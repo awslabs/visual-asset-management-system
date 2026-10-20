@@ -65,6 +65,9 @@ export function buildVamsExecuteMetadata3dLabelingPipelineFunction(
                 : undefined,
         environment: {
             OPEN_PIPELINE_FUNCTION_NAME: openPipelineLambdaFunction.functionName,
+            // The Regions the isolated-subnet Batch compute reaches Amazon S3 in through a
+            // cross-Region interface endpoint; an input in any other Region is rejected at launch.
+            CROSS_REGION_S3_ENDPOINT_REGIONS: Config.crossRegionS3EndpointRegions(config).join(","),
         },
     });
 

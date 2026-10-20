@@ -310,6 +310,8 @@ export function buildStreamAuxiliaryPreviewAssetFunction(
     });
     storageResources.s3.assetAuxiliaryBucket.grantRead(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    // The Region-routing S3 client resolves a bucket name's Region through the buckets table.
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
 
     if (config.app.compliance.quarantineBlocksDownload) {
         storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
@@ -515,6 +517,9 @@ export function buildSqsUploadFileLargeFunction(
 
     // Grant same permissions as uploadFile Lambda
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
+    // The Region-routing S3 client resolves a bucket name's Region through the buckets table
+    // when a queued message predates the bucketRegion field.
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     sendEmailFunction.grantInvoke(fun);
 
     grantReadWritePermissionsToAllAssetBuckets(fun);

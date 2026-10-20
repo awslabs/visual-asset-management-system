@@ -359,6 +359,19 @@ no central partition helper in the backend — these four rules are the contract
    comes from `os.environ["AWS_REGION"]` — avoid a `"us-east-1"` default, which
    silently points at the wrong partition if the variable is ever missing.
 
+    **Asset buckets may be in another Region, so every S3 call on an asset bucket
+    goes through `common.s3`'s Region-routing client**, never a module-level
+    `boto3.client('s3', ...)` of the handler's own: `s3 = region_routing_s3_client()`
+    (or `region_routing_s3_resource()`) signs each call for the Region of the
+    `Bucket` it names, resolved from the bucket details the handler read
+    (`bucket_region_fields(row)` spreads `bucketRegion`/`bucketAccountId` into every
+    bucket-details dict) or from the buckets table's `bucketNameGSI`.
+    `copy_s3_object()` is the one copy path: a managed copy by the destination-Region
+    client, or a streamed GET→PUT when `VAMS_LAMBDAS_IN_VPC` is `true` and the
+    Regions differ, since an S3 interface endpoint does not serve cross-Region
+    `CopyObject`. Ratchet: `backend/tests/handlers/databases/test_buckets_listing_region.py`;
+    mock parity: `backend/tests/common/test_s3_region_routing.py`.
+
 3. **New ARN/URL validators must accept every partition.** Compose them from
    `aws_partition_group` (`aws`, `-us-gov`, `-cn`, `-eusc`, `-iso[-x]`) and
    `aws_dns_suffix_group` in `common/validators.py`; never inline `arn:aws:`. A
