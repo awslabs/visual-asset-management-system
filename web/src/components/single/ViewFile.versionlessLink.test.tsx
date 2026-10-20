@@ -17,6 +17,8 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router";
 
 const mockMissing = new Set<string>();
+// Latest version per relative path; a path without an entry has latest version `v-<path>`.
+const mockLatest: Record<string, string> = {};
 
 jest.mock("../../services/APIService", () => ({
     fetchAsset: jest.fn(
@@ -39,7 +41,7 @@ jest.mock("../../services/APIService", () => ({
                     key: `${assetId}/${rel}`,
                     fileName: rel.split("/").pop(),
                     versions: [
-                        { versionId: `v-${rel}`, isLatest: true },
+                        { versionId: mockLatest[rel] ?? `v-${rel}`, isLatest: true },
                         { versionId: "v-old", isLatest: false },
                     ],
                 },
@@ -158,6 +160,9 @@ const resetCounts = () => {
 beforeEach(() => {
     jest.clearAllMocks();
     mockMissing.clear();
+    for (const rel of Object.keys(mockLatest)) {
+        delete mockLatest[rel];
+    }
     mockTableMounts.length = 0;
     mockTableLoads.length = 0;
     spinnerShows = 0;
@@ -209,6 +214,18 @@ describe("ViewFile link without a version", () => {
         expect(currentUrl).toBe(`${FILE_ROUTE}/b.glb?version=v-b.glb`);
         expect(lookedUp()).toEqual(["b.glb"]);
         expect(mockTableMounts).toEqual(["assetA/b.glb"]);
+    });
+
+    it("looks the latest version up again when a link to the open file names no version", async () => {
+        await openAt(`${FILE_ROUTE}/a.glb`);
+        resetCounts();
+        mockLatest["a.glb"] = "v-new";
+
+        await move(`${FILE_ROUTE}/a.glb`);
+
+        expect(viewer()).toBe("assetA/a.glb@v-new");
+        expect(currentUrl).toBe(`${FILE_ROUTE}/a.glb?version=v-new`);
+        expect(lookedUp()).toEqual(["a.glb"]);
     });
 
     it("still looks the file up when only the version in the URL changes", async () => {

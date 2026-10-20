@@ -163,8 +163,8 @@ function ViewFileForAsset() {
     const [directPathError, setDirectPathError] = useState<string | null>(null);
     const [loadedFileInfo, setLoadedFileInfo] = useState<FileInfo | null>(null);
     // The direct-path requests that loadedFileInfo answers: the one it was loaded for and, when that
-    // named no version, the same path with the version that was picked. Until one equals
-    // directPathRequest, the loaded file is the one the URL named before.
+    // named no version, the same path with the version that was picked, until the URL names that
+    // version. Until one equals directPathRequest, the loaded file is the one the URL named before.
     const [loadedFileRequests, setLoadedFileRequests] = useState<string[]>([]);
     // State for on-demand version loading when state is passed without versionId
     const [isLoadingVersionInfo, setIsLoadingVersionInfo] = useState(false);
@@ -328,9 +328,15 @@ function ViewFileForAsset() {
                 return;
             }
 
-            // The file in hand already answers this URL, for example after the URL gained the
-            // version picked for it. Looking it up again would show the spinner a second time.
+            // The file in hand already answers this URL: the URL gained the version picked for it,
+            // or the effect re-ran after the load wrote that file. Looking it up again would show the
+            // spinner a second time.
             if (loadedFileInfo && loadedFileRequests.includes(directPathRequest)) {
+                // Once the URL names the picked version, the request that named no version no longer
+                // stands for the file in hand: a link that names no version asks for the latest one.
+                if (loadedFileRequests.length > 1 && loadedFileRequests[0] !== directPathRequest) {
+                    setLoadedFileRequests([directPathRequest]);
+                }
                 setDirectPathError(null);
                 setIsLoadingDirectPath(false);
                 return;
