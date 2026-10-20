@@ -85,8 +85,9 @@ cd web && nvm use && npm install && npm run build
 cd ../infra && npm install
 
 # 3. Bootstrap CDK (first time only)
-#    If importing an existing VPC, add: --context loadContextIgnoreVPCStacks=true
-#    See documentation/docusaurus-site/docs/deployment/deploy-the-solution.md (Bootstrap step)
+#    Read documentation/docusaurus-site/docs/deployment/deploy-the-solution.md (Bootstrap step) for:
+#      - deployment to other Regions, including AWS GovCloud and European Sovereign Cloud
+#      - importing an existing VPC by adding `--context loadContextIgnoreVPCStacks=true`
 npx cdk bootstrap aws://ACCOUNT_ID/us-east-1
 
 # 4. Configure deployment (edit infra/config/config.json)
