@@ -26,6 +26,7 @@ from typing import Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 from inference import INFERENCE_SAMPLE_NAME, generate_preview_gif, run_inference
+import manifest_io
 from manifest_io import fetch_input_configuration, InputConfigurationError
 from model_manager import S3_HF_CACHE_PREFIX, ensure_models_cached
 
@@ -126,7 +127,7 @@ def download_from_s3(s3_uri: str, local_path: Path) -> None:
 
     logger.info(f"Downloading from S3: {s3_uri} -> {local_path}")
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-        ["aws", "s3", "cp", s3_uri, str(local_path)],
+        ["aws", "s3", "cp", s3_uri, str(local_path), *manifest_io.s3_region_args(s3_uri)],
         capture_output=True, text=True
     ) # nosemgrep: dangerous-subprocess-use-audit
     if result.returncode != 0:
@@ -144,7 +145,7 @@ def upload_to_s3(local_path: Path, s3_uri: str) -> None:
     """
     logger.info(f"Uploading to S3: {local_path} -> {s3_uri}")
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-        ["aws", "s3", "cp", str(local_path), s3_uri],
+        ["aws", "s3", "cp", str(local_path), s3_uri, *manifest_io.s3_region_args(s3_uri)],
         capture_output=True, text=True
     ) # nosemgrep: dangerous-subprocess-use-audit
     if result.returncode != 0:
@@ -253,6 +254,8 @@ def main():
         logger.info("=" * 80)
 
         definition = load_pipeline_definition()
+        # Each asset bucket's Region, so every S3 command below addresses the bucket where it is.
+        manifest_io.register_bucket_regions(definition.get("bucketRegions"))
         logger.info(f"Pipeline definition loaded: {json.dumps(definition, indent=2)}")
 
         # Extract required fields

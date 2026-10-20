@@ -38,7 +38,7 @@ from common.s3MetadataKeys import (
     UserMetadataTooLargeError,
 )
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
-from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE
+from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from common.apiRoutes import (
     API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
     API_ARCHIVE_FILE, API_UNARCHIVE_FILE, API_DELETE_FILE,
@@ -73,8 +73,8 @@ retry_config = Config(
     }
 )
 
-s3_client = boto3.client('s3', config=retry_config)
-s3_resource = boto3.resource('s3', config=retry_config)
+s3_client = region_routing_s3_client()
+s3_resource = region_routing_s3_resource()
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 lambda_client = boto3.client('lambda', config=retry_config)
 logger = safeLogger(service_name="AssetFiles")
@@ -284,7 +284,8 @@ def get_default_bucket_details(bucketId):
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
-            'baseAssetsPrefix': base_assets_prefix
+            'baseAssetsPrefix': base_assets_prefix,
+            **bucket_region_fields(bucket)
         }
     except Exception as e:
         logger.exception(f"Error getting bucket details: {e}")

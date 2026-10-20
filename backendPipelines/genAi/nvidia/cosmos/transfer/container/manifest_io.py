@@ -34,7 +34,7 @@ def _get_json(s3_location):
             # There is no buffered content to flush.
             local_path = tmp.name  # nosemgrep: tempfile-without-flush
         result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-            ["aws", "s3", "cp", s3_location, local_path],
+            ["aws", "s3", "cp", s3_location, local_path, *s3_region_args(s3_location)],
             capture_output=True, text=True
         )  # nosemgrep: dangerous-subprocess-use-audit
         if result.returncode != 0:
@@ -58,7 +58,7 @@ def _read_text(s3_location):
         return s3_location
     try:
         result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-            ["aws", "s3", "cp", s3_location, "-"],
+            ["aws", "s3", "cp", s3_location, "-", *s3_region_args(s3_location)],
             capture_output=True, text=True
         )  # nosemgrep: dangerous-subprocess-use-audit
         if result.returncode != 0:
@@ -68,6 +68,39 @@ def _read_text(s3_location):
     except Exception as e:
         logger.warning(f"Could not read S3 object {s3_location}: {e}")
         return None
+
+
+# Bucket name -> Region for the asset buckets this run reads and writes, from the pipeline definition's
+# ``bucketRegions`` map. A bucket in the deployment Region is not registered, so the AWS CLI addresses
+# it in its default Region, as it does the auxiliary and model-cache buckets.
+_bucket_regions = {}
+
+
+def register_bucket_regions(bucket_regions):
+    """Record each asset bucket's Region from the definition's ``bucketRegions`` map; called before the
+    first S3 command. ``None`` (a definition from an older Lambda) registers nothing."""
+    _bucket_regions.clear()
+    for bucket, region in (bucket_regions or {}).items():
+        if bucket and region:
+            _bucket_regions[str(bucket)] = str(region)
+
+
+def bucket_region(s3_uri):
+    """The registered Region of the bucket an ``s3://`` URI names, or ``""``."""
+    if not isinstance(s3_uri, str) or not s3_uri.startswith("s3://"):
+        return ""
+    return _bucket_regions.get(s3_uri[len("s3://"):].split("/", 1)[0], "")
+
+
+def s3_region_args(*s3_uris):
+    """``["--region", <Region>]`` for an ``aws s3`` command whose ``s3://`` arguments name a registered
+    bucket, else ``[]``. One side of every transfer this container issues is local, so the first
+    registered bucket among the arguments decides."""
+    for s3_uri in s3_uris:
+        region = bucket_region(s3_uri)
+        if region:
+            return ["--region", region]
+    return []
 
 
 def fetch_metadata(input_metadata_s3_location):
