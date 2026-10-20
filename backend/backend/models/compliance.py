@@ -16,7 +16,9 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from pydantic import Field
 
-from common.validators import id_pattern, trim_name, validate
+from common.validators import (
+    MAX_REGEX_SUBJECT_LENGTH, MAX_S3_OBJECT_KEY_BYTES, id_pattern, trim_name, validate,
+)
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="ComplianceModels")
@@ -290,7 +292,8 @@ class RelationshipRule(BaseModel, extra='ignore'):
 
 # Bounds on the file-structure, version-coverage and asset-attribute rules: the number of checks a
 # rule carries, the path patterns and tags a check lists, and the length of one pattern. Every
-# pattern is also held to the `REGEX` validator's compile check and backtracking budget.
+# pattern is also held to the `REGEX` validator's compile check and backtracking budget, the budget
+# computed for the longest value the pattern is searched in (`validate_patterns`).
 MAX_CHECKS_PER_RULE = 25
 MAX_PATH_PATTERNS = 25
 MAX_PATTERN_LENGTH = 512
@@ -303,14 +306,20 @@ ASSET_ATTRIBUTE_TAGS = "tags"
 ASSET_ATTRIBUTE_TEXT_FIELDS = (ASSET_ATTRIBUTE_NAME, ASSET_ATTRIBUTE_DESCRIPTION)
 
 
-def validate_patterns(field_name: str, patterns: Optional[List[str]]) -> None:
+def validate_patterns(field_name: str, patterns: Optional[List[str]],
+                      subject_length: int = MAX_REGEX_SUBJECT_LENGTH) -> None:
     """Raise ValueError unless every entry of `patterns` is a 1 to MAX_PATTERN_LENGTH character
-    regular expression the `REGEX` validator accepts. The message names the field, never a pattern."""
+    regular expression the `REGEX` validator accepts, its backtracking budget computed for values of
+    `subject_length` characters: MAX_S3_OBJECT_KEY_BYTES for a path pattern, which is searched in a
+    file's S3 key, and the validator's 256-character default for a name or description pattern
+    (an asset's name and description are at most 256 characters). The message names the field,
+    never a pattern."""
     for pattern in patterns or []:
         if not isinstance(pattern, str) or not pattern or len(pattern) > MAX_PATTERN_LENGTH:
             raise ValueError(
                 f"Every '{field_name}' pattern must be 1 to {MAX_PATTERN_LENGTH} characters")
-        (valid, message) = validate({field_name: {'value': pattern, 'validator': 'REGEX'}})
+        (valid, message) = validate({field_name: {'value': pattern, 'validator': 'REGEX',
+                                                  'subjectLength': subject_length}})
         if not valid:
             raise ValueError(message)
 
@@ -355,8 +364,8 @@ class FileStructureCheck(BaseModel, extra='ignore'):
                 "is required")
         if min_files is not None and max_files is not None and min_files > max_files:
             raise ValueError("'minFiles' must be <= 'maxFiles'")
-        validate_patterns("requiredPaths", values.get("requiredPaths"))
-        validate_patterns("forbiddenPaths", values.get("forbiddenPaths"))
+        validate_patterns("requiredPaths", values.get("requiredPaths"), MAX_S3_OBJECT_KEY_BYTES)
+        validate_patterns("forbiddenPaths", values.get("forbiddenPaths"), MAX_S3_OBJECT_KEY_BYTES)
         return values
 
 
@@ -379,7 +388,7 @@ class VersionCoverageCheck(BaseModel, extra='ignore'):
 
     @root_validator(skip_on_failure=True)
     def validate_check(cls, values):
-        validate_patterns("excludePaths", values.get("excludePaths"))
+        validate_patterns("excludePaths", values.get("excludePaths"), MAX_S3_OBJECT_KEY_BYTES)
         return values
 
 
