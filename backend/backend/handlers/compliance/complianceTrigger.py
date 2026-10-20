@@ -48,6 +48,7 @@ from models.compliance import EvaluationVerdict
 from common.dynamodb import query_all_items
 from common.indexerEvents import s3_records_from_indexer_message
 from common.resourceNames import ResourceKeys, get_table_name
+from common.s3 import region_routing_s3_client
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_METADATA_KEY,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
@@ -57,8 +58,9 @@ from handlers.compliance import complianceEvaluationStore as store
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
-# Reads the change-provenance metadata of the object a file event names (HeadObject only).
-s3_client = boto3.client("s3", config=retry_config)
+# Reads the change-provenance metadata of the object a file event names (HeadObject only), signed
+# for the Region of the event's bucket.
+s3_client = region_routing_s3_client()
 logger = safeLogger(service_name="ComplianceTrigger")
 
 SCHEMA_SOURCE_DATABASE = "database"

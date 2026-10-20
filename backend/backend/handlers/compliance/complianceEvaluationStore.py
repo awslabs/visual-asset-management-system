@@ -61,7 +61,7 @@ from common.compliance import evaluationEngine as engine
 from common.compliance.auditRecord import build_audit_item
 from common.dynamodb import query_all_items, to_update_expr
 from common.resourceNames import ResourceKeys, get_table_name
-from common.s3 import list_all_objects
+from common.s3 import bucket_region_fields, list_all_objects, region_routing_s3_client
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_METADATA_KEY,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
@@ -81,7 +81,8 @@ from models.compliance import (
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
 lambda_client = boto3.client("lambda", config=retry_config)
-s3_client = boto3.client("s3", config=retry_config)
+# Asset buckets may sit in other Regions; every call is signed for the Region of the bucket it names.
+s3_client = region_routing_s3_client()
 logger = safeLogger(service_name="ComplianceEvaluationStore")
 
 # Actor recorded on system-initiated evaluations and audit entries.
@@ -314,7 +315,8 @@ def get_template_item(pipeline_database_id: str, pipeline_id: str,
 def asset_s3_location(asset: Dict[str, Any]) -> Optional[Tuple[str, str]]:
     """`(bucket name, key prefix ending in '/')` under which an asset's files live: the bucket row
     named by the asset's `bucketId` and the asset's `assetLocation.Key`. None when either is not
-    resolvable."""
+    resolvable. The bucket row's Region is recorded for the bucket name, so `s3_client` signs the
+    calls on it for that Region without a second read of the buckets table."""
     location = asset.get("assetLocation") or {}
     key = location.get("Key") if isinstance(location, dict) else None
     bucket_id = asset.get("bucketId")
@@ -326,6 +328,7 @@ def asset_s3_location(asset: Dict[str, Any]) -> Optional[Tuple[str, str]]:
     bucket_name = rows[0].get("bucketName") if rows else None
     if not bucket_name:
         return None
+    bucket_region_fields(rows[0])
     return bucket_name, key if key.endswith("/") else key + "/"
 
 

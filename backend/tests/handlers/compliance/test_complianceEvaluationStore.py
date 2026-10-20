@@ -1040,6 +1040,18 @@ class TestAssetFileListing:
         assert self._list(tables) is None
         assert tables.buckets.query.call_args.kwargs["KeyConditionExpression"]._values[1] == BUCKET_ID
 
+    def test_the_bucket_rows_region_is_recorded_for_the_bucket_name(self):
+        """The Region-routing client signs a call by the bucket name; resolving the asset location
+        records the bucket row's Region so a bucket in another Region is reached there."""
+        # The `common.s3` the store bound at import (another suite may have re-registered the name).
+        bucket_region_for_name = store.bucket_region_fields.__globals__["bucket_region_for_name"]
+        tables = Tables()
+        tables.buckets.query.return_value = {"Items": [
+            {"bucketId": BUCKET_ID, "bucketName": "remote-asset-bucket", "baseAssetsPrefix": "/",
+             "bucketRegion": "eu-west-1"}]}
+        self._list(tables)
+        assert bucket_region_for_name("remote-asset-bucket") == "eu-west-1"
+
 
 def _exception_row(state="exception", schema_name=SCHEMA, version=1, **extra):
     """An asset-state row carrying an active exception granted against `schema_name` v`version`
