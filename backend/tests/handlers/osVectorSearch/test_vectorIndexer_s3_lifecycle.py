@@ -205,3 +205,63 @@ class TestIgnoredKeys:
         outcome = indexer.handle_s3_record(_record("ObjectRemoved:Delete"), "assets", "prefix-a/")
         assert outcome.ok and outcome.action == "ignore"
         assert indexer.vector_store.calls == []
+
+
+@pytest.mark.unit
+class TestUnattributedRecordLogging:
+    """One log line per unattributed record, at a level that tells the expected case from a failure.
+
+    A permanent asset delete removes the asset row and then every S3 version, so each file's ObjectRemoved
+    record arrives with the object unreadable and no row in assetIdGSI. The asset-level rule has already
+    removed the items, so that record is logged once at INFO. An assetId registered in two databases on the
+    event's bucket and prefix, or a readable object no asset claims, stays a WARNING.
+    """
+
+    @pytest.fixture
+    def log(self, indexer, monkeypatch):
+        fake = MagicMock()
+        monkeypatch.setattr(indexer, "logger", fake)
+        assert indexer.handle_s3_record.__globals__ is vars(indexer)
+        return fake
+
+    @staticmethod
+    def _messages(method):
+        return [str(c.args[0]) for c in method.call_args_list]
+
+    def test_object_and_asset_gone_after_a_permanent_delete_is_one_info_line(self, indexer, log):
+        indexer.s3_client.head_object.side_effect = _not_found()
+        indexer.asset_storage_table.get_item.side_effect = lambda **kw: {}
+        indexer.asset_storage_table.query.return_value = {"Items": []}
+        outcome = indexer.handle_s3_record(_record("ObjectRemoved:Delete"), "assets", "prefix-a/")
+        assert outcome.ok and outcome.action == "ignore"
+        assert indexer.vector_store.calls == []
+        assert indexer.asset_storage_table.query.call_args.kwargs["IndexName"] == "assetIdGSI"
+        log.warning.assert_not_called()
+        gone = [m for m in self._messages(log.info) if "are gone" in m]
+        assert gone == ["S3 record for assets/prefix-a/a1/models/part.glb: the object and its asset are gone, "
+                        "nothing to update"]
+
+    def test_readable_object_that_no_asset_claims_is_one_warning(self, indexer, log):
+        indexer.s3_client.head_object.side_effect = None
+        indexer.s3_client.head_object.return_value = {"VersionId": "v2", "Metadata": {}}
+        indexer.asset_storage_table.get_item.side_effect = lambda **kw: {}
+        indexer.asset_storage_table.query.return_value = {"Items": []}
+        outcome = indexer.handle_s3_record(_record("ObjectCreated:Put"), "assets", "prefix-a/")
+        assert outcome.ok and outcome.action == "ignore"
+        assert indexer.vector_store.calls == []
+        assert self._messages(log.warning) == [
+            "S3 record for assets/prefix-a/a1/models/part.glb resolves to no asset; nothing to update"]
+        assert not [m for m in self._messages(log.info) if "are gone" in m]
+
+    def test_asset_id_in_two_databases_is_one_warning_naming_the_ambiguity(self, indexer, log):
+        indexer.s3_client.head_object.side_effect = _not_found()
+        indexer.asset_storage_table.get_item.side_effect = lambda **kw: {}
+        indexer.asset_storage_table.query.return_value = {"Items": [
+            {"databaseId": "db1", "assetId": "a1", "bucketId": "bucket-guid"},
+            {"databaseId": "db2#deleted", "assetId": "a1", "bucketId": "bucket-guid"}]}
+        outcome = indexer.handle_s3_record(_record("ObjectRemoved:Delete"), "assets", "prefix-a/")
+        assert outcome.ok and outcome.action == "ignore"
+        assert indexer.vector_store.calls == []
+        assert self._messages(log.warning) == [
+            "assetId a1 resolves to 2 databases for bucket assets/prefix-a/; cannot attribute the file"]
+        assert not [m for m in self._messages(log.info) if "are gone" in m]

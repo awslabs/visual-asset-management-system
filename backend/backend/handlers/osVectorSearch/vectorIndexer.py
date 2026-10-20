@@ -493,10 +493,12 @@ def _split_asset_key(key: str, base_prefix: str) -> Tuple[Optional[str], Optiona
     return parts[0], '/' + '/'.join(parts[1:])
 
 
-def _lookup_database_id(asset_id: str, bucket_name: str, base_prefix: str) -> Optional[str]:
-    """The live databaseId of the one asset with this id whose bucket registration is the event's bucket
-    and prefix. assetId is not unique across databases, so an unverified match would attribute the file
-    to another database's asset."""
+def _lookup_database_id(asset_id: str, bucket_name: str, base_prefix: str) -> Tuple[Optional[str], int]:
+    """(databaseId, number of matching databases) for the one asset with this id whose bucket registration
+    is the event's bucket and prefix; the databaseId is None unless exactly one database matches. assetId
+    is not unique across databases, so an unverified match would attribute the file to another database's
+    asset. Only the ambiguous case is logged here: zero matches is the normal state after a permanent
+    delete, and the caller knows whether the object is gone."""
     rows = query_all_items(asset_storage_table, IndexName='assetIdGSI',
                            KeyConditionExpression=Key('assetId').eq(asset_id))
     matches = set()
@@ -511,26 +513,39 @@ def _lookup_database_id(asset_id: str, bucket_name: str, base_prefix: str) -> Op
                 database_id = database_id[:-len(ARCHIVED_PARTITION_SUFFIX)]
             if database_id:
                 matches.add(database_id)
-    if len(matches) != 1:
+    if len(matches) > 1:
         logger.warning(f"assetId {asset_id} resolves to {len(matches)} databases for bucket "
                        f"{bucket_name}/{base_prefix}; cannot attribute the file")
-        return None
-    return matches.pop()
+    if len(matches) != 1:
+        return None, len(matches)
+    return matches.pop(), 1
 
 
-def _resolve_file_identity(bucket_name: str, key: str,
-                           prefix: Optional[str]) -> Optional[Tuple[str, str, str, str]]:
+UNRESOLVED_GONE = 'gone'
+UNRESOLVED_AMBIGUOUS = 'ambiguous'
+UNRESOLVED_NO_ASSET = 'no-asset'
+
+
+def _resolve_file_identity(bucket_name: str, key: str, prefix: Optional[str]
+                           ) -> Tuple[Optional[Tuple[str, str, str, str]], Optional[str]]:
     """(databaseId, assetId, filePath, changeSource) for an object key: from the object's own metadata
     while the object is readable, else from the key and assetIdGSI (the object is gone on a permanent
     delete). ``changeSource`` is the object's ``vams-changesource`` provenance, '' when the object is
-    unreadable or carries none; it comes from the same HEAD, so no second read is made."""
+    unreadable or carries none; it comes from the same HEAD, so no second read is made.
+
+    Returns (identity, None), or (None, reason) when the file cannot be attributed: UNRESOLVED_GONE when
+    the object is unreadable and no asset row matches (the asset was permanently deleted and its items
+    are removed by the asset-level rule), UNRESOLVED_AMBIGUOUS when more than one database matches, and
+    UNRESOLVED_NO_ASSET otherwise."""
     database_id = asset_id = None
+    object_readable = False
     change_source = ''
     try:
         metadata = s3_client.head_object(Bucket=bucket_name, Key=key).get('Metadata', {}) or {}
         database_id = metadata.get(DATABASE_ID_METADATA_KEY)
         asset_id = metadata.get(ASSET_ID_METADATA_KEY)
         change_source = str(metadata.get(VAMS_CHANGE_SOURCE_METADATA_KEY) or '')
+        object_readable = True
     except ClientError as e:
         if not _is_not_found(e):
             raise
@@ -538,11 +553,13 @@ def _resolve_file_identity(bucket_name: str, key: str,
     key_asset_id, key_relative = _split_asset_key(key, base_prefix)
     asset_id = asset_id or key_asset_id
     if not asset_id:
-        return None
+        return None, UNRESOLVED_NO_ASSET
     if not database_id:
-        database_id = _lookup_database_id(asset_id, bucket_name, base_prefix)
-    if not database_id:
-        return None
+        database_id, match_count = _lookup_database_id(asset_id, bucket_name, base_prefix)
+        if match_count > 1:
+            return None, UNRESOLVED_AMBIGUOUS
+        if not database_id:
+            return None, (UNRESOLVED_NO_ASSET if object_readable else UNRESOLVED_GONE)
     asset_row, _ = _get_asset_row(database_id, asset_id)
     location = ((asset_row or {}).get('assetLocation') or {}).get('Key') if asset_row else None
     if location and key.startswith(location):
@@ -550,8 +567,8 @@ def _resolve_file_identity(bucket_name: str, key: str,
     else:
         file_path = key_relative or ''
     if file_path in ('', '/'):
-        return None
-    return database_id, asset_id, file_path, change_source
+        return None, UNRESOLVED_NO_ASSET
+    return (database_id, asset_id, file_path, change_source), None
 
 
 def run_object_created(pk: str, key_path: str, version_id: str, start_key: Optional[Dict[str, Any]],
@@ -610,9 +627,12 @@ def handle_s3_record(record: Dict[str, Any], bucket_name_hint: Optional[str],
     if PREVIEW_FILE_PATTERN in key:
         return Outcome(True, 'ignore', 'preview file')
 
-    identity = _resolve_file_identity(bucket_name, key, prefix)
+    identity, unresolved = _resolve_file_identity(bucket_name, key, prefix)
     if identity is None:
-        logger.warning(f"S3 record for {bucket_name}/{key} resolves to no asset; nothing to update")
+        if unresolved == UNRESOLVED_GONE:
+            logger.info(f"S3 record for {bucket_name}/{key}: the object and its asset are gone, nothing to update")
+        elif unresolved == UNRESOLVED_NO_ASSET:
+            logger.warning(f"S3 record for {bucket_name}/{key} resolves to no asset; nothing to update")
         return Outcome(True, 'ignore', 'file identity unresolved')
     database_id, asset_id, file_path, change_source = identity
     pk = f"{database_id}:{asset_id}"
