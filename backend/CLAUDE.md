@@ -63,7 +63,8 @@ backend/
 │   │   ├── assetHistory.py, syncTracking.py        # Best-effort history / outbound-sync writers
 │   │   ├── assetProvenance.py                      # lastChangeSource/lastChangeWorkflowExecutionId/lastChangeAt
 │   │   │                                           #   written on the asset row by every upload completion;
-│   │   │                                           #   `assetVersion` stamp from asset-version create/revert
+│   │   │                                           #   `assetVersion` stamp from asset-version create/revert;
+│   │   │                                           #   `assetEdit` from an asset edit of name/description/tags
 │   │   ├── indexerEvents.py                        # s3_records_from_indexer_message: SQS→SNS→S3 unwrapping of a
 │   │   │                                           #   file-indexer message, shared by fileIndexer and complianceTrigger
 │   │   ├── validators.py                           # validate() dispatcher + regex patterns

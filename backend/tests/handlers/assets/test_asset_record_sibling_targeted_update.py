@@ -57,7 +57,7 @@ def _real_to_update_expr(record, op="SET"):
 
 
 class FakeAssetTable:
-    """In-memory asset table that applies a targeted SET update to the stored item.
+    """In-memory asset table that applies a targeted SET (and REMOVE) update to the stored item.
 
     Records put_item separately so a full-record write is distinguishable from an attribute
     update, and honors an attribute_exists ConditionExpression so a write against a removed
@@ -70,6 +70,7 @@ class FakeAssetTable:
             self.items[(item['databaseId'], item['assetId'])] = dict(item)
         self.put_item_calls = []
         self.updated_attributes = []
+        self.removed_attributes = []
 
     def stored(self):
         return self.items.get((DATABASE_ID, ASSET_ID))
@@ -87,13 +88,19 @@ class FakeAssetTable:
                            'Message': 'The conditional request failed'}},
                 'UpdateItem')
         assert UpdateExpression.startswith('SET '), UpdateExpression
+        set_clause, _, remove_clause = UpdateExpression[len('SET '):].partition(' REMOVE ')
         written = {}
-        for assignment in UpdateExpression[len('SET '):].split(', '):
+        for assignment in set_clause.split(', '):
             name_ref, value_ref = [part.strip() for part in assignment.split(' = ')]
             written[ExpressionAttributeNames[name_ref]] = ExpressionAttributeValues[value_ref]
+        removed = [ExpressionAttributeNames[name_ref.strip()]
+                   for name_ref in remove_clause.split(', ') if name_ref.strip()]
         self.updated_attributes.append(written)
+        self.removed_attributes.append(removed)
         if item is not None:
             item.update(written)
+            for attribute in removed:
+                item.pop(attribute, None)
 
 
 def _asset(**overrides):
@@ -331,11 +338,18 @@ class TestAssetEditWrite:
         assert table.stored()['assetType'] == 'folder'
 
     def test_edit_writes_only_the_edited_attributes(self):
+        """The edited fields plus the change provenance a description edit records, and nothing
+        else; the provenance is pinned in `test_assetService_edit_change_provenance.py`."""
         table = FakeAssetTable(_asset())
         _run_update_asset(table, _asset(), {'description': 'new', 'isDistributable': True})
 
         assert table.put_item_calls == []
-        assert table.updated_attributes == [{'description': 'new', 'isDistributable': True}]
+        (written,) = table.updated_attributes
+        assert set(written) == {'description', 'isDistributable', 'lastChangeSource',
+                                'lastChangeAt'}
+        assert written['description'] == 'new'
+        assert written['isDistributable'] is True
+        assert table.removed_attributes == [['lastChangeWorkflowExecutionId']]
 
     def test_the_edit_still_lands(self):
         """POSITIVE CONTROL: the edited fields are actually persisted."""

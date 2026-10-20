@@ -23,8 +23,9 @@ workflow:
   - a stream MODIFY whose new image records `lastChangeSource` of `workflowExecution` (the
     provenance `uploadFile` writes onto the asset row when a workflow execution's outputs are
     completed into the asset) is skipped for the same reason. A MODIFY recording `assetVersion`
-    (an asset version was created or reverted to) is a user change and is evaluated, judged by its
-    `lastChangeAt` like an upload's, so a version-coverage verdict follows the new version;
+    (an asset version was created or reverted to) or `assetEdit` (the asset's name, description or
+    tags were edited) is a user change and is evaluated, judged by its `lastChangeAt` like an
+    upload's, so a version-coverage or asset-attribute verdict follows the new version or the edit;
   - a change the asset's last evaluation already covers (`change_covered_by_last_evaluation`: the
     evaluation started at or after the change, whatever its status — a `pending_pipeline`
     evaluation covers the changes it read too) is not evaluated again, so an N-file upload yields
@@ -72,7 +73,8 @@ CASCADE_STATE_INDEX = "StateIndex"
 
 # The asset-row attributes `common.assetProvenance` writes with the source and instant of the last
 # change (`upload` or `workflowExecution` from an upload completion, `assetVersion` from an asset
-# version create or revert); a stream image carries them in DynamoDB's typed form.
+# version create or revert, `assetEdit` from an edit of the asset's name, description or tags); a
+# stream image carries them in DynamoDB's typed form.
 LAST_CHANGE_SOURCE_ATTRIBUTE = "lastChangeSource"
 LAST_CHANGE_AT_ATTRIBUTE = "lastChangeAt"
 # The instant of the asset's last user-upload completion; a workflow execution's output write moves
@@ -188,10 +190,10 @@ def change_covered_by_last_evaluation(compliance_record, change_time=None, compl
 
     `completion_time` is the instant of the upload completion the change belongs to — the row's
     `lastUploadAt` on the file path, the MODIFY image's `lastChangeAt` on the stream path (a
-    workflow execution's MODIFY is skipped before this point, so that stamp is an upload's or an
-    asset version's). The completion ran after every object of its upload was copied, so an
-    evaluation whose start (`lastEvaluatedAt`) is at or after the stamp has seen those files — the
-    comparison is causal and needs no margin.
+    workflow execution's MODIFY is skipped before this point, so that stamp is an upload's, an
+    asset version's or an asset edit's). The completion ran after every object of its upload was
+    copied, so an evaluation whose start (`lastEvaluatedAt`) is at or after the stamp has seen those
+    files — the comparison is causal and needs no margin.
     `change_time` is an S3 object's `eventTime`. An object written at or before the recorded
     completion belongs to that upload and is judged by the stamp; an object written after it (or an
     asset with no stamp) is judged against its own `eventTime` with EVALUATION_COVERS_CHANGE_MARGIN,

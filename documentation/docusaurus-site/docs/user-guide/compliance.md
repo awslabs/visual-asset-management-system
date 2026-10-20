@@ -110,7 +110,7 @@ In the schema editor, open the **Visual Builder** tab and choose a rule type fro
 A version coverage rule fails from every upload until you create an asset version that records the new files; creating the version (or reverting to an earlier one) re-evaluates the asset and clears the failure. With **Quarantine** enforcement and quarantine blocking downloads (`app.compliance.quarantineBlocksDownload`), a freshly uploaded asset cannot be downloaded until it is versioned. Use **Warn** for this rule unless that is what you want.
 :::
 
-Editing an asset's name, description or tags does not start an evaluation by itself once the asset has files or versions; choose **Evaluate Now** on its **Compliance** tab, or sweep the schema, to check an asset attributes rule after an edit.
+With automatic evaluation on, editing an asset's name, description or tags re-evaluates the asset, so an asset attributes rule follows the edit; an edit that leaves all three as they were starts no evaluation.
 
 :::warning[Legacy schemas]
 A schema whose body is not a `vams-rules-v1` document is marked **Legacy — cannot be bound or evaluated** in the Format column (the API and CLI report it as `schemaFormat: legacy`). Such a schema cannot be bound, updated or evaluated — a bind request is refused with `Schema body must be a vams-rules-v1 document` — and is listed only so that it can be found and deleted (`DELETE /compliance/schemas/{schemaName}` or `vamscli compliance schema delete`). Register its rules again as a `vams-rules-v1` schema under a new name if they are still needed.

@@ -633,6 +633,34 @@ class TestAnAssetVersionReEvaluatesTheAsset:
 
 
 @pytest.mark.unit
+class TestAnAssetEditReEvaluatesTheAsset:
+    """An edit of the asset's name, description or tags stamps `lastChangeSource: assetEdit` with a
+    fresh `lastChangeAt` onto the asset row. The stream MODIFY that write emits is a user change: it
+    is evaluated, judged against its own stamp, so an asset-attribute verdict that failed on a
+    missing tag clears once the user adds it."""
+
+    LAST_EVALUATED = "2026-03-01T12:00:05+00:00"
+
+    def _record(self):
+        return {"schemaName": SCHEMA, "complianceState": "quarantined",
+                "lastEvaluationId": "eval-1", "lastEvaluatedAt": self.LAST_EVALUATED,
+                "lastEvaluationStatus": "completed"}
+
+    def test_an_edit_after_the_last_evaluation_is_evaluated(self):
+        mocks = _run(_sns_event(_stream_message(change_source="assetEdit",
+                                                change_at="2026-03-01T12:05:00+00:00")),
+                     database_item=AUTO_EVAL_DB, compliance_record=self._record())
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+        assert not any("workflow execution" in text for text in _info_messages(mocks))
+
+    def test_an_edit_the_last_evaluation_already_read_is_covered(self):
+        mocks = _run(_sns_event(_stream_message(change_source="assetEdit",
+                                                change_at="2026-03-01T12:00:01+00:00")),
+                     database_item=AUTO_EVAL_DB, compliance_record=self._record())
+        mocks["run_evaluation"].assert_not_called()
+
+
+@pytest.mark.unit
 class TestAPendingEvaluationCoversOnlyTheChangesItRead:
     """An evaluation still awaiting its pipeline rules covers the changes made at or before its start
     (the N-file upload that raised it) like any other evaluation, and no more: a change after its
