@@ -87,13 +87,13 @@ cd ../infra && npm install
 # 3. Bootstrap CDK (first time only)
 #    If importing an existing VPC, add: --context loadContextIgnoreVPCStacks=true
 #    See documentation/docusaurus-site/docs/deployment/deploy-the-solution.md (Bootstrap step)
-cdk bootstrap aws://ACCOUNT_ID/REGION
+npx cdk bootstrap aws://ACCOUNT_ID/us-east-1
 
 # 4. Configure deployment (edit infra/config/config.json)
 #    See documentation/docusaurus-site/docs/deployment/configuration-reference.md
 
 # 5. Deploy
-cdk deploy --all --require-approval never
+npx cdk deploy --all --require-approval never
 ```
 
 After deployment, find your URL in the CDK output and check your email for temporary credentials.
