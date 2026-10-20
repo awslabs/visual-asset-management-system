@@ -6,11 +6,12 @@ asset bucket, on models generated here (#506, #507, #508).
 
 - A textured OBJ (OBJ + MTL + PNG in one asset folder) converts to GLB with its texture (#506, #507).
 - A glTF whose buffers are separate files converts, including the pipeline's own ``.gltf`` output fed
-  back in from the run's output folder (#507).
+  back in from the run's output folder, and a separate glTF image is fetched (#507).
 - A textured GLB keeps its texture through a GLB re-export (#506).
 - A point cloud to STL fails with the STL message; to PLY it converts (#508).
-- A reference outside the asset, an absolute local path, and a missing material library each fail
-  before the loader runs, and the loader cannot read a file the fetch did not stage.
+- A buffer outside the asset, an absolute local path, and a missing buffer each fail before the loader
+  runs; a missing or rejected material library and a missing image are skipped with a warning and the
+  geometry converts; the loader cannot read a file the fetch did not stage.
 
 The cases run in one child interpreter because the other modules in this directory install a
 ``MagicMock`` in ``sys.modules['trimesh']`` at collection, which would otherwise be what this module
@@ -77,6 +78,22 @@ bucket = Bucket()
 mod.s3_client = bucket
 # This handler uploads through the boto3 resource's client.
 mod.s3 = types.SimpleNamespace(meta=types.SimpleNamespace(client=bucket))
+
+
+class Recorder:
+    """The handler's logger, keeping the warnings so a case can report what it skipped."""
+
+    def __init__(self):
+        self.warnings = []
+
+    def warning(self, message, *args, **kwargs):
+        self.warnings.append(str(message))
+
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: None
+
+
+mod.logger = Recorder()
 FILES = "pipelines/conv/JOB/output/E1/files/"
 rng = np.random.default_rng(7)
 
@@ -114,15 +131,17 @@ def summary(key):
 def run(name, input_key, output_type, subdir, check=None):
     before = set(bucket.objects)
     bucket.requested = []
+    mod.logger.warnings = []
     try:
         mod.convert_input_output(f"s3://abkt/{input_key}", f"s3://abkt/{FILES}", output_type, subdir)
     except Exception as e:
-        results[name] = {"error": type(e).__name__, "message": str(e), "requested": bucket.requested}
+        results[name] = {"error": type(e).__name__, "message": str(e), "requested": bucket.requested,
+                         "warnings": mod.logger.warnings}
         return
     written = sorted(set(bucket.objects) - before)
     model = [k for k in written if k.endswith(output_type)]
     results[name] = {"written": written, "model": summary(model[0]) if model else None,
-                     "requested": bucket.requested}
+                     "requested": bucket.requested, "warnings": mod.logger.warnings}
 
 
 results = {}
@@ -140,11 +159,36 @@ run("obj_textured_to_glb", "xasset/parts/box.obj", ".glb", "parts")
 put("xasset/lonely/box.obj", text)
 run("obj_missing_mtl", "xasset/lonely/box.obj", ".glb", "lonely")
 
+# The same OBJ naming its MTL by a Windows absolute path, as an exporter on Windows can write it.
+put("xasset/win/box.obj", text.replace("mtllib box.mtl", "mtllib C:\\models\\box.mtl"))
+put("xasset/win/box.mtl", files["box.mtl"])
+run("obj_windows_absolute_mtllib", "xasset/win/box.obj", ".glb", "win")
+
 # A glTF with separate buffer files.
 exported = trimesh.Scene(trimesh.creation.icosphere()).export(file_type="gltf")
 for name, data in exported.items():
     put(f"xasset/gltf/{name}", data)
 run("gltf_external_buffers_to_glb", "xasset/gltf/model.gltf", ".glb", "gltf")
+
+# The same glTF without its buffer file.
+put("xasset/nobuf/model.gltf", exported["model.gltf"])
+run("gltf_missing_buffer", "xasset/nobuf/model.gltf", ".glb", "nobuf")
+
+# A textured glTF whose image is a separate PNG, with and without that PNG in the asset.
+textured = textured_box().export(file_type="gltf")
+textured_doc = json.loads(textured["model.gltf"])
+textured_doc["images"] = [{"uri": "tex/base.png", "mimeType": "image/png"}]
+png = io.BytesIO()
+Image.fromarray((rng.random((16, 16, 3)) * 255).astype(np.uint8)).save(png, format="PNG")
+for folder, with_image in (("gltfimg", True), ("noimg", False)):
+    put(f"xasset/{folder}/model.gltf", json.dumps(textured_doc))
+    for name, data in textured.items():
+        if name != "model.gltf":
+            put(f"xasset/{folder}/{name}", data)
+    if with_image:
+        put(f"xasset/{folder}/tex/base.png", png.getvalue())
+run("gltf_external_image_to_glb", "xasset/gltfimg/model.gltf", ".glb", "gltfimg")
+run("gltf_missing_image_to_glb", "xasset/noimg/model.gltf", ".glb", "noimg")
 
 # The pipeline's own .gltf output, converted again from the run's output folder.
 put("xasset/round/ball.glb", trimesh.creation.icosphere().export(file_type="glb"))
@@ -244,10 +288,35 @@ class TestReferencedFilesAreFetched:
         second = _ok(results, "pipeline_gltf_output_to_glb")
         assert second["model"]["vertices"] == first["model"]["vertices"], (first, second)
 
-    def test_a_missing_material_library_fails_and_names_it(self, results):
-        result = results["obj_missing_mtl"]
+    def test_a_missing_material_library_converts_geometry_only_and_is_named(self, results):
+        result = _ok(results, "obj_missing_mtl")
+        assert result["model"]["vertices"] > 0, result
+        # Not the 16x16 texture the MTL would have brought (2x2 is trimesh's untextured default).
+        assert [16, 16] not in result["model"]["textures"], result
+        assert any("lonely/box.mtl" in w and "not in the asset" in w for w in result["warnings"]), result
+
+    def test_a_windows_absolute_material_library_converts_geometry_only(self, results):
+        # The MTL exists beside the OBJ, so the reference is what is refused, not a missing file.
+        result = _ok(results, "obj_windows_absolute_mtllib")
+        assert result["model"]["vertices"] > 0, result
+        assert "xasset/win/box.mtl" not in result["requested"], result
+        assert any("not a relative path" in w for w in result["warnings"]), result
+
+    def test_a_gltf_without_its_buffer_fails_and_names_it(self, results):
+        result = results["gltf_missing_buffer"]
         assert result.get("error") == "ReferencedFileError", result
-        assert "box.mtl" in result["message"] and "not in the asset" in result["message"]
+        assert "not in the asset" in result["message"] and ".bin" in result["message"], result
+
+    def test_a_gltf_external_image_is_fetched_and_kept(self, results):
+        result = _ok(results, "gltf_external_image_to_glb")
+        assert result["model"]["textures"] == [[16, 16]], result
+        assert "xasset/gltfimg/tex/base.png" in result["requested"], result
+
+    def test_a_gltf_missing_its_image_converts_without_it(self, results):
+        result = _ok(results, "gltf_missing_image_to_glb")
+        assert result["model"]["vertices"] > 0, result
+        assert [16, 16] not in result["model"]["textures"], result
+        assert any("noimg/tex/base.png" in w for w in result["warnings"]), result
 
 
 @pytest.mark.unit
