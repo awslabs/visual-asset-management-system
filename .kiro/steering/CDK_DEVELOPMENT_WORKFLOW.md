@@ -1406,6 +1406,18 @@ backendPipelines/newPipeline/
 └── README.md                   # Pipeline documentation
 ```
 
+#### **Lambda Container Image Functions**
+
+The 3dBasic and CAD/mesh metadata extraction pipelines deploy as `lambda.DockerImageFunction`. Three
+settings name the instruction set and must agree: `FROM --platform=linux/amd64` in the Dockerfile,
+`platform: Platform.LINUX_AMD64` on the image asset, and `architecture: lambda.Architecture.X86_64` on the
+function. `infra/test/pipelines/t1LambdaContainerImageArchitecture.test.ts` fails any `PackageType: Image`
+function without `Architectures: ["x86_64"]` in all three templates. Lambda also rejects an image pushed as
+an OCI image index (`InvalidImage` / unsupported media type). The pinned AWS CDK CLI (2.179.0 and later)
+runs `docker build` for image assets with `BUILDX_NO_DEFAULT_ATTESTATIONS=1`, so Docker's default
+provenance attestation is not attached on any image store; anything that builds or pushes these images
+outside the CDK CLI must pass `--provenance=false`.
+
 #### **CodeBuild Image Tag Coordination**
 
 A pipeline whose image is built by AWS CodeBuild pushes and consumes ONE content-addressed tag. The

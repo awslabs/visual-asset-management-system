@@ -37,6 +37,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Pipelines/Security** GPU pipeline Batch containers (Cosmos 3, Predict v1, Predict v2.5, Reason, Transfer, GR00T, Isaac Lab) now run as non-root user (uid/gid 10000:10000). The shared Hugging Face model cache is owned by this uid/gid via the launch-template userdata (Cosmos and GR00T), and the Isaac Lab checkpoint volume mounts through an EFS access point that owns its root directory, so containers read/write the cache and checkpoints without root privileges. (issue #327)
 -   **Pipelines** The Potree point cloud viewer container job role holds `states:SendTaskHeartbeat` alongside `SendTaskSuccess`/`SendTaskFailure` (scoped to the deployment account and region), so the PDAL/Potree container's workflow task-token heartbeat is delivered instead of logging an `AccessDeniedException` on every job.
 -   **Documentation** The `/generate-permissions` agent skill's deny-tagged overlay guidance and example use `is_one_of` on the list-valued `tags` field (previously `contains`, which the constraint API rejects), and its operator table states that `tags` accepts only `is_one_of` / `is_not_one_of`. (issue #391)
+-   **Pipelines** The 3D Basic Conversion and CAD/Mesh Metadata Extraction Lambda functions declare the `x86_64` architecture their `linux/amd64` container images are built for, and the GenAI 3D metadata labeling Lambda layer is bundled for `linux/amd64` like the other layers. ([#513](https://github.com/awslabs/visual-asset-management-system/issues/513))
+    -   Note: AWS CloudFormation adds `Architectures: [x86_64]` to both functions in place. With GenAI 3D metadata labeling enabled, the next deployment publishes a new version of its layer.
 
 ### Chores
 

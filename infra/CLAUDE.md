@@ -122,6 +122,8 @@ infra/
                                  # env value is the joined name), gr00t, isaacLabTraining
     pipelines/containerLogRegistrationEnvEcs.test.ts  # Same for rapidPipeline, modelOps
                                  # (/aws/vendedlogs/Pipelines/* container group)
+    pipelines/t1LambdaContainerImageArchitecture.test.ts  # T1: every PackageType Image Lambda function
+                                 # (3dBasic, CAD/mesh extraction) declares Architectures [x86_64]
     support/asl.ts               # parseAsl + lambda-env / job-definition-name / declared-stage-name helpers
                                  # joining a producer's *_STATE_NAME literals to the synthesized ASL
     support/pipelineConstructHarness.ts  # One-pipeline synth harness (stack, VPC, storage stubs, EFS/ECR imports)
