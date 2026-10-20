@@ -58,12 +58,18 @@ def _lambda_client(status_code=200, execution_id="exec-1", body=None):
 
 def _s3_client(*pages):
     """An S3 client whose list_objects_v2 paginator serves `pages`, each a list of asset-relative
-    keys under ASSET_PREFIX (a key ending in '/' is a folder marker)."""
+    keys under ASSET_PREFIX (a key ending in '/' is a folder marker), and whose list_object_versions
+    reports the same keys as current content versions with version id `v:<key>`."""
     client = MagicMock(name="s3_client")
     client.get_paginator.return_value.paginate.return_value = [
         {"Contents": [{"Key": ASSET_PREFIX + key.lstrip("/"), "Size": 1} for key in page]}
         for page in pages
     ]
+    client.list_object_versions.return_value = {
+        "Versions": [{"Key": ASSET_PREFIX + key.lstrip("/"), "VersionId": f"v:{key}",
+                      "IsLatest": True} for page in pages for key in page],
+        "DeleteMarkers": [],
+    }
     return client
 
 
@@ -133,8 +139,8 @@ class Tables:
     """Every table the store touches, each a MagicMock scripted with the row shapes the store reads.
     Defaults describe an asset with the `owner` metadata key, one parentChild parent, one file
     (`/model.stl`) under its S3 prefix, an existing workflow (no systemConfig of its own) and
-    pipeline (arity one, no filters), the rule's template when it names one, and no prior compliance
-    state. `previous_row` is the whole prior asset-state row (it wins over `previous_state`). The
+    pipeline (arity one, no filters), the rule's template when it names one, no asset-version file
+    records, and no prior compliance state. `previous_row` is the whole prior asset-state row (it wins over `previous_state`). The
     evaluation table is a FakeEvaluationTable, so the completion path's conditional writes and its
     consistent re-reads of the tracking rows run against real rows."""
 
@@ -184,6 +190,8 @@ class Tables:
         self.buckets = MagicMock(name="s3_asset_buckets_table")
         self.buckets.query.return_value = {"Items": [
             {"bucketId": BUCKET_ID, "bucketName": BUCKET_NAME, "baseAssetsPrefix": "/"}]}
+        self.file_versions = MagicMock(name="asset_file_versions_table")
+        self.file_versions.query.return_value = {"Items": []}
         self.s3_client = _s3_client(list(asset_files))
         self.lambda_client = _lambda_client()
 
@@ -195,6 +203,7 @@ class Tables:
             patch(f"{STORE}.evaluation_table", self.evaluation),
             patch(f"{STORE}.audit_table", self.audit),
             patch(f"{STORE}.asset_file_metadata_table", self.metadata),
+            patch(f"{STORE}.asset_file_versions_table", self.file_versions),
             patch(f"{STORE}.metadata_schema_table", self.metadata_schema),
             patch(f"{STORE}.asset_links_table", self.links),
             patch(f"{STORE}.workflow_table", self.workflow),
@@ -1051,6 +1060,174 @@ class TestAssetFileListing:
              "bucketRegion": "eu-west-1"}]}
         self._list(tables)
         assert bucket_region_for_name("remote-asset-bucket") == "eu-west-1"
+
+
+# A vams-rules-v1 body carrying one rule of each of the file-structure, version-coverage and
+# asset-attribute types.
+FILE_RULES_SCHEMA_BODY = {
+    "schemaFormat": "vams-rules-v1",
+    "rules": {
+        "model-present": {
+            "ruleType": "fileStructure", "enforcement": "quarantine",
+            "checks": [{"name": "glb", "requiredPaths": [r"\.glb$"], "forbiddenPaths": [r"\.tmp$"]}],
+        },
+        "files-versioned": {
+            "ruleType": "versionCoverage", "enforcement": "warn",
+            "checks": [{"name": "all", "excludePaths": [r"\.previewFile\."]}],
+        },
+        "naming": {
+            "ruleType": "assetAttributes", "enforcement": "inform",
+            "checks": [{"name": "name", "field": "assetName", "matches": "^[A-Z]"},
+                       {"name": "tagged", "field": "tags", "requiredTags": ["engineering"]}],
+        },
+    },
+}
+
+
+def _versions_listing(*entries, delete_markers=()):
+    """A list_object_versions response under ASSET_PREFIX: `entries` are (key, versionId, isLatest)."""
+    return {
+        "Versions": [{"Key": ASSET_PREFIX + key.lstrip("/"), "VersionId": version_id,
+                      "IsLatest": latest} for key, version_id, latest in entries],
+        "DeleteMarkers": [{"Key": ASSET_PREFIX + key.lstrip("/"), "VersionId": "dm",
+                           "IsLatest": True} for key in delete_markers],
+    }
+
+
+def _file_version_rows(*pairs):
+    """Asset file-versions rows: (fileKey as stored, versionId)."""
+    return [{"databaseId:assetId:assetVersionId": f"{DB}:{ASSET}:1", "fileKey": key,
+             "databaseId:assetId": f"{DB}:{ASSET}", "versionId": version_id}
+            for key, version_id in pairs]
+
+
+@pytest.mark.unit
+class TestCurrentFiles:
+
+    def test_the_latest_content_version_of_every_key_is_listed(self):
+        tables = Tables()
+        tables.s3_client.list_object_versions.return_value = _versions_listing(
+            ("models/part.glb", "v2", True), ("models/part.glb", "v1", False),
+            ("models/", "vf", True), ("legacy.obj", "null", True), ("old.stl", "v0", False),
+            delete_markers=("old.stl",))
+        files = tables.run(store.get_current_files, DB, ASSET)
+        assert files == [store.engine.CurrentFile("/legacy.obj", None),
+                         store.engine.CurrentFile("/models/part.glb", "v2")]
+        assert tables.s3_client.list_object_versions.call_args.kwargs["Bucket"] == BUCKET_NAME
+        assert tables.s3_client.list_object_versions.call_args.kwargs["Prefix"] == ASSET_PREFIX
+
+    def test_a_row_the_caller_already_read_is_not_read_again(self):
+        tables = Tables()
+        asset = tables.asset.get_item.return_value["Item"]
+        tables.run(store.get_current_files, DB, ASSET, asset=asset)
+        tables.asset.get_item.assert_not_called()
+
+    def test_an_unresolvable_location_or_a_failed_listing_is_none(self):
+        tables = Tables()
+        tables.buckets.query.return_value = {"Items": []}
+        assert tables.run(store.get_current_files, DB, ASSET) is None
+        tables = Tables()
+        tables.s3_client.list_object_versions.side_effect = RuntimeError("AccessDenied")
+        assert tables.run(store.get_current_files, DB, ASSET) is None
+
+
+@pytest.mark.unit
+class TestVersionedFileKeys:
+
+    def test_every_asset_version_row_is_read_through_the_gsi_to_exhaustion(self):
+        tables = Tables()
+        tables.file_versions.query.side_effect = [
+            {"Items": _file_version_rows(("models/part.glb", "v1")),
+             "LastEvaluatedKey": {"k": 1}},
+            {"Items": _file_version_rows(("/models/part.glb", "v2"), ("legacy.obj", "null"),
+                                         ("readme.txt", None))},
+        ]
+        keys = tables.run(store.get_versioned_file_keys, DB, ASSET)
+        assert keys == {("/models/part.glb", "v1"), ("/models/part.glb", "v2")}
+        first, second = tables.file_versions.query.call_args_list
+        assert first.kwargs["IndexName"] == "databaseIdAssetIdIndex"
+        assert first.kwargs["KeyConditionExpression"]._values[1] == f"{DB}:{ASSET}"
+        assert second.kwargs["ExclusiveStartKey"] == {"k": 1}
+
+
+@pytest.mark.unit
+class TestFileAndAttributeRules:
+
+    def _tables(self, files=("/models/part.glb",), version_rows=(("models/part.glb", "v:/models/part.glb"),),
+                asset=None, **kwargs):
+        tables = Tables(schema_body=FILE_RULES_SCHEMA_BODY, asset_files=files, **kwargs)
+        tables.asset.get_item.return_value = {"Item": {
+            "databaseId": DB, "assetId": ASSET, "bucketId": BUCKET_ID,
+            "assetLocation": {"Key": ASSET_PREFIX}, "assetName": "Turbine",
+            "tags": ["engineering"], **(asset or {})}}
+        tables.file_versions.query.return_value = {"Items": _file_version_rows(*version_rows)}
+        return tables
+
+    def test_an_evaluation_without_these_rule_types_lists_no_files_and_reads_no_versions(self):
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY)
+        tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        tables.s3_client.list_object_versions.assert_not_called()
+        tables.s3_client.get_paginator.assert_not_called()
+        tables.file_versions.query.assert_not_called()
+        tables.asset.get_item.assert_not_called()
+
+    def test_an_attribute_rule_alone_reads_the_asset_row_but_lists_no_files(self):
+        body = {"schemaFormat": "vams-rules-v1",
+                "rules": {"naming": FILE_RULES_SCHEMA_BODY["rules"]["naming"]}}
+        tables = self._tables()
+        tables.schema.query.return_value = {"Items": [schema_row(body=body, version=1)]}
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["verdict"] == "compliant"
+        assert tables.asset.get_item.call_count == 1
+        tables.s3_client.list_object_versions.assert_not_called()
+        tables.file_versions.query.assert_not_called()
+
+    def test_all_three_pass_with_one_asset_read_and_one_listing(self):
+        tables = self._tables()
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["verdict"] == "compliant"
+        assert {r["ruleName"]: r["passed"] for r in result["ruleResults"]} == {
+            "model-present": True, "files-versioned": True, "naming": True}
+        assert tables.asset.get_item.call_count == 1
+        assert tables.s3_client.list_object_versions.call_count == 1
+        assert tables.file_versions.query.call_count == 1
+        parents, _ = tables.evaluation_records()
+        assert parents[0]["status"] == "completed"
+
+    def test_a_fresh_upload_not_yet_versioned_fails_the_coverage_rule(self):
+        tables = self._tables(files=("/models/part.glb", "/models/new.glb"))
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["verdict"] == "non_compliant"
+        coverage = next(r for r in result["ruleResults"] if r["ruleName"] == "files-versioned")
+        assert coverage["passed"] is False
+        assert coverage["measured"] == {"fileCount": 2, "uncoveredCount": 1,
+                                        "uncovered": ["/models/new.glb"]}
+
+    def test_a_missing_model_file_quarantines(self, notifications_aws):
+        tables = self._tables(files=("/models/part.stl",),
+                              version_rows=(("models/part.stl", "v:/models/part.stl"),))
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["verdict"] == "quarantined"
+        assert update_values(tables.state)[0]["quarantineReason"] == (
+            r"glb: no file matches required path pattern(s) \.glb$")
+
+    def test_a_listing_that_fails_errors_the_file_rules_and_leaves_the_attribute_verdict(self):
+        tables = self._tables()
+        tables.s3_client.list_object_versions.side_effect = RuntimeError("AccessDenied")
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        statuses = {r["ruleName"]: r["status"] for r in result["ruleResults"]}
+        assert statuses == {"model-present": "error", "files-versioned": "error",
+                            "naming": "evaluated"}
+        assert result["verdict"] == "compliant"
+        assert result["errorRules"] == ["model-present", "files-versioned"]
+
+    def test_a_missing_asset_row_errors_every_rule_of_these_types(self):
+        tables = self._tables()
+        tables.asset.get_item.return_value = {}
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert {r["status"] for r in result["ruleResults"]} == {"error"}
+        assert result["verdict"] == "error"
+        tables.s3_client.list_object_versions.assert_not_called()
 
 
 def _exception_row(state="exception", schema_name=SCHEMA, version=1, **extra):

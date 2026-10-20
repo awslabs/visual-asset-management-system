@@ -5,18 +5,23 @@
 
 Every function here is a pure function over data the caller has already fetched (schema
 bodies, asset metadata, metadata-schema field definitions, asset links, pipeline
-measurements). DynamoDB / S3 / Lambda access lives in
+measurements, the asset row, the asset's current files and the file versions its asset versions
+record). DynamoDB / S3 / Lambda access lives in
 `handlers/compliance/complianceEvaluationStore.py`, which calls into this module.
 """
 
 import json
+import re
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from customLogging.logger import safeLogger
 from models.compliance import (
+    ASSET_ATTRIBUTE_TAGS,
+    AssetAttributesRule,
     ComplianceRule,
     EvaluationVerdict,
+    FileStructureRule,
     MetadataCheck,
     MetadataRule,
     PipelineRule,
@@ -28,6 +33,7 @@ from models.compliance import (
     RULE_TYPE_MODELS,
     Tolerance,
     ToleranceOperator,
+    VersionCoverageRule,
     determine_verdict as verdict_of_results,
     resolve_schema_inheritance,
 )
@@ -189,21 +195,34 @@ def parse_resolved_rules(rules: Dict[str, Any]) -> Dict[str, ComplianceRule]:
     return parsed
 
 
-def split_rules(
-    typed_rules: Dict[str, ComplianceRule],
-) -> Tuple[Dict[str, MetadataRule], Dict[str, RelationshipRule], Dict[str, PipelineRule]]:
-    """Partition typed rules by kind: (metadata, relationship, pipeline)."""
-    metadata_rules: Dict[str, MetadataRule] = {}
-    relationship_rules: Dict[str, RelationshipRule] = {}
-    pipeline_rules: Dict[str, PipelineRule] = {}
+class RuleGroups(NamedTuple):
+    """Typed rules partitioned by kind, each keyed by rule name."""
+    metadata: Dict[str, MetadataRule]
+    relationship: Dict[str, RelationshipRule]
+    pipeline: Dict[str, PipelineRule]
+    fileStructure: Dict[str, FileStructureRule]
+    versionCoverage: Dict[str, VersionCoverageRule]
+    assetAttributes: Dict[str, AssetAttributesRule]
+
+
+_RULE_GROUP_OF_MODEL = {
+    MetadataRule: "metadata",
+    RelationshipRule: "relationship",
+    PipelineRule: "pipeline",
+    FileStructureRule: "fileStructure",
+    VersionCoverageRule: "versionCoverage",
+    AssetAttributesRule: "assetAttributes",
+}
+
+
+def split_rules(typed_rules: Dict[str, ComplianceRule]) -> RuleGroups:
+    """Partition typed rules by kind."""
+    groups: Dict[str, Dict[str, ComplianceRule]] = {name: {} for name in RuleGroups._fields}
     for rule_name, rule in typed_rules.items():
-        if isinstance(rule, MetadataRule):
-            metadata_rules[rule_name] = rule
-        elif isinstance(rule, RelationshipRule):
-            relationship_rules[rule_name] = rule
-        elif isinstance(rule, PipelineRule):
-            pipeline_rules[rule_name] = rule
-    return metadata_rules, relationship_rules, pipeline_rules
+        group = _RULE_GROUP_OF_MODEL.get(type(rule))
+        if group is not None:
+            groups[group][rule_name] = rule
+    return RuleGroups(**groups)
 
 
 # --- Metadata rules ---
@@ -532,6 +551,264 @@ def evaluate_pipeline_rules(
     ]
 
 
+# --- File-structure, version-coverage and asset-attribute rules ---
+
+
+class CurrentFile(NamedTuple):
+    """One current, non-archived file of an asset: its asset-relative key with a single leading '/'
+    and the S3 version id of its current version (None for an object without one, which is what an
+    unversioned bucket holds)."""
+    relativeKey: str
+    versionId: Optional[str]
+
+
+# Result messages of a rule the tooling could not evaluate. They name no pattern, key or value.
+INVALID_PATTERN_MESSAGE = "Invalid pattern in rule"
+FILES_UNAVAILABLE_MESSAGE = "Asset files could not be listed"
+ASSET_VERSIONS_UNAVAILABLE_MESSAGE = "Asset versions could not be read"
+ASSET_UNAVAILABLE_MESSAGE = "Asset could not be read"
+
+# The most file keys a message or a `measured` list names; the rest are counted.
+MAX_REPORTED_KEYS = 10
+# Length a measured asset name or description is cut to.
+MAX_MEASURED_TEXT_LENGTH = 256
+
+
+def pattern_subject(relative_key: str) -> str:
+    """The text a path pattern is searched in: the asset-relative key without its leading '/', so
+    `^models/` anchors at the asset root."""
+    return relative_key.lstrip("/")
+
+
+def normalize_relative_key(key: str) -> str:
+    """An asset-relative key with a single leading '/' (backend Rule 13)."""
+    return "/" + str(key or "").lstrip("/")
+
+
+def _compile(patterns: List[str]) -> List["re.Pattern"]:
+    """The patterns compiled; raises `re.error` on one that does not compile."""
+    return [re.compile(pattern) for pattern in patterns]
+
+
+def _reported(keys: List[str]) -> str:
+    """At most MAX_REPORTED_KEYS keys, with the remainder counted."""
+    shown = ", ".join(keys[:MAX_REPORTED_KEYS])
+    extra = len(keys) - MAX_REPORTED_KEYS
+    return f"{shown} and {extra} more" if extra > 0 else shown
+
+
+def _unique(values: List[Any]) -> List[Any]:
+    """The values in first-seen order without repeats."""
+    seen = []
+    for value in values:
+        if value not in seen:
+            seen.append(value)
+    return seen
+
+
+def _tooling_error(rule_name: str, rule_type: str, enforcement: str, message: str) -> RuleResult:
+    """A `status: error` result: the rule could not be evaluated."""
+    return RuleResult(ruleName=rule_name, ruleType=rule_type, enforcement=enforcement,
+                      passed=False, status=RULE_STATUS_ERROR, message=message)
+
+
+def evaluate_file_structure_rule(
+    rule_name: str,
+    rule: FileStructureRule,
+    current_files: Optional[List[CurrentFile]],
+) -> RuleResult:
+    """A file-structure rule against the asset's current files. `current_files` None (the listing
+    could not be made) or a pattern that does not compile is a `status: error` result."""
+    rule_type = rule.ruleType.value
+    enforcement = rule.enforcement.value
+    if current_files is None:
+        return _tooling_error(rule_name, rule_type, enforcement, FILES_UNAVAILABLE_MESSAGE)
+    try:
+        compiled = [(_compile(check.requiredPaths), _compile(check.forbiddenPaths))
+                    for check in rule.checks]
+    except re.error:
+        logger.warning(f"Rule '{rule_name}' carries a path pattern that does not compile")
+        return _tooling_error(rule_name, rule_type, enforcement, INVALID_PATTERN_MESSAGE)
+
+    subjects = [(f.relativeKey, pattern_subject(f.relativeKey)) for f in current_files]
+    file_count = len(current_files)
+    messages: List[str] = []
+    unmatched_required: List[str] = []
+    forbidden_matches: List[str] = []
+    expected: Dict[str, Any] = {}
+    for check, (required, forbidden) in zip(rule.checks, compiled):
+        expected[check.name] = {key: value for key, value in (
+            ("requiredPaths", check.requiredPaths), ("forbiddenPaths", check.forbiddenPaths),
+            ("minFiles", check.minFiles), ("maxFiles", check.maxFiles),
+        ) if value not in (None, [])}
+        unmatched = [pattern for pattern, regex in zip(check.requiredPaths, required)
+                     if not any(regex.search(subject) for _, subject in subjects)]
+        if unmatched:
+            messages.append(f"{check.name}: no file matches required path pattern(s) "
+                            f"{', '.join(unmatched)}")
+            unmatched_required.extend(unmatched)
+        offending = [key for key, subject in subjects
+                     if any(regex.search(subject) for regex in forbidden)]
+        if offending:
+            messages.append(f"{check.name}: {len(offending)} file(s) match a forbidden path "
+                            f"pattern: {_reported(offending)}")
+            forbidden_matches.extend(offending)
+        if check.minFiles is not None and file_count < check.minFiles:
+            messages.append(f"{check.name}: found {file_count} files, minimum is {check.minFiles}")
+        if check.maxFiles is not None and file_count > check.maxFiles:
+            messages.append(f"{check.name}: found {file_count} files, maximum is {check.maxFiles}")
+
+    return RuleResult(
+        ruleName=rule_name,
+        ruleType=rule_type,
+        enforcement=enforcement,
+        passed=not messages,
+        message="; ".join(messages) if messages else None,
+        measured={
+            "fileCount": file_count,
+            "unmatchedRequired": _unique(unmatched_required),
+            "forbiddenMatches": _unique(forbidden_matches)[:MAX_REPORTED_KEYS],
+        },
+        expected=expected,
+    )
+
+
+def evaluate_version_coverage_rule(
+    rule_name: str,
+    rule: VersionCoverageRule,
+    current_files: Optional[List[CurrentFile]],
+    versioned_file_keys: Optional[Set[Tuple[str, str]]],
+) -> RuleResult:
+    """A version-coverage rule: every current file not excluded by a check's `excludePaths` has its
+    current S3 version recorded in some asset version, i.e. `(relativeKey, versionId)` is in
+    `versioned_file_keys`. A file without an S3 version id is uncovered and reported on its own.
+    Either input None (the listing or the asset-version read could not be made) or a pattern that
+    does not compile is a `status: error` result."""
+    rule_type = rule.ruleType.value
+    enforcement = rule.enforcement.value
+    if current_files is None:
+        return _tooling_error(rule_name, rule_type, enforcement, FILES_UNAVAILABLE_MESSAGE)
+    if versioned_file_keys is None:
+        return _tooling_error(rule_name, rule_type, enforcement, ASSET_VERSIONS_UNAVAILABLE_MESSAGE)
+    try:
+        compiled = [_compile(check.excludePaths) for check in rule.checks]
+    except re.error:
+        logger.warning(f"Rule '{rule_name}' carries an exclude pattern that does not compile")
+        return _tooling_error(rule_name, rule_type, enforcement, INVALID_PATTERN_MESSAGE)
+
+    messages: List[str] = []
+    uncovered_keys: List[str] = []
+    expected: Dict[str, Any] = {}
+    for check, excludes in zip(rule.checks, compiled):
+        expected[check.name] = {"excludePaths": check.excludePaths} if check.excludePaths else {}
+        candidates = [f for f in current_files
+                      if not any(regex.search(pattern_subject(f.relativeKey)) for regex in excludes)]
+        unversioned = [f.relativeKey for f in candidates if not f.versionId]
+        uncovered = [f.relativeKey for f in candidates
+                     if f.versionId and (f.relativeKey, f.versionId) not in versioned_file_keys]
+        if uncovered:
+            messages.append(f"{check.name}: {len(uncovered)} file(s) whose current version is not "
+                            f"recorded in any asset version: {_reported(uncovered)}")
+        if unversioned:
+            messages.append(f"{check.name}: {len(unversioned)} file(s) without an S3 version id "
+                            f"cannot be recorded in an asset version: {_reported(unversioned)}")
+        uncovered_keys.extend(uncovered + unversioned)
+
+    uncovered_keys = sorted(_unique(uncovered_keys))
+    return RuleResult(
+        ruleName=rule_name,
+        ruleType=rule_type,
+        enforcement=enforcement,
+        passed=not messages,
+        message="; ".join(messages) if messages else None,
+        measured={
+            "fileCount": len(current_files),
+            "uncoveredCount": len(uncovered_keys),
+            "uncovered": uncovered_keys[:MAX_REPORTED_KEYS],
+        },
+        expected=expected,
+    )
+
+
+def asset_tags(asset_row: Dict[str, Any]) -> List[str]:
+    """The asset's tag values as a list of strings (a set-typed attribute sorted), [] when none."""
+    tags = asset_row.get(ASSET_ATTRIBUTE_TAGS) or []
+    if isinstance(tags, (set, frozenset)):
+        tags = sorted(tags)
+    return [tag for tag in tags if isinstance(tag, str)] if isinstance(tags, list) else []
+
+
+def asset_text_attribute(asset_row: Dict[str, Any], field: str) -> str:
+    """A string attribute of the asset row; "" when absent or not a string."""
+    value = asset_row.get(field)
+    return value if isinstance(value, str) else ""
+
+
+def evaluate_asset_attributes_rule(
+    rule_name: str,
+    rule: AssetAttributesRule,
+    asset_row: Optional[Dict[str, Any]],
+) -> RuleResult:
+    """An asset-attribute rule against the asset row. `measured` carries the values the checks read
+    (a name or description cut to MAX_MEASURED_TEXT_LENGTH, the tag list) and never a pattern. A
+    missing asset row or a pattern that does not compile is a `status: error` result."""
+    rule_type = rule.ruleType.value
+    enforcement = rule.enforcement.value
+    if asset_row is None:
+        return _tooling_error(rule_name, rule_type, enforcement, ASSET_UNAVAILABLE_MESSAGE)
+    try:
+        compiled = [re.compile(check.matches if check.matches is not None else check.notMatches)
+                    if check.field != ASSET_ATTRIBUTE_TAGS else None
+                    for check in rule.checks]
+    except re.error:
+        logger.warning(f"Rule '{rule_name}' carries an attribute pattern that does not compile")
+        return _tooling_error(rule_name, rule_type, enforcement, INVALID_PATTERN_MESSAGE)
+
+    messages: List[str] = []
+    measured: Dict[str, Any] = {}
+    expected: Dict[str, Any] = {}
+    tags = asset_tags(asset_row)
+    for check, regex in zip(rule.checks, compiled):
+        if check.field == ASSET_ATTRIBUTE_TAGS:
+            measured[ASSET_ATTRIBUTE_TAGS] = tags
+            expected[check.name] = {key: value for key, value in (
+                ("requiredTags", check.requiredTags), ("forbiddenTags", check.forbiddenTags),
+                ("minTags", check.minTags),
+            ) if value not in (None, [])}
+            missing = [tag for tag in check.requiredTags if tag not in tags]
+            if missing:
+                messages.append(f"{check.name}: missing required tags {', '.join(missing)}")
+            present = [tag for tag in check.forbiddenTags if tag in tags]
+            if present:
+                messages.append(f"{check.name}: carries forbidden tags {', '.join(present)}")
+            if check.minTags is not None and len(tags) < check.minTags:
+                messages.append(f"{check.name}: has {len(tags)} tags, minimum is {check.minTags}")
+            continue
+
+        value = asset_text_attribute(asset_row, check.field)
+        measured[check.field] = value[:MAX_MEASURED_TEXT_LENGTH]
+        if check.matches is not None:
+            expected[check.name] = {"field": check.field, "condition": "matches"}
+            if not value:
+                messages.append(f"{check.name}: {check.field} is empty")
+            elif not regex.search(value):
+                messages.append(f"{check.name}: {check.field} does not match the required pattern")
+        else:
+            expected[check.name] = {"field": check.field, "condition": "notMatches"}
+            if value and regex.search(value):
+                messages.append(f"{check.name}: {check.field} matches a forbidden pattern")
+
+    return RuleResult(
+        ruleName=rule_name,
+        ruleType=rule_type,
+        enforcement=enforcement,
+        passed=not messages,
+        message="; ".join(messages) if messages else None,
+        measured=measured,
+        expected=expected,
+    )
+
+
 # --- Aggregation ---
 
 
@@ -540,20 +817,49 @@ def evaluate_rules(
     asset_metadata: Dict[str, Any],
     metadata_schema_fields: Dict[str, Optional[List[Dict[str, Any]]]],
     asset_links: Dict[str, List[Dict[str, Any]]],
+    current_files: Optional[List[CurrentFile]] = None,
+    versioned_file_keys: Optional[Set[Tuple[str, str]]] = None,
+    asset_row: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[RuleResult], Dict[str, PipelineRule]]:
-    """Run every metadata and relationship rule; return their results and the pipeline rules
-    that still need a workflow execution.
+    """Run every synchronous rule (metadata, relationship, file-structure, version-coverage,
+    asset-attribute); return their results and the pipeline rules that still need a workflow
+    execution.
 
     `metadata_schema_fields` is keyed by `metadata_schema_ref_key(rule.metadataSchemaRef)`.
+    `current_files`, `versioned_file_keys` and `asset_row` are read only by the rule types that need
+    them (see `needs_current_files` / `needs_versioned_file_keys` / `needs_asset_row`); a rule whose
+    input is None records a `status: error` result.
     """
-    metadata_rules, relationship_rules, pipeline_rules = split_rules(typed_rules)
+    groups = split_rules(typed_rules)
     results: List[RuleResult] = []
-    for rule_name, rule in metadata_rules.items():
+    for rule_name, rule in groups.metadata.items():
         fields = metadata_schema_fields.get(metadata_schema_ref_key(rule.metadataSchemaRef))
         results.append(evaluate_metadata_rule(rule_name, rule, asset_metadata, fields))
-    for rule_name, rule in relationship_rules.items():
+    for rule_name, rule in groups.relationship.items():
         results.append(evaluate_relationship_rule(rule_name, rule, asset_links))
-    return results, pipeline_rules
+    for rule_name, rule in groups.fileStructure.items():
+        results.append(evaluate_file_structure_rule(rule_name, rule, current_files))
+    for rule_name, rule in groups.versionCoverage.items():
+        results.append(evaluate_version_coverage_rule(
+            rule_name, rule, current_files, versioned_file_keys))
+    for rule_name, rule in groups.assetAttributes.items():
+        results.append(evaluate_asset_attributes_rule(rule_name, rule, asset_row))
+    return results, groups.pipeline
+
+
+def needs_current_files(groups: RuleGroups) -> bool:
+    """Whether the rules read the asset's current file listing."""
+    return bool(groups.fileStructure or groups.versionCoverage)
+
+
+def needs_versioned_file_keys(groups: RuleGroups) -> bool:
+    """Whether the rules read the file versions the asset's versions record."""
+    return bool(groups.versionCoverage)
+
+
+def needs_asset_row(groups: RuleGroups) -> bool:
+    """Whether the rules read the asset row (its attributes, or the S3 location of its files)."""
+    return bool(groups.assetAttributes) or needs_current_files(groups)
 
 
 def metadata_schema_ref_key(ref) -> str:

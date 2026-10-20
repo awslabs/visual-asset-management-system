@@ -86,7 +86,8 @@ NOT_VAMS_RULES_MESSAGE = "schemaBody must be a vams-rules-v1 document"
 
 def validate_schema_body(schema_body):
     """Validate a schema body. Only the `vams-rules-v1` format (`schemaFormat: "vams-rules-v1"` plus
-    a `rules` object of pipeline, metadata and relationship rules) is accepted.
+    a `rules` object of pipeline, metadata, relationship, fileStructure, versionCoverage and
+    assetAttributes rules) is accepted.
 
     Returns (True, None) when valid, (False, error_message) otherwise. A body that does not declare
     the format is refused with NOT_VAMS_RULES_MESSAGE; a declared body whose rules fail their models

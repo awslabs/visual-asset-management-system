@@ -10,8 +10,8 @@
 - GET  /compliance/state/{databaseId}                  — compliance overview of a database
 
 Evaluation runs through `handlers/compliance/complianceEvaluationStore.run_evaluation`
-(metadata and relationship rules synchronously; pipeline rules launch workflow executions that
-the workflow callback finalizes).
+(metadata, relationship, file-structure, version-coverage and asset-attribute rules
+synchronously; pipeline rules launch workflow executions that the workflow callback finalizes).
 """
 
 import base64

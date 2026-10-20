@@ -11,7 +11,7 @@ and regex checks run.
 """
 
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from pydantic import Field
@@ -45,6 +45,9 @@ class RuleType(str, Enum):
     pipeline = "pipeline"
     metadata = "metadata"
     relationship = "relationship"
+    fileStructure = "fileStructure"
+    versionCoverage = "versionCoverage"
+    assetAttributes = "assetAttributes"
 
 
 class ToleranceOperator(str, Enum):
@@ -285,12 +288,175 @@ class RelationshipRule(BaseModel, extra='ignore'):
     checks: List[RelationshipCheck] = Field(min_items=1)
 
 
-ComplianceRule = Union[PipelineRule, MetadataRule, RelationshipRule]
+# Bounds on the file-structure, version-coverage and asset-attribute rules: the number of checks a
+# rule carries, the path patterns and tags a check lists, and the length of one pattern. Every
+# pattern is also held to the `REGEX` validator's compile check and backtracking budget.
+MAX_CHECKS_PER_RULE = 25
+MAX_PATH_PATTERNS = 25
+MAX_PATTERN_LENGTH = 512
+MAX_TAGS_PER_CHECK = 50
+
+# The asset-row attributes an asset-attribute check reads.
+ASSET_ATTRIBUTE_NAME = "assetName"
+ASSET_ATTRIBUTE_DESCRIPTION = "description"
+ASSET_ATTRIBUTE_TAGS = "tags"
+ASSET_ATTRIBUTE_TEXT_FIELDS = (ASSET_ATTRIBUTE_NAME, ASSET_ATTRIBUTE_DESCRIPTION)
+
+
+def validate_patterns(field_name: str, patterns: Optional[List[str]]) -> None:
+    """Raise ValueError unless every entry of `patterns` is a 1 to MAX_PATTERN_LENGTH character
+    regular expression the `REGEX` validator accepts. The message names the field, never a pattern."""
+    for pattern in patterns or []:
+        if not isinstance(pattern, str) or not pattern or len(pattern) > MAX_PATTERN_LENGTH:
+            raise ValueError(
+                f"Every '{field_name}' pattern must be 1 to {MAX_PATTERN_LENGTH} characters")
+        (valid, message) = validate({field_name: {'value': pattern, 'validator': 'REGEX'}})
+        if not valid:
+            raise ValueError(message)
+
+
+def validate_tags(field_name: str, tags: Optional[List[str]]) -> None:
+    """Raise ValueError unless every entry of `tags` is a non-empty string of at most 256
+    characters (`STRING_256_ARRAY`). The message names the field, never a tag."""
+    if not tags:
+        return
+    if any(not isinstance(tag, str) or not tag for tag in tags):
+        raise ValueError(f"Every '{field_name}' entry must be a non-empty string")
+    (valid, message) = validate({field_name: {'value': tags, 'validator': 'STRING_256_ARRAY'}})
+    if not valid:
+        raise ValueError(message)
+
+
+class FileStructureCheck(BaseModel, extra='ignore'):
+    """A single check within a file-structure rule, over the asset's current non-archived files.
+
+    `requiredPaths`: every pattern must match at least one file. `forbiddenPaths`: no file may match
+    any pattern. `minFiles` / `maxFiles`: bounds on the number of files. Patterns are Python regular
+    expressions searched (`re.search`) in each file's asset-relative path without its leading '/'.
+    """
+    name: str = Field(min_length=1, max_length=MAX_RULE_NAME_LENGTH)
+    description: Optional[str] = Field(None, max_length=MAX_DESCRIPTION_LENGTH)
+    requiredPaths: List[str] = Field(default_factory=list, max_items=MAX_PATH_PATTERNS)
+    forbiddenPaths: List[str] = Field(default_factory=list, max_items=MAX_PATH_PATTERNS)
+    minFiles: Optional[int] = Field(None, ge=0)
+    maxFiles: Optional[int] = Field(None, ge=0)
+
+    _trim_names = validator('name', pre=True, allow_reuse=True)(trim_name)
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
+
+    @root_validator(skip_on_failure=True)
+    def validate_check(cls, values):
+        min_files = values.get("minFiles")
+        max_files = values.get("maxFiles")
+        if not (values.get("requiredPaths") or values.get("forbiddenPaths")
+                or min_files is not None or max_files is not None):
+            raise ValueError(
+                "At least one of 'requiredPaths', 'forbiddenPaths', 'minFiles' or 'maxFiles' "
+                "is required")
+        if min_files is not None and max_files is not None and min_files > max_files:
+            raise ValueError("'minFiles' must be <= 'maxFiles'")
+        validate_patterns("requiredPaths", values.get("requiredPaths"))
+        validate_patterns("forbiddenPaths", values.get("forbiddenPaths"))
+        return values
+
+
+class FileStructureRule(BaseModel, extra='ignore'):
+    """File-structure rule: checks the paths and the number of the asset's current files."""
+    ruleType: RuleType = Field(RuleType.fileStructure, const=True)
+    enforcement: EnforcementLevel
+    checks: List[FileStructureCheck] = Field(min_items=1, max_items=MAX_CHECKS_PER_RULE)
+
+
+class VersionCoverageCheck(BaseModel, extra='ignore'):
+    """A single check within a version-coverage rule: every current non-archived file not matched by
+    an `excludePaths` pattern has its current S3 version recorded in some asset version."""
+    name: str = Field(min_length=1, max_length=MAX_RULE_NAME_LENGTH)
+    description: Optional[str] = Field(None, max_length=MAX_DESCRIPTION_LENGTH)
+    excludePaths: List[str] = Field(default_factory=list, max_items=MAX_PATH_PATTERNS)
+
+    _trim_names = validator('name', pre=True, allow_reuse=True)(trim_name)
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
+
+    @root_validator(skip_on_failure=True)
+    def validate_check(cls, values):
+        validate_patterns("excludePaths", values.get("excludePaths"))
+        return values
+
+
+class VersionCoverageRule(BaseModel, extra='ignore'):
+    """Version-coverage rule: checks that the asset's current files are captured in asset versions."""
+    ruleType: RuleType = Field(RuleType.versionCoverage, const=True)
+    enforcement: EnforcementLevel
+    checks: List[VersionCoverageCheck] = Field(min_items=1, max_items=MAX_CHECKS_PER_RULE)
+
+
+class AssetAttributeCheck(BaseModel, extra='ignore'):
+    """A single check within an asset-attribute rule, over one attribute of the asset row.
+
+    For `assetName` and `description` exactly one of `matches` (the value must match; a missing or
+    empty value fails) or `notMatches` (the value must not match; a missing or empty value passes) is
+    given, as a Python regular expression searched in the value. For `tags` at least one of
+    `requiredTags`, `forbiddenTags` or `minTags` is given; tags compare by exact value.
+    """
+    name: str = Field(min_length=1, max_length=MAX_RULE_NAME_LENGTH)
+    description: Optional[str] = Field(None, max_length=MAX_DESCRIPTION_LENGTH)
+    field: Literal["assetName", "description", "tags"]
+    matches: Optional[str] = None
+    notMatches: Optional[str] = None
+    requiredTags: List[str] = Field(default_factory=list, max_items=MAX_TAGS_PER_CHECK)
+    forbiddenTags: List[str] = Field(default_factory=list, max_items=MAX_TAGS_PER_CHECK)
+    minTags: Optional[int] = Field(None, ge=0)
+
+    _trim_names = validator('name', pre=True, allow_reuse=True)(trim_name)
+    _trim_text = validator('description', pre=True, allow_reuse=True)(trim_name)
+    _trim_tags = validator('requiredTags', 'forbiddenTags', pre=True, allow_reuse=True)(trim_entries)
+
+    @root_validator(skip_on_failure=True)
+    def validate_check(cls, values):
+        field = values.get("field")
+        has_pattern = values.get("matches") is not None or values.get("notMatches") is not None
+        has_tag_criteria = bool(values.get("requiredTags") or values.get("forbiddenTags")
+                                or values.get("minTags") is not None)
+        if field in ASSET_ATTRIBUTE_TEXT_FIELDS:
+            if has_tag_criteria:
+                raise ValueError(
+                    "'requiredTags', 'forbiddenTags' and 'minTags' apply to the tags field only")
+            if (values.get("matches") is None) == (values.get("notMatches") is None):
+                raise ValueError(
+                    "Exactly one of 'matches' or 'notMatches' is required for this field")
+            for key in ("matches", "notMatches"):
+                if values.get(key) is not None:
+                    validate_patterns(key, [values[key]])
+        else:
+            if has_pattern:
+                raise ValueError("'matches' and 'notMatches' do not apply to the tags field")
+            if not has_tag_criteria:
+                raise ValueError(
+                    "At least one of 'requiredTags', 'forbiddenTags' or 'minTags' is required")
+            validate_tags("requiredTags", values.get("requiredTags"))
+            validate_tags("forbiddenTags", values.get("forbiddenTags"))
+        return values
+
+
+class AssetAttributesRule(BaseModel, extra='ignore'):
+    """Asset-attribute rule: checks the asset's name, description or tags."""
+    ruleType: RuleType = Field(RuleType.assetAttributes, const=True)
+    enforcement: EnforcementLevel
+    checks: List[AssetAttributeCheck] = Field(min_items=1, max_items=MAX_CHECKS_PER_RULE)
+
+
+ComplianceRule = Union[
+    PipelineRule, MetadataRule, RelationshipRule, FileStructureRule, VersionCoverageRule,
+    AssetAttributesRule,
+]
 
 RULE_TYPE_MODELS = {
     RuleType.pipeline.value: PipelineRule,
     RuleType.metadata.value: MetadataRule,
     RuleType.relationship.value: RelationshipRule,
+    RuleType.fileStructure.value: FileStructureRule,
+    RuleType.versionCoverage.value: VersionCoverageRule,
+    RuleType.assetAttributes.value: AssetAttributesRule,
 }
 
 

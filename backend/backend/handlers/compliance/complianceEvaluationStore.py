@@ -5,9 +5,10 @@
 
 Owns every DynamoDB, S3 and Lambda access an evaluation needs — schema resolution, asset metadata
 and link reads, metadata-schema field lookup, the asset file listing and workflow / pipeline /
-template reads that select a pipeline rule's input files, workflow-execution launch for pipeline
-rules, evaluation / asset-state / audit writes — and orchestrates one evaluation through the pure
-functions in `common/compliance/evaluationEngine.py`. The evaluate service, the trigger, the
+template reads that select a pipeline rule's input files, the asset row, current file versions and
+asset-version file records the file-structure, version-coverage and asset-attribute rules read,
+workflow-execution launch for pipeline rules, evaluation / asset-state / audit writes — and
+orchestrates one evaluation through the pure functions in `common/compliance/evaluationEngine.py`. The evaluate service, the trigger, the
 cascade executor and the workflow callback all call into this module.
 
 Evaluation record (COMPLIANCE_EVALUATION_STORAGE_TABLE, PK `evaluationId`):
@@ -50,7 +51,7 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
@@ -61,7 +62,12 @@ from common.compliance import evaluationEngine as engine
 from common.compliance.auditRecord import build_audit_item
 from common.dynamodb import query_all_items, to_update_expr
 from common.resourceNames import ResourceKeys, get_table_name
-from common.s3 import bucket_region_fields, list_all_objects, region_routing_s3_client
+from common.s3 import (
+    bucket_region_fields,
+    list_all_object_versions,
+    list_all_objects,
+    region_routing_s3_client,
+)
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_METADATA_KEY,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
@@ -127,6 +133,7 @@ try:
     asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     asset_links_table_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
     asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    asset_file_versions_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSIONS_STORAGE_TABLE)
     metadata_schema_table_name = get_table_name(ResourceKeys.METADATA_SCHEMA_STORAGE_TABLE_V2)
     workflow_table_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
     pipeline_table_name = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
@@ -145,6 +152,7 @@ audit_table = dynamodb.Table(audit_table_name)
 asset_table = dynamodb.Table(asset_table_name)
 asset_links_table = dynamodb.Table(asset_links_table_name)
 asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name)
+asset_file_versions_table = dynamodb.Table(asset_file_versions_table_name)
 metadata_schema_table = dynamodb.Table(metadata_schema_table_name)
 workflow_table = dynamodb.Table(workflow_table_name)
 pipeline_table = dynamodb.Table(pipeline_table_name)
@@ -381,6 +389,64 @@ def asset_file_change_source(location: Tuple[str, str], relative_key: str) -> st
     """`object_change_source` of an asset-relative `/…` key under the asset's S3 location."""
     bucket, prefix = location
     return object_change_source(bucket, prefix + relative_key.lstrip("/"))
+
+
+# --- File-structure and version-coverage inputs ---
+
+# The S3 version id S3 reports for an object written while its bucket had no versioning.
+S3_NULL_VERSION_ID = "null"
+
+
+def get_current_files(database_id: str, asset_id: str,
+                      asset: Optional[Dict[str, Any]] = None) -> Optional[List[engine.CurrentFile]]:
+    """The asset's current, non-archived files as `(relativeKey, versionId)` pairs sorted by key:
+    one `list_object_versions` walk of the asset's S3 prefix, paged to exhaustion, keeping each key's
+    `IsLatest` content version. Folder markers are dropped; an archived file's latest entry is a
+    delete marker, so it is not listed. `relativeKey` carries a single leading '/'; `versionId` is
+    None for an object S3 reports without a version (`null`).
+
+    `asset` is the asset row when the caller has read it already. None (logged) when the asset or
+    its S3 location cannot be resolved or the listing fails."""
+    if asset is None:
+        asset = get_asset_item(database_id, asset_id)
+    location = asset_s3_location(asset) if asset else None
+    if location is None:
+        logger.error(f"Asset {database_id}:{asset_id} has no resolvable S3 location")
+        return None
+    bucket, prefix = location
+    try:
+        listing = list_all_object_versions(bucket, prefix, client=s3_client)
+    except Exception as e:
+        logger.exception(f"Could not list the file versions of asset {database_id}:{asset_id}: {e}")
+        return None
+    files: Dict[str, Optional[str]] = {}
+    for version in listing.get("Versions") or []:
+        key = version.get("Key", "")
+        if not version.get("IsLatest") or not key or key.endswith("/"):
+            continue
+        relative = key[len(prefix):] if key.startswith(prefix) else key
+        version_id = version.get("VersionId")
+        files[engine.normalize_relative_key(relative)] = (
+            version_id if version_id and version_id != S3_NULL_VERSION_ID else None)
+    return [engine.CurrentFile(key, version_id) for key, version_id in sorted(files.items())]
+
+
+def get_versioned_file_keys(database_id: str, asset_id: str) -> Set[Tuple[str, str]]:
+    """Every `(relativeKey, versionId)` an asset version of the asset records: the asset's rows of
+    the asset file-versions table, read through its `databaseIdAssetIdIndex` GSI (partition
+    `databaseId:assetId`, every asset version) to exhaustion. Each row's `fileKey` is normalized to a
+    single leading '/'; a row without an S3 version id records nothing a current file can match."""
+    rows = query_all_items(
+        asset_file_versions_table,
+        IndexName="databaseIdAssetIdIndex",
+        KeyConditionExpression=Key("databaseId:assetId").eq(f"{database_id}:{asset_id}"),
+    )
+    return {
+        (engine.normalize_relative_key(row["fileKey"]), row["versionId"])
+        for row in rows
+        if row.get("fileKey") and row.get("versionId")
+        and row["versionId"] != S3_NULL_VERSION_ID
+    }
 
 
 # --- Pipeline-rule input selection ---
@@ -800,9 +866,11 @@ def run_evaluation(
 ) -> Dict[str, Any]:
     """Evaluate an asset against a schema.
 
-    Metadata and relationship rules complete synchronously; pipeline rules launch workflow
-    executions and leave the evaluation `pending_pipeline` until the workflow callback finalizes
-    it. Writes the evaluation record, the asset-state row and the audit entries, and returns
+    Metadata, relationship, file-structure, version-coverage and asset-attribute rules complete
+    synchronously; pipeline rules launch workflow executions and leave the evaluation
+    `pending_pipeline` until the workflow callback finalizes it. The asset row, the asset's current
+    file listing and its asset-version file records are read only when a rule of a type that uses
+    them is present. Writes the evaluation record, the asset-state row and the audit entries, and returns
     `{evaluationId, verdict, complianceState, ruleResults, pipelineRulesPending, schemaVersion,
     exceptionApplied, hasRuleErrors, errorRules}`.
 
@@ -837,7 +905,7 @@ def run_evaluation(
     schema_version = engine.schema_version_number(schema_item.get("internalVersion"))
 
     typed_rules = engine.parse_resolved_rules(resolve_schema_rules(schema_body))
-    _, _, pipeline_rules = engine.split_rules(typed_rules)
+    groups = engine.split_rules(typed_rules)
 
     asset_metadata = get_asset_metadata(database_id, asset_id)
     metadata_schema_fields = {}
@@ -848,9 +916,18 @@ def run_evaluation(
             if key not in metadata_schema_fields:
                 metadata_schema_fields[key] = get_metadata_schema_fields(ref.databaseId, ref.schemaName)
     asset_links = get_asset_links(database_id, asset_id)
+    # Read only for the rule types that use them: an evaluation without a file-structure,
+    # version-coverage or asset-attribute rule lists no S3 objects and reads no file versions.
+    asset_row = get_asset_item(database_id, asset_id) if engine.needs_asset_row(groups) else None
+    current_files = (get_current_files(database_id, asset_id, asset=asset_row)
+                     if engine.needs_current_files(groups) and asset_row is not None else None)
+    versioned_file_keys = (get_versioned_file_keys(database_id, asset_id)
+                           if engine.needs_versioned_file_keys(groups) else None)
 
     rule_results, pipeline_rules = engine.evaluate_rules(
-        typed_rules, asset_metadata, metadata_schema_fields, asset_links)
+        typed_rules, asset_metadata, metadata_schema_fields, asset_links,
+        current_files=current_files, versioned_file_keys=versioned_file_keys,
+        asset_row=asset_row)
 
     base_record = _evaluation_record_base(evaluation_id, database_id, asset_id, schema_name,
                                           schema_version, evaluated_at, actor)
