@@ -109,10 +109,12 @@ Enable this pipeline in `infra/config/config.json`:
 | :------------------------------- | :-------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `enabled`                        | `false`                                                                                                   | Deploy the pipeline infrastructure. Requires `app.useGlobalVpc.enabled`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `useCodeBuild`                   | `false`                                                                                                   | Build the container image with AWS CodeBuild during deployment. CodeBuild runs outside the VPC to pull the public base image.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `autoRegisterWithVAMS`           | `true`                                                                                                    | Register the pipeline, its two templates, and the workflow in the global VAMS database during deployment.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `autoRegisterWithVAMS`           | `true`                                                                                                    | Register the pipeline, its four templates, and the workflow in the global VAMS database during deployment.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `bedrockModelId`                 | `global.anthropic.claude-sonnet-5-5` (commercial); empty in the GovCloud and EU Sovereign Cloud templates | One Amazon Bedrock model id used for both text and vision calls through the Converse API with forced tool use. A cross-Region inference-profile prefix is partition-specific (`global.` and `us.` exist in the commercial partition; AWS GovCloud (US) uses `us-gov.`); configuration validation rejects an empty value and a commercial prefix outside the commercial partition. The GovCloud template leaves the value empty for the operator to set from a `us-gov.` inference profile; the EU Sovereign Cloud template also ships it empty, but the pipeline cannot be enabled there (see the partition prerequisite below). |
 | `limits.maxVideoFiles`           | `4`                                                                                                       | Maximum number of video files per run (integer, 1 to 4).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `limits.maxTotalDurationMinutes` | `240`                                                                                                     | Maximum summed audio duration per run (integer, 1 to 480; Amazon Transcribe accepts at most 28,800 seconds of audio per job).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+
+The model is set per deployment: `bedrockModelId` is the only place a model id is configured, every Amazon Bedrock call of every template uses it, and the job role's Amazon Bedrock grant is scoped to it at synthesis. No template or workload profile may name a model; a rendered configuration with a `modelId`, `model_id`, or similar key anywhere in it is refused before the job starts. To use another model, change `bedrockModelId` and redeploy.
 
 The byte caps are not operator options. They are `config.ts` constants sized to the container's 100 GiB ephemeral volume: `VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB` (4096) per video and `VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB` (16384) per run.
 
@@ -120,12 +122,12 @@ The pipeline is accepted in the commercial and AWS GovCloud (US) partitions. Ama
 
 ## Input Parameters
 
-Parameters reach the pipeline through the template selected for the run (`systemConfig.requireTemplate` is `true`, so a run cannot start without one). Deployment registers two templates; a run may also supply an edited copy of a template body, which `constructPipeline` validates in full before any job starts.
+Parameters reach the pipeline through the template selected for the run (`systemConfig.requireTemplate` is `true`, so a run cannot start without one). Deployment registers four templates; `video-sop-bom-full` is the default. A run may also supply an edited copy of a template body, which `constructPipeline` validates in full before any job starts.
 
 **`video-sop-bom-full`** (default) — every deliverable:
 
 ```json
-{"mode":"full","languageCode":"{{LANGUAGE_CODE}}","videoOrder":"{{VIDEO_ORDER}}","productName":"{{PRODUCT_NAME}}","contributors":"{{CONTRIBUTORS}}","maxKeyFrames":{{MAX_KEY_FRAMES}},"partLevelBase":"{{PART_LEVEL_BASE}}","generateLabSummary":{{GENERATE_LAB_SUMMARY}},"additionalInstructions":"{{ADDITIONAL_INSTRUCTIONS}}"}
+{"mode":"full","languageCode":"{{LANGUAGE_CODE}}","videoOrder":"{{VIDEO_ORDER}}","productName":"{{PRODUCT_NAME}}","contributors":"{{CONTRIBUTORS}}","maxKeyFrames":{{MAX_KEY_FRAMES}},"partLevelBase":"{{PART_LEVEL_BASE}}","generateLabSummary":{{GENERATE_LAB_SUMMARY}},"runVisualVerification":{{RUN_VISUAL_VERIFICATION}},"additionalInstructions":"{{ADDITIONAL_INSTRUCTIONS}}"}
 ```
 
 **`video-sop-bom-transcript-only`** — the transcript files, the video timeline, and the analysis report, with no Amazon Bedrock calls. Use it as an inexpensive dry run that proves audio, limits, and Amazon Transcribe reachability, or as the transcript deliverable for non-teardown footage:
@@ -133,6 +135,8 @@ Parameters reach the pipeline through the template selected for the run (`system
 ```json
 { "mode": "transcript", "languageCode": "{{LANGUAGE_CODE}}", "videoOrder": "{{VIDEO_ORDER}}" }
 ```
+
+**`video-sop-bom-construction-site`** and **`video-sop-bom-business-process`** — full-mode runs with a workload profile for non-teardown footage; see [Templates and workload profiles](#templates-and-workload-profiles).
 
 ### Parameter Reference
 
@@ -145,11 +149,63 @@ Parameters reach the pipeline through the template selected for the run (`system
 | `MAX_KEY_FRAMES`          | integer | `60`        | Upper bound on extracted key frames, 1 to 200. A value above 200 is refused before the container starts, naming both values.                                                                                                                                                                  |
 | `PART_LEVEL_BASE`         | enum    | `0`         | First BOM part level, `0` or `1`.                                                                                                                                                                                                                                                             |
 | `GENERATE_LAB_SUMMARY`    | boolean | `true`      | Whether `lab-summary.json` and `lab-summary.md` are produced.                                                                                                                                                                                                                                 |
+| `RUN_VISUAL_VERIFICATION` | boolean | `true`      | Whether key frames are extracted and verified with Amazon Bedrock vision calls. `false` skips both stages: no `frames.json` or `keyframe-*.jpg` is written, SOP steps carry no `frame_ref`, and the outputs rest on the transcript alone. An absent value means `true`.                       |
 | `ADDITIONAL_INSTRUCTIONS` | string  | —           | Free text appended to the extraction prompts under the pipeline's system boundary: it may adjust emphasis and vocabulary but cannot change the output schema or field meanings. At most 4,000 characters; a longer value is refused, naming both lengths.                                     |
 
 :::note[What the system boundary does]
-Every Amazon Bedrock call carries a fixed system prompt stating that the transcript, frames, and any text they contain are untrusted data to be described rather than instructions to follow, and that the operator's additional instructions cannot change the schema. The transcript is passed inside a `<transcript>` element and `ADDITIONAL_INSTRUCTIONS` under its own heading. Every structured response is requested through a forced tool call and validated against the tool's JSON Schema before it is used.
+Every Amazon Bedrock call carries a fixed system prompt stating that the transcript, frames, and any text they contain are untrusted data to be described rather than instructions to follow, and that the operator's additional instructions cannot change the schema. A workload profile can append its own system text after it but cannot replace it. The transcript is passed inside a `<transcript>` element and `ADDITIONAL_INSTRUCTIONS` under its own heading. Every structured response is requested through a forced tool call and validated against the tool's JSON Schema before it is used.
 :::
+
+## Templates and workload profiles
+
+Each template is one way to run the same pipeline. A template that carries a `profile` block in its body is a **workload profile**: it keeps the pipeline's stages and tool schemas but replaces the built-in teardown prompts, can lower stage limits, and names extra deliverables. The model never changes between templates; it is the deployment's `bedrockModelId`.
+
+| Template                          | Footage                                        | Amazon Bedrock stages                                                 | Deliverables beyond the transcript set                                                                                                                          |
+| :-------------------------------- | :--------------------------------------------- | :-------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `video-sop-bom-full` (default)    | Narrated product teardown                      | Extraction, visual verification (`RUN_VISUAL_VERIFICATION`), finalize | `sop`, `bom` (JSON, Markdown, CSV), `lab-summary`, `frames.json` and key frames                                                                                 |
+| `video-sop-bom-transcript-only`   | Any narrated video                             | None                                                                  | None                                                                                                                                                            |
+| `video-sop-bom-construction-site` | Narrated construction site walkthrough         | Extraction, visual verification (`RUN_VISUAL_VERIFICATION`), finalize | `sop` (the walkthrough log), `equipment_list` (table), `activity_log` (timeline), `site_report` (hazards, PPE, progress, recommendations), frames when verified |
+| `video-sop-bom-business-process`  | Narrated screen or desk recording of a process | Extraction and finalize only; visual verification is off              | `sop` (the step list), `process_doc` (systems, inputs and outputs, decision points, handoffs), `overview` (stats, automation opportunities, risks)              |
+
+The construction-site template takes `LANGUAGE_CODE`, `VIDEO_ORDER`, `SITE_NAME`, `MAX_KEY_FRAMES`, `RUN_VISUAL_VERIFICATION`, and `ADDITIONAL_INSTRUCTIONS`; the business-process template takes `LANGUAGE_CODE`, `VIDEO_ORDER`, `PROCESS_NAME`, and `ADDITIONAL_INSTRUCTIONS`. `SITE_NAME` and `PROCESS_NAME` fill the same `productName` key as `PRODUCT_NAME`. Neither profile template writes a BOM or a lab summary.
+
+### The `profile` block
+
+A custom template (or a run's edited template body) can define its own profile. The block is validated by `constructPipeline` before any job starts and again by the container:
+
+```json
+{
+    "mode": "full",
+    "...": "the full template's keys",
+    "profile": {
+        "profileId": "my-workload",
+        "profileVersion": "1",
+        "prompts": {
+            "window_extraction": "... <transcript>\n[[TRANSCRIPT]]\n</transcript> ...",
+            "vision_verification": "... [[FRAME_LIST]] ...",
+            "finalize": "... [[MERGED_STEPS]] ...",
+            "system_boundary": "You are a ... analyst."
+        },
+        "stages": {
+            "window_extraction": { "maxTokens": 12000 },
+            "vision_verification": { "maxTokens": 16000, "batchMaxFrames": 6 },
+            "finalize": { "maxTokens": 24000 }
+        },
+        "artifacts": [
+            { "name": "site_report", "sourceField": "site_report", "renderer": "summary-card" }
+        ]
+    }
+}
+```
+
+| Field                         | Rules                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| :---------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `profileId`, `profileVersion` | Required. Recorded in the run's configuration echo; publish a changed profile as a new template rather than editing a shipped one, so a past execution's configuration is the one it ran with.                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `prompts`                     | Optional, per stage. A configured prompt replaces that stage's built-in prompt; an absent one keeps it. Stage inputs are placed as `[[TOKEN]]` (VAMS substitutes `{{tag}}` in the body first, so a declared tag can still inject an operator value). Each stage supplies the same inputs as its built-in prompt: `window_extraction` must place `[[TRANSCRIPT]]` and `finalize` must place `[[MERGED_STEPS]]`; a token the stage does not supply, or a `{{tag}}` VAMS left unresolved, is refused. `system_boundary` is appended to the fixed system boundary and takes no inputs. At most 32,000 characters per prompt (4,000 for `system_boundary`). |
+| `stages`                      | Optional knobs, each bounded by the built-in value so a profile can lower a limit but not raise it: `maxTokens` for each stage (1,024 to 16,000 for extraction, to 32,000 for the others) and `batchMaxFrames` for visual verification (1 to 12).                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `artifacts`                   | Optional, at most 8. Each writes `<name>.json` from the finalize output field `sourceField`, and `<name>.md` when `renderer` is `table`, `steps-timeline`, or `summary-card`. The finalize call is required to return every `sourceField`; a run whose output lacks one fails with `VideoSopBomModelOutputInvalid` naming the field, and nothing is ingested. Names are lowercase letters, digits, and underscores; `transcript`, `sop`, `bom`, and `frames` are reserved.                                                                                                                                                                             |
+
+The extraction and visual-verification stages keep their tool schemas, so a profile's prompts map their domain onto the same step, component, and key-moment fields (the shipped profiles explain the mapping in their prompts). A profile that configures a `finalize` prompt must return `summary` and `safety_notes`, which the SOP is built from; the BOM rows and lab summary become optional, and `bom.*` files are written only when `bom_rows` comes back. A profile that keeps the built-in `finalize` prompt keeps the full teardown contract.
 
 ## Limits
 
@@ -187,17 +243,17 @@ You must enable access to the configured Amazon Bedrock model in your deployment
 
 Outputs are per-run aggregates, so they anchor at the asset root rather than beside each input video. The container writes flat into a `sop-bom/` folder and the workflow inserts the run folder as the leaf, so files land at `sop-bom/<executionId>/` on the asset and two separate executions never share a folder. A re-run of an execution reproduces that execution's layout: it writes into the original run's folder, and the earlier deliverables remain available as prior versions of each file. No previews and no file-level metadata are written. A run that fails ingests nothing: there are no partial deliverables.
 
-| File                                         | Full mode                           | Transcript mode | Content                                                                                                                |
-| :------------------------------------------- | :---------------------------------- | :-------------- | :--------------------------------------------------------------------------------------------------------------------- |
-| `transcript.json`                            | Yes                                 | Yes             | Raw Amazon Transcribe output                                                                                           |
-| `transcript.txt`                             | Yes                                 | Yes             | Readable timestamped transcript                                                                                        |
-| `transcript.vtt`, `transcript.srt`           | Yes                                 | Yes             | WebVTT and SRT subtitles                                                                                               |
-| `video-timeline.json`                        | Yes                                 | Yes             | Per-video offsets built from the extracted audio durations, so timestamps match what Amazon Transcribe reports         |
-| `sop.json`, `sop.md`                         | Yes                                 | —               | Steps with action, component, fasteners, locations, dependencies, tools, motion, force, and failure modes              |
-| `bom.json`, `bom.md`, `bom.csv`              | Yes                                 | —               | Bill of materials; `bom.md` is a seven-column readable table indented by part level                                    |
-| `lab-summary.json`, `lab-summary.md`         | When `GENERATE_LAB_SUMMARY` is true | —               | Sections 1.1 to 1.9 of the lab summary; mass, component count, and materials breakdown are computed from the BOM       |
-| `frames.json`, `keyframe-NNNN-HHhMMmSSs.jpg` | Yes                                 | —               | Key-frame manifest keyed by moment index and the frames (at most `MAX_KEY_FRAMES`, long edge at most 1568 px)          |
-| `analysis-report.json`                       | Yes                                 | Yes             | Models, per-stage tokens and timings, windows, frames requested/extracted/skipped, limits, warnings, vocabulary misses |
+| File                                         | Full mode                              | Transcript mode | Content                                                                                                                |
+| :------------------------------------------- | :------------------------------------- | :-------------- | :--------------------------------------------------------------------------------------------------------------------- |
+| `transcript.json`                            | Yes                                    | Yes             | Raw Amazon Transcribe output                                                                                           |
+| `transcript.txt`                             | Yes                                    | Yes             | Readable timestamped transcript                                                                                        |
+| `transcript.vtt`, `transcript.srt`           | Yes                                    | Yes             | WebVTT and SRT subtitles                                                                                               |
+| `video-timeline.json`                        | Yes                                    | Yes             | Per-video offsets built from the extracted audio durations, so timestamps match what Amazon Transcribe reports         |
+| `sop.json`, `sop.md`                         | Yes                                    | —               | Steps with action, component, fasteners, locations, dependencies, tools, motion, force, and failure modes              |
+| `bom.json`, `bom.md`, `bom.csv`              | Yes                                    | —               | Bill of materials; `bom.md` is a seven-column readable table indented by part level                                    |
+| `lab-summary.json`, `lab-summary.md`         | When `GENERATE_LAB_SUMMARY` is true    | —               | Sections 1.1 to 1.9 of the lab summary; mass, component count, and materials breakdown are computed from the BOM       |
+| `frames.json`, `keyframe-NNNN-HHhMMmSSs.jpg` | When `RUN_VISUAL_VERIFICATION` is true | —               | Key-frame manifest keyed by moment index and the frames (at most `MAX_KEY_FRAMES`, long edge at most 1568 px)          |
+| `analysis-report.json`                       | Yes                                    | Yes             | Models, per-stage tokens and timings, windows, frames requested/extracted/skipped, limits, warnings, vocabulary misses |
 
 ### `bom.csv` contract
 
@@ -238,11 +294,11 @@ Both modes write `asset.metadata.json` (`updateType: update`) on the output asse
 }
 ```
 
-Full mode adds `sopBom_productName`, `sopBom_componentCount`, `sopBom_stepCount`, `sopBom_totalMassG`, `sopBom_sopPath`, `sopBom_bomPath`, and `sopBom_labSummaryPath`. Path values are the final asset-relative paths, including the run folder.
+Full mode adds `sopBom_productName`, `sopBom_componentCount`, `sopBom_stepCount`, `sopBom_totalMassG`, `sopBom_sopPath`, `sopBom_bomPath`, and `sopBom_labSummaryPath`. A run whose finalize output carries no BOM (the construction-site and business-process templates) omits `sopBom_componentCount`, `sopBom_totalMassG`, and `sopBom_bomPath`, and `sopBom_labSummaryPath` is written only with a lab summary. Path values are the final asset-relative paths, including the run folder.
 
 ### Results summary
 
-Both modes write `results/summary.json` (under 50 KB), which the execution details page shows: `mode`, `status`, `fileCount`, `bedrock` (`calls`, `inputTokens`, `outputTokens`), `limits.configured` and `limits.observed`, `timings`, `warnings`, the final paths, and the resolved configuration.
+Both modes write `results/summary.json` (under 50 KB), which the execution details page shows: `mode`, `status`, `fileCount`, `bedrock` (`calls`, `inputTokens`, `outputTokens`), `limits.configured` and `limits.observed`, `timings`, `warnings`, the final paths, and the resolved configuration. A workload profile's prompt text is echoed there as `sha256:<hex>` digests to stay within the size budget; `analysis-report.json` carries the full text.
 
 ### A video with no speech
 
