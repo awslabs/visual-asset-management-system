@@ -237,6 +237,12 @@ def build_definition(case, globals_, input_name, naming_module, model_id):
     }
 
 
+def bedrock_region(globals_, environ=os.environ):
+    """The Region the run uses: an exported ``AWS_REGION``, else the corpus's ``globals.region``, else
+    us-east-1. It is set as ``AWS_REGION`` too, so the model and the container package agree on it."""
+    return environ.setdefault("AWS_REGION", globals_.get("region") or "us-east-1")
+
+
 def run_one(case_id, corpus_path, container_dir, out_root, model_id, fake_script=None):
     corpus = load_corpus(corpus_path)
     case = corpus["_by_id"][case_id]
@@ -249,7 +255,7 @@ def run_one(case_id, corpus_path, container_dir, out_root, model_id, fake_script
     os.makedirs(work_dir)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-    os.environ.setdefault("AWS_REGION", g.get("region", "us-east-1"))
+    region = bedrock_region(g)
     os.environ[MODEL_ID_ENV] = model_id
     sys.path.insert(0, container_dir)
     from cad_step_agent import agent as agent_module  # noqa: E402
@@ -286,7 +292,7 @@ def run_one(case_id, corpus_path, container_dir, out_root, model_id, fake_script
             return holder["rec"]
         from strands.models import BedrockModel  # noqa: WPS433 - only a model-driven run needs it
 
-        model = BedrockModel(model_id=model_id, region_name=g.get("region") or os.environ.get("AWS_REGION"),
+        model = BedrockModel(model_id=model_id, region_name=region,
                              temperature=agent_module.TEMPERATURE, max_tokens=agent_module.MAX_TOKENS)
         holder["rec"] = AgentRecorder(agent_module.build_agent(model, bound_tools))
         return holder["rec"]

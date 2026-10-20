@@ -52,7 +52,7 @@ A CadQuery venv is a Python 3.12 virtual environment with the container's requir
 
 ## Offline runs (agent on this host)
 
-`run_offline.py` runs the container package in-process against Amazon Bedrock with the deployment's model, writes every output to a local directory and scores it. It attaches no guardrail and makes no task-token callbacks; the deployed path is `run_live.py`'s.
+`run_offline.py` runs the container package in-process against Amazon Bedrock with the deployment's model, writes every output to a local directory and scores it. It attaches no guardrail and makes no task-token callbacks; the deployed path is `run_live.py`'s. The model is called in the exported `AWS_REGION`, else in the corpus's `globals.region`.
 
 ```bash
 export AWS_REGION=us-east-1 BEDROCK_MODEL_ID=<the deployment's bedrockModelId>
