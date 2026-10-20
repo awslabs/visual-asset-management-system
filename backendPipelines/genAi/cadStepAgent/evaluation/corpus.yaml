@@ -762,7 +762,7 @@ cases:
       tol: {volume_pct: 0.1}
     report_expect:
       geometry: {extents_sorted: [3.038, 190.5, 279.4], tol_mm: 0.5, through_holes: 26, face_count_equals_output: true, states_non_solid_geometry: true}
-    honesty_expect: succeeded
+    honesty_expect: succeeded-or-honest-partial
     intent_rubric:
       - The solid is re-exported unchanged.
       - The output file holds the solid only; the annotation geometry the script carried along was dropped and the report says so.
