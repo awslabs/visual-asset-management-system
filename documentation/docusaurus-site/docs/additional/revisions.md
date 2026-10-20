@@ -69,6 +69,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **`/generate-permissions` agent skill** — The deny-tagged overlay guidance and example use `is_one_of` on the list-valued `tags` field (previously `contains`, which the constraint API rejects), and the operator table states that `tags` accepts only `is_one_of` / `is_not_one_of`. (issue #391)
 -   **Assertion-shape guard passes on development** — The assetLinks batch_get helper test asserts the recorded `sleep` call count before asserting over its contents, so a zero-sleep test double fails instead of passing vacuously. (issue #414)
 -   **Lambda container image architecture is explicit** — The 3D Basic Conversion and CAD/Mesh Metadata Extraction functions declare `x86_64`, matching their `linux/amd64` images, and the GenAI 3D metadata labeling layer is bundled for `linux/amd64`. (issue #513)
+-   **SageMaker stop on workflow failure classified by status** — The workflow error handler holds `sagemaker:DescribeTrainingJob` and `sagemaker:DescribePipelineExecution` on the same account and Region namespaces as its SageMaker Stop grants, so a refused stop of a registered training job or pipeline execution is classified by the job's live status, as on abort, rather than by the service's error wording. (issue #505)
 
 **Other changes:**
 

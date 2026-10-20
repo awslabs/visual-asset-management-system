@@ -620,9 +620,15 @@ export function buildHandleExecutionErrorFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             // Stop a SageMaker training job or pipeline execution a pipeline this failure is about to
-            // stamp terminal registered as its sub-process. Scoped exactly as the abort path's grant is:
+            // stamp terminal registered as its sub-process, and describe it when the stop is refused so
+            // the refusal is classified by its live status. Scoped exactly as the abort path's grant is:
             // the two share the stop implementation and act on the same registration rows.
-            actions: ["sagemaker:StopTrainingJob", "sagemaker:StopPipelineExecution"],
+            actions: [
+                "sagemaker:StopTrainingJob",
+                "sagemaker:StopPipelineExecution",
+                "sagemaker:DescribeTrainingJob",
+                "sagemaker:DescribePipelineExecution",
+            ],
             resources: [
                 `arn:${Partition()}:sagemaker:${config.env.region}:${
                     config.env.account
