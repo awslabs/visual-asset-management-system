@@ -116,11 +116,60 @@ POST /compliance/schemas
                         "tolerance": { "operator": "eq", "value": 1 }
                     }
                 ]
+            },
+            "deliverable-layout": {
+                "ruleType": "fileStructure",
+                "enforcement": "warn",
+                "checks": [
+                    {
+                        "name": "model-and-no-temp-files",
+                        "requiredPaths": ["^models/", "\\.glb$"],
+                        "forbiddenPaths": ["\\.tmp$"],
+                        "maxFiles": 500
+                    }
+                ]
+            },
+            "files-versioned": {
+                "ruleType": "versionCoverage",
+                "enforcement": "warn",
+                "checks": [
+                    { "name": "current-files-versioned", "excludePaths": ["\\.previewFile\\."] }
+                ]
+            },
+            "naming-and-tags": {
+                "ruleType": "assetAttributes",
+                "enforcement": "inform",
+                "checks": [
+                    {
+                        "name": "name-convention",
+                        "field": "assetName",
+                        "matches": "^[A-Z][A-Za-z0-9-]*$"
+                    },
+                    {
+                        "name": "tagged",
+                        "field": "tags",
+                        "requiredTags": ["survey"],
+                        "forbiddenTags": ["draft"]
+                    }
+                ]
             }
         }
     }
 }
 ```
+
+The rule types and what each check reads:
+
+| `ruleType`        | A check passes when                                                                                                                                                           | Reads                                                  |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `pipeline`        | The measurement in `outputField` is within the `tolerance` (asynchronous: a workflow execution runs first)                                                                    | The pipeline's `compliance-output.json`                |
+| `metadata`        | The metadata schema's required fields are present (`validateRequired`), typed as declared (`validateTypes`), and every `additionalRequiredFields` key is present              | Asset metadata, the referenced metadata schema         |
+| `relationship`    | The number of `direction` links of `relationshipType` is within `minCount` / `maxCount`                                                                                       | Asset links                                            |
+| `fileStructure`   | Every `requiredPaths` pattern matches some file, no file matches a `forbiddenPaths` pattern, and the file count is within `minFiles` / `maxFiles`                             | The asset's current, non-archived files                |
+| `versionCoverage` | Every current file not matched by `excludePaths` has its current S3 version recorded in some asset version                                                                    | The current files and the asset versions' file records |
+| `assetAttributes` | `assetName` / `description` matches `matches` or does not match `notMatches`; `tags` carries every `requiredTags` entry, no `forbiddenTags` entry and at least `minTags` tags | The asset record                                       |
+
+Path, name and description patterns are Python regular expressions searched (`re.search`) in the value; a file path is matched without its leading `/`, so `^models/` anchors at the asset root. Every pattern is checked when the schema is saved — it must compile, may not repeat a group that itself repeats or alternates or use a backreference, and must stay within the backtracking budget (at most three unbounded quantifiers) — and the `400` message names the field, never the pattern. Bounds: at most 25 checks per `fileStructure`, `versionCoverage` or `assetAttributes` rule; at most 25 patterns of 1-512 characters per `requiredPaths`, `forbiddenPaths` or `excludePaths` list; at most 50 tags of 1-256 characters per `requiredTags` or `forbiddenTags` list. See [Compliance — The vams-rules-v1 format](../concepts/compliance.md#the-vams-rules-v1-format) for each type in full, including why `versionCoverage` fails after every upload until a version is created.
 
 :::note[Only vams-rules-v1 documents are accepted]
 `schemaBody` must be a `vams-rules-v1` document: an object with `schemaFormat` set to `vams-rules-v1` and at least one rule under `rules`. A plain JSON Schema, a template file's envelope (`metadata`, `schemaName`, `schemaBody`) or any other object is rejected with `400` and the message `schemaBody must be a vams-rules-v1 document`; the specific validation failure is written to the handler's log. A pipeline rule's `inputFiles` selects which of the asset's files the workflow receives (`matching`, `wholeAsset` or `explicit`); the modes and the arity rule are described in [Pipeline rules](../concepts/compliance.md#pipeline-rules).
@@ -440,7 +489,7 @@ DELETE /compliance/bind/{databaseId}/{assetId}
 
 ## Evaluate an asset
 
-Evaluates an asset against the named schema, or against its bound schema when the body names none. Naming a schema evaluates against it without changing the asset's binding; the evaluation record carries the `schemaName` used. Metadata and relationship rules complete within the request. Each pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and the evaluation stays `pending_pipeline` (asset state `pending_evaluation`) until the execution completes — see [Pipeline rules](../concepts/compliance.md#pipeline-rules). When the asset has children linked by `parentChild` asset links, a cascade awaiting approval is opened after the evaluation, unless one for this asset is already pending approval.
+Evaluates an asset against the named schema, or against its bound schema when the body names none. Naming a schema evaluates against it without changing the asset's binding; the evaluation record carries the `schemaName` used. Metadata, relationship, file-structure, version-coverage and asset-attribute rules complete within the request. Each pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and the evaluation stays `pending_pipeline` (asset state `pending_evaluation`) until the execution completes — see [Pipeline rules](../concepts/compliance.md#pipeline-rules). When the asset has children linked by `parentChild` asset links, a cascade awaiting approval is opened after the evaluation, unless one for this asset is already pending approval.
 
 While the asset holds an active exception against the schema version evaluated, the rule results and violations are recorded on the evaluation as computed, the evaluation carries `exceptionApplied: true`, and a failing verdict leaves the asset in the `exception` state rather than quarantining it; an evaluation against another schema or a newer version supersedes the exception and applies its verdict normally (see [Grant an exception](#grant-an-exception-to-a-quarantined-asset)).
 

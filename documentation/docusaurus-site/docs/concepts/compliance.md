@@ -30,7 +30,7 @@ A schema whose `isSystem` flag is set is a system schema. Only the system user c
 
 ### Schema format
 
-A schema body is a `vams-rules-v1` document: named rules of three types, each with an enforcement level, whose pipeline rules compare measurements against tolerances. Registration and update accept only a valid `vams-rules-v1` document — an object with `schemaFormat` set to `vams-rules-v1` and at least one rule under `rules`. Any other body (a plain JSON Schema, a template file's envelope, an object without rules) is rejected with `400` and the message `schemaBody must be a vams-rules-v1 document`; the specific validation failure is written to the handler's log rather than returned.
+A schema body is a `vams-rules-v1` document: named rules of six types, each with an enforcement level. Registration and update accept only a valid `vams-rules-v1` document — an object with `schemaFormat` set to `vams-rules-v1` and at least one rule under `rules`. Any other body (a plain JSON Schema, a template file's envelope, an object without rules) is rejected with `400` and the message `schemaBody must be a vams-rules-v1 document`; the specific validation failure is written to the handler's log rather than returned.
 
 Every schema record the listing and the single-schema read return carries a top-level `schemaFormat`, derived from its body: `vams-rules-v1`, or `legacy` for a row whose body is not a `vams-rules-v1` document. A legacy schema cannot be bound (the bind request is refused with `400` and `Schema body must be a vams-rules-v1 document`), updated or evaluated; it is listed — marked **Legacy** on the Compliance Schemas page and printed as `Format: legacy` by the CLI — only so that it can be found and deleted.
 
@@ -38,12 +38,12 @@ Every schema record the listing and the single-schema read return carries a top-
 
 Four ready-to-register schemas ship in `documentation/complianceSchemaTemplates/`. Each file wraps a `vams-rules-v1` body in an envelope (`metadata`, `schemaName`, `description`, `schemaBody`); register the `schemaBody` under the `schemaName` — the envelope itself is not a schema body and is rejected as one.
 
-| Template                     | Rules                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `3d-model-quality`           | A `warn` metadata rule against the `GLOBAL` `defaultAsset` metadata schema (required fields, declared types, plus `polygon_count`, `coordinate_system` and `units`), and a `quarantine` pipeline rule that converts the model through the built-in 3D conversion workflow: `pipelineRef` `{"databaseId": "GLOBAL", "workflowId": "conversion-3d-basic", "pipelineDatabaseId": "GLOBAL", "pipelineId": "conversion-3d-basic", "templateId": "convert-to-glb"}`, `inputFiles` `{"mode": "matching", "filter": ["*.stl", "*.obj", "*.ply", "*.gltf", "*.xyz"]}`, with checks on `execution_success` and `processing_duration_seconds`. The filter names source formats only and excludes `*.glb`: the pipeline writes a `.glb` back into the asset, and a filter that admitted it would select the pipeline's own output. |
-| `data-classification`        | A `quarantine` metadata rule requiring `classification`, `handling_instructions` and `data_steward`, and an `inform` metadata rule recording `dissemination_controls` and `originating_agency`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `engineering-asset-standard` | A `warn` metadata rule requiring `owner`, `classification` and `retention_days`, an `inform` metadata rule recording `department` and `review_date`, and a `warn` relationship rule requiring at least one `parentChild` parent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `retention-policy`           | A `warn` metadata rule requiring `retention_days`, `disposal_method` and `data_owner`, and an `inform` metadata rule recording `last_access_review` and `next_review_date`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Template                     | Rules                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `3d-model-quality`           | A `warn` metadata rule against the `GLOBAL` `defaultAsset` metadata schema (required fields, declared types, plus `polygon_count`, `coordinate_system` and `units`), a `warn` file-structure rule requiring a source model file and forbidding `.tmp`, `.bak`, `.DS_Store` and `Thumbs.db` files, and a `quarantine` pipeline rule that converts the model through the built-in 3D conversion workflow: `pipelineRef` `{"databaseId": "GLOBAL", "workflowId": "conversion-3d-basic", "pipelineDatabaseId": "GLOBAL", "pipelineId": "conversion-3d-basic", "templateId": "convert-to-glb"}`, `inputFiles` `{"mode": "matching", "filter": ["*.stl", "*.obj", "*.ply", "*.gltf", "*.xyz"]}`, with checks on `execution_success` and `processing_duration_seconds`. The filter names source formats only and excludes `*.glb`: the pipeline writes a `.glb` back into the asset, and a filter that admitted it would select the pipeline's own output. |
+| `data-classification`        | A `quarantine` metadata rule requiring `classification`, `handling_instructions` and `data_steward`, and an `inform` metadata rule recording `dissemination_controls` and `originating_agency`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `engineering-asset-standard` | A `warn` metadata rule requiring `owner`, `classification` and `retention_days`, an `inform` metadata rule recording `department` and `review_date`, a `warn` relationship rule requiring at least one `parentChild` parent, and an `inform` asset-attribute rule checking the asset name against a naming convention.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `retention-policy`           | A `warn` metadata rule requiring `retention_days`, `disposal_method` and `data_owner`, an `inform` metadata rule recording `last_access_review` and `next_review_date`, and a `warn` version-coverage rule requiring every current file except preview images to be recorded in an asset version.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 The pipeline template's `filter` names the source formats the conversion workflow accepts, and the workflow takes exactly one input file, so a model asset that holds exactly one such file converts; an asset holding several records the rule as an `error` result — a [tooling failure](#tooling-failures) that applies no enforcement — until the selection is narrowed (a tighter `filter`, or `explicit` keys).
 
@@ -57,7 +57,7 @@ A `vams-rules-v1` body is a set of named rules. Each rule has a `ruleType`, an `
     "extends": "parent-schema-name",
     "rules": {
         "rule-name": {
-            "ruleType": "pipeline | metadata | relationship",
+            "ruleType": "pipeline | metadata | relationship | fileStructure | versionCoverage | assetAttributes",
             "enforcement": "quarantine | warn | inform",
             "checks": []
         }
@@ -65,11 +65,14 @@ A `vams-rules-v1` body is a set of named rules. Each rule has a `ruleType`, an `
 }
 ```
 
-| Rule type      | Purpose                                                                                                                                                                                  | Evaluation                                       |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| `metadata`     | Validate the asset's metadata against a VAMS metadata schema — required fields present, values of the declared type, and any `additionalRequiredFields`.                                 | Within the evaluation request                    |
-| `relationship` | Validate that the asset carries the required asset links — `direction` (`parents`, `children`, `related`), `relationshipType` (`parentChild`, `related`) and a `minCount` or `maxCount`. | Within the evaluation request                    |
-| `pipeline`     | Run a VAMS workflow and compare the measurements one of its pipelines reports against tolerances.                                                                                        | Asynchronous, completed by the workflow callback |
+| Rule type         | Purpose                                                                                                                                                                                  | Evaluation                                       |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `metadata`        | Validate the asset's metadata against a VAMS metadata schema — required fields present, values of the declared type, and any `additionalRequiredFields`.                                 | Within the evaluation request                    |
+| `relationship`    | Validate that the asset carries the required asset links — `direction` (`parents`, `children`, `related`), `relationshipType` (`parentChild`, `related`) and a `minCount` or `maxCount`. | Within the evaluation request                    |
+| `pipeline`        | Run a VAMS workflow and compare the measurements one of its pipelines reports against tolerances.                                                                                        | Asynchronous, completed by the workflow callback |
+| `fileStructure`   | Require or forbid file paths and bound the number of the asset's current files — see [File-structure rules](#file-structure-rules).                                                      | Within the evaluation request                    |
+| `versionCoverage` | Require every current file to be recorded in an asset version — see [Version-coverage rules](#version-coverage-rules).                                                                   | Within the evaluation request                    |
+| `assetAttributes` | Check the asset's name, description or tags — see [Asset-attribute rules](#asset-attribute-rules).                                                                                       | Within the evaluation request                    |
 
 :::info[Relationship type values]
 `relationshipType` takes the value stored on the asset link: `parentChild` or `related`.
@@ -80,6 +83,96 @@ A `vams-rules-v1` body is a set of named rules. Each rule has a `ruleType`, an `
 | `quarantine` | The asset is `quarantined`                                                |
 | `warn`       | The asset is `non_compliant` unless a `quarantine`-level rule also failed |
 | `inform`     | The failure is recorded in the rule results; the asset stays `compliant`  |
+
+#### Path and attribute patterns
+
+`fileStructure`, `versionCoverage` and `assetAttributes` rules take Python regular expressions. A pattern is searched (`re.search`) in the value rather than matched against all of it, so `^` and `$` anchor it; a file path is matched without its leading `/`, so `^models/` means a top-level `models` folder and `\.glb$` a GLB file anywhere. Every pattern is checked when the schema is registered or updated: it must compile, may not repeat a group that itself repeats or alternates (`(a+)+`) or use a backreference, and must stay within the same backtracking budget constraint criteria are held to — at most three unbounded quantifiers (`.*`, `+`, `{n,}`). A pattern that fails is rejected with `400` and a message naming the field, never the pattern. Should a stored pattern fail to compile at evaluation time, the rule records an `error` result with the message `Invalid pattern in rule`.
+
+| Bound                                                                   | Limit                     |
+| ----------------------------------------------------------------------- | ------------------------- |
+| Checks per `fileStructure`, `versionCoverage` or `assetAttributes` rule | 25                        |
+| Patterns per `requiredPaths`, `forbiddenPaths` or `excludePaths` list   | 25, 1-512 characters each |
+| `matches` / `notMatches`                                                | 1-512 characters          |
+| Tags per `requiredTags` or `forbiddenTags` list                         | 50, 1-256 characters each |
+
+#### File-structure rules
+
+A file-structure rule checks the asset's current, non-archived files — one listing of the asset's S3 prefix per evaluation, folder markers and archived files left out:
+
+```json
+{
+    "ruleType": "fileStructure",
+    "enforcement": "warn",
+    "checks": [
+        {
+            "name": "deliverable-layout",
+            "requiredPaths": ["^models/", "\\.glb$"],
+            "forbiddenPaths": ["\\.tmp$", "(^|/)\\.DS_Store$"],
+            "minFiles": 1,
+            "maxFiles": 500
+        }
+    ]
+}
+```
+
+| Field            | Passes when                                                                                  |
+| ---------------- | -------------------------------------------------------------------------------------------- |
+| `requiredPaths`  | Every pattern matches at least one file; the message names the patterns no file matches      |
+| `forbiddenPaths` | No file matches any pattern; the message names up to ten offending files and counts the rest |
+| `minFiles`       | The asset has at least this many files                                                       |
+| `maxFiles`       | The asset has at most this many files (at least `minFiles` when both are given)              |
+
+A check needs at least one of the four. The rule result's `measured` carries `fileCount`, `unmatchedRequired` and the first ten `forbiddenMatches`. When the asset's files cannot be listed (no resolvable bucket, a denied listing), the rule records an `error` result.
+
+#### Version-coverage rules
+
+A version-coverage rule checks that every current, non-archived file — except those an `excludePaths` pattern matches — has its current S3 version recorded in some asset version, that is, that the asset's current file set can be reproduced from its versions:
+
+```json
+{
+    "ruleType": "versionCoverage",
+    "enforcement": "warn",
+    "checks": [{ "name": "current-files-versioned", "excludePaths": ["\\.previewFile\\."] }]
+}
+```
+
+The rule compares each current file's S3 version id against the file records of all of the asset's versions. A file in a bucket without versioning has no version id; it is reported as not covered, with a message of its own. The rule result's `measured` carries `fileCount`, `uncoveredCount` and the first ten `uncovered` paths.
+
+:::warning[A version-coverage rule fails after every upload]
+An upload writes new S3 versions that no asset version records yet, so the rule fails from every upload until an asset version is created. Creating an asset version — or reverting to one, which creates a new version — records the asset's latest change as `assetVersion` and re-evaluates the asset, which clears the failure. At `quarantine` level with `app.compliance.quarantineBlocksDownload` on, a freshly uploaded asset is therefore download-blocked until it is versioned. Use `warn` for this rule unless that is the intended workflow.
+:::
+
+#### Asset-attribute rules
+
+An asset-attribute rule checks fields of the asset record:
+
+```json
+{
+    "ruleType": "assetAttributes",
+    "enforcement": "inform",
+    "checks": [
+        { "name": "name-convention", "field": "assetName", "matches": "^[A-Z][A-Za-z0-9-]*$" },
+        { "name": "no-placeholder", "field": "description", "notMatches": "(?i)^(tbd|todo)$" },
+        {
+            "name": "released",
+            "field": "tags",
+            "requiredTags": ["released"],
+            "forbiddenTags": ["draft"],
+            "minTags": 1
+        }
+    ]
+}
+```
+
+| `field`       | Criteria                                                                                                                            |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `assetName`   | Exactly one of `matches` (the name must match; an empty name fails) or `notMatches` (the name must not match; an empty name passes) |
+| `description` | As for `assetName`                                                                                                                  |
+| `tags`        | At least one of `requiredTags` (every tag present), `forbiddenTags` (none present) or `minTags`; tags compare by exact value        |
+
+The rule result's `measured` carries the values the checks read — `assetName` and `description` cut to 256 characters, the `tags` list — and never a pattern; its `expected` names each check's field and condition.
+
+Editing an asset's name, description or tags does not by itself start an evaluation once the asset has had an upload or an asset version: the next upload, asset version, sweep or **Evaluate Now** re-evaluates it.
 
 #### Schema inheritance
 
@@ -235,14 +328,14 @@ Beside its state, a compliance record carries `lastEvaluationStatus` — `comple
 
 An evaluation checks one asset against one schema and produces a verdict. Evaluations start in four ways:
 
-1. **Automatically** — the compliance trigger evaluates an asset of a database with `complianceAutoEval` on when the asset is created or updated. Uploads are detected from the file indexer's events: the trigger subscribes to the indexer's Amazon SNS topic, unwraps each message to its Amazon S3 object records and queues one evaluation per asset a message touches; a change to the asset record itself (the asset table's stream) triggers the same way. Both paths report the same upload — the indexer emits one message per object and every upload stamps the asset record — so each skips a change the asset's last evaluation already covers: an evaluation that started after the upload's completion was recorded on the asset (`lastUploadAt`, written once every object of the upload was copied; a pipeline rule's own output write re-stamps the asset's latest change but does not move it) has read every file of that upload, whichever path reported the change first and however many files it carried, so one upload produces one evaluation. Only an object written outside a recorded upload completion is judged against its own S3 event time, with a two-second margin that absorbs clock skew between the S3 and trigger clocks. A file that lands after that evaluation started is a new change and deliberately yields a second evaluation. An asset without a record is registered under the database binding first. Files a workflow execution wrote — the outputs a pipeline rule's own run puts back into the asset, carrying object metadata `vams-changesource` of `workflowExecution` and recorded on the asset as `lastChangeSource` — never trigger an evaluation, and are never counted as a pipeline rule's inputs, so a rule cannot re-evaluate and quarantine an asset on the strength of its own output. A change the in-flight evaluation has already read — one made at or before its start — is covered by that evaluation; a later change starts a new evaluation. When two evaluations overlap, an older evaluation's callback never overwrites the state a newer one has written: the asset-state row records the newest evaluation only, and an older one finalizes its own evaluation record alone.
+1. **Automatically** — the compliance trigger evaluates an asset of a database with `complianceAutoEval` on when the asset is created or updated. Uploads are detected from the file indexer's events: the trigger subscribes to the indexer's Amazon SNS topic, unwraps each message to its Amazon S3 object records and queues one evaluation per asset a message touches; a change to the asset record itself (the asset table's stream) triggers the same way. Both paths report the same upload — the indexer emits one message per object and every upload stamps the asset record — so each skips a change the asset's last evaluation already covers: an evaluation that started after the upload's completion was recorded on the asset (`lastUploadAt`, written once every object of the upload was copied; a pipeline rule's own output write re-stamps the asset's latest change but does not move it) has read every file of that upload, whichever path reported the change first and however many files it carried, so one upload produces one evaluation. Only an object written outside a recorded upload completion is judged against its own S3 event time, with a two-second margin that absorbs clock skew between the S3 and trigger clocks. A file that lands after that evaluation started is a new change and deliberately yields a second evaluation. Creating an asset version, or reverting to one, records `assetVersion` as the asset's latest change and re-evaluates it the same way, so a [version-coverage rule](#version-coverage-rules) follows the new version. An asset without a record is registered under the database binding first. Files a workflow execution wrote — the outputs a pipeline rule's own run puts back into the asset, carrying object metadata `vams-changesource` of `workflowExecution` and recorded on the asset as `lastChangeSource` — never trigger an evaluation, and are never counted as a pipeline rule's inputs, so a rule cannot re-evaluate and quarantine an asset on the strength of its own output. A change the in-flight evaluation has already read — one made at or before its start — is covered by that evaluation; a later change starts a new evaluation. When two evaluations overlap, an older evaluation's callback never overwrites the state a newer one has written: the asset-state row records the newest evaluation only, and an older one finalizes its own evaluation record alone.
 2. **On demand** — the **Evaluate Now** action on the asset's Compliance tab, or `POST /compliance/evaluate/{databaseId}/{assetId}`. A request that names a `schemaName` evaluates against that schema without changing the asset's binding; the evaluation record carries the schema used, and the response carries the `schemaVersion` read, `exceptionApplied` and `hasRuleErrors`.
 3. **Sweep** — the **Sweep** action on the Compliance Schemas page, or `POST /compliance/sweep/{schemaName}`, evaluates every asset bound to the schema (200 per call).
 4. **Cascade** — an approved cascade evaluates the downstream assets of a parent in dependency order.
 
-An evaluation resolves the schema (merging inherited rules), runs the metadata and relationship rules against the asset's metadata and links, launches a workflow execution for each pipeline rule, and writes an evaluation record, the asset's compliance state and a `compliance_check` audit entry. With no pipeline rules the verdict is final at once; otherwise the evaluation stays `pending_pipeline` until the [workflow completion](#workflow-completion) events arrive.
+An evaluation resolves the schema (merging inherited rules), runs the metadata, relationship, file-structure, version-coverage and asset-attribute rules against the asset's metadata, links, current files, asset-version file records and record — the file listing and the version records are read only when a rule needs them — launches a workflow execution for each pipeline rule, and writes an evaluation record, the asset's compliance state and a `compliance_check` audit entry. With no pipeline rules the verdict is final at once; otherwise the evaluation stays `pending_pipeline` until the [workflow completion](#workflow-completion) events arrive.
 
-The verdict follows the highest-severity failure among the rules that were evaluated: any `quarantine`-level failure → `quarantined`; otherwise any `warn`-level failure → `non_compliant`; otherwise `compliant`. While the asset holds an active [exception](#exceptions) against the schema version evaluated, a failing verdict maps to the `exception` state instead. Each rule's outcome is kept on the evaluation record as a rule result (`ruleName`, `ruleType`, `enforcement`, `status`, `passed`, `message`, and for pipeline rules the `measured` and `expected` values), and the messages of the failed rules as `violations`. A rule result whose `status` is `error` is a [tooling failure](#tooling-failures): it is excluded from the verdict and from the violations, and the evaluation records it under `hasRuleErrors` / `errorRules`.
+The verdict follows the highest-severity failure among the rules that were evaluated: any `quarantine`-level failure → `quarantined`; otherwise any `warn`-level failure → `non_compliant`; otherwise `compliant`. While the asset holds an active [exception](#exceptions) against the schema version evaluated, a failing verdict maps to the `exception` state instead. Each rule's outcome is kept on the evaluation record as a rule result (`ruleName`, `ruleType`, `enforcement`, `status`, `passed`, `message`, and the `measured` and `expected` values the rule type reports), and the messages of the failed rules as `violations`. A rule result whose `status` is `error` is a [tooling failure](#tooling-failures): it is excluded from the verdict and from the violations, and the evaluation records it under `hasRuleErrors` / `errorRules`.
 
 ## Quarantine
 

@@ -9518,7 +9518,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/evaluate/{databaseId}/{assetId}:
         post:
             summary: "Evaluate an asset."
-            description: "Evaluates an asset against the named schema, or against its bound schema when the body names none; naming a schema never changes the asset's binding. Metadata and relationship rules complete in the request; a pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and leaves the evaluation `pending_pipeline` until the execution completes. While the asset holds an active exception against the schema version evaluated, a failing verdict is recorded on the evaluation (`exceptionApplied`) and the asset stays in the `exception` state instead of being quarantined. A rule whose tooling fails (an input selection the workflow cannot use, an execution that cannot be launched) is a rule result with `status` `error`: not a verdict, its enforcement does not apply, and `hasRuleErrors` is true; when every rule errored the `verdict` is `error` and the asset's state is left unchanged. The response also carries the `schemaVersion` read. A cascade awaiting approval is opened for an asset with children unless one for it is already pending."
+            description: "Evaluates an asset against the named schema, or against its bound schema when the body names none; naming a schema never changes the asset's binding. Metadata, relationship, file-structure, version-coverage and asset-attribute rules complete in the request; a pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and leaves the evaluation `pending_pipeline` until the execution completes. While the asset holds an active exception against the schema version evaluated, a failing verdict is recorded on the evaluation (`exceptionApplied`) and the asset stays in the `exception` state instead of being quarantined. A rule whose tooling fails (an input selection the workflow cannot use, an execution that cannot be launched) is a rule result with `status` `error`: not a verdict, its enforcement does not apply, and `hasRuleErrors` is true; when every rule errored the `verdict` is `error` and the asset's state is left unchanged. The response also carries the `schemaVersion` read. A cascade awaiting approval is opened for an asset with children unless one for it is already pending."
             parameters:
                 - name: databaseId
                   in: path
@@ -16010,6 +16010,9 @@ components:
                             - $ref: "#/components/schemas/compliancePipelineRule"
                             - $ref: "#/components/schemas/complianceMetadataRule"
                             - $ref: "#/components/schemas/complianceRelationshipRule"
+                            - $ref: "#/components/schemas/complianceFileStructureRule"
+                            - $ref: "#/components/schemas/complianceVersionCoverageRule"
+                            - $ref: "#/components/schemas/complianceAssetAttributesRule"
             required:
                 - schemaFormat
                 - rules
@@ -16213,6 +16216,149 @@ components:
                             - name
                             - direction
                             - relationshipType
+            required:
+                - ruleType
+                - enforcement
+                - checks
+
+        complianceFileStructureRule:
+            type: object
+            description: "Checks the paths and the number of the asset's current, non-archived files. Path patterns are Python regular expressions searched (`re.search`) in each file's asset-relative path without its leading `/`, so `^models/` anchors at the asset root and `\\.glb$` matches a GLB anywhere. Every pattern is checked when the schema is saved: it must compile, may not repeat a group that itself repeats or alternates or use a backreference, and must stay within the backtracking budget (at most three unbounded quantifiers)."
+            properties:
+                ruleType:
+                    type: string
+                    enum: [fileStructure]
+                enforcement:
+                    $ref: "#/components/schemas/complianceEnforcementLevel"
+                checks:
+                    type: array
+                    minItems: 1
+                    maxItems: 25
+                    items:
+                        type: object
+                        description: "At least one of `requiredPaths`, `forbiddenPaths`, `minFiles` or `maxFiles`."
+                        properties:
+                            name:
+                                type: string
+                            description:
+                                type: string
+                            requiredPaths:
+                                type: array
+                                description: "Every pattern must match at least one file."
+                                maxItems: 25
+                                items:
+                                    type: string
+                                    minLength: 1
+                                    maxLength: 512
+                            forbiddenPaths:
+                                type: array
+                                description: "No file may match any pattern."
+                                maxItems: 25
+                                items:
+                                    type: string
+                                    minLength: 1
+                                    maxLength: 512
+                            minFiles:
+                                type: integer
+                                minimum: 0
+                            maxFiles:
+                                type: integer
+                                minimum: 0
+                                description: "At least `minFiles` when both are given."
+                        required:
+                            - name
+            required:
+                - ruleType
+                - enforcement
+                - checks
+
+        complianceVersionCoverageRule:
+            type: object
+            description: "Checks that every current, non-archived file of the asset, except those matching `excludePaths`, has its current S3 version recorded in some asset version. A file in a bucket without versioning has no version id and is reported as not covered. The rule fails after every upload until an asset version is created; creating or reverting to an asset version re-evaluates the asset. At `quarantine` level with `quarantineBlocksDownload` on, a fresh upload is therefore download-blocked until it is versioned, so `warn` is the usual level."
+            properties:
+                ruleType:
+                    type: string
+                    enum: [versionCoverage]
+                enforcement:
+                    $ref: "#/components/schemas/complianceEnforcementLevel"
+                checks:
+                    type: array
+                    minItems: 1
+                    maxItems: 25
+                    items:
+                        type: object
+                        properties:
+                            name:
+                                type: string
+                            description:
+                                type: string
+                            excludePaths:
+                                type: array
+                                description: "Patterns (same semantics and checks as a file-structure rule's) of files the check ignores, e.g. `\\.previewFile\\.` for preview images."
+                                maxItems: 25
+                                items:
+                                    type: string
+                                    minLength: 1
+                                    maxLength: 512
+                        required:
+                            - name
+            required:
+                - ruleType
+                - enforcement
+                - checks
+
+        complianceAssetAttributesRule:
+            type: object
+            description: "Checks attributes of the asset record: its name, description or tags."
+            properties:
+                ruleType:
+                    type: string
+                    enum: [assetAttributes]
+                enforcement:
+                    $ref: "#/components/schemas/complianceEnforcementLevel"
+                checks:
+                    type: array
+                    minItems: 1
+                    maxItems: 25
+                    items:
+                        type: object
+                        description: "For `assetName` and `description`, exactly one of `matches` (a missing or empty value fails) or `notMatches` (a missing or empty value passes), a Python regular expression searched in the value and checked like a file-structure pattern. For `tags`, at least one of `requiredTags`, `forbiddenTags` or `minTags`; tags compare by exact value."
+                        properties:
+                            name:
+                                type: string
+                            description:
+                                type: string
+                            field:
+                                type: string
+                                enum: [assetName, description, tags]
+                            matches:
+                                type: string
+                                minLength: 1
+                                maxLength: 512
+                            notMatches:
+                                type: string
+                                minLength: 1
+                                maxLength: 512
+                            requiredTags:
+                                type: array
+                                maxItems: 50
+                                items:
+                                    type: string
+                                    minLength: 1
+                                    maxLength: 256
+                            forbiddenTags:
+                                type: array
+                                maxItems: 50
+                                items:
+                                    type: string
+                                    minLength: 1
+                                    maxLength: 256
+                            minTags:
+                                type: integer
+                                minimum: 0
+                        required:
+                            - name
+                            - field
             required:
                 - ruleType
                 - enforcement
@@ -16444,14 +16590,14 @@ components:
                     type: string
                 ruleType:
                     type: string
-                    enum: [pipeline, metadata, relationship]
+                    enum: [pipeline, metadata, relationship, fileStructure, versionCoverage, assetAttributes]
                 enforcement:
                     $ref: "#/components/schemas/complianceEnforcementLevel"
                 status:
                     type: string
                     enum: [evaluated, error]
                     default: evaluated
-                    description: "`evaluated` when the rule produced a pass or fail. `error` when its tooling failed before it could — an input selection not accepted by the workflow, one that did not match exactly one file or named a file the asset does not have, or an execution that could not be launched: `passed` is false, but the result is not a verdict and the rule's enforcement does not apply."
+                    description: "`evaluated` when the rule produced a pass or fail. `error` when its tooling failed before it could — an input selection not accepted by the workflow, one that did not match exactly one file or named a file the asset does not have, an execution that could not be launched, an asset whose files could not be listed or whose record could not be read: `passed` is false, but the result is not a verdict and the rule's enforcement does not apply."
                 passed:
                     type: boolean
                 message:
@@ -16460,11 +16606,11 @@ components:
                 measured:
                     type: object
                     nullable: true
-                    description: "Pipeline rules: the measured value of each check, keyed by `outputField`."
+                    description: "Pipeline rules: the measured value of each check, keyed by `outputField`. File-structure rules: `fileCount`, `unmatchedRequired` and the first 10 `forbiddenMatches`. Version-coverage rules: `fileCount`, `uncoveredCount` and the first 10 `uncovered` paths. Asset-attribute rules: the values read (`assetName` / `description` cut to 256 characters, `tags`)."
                 expected:
                     type: object
                     nullable: true
-                    description: "Pipeline rules: the tolerance of each check (`operator`, `value`, `min`, `max`), keyed by `outputField`."
+                    description: "Pipeline rules: the tolerance of each check (`operator`, `value`, `min`, `max`), keyed by `outputField`. Other rules: each check's criteria keyed by check name; an asset-attribute check gives its `field` and `condition` rather than its pattern."
             required:
                 - ruleName
                 - ruleType
