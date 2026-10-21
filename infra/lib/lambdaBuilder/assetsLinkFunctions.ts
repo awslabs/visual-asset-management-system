@@ -52,6 +52,9 @@ export function buildAssetLinksService(
     storageResources.dynamo.assetLinksStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    // The link-change stamp a link create or delete records on both assets' rows
+    // (common/assetProvenance.stamp_asset_change): one targeted UpdateItem, no other write.
+    storageResources.dynamo.assetStorageTable.grant(fun, "dynamodb:UpdateItem");
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -90,6 +93,9 @@ export function buildCreateAssetLinkFunction(
     storageResources.dynamo.assetLinksStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    // The link-change stamp a link create or delete records on both assets' rows
+    // (common/assetProvenance.stamp_asset_change): one targeted UpdateItem, no other write.
+    storageResources.dynamo.assetStorageTable.grant(fun, "dynamodb:UpdateItem");
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

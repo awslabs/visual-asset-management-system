@@ -67,6 +67,9 @@ function grantEvaluationEngineReads(fun: lambda.Function, storageResources: stor
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadData(fun);
+    // Metadata rules of the fileAttributes and links scopes.
+    storageResources.dynamo.fileAttributeStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetLinksMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileVersionsStorageTable.grantReadData(fun);
     storageResources.dynamo.metadataSchemaStorageTableV2.grantReadData(fun);
     storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
