@@ -49,6 +49,9 @@ export function buildVamsExecute3dBasicConversionPipelineFunction(
                 platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64, //Fix to the LINUX_AMD64 platform to standardize instruction set across all loads
             }
         ),
+        // Must match the image: the Dockerfile builds FROM --platform=linux/amd64 and the asset sets
+        // Platform.LINUX_AMD64. Lambda runs an image only on the architecture the function declares.
+        architecture: lambda.Architecture.X86_64,
         timeout: Duration.minutes(15),
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         ephemeralStorageSize: CONVERSION_EPHEMERAL_STORAGE,

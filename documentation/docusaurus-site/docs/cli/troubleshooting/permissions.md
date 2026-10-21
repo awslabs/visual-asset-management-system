@@ -357,10 +357,12 @@ These errors apply to both role/constraint and API key management commands.
 
 **Symptoms:**
 
--   `Authentication Error: Access forbidden. You do not have permission to perform this action.`
+-   `Permission Denied: Access forbidden. Not Authorized`, or `Permission Denied: Access forbidden. You do not have permission to perform this action. Contact your administrator if you believe this is an error.`
 -   `Not Authorized` when managing roles, constraints, or API keys.
 
 **Cause:** Your account lacks API-level (Tier 1) authorization for the management endpoints — for example, the `/auth/api-keys` route for API key commands, or the roles and constraints routes.
+
+A `Request Blocked:` error is not a permission problem: the deployment's AWS WAF web ACL refused the request before VAMS evaluated your role. See [Request Blocked (AWS WAF)](general.md#request-blocked-aws-waf).
 
 **Resolution:**
 
@@ -372,7 +374,7 @@ vamscli auth status
 
 ### Token Expired
 
-**Symptoms:** `Authentication Error: Authentication token has expired.`
+**Symptoms:** `Token Expired: Authentication token has expired. Please run 'vamscli auth login' to re-authenticate.`, or `Token Expired: Override token has expired. ...` for an override token.
 
 **Cause:** Your session token expired. Cognito tokens auto-refresh; override tokens do not and fail immediately on 401.
 

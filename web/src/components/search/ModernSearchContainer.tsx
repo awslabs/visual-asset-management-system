@@ -535,6 +535,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                             useMapView: useMapView,
                         }}
                         onShowToast={showSuccess}
+                        onCreateAsset={handleCreateAsset}
                         dispatch={(action: any) => {
                             // Handle dispatch actions from SearchPageListView
                             switch (action.type) {
@@ -663,6 +664,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                             useMapView: useMapView,
                         }}
                         onShowToast={showSuccess}
+                        onCreateAsset={handleCreateAsset}
                         dispatch={(action: any) => {
                             // Handle dispatch actions from SearchPageListView
                             switch (action.type) {

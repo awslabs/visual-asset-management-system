@@ -95,6 +95,7 @@ export class CosmosBuilderNestedStack extends NestedStack {
                 pipelineSecurityGroups: props.pipelineSecurityGroups,
                 buildCosmosRepos: cosmosUseCodeBuild,
                 buildCosmos3Repos: cosmos3UseCodeBuild,
+                kmsKey: props.storageResources.encryption.kmsKey,
             });
         }
 
