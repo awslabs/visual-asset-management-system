@@ -14,7 +14,10 @@
 import * as fs from "fs";
 import * as path from "path";
 import { SCHEMA_TEMPLATES } from "./ComplianceSchemas";
-import { CHECK_VALIDATORS } from "../components/compliance/complianceSchemaRules";
+import {
+    CHECK_VALIDATORS,
+    validateMetadataScope,
+} from "../components/compliance/complianceSchemaRules";
 import { COMPLIANCE_RULE_TYPES } from "../services/ComplianceService";
 
 jest.mock("@monaco-editor/react", () => ({
@@ -76,5 +79,19 @@ describe("Compliance schema templates", () => {
                 }
             }
         }
+    });
+
+    it("passes the builder's validation on every metadata rule's scope", () => {
+        const scopes = new Set<string>();
+        for (const { body } of Object.values(SCHEMA_TEMPLATES)) {
+            for (const rule of Object.values(body.rules as Record<string, any>)) {
+                if (rule.ruleType !== "metadata") continue;
+                expect(validateMetadataScope(rule)).toEqual({});
+                scopes.add(rule.scope ?? "asset");
+            }
+        }
+        // One example each of a file scope and of the links scope ships with the page.
+        expect(scopes.has("files")).toBe(true);
+        expect(scopes.has("links")).toBe(true);
     });
 });

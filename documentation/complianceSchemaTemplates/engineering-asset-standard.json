@@ -2,10 +2,10 @@
     "metadata": {
         "name": "Engineering Asset Standard",
         "description": "Baseline compliance schema for engineering assets. Requires ownership, classification and lifecycle metadata, and places every engineering asset within an assembly hierarchy.",
-        "version": "2.1.0"
+        "version": "2.2.0"
     },
     "schemaName": "engineering-asset-standard",
-    "description": "Requires owner, classification and retention metadata for all engineering assets and a parent assembly link.",
+    "description": "Requires owner, classification and retention metadata for all engineering assets and a parent assembly link, and records whether each parent-assembly link carries its placement.",
     "schemaBody": {
         "schemaFormat": "vams-rules-v1",
         "rules": {
@@ -51,6 +51,24 @@
                         "direction": "parents",
                         "relationshipType": "parentChild",
                         "minCount": 1
+                    }
+                ]
+            },
+            "assembly-placement": {
+                "ruleType": "metadata",
+                "enforcement": "inform",
+                "scope": "links",
+                "linkDirection": "parents",
+                "relationshipType": "parentChild",
+                "metadataSchemaRef": {
+                    "databaseId": "GLOBAL",
+                    "schemaName": "defaultAssetLinks"
+                },
+                "checks": [
+                    {
+                        "name": "placement-recorded",
+                        "description": "Every parent-assembly link records where the asset sits in the assembly.",
+                        "additionalRequiredFields": ["Translation"]
                     }
                 ]
             },

@@ -90,10 +90,34 @@ export interface CompliancePipelineRule {
     checks: CompliancePipelineCheck[];
 }
 
+/**
+ * Which metadata a metadata rule validates: the asset's own (`asset`, the default), each current
+ * file's metadata (`files`) or attributes (`fileAttributes`), or each asset link's metadata
+ * (`links`). The referenced metadata schema must be of the matching entity type.
+ */
+export type ComplianceMetadataScope = "asset" | "files" | "fileAttributes" | "links";
+
+export const COMPLIANCE_METADATA_SCOPES: ComplianceMetadataScope[] = [
+    "asset",
+    "files",
+    "fileAttributes",
+    "links",
+];
+
 export interface ComplianceMetadataRule {
     ruleType: "metadata";
     enforcement: ComplianceEnforcementLevel;
     metadataSchemaRef: { databaseId: string; schemaName: string };
+    /** Absent means `asset`. */
+    scope?: ComplianceMetadataScope;
+    /** `files` / `fileAttributes` only: regular expressions a file path must match (any one). */
+    includePaths?: string[];
+    /** `files` / `fileAttributes` only: regular expressions of file paths left out. */
+    excludePaths?: string[];
+    /** `links` only; absent means both directions. */
+    linkDirection?: "parents" | "children" | "related";
+    /** `links` only; absent means either relationship type. */
+    relationshipType?: "parentChild" | "related";
     checks: {
         name: string;
         description?: string;

@@ -4,9 +4,11 @@
  */
 
 import {
+    COMPLIANCE_METADATA_SCOPES,
     COMPLIANCE_RULE_TYPES,
     ComplianceAssetAttributeField,
     ComplianceEnforcementLevel,
+    ComplianceMetadataScope,
     CompliancePipelineInputFiles,
     CompliancePipelineInputFilesMode,
     CompliancePipelineRef,
@@ -324,7 +326,7 @@ export function newPipelineRuleDraft(existingNames: string[]): RuleDraft {
 
 // --- Rule types and the checks the Visual Builder edits ---
 
-/** Limits the backend places on file-structure, version-coverage and asset-attribute rules. */
+/** Limits the backend places on metadata, file-structure, version-coverage and asset-attribute rules. */
 export const RULE_MAX_CHECKS = 25;
 export const PATH_PATTERNS_MAX = 25;
 export const PATTERN_MAX_LENGTH = 512;
@@ -680,3 +682,150 @@ export const CHECK_VALIDATORS: Partial<
     versionCoverage: validateVersionCoverageCheck,
     assetAttributes: validateAssetAttributeCheck,
 };
+
+// --- Metadata rule scopes ---
+
+export interface MetadataScopeOption {
+    value: ComplianceMetadataScope;
+    label: string;
+    description: string;
+}
+
+/** The metadata rule scopes in display order, with their user-visible labels. */
+export const METADATA_SCOPE_OPTIONS: MetadataScopeOption[] = [
+    {
+        value: "asset",
+        label: "Asset metadata",
+        description: "The asset's own metadata. The schema must be an asset metadata schema.",
+    },
+    {
+        value: "files",
+        label: "File metadata",
+        description:
+            "The metadata of each current file. The schema must be a file metadata schema; every file in scope must pass.",
+    },
+    {
+        value: "fileAttributes",
+        label: "File attributes",
+        description:
+            "The attributes of each current file. The schema must be a file attribute schema; every file in scope must pass.",
+    },
+    {
+        value: "links",
+        label: "Asset link metadata",
+        description:
+            "The metadata of each asset link. The schema must be an asset link metadata schema; every link in scope must pass.",
+    },
+];
+
+/** The scopes that iterate the asset's current files and take include / exclude paths. */
+export const METADATA_FILE_SCOPES: ComplianceMetadataScope[] = ["files", "fileAttributes"];
+
+/** `linkDirection` choices; "" is the absent value (both directions). */
+export const LINK_DIRECTION_OPTIONS: { value: string; label: string }[] = [
+    { value: "", label: "Any direction" },
+    { value: "parents", label: "Parents (links to this asset)" },
+    { value: "children", label: "Children (links from this asset)" },
+    { value: "related", label: "Both directions" },
+];
+
+/** `relationshipType` choices; "" is the absent value (either type). */
+export const LINK_RELATIONSHIP_TYPE_OPTIONS: { value: string; label: string }[] = [
+    { value: "", label: "Any relationship type" },
+    { value: "parentChild", label: "Parent-child" },
+    { value: "related", label: "Related" },
+];
+
+/** A metadata rule's scope as its opaque properties carry it; absent or unknown reads as `asset`. */
+export function metadataScopeOf(rest: Record<string, any>): ComplianceMetadataScope {
+    return COMPLIANCE_METADATA_SCOPES.includes(rest.scope) ? rest.scope : "asset";
+}
+
+/**
+ * The opaque properties of a metadata rule switched to `scope`: the filters another scope takes are
+ * removed, so the body never carries a field the API refuses for the new scope. `asset` is written
+ * as no `scope` at all, the default.
+ */
+export function withMetadataScope(
+    rest: Record<string, any>,
+    scope: ComplianceMetadataScope
+): Record<string, any> {
+    const next = { ...rest };
+    delete next.scope;
+    if (scope !== "asset") next.scope = scope;
+    if (!METADATA_FILE_SCOPES.includes(scope)) {
+        delete next.includePaths;
+        delete next.excludePaths;
+    }
+    if (scope !== "links") {
+        delete next.linkDirection;
+        delete next.relationshipType;
+    }
+    return next;
+}
+
+export interface MetadataScopeErrors {
+    scope?: string;
+    includePaths?: string;
+    excludePaths?: string;
+    linkDirection?: string;
+    relationshipType?: string;
+}
+
+/**
+ * Errors of a metadata rule's scope fields with the messages the API returns: a known scope, path
+ * filters on a file scope only (at most 25 patterns of 1 to 512 characters each), link filters on the
+ * links scope only, each from its own vocabulary. Whether a pattern is a valid regular expression is
+ * checked by the API when the schema is saved.
+ */
+export function validateMetadataScope(rest: Record<string, any>): MetadataScopeErrors {
+    const errors: MetadataScopeErrors = {};
+    if (rest.scope !== undefined && !COMPLIANCE_METADATA_SCOPES.includes(rest.scope)) {
+        errors.scope =
+            "scope: value is not a valid enumeration member; permitted: 'asset', 'files', 'fileAttributes', 'links'";
+        return errors;
+    }
+    const scope = metadataScopeOf(rest);
+    const includePaths = stringList(rest.includePaths);
+    const excludePaths = stringList(rest.excludePaths);
+    if (METADATA_FILE_SCOPES.includes(scope)) {
+        setScopeError(errors, "includePaths", patternListError("includePaths", includePaths));
+        setScopeError(errors, "excludePaths", patternListError("excludePaths", excludePaths));
+    } else if (includePaths.length || excludePaths.length) {
+        errors.scope =
+            "'includePaths' and 'excludePaths' apply to the files and fileAttributes scopes only";
+    }
+    const hasLinkFilter =
+        (rest.linkDirection !== undefined && rest.linkDirection !== null) ||
+        (rest.relationshipType !== undefined && rest.relationshipType !== null);
+    if (scope !== "links" && hasLinkFilter && !errors.scope) {
+        errors.scope = "'linkDirection' and 'relationshipType' apply to the links scope only";
+    }
+    if (scope === "links") {
+        if (
+            rest.linkDirection !== undefined &&
+            !LINK_DIRECTION_OPTIONS.some((o) => o.value && o.value === rest.linkDirection)
+        ) {
+            errors.linkDirection =
+                "linkDirection: unexpected value; permitted: 'parents', 'children', 'related'";
+        }
+        if (
+            rest.relationshipType !== undefined &&
+            !LINK_RELATIONSHIP_TYPE_OPTIONS.some(
+                (o) => o.value && o.value === rest.relationshipType
+            )
+        ) {
+            errors.relationshipType =
+                "relationshipType: unexpected value; permitted: 'parentChild', 'related'";
+        }
+    }
+    return errors;
+}
+
+function setScopeError(
+    errors: MetadataScopeErrors,
+    key: keyof MetadataScopeErrors,
+    message: string | undefined
+) {
+    if (message && !errors[key]) errors[key] = message;
+}

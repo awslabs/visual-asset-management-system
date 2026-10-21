@@ -51,7 +51,7 @@ export const SCHEMA_TEMPLATES: Record<
     pipelineRules: {
         label: "Pipeline and metadata rules",
         description:
-            "Runs a workflow and checks its output against tolerances; also validates metadata",
+            "Runs a workflow and checks its output against tolerances; also validates the asset's metadata and each model file's metadata",
         body: {
             schemaFormat: "vams-rules-v1",
             rules: {
@@ -85,12 +85,29 @@ export const SCHEMA_TEMPLATES: Record<
                         },
                     ],
                 },
+                "model-file-metadata": {
+                    ruleType: "metadata",
+                    enforcement: "warn",
+                    scope: "files",
+                    metadataSchemaRef: { databaseId: "GLOBAL", schemaName: "modelFileMetadata" },
+                    includePaths: ["\\.(glb|gltf|obj|stl|fbx)$"],
+                    excludePaths: ["\\.previewFile\\."],
+                    checks: [
+                        {
+                            name: "file-fields-present",
+                            description:
+                                "Every current model file carries the required fields of the GLOBAL modelFileMetadata file metadata schema, typed as declared. Create that schema (entity type fileMetadata) first; until it exists the rule records an error.",
+                            validateRequired: true,
+                            validateTypes: true,
+                        },
+                    ],
+                },
             },
         },
     },
     engineering: {
         label: `Engineering ${Synonyms.Asset} Standard`,
-        description: "Owner, classification and retention metadata plus a parent assembly",
+        description: "Owner, classification and retention metadata plus a placed parent assembly",
         body: {
             schemaFormat: "vams-rules-v1",
             rules: {
@@ -138,6 +155,25 @@ export const SCHEMA_TEMPLATES: Record<
                             direction: "parents",
                             relationshipType: "parentChild",
                             minCount: 1,
+                        },
+                    ],
+                },
+                "assembly-placement": {
+                    ruleType: "metadata",
+                    enforcement: "inform",
+                    scope: "links",
+                    linkDirection: "parents",
+                    relationshipType: "parentChild",
+                    metadataSchemaRef: {
+                        databaseId: "GLOBAL",
+                        schemaName: "defaultAssetLinks",
+                    },
+                    checks: [
+                        {
+                            name: "placement-recorded",
+                            description:
+                                "Every parent-assembly link records where the asset sits in the assembly.",
+                            additionalRequiredFields: ["Translation"],
                         },
                     ],
                 },

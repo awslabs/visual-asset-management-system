@@ -7,6 +7,7 @@ import React, { useState } from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import FormField from "@cloudscape-design/components/form-field";
+import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import ComplianceSchemaEditor from "./ComplianceSchemaEditor";
 
 jest.mock("@monaco-editor/react", () => ({
@@ -381,5 +382,122 @@ describe("ComplianceSchemaEditor rule types", () => {
         await waitFor(() => {
             expect(lastBody(onChange).rules.tagged.checks[0].requiredTags).toBeUndefined();
         });
+    });
+});
+
+const metadataRule = (extra: Record<string, any> = {}) =>
+    ruleBody("m", {
+        ruleType: "metadata",
+        enforcement: "warn",
+        metadataSchemaRef: { databaseId: "GLOBAL", schemaName: "defaultAsset" },
+        ...extra,
+        checks: [{ name: "c", validateRequired: true }],
+    });
+
+/** The Cloudscape Select inside the form field labelled `label`. */
+const selectNamed = (label: string) => {
+    const select = createWrapper()
+        .findAllFormFields()
+        .find((field) => field.findLabel()?.getElement().textContent === label)
+        ?.findControl()
+        ?.findSelect();
+    if (!select) throw new Error(`no select in the ${label} field`);
+    return select;
+};
+
+describe("ComplianceSchemaEditor metadata rule scope", () => {
+    it("loads a metadata rule without a scope as asset metadata, with no filters", async () => {
+        render(<Harness initial={metadataRule()} onChange={jest.fn()} />);
+        await openBuilder();
+
+        expect(selectNamed("Scope").findTrigger().getElement()).toHaveTextContent("Asset metadata");
+        expect(screen.queryByLabelText("Include paths, rule 1")).not.toBeInTheDocument();
+        expect(screen.queryByText("Link direction")).not.toBeInTheDocument();
+        expect(
+            screen.getByText(/schema reference and the checks of a metadata rule are edited in the/)
+        ).toBeInTheDocument();
+    });
+
+    it.each([["files"], ["fileAttributes"]])(
+        "shows the include and exclude paths for the %s scope",
+        async (scope) => {
+            render(
+                <Harness
+                    initial={metadataRule({ scope, excludePaths: ["\\.previewFile\\."] })}
+                    onChange={jest.fn()}
+                />
+            );
+            await openBuilder();
+
+            expect(screen.getByRole("textbox", { name: "Include paths, rule 1" })).toHaveValue("");
+            expect(screen.getByRole("textbox", { name: "Exclude paths, rule 1" })).toHaveValue(
+                "\\.previewFile\\."
+            );
+            expect(screen.queryByText("Link direction")).not.toBeInTheDocument();
+        }
+    );
+
+    it("shows the direction and relationship type for the links scope", async () => {
+        render(
+            <Harness
+                initial={metadataRule({ scope: "links", linkDirection: "parents" })}
+                onChange={jest.fn()}
+            />
+        );
+        await openBuilder();
+
+        expect(selectNamed("Link direction").findTrigger().getElement()).toHaveTextContent(
+            "Parents (links to this asset)"
+        );
+        expect(selectNamed("Relationship type").findTrigger().getElement()).toHaveTextContent(
+            "Any relationship type"
+        );
+        expect(screen.queryByLabelText("Include paths, rule 1")).not.toBeInTheDocument();
+    });
+
+    it("switches the scope and writes the filters the new scope takes", async () => {
+        const onChange = jest.fn();
+        render(<Harness initial={metadataRule()} onChange={onChange} />);
+        await openBuilder();
+
+        const scope = selectNamed("Scope");
+        scope.openDropdown();
+        scope.selectOptionByValue("files");
+        await waitFor(() => {
+            expect(lastBody(onChange).rules.m.scope).toBe("files");
+        });
+        await userEvent.type(
+            screen.getByRole("textbox", { name: "Include paths, rule 1" }),
+            "^models/"
+        );
+        await waitFor(() => {
+            expect(lastBody(onChange).rules.m.includePaths).toEqual(["^models/"]);
+        });
+
+        const again = selectNamed("Scope");
+        again.openDropdown();
+        again.selectOptionByValue("links");
+        await waitFor(() => {
+            const rule = lastBody(onChange).rules.m;
+            expect(rule.scope).toBe("links");
+            expect(rule.includePaths).toBeUndefined();
+        });
+        const direction = selectNamed("Link direction");
+        direction.openDropdown();
+        direction.selectOptionByValue("children");
+        await waitFor(() => {
+            expect(lastBody(onChange).rules.m.linkDirection).toBe("children");
+        });
+    });
+
+    it("shows the API's message for a filter the scope does not take", async () => {
+        render(
+            <Harness initial={metadataRule({ relationshipType: "related" })} onChange={jest.fn()} />
+        );
+        await openBuilder();
+
+        expect(
+            screen.getByText("'linkDirection' and 'relationshipType' apply to the links scope only")
+        ).toBeInTheDocument();
     });
 });

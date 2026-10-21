@@ -13,7 +13,9 @@ import os
 import pytest
 
 from handlers.compliance import complianceSchemaService as svc
-from models.compliance import RULE_TYPE_MODELS, MetadataRule, PipelineRule, VamsRulesV1Schema
+from models.compliance import (
+    RULE_TYPE_MODELS, MetadataRule, MetadataScope, PipelineRule, VamsRulesV1Schema,
+)
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 TEMPLATES_DIR = os.path.join(_REPO_ROOT, "documentation", "complianceSchemaTemplates")
@@ -21,9 +23,14 @@ CONVERSION_SCHEMA_DIR = os.path.join(
     _REPO_ROOT, "backendPipelines", "conversion", "3dBasic", "vamsSchema")
 
 ENVELOPE_KEYS = {"metadata", "schemaName", "description", "schemaBody"}
-# The GLOBAL metadata schema the metadata-schema defaults construct seeds; the one metadata-schema
-# reference a template can rely on being present.
-SEEDED_METADATA_SCHEMA = ("GLOBAL", "defaultAsset")
+# The GLOBAL metadata schemas the metadata-schema defaults construct seeds, by the metadata-rule scope
+# whose entity type each one is; the only metadata-schema references a template can rely on being
+# present. No file metadata schema is seeded, so no shipped template uses the `files` scope.
+SEEDED_METADATA_SCHEMAS = {
+    MetadataScope.asset: ("GLOBAL", "defaultAsset"),
+    MetadataScope.fileAttributes: ("GLOBAL", "defaultAssetFile3dModel"),
+    MetadataScope.links: ("GLOBAL", "defaultAssetLinks"),
+}
 
 
 def _template_paths():
@@ -62,11 +69,17 @@ class TestEveryShippedTemplate:
         assert svc.validate_schema_body(_load(path)["schemaBody"]) == (True, None)
 
     @pytest.mark.parametrize("path", _template_paths(), ids=os.path.basename)
-    def test_metadata_rules_reference_the_seeded_metadata_schema(self, path):
+    def test_metadata_rules_reference_the_seeded_metadata_schema_of_their_scope(self, path):
         for rule in _rules(path).values():
             if isinstance(rule, MetadataRule):
                 ref = rule.metadataSchemaRef
-                assert (ref.databaseId, ref.schemaName) == SEEDED_METADATA_SCHEMA
+                assert rule.scope in SEEDED_METADATA_SCHEMAS
+                assert (ref.databaseId, ref.schemaName) == SEEDED_METADATA_SCHEMAS[rule.scope]
+
+    def test_a_shipped_template_exercises_a_scoped_metadata_rule(self):
+        scopes = {rule.scope for path in _template_paths() for rule in _rules(path).values()
+                  if isinstance(rule, MetadataRule)}
+        assert MetadataScope.links in scopes
 
     def test_the_set_exercises_every_rule_type(self):
         kinds = {type(rule) for path in _template_paths() for rule in _rules(path).values()}

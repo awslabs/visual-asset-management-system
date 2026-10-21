@@ -38,8 +38,10 @@ import TokenGroup from "@cloudscape-design/components/token-group";
 import type { editor } from "monaco-editor";
 import Synonyms from "../../synonyms";
 import {
+    COMPLIANCE_METADATA_SCOPES,
     COMPLIANCE_RULE_TYPES,
     ComplianceAssetAttributeField,
+    ComplianceMetadataScope,
     CompliancePipelineInputFilesMode,
     CompliancePipelineRef,
     ComplianceRuleType,
@@ -57,6 +59,10 @@ import {
     INPUT_FILES_MAX_KEYS,
     INPUT_FILES_MODE_OPTIONS,
     InputFilesDraft,
+    LINK_DIRECTION_OPTIONS,
+    LINK_RELATIONSHIP_TYPE_OPTIONS,
+    METADATA_FILE_SCOPES,
+    METADATA_SCOPE_OPTIONS,
     PATH_PATTERNS_MAX,
     PATTERN_MAX_LENGTH,
     PIPELINE_REF_FIELDS,
@@ -70,13 +76,16 @@ import {
     checksCountError,
     checksOf,
     isVamsRulesBody,
+    metadataScopeOf,
     newCheck,
     newRuleDraft,
     numberFromInput,
     patchCheck,
     rulesDraftFromBody,
     validateInputFiles,
+    validateMetadataScope,
     validatePipelineRef,
+    withMetadataScope,
 } from "./complianceSchemaRules";
 
 const ID_STRING = { type: "string", pattern: COMPLIANCE_ID_PATTERN.source };
@@ -200,10 +209,31 @@ const RULE_META_SCHEMA = {
             required: ["databaseId", "schemaName"],
             properties: { databaseId: ID_STRING, schemaName: { type: "string", minLength: 1 } },
         },
+        scope: {
+            type: "string",
+            enum: COMPLIANCE_METADATA_SCOPES,
+            description: `metadata: which metadata the rule validates — the ${Synonyms.asset}'s own (asset, the default), each current file's metadata (files) or attributes (fileAttributes), or each ${Synonyms.asset} link's metadata (links). The metadata schema must be of the matching entity type.`,
+        },
+        includePaths: PATTERN_LIST_META_SCHEMA(
+            "metadata (files, fileAttributes): when given, only files whose path matches one of these regular expressions are checked."
+        ),
+        excludePaths: PATTERN_LIST_META_SCHEMA(
+            "metadata (files, fileAttributes): files whose path matches one of these regular expressions are not checked."
+        ),
+        linkDirection: {
+            type: "string",
+            enum: ["parents", "children", "related"],
+            description: "metadata (links): the links checked; absent means both directions.",
+        },
+        relationshipType: {
+            type: "string",
+            enum: ["parentChild", "related"],
+            description: "metadata (links): the links checked; absent means either type.",
+        },
         checks: {
             type: "array",
             minItems: 1,
-            description: `At most ${RULE_MAX_CHECKS} checks on a fileStructure, versionCoverage or assetAttributes rule.`,
+            description: `At most ${RULE_MAX_CHECKS} checks on a metadata, fileStructure, versionCoverage or assetAttributes rule.`,
             items: {
                 type: "object",
                 required: ["name"],
@@ -1043,6 +1073,118 @@ export default function ComplianceSchemaEditor({
         );
     };
 
+    const renderMetadataScope = (idx: number, rule: RulesDraft["rules"][number]) => {
+        const scope = metadataScopeOf(rule.rest);
+        const errors = validateMetadataScope(rule.rest);
+        const ruleLabel = `rule ${idx + 1}`;
+        const patchRest = (patch: Record<string, any>) =>
+            updateRule(idx, { rest: patchCheck(rule.rest, patch) });
+        const selected = (options: { value: string; label: string }[], value: any) =>
+            options.find((o) => o.value === (value ?? "")) || options[0];
+        return (
+            <SpaceBetween size="s">
+                <FormField
+                    label="Scope"
+                    description="Which metadata the rule validates. The referenced metadata schema must be of the matching type; a schema that is missing or of another type records the rule as an error."
+                    errorText={errors.scope}
+                    stretch
+                >
+                    <Select
+                        ariaLabel={`Scope, ${ruleLabel}`}
+                        selectedOption={
+                            METADATA_SCOPE_OPTIONS.find((o) => o.value === scope) ||
+                            METADATA_SCOPE_OPTIONS[0]
+                        }
+                        options={METADATA_SCOPE_OPTIONS}
+                        disabled={readOnly}
+                        onChange={({ detail }) =>
+                            updateRule(idx, {
+                                rest: withMetadataScope(
+                                    rule.rest,
+                                    detail.selectedOption.value as ComplianceMetadataScope
+                                ),
+                            })
+                        }
+                    />
+                </FormField>
+                {METADATA_FILE_SCOPES.includes(scope) && (
+                    <>
+                        <ColumnLayout columns={2}>
+                            <FormField
+                                label="Include paths (optional)"
+                                description="Regular expressions, one per line; when any is given, only files whose path matches one are checked. Paths are matched without their leading /."
+                                constraintText={PATTERN_CONSTRAINT}
+                                errorText={errors.includePaths}
+                                stretch
+                            >
+                                <PatternListField
+                                    items={checkList(rule.rest, "includePaths")}
+                                    ariaLabel={`Include paths, ${ruleLabel}`}
+                                    placeholder="^models/"
+                                    disabled={readOnly}
+                                    onChange={(items) => patchRest({ includePaths: items })}
+                                />
+                            </FormField>
+                            <FormField
+                                label="Exclude paths (optional)"
+                                description="Regular expressions, one per line; files whose path matches one are not checked (e.g. \.previewFile\. for preview images)."
+                                constraintText={PATTERN_CONSTRAINT}
+                                errorText={errors.excludePaths}
+                                stretch
+                            >
+                                <PatternListField
+                                    items={checkList(rule.rest, "excludePaths")}
+                                    ariaLabel={`Exclude paths, ${ruleLabel}`}
+                                    placeholder="\.previewFile\."
+                                    disabled={readOnly}
+                                    onChange={(items) => patchRest({ excludePaths: items })}
+                                />
+                            </FormField>
+                        </ColumnLayout>
+                        <Box color="text-body-secondary" fontSize="body-s">
+                            Checked: every current, non-archived file of the {Synonyms.asset} that
+                            the schema&apos;s file type restriction admits, narrowed by the include
+                            and then the exclude paths. A file without metadata fails a required
+                            field.
+                        </Box>
+                    </>
+                )}
+                {scope === "links" && (
+                    <ColumnLayout columns={2}>
+                        <FormField label="Link direction" errorText={errors.linkDirection}>
+                            <Select
+                                ariaLabel={`Link direction, ${ruleLabel}`}
+                                selectedOption={selected(
+                                    LINK_DIRECTION_OPTIONS,
+                                    rule.rest.linkDirection
+                                )}
+                                options={LINK_DIRECTION_OPTIONS}
+                                disabled={readOnly}
+                                onChange={({ detail }) =>
+                                    patchRest({ linkDirection: detail.selectedOption.value })
+                                }
+                            />
+                        </FormField>
+                        <FormField label="Relationship type" errorText={errors.relationshipType}>
+                            <Select
+                                ariaLabel={`Relationship type, ${ruleLabel}`}
+                                selectedOption={selected(
+                                    LINK_RELATIONSHIP_TYPE_OPTIONS,
+                                    rule.rest.relationshipType
+                                )}
+                                options={LINK_RELATIONSHIP_TYPE_OPTIONS}
+                                disabled={readOnly}
+                                onChange={({ detail }) =>
+                                    patchRest({ relationshipType: detail.selectedOption.value })
+                                }
+                            />
+                        </FormField>
+                    </ColumnLayout>
+                )}
+            </SpaceBetween>
+        );
+    };
+
     const renderChecks = (idx: number, rule: RulesDraft["rules"][number]) => {
         const checks = checksOf(rule);
         const validate = CHECK_VALIDATORS[rule.ruleType];
@@ -1175,7 +1317,7 @@ export default function ComplianceSchemaEditor({
         <SpaceBetween size="m">
             <Header
                 variant="h3"
-                description="Rules of a vams-rules-v1 schema. The checks of file structure, version coverage and asset attributes rules are edited here. A pipeline rule's workflow, pipeline and input files are edited here and its checks and input parameters in the JSON Editor tab; metadata and relationship rules are edited in the JSON Editor tab. Properties the builder does not show are kept as they are."
+                description="Rules of a vams-rules-v1 schema. The checks of file structure, version coverage and asset attributes rules are edited here. A pipeline rule's workflow, pipeline and input files are edited here and its checks and input parameters in the JSON Editor tab; a metadata rule's scope and its file or link filters are edited here and its schema reference and checks in the JSON Editor tab; relationship rules are edited in the JSON Editor tab. Properties the builder does not show are kept as they are."
                 actions={
                     <ButtonDropdown
                         disabled={readOnly}
@@ -1282,13 +1424,15 @@ export default function ComplianceSchemaEditor({
                                 </ColumnLayout>
                             )}
                             {rule.ruleType === "pipeline" && renderInputFiles(idx, rule.inputFiles)}
+                            {rule.ruleType === "metadata" && renderMetadataScope(idx, rule)}
                             {CHECK_EDITED_RULE_TYPES.includes(rule.ruleType) &&
                                 renderChecks(idx, rule)}
                             {rule.ruleType !== "pipeline" &&
                                 !CHECK_EDITED_RULE_TYPES.includes(rule.ruleType) && (
                                     <Box color="text-body-secondary" fontSize="body-s">
-                                        The checks of a {rule.ruleType} rule are edited in the JSON
-                                        Editor tab.
+                                        {rule.ruleType === "metadata"
+                                            ? "The metadata schema reference and the checks of a metadata rule are edited in the JSON Editor tab."
+                                            : `The checks of a ${rule.ruleType} rule are edited in the JSON Editor tab.`}
                                     </Box>
                                 )}
                             {!readOnly && (
