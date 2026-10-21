@@ -340,6 +340,14 @@ Each enabled pipeline's Step Functions state machine logs to `/aws/vendedlogs/VA
 | `/aws/vendedlogs/Pipelines/PcPotreeViewerPotree<hash>`              | Potree octree conversion (AWS Fargate)    | `usePreviewPcPotreeViewer`         | DESTROY        | Yes         |
 | `/aws/vendedlogs/Pipelines/<containerName>`                         | RapidPipeline, ModelOps containers        | `useRapidPipeline`, `useModelOps`  | DESTROY        | Yes         |
 
+A pipeline configured with `useCodeBuild: true` also has one build log group per AWS CodeBuild project,
+`/aws/codebuild/<project name>`. The projects set no logging configuration, so AWS CodeBuild creates the group
+on the first build and it is not a stack resource: it is left behind when the stack is deleted, keeps the
+CloudWatch Logs default retention of never expire, and does not take the VAMS KMS key. AWS CloudFormation
+generates the project names, so a leftover group does not collide with a redeploy. See
+[Uninstall the solution](../deployment/uninstall.md#step-4-delete-amazon-cloudwatch-log-groups) to find and
+delete them.
+
 :::note[Log Retention]
 A CDK aspect (`LogRetentionAspect`) sets one-year retention on every CloudWatch log group **declared in the stack**, including the audit groups and the `/aws/vendedlogs/` groups above. A `retention` value declared on an individual log group has no effect, because the aspect runs afterwards and overwrites it. To hold logs longer across the whole deployment, pass a longer `logs.RetentionDays` value to the aspect in `infra/lib/core-stack.ts` — see [Configuring Log Retention](../developer/audit-logging.md#configuring-log-retention).
 :::
@@ -385,13 +393,14 @@ admits the CloudWatch Logs service principal, so no per-group grant is required.
 CloudWatch applies a key to new log events only. A group that already holds events keeps those events
 unencrypted after a key is attached, so a group spanning the change contains both.
 
-Three log groups always use the AWS-managed key:
+These log groups always use the AWS-managed key:
 
 | Log Group                                     | Reason                                                                                  |
 | --------------------------------------------- | --------------------------------------------------------------------------------------- |
 | `/aws/vendedlogs/VAMSCloudWatchVPCLogs<hash>` | The VPC nested stack is created before the storage nested stack that owns the key.      |
 | `/aws/vendedlogs/VAMSCloudTrailLogs<hash>`    | Lives in the root stack; consuming the key from a nested stack makes the two circular.  |
 | Provisioned OpenSearch domain log groups      | Created by Amazon OpenSearch Service from the domain's logging configuration, not VAMS. |
+| `/aws/codebuild/<project name>`               | Created by AWS CodeBuild on a project's first build, not VAMS.                          |
 
 ## AWS Systems Manager Parameter Store
 
@@ -507,20 +516,23 @@ container image from the source in the repository and pushes it to a private Ama
 the pipeline's AWS Batch job definition then references. Pipelines that do not set `useCodeBuild` build
 their image locally at synthesis time and use the CDK asset repository instead.
 
-| Resource              | Configuration                                                                                 |
-| --------------------- | --------------------------------------------------------------------------------------------- |
-| **Repository**        | One per CodeBuild-built pipeline, image scanning on push, last 10 images retained             |
-| **CodeBuild project** | One per repository, privileged mode for container builds, one-hour timeout                    |
-| **Image tag**         | The first 32 hexadecimal characters of the source asset hash, so the tag is content-addressed |
+| Resource              | Configuration                                                                                                         |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| **Repository**        | One per CodeBuild-built pipeline, image scanning on push, last 10 images retained                                     |
+| **CodeBuild project** | One per repository, privileged mode for container builds, one-hour timeout                                            |
+| **Image tag**         | The first 32 hexadecimal characters of the source asset hash, so the tag is content-addressed                         |
+| **Encryption**        | The VAMS KMS key when `useKmsCmkEncryption.enabled` is `true`, Amazon ECR's default AES-256 otherwise                 |
+| **Build log group**   | `/aws/codebuild/<project name>`, created by AWS CodeBuild and left behind on teardown (see Pipeline Log Groups above) |
 
 All repositories use the `DESTROY` removal policy with `emptyOnDelete`, so both the repository and its
 images are removed when the stack is destroyed cleanly.
 
 Most repositories are auto-named by AWS CloudFormation and therefore cannot collide on a redeploy. The
 **Coordinate Transform** repository is the exception: it carries an explicit name,
-`{config.name}-{app.baseStackName}-coordtransform`, and is redeploy-collision relevant. Delete any
-orphaned repository of that name left by a failed teardown before redeploying with the same configuration
-name and account.
+`{config.name}-{app.baseStackName}-coordtransform` (`{config.name}-{app.baseStackName}-coordtransform-kms`
+when `useKmsCmkEncryption.enabled` is `true`), and is redeploy-collision relevant. Delete any orphaned
+repository of that name left by a failed teardown before redeploying with the same configuration name and
+account.
 
 :::note[Why one repository is explicitly named]
 Amazon ECS and AWS Batch cap a container image reference at 255 characters across the whole
@@ -530,6 +542,31 @@ that the resulting reference exceeds the cap — AWS Batch then rejects every jo
 job never starts, no container log or exit code is produced; the reason appears only in the job's
 `statusReason`. An explicit short name keeps the reference well inside the limit without shortening the
 content-addressed tag.
+:::
+
+:::note[The repositories follow their encryption]
+Amazon ECR cannot change a repository's encryption after the repository is created, so turning
+`useKmsCmkEncryption.enabled` on or off replaces every CodeBuild repository. An auto-named repository gets
+a new generated name, and the Coordinate Transform repository changes between its two names, because AWS
+CloudFormation cannot replace an explicitly named resource under the same name. The deployment creates each
+new repository, points the AWS Batch job definitions at it, starts a build of the image into it, and deletes
+the old repository with its images. The deployment does not wait for these builds, so a job submitted before
+its pipeline's build finishes fails to pull the image.
+
+Changing to a different key while the CMK stays on (for example, setting `optionalExternalCmkArn` on a
+deployment that uses the VAMS-generated key) also replaces the repositories, but the Coordinate Transform
+repository keeps its name, so that update fails. Deploy once with
+`useConversionCoordinateTransform.useCodeBuild` set to `false`, which builds the image with local Docker for
+that deployment and removes the repository, then set it back to `true` and deploy again.
+
+The principal that creates or deletes a KMS-encrypted Amazon ECR repository needs `kms:CreateGrant`,
+`kms:DescribeKey` and `kms:RetireGrant` on the key in its IAM policy. For VAMS that principal is the AWS
+CloudFormation execution role, and the default CDK bootstrap role has these permissions. A custom execution
+role (`app.iamRoleConfig.useCustomBootstrapRoles`, or `cdk bootstrap --cloudformation-execution-policies`)
+must allow them on the key; with `useCliCredentialsSynthesizer` set in `infra/config/policy/iamRoleConfig.json`,
+the deploying credentials must. An external key's policy must keep the statement that lets IAM policies in the
+account authorize use of the key. Amazon ECR encrypts and decrypts image layers through the grants it creates
+on the key, so the CodeBuild projects and the AWS Batch jobs get no permission on it.
 :::
 
 ## AWS CloudTrail
