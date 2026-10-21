@@ -57,22 +57,39 @@ const EXPECTED_REPOSITORIES = [
 /** The one repository with an explicit `repositoryName`. */
 const COORDINATE_TRANSFORM = EXPECTED_REPOSITORIES[0];
 
-/** Every CodeBuild pipeline on, with one model per Cosmos family so each Cosmos repository exists. */
-const allCodeBuildPipelines = (cmkOn: boolean) => (c: any) => {
+/**
+ * Every pipeline config entry with a `useCodeBuild` key.
+ *
+ * The mutation enables each entry that has the key instead of a list of its own, so a pipeline added
+ * later is synthesized here as soon as its config entry exists. `[control]` then fails until its key is
+ * added here and its repository to EXPECTED_REPOSITORIES, which is when its encryption gets checked.
+ */
+const EXPECTED_CODEBUILD_PIPELINES = [
+    "useConversionCoordinateTransform",
+    "useSplatToolbox",
+    "useIsaacLabTraining",
+    "useNvidiaCosmos",
+    "useNvidiaCosmos3",
+    "useNvidiaGr00t",
+];
+
+/**
+ * Every pipeline with a `useCodeBuild` key on, as `containerImageReferenceLength.test.ts` does, plus one
+ * model per Cosmos family and the GR00T model so each per-model repository exists. Returns the pipeline
+ * keys it enabled.
+ */
+const enableEveryCodeBuildPipeline = (c: any, cmkOn: boolean): string[] => {
     // A CodeBuild project runs in the pipeline VPC, which the commercial template ships disabled.
     c.app.useGlobalVpc = { ...(c.app.useGlobalVpc ?? {}), enabled: true };
     c.app.useKmsCmkEncryption = { ...(c.app.useKmsCmkEncryption ?? {}), enabled: cmkOn };
     const p = c.app.pipelines;
-    for (const key of [
-        "useConversionCoordinateTransform",
-        "useSplatToolbox",
-        "useNvidiaCosmos",
-        "useNvidiaCosmos3",
-        "useNvidiaGr00t",
-        "useIsaacLabTraining",
-    ]) {
-        p[key].enabled = true;
-        p[key].useCodeBuild = true;
+    const enabled: string[] = [];
+    for (const [key, entry] of Object.entries<Record<string, unknown>>(p)) {
+        if (entry && typeof entry === "object" && "useCodeBuild" in entry) {
+            entry.enabled = true;
+            entry.useCodeBuild = true;
+            enabled.push(key);
+        }
     }
     // Synth-only values for the fields the NVIDIA constructs require before they build.
     for (const key of ["useNvidiaCosmos", "useNvidiaCosmos3", "useNvidiaGr00t"]) {
@@ -85,13 +102,21 @@ const allCodeBuildPipelines = (cmkOn: boolean) => (c: any) => {
     p.useNvidiaCosmos.modelsTransfer.transfer2B.enabled = true;
     p.useNvidiaCosmos3.modelsOmni.nano16B.enabled = true;
     p.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.enabled = true;
+    return enabled;
 };
 
-const synthWith = (name: TemplateName, cmkOn: boolean): SynthResult =>
-    synthTemplate(name, {
-        mutate: allCodeBuildPipelines(cmkOn),
+/** A synth with every CodeBuild pipeline on, and the pipeline keys its mutation enabled. */
+const synthWith = (name: TemplateName, cmkOn: boolean): [SynthResult, string[]] => {
+    // Stays empty on a cache hit, which [control] reports; each (template, CMK) pair is synthesized once.
+    let enabled: string[] = [];
+    const synth = synthTemplate(name, {
+        mutate: (c) => {
+            enabled = enableEveryCodeBuildPipeline(c, cmkOn);
+        },
         mutateKey: `codebuild-ecr-encryption-cmk-${cmkOn ? "on" : "off"}`,
     });
+    return [synth, enabled];
+};
 
 const repositories = (s: SynthResult): Resource[] => s.ofType("AWS::ECR::Repository");
 
@@ -194,17 +219,29 @@ const actionsOf = (statement: any): string[] => ([] as string[]).concat(statemen
 describe.each(ALL_TEMPLATES)("%s: CodeBuild repositories follow useKmsCmkEncryption", (name) => {
     let off: SynthResult;
     let on: SynthResult;
+    let enabledOff: string[];
+    let enabledOn: string[];
 
     beforeAll(() => {
-        off = synthWith(name, false);
-        on = synthWith(name, true);
+        [off, enabledOff] = synthWith(name, false);
+        [on, enabledOn] = synthWith(name, true);
     });
 
     it("[control] both synths emit every repository with its build, and only CMK-on has the key", () => {
         // Every assertion below is satisfied by a synth that emits no repository, and the shipped
-        // templates enable none of these pipelines.
+        // templates enable none of these pipelines. A pipeline or repository missing from
+        // EXPECTED_CODEBUILD_PIPELINES or EXPECTED_REPOSITORIES fails here, because several assertions
+        // below check only the listed repositories.
+        for (const enabled of [enabledOff, enabledOn]) {
+            expect([...enabled].sort()).toEqual([...EXPECTED_CODEBUILD_PIPELINES].sort());
+        }
         for (const s of [off, on]) {
-            expect(repositories(s).map(prefixOf).sort()).toEqual([...EXPECTED_REPOSITORIES].sort());
+            // An unlisted repository shows as its logical id: toEqual ignores undefined array items.
+            expect(
+                repositories(s)
+                    .map((r) => prefixOf(r) ?? r.logicalId)
+                    .sort()
+            ).toEqual([...EXPECTED_REPOSITORIES].sort());
             for (const repository of repositories(s)) {
                 expect(projectOf(s, repository)).toHaveLength(1);
                 expect(triggerOf(s, repository)).toHaveLength(1);
