@@ -185,10 +185,12 @@ If you are using an alternative container engine such as [Finch](https://aws.git
 Run the CDK deploy command from the `infra/` directory:
 
 ```bash
-npx cdk deploy --all --require-approval never
+npx cdk deploy --all --require-approval never -c configFile=config.json
 ```
 
 This command synthesizes all AWS CloudFormation templates and deploys every nested stack. The `--require-approval never` flag auto-approves IAM and security-related changes.
+
+The `configFile` context parameter names the configuration file to deploy and defaults to `config.json`; see [Selecting the configuration file](configuration-reference.md#selecting-the-configuration-file) for how the value resolves, and [Multiple deployments in the same account](#multiple-deployments-in-the-same-account) for keeping one file per deployment.
 
 :::warning[There is no dry run]
 `npm run deploy.dev --dry-run` and `npm run deploy.vams --dry-run` run a real deployment: `--dry-run` is consumed by npm and never reaches the AWS CDK CLI, which has no such option. To preview the changes a deployment would make, run `npx cdk diff`.
@@ -254,6 +256,20 @@ export AWS_REGION=us-west-2
 export STACK_NAME=staging
 npx cdk deploy --all --require-approval never
 ```
+
+You can also keep one configuration file per deployment in `infra/config/` and select it with the `configFile` context parameter:
+
+```bash
+cp config/config.template.commercial.json config/config.dev.json
+# edit config/config.dev.json: "baseStackName": "dev", "region": "us-west-2"
+npx cdk deploy --all --require-approval never -c configFile=config.dev.json
+```
+
+:::note[Use the same configuration file for every command]
+Each `cdk` command synthesizes from the file it is given. Pass the same `-c configFile=...` to `cdk synth`, `cdk diff`, `cdk deploy` and `cdk destroy` for a deployment, or the command targets the stacks named in `config.json`. `cdk bootstrap` run from `infra/` without an explicit `aws://ACCOUNT/REGION` environment also synthesizes the app, so pass the parameter there too. To check that deployment's account quotas before deploying, run `npm run check.quotas -- --config-file config.dev.json`.
+:::
+
+The parameter selects only the main configuration file. Every deployment from the same checkout shares the other files in `infra/config/` (`policy/*.json`, `saml-config.ts`, `oidc-config.ts`, `csp/cspAdditionalConfig.json`, `custom/customConfig.json`) and the `infra/.env` file; use separate checkouts when deployments need different values in those.
 
 Each deployment creates a fully isolated set of resources with unique stack names derived from the `baseStackName` and Region combination.
 
@@ -322,6 +338,8 @@ To remove VAMS and all associated resources:
 cd infra
 npx cdk destroy --all
 ```
+
+If the deployment was made with `-c configFile=<name>`, pass the same parameter (`npx cdk destroy --all -c configFile=<name>`); without it the command targets the stacks named in `config.json`.
 
 Some resources (Amazon S3 buckets, Amazon DynamoDB tables, pipeline stacks) may not be automatically deleted due to retention policies. Remove these manually through the AWS Management Console or AWS CLI.
 
