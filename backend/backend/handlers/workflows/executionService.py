@@ -1964,6 +1964,33 @@ MAX_LOG_EVENTS_PER_CALL = 1000
 # skew between the recorded start and the first emitted event.
 LOG_SEARCH_WINDOW_MARGIN_MS = 5 * 60 * 1000
 
+# Bounds on following FilterLogEvents' nextToken past pages that hold no events. CloudWatch Logs
+# returns a page per slice of the group it searched, and "a returned page might only be partially full,
+# or even empty ... If the results don't include a nextToken, then pagination is finished"
+# (FilterLogEvents API reference). On a group holding many streams -- the shared workflow log group, a
+# shared Lambda log group -- the first page of a search for one run is often empty with the run's
+# events on a later page, so a read that stops there reports none. A read therefore follows the token
+# until a page holds events or the token is absent, and stops on whichever bound below comes first,
+# returning the token it would have read next so the caller continues from there:
+#
+#   MAX_LOG_PAGES_PER_READ              pages one source's read issues, counting the first. Bounds the
+#                                       walk when the clock does not, e.g. against a fast empty group.
+#   LOG_EMPTY_PAGE_WALK_BUDGET_SECONDS  wall-clock budget for the reads that follow an empty page,
+#                                       shared by every source of ONE logs request. A pipeline-scoped
+#                                       request reads the shared group plus up to
+#                                       MAX_REGISTERED_LOGS_INSPECTED registered sources, and the whole
+#                                       request must answer inside the 29 s API Gateway ceiling (see
+#                                       GLOBAL_LIST_WALK_BUDGET_SECONDS for what is reserved outside a
+#                                       walk). The clock is checked before each follow-up read, so the
+#                                       overshoot is one read. FilterLogEvents is also throttled per
+#                                       account and Region (5 to 25 transactions per second depending on
+#                                       the Region, not adjustable) and that quota is shared with every
+#                                       other caller in the account, which is why the walk is bounded in
+#                                       time rather than left to the adaptive retry. The first read of
+#                                       each source is never charged to this budget.
+MAX_LOG_PAGES_PER_READ = 10
+LOG_EMPTY_PAGE_WALK_BUDGET_SECONDS = 6
+
 # Upper bound on registered sub-process logs / sub-executions read per logs request. A pipeline may
 # register an unbounded number of these; each read is a CloudWatch/SFN API call, so a single logs GET
 # must not fan out without limit. Excess entries are skipped and flagged in the response warnings.
@@ -3451,7 +3478,41 @@ def _log_search_window_start(main_item):
     return int(parsed.timestamp() * 1000) - LOG_SEARCH_WINDOW_MARGIN_MS
 
 
-def _full_log_search(log_group_arn, filter_terms, query_params, default_start_time=None):
+def _log_walk_deadline():
+    """The monotonic-clock deadline for one logs request's empty-page follow-up reads."""
+    return time.monotonic() + LOG_EMPTY_PAGE_WALK_BUDGET_SECONDS
+
+
+def _filter_log_events_past_empty_pages(kwargs, walk_deadline=None):
+    """FilterLogEvents with ``kwargs``, following nextToken past pages that hold no events.
+
+    Returns the last page read. Its ``events`` are the first non-empty page's, and its ``nextToken``
+    is present whenever more may follow -- including when MAX_LOG_PAGES_PER_READ or the
+    ``walk_deadline`` (``time.monotonic()`` seconds; one request's shared budget, else
+    LOG_EMPTY_PAGE_WALK_BUDGET_SECONDS from now) stopped the walk on an empty page. The first read's
+    exception propagates to the caller. A later read that fails ends the walk on the page before it,
+    whose token is the one that read was continuing from."""
+    if walk_deadline is None:
+        walk_deadline = _log_walk_deadline()
+    resp = logs_client.filter_log_events(**kwargs)
+    pages_read = 1
+    while not resp.get('events'):
+        if 'nextToken' not in resp:
+            break
+        if pages_read >= MAX_LOG_PAGES_PER_READ or time.monotonic() >= walk_deadline:
+            break
+        try:
+            following = logs_client.filter_log_events(**dict(kwargs, nextToken=resp['nextToken']))
+        except Exception as e:
+            logger.info(f"Log read stopped after an empty page (non-critical): {e}")
+            break
+        resp = following
+        pages_read += 1
+    return resp
+
+
+def _full_log_search(log_group_arn, filter_terms, query_params, default_start_time=None,
+                     walk_deadline=None):
     """Live CloudWatch FilterLogEvents search within the shared workflow log group.
 
     filter_terms is the list of REQUIRED literal terms the search is scoped to (e.g. the
@@ -3466,7 +3527,11 @@ def _full_log_search(log_group_arn, filter_terms, query_params, default_start_ti
     older streams, an unbounded search returns those streams' events and reports nothing for a run
     that finished seconds ago, even though the events are present (verified against a group where a
     stream-scoped query returned 12 events and the same unbounded group-wide query returned 0).
-    Anchoring on the execution's own start makes the search look where its events actually are."""
+    Anchoring on the execution's own start makes the search look where its events actually are.
+
+    A page with no events and a nextToken is followed (``_filter_log_events_past_empty_pages``,
+    bounded by MAX_LOG_PAGES_PER_READ and ``walk_deadline``), so the result is the first page that
+    holds events, or the outstanding token when the bound stopped the walk first."""
     if not log_group_arn:
         return {"events": [], "nextToken": None}
     parts = log_group_arn.split(":log-group:")
@@ -3506,7 +3571,7 @@ def _full_log_search(log_group_arn, filter_terms, query_params, default_start_ti
         kwargs['nextToken'] = query_params['nextToken']
 
     try:
-        resp = logs_client.filter_log_events(**kwargs)
+        resp = _filter_log_events_past_empty_pages(kwargs, walk_deadline)
     except Exception as e:
         logger.info(f"Full log search failed (non-critical): {e}")
         return {"events": [], "nextToken": None}
@@ -3567,7 +3632,7 @@ def step_invocation_log_group_arn(pipeline_row, reference_log_group_arn=""):
 
 def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, log_stream_prefix="",
                                  scope_terms=None, default_start_time=None, next_token=None,
-                                 log_stream_names=None):
+                                 log_stream_names=None, walk_deadline=None):
     """Best-effort fetch of events from a registered sub-process log location. Returns
     (True, events, nextToken) on success or (False, reason, None) on a real failure (e.g.
     AccessDenied), never raising; the caller surfaces a failure as a warning and classifies it.
@@ -3579,7 +3644,8 @@ def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, l
     id) are AND-ed into the filter pattern as required literal terms so a group SHARED across
     executions (a nested state machine's own log group) returns only this execution's events, not
     every execution's; the caller passes none for a stream it registered itself. `next_token`
-    continues an earlier page of this same read."""
+    continues an earlier page of this same read. A page with no events and a nextToken is followed
+    as `_full_log_search` follows one, within MAX_LOG_PAGES_PER_READ and `walk_deadline`."""
     parts = (log_group_arn or "").split(":log-group:")
     if len(parts) < 2:
         return False, "unparseable log group ARN", None
@@ -3611,7 +3677,7 @@ def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, l
     if next_token:
         kwargs['nextToken'] = next_token
     try:
-        resp = logs_client.filter_log_events(**kwargs)
+        resp = _filter_log_events_past_empty_pages(kwargs, walk_deadline)
     except botocore.exceptions.ClientError as e:
         code = e.response.get('Error', {}).get('Code', '')
         logger.warning(f"Could not read registered log {log_group_arn}: {e}")
@@ -4372,6 +4438,9 @@ def get_execution_logs(event, execution_id, query_params):
     log_group_arn = main_item.get('executionLogGroupArn', '')
     # Lower bound shared by every live read below, so none of them scans unbounded history.
     window_start = _log_search_window_start(main_item)
+    # One budget for every read below that follows an empty page, so the sources together stay inside
+    # LOG_EMPTY_PAGE_WALK_BUDGET_SECONDS however many of them this request reads.
+    walk_deadline = _log_walk_deadline()
     scope_terms = [execution_id]
     if pipeline_execution_id:
         scope_terms.append(pipeline_execution_id)
@@ -4379,7 +4448,7 @@ def get_execution_logs(event, execution_id, query_params):
     search = {"events": [], "nextToken": None}
     if not log_id:
         search = _full_log_search(log_group_arn, scope_terms, query_params,
-                                  default_start_time=window_start)
+                                  default_start_time=window_start, walk_deadline=walk_deadline)
 
     # When scoped to a pipeline, read every log source that pipeline offers (its invocation log, what
     # it registered, and each sub-state-machine's own group) and report how each read went.
@@ -4444,7 +4513,8 @@ def get_execution_logs(event, execution_id, query_params):
                 scope_terms=source_terms if plan["scoped"] else None,
                 default_start_time=window_start,
                 next_token=(query_params.get('nextToken') if log_id else None),
-                log_stream_names=plan.get("logStreamNames"))
+                log_stream_names=plan.get("logStreamNames"),
+                walk_deadline=walk_deadline)
             status = al.classify_read(ok, payload, token, unscoped=plan["unscoped"])
             events = [dict(e, logId=source["logId"]) for e in payload] if ok else []
             if not ok:
