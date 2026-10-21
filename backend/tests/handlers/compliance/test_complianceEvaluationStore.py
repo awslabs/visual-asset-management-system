@@ -376,7 +376,8 @@ class TestSynchronousEvaluation:
         ]
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
         calls = [c.kwargs for c in tables.metadata_schema.query.call_args_list]
-        assert [c["IndexName"] for c in calls] == ["DatabaseIdMetadataEntityTypeIndex"] * 2
+        assert calls, "the metadata schema was not looked up"
+        assert {c["IndexName"] for c in calls} == {"DatabaseIdMetadataEntityTypeIndex"}
         partitions = [c["KeyConditionExpression"]._values[1] for c in calls]
         assert partitions == [f"{DB}:assetMetadata", "GLOBAL:assetMetadata"]
         metadata_result = next(r for r in result["ruleResults"] if r["ruleName"] == "owner-present")

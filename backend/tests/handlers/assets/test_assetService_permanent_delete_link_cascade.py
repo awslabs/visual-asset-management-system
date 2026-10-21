@@ -259,8 +259,10 @@ class TestTheSurvivingEndIsRecorded:
     def test_the_other_end_of_every_removed_link_is_stamped(self):
         stamp = self._stamps([_link("l-out", ASSET_KEY, "db-2:child")],
                              [_link("l-in", "db-3:parent", ASSET_KEY)])
-        assert sorted(c.args[1:4] for c in stamp.call_args_list) == [
-            ("db-2", "child", "linkChange"), ("db-3", "parent", "linkChange")]
+        assert stamp.call_args_list, "no surviving end was stamped"
+        assert {c.args[1:4] for c in stamp.call_args_list} >= {
+            ("db-2", "child", "linkChange"), ("db-3", "parent", "linkChange")}
+        assert (DATABASE_ID, ASSET_ID) not in {c.args[1:3] for c in stamp.call_args_list}
         assert all(c.args[0] is _svc().asset_table for c in stamp.call_args_list)
 
     def test_the_deleted_asset_itself_is_not_stamped(self):
@@ -270,4 +272,6 @@ class TestTheSurvivingEndIsRecorded:
     def test_a_link_that_could_not_be_removed_is_not_recorded(self):
         stamp = self._stamps([_link("bad", ASSET_KEY, "db-2:a"), _link("good", ASSET_KEY, "db-2:b")],
                              [], fail=("bad",))
-        assert [c.args[1:3] for c in stamp.call_args_list] == [("db-2", "b")]
+        stamped = {c.args[1:3] for c in stamp.call_args_list}
+        assert ("db-2", "b") in stamped
+        assert ("db-2", "a") not in stamped

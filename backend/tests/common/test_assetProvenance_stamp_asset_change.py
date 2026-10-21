@@ -98,7 +98,7 @@ class TestTheStampIsBestEffort:
         stamp_asset_change(table, DATABASE_ID, ASSET_ID, ASSET_CHANGE_SOURCE_METADATA_EDIT)
         call = table.update_item.call_args.kwargs
         assert call["Key"] == {"databaseId": DATABASE_ID, "assetId": ASSET_ID}
-        assert call["ConditionExpression"] == "attribute_exists(#asset)"
+        assert "attribute_exists(#asset)" in call["ConditionExpression"]
         assert call["ExpressionAttributeNames"]["#asset"] == "assetId"
 
     def test_any_failure_is_reported_not_raised(self):

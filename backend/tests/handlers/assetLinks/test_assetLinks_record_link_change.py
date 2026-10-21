@@ -53,7 +53,8 @@ class TestCreatingALink:
         links_table.put_item.side_effect = lambda **kw: order.append("put")
         stamp.side_effect = lambda *a, **kw: order.append("stamp")
         _create(links_table)
-        assert _stamped(stamp) == ENDPOINT_STAMPS
+        assert stamp.call_args_list, "no linked asset was stamped"
+        assert set(_stamped(stamp)) >= set(ENDPOINT_STAMPS)
         assert all(call.args[0] is cal.asset_storage_table for call in stamp.call_args_list)
         assert order == ["put", "stamp", "stamp"]
 
@@ -86,7 +87,8 @@ class TestDeletingALink:
         links_table.delete_item.side_effect = lambda **kw: order.append("delete")
         stamp.side_effect = lambda *a, **kw: order.append("stamp")
         _delete(links_table)
-        assert _stamped(stamp) == ENDPOINT_STAMPS
+        assert stamp.call_args_list, "no linked asset was stamped"
+        assert set(_stamped(stamp)) >= set(ENDPOINT_STAMPS)
         assert all(call.args[0] is service.asset_storage_table for call in stamp.call_args_list)
         assert order == ["delete", "stamp", "stamp"]
 
