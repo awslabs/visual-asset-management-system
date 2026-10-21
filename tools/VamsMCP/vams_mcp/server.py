@@ -1508,7 +1508,8 @@ def list_compliance_schemas(database_id: Optional[str] = None) -> Dict[str, Any]
     response and takes no paging parameters, so there is no `starting_token` and the result is never
     `truncated`. Each item carries schemaName, databaseId (the scope, or GLOBAL), description,
     schemaBody (the rule document; rule types pipeline, metadata, relationship, fileStructure,
-    versionCoverage, assetAttributes), `schemaFormat`, version and createdAt. `schemaFormat` is
+    versionCoverage, assetAttributes; a metadata rule's scope is asset, files, fileAttributes or
+    links), `schemaFormat`, version and createdAt. `schemaFormat` is
     `vams-rules-v1`, or `legacy` for a row whose body is not a vams-rules-v1 document: a legacy
     schema cannot be bound, updated or evaluated and is listed only so it can be found and removed
     with delete_compliance_schema().
@@ -1525,7 +1526,11 @@ def get_compliance_schema(schema_name: str) -> Dict[str, Any]:
     enforcement, checks, ...}}}` with `ruleType` one of pipeline, metadata, relationship,
     fileStructure (regular expressions over the asset's current file paths, file-count bounds),
     versionCoverage (every current file recorded in an asset version) or assetAttributes (the
-    asset's name, description or tags); a pipeline rule's `pipelineRef` names the workflow it executes
+    asset's name, description or tags); a metadata rule's `scope` is asset (default; the asset's
+    own metadata), files or fileAttributes (each current file's metadata or attributes, narrowed by
+    `includePaths` / `excludePaths`) or links (each asset link's metadata, narrowed by
+    `linkDirection` / `relationshipType`), and its `metadataSchemaRef` must name a metadata schema
+    of that scope's entity type; a pipeline rule's `pipelineRef` names the workflow it executes
     (databaseId — the WORKFLOW's database — and workflowId) and the pipeline whose measurements its
     checks read (pipelineDatabaseId, pipelineId, optional templateId), and its `inputFiles`
     (`mode` matching / wholeAsset / explicit, with `filter` globs or explicit `keys`) selects
@@ -2328,13 +2333,27 @@ if CONFIG.enable_writes:
 
         `schema_body` MUST be a vams-rules-v1 document: `{"schemaFormat": "vams-rules-v1", "rules":
         {<name>: {ruleType, enforcement, checks, ...}}}` with ruleType one of pipeline / metadata /
-        relationship and enforcement one of quarantine / warn / inform; any other body (a plain JSON
+        relationship / fileStructure / versionCoverage / assetAttributes and enforcement one of
+        quarantine / warn / inform; any other body (a plain JSON
         Schema, an envelope wrapping the document) is refused with `schemaBody must be a
         vams-rules-v1 document`. A pipeline rule's `pipelineRef` takes databaseId (the WORKFLOW's
         database; GLOBAL allowed), workflowId, pipelineDatabaseId (GLOBAL allowed), pipelineId and
         an optional templateId; a metadata rule's `metadataSchemaRef` takes databaseId and
         schemaName; each rule needs at least one check. Read an existing schema with
         get_compliance_schema() and copy its shape.
+
+        A metadata rule's `scope` selects what it validates: `asset` (the default; the asset's own
+        metadata, against an assetMetadata schema), `files` / `fileAttributes` (each current,
+        non-archived file's metadata or attributes, against a fileMetadata / fileAttribute schema;
+        the schema's file type restriction, then the rule's optional `includePaths` and
+        `excludePaths` regular expressions, select the files) or `links` (each asset link's
+        metadata, against an assetLinkMetadata schema, narrowed by `linkDirection` parents /
+        children / related and `relationshipType` parentChild / related). Every file or link in
+        scope must pass, e.g. `{"ruleType": "metadata", "enforcement": "warn", "scope": "files",
+        "metadataSchemaRef": {"databaseId": "GLOBAL", "schemaName": "modelFileMetadata"},
+        "excludePaths": ["\\\\.previewFile\\\\."], "checks": [{"name": "c", "validateRequired":
+        true}]}`. A schema that is missing or of another entity type records an `error` result,
+        never a pass.
 
         A pipeline rule's `inputFiles` selects which of the asset's files the workflow execution
         receives: `{"mode": "matching", "filter": ["*.glb"]}` (the default mode) lists the asset's

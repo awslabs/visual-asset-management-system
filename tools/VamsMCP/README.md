@@ -419,7 +419,14 @@ needs the selection to resolve to exactly one file, otherwise the rule records a
 `error` result — a non-verdict `status` `error` whose enforcement does not apply;
 files a workflow execution wrote are never selected, so a filter names source
 formats only. A pipeline that writes no `compliance-output.json` is checked on the derived
-`execution_success` / `processing_duration_seconds` measurements only. Registering an
+`execution_success` / `processing_duration_seconds` measurements only. A metadata rule's
+`scope` selects what it validates: `asset` (the default; the asset's own metadata),
+`files` or `fileAttributes` (each current, non-archived file's metadata or attributes,
+narrowed by the schema's file type restriction and the rule's `includePaths` /
+`excludePaths` regular expressions) or `links` (each asset link's metadata, narrowed by
+`linkDirection` and `relationshipType`); every file or link in scope must pass, and the
+`metadataSchemaRef` must name a schema of the scope's entity type — a missing or
+mismatched schema records an `error` result, never a pass. Registering an
 existing name writes the next version, and `update_compliance_schema` replaces the
 body wholesale rather than merging. `bind_compliance_schema` binds a database (or,
 with `asset_id`, one asset as an override); only a GLOBAL schema or one scoped to

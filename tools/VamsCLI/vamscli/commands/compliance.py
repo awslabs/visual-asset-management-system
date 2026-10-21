@@ -422,7 +422,9 @@ def compliance():
     """Compliance schema, evaluation, quarantine, cascade and audit commands.
 
     Schema rules take one of six rule types: pipeline, metadata, relationship, fileStructure,
-    versionCoverage and assetAttributes (see 'compliance schema create --help').
+    versionCoverage and assetAttributes (see 'compliance schema create --help'). A metadata rule
+    validates one of four scopes: the asset's own metadata (asset, the default), each current file's
+    metadata (files) or attributes (fileAttributes), or each asset link's metadata (links).
     """
     pass
 
@@ -520,6 +522,17 @@ def create_schema(ctx: click.Context, schema_name: str, schema_file: str,
     assetAttributes check tests the asset's assetName or description against a matches or
     notMatches regular expression, or its tags against requiredTags, forbiddenTags or minTags.
 
+    A metadata rule validates metadata against the metadata schema its metadataSchemaRef names
+    (databaseId, schemaName), in one of four scopes set by "scope": "asset" (the default; the
+    asset's own metadata, against an assetMetadata schema), "files" or "fileAttributes" (the
+    metadata or attributes of each current, non-archived file, against a fileMetadata or
+    fileAttribute schema; the schema's file type restriction applies, then the rule's optional
+    includePaths and excludePaths regular expressions), or "links" (the metadata of each asset link,
+    against an assetLinkMetadata schema, narrowed by the optional linkDirection - parents, children
+    or related - and relationshipType - parentChild or related). Every file or link in scope must
+    pass; none in scope is a pass. A schema that is missing, or of another entity type than the
+    scope reads, records the rule as an error rather than a pass.
+
     A pipeline rule names the workflow it executes and the pipeline whose measurements its checks
     read under pipelineRef: databaseId (the workflow's database), workflowId, pipelineDatabaseId,
     pipelineId and an optional templateId. Its inputFiles selects which of the asset's files the
@@ -577,9 +590,9 @@ def update_schema(ctx: click.Context, schema_name: str, schema_file: Optional[st
     At least one of --schema-file, --database-id or --description must be given. The schema body
     is replaced wholesale, not merged, and must be a vams-rules-v1 document like the one
     'compliance schema create' takes (its pipeline rules select their input files through
-    inputFiles). Assets bound to the schema keep their state until the next evaluation or a
-    'compliance sweep'; an exception granted against the previous version is superseded by that
-    evaluation.
+    inputFiles, its metadata rules their scope through scope). Assets bound to the schema keep
+    their state until the next evaluation or a 'compliance sweep'; an exception granted against
+    the previous version is superseded by that evaluation.
 
     Examples:
         vamscli compliance schema update -n cad-quality --schema-file cad-quality-v2.json
