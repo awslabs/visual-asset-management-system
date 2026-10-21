@@ -105,6 +105,8 @@ def _drive_every_method(service, tmp_path):
          lambda: service.list_workflow_executions("db", "a1", workflow_id="wf")),
         ("execute_workflow",
          lambda: service.execute_workflow("db", "a1", "wf", "GLOBAL")),
+        ("get_pipeline", lambda: service.get_pipeline("GLOBAL", "p1")),
+        ("list_pipeline_templates", lambda: service.list_pipeline_templates("GLOBAL", "p1")),
     ]
 
     names = []
