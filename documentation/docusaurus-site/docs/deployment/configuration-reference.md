@@ -18,7 +18,7 @@ npx cdk deploy --all --require-approval never -c configFile=config.staging.json
 | ------------ | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `configFile` | `config.json` | The configuration file to read. A file name or relative path resolves relative to `infra/config/`; an absolute path is used as given. Synthesis fails with the path it tried when the file is missing or is not valid JSON. |
 
-The selected file has the same structure as `config.json`, and every option on this page applies to it. Where this page refers to `config.json`, it means the selected file. The other files in `infra/config/` listed under [Additional configuration files](#additional-configuration-files) are shared by every deployment made from the same checkout. The pre-deploy quota check takes the same file with `npm run check.quotas -- --config-file <name>`.
+The selected file has the same structure as `config.json`, and every option on this page applies to it. Where this page refers to `config.json`, it means the selected file. Git ignores files named `config.<name>.json` in `infra/config/` (other than the `config.template.*.json` templates), so a per-deployment file and the account ID it holds are not committed; `config.json` stays tracked. The other files in `infra/config/` listed under [Additional configuration files](#additional-configuration-files) are shared by every deployment made from the same checkout. The pre-deploy quota check takes the same file with `npm run check.quotas -- --config-file <name>`.
 
 ## Top-level settings
 
