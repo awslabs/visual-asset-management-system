@@ -197,7 +197,7 @@ In Assets mode, you can select multiple assets using the checkboxes and perform 
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | **Delete Selected**    | Archive or permanently delete the selected assets. If any selected asset is already archived, the delete modal offers permanent deletion. |
 | **Unarchive Selected** | Restore a single archived asset. This button appears when exactly one archived asset is selected.                                         |
-| **Create Asset**       | Navigate to the upload page to create a new asset.                                                                                        |
+| **Create Asset**       | Navigate to the upload page to create a new asset. From a database's asset page, the upload page opens with that database selected.       |
 
 :::warning
 Permanently deleting an archived asset cannot be undone. The asset and all its files are removed from the system.
