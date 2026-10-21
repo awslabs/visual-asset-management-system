@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { apiClient, ApiError } from "./apiClient";
+import { apiClient, ApiError, isRequestBlocked } from "./apiClient";
 
 const mockEnsure = jest.fn();
 const mockLogout = jest.fn();
@@ -182,5 +182,67 @@ describe("apiClient backstop", () => {
         await apiClient
             .post("thing", { body: {} })
             .catch((e: ApiError) => expect(e.message).not.toContain("[object Object]"));
+    });
+});
+
+describe("a request the deployment's AWS WAF web ACL blocked", () => {
+    // The body of the REST API's WAF_FILTERED gateway response.
+    const BLOCKED = {
+        message: "Request blocked by the deployment's AWS WAF web ACL",
+        blockedBy: "waf",
+        requestId: "r-1",
+    };
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        localStorage.setItem("api_path", "https://api.example.test/");
+        mockHeader.mockResolvedValue("Bearer good");
+        mockEnsure.mockResolvedValue(true);
+    });
+
+    it("names the web ACL and the request ID, after one send and no refresh", async () => {
+        const fetchMock = jest.fn().mockResolvedValue(jsonResponse(403, BLOCKED));
+        (global.fetch as any) = fetchMock;
+        const error = await apiClient.get("thing").catch((e) => e);
+        expect(error).toBeInstanceOf(ApiError);
+        expect(error.status).toBe(403);
+        expect(error.message).toBe(
+            "Request blocked by the deployment's AWS WAF web ACL (request ID r-1)"
+        );
+        expect(isRequestBlocked(error)).toBe(true);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(mockEnsure).toHaveBeenCalledWith(false);
+        expect(mockLogout).not.toHaveBeenCalled();
+    });
+
+    it("keeps the message alone when the body names no request ID", async () => {
+        for (const requestId of [undefined, "", 7]) {
+            (global.fetch as any) = jest
+                .fn()
+                .mockResolvedValue(jsonResponse(403, { ...BLOCKED, requestId }));
+            const error = await apiClient.get("thing").catch((e) => e);
+            expect(error.message).toBe(BLOCKED.message);
+            expect(isRequestBlocked(error)).toBe(true);
+        }
+    });
+
+    it("reads the marker only on a 403", async () => {
+        (global.fetch as any) = jest.fn().mockResolvedValue(jsonResponse(400, BLOCKED));
+        const error = await apiClient.get("thing").catch((e) => e);
+        expect(error.message).toBe(BLOCKED.message);
+        expect(isRequestBlocked(error)).toBe(false);
+    });
+
+    it("is not a block for a Casbin denial, or for an error that is not an ApiError", async () => {
+        (global.fetch as any) = jest
+            .fn()
+            .mockResolvedValue(jsonResponse(403, { message: "Not Authorized" }));
+        const denial = await apiClient.get("thing").catch((e) => e);
+        expect(denial.message).toBe("Not Authorized");
+        expect(isRequestBlocked(denial)).toBe(false);
+        expect(isRequestBlocked({ status: 403, body: BLOCKED, message: "x" })).toBe(false);
+        expect(isRequestBlocked(new Error(BLOCKED.message))).toBe(false);
+        expect(isRequestBlocked(undefined)).toBe(false);
+        expect(isRequestBlocked(null)).toBe(false);
     });
 });

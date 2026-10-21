@@ -343,7 +343,8 @@ Add an API call method to `web/src/services/APIService.ts` following the existin
 ### Step 8: Add CLI Command (if applicable)
 
 1. Define the endpoint path constant in `tools/VamsCLI/vamscli/constants.py` (Rule 7: never hardcode endpoint paths in command files or API client methods)
-2. Add the command in `tools/VamsCLI/vamscli/commands/{group}.py` following `roleUserConstraints.py` patterns (Click decorators, profile support, `--json-output`, error handling)
+2. Add the `APIClient` method in `tools/VamsCLI/vamscli/utils/api_client.py`: map a `401` to `AuthenticationError` and leave a `403` to `_make_request`, which raises `RequestBlockedError`, `PermissionDeniedError`, `TokenExpiredError` or, for an unrouted path, `APIError` itself, and put `except GlobalInfrastructureError: raise` ahead of any broad handler that raises (`tests/test_api_client_global_error_guards.py` fails otherwise)
+3. Add the command in `tools/VamsCLI/vamscli/commands/{group}.py` following `roleUserConstraints.py` patterns (Click decorators, profile support, `--json-output`, error handling)
 
 ### Step 9: Propagate to the MCP Server and External Connectors
 

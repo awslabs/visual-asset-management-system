@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 
 import click
 
+from ..constants import WAF_ADMIN_HINT
 from ..utils.api_client import APIClient
 from ..utils.decorators import get_profile_manager_from_context
 from ..utils.exceptions import ConfigurationError
@@ -63,22 +64,27 @@ _STAGE_PROBE_TIMEOUT_SECONDS = 15
 def validate_api_gateway_reachable(api_gateway_url: str):
     """Check the stored API base URL reaches the deployed API, WITHOUT being authenticated yet.
 
-    Returns ``(ok, detail)``. ``ok`` is False only for a definitive wrong-stage answer; a network
-    failure returns True with a detail, because setup must not be blocked by a transient outage.
+    Returns ``(ok, detail)``. ``ok`` is False only for a definitive wrong-stage answer or a probe the
+    deployment's AWS WAF web ACL blocked; a network failure returns True with a detail, because setup
+    must not be blocked by a transient outage.
 
     Setup runs before login, so this cannot make an authenticated call. It does not need to: Amazon API
     Gateway reads the FIRST path segment as the stage name, and the two failure modes answer
-    differently on an authenticated route requested with no token. Measured against a live deployment:
+    differently on an authenticated route requested with no token. Measured against a live deployment,
+    except the last row, which is the deployment's WAF_FILTERED gateway response:
 
     | request                          | answer                                    |
     | -------------------------------- | ----------------------------------------- |
     | `<host>/api/secure-config`       | 401 `{"message":"Unauthorized"}`          |
     | `<host>/secure-config`           | 403 `{"message":"Forbidden"}`             |
+    | blocked by the web ACL           | 403 `{"message":"Request blocked ...","blockedBy":"waf","requestId":"..."}` |
 
     A **401** means the request reached the custom authorizer and was refused for having no token --
     which proves the stage segment is right and the route is deployed. A **403 Forbidden** means API
     Gateway rejected the request as naming a stage that does not exist, before any authorizer ran. So
-    the absence of credentials is what makes this a clean probe rather than a limitation.
+    the absence of credentials is what makes this a clean probe rather than a limitation. A **403
+    carrying `blockedBy: "waf"`** means the web ACL blocked the probe itself, so setup is refused naming
+    the request ID; the marker is checked first because its body does not say "forbidden".
 
     Checked at setup rather than per command (owner question 89, NEW-LEAD-03 option A): the
     misconfiguration is created here, and a per-command pre-flight was already declined for its
@@ -93,6 +99,20 @@ def validate_api_gateway_reachable(api_gateway_url: str):
     except Exception as e:
         # Unreachable host, TLS failure, proxy. Not a stage problem, and not worth blocking setup for.
         return True, f"could not reach {probe_url} to verify the stage ({e})"
+
+    if response.status_code == 403:
+        try:
+            body = response.json()
+        except Exception:
+            body = None
+        if isinstance(body, dict) and body.get("blockedBy") == "waf":
+            request_id = body.get("requestId")
+            rid = f", request ID {request_id}" if isinstance(request_id, str) and request_id else ""
+            return False, (
+                f"{probe_url} was blocked by the deployment's AWS WAF web ACL (HTTP 403{rid}). A "
+                f"request this simple is blocked by the source address or the request as a whole, so "
+                f"every command from this network would be blocked the same way. {WAF_ADMIN_HINT}"
+            )
 
     if response.status_code == 403 and "forbidden" in (response.text or "").lower():
         return False, (

@@ -100,14 +100,28 @@ The `body` field contains a JSON-encoded string. When successful, the body conta
 
 VAMS uses standard HTTP status codes to indicate the result of an API request.
 
-| Status Code | Description                                                                                                                                                                       |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `200`       | The request succeeded.                                                                                                                                                            |
-| `400`       | Bad request. The request contains invalid parameters, fails validation, or targets a feature that is disabled (for example, Cognito user management when Cognito is not enabled). |
-| `401`       | Unauthorized. No VAMS handler returns this code; API Gateway returns it when a request carries no credential.                                                                     |
-| `403`       | Forbidden. The authenticated user does not have permission for the requested action.                                                                                              |
-| `404`       | Not found. The requested resource does not exist, or a feature-gated resource is unavailable (for example, search when the OpenSearch feature is not enabled).                    |
-| `500`       | Internal server error. An unexpected error occurred on the server.                                                                                                                |
+| Status Code | Description                                                                                                                                                                                                     |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `200`       | The request succeeded.                                                                                                                                                                                          |
+| `400`       | Bad request. The request contains invalid parameters, fails validation, or targets a feature that is disabled (for example, Cognito user management when Cognito is not enabled).                               |
+| `401`       | Unauthorized. No VAMS handler returns this code; API Gateway returns it when a request carries no credential.                                                                                                   |
+| `403`       | Forbidden. The authenticated user does not have permission for the requested action, or the deployment's AWS WAF web ACL blocked the request (see [Requests Blocked by AWS WAF](#requests-blocked-by-aws-waf)). |
+| `404`       | Not found. The requested resource does not exist, or a feature-gated resource is unavailable (for example, search when the OpenSearch feature is not enabled).                                                  |
+| `500`       | Internal server error. An unexpected error occurred on the server.                                                                                                                                              |
+
+### Requests Blocked by AWS WAF
+
+When the deployment enables AWS WAF (`app.useWaf`), a request that a web ACL rule blocks at the API Gateway stage never reaches VAMS. API Gateway answers it with HTTP `403` and this body, which names AWS WAF as the source and carries API Gateway's extended request ID:
+
+```json
+{
+    "message": "Request blocked by the deployment's AWS WAF web ACL",
+    "blockedBy": "waf",
+    "requestId": "E7BBKGcCvHcEXAMPLE="
+}
+```
+
+A `403` from an authorization denial carries no `blockedBy` field. Signing in again does not change a blocked request's result: a managed rule matched something in the request, most often a value in its body. An administrator looks the request ID up in the web ACL's `aws-waf-logs-vams-*` log group, where the request's record carries it as `httpRequest.requestId` and names the rule that matched; the response carries the same ID in its `x-amz-apigw-id` header. The web ACL's sampled requests carry no request ID; a request is matched there by its time, URI and client IP. A rate-based rule answers `429` with a `Retry-After` header instead (see [AWS WAF and Rate Limiting](../architecture/security.md#aws-waf-and-rate-limiting)).
 
 ---
 
