@@ -422,6 +422,15 @@ class TestGeo:
         assert mc.location_geojson({"sys_geo": {"footprint": bad}}, "data") is None
         assert mc.location_geojson({"sys_geo": {"footprint": {"type": "Point", "coordinates": [181, 0]}}}, "data") is None
 
+    def test_a_layer_file_promotes_no_feature_count_or_geometry_types(self):
+        """A layer file names its data without carrying it, so its sys_geo has no featureCount or geometryTypes and
+        the catalog writes no ext_feature_count / ext_geometry_types row for it."""
+        layer_file = {"sys_geo": {"format": "ArcGIS Layer File", "type": "CIMLayerDocument", "layerCount": 1,
+                                  "layers": [{"name": "Parcels", "type": "feature"}], "layerKinds": ["feature"],
+                                  "datasets": ["Parcels"], "crs": [], "footprint": None}}
+        rows = _items(layer_file, "data")
+        assert "ext_feature_count" not in rows and "ext_geometry_types" not in rows
+
 
 @pytest.mark.unit
 class TestMediaDocumentTextData:

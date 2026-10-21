@@ -151,6 +151,15 @@ class TestExtractText:
         assert result.file_class == "text"
         assert "does not parse" in result.warnings[0]
 
+    def test_json_nested_deeper_than_the_parser_reads_is_a_warning(self, tmp_path):
+        """json.loads raises RecursionError, not ValueError, on deep nesting; the file stays text with a warning
+        instead of failing the extraction."""
+        depth = 200_000
+        path = write(tmp_path, "deep.json", b'{"a": ' + b"[" * depth + b"]" * depth + b"}")
+        result = text.extract_text(path, make_ctx(tmp_path, "deep.json"))
+        assert result.file_class == "text"
+        assert any("nests deeper than the parser reads" in warning for warning in result.warnings)
+
     def test_binary_bytes_demote_to_other(self, tmp_path):
         path = write(tmp_path, "blob.txt", png_bytes(4, 4))
         result = text.extract_text(path, make_ctx(tmp_path, "blob.txt"))

@@ -547,7 +547,8 @@ def geopackage_bytes(layers=None):
     import tempfile
 
     if layers is None:
-        layers = [{"name": "sites", "geometry": "POINT", "srs_id": 4326, "extent": (151.1, -33.9, 151.3, -33.8), "rows": 3}]
+        layers = [{"name": "sites", "geometry": "POINT", "srs_id": 4326, "extent": (151.1, -33.9, 151.3, -33.8),
+                   "rows": 3}]
     with tempfile.TemporaryDirectory() as directory:
         path = os.path.join(directory, "fixture.gpkg")
         connection = sqlite3.connect(path)
@@ -560,11 +561,12 @@ def geopackage_bytes(layers=None):
             "Pseudo-Mercator\"]', NULL);"
             "INSERT INTO gpkg_spatial_ref_sys VALUES ('Undefined cartesian SRS', -1, 'NONE', -1, 'undefined', NULL);"
             "INSERT INTO gpkg_spatial_ref_sys VALUES ('Undefined geographic SRS', 0, 'NONE', 0, 'undefined', NULL);"
-            "CREATE TABLE gpkg_contents (table_name TEXT NOT NULL PRIMARY KEY, data_type TEXT NOT NULL, identifier TEXT"
-            " UNIQUE, description TEXT DEFAULT '', last_change DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ',"
-            " 'now')), min_x DOUBLE, min_y DOUBLE, max_x DOUBLE, max_y DOUBLE, srs_id INTEGER);"
-            "CREATE TABLE gpkg_geometry_columns (table_name TEXT NOT NULL, column_name TEXT NOT NULL, geometry_type_name"
-            " TEXT NOT NULL, srs_id INTEGER NOT NULL, z TINYINT NOT NULL, m TINYINT NOT NULL);")
+            "CREATE TABLE gpkg_contents (table_name TEXT NOT NULL PRIMARY KEY, data_type TEXT NOT NULL,"
+            " identifier TEXT UNIQUE, description TEXT DEFAULT '', last_change DATETIME NOT NULL DEFAULT"
+            " (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), min_x DOUBLE, min_y DOUBLE, max_x DOUBLE, max_y DOUBLE,"
+            " srs_id INTEGER);"
+            "CREATE TABLE gpkg_geometry_columns (table_name TEXT NOT NULL, column_name TEXT NOT NULL,"
+            " geometry_type_name TEXT NOT NULL, srs_id INTEGER NOT NULL, z TINYINT NOT NULL, m TINYINT NOT NULL);")
         for layer in layers:
             name = layer["name"]
             min_x, min_y, max_x, max_y = layer["extent"]

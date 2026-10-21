@@ -164,6 +164,8 @@ def load_json_document(path: str, head: str, encoding: str, truncated: bool, siz
             text = handle.read().decode(encoding or "utf-8", "replace")
     try:
         return json.loads(text), None
+    except RecursionError:
+        return None, "JSON nests deeper than the parser reads; indexed as plain text"
     except ValueError as exc:
         return None, f"JSON does not parse ({exc}); indexed as plain text"
 
