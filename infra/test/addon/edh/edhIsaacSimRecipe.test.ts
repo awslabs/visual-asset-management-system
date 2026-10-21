@@ -453,11 +453,15 @@ function runInstalled(
 const FD9_STATE = "{ { : >&9; } 2>/dev/null && echo open || echo closed; }";
 
 /**
- * `sleep` advances bash's SECONDS instead of waiting. Once the refresher holds its lock, the sleep
- * after POLLS checks ends the run with status 99, since the refresher itself never stops; each of
- * the refresher's sleeps records whether it holds the lock's descriptor.
+ * `sleep` advances bash's SECONDS instead of waiting. SECONDS is unset first, which removes its
+ * special property (bash keeps it plain even once reassigned), so only these sleeps advance it and
+ * real time on a loaded host cannot close the sign-in window early. Once the refresher holds its
+ * lock, the sleep after POLLS checks ends the run with status 99, since the refresher itself never
+ * stops; each of the refresher's sleeps records whether it holds the lock's descriptor.
  */
 const FAKE_SLEEP = [
+    "unset SECONDS",
+    "SECONDS=0",
     "sleep() {",
     '    if [ -e "${HOME}/refreshing" ]; then',
     "        POLLED=$((${POLLED:-0} + 1))",
