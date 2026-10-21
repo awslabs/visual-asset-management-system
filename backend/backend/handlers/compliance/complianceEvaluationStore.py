@@ -255,11 +255,19 @@ def get_metadata_schema(
 ) -> Optional[Dict[str, Any]]:
     """The metadata schema named `schema_name` of `entity_type` in `database_id`, falling back to the
     GLOBAL schema of that name and type, as `{"fields": [{"field", "required", "type"}] or None,
-    "entityType", "fileKeyTypeRestriction"}`. None when neither exists; a schema of that name with
-    another entity type is not a match, so two schemas sharing a name never resolve arbitrarily.
+    "entityType", "fileKeyTypeRestriction"}`.
 
-    Reads the `DatabaseIdMetadataEntityTypeIndex` GSI (partition `databaseId:metadataEntityType`,
-    projecting ALL) to exhaustion and filters by `schemaName`, which is not a key.
+    When neither exists, a schema of that name under another entity type — in `database_id`, then
+    GLOBAL — is returned with its own `entityType`, so the rule reports the entity-type mismatch
+    rather than a missing schema. None when no schema of that name exists under any entity type.
+    Only the exact-type lookup can yield a schema of `entity_type`; a schema of another type always
+    reads as a mismatch, so two schemas sharing a name never resolve arbitrarily. When several of
+    other types share the name, the first by (entity type, metadataSchemaId) is reported — every one
+    of them is a mismatch, and the pick is stable across reads.
+
+    Reads the `DatabaseIdMetadataEntityTypeIndex` GSI (partition `databaseId:metadataEntityType`)
+    and, on a miss, the `DatabaseIdIndex` GSI (partition `databaseId`), both projecting ALL, each to
+    exhaustion and filtered by `schemaName`, which is neither index's key.
     """
     for candidate_database in _database_lookup_order(database_id):
         rows = query_all_items(
@@ -270,15 +278,40 @@ def get_metadata_schema(
             FilterExpression=Attr("schemaName").eq(schema_name),
         )
         if rows:
-            row = rows[0]
-            stored_type = (row.get("metadataSchemaEntityType")
-                           or str(row.get("databaseId:metadataEntityType", "")).split(":", 1)[-1])
-            return {
-                "fields": engine.normalize_metadata_schema_fields(row.get("fields", "[]")),
-                "entityType": stored_type,
-                "fileKeyTypeRestriction": row.get("fileKeyTypeRestriction"),
-            }
+            return _metadata_schema_view(rows[0])
+    for candidate_database in _database_lookup_order(database_id):
+        other_types = [
+            row for row in query_all_items(
+                metadata_schema_table,
+                IndexName="DatabaseIdIndex",
+                KeyConditionExpression=Key("databaseId").eq(candidate_database),
+                FilterExpression=Attr("schemaName").eq(schema_name),
+            )
+            if _metadata_schema_entity_type(row) != entity_type
+        ]
+        if other_types:
+            reported = min(other_types, key=lambda row: (
+                _metadata_schema_entity_type(row), str(row.get("metadataSchemaId", ""))))
+            logger.info(f"Metadata schema '{schema_name}' of {candidate_database} exists as "
+                        f"{_metadata_schema_entity_type(reported)}, not {entity_type}")
+            return _metadata_schema_view(reported)
     return None
+
+
+def _metadata_schema_entity_type(row: Dict[str, Any]) -> str:
+    """A metadata-schema row's entity type: `metadataSchemaEntityType`, or the type half of its
+    `databaseId:metadataEntityType` key for a row written without it."""
+    return (row.get("metadataSchemaEntityType")
+            or str(row.get("databaseId:metadataEntityType", "")).split(":", 1)[-1])
+
+
+def _metadata_schema_view(row: Dict[str, Any]) -> Dict[str, Any]:
+    """The `get_metadata_schema` form of a metadata-schema row."""
+    return {
+        "fields": engine.normalize_metadata_schema_fields(row.get("fields", "[]")),
+        "entityType": _metadata_schema_entity_type(row),
+        "fileKeyTypeRestriction": row.get("fileKeyTypeRestriction"),
+    }
 
 
 def _metadata_by_file_path(rows: List[Dict[str, Any]], database_id: str, asset_id: str,

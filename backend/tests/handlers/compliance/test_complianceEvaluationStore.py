@@ -2363,12 +2363,18 @@ REQUIRE_UNITS = [{"name": "units", "validateRequired": True}]
 
 
 def _schema_lookup(*rows):
-    """A metadata-schema-table `query` side effect: the rows whose entity-type partition and
-    `schemaName` match the query's key condition and filter, as the GSI and filter would select."""
+    """A metadata-schema-table `query` side effect: the rows whose index partition and `schemaName`
+    match the query's key condition and filter, as the GSI and filter would select —
+    `databaseId:metadataEntityType` on DatabaseIdMetadataEntityTypeIndex, `databaseId` on
+    DatabaseIdIndex."""
+    partition_attribute = {"DatabaseIdMetadataEntityTypeIndex": "databaseId:metadataEntityType",
+                           "DatabaseIdIndex": "databaseId"}
+
     def query(**kwargs):
+        attribute = partition_attribute[kwargs["IndexName"]]
         partition = kwargs["KeyConditionExpression"]._values[1]
         name = kwargs["FilterExpression"]._values[1]
-        return {"Items": [row for row in rows if row["databaseId:metadataEntityType"] == partition
+        return {"Items": [row for row in rows if row[attribute] == partition
                           and row["schemaName"] == name]}
     return query
 
@@ -2500,16 +2506,6 @@ class TestScopedMetadataRules:
         # The asset scope required `units` (the asset lacks it); the file schema requires nothing.
         assert self._result(result, "own")["passed"] is False
         assert self._result(result, "per_file")["passed"] is True
-
-    def test_a_schema_of_the_name_under_another_entity_type_is_not_found(self):
-        body = _scoped_body(per_file=("files", REQUIRE_UNITS, {}))
-        tables = self._tables(body, [
-            metadata_schema_row("Model Schema", "assetMetadata"),
-            metadata_schema_row("Model Schema", "assetMetadata", database_id="GLOBAL")])
-        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
-        rule = self._result(result, "per_file")
-        assert rule["status"] == "error"
-        assert rule["message"] == "Metadata schema not found"
 
 
 @pytest.mark.unit

@@ -329,7 +329,8 @@ MAX_LINKS_PER_METADATA_RULE = 500
 class MetadataRuleInputs:
     """What one metadata rule reads, as the store fetched it. `schema` is the rule's referenced
     metadata schema (`{"fields", "entityType", "fileKeyTypeRestriction"}`) or None when no schema of
-    that name and the scope's entity type exists. The per-file maps are keyed by the asset-relative
+    that name exists; a schema the store found only under another entity type carries that type,
+    which the rule reports as a scope mismatch. The per-file maps are keyed by the asset-relative
     path with a single leading '/'; `link_metadata_by_id` by assetLinkId. A source the rule's scope
     does not read may be None."""
     asset_metadata: Optional[Dict[str, Any]] = None
