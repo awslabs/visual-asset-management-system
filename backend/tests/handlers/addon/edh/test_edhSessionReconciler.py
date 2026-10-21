@@ -62,6 +62,8 @@ STAMP = "%Y-%m-%dT%H:%M:%SZ"
 INSTANCE_ID = "i-0123456789abcdef0"
 # The expiry a DELETED row without a credential is given during a sweep at NOW.
 EXPIRY = deleted_row_expiry(NOW)
+# The stamp the sweep writes on a row it records DELETED because EDH stopped listing its desktop.
+UNLISTED_AT = NOW.isoformat()
 # The updatedAt the scripted conditional write reports it wrote.
 STAMP_WRITTEN = NOW.isoformat()
 # The updatedAt every scripted row carries, and so what the claim on it is conditioned on.
@@ -337,18 +339,21 @@ class TestReconcileRow:
 
     def test_a_desktop_edh_no_longer_lists_is_recorded_deleted_and_its_secret_removed(self):
         assert rec.reconcile_row(_row("a"), _index(), NOW) == (
-            {"state": rec.STATE_DELETED, "connectionAvailable": False}, True, True)
+            {"state": rec.STATE_DELETED,
+                rec.EDH_UNLISTED_AT_FIELD: UNLISTED_AT, "connectionAvailable": False}, True, True)
 
     def test_a_stopped_row_edh_no_longer_lists_is_recorded_deleted_and_its_container_removed(self):
         # A stop took the key and kept the container; the desktop is gone, so the container goes now.
         row = _row("a", apiKeyId="", state=rec.STATE_STOPPED, edhState="stopped", connectionAvailable=False)
-        assert rec.reconcile_row(row, _index(), NOW) == ({"state": rec.STATE_DELETED}, True, True)
+        assert rec.reconcile_row(row, _index(), NOW) == ({"state": rec.STATE_DELETED,
+            rec.EDH_UNLISTED_AT_FIELD: UNLISTED_AT}, True, True)
 
     def test_a_stopped_row_without_any_credential_edh_no_longer_lists_is_recorded_deleted_with_its_expiry(self):
         row = _row("a", apiKeyId="", secretName="", keyExpiresAt="", state=rec.STATE_STOPPED, edhState="stopped",
                    connectionAvailable=False)
         assert rec.reconcile_row(row, _index(), NOW) == (
-            {"state": rec.STATE_DELETED, EXPIRES_AT_FIELD: EXPIRY}, False, False)
+            {"state": rec.STATE_DELETED,
+                rec.EDH_UNLISTED_AT_FIELD: UNLISTED_AT, EXPIRES_AT_FIELD: EXPIRY}, False, False)
 
     @pytest.mark.parametrize("state, edh_state", [(rec.STATE_ACTIVE, "running"), (rec.STATE_STOPPED, "stopped")])
     def test_only_a_row_recorded_deleted_is_given_the_expiry(self, state, edh_state):
@@ -643,7 +648,8 @@ class TestTheSweep:
         assert _written_for(persist, "b") == {"state": rec.STATE_STOPPED, "edhState": "stopped",
                                               "connectionAvailable": False, **CLEARED_KEY,
                                               "startRequestedAt": None, "credentialClaimedAt": None}
-        assert _written_for(persist, "c") == {"state": rec.STATE_DELETED, "connectionAvailable": False,
+        assert _written_for(persist, "c") == {"state": rec.STATE_DELETED,
+            rec.EDH_UNLISTED_AT_FIELD: UNLISTED_AT, "connectionAvailable": False,
                                               **CLEARED_ALL, EXPIRES_AT_FIELD: EXPIRY, "credentialClaimedAt": None}
         assert _written_for(persist, "e") == {**CLEARED_ALL, EXPIRES_AT_FIELD: EXPIRY, "credentialClaimedAt": None}
         assert _updates_for(persist, "a") == []
@@ -961,7 +967,8 @@ class TestCredentialWorkWithoutSessionBootstrap:
         row = _row("a", apiKeyId="", state=rec.STATE_STOPPED, edhState="stopped", connectionAvailable=False)
         summary, revoke_fn, persist, *_ = _run([row], [], bootstrap_enabled=False)
         assert revoke_fn.call_args.kwargs["delete_secret"] is True
-        assert _written_for(persist, "a") == {"state": rec.STATE_DELETED, **CLEARED_ALL, EXPIRES_AT_FIELD: EXPIRY,
+        assert _written_for(persist, "a") == {"state": rec.STATE_DELETED,
+            rec.EDH_UNLISTED_AT_FIELD: UNLISTED_AT, **CLEARED_ALL, EXPIRES_AT_FIELD: EXPIRY,
                                               "credentialClaimedAt": None}
         assert summary["skipped"] == 0 and summary["updated"] == 1
 
@@ -969,7 +976,7 @@ class TestCredentialWorkWithoutSessionBootstrap:
         row = _row("a", apiKeyId="", state=rec.STATE_STOPPED, edhState="stopped", connectionAvailable=False)
         summary, revoke_fn, persist, *_ = _run([row], [], bootstrap_enabled=False, api_key_service="")
         revoke_fn.assert_not_called()
-        assert _written_for(persist, "a") == {"state": rec.STATE_DELETED}
+        assert _written_for(persist, "a") == {"state": rec.STATE_DELETED, rec.EDH_UNLISTED_AT_FIELD: UNLISTED_AT}
         assert summary == _summary(examined=1, updated=1, skipped=1)
 
     def test_a_row_that_names_a_key_is_still_revoked_while_an_apikeyservice_is_named(self):
@@ -995,7 +1002,8 @@ class TestCredentialWorkWithoutSessionBootstrap:
     def test_state_is_still_reconciled_for_a_keyed_row_whose_credential_cannot_be_revoked(self):
         summary, revoke_fn, persist, *_ = _run([_row("a")], [], bootstrap_enabled=False, api_key_service="")
         revoke_fn.assert_not_called()
-        assert _written_for(persist, "a") == {"state": rec.STATE_DELETED, "connectionAvailable": False}
+        assert _written_for(persist, "a") == {"state": rec.STATE_DELETED,
+            rec.EDH_UNLISTED_AT_FIELD: UNLISTED_AT, "connectionAvailable": False}
         assert summary == _summary(examined=1, updated=1, skipped=1)
 
     def test_with_the_feature_on_the_container_alone_is_removed(self):
@@ -1003,7 +1011,8 @@ class TestCredentialWorkWithoutSessionBootstrap:
         row = _row("a", apiKeyId="", state=rec.STATE_STOPPED, edhState="stopped", connectionAvailable=False)
         _summary_, revoke_fn, persist, *_ = _run([row], [], bootstrap_enabled=True)
         assert revoke_fn.call_args.kwargs["delete_secret"] is True
-        assert _written_for(persist, "a") == {"state": rec.STATE_DELETED, **CLEARED_ALL, EXPIRES_AT_FIELD: EXPIRY,
+        assert _written_for(persist, "a") == {"state": rec.STATE_DELETED,
+            rec.EDH_UNLISTED_AT_FIELD: UNLISTED_AT, **CLEARED_ALL, EXPIRES_AT_FIELD: EXPIRY,
                                               "credentialClaimedAt": None}
 
     def test_the_orphan_key_sweep_waits_for_the_feature(self):
@@ -1139,7 +1148,8 @@ class TestModuleLoadWithoutTheBootstrapEnvironment:
         writes = [c.kwargs for c in table.update_item.call_args_list]
         assert writes and len(writes) <= 2
         state_write, credential_write = writes[0], writes[-1]
-        assert set(state_write["ExpressionAttributeNames"].values()) == {"state", "credentialClaimedAt", "updatedAt"}
+        assert set(state_write["ExpressionAttributeNames"].values()) == {"state",
+            rec.EDH_UNLISTED_AT_FIELD, "credentialClaimedAt", "updatedAt"}
         assert set(credential_write["ExpressionAttributeNames"].values()) == {
             *CLEARED_ALL, EXPIRES_AT_FIELD, "credentialClaimedAt", "updatedAt"}
 
@@ -1169,7 +1179,7 @@ class TestModuleLoadWithoutTheBootstrapEnvironment:
         assert table.update_item.called
         assert table.update_item.call_count <= 1
         written = table.update_item.call_args.kwargs
-        assert set(written["ExpressionAttributeNames"].values()) == {"state", "updatedAt"}
+        assert set(written["ExpressionAttributeNames"].values()) == {"state", rec.EDH_UNLISTED_AT_FIELD, "updatedAt"}
 
 
 @pytest.mark.unit
@@ -2356,3 +2366,77 @@ class TestAnUnlistedDesktopIsConfirmedGoneBeforeItsRowIsDeleted:
             [_row("a")], [_desktop("sess-a")], states=[])
         client_factory.return_value.get_desktop_states.assert_not_called()
 
+
+
+@pytest.mark.unit
+class TestADesktopEdhSavedAndResumedKeepsItsRow:
+    """EDH's Save and Resume continues a desktop under a new session uuid with the same session name and
+    owner. VAMS names every launch's desktop after its bootstrap id, so a desktop EDH lists under a row's
+    name and owner with another session id is that row's desktop: the row follows it instead of being
+    recorded DELETED with its key revoked."""
+
+    def test_a_row_whose_desktop_edh_resumed_under_a_new_session_follows_it(self):
+        row = _row(BOOTSTRAP, sessionId="sess-saved")
+        updates, revoke, delete_secret = rec.reconcile_row(row, _index(_named("sess-resumed")), NOW)
+        assert updates == {"sessionId": "sess-resumed", "scheduleAppliedAt": None}
+        assert (revoke, delete_secret) == (False, False)
+
+    def test_the_resumed_desktops_instance_is_bound_to_the_session_secret(self):
+        bind = MagicMock(return_value={"secretBoundInstanceId": INSTANCE_ID})
+        row = _row(BOOTSTRAP, sessionId="sess-saved", secretBoundInstanceId="i-0aaaaaaaaaaaaaaaa")
+        with patch.object(bootstrap, "bind_session_secret", bind):
+            updates, revoke, _ = rec.reconcile_row(
+                row, _index(_named("sess-resumed", **{EDH_FIELD_INSTANCE_ID: INSTANCE_ID})), NOW)
+        assert bind.call_args_list, "the resumed desktop's instance was never bound"
+        assert {call.args[1] for call in bind.call_args_list} == {INSTANCE_ID}
+        assert updates["sessionId"] == "sess-resumed" and updates["secretBoundInstanceId"] == INSTANCE_ID
+        assert revoke is False
+
+    def test_a_desktop_another_owner_has_under_the_rows_name_is_not_followed(self):
+        row = _row(BOOTSTRAP, sessionId="sess-saved")
+        updates, revoke, _ = rec.reconcile_row(row, _index(_named("sess-other", owner="vothervothervoth")), NOW)
+        assert updates["state"] == rec.STATE_DELETED and "sessionId" not in updates
+        assert revoke is True
+
+    def test_a_row_edh_no_longer_lists_is_stamped_unlisted_when_recorded_deleted(self):
+        updates, _, _ = rec.reconcile_row(_row(BOOTSTRAP), _index(), NOW)
+        assert updates[rec.EDH_UNLISTED_AT_FIELD] == NOW.isoformat()
+
+    def test_a_row_the_sweep_recorded_deleted_is_re_adopted_by_its_resumed_desktop(self):
+        # A save takes the desktop out of EDH's listing for the minutes its image takes, so a sweep in
+        # between records the row deleted; the resume brings it back under a new session id.
+        row = _row(BOOTSTRAP, sessionId="sess-saved", state=rec.STATE_DELETED, edhState=None,
+                   connectionAvailable=False, apiKeyId="", secretName="", keyExpiresAt="",
+                   **{rec.EDH_UNLISTED_AT_FIELD: NOW.isoformat(), EXPIRES_AT_FIELD: EXPIRY})
+        updates, revoke, delete_secret = rec.reconcile_row(row, _index(_named("sess-resumed")), NOW)
+        assert updates == {"sessionId": "sess-resumed", "state": rec.STATE_ACTIVE, "edhState": "running",
+                           "connectionAvailable": True, "scheduleAppliedAt": None,
+                           rec.EDH_UNLISTED_AT_FIELD: None, EXPIRES_AT_FIELD: None}
+        assert (revoke, delete_secret) == (False, False)
+
+    def test_a_row_deleted_through_vams_is_not_re_adopted_by_a_desktop_of_its_name(self):
+        row = _row(BOOTSTRAP, sessionId="sess-saved", state=rec.STATE_DELETED, edhState=None,
+                   connectionAvailable=False, apiKeyId="", secretName="", keyExpiresAt="",
+                   **{EXPIRES_AT_FIELD: EXPIRY})
+        assert rec.reconcile_row(row, _index(_named("sess-resumed")), NOW) == ({}, False, False)
+
+    def test_an_unlisted_row_with_a_resumed_desktop_needs_no_session_state_read(self):
+        row = _row(BOOTSTRAP, sessionId="sess-saved")
+        summary, revoke_fn, persist, *_rest, client_factory, _delete = _run(
+            [row], [_named("sess-resumed")], states=[])
+        client_factory.return_value.get_desktop_states.assert_not_called()
+        written = _written_for(persist, BOOTSTRAP)
+        assert written["sessionId"] == "sess-resumed" and "state" not in written
+        revoke_fn.assert_not_called()
+        assert summary["revoked"] == 0
+
+    def test_a_deleted_row_the_scan_no_longer_returns_is_found_by_its_resumed_desktop(self):
+        # Its expiry is set, so the scan filter leaves it out; the desktop's name names its bootstrap id.
+        row = _row(BOOTSTRAP, sessionId="sess-saved", state=rec.STATE_DELETED, edhState=None,
+                   connectionAvailable=False, apiKeyId="", secretName="", keyExpiresAt="",
+                   **{rec.EDH_UNLISTED_AT_FIELD: NOW.isoformat(), EXPIRES_AT_FIELD: EXPIRY})
+        summary, _revoke, persist, *_ = _run([], [_named("sess-resumed")], current={BOOTSTRAP: row})
+        written = _written_for(persist, BOOTSTRAP)
+        assert written["sessionId"] == "sess-resumed" and written["state"] == rec.STATE_ACTIVE
+        assert written[EXPIRES_AT_FIELD] is None
+        assert summary["examined"] == 1

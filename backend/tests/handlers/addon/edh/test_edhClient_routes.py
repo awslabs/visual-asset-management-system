@@ -869,6 +869,38 @@ class TestEnsureUser:
         probe, create = recorded["calls"]
         assert (probe["method"], create["method"]) == ("GET", "POST")
 
+    def test_a_failed_existence_check_at_create_is_not_taken_for_an_existing_user(self, monkeypatch):
+        # EDH's create re-checks the directory first. When that check fails it answers "Unable to check if
+        # user <uid> already exist, ..." (v1/ldap/user.py), which carries the same "already exist" words as
+        # its duplicate refusal. Only the duplicate means the user is there.
+        ec, recorded = install_client_fakes(
+            monkeypatch, root_keys=["k1"],
+            results=[FakeResponse(200, EMPTY_DIRECTORY),
+                     _refusal(" Unable to check if user vabc already exist, Unable to bind to LDAP server")])
+        monkeypatch.setattr(ec, "EDH_AUTO_PROVISION_USERS", "true")
+        with pytest.raises(ec.EdhUnavailableError):
+            ec.EdhClient(profile="batch").ensure_user("vabc")
+        assert [call["method"] for call in recorded["calls"]] == ["GET", "POST"]
+
+    def test_a_directory_search_failure_on_the_probe_is_an_outage_not_an_absent_user(self, monkeypatch):
+        # A directory outage answers the probe "Unable to find user because of ..." (v1/ldap/user.py), which
+        # the not-found markers would read as "no such resource". An absent user is a 200 with [].
+        ec, recorded = install_client_fakes(
+            monkeypatch, root_keys=["k1"],
+            results=[_refusal(" Unable to find user because of Can't contact LDAP server")])
+        monkeypatch.setattr(ec, "EDH_AUTO_PROVISION_USERS", "true")
+        with pytest.raises(ec.EdhUnavailableError):
+            ec.EdhClient(profile="batch").ensure_user("vabc")
+        assert [call["method"] for call in recorded["calls"]] == ["GET"]
+
+    def test_with_provisioning_disabled_a_directory_outage_is_not_user_not_provisioned(self, monkeypatch):
+        ec, _ = install_client_fakes(
+            monkeypatch, root_keys=["k1"],
+            results=[_refusal(" Unable to find user because of Can't contact LDAP server")])
+        monkeypatch.setattr(ec, "EDH_AUTO_PROVISION_USERS", "false")
+        with pytest.raises(ec.EdhUnavailableError):
+            ec.EdhClient(profile="batch").ensure_user("vabc")
+
     def test_any_other_refusal_still_raises(self, monkeypatch):
         ec, _ = install_client_fakes(
             monkeypatch, root_keys=["k1"],

@@ -26,6 +26,7 @@ from models.common import (
 from models.addon.edh import AmiRecipeRequestModel, edh_recipe_id_pattern
 from .common.edhIdentity import SYSTEM_USER_ID
 from .common import edhAmiRecipes as recipes
+from .common.edhClient import EdhError, map_edh_error_to_response
 from .common import edhAmiRecipeStore as store
 
 logger = safeLogger(service_name="EdhAmiRecipeService")
@@ -300,6 +301,11 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)
+    except EdhError as e:
+        # A register, retire or delete that reached EDH answers as every other EDH route does: the typed
+        # error's status and curated message, never EDH's own text.
+        logger.exception(f"EDH error: {type(e).__name__}")
+        return map_edh_error_to_response(e, event)
     except VAMSGeneralErrorResponse as v:
         logger.exception("VAMSGeneralErrorResponse")
         return validation_error(body={'message': str(v)}, event=event)

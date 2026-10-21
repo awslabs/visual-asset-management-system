@@ -12,6 +12,7 @@ from moto import mock_aws
 from backend.backend.handlers.addon.edh import edhAmiRecipeService as service
 from backend.backend.handlers.addon.edh.common import edhAmiRecipeStore as store_mod
 from backend.backend.handlers.addon.edh.common import edhAmiRecipes as recipes_mod
+from backend.backend.handlers.addon.edh.common import edhClient as ec_mod
 from backend.tests.handlers.addon.edh.edhAdminTestSupport import (
     ADMIN, ADMIN_CLAIMS, NO_IDENTITY_CLAIMS, SYSTEM_CLAIMS, make_event, response_body,
 )
@@ -296,6 +297,27 @@ class TestBuilds:
         fakes.recipes.retire_build.side_effect = ClientError(
             {"Error": {"Code": "RequestLimitExceeded", "Message": "slow down"}}, "DeregisterImage")
         assert service.lambda_handler(event, {})["statusCode"] == 500
+
+    @pytest.mark.parametrize("error, status", [
+        (ec_mod.EdhUnavailableError("EDH returned 502 for DELETE /api/dcv/virtual_desktops/software_stacks"), 502),
+        (ec_mod.EdhAuthError("EDH rejected the root key", status=401), 502),
+        (ec_mod.EdhNotFoundError("Software Stack not found or already deactivated"), 404),
+        (ec_mod.EdhApiError("EDH refused DELETE /api/dcv/virtual_desktops/software_stacks with 500"), 400),
+    ], ids=["unavailable", "auth", "not_found", "refused"])
+    def test_an_edh_error_on_a_recipe_route_keeps_its_status_and_curated_message(self, monkeypatch, error, status):
+        # The recipe routes reach EDH (register, retire, delete); a typed EDH error answers as it does on
+        # every other EDH route -- its own status and curated message -- not as a 500 internal error.
+        fakes = install(monkeypatch)
+        params = {"recipeId": "al2023-desktop", "version": "1"}
+        fakes.recipes.retire_build.side_effect = error
+        response = service.lambda_handler(make_event("DELETE", recipe_path("al2023-desktop", "builds", "1"),
+                                                     path_params=params), {})
+        assert response["statusCode"] == status
+        assert response_body(response)["message"] == ec_mod.edh_error_response_parts(error)[1]
+        fakes.recipes.retry_registration.side_effect = error
+        response = service.lambda_handler(make_event("POST", recipe_path("al2023-desktop", "builds", "1", "register"),
+                                                     path_params=params), {})
+        assert response["statusCode"] == status
 
     def test_a_retire_whose_recipe_is_deleted_meanwhile_answers_409(self, monkeypatch):
         fakes = install(monkeypatch)

@@ -105,6 +105,9 @@ REFUSALS = [
 TRANSIENT = [
     ("create_desktop", EdhUnavailableError("read timeout")),
     ("ensure_user", EdhAuthError("rejected", status=401)),
+    # The client raises a directory that could not be searched as unavailable, never as not-found, so a
+    # directory outage retries instead of ending the launch USER_NOT_PROVISIONED.
+    ("ensure_user", EdhUnavailableError("The EDH directory could not be searched")),
     ("create_desktop", RuntimeError("unexpected")),
     ("find_desktop_by_name", EdhNotFoundError("EDH has no such route for GET /api/dcv/virtual_desktops/list_all",
                                               status=404)),

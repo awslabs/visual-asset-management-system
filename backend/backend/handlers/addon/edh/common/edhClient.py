@@ -246,8 +246,14 @@ EDH_LDAP_EMAIL_DOMAIN = "vams.invalid"
 EDH_LDAP_CREATE_FIELDS = frozenset({
     EDH_LDAP_USER_FIELD, EDH_LDAP_PASSWORD_FIELD, EDH_LDAP_EMAIL_FIELD, "sudoers", "shell", "uid", "gid",
 })
-# Lower-cased substrings of an EDH refusal that mean the directory user already exists.
-EDH_USER_EXISTS_MARKERS = ("already exist",)
+# EDH's duplicate-user refusal, "Unable to create user, <uid> already exist". EDH's create re-checks the
+# directory first and, when that check fails, answers "Unable to check if user <uid> already exist, ..." --
+# the same two words, so the whole duplicate wording is matched, not "already exist" alone.
+EDH_USER_EXISTS_PATTERN = re.compile(r"unable to create user, \S+ already exist", re.IGNORECASE)
+# Lower-cased substrings of an EDH refusal that mean the directory itself could not be searched: the probe's
+# "Unable to find user because of ..." and the create's "Unable to check if user <uid> already exist, ...".
+# Each is an outage, not an answer about the user, so a launch retries it.
+EDH_DIRECTORY_FAILURE_MARKERS = ("unable to find user because of", "unable to check if user")
 # The throw-away directory password: never stored, logged or reused (a workstation user signs in through
 # the DCV connection token). Every class is present so any directory policy accepts it.
 EDH_PASSWORD_LENGTH = 24
@@ -592,6 +598,15 @@ def _refusal_text(parsed: dict) -> str:
 def _mentions(text: str, markers) -> bool:
     lowered = text.lower()
     return any(marker in lowered for marker in markers)
+
+
+def _directory_outage(exc: EdhError) -> Optional[EdhError]:
+    """An ``EdhUnavailableError`` for an EDH refusal that says the directory could not be searched, which the
+    not-found or generic classes would otherwise take for an answer about the user; None for any other error."""
+    if isinstance(exc, EdhUnavailableError) or not _mentions(exc.body_text or "", EDH_DIRECTORY_FAILURE_MARKERS):
+        return None
+    return EdhUnavailableError("The EDH directory could not be searched", status=exc.status,
+                               body_text=exc.body_text)
 
 
 def _payload(parsed):
@@ -1101,9 +1116,13 @@ class EdhClient:
 
     def user_exists(self, edh_uid: str) -> bool:
         """Whether the directory has ``edh_uid``: the lookup answers 200 with the entries found, [] for none.
-        The service actor is the acting user; the probed uid may not exist yet."""
-        parsed = self.request("GET", EDH_ROUTE_LDAP_USER, edh_uid=EDH_SERVICE_ACTOR_UID,
-                              params={EDH_LDAP_USER_FIELD: edh_uid})
+        The service actor is the acting user; the probed uid may not exist yet. A refusal that says the
+        directory could not be searched raises ``EdhUnavailableError``: it says nothing about the user."""
+        try:
+            parsed = self.request("GET", EDH_ROUTE_LDAP_USER, edh_uid=EDH_SERVICE_ACTOR_UID,
+                                  params={EDH_LDAP_USER_FIELD: edh_uid})
+        except EdhError as exc:
+            raise _directory_outage(exc) or exc
         return bool(_as_list(_payload(parsed)))
 
     def ensure_user(self, edh_uid: str, display_name: Optional[str] = None) -> None:
@@ -1125,8 +1144,11 @@ class EdhClient:
         try:
             # The service actor creates the user: the new uid is not a directory principal yet.
             self.request("POST", EDH_ROUTE_LDAP_USER, edh_uid=EDH_SERVICE_ACTOR_UID, form=_ldap_user_form(edh_uid))
-        except EdhApiError as exc:
-            if _mentions(exc.body_text, EDH_USER_EXISTS_MARKERS):
+        except EdhError as exc:
+            outage = _directory_outage(exc)
+            if outage is not None:
+                raise outage
+            if isinstance(exc, EdhApiError) and EDH_USER_EXISTS_PATTERN.search(exc.body_text or ""):
                 return
             raise
 

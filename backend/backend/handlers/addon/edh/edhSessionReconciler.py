@@ -46,6 +46,7 @@ revoke is counted skipped and its state reconciliation runs regardless. Two swee
 converge on the same rows: every revoke tolerates a key or secret that is already gone.
 """
 
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterator, List, NamedTuple, Optional, Set, Tuple
@@ -97,6 +98,14 @@ SWEPT_STATES = (STATE_CREATING, STATE_ACTIVE, STATE_STOPPED, STATE_ORPHANED)
 # States whose row is recorded DELETED when EDH's listing leaves its desktop out; that absence is confirmed
 # with EDH's session-state read before any such row is written.
 UNLISTED_CONFIRMED_STATES = frozenset({STATE_CREATING, STATE_ACTIVE, STATE_STOPPED})
+# Stamped on a row the sweep records DELETED because EDH stopped listing its desktop, and only then: a row
+# deleted through VAMS never carries it. EDH's Save and Resume takes a desktop out of the listing while its
+# image is taken and brings it back under a new session uuid with the same name and owner, so only a row
+# carrying this stamp is re-adopted by a desktop listed under its name.
+EDH_UNLISTED_AT_FIELD = "edhUnlistedAt"
+# Rows the sweep reads by the session name of a listed desktop no scanned row claims, at most this many per
+# sweep: a DELETED row whose expiry is set is no longer scanned, and its resumed desktop names its bootstrap.
+MAX_RESUMED_ROW_LOOKUPS_PER_SWEEP = 50
 # States in which the desktop is definitely not running, so its credential is revoked ...
 REVOKING_STATES = frozenset({STATE_STOPPED, STATE_ORPHANED, STATE_DELETED})
 # ... and those in which the secret container goes with it. A STOPPED desktop keeps its container: the
@@ -232,6 +241,63 @@ def _desktop_for_row(row: Dict[str, Any], index: DesktopIndex) -> Optional[Dict[
     return max(matches, key=lambda desktop: str(desktop.get(EDH_SESSION_CREATED_ON_FIELD) or ""))
 
 
+def _resumed_desktop(row: Dict[str, Any], index: DesktopIndex) -> Optional[Dict[str, Any]]:
+    """The desktop EDH lists under the row's owner and session name with another session id: EDH's Save and
+    Resume continues a desktop that way (a new session uuid, the same name and owner), and VAMS gives every
+    launch a session name of its own, so it is the row's desktop. The newest wins; None when EDH lists none,
+    or when the row has no session id (the launch path matches those by name already)."""
+    session_id = row.get("sessionId")
+    if not session_id:
+        return None
+    try:
+        session_name = edh_session_name(row["bootstrapId"])
+    except (KeyError, ValueError):
+        return None
+    matches = [desktop for desktop in index.by_owner_name.get((str(row.get("edhUid")), session_name), [])
+               if str(desktop.get(EDH_SESSION_ID_FIELD)) != str(session_id)]
+    if not matches:
+        return None
+    return max(matches, key=lambda desktop: str(desktop.get(EDH_SESSION_CREATED_ON_FIELD) or ""))
+
+
+def _bootstrap_id_of_session_name(session_name) -> Optional[str]:
+    """The bootstrap id a VAMS session name was made from (its 32 hex digits, hyphenated back as a uuid);
+    None for a name VAMS did not make."""
+    text = str(session_name or "")
+    if not re.fullmatch(r"[0-9a-fA-F]{32}", text):
+        return None
+    return f"{text[:8]}-{text[8:12]}-{text[12:16]}-{text[16:20]}-{text[20:]}"
+
+
+def _resumed_rows(scanned_rows: List[Dict[str, Any]], index: DesktopIndex) -> List[Dict[str, Any]]:
+    """Rows the scan no longer returns whose desktop EDH lists again under a new session id: a row the sweep
+    recorded DELETED while EDH's Save and Resume had the desktop out of its listing, read by the bootstrap
+    id the listed desktop's session name encodes. Only a DELETED row that carries the unlisted stamp, is
+    owned by the desktop's owner and names another session id is returned; at most
+    ``MAX_RESUMED_ROW_LOOKUPS_PER_SWEEP`` rows are read per sweep."""
+    claimed = {str(row["sessionId"]) for row in scanned_rows if row.get("sessionId")}
+    scanned = {str(row.get("bootstrapId")) for row in scanned_rows}
+    found: List[Dict[str, Any]] = []
+    lookups = 0
+    for session_id, desktop in index.by_id.items():
+        if session_id in claimed:
+            continue
+        bootstrap_id = _bootstrap_id_of_session_name(desktop.get(EDH_SESSION_NAME_FIELD))
+        if bootstrap_id is None or bootstrap_id in scanned:
+            continue
+        if lookups >= MAX_RESUMED_ROW_LOOKUPS_PER_SWEEP:
+            logger.info("Resumed-desktop row lookups reached the per-sweep limit; the rest wait for the next sweep")
+            break
+        lookups += 1
+        scanned.add(bootstrap_id)
+        row = _read_row(bootstrap_id)
+        if (row is not None and row.get("state") == STATE_DELETED and row.get(EDH_UNLISTED_AT_FIELD)
+                and str(row.get("edhUid")) == str(desktop.get(EDH_SESSION_OWNER_FIELD))
+                and str(row.get("sessionId")) != session_id):
+            found.append(row)
+    return found
+
+
 def _confirm_unlisted(rows: List[Dict[str, Any]], index: DesktopIndex, summary: Dict[str, int]) -> Set[str]:
     """Confirm with EDH's token-free session-state read that the desktops of rows EDH's listing left out are
     gone, before any such row is recorded DELETED: a desktop the read still reports active joins the index
@@ -240,7 +306,7 @@ def _confirm_unlisted(rows: List[Dict[str, Any]], index: DesktopIndex, summary: 
     missing = list(dict.fromkeys(
         str(row["sessionId"]) for row in rows
         if row.get("sessionId") and row.get("state") in UNLISTED_CONFIRMED_STATES
-        and str(row["sessionId"]) not in index.by_id))
+        and str(row["sessionId"]) not in index.by_id and _resumed_desktop(row, index) is None))
     if not missing:
         return set()
     try:
@@ -371,10 +437,18 @@ def _reconcile_decision(row: Dict[str, Any], index: DesktopIndex, now: datetime,
     has_secret = bool(row.get("secretName"))
     has_credential = has_key or has_secret
     re_adopted = False
+    resumed = None
     if state == STATE_DELETED:
-        # A launch deleted before EDH listed its desktop re-adopts the desktop EDH created for it; any
-        # other DELETED row has its removal recorded and only a leftover credential left to act on.
-        desktop = None if row.get("sessionId") else _desktop_for_row(row, index)
+        # A launch deleted before EDH listed its desktop re-adopts the desktop EDH created for it, and a row
+        # the sweep recorded deleted while EDH's Save and Resume had its desktop out of the listing re-adopts
+        # the resumed desktop; any other DELETED row has its removal recorded and only a leftover credential
+        # left to act on.
+        if not row.get("sessionId"):
+            desktop = _desktop_for_row(row, index)
+        elif row.get(EDH_UNLISTED_AT_FIELD):
+            desktop = resumed = _resumed_desktop(row, index)
+        else:
+            desktop = None
         if desktop is None:
             # A recorded removal that carries neither a credential nor an expiry takes the TTL now.
             if not has_credential and row.get(EXPIRES_AT_FIELD) is None:
@@ -383,9 +457,19 @@ def _reconcile_decision(row: Dict[str, Any], index: DesktopIndex, now: datetime,
         re_adopted = True
     else:
         desktop = _desktop_for_row(row, index)
+        if desktop is None:
+            desktop = resumed = _resumed_desktop(row, index)
     updates: Dict[str, Any] = {}
     if desktop is not None:
         updates = observed_row_attributes(row, desktop)
+        if resumed is not None:
+            # The row follows its desktop's new session; the never-auto-start schedule is set on it afresh.
+            updates["sessionId"] = str(resumed[EDH_SESSION_ID_FIELD])
+            if row.get("scheduleAppliedAt"):
+                updates["scheduleAppliedAt"] = None
+            if row.get(EDH_UNLISTED_AT_FIELD):
+                updates[EDH_UNLISTED_AT_FIELD] = None
+            logger.info(f"Bootstrap {row['bootstrapId']} follows its desktop resumed by EDH under a new session")
         if not re_adopted:
             updates.update(_bind_session_secret(row, desktop, summary))
     elif state == STATE_CREATING and not row.get("sessionId"):
@@ -393,8 +477,9 @@ def _reconcile_decision(row: Dict[str, Any], index: DesktopIndex, now: datetime,
             return {}, False, False
         updates = {"state": STATE_ORPHANED, "lastError": LAST_ERROR_CREATE_TIMED_OUT}
     elif state in (STATE_CREATING, STATE_ACTIVE, STATE_STOPPED):
-        # EDH lists every desktop that is not deleted; one it no longer lists was removed outside VAMS.
-        updates = {"state": STATE_DELETED}
+        # EDH lists every desktop that is not deleted; one it no longer lists was removed outside VAMS, or is
+        # held out of the listing by EDH's Save and Resume, which the stamp lets a later sweep re-adopt.
+        updates = {"state": STATE_DELETED, EDH_UNLISTED_AT_FIELD: now.isoformat()}
     if updates.get("state") in SECRET_REMOVING_STATES and row.get("connectionAvailable") is not False:
         updates["connectionAvailable"] = False
     final_state = updates.get("state", state)
@@ -520,7 +605,7 @@ def _sweep_orphan_keys(referenced_key_ids: Set[str], live_bootstrap_ids: Set[str
 def _live_state(row: Dict[str, Any], index: DesktopIndex) -> Optional[str]:
     """The state EDH's listing implies for the row's desktop: None when EDH lists no desktop for the row.
     A listed desktop in a state outside the mapping yields the empty string, which no lease branch acts on."""
-    desktop = _desktop_for_row(row, index)
+    desktop = _desktop_for_row(row, index) or _resumed_desktop(row, index)
     if desktop is None:
         return None
     return state_for_edh_session_state(desktop.get(EDH_SESSION_STATE_FIELD), "")
@@ -733,6 +818,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, int]:
         raise
     index = _index_desktops(desktops)
     scanned_rows = list(_scan_swept_rows(now))
+    scanned_rows.extend(_resumed_rows(scanned_rows, index))
     unconfirmed = _confirm_unlisted(scanned_rows, index, summary)
 
     # Every key some row names, and the bootstrap of every desktop that may still be running -- by its row as

@@ -335,14 +335,14 @@ class TestCapturedRefusals:
         assert excinfo.value.status == fixture["response"]["status"]
 
     def test_a_captured_refusal_envelope_carries_its_text_for_the_log(self, monkeypatch):
-        # The wrappers read markers from body_text (ensure_user's "already exist"), and the log line
+        # The wrappers read markers from body_text (ensure_user's duplicate wording), and the log line
         # carries it; the replayed envelope's message is what arrives there.
         fixture = load_fixture("ldap_user_duplicate")
         ec, send = _replay(monkeypatch, fixture)
         with pytest.raises(ec.EdhApiError) as excinfo:
             send()
         assert excinfo.value.body_text == fixture["response"]["json"]["message"]
-        assert ec._mentions(excinfo.value.body_text, ec.EDH_USER_EXISTS_MARKERS)
+        assert ec.EDH_USER_EXISTS_PATTERN.search(excinfo.value.body_text)
 
     def test_every_recorded_refusal_is_replayed(self):
         # Directory-driven: a refusal the spike records under a new name has to be classified here.
