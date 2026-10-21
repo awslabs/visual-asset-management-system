@@ -310,7 +310,7 @@ def handler(event, context):
             new cdk.CfnOutput(this, "CosmosPredictCodeBuildProject", {
                 value: this.predictV2Repo.codeBuildProjectName,
                 description:
-                    "CodeBuild project name for Cosmos Predict v2.5 container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+                    "CodeBuild project name for Cosmos Predict v2.5 container. Check build status, then run the pipeline once it prints SUCCEEDED: aws codebuild batch-get-builds --ids \"$(aws codebuild list-builds-for-project --project-name <value> --max-items 1 --query 'ids[0]' --output text)\" --query 'builds[0].buildStatus' --output text",
             });
         }
 
@@ -331,7 +331,7 @@ def handler(event, context):
             new cdk.CfnOutput(this, "CosmosReasonCodeBuildProject", {
                 value: this.reasonRepo.codeBuildProjectName,
                 description:
-                    "CodeBuild project name for Cosmos Reason container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+                    "CodeBuild project name for Cosmos Reason container. Check build status, then run the pipeline once it prints SUCCEEDED: aws codebuild batch-get-builds --ids \"$(aws codebuild list-builds-for-project --project-name <value> --max-items 1 --query 'ids[0]' --output text)\" --query 'builds[0].buildStatus' --output text",
             });
         }
 
@@ -350,7 +350,7 @@ def handler(event, context):
             new cdk.CfnOutput(this, "CosmosTransferCodeBuildProject", {
                 value: this.transferRepo.codeBuildProjectName,
                 description:
-                    "CodeBuild project name for Cosmos Transfer container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+                    "CodeBuild project name for Cosmos Transfer container. Check build status, then run the pipeline once it prints SUCCEEDED: aws codebuild batch-get-builds --ids \"$(aws codebuild list-builds-for-project --project-name <value> --max-items 1 --query 'ids[0]' --output text)\" --query 'builds[0].buildStatus' --output text",
             });
         }
 
@@ -375,7 +375,7 @@ def handler(event, context):
             new cdk.CfnOutput(this, "Cosmos3CodeBuildProject", {
                 value: this.cosmos3Repo.codeBuildProjectName,
                 description:
-                    "CodeBuild project name for Cosmos 3 container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+                    "CodeBuild project name for Cosmos 3 container. Check build status, then run the pipeline once it prints SUCCEEDED: aws codebuild batch-get-builds --ids \"$(aws codebuild list-builds-for-project --project-name <value> --max-items 1 --query 'ids[0]' --output text)\" --query 'builds[0].buildStatus' --output text",
             });
         }
     }

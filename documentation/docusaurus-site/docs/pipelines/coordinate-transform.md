@@ -282,16 +282,24 @@ The following AWS resources are created when this pipeline is enabled:
 
 ### Container Fails to Start
 
-If the AWS Batch job fails immediately, check that the CodeBuild project completed successfully:
+If the AWS Batch job fails immediately, check that the CodeBuild project's newest build succeeded. The project name is the `CodeBuildProject` output of the pipeline's nested stack (its name contains `CoordinateTransformBuilderNestedStack`). This command prints the build's status, `IN_PROGRESS` while it runs; run the pipeline once it prints `SUCCEEDED`:
 
 ```bash
-aws codebuild list-builds-for-project \
-    --project-name <CodeBuild-project-name> \
-    --sort-order DESCENDING \
-    --region <region>
+aws codebuild batch-get-builds \
+    --ids "$(aws codebuild list-builds-for-project --project-name <CodeBuild-project-name> \
+        --max-items 1 --query 'ids[0]' --output text --region <region>)" \
+    --query 'builds[0].buildStatus' --output text --region <region>
 ```
 
-Verify the build status is `SUCCEEDED` and the Amazon ECR repository contains the `latest` tag.
+The image tag is derived from the container source, so the job definition names a specific tag rather than `latest`. To confirm that tag was pushed, read the image the job definition references and look it up in the repository:
+
+```bash
+aws batch describe-job-definitions --job-definition-name <job-definition-name> --status ACTIVE \
+    --query 'jobDefinitions[0].containerProperties.image' --output text --region <region>
+
+aws ecr describe-images --repository-name <repository-name> \
+    --image-ids imageTag=<tag-from-the-image-above> --region <region>
+```
 
 ### Missing sourceCrs or targetCrs
 
