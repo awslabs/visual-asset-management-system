@@ -181,7 +181,7 @@ Outside the core stack, `bin/infra.ts` creates the WAF stacks and, for each Regi
 
 ## Configuration System
 
-Configuration values resolve in order: CDK context (`-c key=value`) → `config/config.json` → environment variables → hardcoded defaults. `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetConfig(config)`. The file is `config/config.json` unless CDK context `configFile` names another (`-c configFile=config.staging.json`); `config/configFile.ts` (`resolveConfigFilePath`) resolves a name or relative path in `config/` and leaves an absolute path as given, and `scripts/assertDeployQuotas.ts` resolves its `--config-file` argument through the same function. Tests that mock `fs.readFileSync` on `p.endsWith("config.json")` keep working because the default path still ends in `config.json`.
+Configuration values resolve in order: CDK context (`-c key=value`) → `config/config.json` → environment variables → hardcoded defaults. `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetConfig(config)`. The file is `config/config.json` unless CDK context `configFile` names another (`-c configFile=config.staging.json`); `config/configFile.ts` (`resolveConfigFilePath`) resolves a name or relative path relative to `config/` and leaves an absolute path as given, and `scripts/assertDeployQuotas.ts` parses its `--config-file` argument with `configFileFromArgs` (a missing value fails rather than checking `config.json`) and resolves it through the same function. The default path ends in `config.json`, which is what the tests that mock `fs.readFileSync` on `p.endsWith("config.json")` match.
 
 ### Key Constants (config/config.ts)
 

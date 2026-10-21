@@ -14,7 +14,11 @@
 import * as fs from "fs";
 import { join } from "path";
 import * as Config from "../../config/config";
-import { DEFAULT_CONFIG_FILE_NAME, resolveConfigFilePath } from "../../config/configFile";
+import {
+    configFileFromArgs,
+    DEFAULT_CONFIG_FILE_NAME,
+    resolveConfigFilePath,
+} from "../../config/configFile";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import { newTestApp } from "../support/testApp";
 
@@ -72,6 +76,28 @@ describe("resolveConfigFilePath()", () => {
     test("a non-string value is rejected", () => {
         expect(() => resolveConfigFilePath(42)).toThrow(/`configFile` must be a file name or path/);
     });
+});
+
+describe("configFileFromArgs() parses the quota check's --config-file option", () => {
+    test("is undefined when the option is absent, so the check reads config.json", () => {
+        expect(configFileFromArgs([])).toBeUndefined();
+        expect(configFileFromArgs(["--verbose"])).toBeUndefined();
+    });
+
+    test.each([
+        [["--config-file", "config.dev.json"]],
+        [["--config-file=config.dev.json"]],
+        [["--verbose", "--config-file", "config.dev.json"]],
+    ])("%p names config.dev.json", (args) => {
+        expect(configFileFromArgs(args)).toBe("config.dev.json");
+    });
+
+    test.each([[["--config-file"]], [["--config-file="]], [["--config-file", "--verbose"]]])(
+        "%p without a value is rejected rather than checking config.json",
+        (args) => {
+            expect(() => configFileFromArgs(args)).toThrow(/--config-file needs a file name/);
+        }
+    );
 });
 
 describe("getConfig() reads the file named by CDK context configFile", () => {
