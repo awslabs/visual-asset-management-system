@@ -3,7 +3,9 @@
 import json
 import os
 import shutil
+import stat
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, Union, List
@@ -22,9 +24,54 @@ from .exceptions import (
 from .logging import OWNER_ONLY_DIR_MODE, OWNER_ONLY_FILE_MODE, restrict_path
 
 
-def _owner_only_opener(path, flags):
-    """`open()` opener that creates a file with owner-only access from the outset."""
-    return os.open(path, flags, OWNER_ONLY_FILE_MODE)
+# Windows refuses os.replace while another process holds the destination open, as a CLI reading its
+# profile does for a moment, so the swap is retried briefly there.
+_RETRY_REFUSED_REPLACE = os.name == 'nt'
+_REPLACE_ATTEMPTS = 20
+_REPLACE_RETRY_DELAY_SECONDS = 0.05
+
+
+def _replace(source: Path, destination: Path):
+    for attempt in range(1, _REPLACE_ATTEMPTS + 1):
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError:
+            if not _RETRY_REFUSED_REPLACE or attempt == _REPLACE_ATTEMPTS:
+                raise
+            time.sleep(_REPLACE_RETRY_DELAY_SECONDS)
+
+
+def _write_json_file(path: Path, data: Any, mode: Optional[int] = None):
+    """Write `data` to `path` as JSON through a temporary file beside it, swapped in with `os.replace`.
+
+    A reader opens the previous document or the new one, never part of one; two processes writing
+    the same file (two desktops signing one profile in over a shared home directory) leave one whole
+    document; and a write that fails leaves the previous file as it was. The temporary file is given
+    `mode` before the swap or, without one, the mode of the file it replaces; a new file otherwise
+    gets the default mode.
+    """
+    if mode is None:
+        try:
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+        except FileNotFoundError:
+            pass
+    temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666 if mode is None else mode)
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        if mode is not None:
+            restrict_path(temp_path, mode)
+        _replace(temp_path, path)
+    except BaseException:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
 
 
 def read_active_profile_name() -> str:
@@ -142,11 +189,10 @@ class ProfileManager:
             raise InvalidProfileNameError(f"Invalid profile name: {profile_name}")
         
         self.ensure_config_dir()
-        with open(self.active_profile_file, 'w') as f:
-            json.dump({
-                'active_profile': profile_name,
-                'updated_at': datetime.now(timezone.utc).isoformat()
-            }, f, indent=2)
+        _write_json_file(self.active_profile_file, {
+            'active_profile': profile_name,
+            'updated_at': datetime.now(timezone.utc).isoformat()
+        })
     
     def delete_profile(self, profile_name: str = None):
         """Delete an entire profile."""
@@ -186,9 +232,8 @@ class ProfileManager:
     def save_config(self, config: Dict[str, Any]):
         """Save the main configuration for this profile."""
         self.ensure_profile_dir()
-        with open(self.config_file, 'w') as f:
-            json.dump(config, f, indent=2)
-        
+        _write_json_file(self.config_file, config)
+
         # Set this profile as active when saving config
         self.set_active_profile(self.profile_name)
             
@@ -215,8 +260,7 @@ class ProfileManager:
         Holds the live Cognito access and refresh tokens, so the file is owner-only.
         """
         self.ensure_profile_dir()
-        with open(self.auth_profile_file, 'w', opener=_owner_only_opener) as f:
-            json.dump(auth_data, f, indent=2)
+        _write_json_file(self.auth_profile_file, auth_data, OWNER_ONLY_FILE_MODE)
         restrict_path(self.auth_profile_file, OWNER_ONLY_FILE_MODE)
 
     def load_auth_profile(self) -> Optional[Dict[str, Any]]:
@@ -243,8 +287,7 @@ class ProfileManager:
         Holds the plaintext password, so the file is owner-only.
         """
         self.ensure_profile_dir()
-        with open(self.credentials_file, 'w', opener=_owner_only_opener) as f:
-            json.dump(credentials, f, indent=2)
+        _write_json_file(self.credentials_file, credentials, OWNER_ONLY_FILE_MODE)
         restrict_path(self.credentials_file, OWNER_ONLY_FILE_MODE)
 
     def load_credentials(self) -> Optional[Dict[str, str]]:
