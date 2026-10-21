@@ -105,7 +105,7 @@ done
 
 ### Delete orphaned EDH Amazon ECR repositories
 
-Each EDH container image (`app.addons.useEdhWorkstations.containers.buildAndPushImages[]`) has an explicitly named repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-edh-<image name>` lower-cased. Like the pipeline repositories in [Step 5](../../deployment/uninstall.md#step-5-delete-orphaned-amazon-ecr-repositories), it uses the `DESTROY` removal policy with `emptyOnDelete`, so a clean teardown removes it with its images. The listing below matches names case-sensitively, so it lower-cases the prefix first. Delete any repository left behind before redeploying with the same configuration name and account:
+Each EDH container image (`app.addons.useEdhWorkstations.containers.buildAndPushImages[]`) has an explicitly named repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-edh-<image name>` lower-cased, with `-kms` appended when `app.useKmsCmkEncryption.enabled` is `true`. The prefix listing below finds both forms. With the CMK enabled, deleting a repository retires the grant Amazon ECR holds on the VAMS key, so the caller needs `kms:RetireGrant` on the key. Like the pipeline repositories in [Step 5](../../deployment/uninstall.md#step-5-delete-orphaned-amazon-ecr-repositories), it uses the `DESTROY` removal policy with `emptyOnDelete`, so a clean teardown removes it with its images. The listing below matches names case-sensitively, so it lower-cases the prefix first. Delete any repository left behind before redeploying with the same configuration name and account:
 
 ```bash
 EDH_PREFIX=$(echo "<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-edh" | tr '[:upper:]' '[:lower:]')

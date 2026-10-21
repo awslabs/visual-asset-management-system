@@ -8,6 +8,7 @@ import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as codebuild from "aws-cdk-lib/aws-codebuild";
 import * as s3assets from "aws-cdk-lib/aws-s3-assets";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as kms from "aws-cdk-lib/aws-kms";
 import * as cr from "aws-cdk-lib/custom-resources";
 import * as path from "path";
 import { Stack, RemovalPolicy, Duration } from "aws-cdk-lib";
@@ -42,6 +43,8 @@ export interface EdhImageBuildConstructProps {
     edhClusterId: string;
     /** `containers.imagePullRoleArns`: EDH compute roles granted pull on the repository; empty for none. */
     imagePullRoleArns: string[];
+    /** `storageResources.encryption.kmsKey`: the shared VAMS key, undefined when the CMK is off. */
+    kmsKey?: kms.IKey;
 }
 
 export class EdhImageBuildConstruct extends Construct {
@@ -64,17 +67,35 @@ export class EdhImageBuildConstruct extends Construct {
         // this construct sits a nested stack deeper than coordinateTransform, whose auto-generated
         // name already measured over the cap. DESTROY + emptyOnDelete removes the repository on an
         // ordinary teardown; a failed teardown can leave it behind under this fixed name.
+        //
+        // Amazon ECR cannot change a repository's encryption after it is created, so turning
+        // useKmsCmkEncryption on or off replaces the repository, and AWS CloudFormation cannot replace
+        // a custom-named resource under the same name. The name therefore carries `-kms` when the key
+        // is used; the build trigger carries the repository URI, so the build re-fires into the new one.
         const repositoryName = [
             props.config.name,
             props.config.app.baseStackName,
             "edh",
             props.imageName,
+            ...(props.kmsKey ? ["kms"] : []),
         ]
             .join("-")
             .toLowerCase();
 
+        // Imported by ARN, not passed as the key object, so no grant CDK derives can land in the key
+        // policy of the storage nested stack (infra/CLAUDE.md, encryption trap 2). Amazon ECR creates
+        // its own grant on the key when the repository is created; pushing and pulling need no
+        // permission on the key.
+        const encryptionKey = props.kmsKey
+            ? kms.Key.fromKeyArn(this, `EdhEcrKmsKeyRef-${props.imageName}`, props.kmsKey.keyArn)
+            : undefined;
+
         this.repository = new ecr.Repository(this, `EcrRepo-Edh-${props.imageName}`, {
             repositoryName,
+            encryption: encryptionKey
+                ? ecr.RepositoryEncryption.KMS
+                : ecr.RepositoryEncryption.AES_256,
+            encryptionKey,
             removalPolicy: RemovalPolicy.DESTROY,
             emptyOnDelete: true,
             imageScanOnPush: true,

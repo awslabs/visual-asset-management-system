@@ -461,6 +461,7 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
                     platform: image.platform,
                     edhClusterId: edhConfig.edhClusterId,
                     imagePullRoleArns: containers.imagePullRoleArns,
+                    kmsKey: props.storageResources.encryption.kmsKey,
                 });
                 imageBuildTriggers.push(build.buildTrigger);
                 imageUriByName.set(image.name, build.imageUri);

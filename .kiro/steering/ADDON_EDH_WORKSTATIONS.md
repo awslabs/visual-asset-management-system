@@ -204,7 +204,7 @@ With the add-on and `amiBuilds` on, `buildEdhWafRuleExclusions` gives the region
 
 -   the `EdhSessionStorageTable` and `EdhAmiRecipeStorageTable` tables (RETAIN like every VAMS table, auto-named)
 -   `EdhAddonLambdaSecurityGroup` (destroyed with the stack; id under the explicitly named `resourceNames/securityGroups/edhAddonLambda` parameter) and the two `resourceNames/addon/dynamoTables/*` parameters
--   the `{config.name}-{app.baseStackName}-edh-{name}` repositories (DESTROY with `emptyOnDelete`, explicitly named, ECR default AES-256 encryption)
+-   the `{config.name}-{app.baseStackName}-edh-{name}[-kms]` repositories (DESTROY with `emptyOnDelete`, explicitly named; KMS with the VAMS key imported by ARN when the CMK is on, AES-256 otherwise, and the `-kms` suffix follows the encryption because a flip replaces the repository)
 -   the per-session secrets `<secretNamePrefix><bootstrapId>`, created at runtime and removed by the add-on, not by `cdk destroy`
 -   the `EdhSessionSecretsKey` CMK, the `EdhSessionReconcilerSchedule`, `EdhAmiBuildStateRule` and `EdhAmiBuildSweepSchedule` rules
 -   the AWS Batch job definitions the registration Lambda registers and tags `edh:visibility:<edhClusterId>` (not stack resources; deregistered by supersession or by the operator)

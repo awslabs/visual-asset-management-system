@@ -204,8 +204,11 @@ describe("one image build per declared image", () => {
             const s = imageSynth(name);
             const repos = s.where("AWS::ECR::Repository", inEdhStack);
             expect(repos).toHaveLength(1);
+            // govcloud turns useKmsCmkEncryption on, so its repository carries the -kms suffix
+            // (an encryption change replaces an ECR repository, so the name changes with it).
+            const kmsSuffix = name === "govcloud" ? "-kms" : "";
             expect(SynthResult.flatten(repos[0].properties.RepositoryName)).toBe(
-                `vams-t1-${name}-edh-sim-worker`
+                `vams-t1-${name}-edh-sim-worker${kmsSuffix}`
             );
             expect(repos[0].properties.Tags).toEqual(
                 expect.arrayContaining([{ Key: "edh:visibility:edh-t1", Value: "true" }])
@@ -293,6 +296,66 @@ describe("the image repository name fits an AWS Batch image reference", () => {
             );
         }
     );
+});
+
+describe("the image repository follows the deployment KMS key", () => {
+    // The commercial template leaves useKmsCmkEncryption off and the govcloud template turns it on,
+    // so the pair covers both sides of the flip with the same image configuration.
+
+    /** The deployment's shared VAMS key in the storage nested stack: one with the CMK on, none off. */
+    const deploymentKeys = (s: SynthResult): Resource[] =>
+        s.where(
+            "AWS::KMS::Key",
+            (r) =>
+                /StorageResourcesBuilder/.test(r.stack) &&
+                r.logicalId.startsWith("VAMSEncryptionKMSKey")
+        );
+
+    /**
+     * The storage-stack key a nested-stack value refers to, or undefined: the key reaches the add-on
+     * stack as a `referenceto…Outputs<output name>` parameter, and that storage output must be the
+     * key's `Arn`.
+     */
+    const storageKeyReferencedBy = (s: SynthResult, of: Resource, value: any) => {
+        const param = value?.Ref;
+        if (typeof param !== "string" || !(param in (s.templates[of.stack].Parameters ?? {}))) {
+            return undefined;
+        }
+        const outputName = param.split("Outputs").pop() as string;
+        for (const [stackKey, template] of Object.entries<any>(s.templates)) {
+            if (!/StorageResourcesBuilder/.test(stackKey)) continue;
+            const output = template.Outputs?.[outputName];
+            if (output?.Value?.["Fn::GetAtt"]?.[1] === "Arn") return output.Value["Fn::GetAtt"][0];
+        }
+        return undefined;
+    };
+
+    test("[control] only the govcloud synth has the deployment key", () => {
+        expect(deploymentKeys(imageSynth("commercial"))).toHaveLength(0);
+        expect(deploymentKeys(imageSynth("govcloud"))).toHaveLength(1);
+    });
+
+    test("commercial (CMK off): AES-256, and the name carries no -kms", () => {
+        const repos = imageSynth("commercial").where("AWS::ECR::Repository", inEdhStack);
+        expect(repos).toHaveLength(1);
+        const config = repos[0].properties.EncryptionConfiguration;
+        expect(config === undefined || config.EncryptionType === "AES256").toBe(true);
+        expect(SynthResult.flatten(repos[0].properties.RepositoryName)).toMatch(/-edh-sim-worker$/);
+    });
+
+    test("govcloud (CMK on): KMS with the deployment key, and the name ends in -kms", () => {
+        const s = imageSynth("govcloud");
+        const repos = s.where("AWS::ECR::Repository", inEdhStack);
+        expect(repos).toHaveLength(1);
+        const config = repos[0].properties.EncryptionConfiguration;
+        expect(config?.EncryptionType).toBe("KMS");
+        expect(storageKeyReferencedBy(s, repos[0], config?.KmsKey)).toBe(
+            deploymentKeys(s)[0].logicalId
+        );
+        expect(SynthResult.flatten(repos[0].properties.RepositoryName)).toMatch(
+            /-edh-sim-worker-kms$/
+        );
+    });
 });
 
 describe("the job-definition list handed to the catalog registration", () => {

@@ -18,6 +18,7 @@ import * as os from "os";
 import * as path from "path";
 import * as cdk from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
+import * as kms from "aws-cdk-lib/aws-kms";
 import * as Config from "../../../config/config";
 import { IMAGE_TAG_LENGTH } from "../../../lib/helper/containerImageTag";
 import {
@@ -38,11 +39,15 @@ function variableNames(template: Template): string[] {
     return projects[0].Properties.Environment.EnvironmentVariables.map((v: any) => v.Name).sort();
 }
 
-function build(platform?: string, imagePullRoleArns: string[] = []) {
+/** A key ARN standing in for the shared VAMS key; the construct only reads its ARN. */
+const KEY_ARN = "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555";
+
+function build(platform?: string, imagePullRoleArns: string[] = [], withKey = false) {
     const app = newTestApp();
     const stack = new cdk.Stack(app, "T", {
         env: { account: "123456789012", region: "us-east-1" },
     });
+    const kmsKey = withKey ? kms.Key.fromKeyArn(stack, "VamsKey", KEY_ARN) : undefined;
     const construct = new EdhImageBuildConstruct(stack, "ImageBuild-sim-worker", {
         config: CONFIG,
         imageName: "sim-worker",
@@ -50,6 +55,7 @@ function build(platform?: string, imagePullRoleArns: string[] = []) {
         platform,
         edhClusterId: "cluster-a",
         imagePullRoleArns,
+        kmsKey,
     });
     return { construct, template: Template.fromStack(stack) };
 }
@@ -192,6 +198,49 @@ describe("EdhImageBuildConstruct", () => {
         const [serviceTokenTarget] = trigger.Properties.ServiceToken["Fn::GetAtt"];
         expect(serviceTokenTarget).toMatch(/BuildProviderEdhsimworkerframeworkonEvent/);
         expect(serviceTokenTarget).not.toMatch(/BuildTriggerEdhsimworker/);
+    });
+});
+
+describe("EdhImageBuildConstruct repository encryption", () => {
+    const off = build("linux/amd64").template;
+    const on = build("linux/amd64", [], true).template;
+
+    function repository(template: Template): any {
+        const repos = Object.values(template.findResources("AWS::ECR::Repository"));
+        expect(repos).toHaveLength(1);
+        return repos[0].Properties;
+    }
+
+    test("[control] both builds emit exactly one repository", () => {
+        off.resourceCountIs("AWS::ECR::Repository", 1);
+        on.resourceCountIs("AWS::ECR::Repository", 1);
+    });
+
+    test("with the CMK on, the repository is KMS-encrypted with the deployment key", () => {
+        expect(repository(on).EncryptionConfiguration).toEqual({
+            EncryptionType: "KMS",
+            KmsKey: KEY_ARN,
+        });
+    });
+
+    test("with the CMK off, the repository has no EncryptionConfiguration (AES-256)", () => {
+        const config = repository(off).EncryptionConfiguration;
+        expect(config === undefined || config.EncryptionType === "AES256").toBe(true);
+        expect(config?.KmsKey).toBeUndefined();
+    });
+
+    test("the explicit repository name ends in -kms exactly when the CMK is on", () => {
+        // Encryption is immutable, so a flip replaces the repository, and CloudFormation cannot
+        // replace an explicitly named resource under the same name.
+        expect(repository(off).RepositoryName).toBe("vams-t1-edh-sim-worker");
+        expect(repository(on).RepositoryName).toBe("vams-t1-edh-sim-worker-kms");
+    });
+
+    test("no role in the build gets a permission on the key", () => {
+        // Amazon ECR holds its own grant on the key; the project and trigger roles need none.
+        const policies = JSON.stringify(on.findResources("AWS::IAM::Policy"));
+        expect(policies).not.toContain("kms:");
+        expect(policies).not.toContain(KEY_ARN);
     });
 });
 
