@@ -7180,6 +7180,8 @@ class APIClient(CustomAPIClientMixin):
                 raise InvalidComplianceDataError(f"{action} failed: {error_message}")
             raise APIError(f"{action} failed: {error_message}")
 
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"{action} failed: {e}")
 
