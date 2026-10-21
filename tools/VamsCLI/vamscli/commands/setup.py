@@ -27,7 +27,8 @@ def validate_base_url(url: str) -> bool:
 
 
 # Default REST API deployment stage. The execute-api endpoint serves routes under a stage
-# path; a CloudFront/ALB front absorbs it, but a raw execute-api URL must include it.
+# path; a CloudFront/ALB front maps the bootstrap calls' /api/* paths onto it, but a raw
+# execute-api URL must include it.
 DEFAULT_API_STAGE = "api"
 
 
