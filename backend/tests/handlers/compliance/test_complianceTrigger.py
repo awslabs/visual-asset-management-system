@@ -673,6 +673,60 @@ class TestAnAssetEditReEvaluatesTheAsset:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("change_source", ["metadataEdit", "linkChange"])
+class TestAMetadataOrLinkChangeReEvaluatesTheAsset:
+    """A write of the asset's metadata, a file's metadata or attributes or a link's metadata stamps
+    `lastChangeSource: metadataEdit`; creating or deleting a link stamps `linkChange` on both linked
+    assets. The stream MODIFY either write emits is a user change, admitted exactly as an
+    `assetEdit` is: judged against `lastEvaluatedAt` by its own `lastChangeAt`, the source itself not
+    consulted, so a metadata rule that quarantined an asset for a missing field clears once the user
+    adds it."""
+
+    LAST_EVALUATED = "2026-03-01T12:00:05+00:00"
+
+    def _record(self):
+        return {"schemaName": SCHEMA, "complianceState": "quarantined",
+                "lastEvaluationId": "eval-1", "lastEvaluatedAt": self.LAST_EVALUATED,
+                "lastEvaluationStatus": "completed"}
+
+    def test_a_change_after_the_last_evaluation_is_evaluated(self, change_source):
+        mocks = _run(_sns_event(_stream_message(change_source=change_source,
+                                                change_at="2026-03-01T12:05:00+00:00")),
+                     database_item=AUTO_EVAL_DB, compliance_record=self._record())
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
+        assert not any("workflow execution" in text for text in _info_messages(mocks))
+
+    def test_a_change_the_last_evaluation_already_read_is_covered(self, change_source):
+        mocks = _run(_sns_event(_stream_message(change_source=change_source,
+                                                change_at="2026-03-01T12:00:01+00:00")),
+                     database_item=AUTO_EVAL_DB, compliance_record=self._record())
+        mocks["run_evaluation"].assert_not_called()
+
+    def test_the_source_is_not_a_workflow_execution_write(self, change_source):
+        from common.assetProvenance import (
+            ASSET_CHANGE_SOURCE_LINK_CHANGE, ASSET_CHANGE_SOURCE_METADATA_EDIT)
+        from common.s3MetadataKeys import VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION
+        assert change_source in (ASSET_CHANGE_SOURCE_METADATA_EDIT, ASSET_CHANGE_SOURCE_LINK_CHANGE)
+        assert change_source != VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION
+
+
+@pytest.mark.unit
+class TestAPipelineRulesMetadataOutputDoesNotReEvaluate:
+    """A workflow execution's metadata write-back stamps `workflowExecution` with the execution's id
+    (the metadata service, on a cross-call carrying `workflowExecutionId`); its MODIFY is skipped
+    like a file output's."""
+
+    def test_the_stamp_starts_no_evaluation(self):
+        mocks = _run(_sns_event(_stream_message(change_source="workflowExecution",
+                                                change_at="2026-03-01T12:05:00+00:00")),
+                     database_item=AUTO_EVAL_DB,
+                     compliance_record={"schemaName": SCHEMA, "complianceState": "compliant",
+                                        "lastEvaluationId": "eval-1",
+                                        "lastEvaluatedAt": "2026-03-01T12:00:05+00:00"})
+        mocks["run_evaluation"].assert_not_called()
+
+
+@pytest.mark.unit
 class TestAPendingEvaluationCoversOnlyTheChangesItRead:
     """An evaluation still awaiting its pipeline rules covers the changes made at or before its start
     (the N-file upload that raised it) like any other evaluation, and no more: a change after its

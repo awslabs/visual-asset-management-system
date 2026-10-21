@@ -6,17 +6,23 @@
 Shared by the synchronous upload completion (`handlers/assets/uploadFile.py`) and the
 asynchronous large-file completion (`handlers/assets/sqsUploadFileLarge.py`) so both paths stamp
 the asset row identically, by the asset-version create and revert paths
-(`handlers/assets/assetVersions.py`), and by the asset edit (`handlers/assets/assetService.py`
-`update_asset`); the compliance trigger reads them from the table's stream image and from the row.
+(`handlers/assets/assetVersions.py`), by the asset edit (`handlers/assets/assetService.py`
+`update_asset`), by the metadata service (`handlers/metadata/metadataService.py`: a write of asset
+metadata, file metadata, file attributes or asset-link metadata) and by the asset-link create and
+delete (`handlers/assetLinks/createAssetLink.py`, `handlers/assetLinks/assetLinksService.py`); the
+compliance trigger reads them from the table's stream image and from the row.
 `lastChangeSource` / `lastChangeAt` describe the latest change of any of these kinds (`upload`,
-`workflowExecution`, `assetVersion`, `assetEdit`); `lastUploadAt` is written by a user upload's
-completion only, so a workflow execution's output write, a new asset version or an asset edit —
-each of which re-stamps `lastChangeAt` — leaves the instant of the last user upload readable.
+`workflowExecution`, `assetVersion`, `assetEdit`, `metadataEdit`, `linkChange`); `lastUploadAt` is
+written by a user upload's completion only, so a workflow execution's output write, a new asset
+version, an asset edit, a metadata write or a link change — each of which re-stamps `lastChangeAt` —
+leaves the instant of the last user upload readable.
 `lastAssetVersionAt` is its asset-version analogue: written by an asset-version create or revert
-only (the same instant as that stamp's `lastChangeAt`), and left as it is by an upload completion,
-a workflow execution's output write and an asset edit, so the instant of the last asset version —
-and with it the objects a revert copied before that stamp — stays readable after a pipeline rule's
-output write or an edit re-stamps `lastChangeSource` / `lastChangeAt`.
+only (the same instant as that stamp's `lastChangeAt`), and left as it is by every other writer, so
+the instant of the last asset version — and with it the objects a revert copied before that stamp —
+stays readable after a pipeline rule's output write, an edit, a metadata write or a link change
+re-stamps `lastChangeSource` / `lastChangeAt`. A pipeline rule's own metadata output is stamped
+`workflowExecution` with the execution's id, like its file outputs, so the trigger does not
+re-evaluate the asset on it.
 """
 
 from datetime import datetime, timezone
@@ -25,6 +31,9 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_UPLOAD,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
 )
+from customLogging.logger import safeLogger
+
+logger = safeLogger(service_name="AssetProvenance")
 
 # `lastChangeSource` of an asset row whose latest change is a new asset version (created, or made by
 # reverting to an earlier one). An asset-row value only: no S3 object carries it as its
@@ -38,6 +47,57 @@ ASSET_CHANGE_SOURCE_ASSET_EDIT = "assetEdit"
 # The asset-row fields an edit of which `asset_edit_provenance` stamps: the fields an
 # `assetAttributes` compliance rule reads.
 ASSET_EDIT_STAMPED_FIELDS = ("assetName", "description", "tags")
+
+# `lastChangeSource` of an asset row whose latest change is a write of the asset's metadata, a file's
+# metadata or attributes, or the metadata of one of its links, through the metadata API. An asset-row
+# value only, like `assetEdit`.
+ASSET_CHANGE_SOURCE_METADATA_EDIT = "metadataEdit"
+
+# `lastChangeSource` of an asset row whose latest change is the creation or deletion of one of its
+# asset links. An asset-row value only, like `assetEdit`.
+ASSET_CHANGE_SOURCE_LINK_CHANGE = "linkChange"
+
+
+def stamp_asset_change(asset_table, database_id, asset_id, source, workflow_execution_id=None):
+    """Record a change made outside the asset row as the row's latest change, with one targeted
+    `update_item` on the live row: SET `lastChangeSource` (`source`) and `lastChangeAt` (now), and
+    REMOVE `lastChangeWorkflowExecutionId` — or, given `workflow_execution_id`, SET
+    `lastChangeSource` `workflowExecution` and `lastChangeWorkflowExecutionId` to it, the provenance a
+    workflow execution's file outputs carry. No other attribute is written, so `lastUploadAt`,
+    `lastAssetVersionAt` and every sibling field are left as they are.
+
+    The write is conditioned on `attribute_exists(assetId)` under `databaseId`: an archived asset's
+    row lives under `<databaseId>#deleted` and is not stamped, and no row is created for an asset
+    that does not exist. The stream MODIFY the stamp raises is what makes the compliance trigger
+    re-evaluate the asset (a `workflowExecution` stamp is skipped there, so a pipeline rule's own
+    metadata output does not re-trigger its evaluation).
+
+    Best-effort, like `common.assetHistory`: the change it records has already been written, so a
+    failed stamp — the condition included — is logged and returns False rather than raising.
+    Returns True when the row was stamped."""
+    names = {"#src": "lastChangeSource", "#at": "lastChangeAt",
+             "#wf": "lastChangeWorkflowExecutionId", "#asset": "assetId"}
+    values = {":at": datetime.now(timezone.utc).isoformat()}
+    if workflow_execution_id:
+        values[":src"] = VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION
+        values[":wf"] = workflow_execution_id
+        expression = "SET #src = :src, #at = :at, #wf = :wf"
+    else:
+        values[":src"] = source
+        expression = "SET #src = :src, #at = :at REMOVE #wf"
+    try:
+        asset_table.update_item(
+            Key={"databaseId": database_id, "assetId": asset_id},
+            UpdateExpression=expression,
+            ConditionExpression="attribute_exists(#asset)",
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+        )
+    except Exception as e:
+        logger.warning(f"Could not record the {values[':src']} change on asset "
+                       f"{database_id}:{asset_id}: {e}")
+        return False
+    return True
 
 
 def asset_change_provenance(workflow_execution_id=None):

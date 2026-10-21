@@ -545,12 +545,17 @@ def _applied_metadata_entries(metadata_items):
     return entries
 
 
-def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, asset_id, file_path, metadata_type, request_context):
+def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, asset_id, file_path, metadata_type, request_context, workflow_execution_id=None):
     """Process metadata or attribute file from pipeline output.
 
     Returns the {metadataKey, metadataValue} entries the file applied (empty when the file carried
     no keys) so the caller can record them as output provenance, or None when the file could not be
-    read/parsed or the metadata service rejected the write."""
+    read/parsed or the metadata service rejected the write.
+
+    `workflow_execution_id` travels on the cross-call as `lambdaCrossCall.workflowExecutionId`, so
+    the metadata service records the write on the asset row as the execution's
+    (`lastChangeSource: workflowExecution`) and the compliance trigger does not re-evaluate the asset
+    on a pipeline rule's own metadata output."""
     try:
         logger.info(f"Processing {metadata_type} file: {s3_key}")
         
@@ -610,7 +615,9 @@ def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, a
                 },
                 'body': json.dumps(request_body),
                 'lambdaCrossCall': {
-                    'userName': 'SYSTEM_USER'
+                    'userName': 'SYSTEM_USER',
+                    **({'workflowExecutionId': workflow_execution_id}
+                       if workflow_execution_id else {}),
                 }
             }
             
@@ -1413,7 +1420,8 @@ def lambda_handler(event, context):
                                 event['assetId'],
                                 None,  # No file path for asset-level metadata
                                 'metadata',
-                                requestContext
+                                requestContext,
+                                workflow_execution_id=event.get('workflowExecutionId')
                             )
                             if applied is None:
                                 output_failures.append(METADATA_WRITE_BACK_FAILURE)
@@ -1448,7 +1456,8 @@ def lambda_handler(event, context):
                                     event['assetId'],
                                     file_path,
                                     'metadata',
-                                    requestContext
+                                    requestContext,
+                                    workflow_execution_id=event.get('workflowExecutionId')
                                 )
                                 if applied is None:
                                     output_failures.append(METADATA_WRITE_BACK_FAILURE)
@@ -1483,7 +1492,8 @@ def lambda_handler(event, context):
                                     event['assetId'],
                                     file_path,
                                     'attribute',
-                                    requestContext
+                                    requestContext,
+                                    workflow_execution_id=event.get('workflowExecutionId')
                                 )
                                 if applied is None:
                                     output_failures.append(METADATA_WRITE_BACK_FAILURE)
