@@ -245,14 +245,15 @@ This software includes third party software subject to the following copyrights:
 | usd-core | 26.8    | TOST-1.0 (Apache-2.0 with a different Section 6) | OpenUSD Python bindings for USD/USDA/USDC/USDZ |
 | boto3    | 1.43.93 | Apache-2.0                                       | AWS SDK for Python                             |
 
-**Preview 3D Thumbnail Pipeline transitive dependencies with weak-copyleft licenses** (pinned by `container/requirements.lock`; installed because a package above requires them)
+**Preview 3D Thumbnail Pipeline transitive dependencies with weak-copyleft licenses** (pinned by `container/requirements.lock`; installed because a package above requires them, or compiled into one)
 
-| Name    | Version   | License           | Notes                                                                                                                                               |
-| :------ | :-------- | :---------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------- |
-| casadi  | 3.8.0     | LGPL-3.0-or-later | Optimization library required by cadquery                                                                                                           |
-| nlopt   | 2.11.0    | LGPL-2.1-or-later | Optimization library required by cadquery. Its package metadata says MIT; its LICENSE file states that the compiled library is governed by the LGPL |
-| certifi | 2026.7.22 | MPL-2.0           | CA certificate bundle required by requests                                                                                                          |
-| tqdm    | 4.70.1    | MPL-2.0 AND MIT   | Progress bars required by open3d                                                                                                                    |
+| Name    | Version               | License           | Notes                                                                                                                                               |
+| :------ | :-------------------- | :---------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------- |
+| casadi  | 3.8.0                 | LGPL-3.0-or-later | Optimization library required by cadquery                                                                                                           |
+| nlopt   | 2.11.0                | LGPL-2.1-or-later | Optimization library required by cadquery. Its package metadata says MIT; its LICENSE file states that the compiled library is governed by the LGPL |
+| certifi | 2026.7.22             | MPL-2.0           | CA certificate bundle required by requests                                                                                                          |
+| tqdm    | 4.70.1                | MPL-2.0 AND MIT   | Progress bars required by open3d                                                                                                                    |
+| Eigen   | da79095 (after 3.4.0) | MPL-2.0           | C++ linear algebra library compiled into the open3d 0.19.0 wheel, not a separate package. Loaded for `.fbx` and `.pcd` files                        |
 
 The other packages in `requirements.lock` declare permissive licenses (MIT, BSD, Apache-2.0, ISC, PSF and similar) in their package metadata.
 

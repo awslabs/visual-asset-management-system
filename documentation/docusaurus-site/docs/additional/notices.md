@@ -60,7 +60,7 @@ Certain optional components use LGPL-licensed libraries:
 LGPL license terms apply only when these optional features are enabled. Review the license requirements with your legal team before enabling CAD-related features.
 :::
 
-The 3D Preview Thumbnail pipeline image also installs two MPL-2.0 packages: certifi (required by requests) and tqdm (required by open3d). `NOTICE.md` lists both.
+The 3D Preview Thumbnail pipeline image also contains MPL-2.0 code: the certifi package (required by requests), the tqdm package (required by open3d), and the Eigen library compiled into open3d. `NOTICE.md` lists all three.
 
 When the 3D Preview Thumbnail pipeline reads a STEP file, it also loads the native libraries that the cadquery-ocp wheel bundles with Open CASCADE. They include JBIG-KIT (GPL-2.0-or-later), FreeImage (GPL-2.0, GPL-3.0 or the FreeImage Public License), LibRaw (LGPL-2.1 or CDDL-1.0) and FreeType (FreeType License or GPL-2.0-or-later). `NOTICE.md` lists every bundled library with its version and license.
 
