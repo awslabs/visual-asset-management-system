@@ -7,8 +7,8 @@ the asset: an API write of asset metadata, file metadata or file attributes stam
 metadata output (a `lambdaCrossCall` carrying `workflowExecutionId`, which
 `processWorkflowExecutionOutput` sends) stamps `workflowExecution` with that id instead -- the
 trigger skips that source, so a pipeline rule's own output never re-triggers its evaluation -- and
-a system cross-call without an execution id stamps nothing. A write that changed no key stamps
-nothing."""
+a system cross-call without an execution id stamps nothing. A request in which no key was
+written stamps nothing."""
 
 import json
 from unittest.mock import MagicMock, patch
@@ -83,7 +83,7 @@ class TestRecordMetadataChange:
         event = dict(_api_event(), lambdaCrossCall={"userName": "SYSTEM_USER"})
         self._record(event).assert_not_called()
 
-    def test_a_write_that_changed_nothing_stamps_nothing(self):
+    def test_a_request_that_wrote_no_key_stamps_nothing(self):
         self._record(_api_event(), response=_response(success=False)).assert_not_called()
 
     def test_each_endpoint_is_stamped_once(self):
