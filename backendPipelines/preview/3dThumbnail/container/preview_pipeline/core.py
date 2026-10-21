@@ -309,7 +309,7 @@ def _run_preview_stage(
     logger.info(f"Detected file extension: {ext}")
 
     # In S3 mode, fetch the files the input references (glTF buffers/images, USD layers and textures,
-    # OBJ materials and textures, FBX textures) from the input's own asset. A rejected or missing
+    # OBJ materials and textures, FBX textures, LCC data files and LCC2 chunks) from the input's own asset. A rejected or missing
     # reference is skipped; the input still renders.
     if not localTest and not streamed and dependencies.has_references(ext):
         try:
@@ -321,6 +321,7 @@ def _run_preview_stage(
                     reference_local_root,
                     reference_root_key,
                     ext,
+                    max_splats=budgets.splats,
                 )
         except Exception as e:
             logger.warning(f"Failed to fetch some referenced files: {e}")
@@ -587,7 +588,7 @@ _Z_UP_FORMATS = {".las", ".laz", ".e57", ".ptx", ".pts", ".pcd"}
 # COLLADA handlers convert from their own metadata (stage upAxis, the 3MF spec's Z-up, <up_axis>), and
 # the splat handler orients splat scenes, so all of these arrive Y-up.
 _Y_UP_FORMATS = {".glb", ".gltf", ".stp", ".step", ".usd", ".usda", ".usdc", ".usdz", ".3mf", ".dae",
-                 ".spz", ".sog", ".splat", ".ksplat", ".lcc"}
+                 ".spz", ".sog", ".splat", ".ksplat", ".lcc", ".lcc2"}
 # No convention (.obj, .ply, .drc, .stl, .off; .fbx without UpAxis): rendered as authored, Y-up.
 
 

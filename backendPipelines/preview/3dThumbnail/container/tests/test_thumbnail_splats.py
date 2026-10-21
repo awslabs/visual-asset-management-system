@@ -7,9 +7,11 @@
   cloud (with the point budget). A 3DGS PLY used to go to the mesh handler as an uncoloured blob.
 * Splat colour is the degree-0 SH term, opacity ``sigmoid(opacity)``, size ``exp(max(scale))``; faint
   splats are dropped and the rest sampled by opacity to the splat budget.
-* ``.spz``/``.sog``/``.ksplat``/``.lcc``/``.compressed.ply`` go through ``splat-transform``, which is
-  only given an allowlisted local file inside the work directory, with an argument list, no shell
-  and a timeout -- never a URL and never an ``.mjs`` script (it fetches the one and runs the other).
+* ``.spz``/``.sog``/``.ksplat``/``.lcc``/``.lcc2``/``.compressed.ply`` go through ``splat-transform``,
+  which is only given an allowlisted local file inside the work directory, with an argument list, no
+  shell and a timeout -- never a URL and never an ``.mjs`` script (it fetches the one and runs the
+  other). LCC levels, ``.lcc2`` chunk confinement and the scene-core focus are tested in
+  ``test_thumbnail_splat_scenes.py``.
 
 Render and conversion tests need the real pyvista/VTK and the image's Node.js + splat-transform.
 """
@@ -110,7 +112,8 @@ class TestSplatReading:
             cloud = splat_handler.load_ply(path, max_splats=10_000)
         assert len(cloud.points) == 4000, "the faint floaters are dropped"
         radius = np.asarray(cloud.point_data["splat_radius"])
-        assert np.allclose(radius, 0.05, rtol=1e-4)
+        # The disc radius gives the coverage of the Gaussian: sigma * sqrt(2 * alpha).
+        assert np.allclose(radius, 0.05 * np.sqrt(2 * splat_handler.sigmoid(np.float64(3.0))), rtol=1e-4)
         rgb = np.asarray(cloud.point_data["RGB"]).astype(int)
         # 180 degrees about Z: the red top (+Y in the file) is at -Y before... and +Y after the turn.
         top = rgb[cloud.points[:, 1] < 0]
@@ -137,7 +140,10 @@ class TestSplatReading:
             cloud = splat_handler.load_splat(str(path))
         assert cloud.points.tolist() == [[-1, -2, 3], [-4, -5, 6]], "transparent splat dropped, turned about Z"
         assert np.asarray(cloud.point_data["RGB"]).tolist() == [[255, 0, 0], [0, 255, 0]]
-        assert np.allclose(cloud.point_data["splat_radius"], 0.3)
+        # sigma = sqrt(0.3 * 0.2) (the two larger scales), disc radius sigma * sqrt(2 * alpha).
+        sigma = np.sqrt(0.3 * 0.2)
+        assert np.allclose(cloud.point_data["splat_radius"], [sigma * np.sqrt(2.0), sigma * np.sqrt(2 * 200 / 255)],
+                           rtol=1e-5)
         (tmp_path / "bad.splat").write_bytes(b"x" * 33)
         with pytest.raises(ValueError, match="multiple of 32"):
             splat_handler.load_splat(str(tmp_path / "bad.splat"))

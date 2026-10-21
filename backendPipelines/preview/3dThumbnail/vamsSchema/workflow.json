@@ -43,7 +43,8 @@
                 "*.sog",
                 "*.splat",
                 "*.ksplat",
-                "*.lcc"
+                "*.lcc",
+                "*.lcc2"
             ],
             "exclude": []
         },
@@ -85,7 +86,8 @@
                     "*.sog",
                     "*.splat",
                     "*.ksplat",
-                    "*.lcc"
+                    "*.lcc",
+                    "*.lcc2"
                 ],
                 "exclude": []
             },

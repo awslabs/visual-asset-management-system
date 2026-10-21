@@ -53,7 +53,7 @@ class FakeBucket:
         return path
 
 
-def _fetch(tmp_path, bucket, input_key, ext, asset_id="xid", limits=None):
+def _fetch(tmp_path, bucket, input_key, ext, asset_id="xid", limits=None, max_splats=None):
     root_key = dependencies.asset_root_key(input_key, asset_id)
     local_root = str(tmp_path / "local")
     local_input = dependencies.local_path_for(
@@ -63,7 +63,7 @@ def _fetch(tmp_path, bucket, input_key, ext, asset_id="xid", limits=None):
     with patch.object(dependencies.s3, "head_object_size", bucket.head_object_size), \
             patch.object(dependencies.s3, "download", bucket.download):
         report = dependencies.fetch_referenced_files(BUCKET, input_key, local_input, local_root,
-                                                     root_key, ext, limits=limits)
+                                                     root_key, ext, limits=limits, max_splats=max_splats)
     return report, local_root, local_input
 
 
@@ -321,3 +321,72 @@ class TestObjWithMaterial:
         textured = getattr(data, "_preview_texture", None) is not None
         coloured = "RGB" in data.point_data and len(np.unique(data.point_data["RGB"], axis=0)) > 1
         assert textured or coloured, "the OBJ rendered without its material"
+
+
+def _lcc2_meta(files, levels, counts=True, extra=None):
+    """An LCC2 description: ``levels`` maps a level (0 = finest) to its chunk file indices."""
+    total = max(levels) + 1
+
+    def node(level, index):
+        gs = {"name": index, "start": 0}
+        if counts:
+            gs["count"] = 1000 * (level + 1)
+        return {"data": {"3dgs": gs}, "childNum": 0}
+
+    # A level-L node sits at depth total - L below the root.
+    root = {"splatFiles": files, "childNum": 0}
+    parents = [root]
+    for depth in range(1, total + 1):
+        level = total - depth
+        children = []
+        for parent in parents:
+            parent["child"] = {}
+            for slot, index in enumerate(levels.get(level, [])):
+                child = node(level, index)
+                parent["child"][str(slot)] = child
+                children.append(child)
+        parents = children or parents
+    meta = {"version": "0.0.3", "totalLevels": total, "root": root,
+            "totalSplats": 0, "lodSplats": [1000 * (lv + 1) * len(levels.get(lv, [])) for lv in range(total)]}
+    meta.update(extra or {})
+    return meta
+
+
+@pytest.mark.unit
+class TestFetchLcc2:
+    def test_only_the_chosen_level_is_fetched(self, tmp_path):
+        import json
+
+        bucket = FakeBucket(tmp_path / "bucket")
+        files = ["data/3dgs/l0a.sog", "data/3dgs/l0b.sog", "data/3dgs/l1.sog"]
+        bucket.put("xid/scan/scene.lcc2", json.dumps(_lcc2_meta(files, {0: [0, 1], 1: [2]})))
+        for name in files:
+            bucket.put(f"xid/scan/{name}", b"chunk")
+        # LOD 0 holds 2,000 splats: within twice a budget of 1,000 -> LOD 0.
+        report, local_root, _ = _fetch(tmp_path, bucket, "xid/scan/scene.lcc2", ".lcc2", max_splats=1000)
+        assert sorted(report.fetched) == ["scan/data/3dgs/l0a.sog", "scan/data/3dgs/l0b.sog"]
+        assert os.path.isfile(os.path.join(local_root, "scan", "data", "3dgs", "l0a.sog"))
+        # A budget of 500 allows 1,000 splats: LOD 0 (2,000) is too many, LOD 1 (2,000 x 1) too ->
+        # the coarsest level is read.
+        shutil.rmtree(local_root)
+        report, _, _ = _fetch(tmp_path, bucket, "xid/scan/scene.lcc2", ".lcc2", max_splats=500)
+        assert report.fetched == ["scan/data/3dgs/l1.sog"]
+
+    def test_names_outside_the_asset_are_not_fetched(self, tmp_path):
+        import json
+
+        bucket = FakeBucket(tmp_path / "bucket")
+        files = ["../../other/secret.sog", "s3://other-bucket/a.sog", "data/3dgs/ok.sog"]
+        bucket.put("xid/scene.lcc2", json.dumps(_lcc2_meta(files, {0: [0, 1, 2]})))
+        bucket.put("xid/data/3dgs/ok.sog", b"chunk")
+        bucket.put("other/secret.sog", b"secret")
+        report, _, _ = _fetch(tmp_path, bucket, "xid/scene.lcc2", ".lcc2", max_splats=10 ** 6)
+        assert report.fetched == ["data/3dgs/ok.sog"]
+        assert sorted(report.rejected) == sorted(files[:2])
+        assert "other/secret.sog" not in bucket.downloads
+
+    def test_an_unreadable_description_fetches_nothing(self, tmp_path):
+        bucket = FakeBucket(tmp_path / "bucket")
+        bucket.put("xid/scene.lcc2", "{not json")
+        report, _, _ = _fetch(tmp_path, bucket, "xid/scene.lcc2", ".lcc2")
+        assert report.fetched == [] and report.rejected == []

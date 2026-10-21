@@ -39,9 +39,15 @@ _CAMERA_ELEVATION_DEG = 25
 # i * 360 / n_frames degrees, so the middle frame of an orbit shows the back of the model.
 STILL_VIEW_DEG = 45.0
 
-# Point-Gaussian footprint of a splat relative to its largest scale (exp(max(scale_*))): about two
-# standard deviations, where a 3DGS splat's contribution fades out.
-SPLAT_SCALE_FACTOR = 2.0
+# Splats are drawn as flat, unlit discs of radius ``splat_radius`` (the splat handler sizes them to the
+# coverage of each splat's Gaussian). VTK's default splat shader darkens a disc toward its edge, which
+# rings every splat in a dark outline; this one only clips the quad to the disc.
+SPLAT_SCALE_FACTOR = 1.0
+SPLAT_DISC_SHADER = (
+    "//VTK::Color::Impl\n"
+    "  float dist2 = dot(offsetVCVSOutput.xy, offsetVCVSOutput.xy);\n"
+    "  if (dist2 > 1.0) { discard; }\n"
+)
 
 
 def is_point_cloud(pv_data) -> bool:
@@ -225,7 +231,7 @@ def _add_point_cloud(plotter: pv.Plotter, pv_data: pv.PolyData):
     has_colors = "RGB" in pv_data.point_data
 
     if "splat_radius" in pv_data.point_data:
-        # Gaussian splats: one screen-aligned Gaussian per splat, sized by the splat's largest scale.
+        # Gaussian splats: one screen-aligned disc per splat, of the radius the splat handler set.
         actor = plotter.add_mesh(
             pv_data,
             scalars="RGB",
@@ -235,6 +241,11 @@ def _add_point_cloud(plotter: pv.Plotter, pv_data: pv.PolyData):
         )
         actor.mapper.SetScaleArray("splat_radius")
         actor.mapper.SetScaleFactor(SPLAT_SCALE_FACTOR)
+        actor.mapper.SetSplatShaderCode(SPLAT_DISC_SHADER)
+        # The colour is the splat's own radiance: no lighting, and fully opaque discs (pyvista sets
+        # 0.9999 for its own shader, which this one replaces).
+        actor.prop.lighting = False
+        actor.prop.opacity = 1.0
         return
 
     if has_colors:

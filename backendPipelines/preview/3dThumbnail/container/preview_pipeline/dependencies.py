@@ -4,7 +4,8 @@
 """
 Referenced files: fetch the files an input names (glTF buffers and images, USD sublayers, references,
 payloads and asset-valued attributes, OBJ material libraries and their texture maps, FBX texture
-files) from the input's own asset, so the loader opens the input against them.
+files, an XGRIDS ``.lcc`` scene's data files and the chunk files of one ``.lcc2`` level of detail) from
+the input's own asset, so the loader opens the input against them.
 
 Every reference is untrusted input. The container's job role can read every asset bucket, so a
 reference must not pull another asset's content into this thumbnail (ARCC BSC1, input validation by
@@ -268,14 +269,29 @@ def _lcc_references(path: str) -> List[tuple]:
     return references
 
 
+def _lcc2_references(path: str, max_splats: Optional[int] = None) -> List[tuple]:
+    """The chunk files of the one level of detail an ``.lcc2`` scene is read at (``lcc_meta``).
+
+    The other levels and the environment chunk are not read for a thumbnail, so they are not fetched.
+    """
+    from .format_handlers import lcc_meta
+
+    meta = lcc_meta.read_meta(path)
+    _, names = lcc_meta.lcc2_level_files(meta, max_splats or lcc_meta.DEFAULT_MAX_SPLATS)
+    return [(name, False) for name in names]
+
+
 _COLLECTORS: Dict[str, Callable[[str], List[tuple]]] = {
     ".gltf": _gltf_references,
     ".obj": _obj_references,
     ".mtl": _mtl_references,
     ".fbx": _fbx_references,
     ".lcc": _lcc_references,
+    ".lcc2": _lcc2_references,
     **{ext: _usd_references for ext in _USD_LAYER_EXTENSIONS},
 }
+# Collectors whose references depend on the splat budget.
+_BUDGETED_COLLECTORS = {".lcc2"}
 
 
 def has_references(ext: str) -> bool:
@@ -288,12 +304,14 @@ def has_references(ext: str) -> bool:
 # --------------------------------------------------------------------------------------------------
 
 def fetch_referenced_files(bucket: str, input_key: str, local_input_path: str, local_root: str,
-                           root_key: str, ext: str, limits: Optional[FetchLimits] = None) -> FetchReport:
+                           root_key: str, ext: str, limits: Optional[FetchLimits] = None,
+                           max_splats: Optional[int] = None) -> FetchReport:
     """Fetch every accepted file the input references, transitively, into ``local_root``.
 
     ``local_input_path`` is the input already downloaded at its root-relative path under
     ``local_root``; each fetched file lands at its own root-relative path beside it, so relative
-    references resolve locally exactly as they do in the asset.
+    references resolve locally exactly as they do in the asset. ``max_splats`` is the splat budget an
+    ``.lcc2`` scene's level of detail is chosen for.
     """
     limits = limits or FetchLimits()
     report = FetchReport()
@@ -311,7 +329,10 @@ def fetch_referenced_files(bucket: str, input_key: str, local_input_path: str, l
         if collector is None:
             continue
         try:
-            references = collector(local_path)
+            if file_ext in _BUDGETED_COLLECTORS:
+                references = collector(local_path, max_splats=max_splats)
+            else:
+                references = collector(local_path)
         except Exception as e:
             logger.warning(f"Could not read the references in {rel_path}: {e}")
             continue

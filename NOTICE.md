@@ -225,37 +225,40 @@ This software includes third party software subject to the following copyrights:
 
 ### Preview 3D Thumbnail Pipeline
 
-**Preview 3D Thumbnail Pipeline Dependencies**
+**Preview 3D Thumbnail Pipeline Dependencies** (versions as pinned by `container/requirements.lock`, which the image installs)
 
-| Name     | Version  | License             | Notes                                             |
-| :------- | :------- | :------------------ | :------------------------------------------------ |
-| pyvista  | >=0.44.2 | MIT                 | 3D rendering and visualization                    |
-| vtk      | >=9.4.0  | BSD-3-Clause        | Visualization Toolkit (rendering backend)         |
-| trimesh  | >=4.5.0  | MIT                 | Mesh loading (GLB, GLTF, OBJ, FBX, PLY, STL, DRC) |
-| numpy    | >=1.26.4 | BSD-3-Clause        | Numerical computing                               |
-| scipy    | >=1.14.0 | BSD-3-Clause        | Scientific computing (used by trimesh)            |
-| laspy    | >=2.5.4  | BSD-3-Clause        | LAS/LAZ point cloud format support                |
-| pye57    | >=0.4.17 | MIT                 | E57 point cloud format support                    |
-| cadquery | >=2.4.0  | Apache-2.0/LGPL-2.1 | STEP/STP CAD file tessellation                    |
-| imageio  | >=2.36.0 | BSD-2-Clause        | GIF/image I/O                                     |
-| Pillow   | >=11.0.0 | HPND                | Image optimization and processing                 |
-| DracoPy  | >=1.4.0  | Apache-2.0          | Draco compressed mesh (.drc) support              |
-| open3d   | >=0.19.0 | MIT                 | PCD point clouds and the FBX fallback             |
-| usd-core | >=24.8   | Modified Apache-2.0 | OpenUSD Python bindings for USD/USDA/USDC/USDZ    |
-| boto3    | >=1.35.0 | Apache-2.0          | AWS SDK for Python                                |
+| Name     | Version | License             | Notes                                          |
+| :------- | :------ | :------------------ | :--------------------------------------------- |
+| pyvista  | 0.49.0  | MIT                 | 3D rendering and visualization                 |
+| vtk      | 9.6.2   | BSD-3-Clause        | Visualization Toolkit (rendering backend)      |
+| trimesh  | 5.1.0   | MIT                 | Mesh loading (GLB, GLTF, OBJ, PLY, STL, OFF)   |
+| numpy    | 2.5.3   | BSD-3-Clause        | Numerical computing                            |
+| scipy    | 1.18.1  | BSD-3-Clause        | Scientific computing (used by trimesh)         |
+| laspy    | 2.7.0   | BSD-3-Clause        | LAS/LAZ point cloud format support             |
+| lazrs    | 0.8.2   | MIT                 | LAZ decompression used by laspy                |
+| pye57    | 0.4.19  | MIT                 | E57 point cloud format support                 |
+| cadquery | 2.8.0   | Apache-2.0/LGPL-2.1 | STEP/STP CAD file tessellation                 |
+| imageio  | 2.37.4  | BSD-2-Clause        | GIF/image I/O                                  |
+| Pillow   | 12.3.0  | HPND                | Image optimization and processing              |
+| DracoPy  | 2.0.0   | Apache-2.0          | Draco compressed mesh (.drc) support           |
+| open3d   | 0.19.0  | MIT                 | PCD point clouds and FBX meshes                |
+| usd-core | 26.8    | Modified Apache-2.0 | OpenUSD Python bindings for USD/USDA/USDC/USDZ |
+| boto3    | 1.43.93 | Apache-2.0          | AWS SDK for Python                             |
 
 **Preview 3D Thumbnail Pipeline Gaussian Splat Conversion (Node.js, pinned by `container/splat-transform/package-lock.json`)**
 
-| Name                        | Version       | License      | Notes                                                                              |
-| :-------------------------- | :------------ | :----------- | :--------------------------------------------------------------------------------- |
-| Node.js                     | 22.23.3       | MIT          | Runtime for splat-transform; release tarball verified by SHA-256 at image build    |
-| @playcanvas/splat-transform | 3.10.1        | MIT          | Converts .spz, .sog, .ksplat, .lcc and .compressed.ply splats to PLY on the CPU    |
-| playcanvas                  | 2.23.3        | MIT          | Engine library used by splat-transform                                             |
-| webgpu                      | 0.6.2         | MIT          | Dawn bindings required by splat-transform (bundled Dawn: BSD-3-Clause); GPU unused |
-| @adobe/spz                  | 0.2.3         | ISC          | SPZ codec used by splat-transform                                                  |
-| @webgpu/types               | 0.1.74        | BSD-3-Clause | Type definitions (transitive)                                                      |
-| @types/webxr                | 0.5.24        | MIT          | Type definitions (transitive)                                                      |
-| debug / ms                  | 4.4.3 / 2.1.3 | MIT          | Transitive dependencies of webgpu                                                  |
+| Name                        | Version       | License      | Notes                                                                                                                                                                         |
+| :-------------------------- | :------------ | :----------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Node.js                     | 22.23.3       | MIT          | Runtime for splat-transform; release tarball verified by SHA-256 at image build. The release also ships npm (Artistic-2.0) and the other components named in its LICENSE file |
+| @playcanvas/splat-transform | 3.10.1        | MIT          | Converts .spz, .sog, .ksplat, .lcc, .lcc2 and .compressed.ply splats to PLY on the CPU                                                                                        |
+| playcanvas                  | 2.23.3        | MIT          | Engine library used by splat-transform                                                                                                                                        |
+| webgpu                      | 0.6.2         | MIT          | Dawn bindings required by splat-transform (bundled Dawn: BSD-3-Clause); GPU unused                                                                                            |
+| @adobe/spz                  | 0.2.3         | ISC          | SPZ codec used by splat-transform                                                                                                                                             |
+| @webgpu/types               | 0.1.74        | BSD-3-Clause | Type definitions (transitive)                                                                                                                                                 |
+| @types/webxr                | 0.5.24        | MIT          | Type definitions (transitive)                                                                                                                                                 |
+| debug / ms                  | 4.4.3 / 2.1.3 | MIT          | Transitive dependencies of webgpu                                                                                                                                             |
+
+The pipeline reads XGRIDS LCC (`.lcc`) and LCC2 (`.lcc2`) scene descriptions to choose a level of detail and the files to download. The LCC and LCC2 data organization formats originated from XGRIDS; their specifications are the [LCC white paper](https://github.com/xgrids/LCCWhitepaper) and the [LCC2 white paper](https://github.com/xgrids/LCC2Whitepaper).
 
 ### Coordinate Transform Pipeline
 

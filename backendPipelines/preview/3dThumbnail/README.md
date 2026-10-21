@@ -18,15 +18,15 @@ The Preview 3D Thumbnail pipeline generates animated GIF or static image preview
 
 ## Supported Formats
 
-| Category       | Extensions                                                      | Handler                                          |
-| :------------- | :-------------------------------------------------------------- | :----------------------------------------------- |
-| Mesh           | .ply, .stl, .obj, .glb, .gltf, .drc, .off                       | trimesh                                          |
-| Mesh (FBX)     | .fbx                                                            | open3d (Assimp)                                  |
-| Mesh (XML)     | .3mf, .dae                                                      | built-in, hardened XML parsing                   |
-| Point Cloud    | .las, .laz, .e57, .ptx, .pts, .pcd, vertex-only .ply            | laspy, pye57, open3d                             |
-| CAD            | .stp, .step                                                     | cadquery                                         |
-| USD            | .usd, .usda, .usdc, .usdz                                       | usd-core (pxr)                                   |
-| Gaussian splat | .ply (3DGS), .compressed.ply, .spz, .sog, .splat, .ksplat, .lcc | numpy; PlayCanvas splat-transform for conversion |
+| Category       | Extensions                                                             | Handler                                          |
+| :------------- | :--------------------------------------------------------------------- | :----------------------------------------------- |
+| Mesh           | .ply, .stl, .obj, .glb, .gltf, .drc, .off                              | trimesh                                          |
+| Mesh (FBX)     | .fbx                                                                   | open3d (Assimp)                                  |
+| Mesh (XML)     | .3mf, .dae                                                             | built-in, hardened XML parsing                   |
+| Point Cloud    | .las, .laz, .e57, .ptx, .pts, .pcd, vertex-only .ply                   | laspy, pye57, open3d                             |
+| CAD            | .stp, .step                                                            | cadquery                                         |
+| USD            | .usd, .usda, .usdc, .usdz                                              | usd-core (pxr)                                   |
+| Gaussian splat | .ply (3DGS), .compressed.ply, .spz, .sog, .splat, .ksplat, .lcc, .lcc2 | numpy; PlayCanvas splat-transform for conversion |
 
 FARO scans (`.fls`, `.fws`) are not supported: reading them needs the proprietary FARO SDK. Convert them to E57 or LAS first.
 
@@ -37,11 +37,11 @@ S3 Event / API Trigger
     --> Open Pipeline Lambda (starts Step Functions state machine)
         --> Construct Pipeline Lambda (builds stage definitions)
             --> AWS Batch Fargate Job (runs Docker container)
-                1. Download input file from S3
+                1. Download the input and the files it references from the same asset
                 2. Detect format, load with appropriate handler
                 3. Normalize up-axis to Y-up
-                4. Render 36-frame rotating preview (or single static frame fallback)
-                5. Save as GIF with size optimization (JPEG fallback for single frame)
+                4. Render 36-frame rotating preview (or the single still view)
+                5. Save in the requested format (auto, gif, jpg, png), keeping a GIF under 5 MiB
                 6. Upload preview file to S3
             --> Pipeline End Lambda (finalizes execution, sends SFN callback)
 ```
@@ -172,7 +172,7 @@ A still preview (`outputType` `jpg` or `png`, the static fallback, and the size-
 
 ### Referenced Files
 
-Before loading, `preview_pipeline/dependencies.py` fetches the files the input references from the input's own asset (glTF buffers and images; USD sublayers, references, payloads and asset-valued attributes, followed through each fetched layer; OBJ `mtllib` files and their `map_*`/`bump`/`disp` textures; FBX texture file names). The input and every fetched file land at their asset-relative paths under one local root, so relative references resolve locally as they do in the asset.
+Before loading, `preview_pipeline/dependencies.py` fetches the files the input references from the input's own asset (glTF buffers and images; USD sublayers, references, payloads and asset-valued attributes, followed through each fetched layer; OBJ `mtllib` files and their `map_*`/`bump`/`disp` textures; FBX texture file names; an `.lcc` scene's `data.bin`, `index.bin`, `shcoef.bin` and `environment.bin`; the chunk files of the one level of detail an `.lcc2` scene is read at). The input and every fetched file land at their asset-relative paths under one local root, so relative references resolve locally as they do in the asset.
 
 Every reference is untrusted input. It is accepted only as a relative path that, normalised against the referring file's directory, stays inside the asset prefix (the key up to the asset id, the run's output files folder for a file an earlier step wrote, else the input's own directory); absolute paths, `..` escapes, URI schemes, control characters and over-long values are rejected. The fetch is bounded: 2,000 files, 50 GiB (HeadObject before each download, checked against free disk with 1 GiB headroom) and a recursion depth of 32. A rejected, missing or over-budget reference is logged and skipped.
 
@@ -212,11 +212,13 @@ A STEP file is read through XCAF (`STEPCAFControl_Reader`), so assemblies keep t
 
 ### Gaussian Splat Handling
 
-A `.ply` is routed by its header: a vertex element with `f_dc_0`, `opacity`, `scale_*` and `rot_*` is a 3D Gaussian Splatting scene, a PLY with faces is a mesh, and a vertex-only PLY is a point cloud (sampled to the point budget). A 3DGS PLY is read through a memory map; `.splat` (32-byte records) is decoded in numpy; `.spz`, `.sog`, `.ksplat`, `.lcc` and `.compressed.ply` are converted to a 3DGS PLY on the CPU with the PlayCanvas [`splat-transform`](https://github.com/playcanvas/splat-transform) CLI (MIT), pinned by `container/splat-transform/package-lock.json` and installed with `npm ci` on a pinned, SHA-256-verified Node.js 22 release. An `.lcc` scene's `data.bin`, `index.bin`, `shcoef.bin` and `environment.bin` are fetched beside it as referenced files.
+A `.ply` is routed by its header: a vertex element with `f_dc_0`, `opacity`, `scale_*` and `rot_*` is a 3D Gaussian Splatting scene, a PLY with faces is a mesh, and a vertex-only PLY is a point cloud (sampled to the point budget). A 3DGS PLY is read through a memory map; `.splat` (32-byte records) is decoded in numpy; `.spz`, `.sog`, `.ksplat`, `.lcc`, `.lcc2` and `.compressed.ply` are converted to a 3DGS PLY on the CPU with the PlayCanvas [`splat-transform`](https://github.com/playcanvas/splat-transform) CLI (MIT), pinned by `container/splat-transform/package-lock.json` and installed with `npm ci` on a pinned, SHA-256-verified Node.js 22 release. An XGRIDS scene is read at one level of detail: the finest whose splat count is at most twice the splat budget, else the coarsest. The counts come from the scene description (`format_handlers/lcc_meta.py`) and the level is passed to the converter as `--select-lod`. An `.lcc` scene keeps every level in one `data.bin`, so its `data.bin`, `index.bin`, `shcoef.bin` and `environment.bin` are fetched beside it as referenced files. An `.lcc2` scene is a JSON octree whose `root.splatFiles` names the chunk files (usually under `data/3dgs/`); only the chosen level's chunk files are fetched, not the other levels or the environment chunk.
 
-Each splat is drawn as a point Gaussian: colour from the degree-0 spherical harmonic (`0.5 + 0.28209479 × f_dc`), opacity `sigmoid(opacity)`, footprint twice `exp(max(scale_*))`. Splats with opacity below 0.2 are dropped and the rest are sampled to the splat budget (1 million per vCPU, at most 5 million) with probability proportional to opacity, so the percentile framing of point data follows the opaque content. Scenes are turned 180° about Z, the original 3DGS (COLMAP) Y-down convention to Y-up, as SuperSplat does. View-dependent colour and anisotropic splat shapes are not rendered.
+Each splat is drawn as a flat, unlit disc in its degree-0 spherical-harmonic colour (`0.5 + 0.28209479 × f_dc`). The disc has the coverage of the splat's Gaussian: radius `σ × √(2α)`, where `σ = √(s_max × s_mid)` (the two larger of `exp(scale_*)`) and `α = sigmoid(opacity)`, so a faint or elongated splat does not draw as a large opaque blob. Splats with opacity below 0.2 are dropped and the rest are sampled to the splat budget (1 million per vCPU, at most 5 million) with probability proportional to opacity. Scenes are turned 180° about Z, the original 3DGS (COLMAP) Y-down convention to Y-up, as SuperSplat does. View-dependent colour and anisotropic splat shapes are not rendered.
 
-`splat-transform` runs `.mjs` generator scripts and downloads `http(s)://` inputs, so the container only ever passes it a local regular file inside the job's work directory whose name ends in an allowlisted splat extension, starts it with an argument list (no shell), `--gpu cpu` and a minimal environment, and stops it after 30 minutes.
+A captured scene surrounds its subject with background (room walls, sky, distant trees) built from large splats, and framing the whole scene put the camera among them. The handler renders the scene's core: the splats within 1.75 times the 60th-percentile distance from the scene's centre, with each splat weighted by `α / σ²` in both the centre and the percentile, so small opaque splats (the detail the capture looked at closely) decide where the core is. A compact subject (an object, a room, a slab of terrain) loses nothing, since all of it lies within 1.75 times its own 60th-percentile distance. Splats in the core whose disc is larger than 3% of the core radius and ten times the median disc are dropped as fog. When the core is a plane (its smallest spread under 35% of the middle one) tilted less than 60° from the up axis, as the ground of an outdoor capture is, it is levelled so the orbit circles the ground's normal. The log records the core radius, the splats kept and dropped, and any levelling. A scene of fewer than 1,000 splats is drawn whole.
+
+`splat-transform` runs `.mjs` generator scripts and downloads `http(s)://` inputs, so the container only ever passes it a local regular file inside the job's work directory whose name ends in an allowlisted splat extension, starts it with an argument list (no shell), `--gpu cpu` and a minimal environment, and stops it after 30 minutes. The converter opens an `.lcc2` scene's chunk files by the names its description lists, so before it starts, every name must be a relative path that stays inside the job's work directory (no absolute path, URL or scheme, `..` escape, backslash or control character), and every chunk of the chosen level must be present. Otherwise the run fails with a message naming the problem. The description is read up to 64 MiB and 1,000,000 octree nodes.
 
 ### USD Stage Handling
 
@@ -235,12 +237,13 @@ MaterialX materials are not read (the `usd-core` build has no MaterialX plugin);
 
 ### Compute and Limits
 
-The container sizes its work to the task it runs in, read from its cgroup (memory limit; CPU quota and affinity), so it stays within whichever job size started it. When the state machine sets `VAMS_COMPUTE_TIER`, the value is logged; budgets never depend on it.
+The container sizes its work to the task it runs in, read from its cgroup (memory limit; CPU quota and affinity), so it stays within whichever job size started it. The shipped state machine does not set `VAMS_COMPUTE_TIER`; when an orchestration sets it, the value is logged, and budgets never depend on it.
 
 | Budget    | Per vCPU  | Memory cap (35% of the limit) | Floor     | Ceiling    |
 | :-------- | :-------- | :---------------------------- | :-------- | :--------- |
 | Points    | 5 million | 120 bytes per point           | 1 million | 20 million |
 | Triangles | 5 million | 200 bytes per triangle        | 1 million | 30 million |
+| Splats    | 1 million | 200 bytes per splat           | 250,000   | 5 million  |
 
 On 4 vCPU and 16 GiB that is 20 million points or triangles. A point cloud above its budget is sampled; a mesh above its budget is decimated with VTK quadric clustering (a texture is baked to colours first). VTK allocates the clustering grid densely, so the grid is also bounded to an eighth of the memory limit at 88 bytes per bin (at most 2^26 bins): a closed mesh far above the budget comes out with fewer triangles than the budget allows (a 20 million triangle sphere on 16 GiB becomes about 730,000). The rasteriser (Mesa llvmpipe) runs `LP_NUM_THREADS` = the task's vCPU count; on 4 vCPU a 36-frame 800x600 orbit of 20 million triangles renders in about 100 seconds.
 
