@@ -16161,7 +16161,7 @@ components:
                     $ref: "#/components/schemas/complianceEnforcementLevel"
                 metadataSchemaRef:
                     type: object
-                    description: "The metadata schema, looked up among the schemas of the scope's entity type (asset: `assetMetadata`, files: `fileMetadata`, fileAttributes: `fileAttribute`, links: `assetLinkMetadata`) in the database, then in `GLOBAL`."
+                    description: "The metadata schema, looked up among the schemas of the scope's entity type (asset: `assetMetadata`, files: `fileMetadata`, fileAttributes: `fileAttribute`, links: `assetLinkMetadata`) in the database, then in `GLOBAL`. The schema is read whether or not it is enabled; its enabled setting governs metadata write validation only."
                     properties:
                         databaseId:
                             type: string

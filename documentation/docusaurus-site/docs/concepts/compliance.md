@@ -159,7 +159,7 @@ Each check runs against the metadata of every unit in scope — the asset, each 
 }
 ```
 
-The schema is looked up by name among the metadata schemas of the scope's entity type, in the rule's `databaseId` and then in `GLOBAL`, so two schemas that share a name but differ in entity type never stand in for each other. A schema that is not found, one whose entity type does not match the scope, or one whose field list cannot be read records the rule as an `error` result — a [tooling failure](#tooling-failures), never a pass.
+The schema is looked up by name among the metadata schemas of the scope's entity type, in the rule's `databaseId` and then in `GLOBAL`, so two schemas that share a name but differ in entity type never stand in for each other. The schema is read whether or not it is enabled: a metadata schema's enabled setting decides whether it validates metadata writes, not whether compliance rules can use it. A schema that is not found, one whose entity type does not match the scope, or one whose field list cannot be read records the rule as an `error` result — a [tooling failure](#tooling-failures), never a pass.
 
 A file scope evaluates the asset's current files from its Amazon S3 listing, not its metadata rows: a file that carries no metadata is evaluated with none and fails `validateRequired` when the schema requires a field, and archived files, folder markers and the rows of a file no longer current are not evaluated. Files are selected in this order:
 

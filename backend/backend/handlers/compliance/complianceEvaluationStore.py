@@ -263,7 +263,8 @@ def get_metadata_schema(
     Only the exact-type lookup can yield a schema of `entity_type`; a schema of another type always
     reads as a mismatch, so two schemas sharing a name never resolve arbitrarily. When several of
     other types share the name, the first by (entity type, metadataSchemaId) is reported — every one
-    of them is a mismatch, and the pick is stable across reads.
+    of them is a mismatch, and the pick is stable across reads. The schema's `enabled` flag is not
+    read: it governs metadata write validation, not compliance.
 
     Reads the `DatabaseIdMetadataEntityTypeIndex` GSI (partition `databaseId:metadataEntityType`)
     and, on a miss, the `DatabaseIdIndex` GSI (partition `databaseId`), both projecting ALL, each to
