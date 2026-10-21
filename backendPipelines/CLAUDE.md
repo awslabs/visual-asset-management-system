@@ -133,6 +133,13 @@ logs anything and never logs the event, as both handlers do
 (`tests/test_3dbasic_task_token_logging.py`, `tests/test_meshcad_task_token_logging.py`). The 3dBasic
 `.dockerignore` keeps `tests/`, the Poetry files and caches out of its `COPY . .`.
 
+VAMS reads a Lambda step's log group only for lines that contain the workflow execution id, so a line
+that names no run path (a referenced-file warning, for one) is missing from the run's log in VAMS. The
+3dBasic handler therefore puts the body's `workflowExecutionId` on every line with `logger.append_keys`
+after the task-token check, and removes it with `remove_keys` first thing in each invocation, because a
+reused execution environment keeps the logger's keys (`tests/test_3dbasic_execution_id_logging.py`).
+The CAD/mesh handler does not yet; its extractors log through loggers of their own.
+
 ## Reporting Failure on a Task-Token Pipeline
 
 A pipeline registered with `waitForCallback: "Enabled"` receives an AWS Step Functions task token, and the
