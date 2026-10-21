@@ -3,12 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
 import { getDualValidAccessToken } from "../../../utils/authTokenUtils";
 import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { CesiumDependencyManager } from "./dependencies";
 import CesiumSceneGraph from "./components/CesiumSceneGraph";
+import { describeTilesetFailure, partialTilesetsNotice, tileFailureNotice } from "./tilesetFailure";
+
+// Offset of the viewer's own panels from the top of the scene while no notice is showing
+const OVERLAY_TOP_PX = 20;
+// Space kept clear at the bottom of the scene for the host's viewer controls
+const OVERLAY_BOTTOM_PX = 60;
 
 // Cesium will be loaded dynamically and accessed from window
 // No imports needed - we'll use window.Cesium directly
@@ -31,9 +37,24 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 }) => {
     const cesiumContainer = useRef<HTMLDivElement>(null);
     const viewerRef = useRef<any>(null);
+    // Counts the viewers created, so the effects that need a viewer run once one exists
+    const [viewerGeneration, setViewerGeneration] = useState(0);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [initError, setInitError] = useState<string | null>(null);
+    // Tilesets that failed beside others that loaded, and failed tiles of a loaded tileset: the
+    // model renders with holes, so both are reported without replacing the scene.
+    const [tilesetWarning, setTilesetWarning] = useState<string | null>(null);
+    const [tileWarning, setTileWarning] = useState<string | null>(null);
+    const tileFailures = useRef<{
+        count: number;
+        last?: string;
+        timer?: ReturnType<typeof setTimeout>;
+        dismissed?: boolean;
+    }>({ count: 0 });
+    // The notice stack over the top of the scene; the viewer's own panels start below it.
+    const noticesRef = useRef<HTMLDivElement>(null);
+    const [noticesHeight, setNoticesHeight] = useState(0);
     const [loadedTilesets, setLoadedTilesets] = useState<any[]>([]);
     const [config] = useState(appCache.getItem("config"));
     const [cesiumLoaded, setCesiumLoaded] = useState(false);
@@ -320,6 +341,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                     }
                 } finally {
                     setLoading(false);
+                    if (viewerRef.current) {
+                        setViewerGeneration((generation) => generation + 1);
+                    }
                 }
             };
 
@@ -1085,7 +1109,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 
         const interval = setInterval(updatePerformanceStats, 100); // Check every 100ms
         return () => clearInterval(interval);
-    }, [viewerRef.current]);
+    }, [viewerGeneration]);
 
     // Initialize tileset visibility tracking
     useEffect(() => {
@@ -1095,6 +1119,58 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
         });
         setTilesetVisibility(initialVisibility);
     }, [loadedTilesets]);
+
+    // Tile failures arrive in bursts while a tileset streams, so they are counted in a ref and the
+    // notice is refreshed at most twice a second. A dismissed warning stays closed until the next
+    // load.
+    const recordTileFailure = useCallback((event: any) => {
+        const failures = tileFailures.current;
+        failures.count += 1;
+        failures.last = event?.message;
+        if (failures.timer || failures.dismissed) return;
+        failures.timer = setTimeout(() => {
+            failures.timer = undefined;
+            setTileWarning(tileFailureNotice(failures.count, failures.last));
+        }, 500);
+    }, []);
+
+    const resetLoadWarnings = useCallback(() => {
+        if (tileFailures.current.timer) clearTimeout(tileFailures.current.timer);
+        tileFailures.current = { count: 0 };
+        setTilesetWarning(null);
+        setTileWarning(null);
+    }, []);
+
+    const dismissLoadWarnings = useCallback(() => {
+        const failures = tileFailures.current;
+        if (failures.timer) clearTimeout(failures.timer);
+        failures.timer = undefined;
+        failures.dismissed = true;
+        setTilesetWarning(null);
+        setTileWarning(null);
+    }, []);
+
+    useEffect(
+        () => () => {
+            if (tileFailures.current.timer) clearTimeout(tileFailures.current.timer);
+        },
+        []
+    );
+
+    const showVersionWarning = !!versionId && !assetVersionId && !dismissedVersionWarning;
+
+    useLayoutEffect(() => {
+        const notices = noticesRef.current;
+        if (!notices) {
+            setNoticesHeight(0);
+            return;
+        }
+        const measure = () => setNoticesHeight(notices.offsetHeight);
+        measure();
+        const observer = new ResizeObserver(measure);
+        observer.observe(notices);
+        return () => observer.disconnect();
+    }, [initError, showVersionWarning, tilesetWarning, tileWarning]);
 
     const loadSingleTileset = useCallback(
         async (key: string) => {
@@ -1122,6 +1198,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 // Create 3D Tileset using the authenticated resource
                 const tileset = await Cesium.Cesium3DTileset.fromUrl(resource);
                 tileset.vamsFileKey = key;
+                tileset.tileFailed.addEventListener(recordTileFailure);
 
                 // Add tileset to scene
                 viewerRef.current.scene.primitives.add(tileset);
@@ -1176,8 +1253,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 // this one log line; nothing is executed, stored or returned from it.
                 // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.error(`Error loading tileset ${key}:`, error);
-                const errorMessage = error?.message || error?.toString() || "Unknown error";
-                setError(`Tileset loading failed for "${key}": ${errorMessage}`);
+                setError(describeTilesetFailure(key, error));
             }
         },
         [
@@ -1188,6 +1264,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             createCameraOffset,
             isTilesetGeolocated,
             focusCameraOnTileset,
+            recordTileFailure,
         ]
     );
 
@@ -1196,6 +1273,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             if (!viewerRef.current || !config) return;
 
             const tilesets: any[] = [];
+            const failures: string[] = [];
 
             for (let i = 0; i < keys.length; i++) {
                 const key = keys[i];
@@ -1227,6 +1305,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                     // Create 3D Tileset using the authenticated resource
                     const tileset = await Cesium.Cesium3DTileset.fromUrl(resource);
                     tileset.vamsFileKey = key;
+                    tileset.tileFailed.addEventListener(recordTileFailure);
 
                     // Add tileset to scene
                     viewerRef.current!.scene.primitives.add(tileset);
@@ -1238,6 +1317,16 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                     // garble this one log line; nothing is executed, stored or returned from it.
                     // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                     console.error(`Error loading tileset ${key}:`, fileError);
+                    failures.push(describeTilesetFailure(key, fileError));
+                }
+            }
+
+            if (failures.length > 0) {
+                const notice = partialTilesetsNotice(failures, keys.length);
+                if (tilesets.length === 0) {
+                    setError(notice);
+                } else if (!tileFailures.current.dismissed) {
+                    setTilesetWarning(notice);
                 }
             }
 
@@ -1299,6 +1388,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             createCameraOffset,
             isTilesetGeolocated,
             focusCameraOnTileset,
+            recordTileFailure,
         ]
     );
 
@@ -1311,6 +1401,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             try {
                 setLoading(true);
                 setError(null);
+                resetLoadWarnings();
 
                 // Clear existing tilesets
                 viewerRef.current!.scene.primitives.removeAll();
@@ -1341,7 +1432,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
         versionId,
         assetVersionId,
         config,
-        viewerRef.current,
+        viewerGeneration,
     ]);
 
     if (error) {
@@ -1399,96 +1490,165 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
         );
     }
 
+    const overlayTop = `${Math.max(OVERLAY_TOP_PX, noticesHeight)}px`;
+
     return (
         <div style={{ position: "relative", width: "100%", height: "100%" }}>
-            {/* File version warning — Cesium only supports assetVersionId, not individual file versions */}
-            {versionId && !assetVersionId && !dismissedVersionWarning && (
+            {/* Notices over the top of the scene, clear of the host's viewer controls; the space
+                between them passes pointer input to the scene */}
+            {(initError || showVersionWarning || tilesetWarning || tileWarning) && (
                 <div
+                    ref={noticesRef}
+                    data-testid="cesium-notices"
                     style={{
                         position: "absolute",
                         top: "0",
                         left: "0",
                         right: "0",
-                        backgroundColor: "#e8f4fd",
-                        border: "1px solid #0972d3",
-                        borderRadius: "4px",
-                        padding: "8px 12px",
-                        margin: "8px",
                         zIndex: 1001,
-                        fontSize: "0.85em",
-                        color: "#0972d3",
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
+                        pointerEvents: "none",
                     }}
                 >
-                    <span style={{ textAlign: "center", flex: 1 }}>
-                        Specific file versions cannot be viewed except for when looking at files
-                        under an asset version ID. Viewing the latest version of this file.
-                    </span>
-                    <button
-                        onClick={() => setDismissedVersionWarning(true)}
-                        style={{
-                            background: "none",
-                            border: "none",
-                            color: "#0972d3",
-                            cursor: "pointer",
-                            fontSize: "1.1em",
-                            fontWeight: "bold",
-                            padding: "0 0 0 12px",
-                        }}
-                    >
-                        ×
-                    </button>
-                </div>
-            )}
+                    {initError && (
+                        <div
+                            style={{
+                                position: "relative",
+                                backgroundColor: "var(--vams-bg-secondary)",
+                                border: "1px solid var(--vams-color-error)",
+                                borderRadius: "4px",
+                                padding: "12px 16px",
+                                margin: "8px",
+                                fontSize: "0.9em",
+                                pointerEvents: "auto",
+                            }}
+                        >
+                            <div
+                                style={{
+                                    color: "var(--vams-color-error)",
+                                    fontWeight: "bold",
+                                    marginBottom: "4px",
+                                }}
+                            >
+                                Cesium Initialization Error
+                            </div>
+                            <div style={{ color: "var(--vams-text-secondary)" }}>{initError}</div>
+                            <button
+                                onClick={() => setInitError(null)}
+                                style={{
+                                    position: "absolute",
+                                    top: "8px",
+                                    right: "8px",
+                                    background: "none",
+                                    border: "none",
+                                    color: "var(--vams-color-error)",
+                                    cursor: "pointer",
+                                    fontSize: "16px",
+                                    padding: "0",
+                                    width: "20px",
+                                    height: "20px",
+                                }}
+                                title="Dismiss error"
+                            >
+                                ×
+                            </button>
+                        </div>
+                    )}
 
-            {/* Display initialization errors at the top */}
-            {initError && (
-                <div
-                    style={{
-                        position: "absolute",
-                        top: "0",
-                        left: "0",
-                        right: "0",
-                        backgroundColor: "var(--vams-bg-secondary)",
-                        border: "1px solid var(--vams-color-error)",
-                        borderRadius: "4px",
-                        padding: "12px 16px",
-                        margin: "8px",
-                        zIndex: 1001,
-                        fontSize: "0.9em",
-                    }}
-                >
-                    <div
-                        style={{
-                            color: "var(--vams-color-error)",
-                            fontWeight: "bold",
-                            marginBottom: "4px",
-                        }}
-                    >
-                        Cesium Initialization Error
-                    </div>
-                    <div style={{ color: "var(--vams-text-secondary)" }}>{initError}</div>
-                    <button
-                        onClick={() => setInitError(null)}
-                        style={{
-                            position: "absolute",
-                            top: "8px",
-                            right: "8px",
-                            background: "none",
-                            border: "none",
-                            color: "var(--vams-color-error)",
-                            cursor: "pointer",
-                            fontSize: "16px",
-                            padding: "0",
-                            width: "20px",
-                            height: "20px",
-                        }}
-                        title="Dismiss error"
-                    >
-                        ×
-                    </button>
+                    {/* File version warning — Cesium only supports assetVersionId, not individual file versions */}
+                    {showVersionWarning && (
+                        <div
+                            style={{
+                                backgroundColor: "#e8f4fd",
+                                border: "1px solid #0972d3",
+                                borderRadius: "4px",
+                                padding: "8px 12px",
+                                margin: "8px",
+                                fontSize: "0.85em",
+                                color: "#0972d3",
+                                display: "flex",
+                                justifyContent: "space-between",
+                                alignItems: "center",
+                                pointerEvents: "auto",
+                            }}
+                        >
+                            <span style={{ textAlign: "center", flex: 1 }}>
+                                Specific file versions cannot be viewed except for when looking at
+                                files under an asset version ID. Viewing the latest version of this
+                                file.
+                            </span>
+                            <button
+                                onClick={() => setDismissedVersionWarning(true)}
+                                style={{
+                                    background: "none",
+                                    border: "none",
+                                    color: "#0972d3",
+                                    cursor: "pointer",
+                                    fontSize: "1.1em",
+                                    fontWeight: "bold",
+                                    padding: "0 0 0 12px",
+                                }}
+                            >
+                                ×
+                            </button>
+                        </div>
+                    )}
+
+                    {/* Tilesets or tiles that failed while the rest of the scene loaded */}
+                    {(tilesetWarning || tileWarning) && (
+                        <div
+                            role="status"
+                            data-testid="cesium-load-warning"
+                            style={{
+                                position: "relative",
+                                backgroundColor: "var(--vams-bg-secondary)",
+                                border: "1px solid var(--vams-color-warning)",
+                                borderRadius: "4px",
+                                padding: "12px 16px",
+                                margin: "8px",
+                                fontSize: "0.9em",
+                                pointerEvents: "auto",
+                            }}
+                        >
+                            <div
+                                style={{
+                                    color: "var(--vams-color-warning)",
+                                    fontWeight: "bold",
+                                    marginBottom: "4px",
+                                }}
+                            >
+                                Incomplete 3D Tileset
+                            </div>
+                            {tilesetWarning && (
+                                <div style={{ color: "var(--vams-text-secondary)" }}>
+                                    {tilesetWarning}
+                                </div>
+                            )}
+                            {tileWarning && (
+                                <div style={{ color: "var(--vams-text-secondary)" }}>
+                                    {tileWarning}
+                                </div>
+                            )}
+                            <button
+                                onClick={dismissLoadWarnings}
+                                style={{
+                                    position: "absolute",
+                                    top: "8px",
+                                    right: "8px",
+                                    background: "none",
+                                    border: "none",
+                                    color: "var(--vams-color-warning)",
+                                    cursor: "pointer",
+                                    fontSize: "16px",
+                                    padding: "0",
+                                    width: "20px",
+                                    height: "20px",
+                                }}
+                                title="Dismiss warning"
+                            >
+                                ×
+                            </button>
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -1556,7 +1716,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 <div
                     style={{
                         position: "fixed",
-                        top: initError ? "50px" : "20px",
+                        top: overlayTop,
                         left: "10px",
                         bottom: "20px",
                         backgroundColor: "rgba(0, 0, 0, 0.85)",
@@ -2190,7 +2350,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                     onClick={() => setShowControls(true)}
                     style={{
                         position: "absolute",
-                        top: initError ? "50px" : "20px",
+                        top: overlayTop,
                         left: "10px",
                         backgroundColor: "rgba(0, 0, 0, 0.7)",
                         color: "white",
@@ -2244,7 +2404,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 <div
                     style={{
                         position: "absolute",
-                        top: "20px",
+                        top: overlayTop,
                         right: "10px",
                         backgroundColor: "rgba(0, 0, 0, 0.8)",
                         color: "white",
@@ -2253,7 +2413,8 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                         fontSize: "0.85em",
                         zIndex: 1000,
                         maxWidth: "300px",
-                        maxHeight: "50%",
+                        boxSizing: "border-box",
+                        maxHeight: `min(50%, calc(100% - ${overlayTop} - ${OVERLAY_BOTTOM_PX}px))`,
                         overflowY: "auto",
                     }}
                 >
