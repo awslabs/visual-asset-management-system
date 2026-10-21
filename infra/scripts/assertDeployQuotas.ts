@@ -25,13 +25,16 @@
  * configured value or the quota, so the ~100 identical lines read as a VAMS defect rather than as one
  * account limit.
  *
+ * Usage: `npm run check.quotas [-- --config-file <name>]` (or `--config-file=<name>`), with the same value
+ * the deploy passes as CDK context `configFile` (default `config.json`).
+ *
  * Exit codes: 0 pass, 1 a configured value exceeds the Region's quota, 2 the check could not be performed.
  * A check that could not run is NOT a pass — the caller must be able to tell the difference.
  */
 
 import { execFileSync } from "child_process";
 import * as fs from "fs";
-import * as path from "path";
+import { configFileFromArgs, resolveConfigFilePath } from "../config/configFile";
 
 /** One quota that a config value must fit inside. */
 interface QuotaCheck {
@@ -48,12 +51,26 @@ interface QuotaCheck {
 }
 
 function readConfig(): any {
-    const p = path.join(__dirname, "..", "config", "config.json");
-    if (!fs.existsSync(p)) {
-        console.log(`assertDeployQuotas: no config.json at ${p} — nothing to check.`);
+    // `--config-file <name>` takes the same value as the CDK context `configFile` of the deploy.
+    let p: string;
+    try {
+        p = resolveConfigFilePath(configFileFromArgs(process.argv.slice(2)));
+    } catch (error) {
+        console.log(`assertDeployQuotas: ${(error as Error).message}`);
         process.exit(2);
     }
-    return JSON.parse(fs.readFileSync(p, "utf8"));
+    if (!fs.existsSync(p)) {
+        console.log(`assertDeployQuotas: no configuration file at ${p} — nothing to check.`);
+        process.exit(2);
+    }
+    console.log(`assertDeployQuotas: configuration file ${p}`);
+    try {
+        return JSON.parse(fs.readFileSync(p, "utf8"));
+    } catch (error) {
+        const reason = (error as Error).message;
+        console.log(`assertDeployQuotas: cannot read ${p} as JSON (${reason}) — nothing checked.`);
+        process.exit(2);
+    }
 }
 
 function appliedQuota(region: string, serviceCode: string, quotaCode: string): number | undefined {
@@ -117,7 +134,7 @@ function main(): void {
 
     for (const check of checks) {
         if (check.configured === undefined) {
-            console.log(`  SKIP ${check.configPath} — not set in config.json`);
+            console.log(`  SKIP ${check.configPath} — not set in the configuration file`);
             continue;
         }
         const limit = appliedQuota(region, check.serviceCode, check.quotaCode);

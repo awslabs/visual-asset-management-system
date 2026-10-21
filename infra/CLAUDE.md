@@ -33,6 +33,7 @@ infra/
     customResourceParamKeys.ts  # FORK EXTENSION POINT: custom SSM keys (mirrored in backend/custom/customResourceNames.py)
   config/
     config.ts                   # Config interfaces, getConfig(), constants
+    configFile.ts               # resolveConfigFilePath(): CDK context `configFile` -> path (default config.json)
     config.json                 # Active deployment configuration
     config.template.{commercial,govcloud,eusovereign}.json
     saml-config.ts              # SAML provider settings
@@ -184,7 +185,7 @@ Outside the core stack, `bin/infra.ts` creates the WAF stacks and, for each Regi
 
 ## Configuration System
 
-Configuration values resolve in order: CDK context (`-c key=value`) → `config/config.json` → environment variables → hardcoded defaults. `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetConfig(config)`.
+Configuration values resolve in order: CDK context (`-c key=value`) → `config/config.json` → environment variables → hardcoded defaults. `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetConfig(config)`. The file is `config/config.json` unless CDK context `configFile` names another (`-c configFile=config.staging.json`); `config/configFile.ts` (`resolveConfigFilePath`) resolves a name or relative path relative to `config/` and leaves an absolute path as given, and `scripts/assertDeployQuotas.ts` parses its `--config-file` argument with `configFileFromArgs` (a missing value fails rather than checking `config.json`) and resolves it through the same function. The default path ends in `config.json`, which is what the tests that mock `fs.readFileSync` on `p.endsWith("config.json")` match. `infra/.gitignore` ignores `config/config.*.json` except `config/config.template.*.json`, so a per-deployment file is never committed; a new template keeps the `config.template.` prefix to stay tracked.
 
 ### Key Constants (config/config.ts)
 
