@@ -82,6 +82,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Gateway responses deploy with the API** — The explicit API deployment covers the `DEFAULT_4XX`, `DEFAULT_5XX` and `WAF_FILTERED` gateway responses, so a change to one reaches the stage with the next stack update, and the API definition carries the same responses, so a stack update that imports a changed definition keeps API Gateway's own `401`, `403` and `5XX` answers readable in a browser. (issue #538)
 -   **CodeBuild image repositories use the KMS key** — With `app.useKmsCmkEncryption.enabled`, the Amazon ECR repositories of the coordinate transform, Gaussian splat toolbox, NVIDIA Cosmos, NVIDIA GR00T and Isaac Lab training CodeBuild builds are encrypted with the VAMS KMS key; without it they stay on AES-256. The coordinate transform repository is `<name>-<baseStackName>-coordtransform-kms` with the key, and turning the CMK on or off replaces each repository and starts a build of its image. (issue #533)
 -   **CodeBuild build log groups in the uninstall guide** — The uninstall guide and the AWS resources page list the `/aws/codebuild/<project name>` log groups that AWS CodeBuild creates and stack deletion leaves behind, with the commands to find and delete them. (issue #552)
+-   **`{{jobName}}` renders per run** — The tag renders the step's generated job name joined to its pipeline execution id, so a `/{{jobName}}/` output path prefix gives every run its own asset folder and no two steps of a run share a value. (issue #569)
 
 **Other changes:**
 

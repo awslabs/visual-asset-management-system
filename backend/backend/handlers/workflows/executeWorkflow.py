@@ -1818,6 +1818,9 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
     # The uuid-prefixed job-name segment exists only in the ASL the deploy produced, so it is read
     # from the workflow record's jobNames (gated by _stored_job_names_error before launch).
     first_job_name = workflow["jobNames"][0]
+    # The {{jobName}} tag value is per run and per step; the run-bucket output prefixes keep the
+    # stored name.
+    first_run_job_name = er.run_job_name(first_job_name, pipeline_execution_ids[0])
 
     # Pipeline 1's manifest carries the inputs PIPELINE 1 accepts (its own inputFileFilters applied,
     # empty for arity 'none'), not the workflow's full selection — the pipeline is handed exactly the
@@ -1923,7 +1926,7 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
         "pipelineExecutionId": pipeline_execution_ids[0] if pipeline_execution_ids else "",
         "pipelineId": first_pipeline.get("pipelineId", ""),
         "pipelineDatabaseId": first_pipeline.get("databaseId", ""),
-        "jobName": first_job_name,
+        "jobName": first_run_job_name,
         "triggerType": trigger_type_stored,
         "executingUserName": executing_user,
         "executionStartTimestamp": execution_start_ts,

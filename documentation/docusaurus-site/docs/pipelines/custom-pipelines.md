@@ -1412,6 +1412,8 @@ A tag that is neither a system tag nor declared in the template's `tagSchema` is
 
 **Execution and pipeline identity:** `{{executionId}}`, `{{workflowId}}`, `{{workflowDatabaseId}}`, `{{triggerType}}`, `{{executingUserName}}`, `{{pipelineExecutionId}}`, `{{pipelineId}}` / `{{pipelineName}}`, `{{pipelineDatabaseId}}`, `{{jobName}}`.
 
+`{{jobName}}` is a per-run name for the step: the step's generated job name joined to its `{{pipelineExecutionId}}`, at most 80 characters of letters, numbers, hyphens, and underscores. It differs on every execution and for every step of one execution, and is the same everywhere it renders within one step, so a template can use it to name a per-run resource such as an AWS Batch job or an AWS Step Functions execution. An Amazon SageMaker job name allows at most 63 characters, so build one from `{{pipelineExecutionId}}` instead.
+
 **Timestamps:** `{{jobStartTimestamp}}`, `{{jobStartTimestampUnix}}`, `{{jobStartDate}}`, `{{executionStartTimestamp}}`.
 
 **First input file** (`{{firstAssetFile...}}`): `DatabaseId`, `AssetId`, `AssetBucket`, `AssetRootS3Key`, `RelativePath`, `Key`, `VersionId`, `AuxPreviewPrefix`, `S3Uri`, `AuxPreviewS3Uri`, `FileName`, `FileNameNoExt`, `FileExtension`.
