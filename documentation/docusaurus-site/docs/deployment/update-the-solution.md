@@ -75,7 +75,7 @@ cd infra && npm install && cd ..
 
 ### Step 3: Update configuration
 
-Review and update `infra/config/config.json` with any new configuration fields introduced in the target version. New configuration fields are typically backward-compatible and receive defaults, but review the changelog for required changes.
+Review and update `infra/config/config.json` (or the file the deployment selects with `-c configFile=<name>`) with any new configuration fields introduced in the target version. New configuration fields are typically backward-compatible and receive defaults, but review the changelog for required changes.
 
 ### Step 4: Deploy the update
 
@@ -83,6 +83,8 @@ Review and update `infra/config/config.json` with any new configuration fields i
 cd infra
 npx cdk deploy --all --require-approval never
 ```
+
+If the deployment was made with `-c configFile=<name>`, pass the same parameter to this command and to `cdk diff`; without it they target the stacks named in `config.json`.
 
 AWS CDK creates a CloudFormation changeset and applies only the modified resources. Resources that have not changed are left untouched.
 
@@ -209,7 +211,7 @@ Use A/B deployment when the update involves changes that cannot be safely applie
 
 ### A/B deployment steps
 
-1. **Deploy Stack B.** Use a different `baseStackName` in your `infra/config/config.json` for the new deployment.
+1. **Deploy Stack B.** Use a different `baseStackName` for the new deployment. Keeping it in its own file (for example `infra/config/config.stackb.json`) leaves Stack A's `config.json` unchanged; see [Selecting the configuration file](configuration-reference.md#selecting-the-configuration-file).
 
 2. **Redirect traffic.** Update DNS records to point to a temporary maintenance page.
 
@@ -217,7 +219,7 @@ Use A/B deployment when the update involves changes that cannot be safely applie
 
     ```bash
     cd infra
-    npx cdk deploy --all --require-approval never
+    npx cdk deploy --all --require-approval never -c configFile=config.stackb.json
     ```
 
 4. **Migrate DynamoDB data.** VAMS does not ship a Stack A to Stack B table copy script. Copy each Amazon DynamoDB table from Stack A into the matching table in Stack B with the tooling of your choice -- an AWS Glue job, an AWS Database Migration Service task, or a scan-and-batch-write script built on the AWS SDK. Both stacks publish their table names as AWS Systems Manager Parameter Store parameters under the prefix in the `ResourceNamesSSMParamPrefixOutput` CloudFormation output, so the source and destination names can be read from there instead of the console:
@@ -844,7 +846,7 @@ A rollback deployment creates its own tables; it does not reattach the ones a re
 ### A/B deployment rollback
 
 1. Switch DNS records back to Stack A endpoints.
-2. Destroy Stack B using `cdk destroy --all`.
+2. Destroy Stack B using `cdk destroy --all` with the `-c configFile=<name>` used to deploy it.
 3. Verify Stack A is functioning correctly.
 
 ## Related resources

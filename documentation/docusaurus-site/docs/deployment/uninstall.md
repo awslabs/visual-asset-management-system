@@ -110,6 +110,8 @@ cd infra
 npx cdk destroy --all
 ```
 
+If the deployment was made with a configuration file other than `config.json`, add the same `-c configFile=<name>` parameter used to deploy it (see [Selecting the configuration file](configuration-reference.md#selecting-the-configuration-file)). Without it, the command targets the stacks named in `config.json`, which may belong to a different deployment.
+
 :::info[Confirmation prompt]
 The `cdk destroy` command prompts for confirmation before proceeding. Type `y` to confirm. To skip the prompt, append `--force` to the command.
 :::

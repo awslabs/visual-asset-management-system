@@ -6,6 +6,20 @@ This page documents every configuration option available in the VAMS deployment 
 Configuration values are resolved using a fallback chain: CDK context parameters (`-c key=value`) take highest priority, followed by values in `config.json`, then environment variables, and finally hardcoded defaults.
 :::
 
+## Selecting the configuration file
+
+The CDK app reads `infra/config/config.json` unless the `configFile` context parameter names another file:
+
+```bash
+npx cdk deploy --all --require-approval never -c configFile=config.staging.json
+```
+
+| Parameter    | Default       | Description                                                                                                                                                                                                                 |
+| ------------ | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `configFile` | `config.json` | The configuration file to read. A file name or relative path resolves relative to `infra/config/`; an absolute path is used as given. Synthesis fails with the path it tried when the file is missing or is not valid JSON. |
+
+The selected file has the same structure as `config.json`, and every option on this page applies to it. Where this page refers to `config.json`, it means the selected file. Git ignores files named `config.<name>.json` in `infra/config/` (other than the `config.template.*.json` templates), so a per-deployment file and the account ID it holds are not committed; `config.json` stays tracked. The other files in `infra/config/` listed under [Additional configuration files](#additional-configuration-files) are shared by every deployment made from the same checkout. The pre-deploy quota check takes the same file with `npm run check.quotas -- --config-file <name>`.
+
 ## Top-level settings
 
 | Field  | Type   | Default | Description                                            |
@@ -674,7 +688,7 @@ Nested stack: `infra/lib/nestedStacks/pipelines/preview/pcPotreeViewer/pcPotreeV
 
 ### 3D preview thumbnail (`app.pipelines.usePreview3dThumbnail`)
 
-Generates animated GIF and static PNG preview thumbnails from 3D mesh, point cloud, CAD, and USD files. **Requires VPC.** Uses LGPL-licensed libraries. Supports input files up to 100 GB.
+Generates animated GIF and static PNG or JPEG preview thumbnails from 3D mesh, point cloud, CAD, USD and Gaussian splat files. **Requires VPC.** Uses LGPL-licensed libraries. The largest input is bounded by the free space of the task's 200 GiB work volume.
 
 :::note[Implemented by]
 Nested stack: `infra/lib/nestedStacks/pipelines/preview/3dThumbnail/preview3dThumbnailBuilder-nestedStack.ts` (`Preview3dThumbnailBuilderNestedStack`) — AWS Batch on Fargate.
