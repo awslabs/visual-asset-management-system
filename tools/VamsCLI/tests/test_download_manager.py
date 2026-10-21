@@ -8,7 +8,7 @@ import pytest
 
 from vamscli.constants import MAX_DOWNLOAD_KEYS_PER_REQUEST
 from vamscli.utils.download_manager import (
-    DownloadFileInfo, DownloadManager, DownloadProgress, parse_remote_timestamp,
+    DownloadFileInfo, DownloadManager, DownloadProgress, StreamingDownloadProgress, parse_remote_timestamp,
     generate_presigned_urls
 )
 from vamscli.utils.exceptions import APIError, DownloadError
@@ -143,6 +143,41 @@ class TestDownloadSingleFile:
         manager = make_manager(FakeStreamResponse(chunks=[b'whatever']))
         result = run_download(manager, file_info)
         assert result['size'] == 8
+
+    def test_result_size_counts_bytes_written_when_file_size_is_unknown(self, tmp_path):
+        target = tmp_path / 'file.txt'
+        file_info = DownloadFileInfo(
+            relative_key='/file.txt', local_path=target,
+            download_url='https://example.com/x', file_size=None
+        )
+        manager = make_manager(FakeStreamResponse(chunks=[b'payload']))
+
+        result = asyncio.run(manager.download_files([file_info]))
+
+        assert target.read_bytes() == b'payload'
+        assert result['overall_success'] is True
+        assert result['total_size'] == 7
+        assert result['total_size_formatted'] == '7.0 B'
+
+    def test_streamed_result_size_counts_bytes_written_when_file_size_is_unknown(self, tmp_path):
+        target = tmp_path / 'streamed.txt'
+        file_info = DownloadFileInfo(
+            relative_key='/streamed.txt', local_path=target,
+            download_url='https://example.com/x', file_size=None
+        )
+        manager = make_manager(FakeStreamResponse(chunks=[b'payload']))
+
+        async def download():
+            queue = asyncio.Queue()
+            await queue.put(file_info)
+            await queue.put(None)
+            return await manager.download_files_streamed(queue, StreamingDownloadProgress())
+
+        result = asyncio.run(download())
+
+        assert target.read_bytes() == b'payload'
+        assert result['total_size'] == 7
+        assert result['total_size_formatted'] == '7.0 B'
 
 
 class TestGeneratePresignedUrls:

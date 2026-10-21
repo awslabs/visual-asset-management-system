@@ -306,13 +306,14 @@ class DownloadManager:
                     "error": result.get("error", "Unknown error")
                 })
         
+        total_size = sum(entry["size"] for entry in successful_files)
         return {
             "overall_success": len(failed_files) == 0,
             "total_files": len(files),
             "successful_files": len(successful_files),
             "failed_files": len(failed_files),
-            "total_size": progress.total_size,
-            "total_size_formatted": format_file_size(progress.total_size),
+            "total_size": total_size,
+            "total_size_formatted": format_file_size(total_size),
             "download_duration": progress.elapsed_time,
             "average_speed": progress.download_speed,
             "average_speed_formatted": format_file_size(int(progress.download_speed)) + "/s",
@@ -465,13 +466,14 @@ class DownloadManager:
                 else:
                     failed_files.append({"relative_key": fi.relative_key, "local_path": str(fi.local_path), "error": result.get("error", "Unknown error")})
 
+        total_size = sum(entry["size"] for entry in successful_files)
         return {
             "overall_success": len(failed_files) == 0,
             "total_files": len(all_files),
             "successful_files": len(successful_files),
             "failed_files": len(failed_files),
-            "total_size": progress.total_size,
-            "total_size_formatted": format_file_size(progress.total_size),
+            "total_size": total_size,
+            "total_size_formatted": format_file_size(total_size),
             "download_duration": progress.elapsed_time,
             "average_speed": progress.download_speed,
             "average_speed_formatted": format_file_size(int(progress.download_speed)) + "/s",
