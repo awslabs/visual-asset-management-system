@@ -133,10 +133,12 @@ web/
       common/               # ErrorBoundary, LoadingSpinner, StatusMessage
       compliance/           # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1
                             #   rules: "Add rule" for all six types, the pipeline-rule input-file
-                            #   selector (mode / globs / explicit paths), typed checks for
-                            #   fileStructure / versionCoverage / assetAttributes); complianceSchemaRules.ts
-                            #   (pure pipelineRef fields/validation, rule-draft round-trip, example
-                            #   rule per type, check validators carrying the API's messages);
+                            #   selector (mode / globs / explicit paths), the metadata-rule scope
+                            #   form (scope select, include/exclude paths, link direction + type),
+                            #   typed checks for fileStructure / versionCoverage / assetAttributes);
+                            #   complianceSchemaRules.ts (pure pipelineRef fields/validation, rule-draft
+                            #   round-trip, example rule per type, metadata-scope switching/validation
+                            #   and check validators carrying the API's messages);
                             #   ReasonModal.tsx (Cloudscape modal collecting a mandatory reason:
                             #   reject cascade, grant quarantine exception, release from
                             #   quarantine); complianceStateBadge.tsx

@@ -16132,7 +16132,7 @@ components:
 
         complianceMetadataRule:
             type: object
-            description: "Validates the asset's metadata against a VAMS metadata schema."
+            description: "Validates metadata against a VAMS metadata schema, in one of four scopes: the asset's own metadata, each current file's metadata or attributes, or each asset link's metadata. Every file or link in scope must pass. A schema that is not found under the scope's entity type, or whose fields cannot be read, records the rule as `status: error`, never a pass."
             properties:
                 ruleType:
                     type: string
@@ -16141,6 +16141,7 @@ components:
                     $ref: "#/components/schemas/complianceEnforcementLevel"
                 metadataSchemaRef:
                     type: object
+                    description: "The metadata schema, looked up among the schemas of the scope's entity type (asset: `assetMetadata`, files: `fileMetadata`, fileAttributes: `fileAttribute`, links: `assetLinkMetadata`) in the database, then in `GLOBAL`."
                     properties:
                         databaseId:
                             type: string
@@ -16150,9 +16151,39 @@ components:
                     required:
                         - databaseId
                         - schemaName
+                scope:
+                    type: string
+                    enum: [asset, files, fileAttributes, links]
+                    default: asset
+                    description: "`asset`: the asset's own metadata. `files` / `fileAttributes`: the metadata / attributes of each current, non-archived file the schema's `fileKeyTypeRestriction` admits, narrowed by `includePaths` then `excludePaths`; a file without rows is evaluated as having none. `links`: the metadata of each asset link in `linkDirection` of `relationshipType`, at most 500 (more is `status: error`)."
+                includePaths:
+                    type: array
+                    maxItems: 25
+                    description: "`files` / `fileAttributes` only. When given, a file is in scope only if one of these Python regular expressions is found in its asset-relative path without the leading `/`. Validated like the file-structure path patterns."
+                    items:
+                        type: string
+                        minLength: 1
+                        maxLength: 512
+                excludePaths:
+                    type: array
+                    maxItems: 25
+                    description: "`files` / `fileAttributes` only. A file whose path matches one of these regular expressions is out of scope."
+                    items:
+                        type: string
+                        minLength: 1
+                        maxLength: 512
+                linkDirection:
+                    type: string
+                    enum: [parents, children, related]
+                    description: "`links` only. `parents`: links to this asset; `children`: links from it; `related` or absent: both."
+                relationshipType:
+                    type: string
+                    enum: [parentChild, related]
+                    description: "`links` only. Absent: either type."
                 checks:
                     type: array
                     minItems: 1
+                    maxItems: 25
                     items:
                         type: object
                         properties:
@@ -16597,7 +16628,7 @@ components:
                     type: string
                     enum: [evaluated, error]
                     default: evaluated
-                    description: "`evaluated` when the rule produced a pass or fail. `error` when its tooling failed before it could — an input selection not accepted by the workflow, one that did not match exactly one file or named a file the asset does not have, an execution that could not be launched, an asset whose files could not be listed or whose record could not be read: `passed` is false, but the result is not a verdict and the rule's enforcement does not apply."
+                    description: "`evaluated` when the rule produced a pass or fail. `error` when its tooling failed before it could — an input selection not accepted by the workflow, one that did not match exactly one file or named a file the asset does not have, an execution that could not be launched, an asset whose files could not be listed or whose record could not be read, a metadata rule whose schema was not found under its scope's entity type, or a links-scope metadata rule with more than 500 links in scope: `passed` is false, but the result is not a verdict and the rule's enforcement does not apply."
                 passed:
                     type: boolean
                 message:
@@ -16606,11 +16637,18 @@ components:
                 measured:
                     type: object
                     nullable: true
-                    description: "Pipeline rules: the measured value of each check, keyed by `outputField`. File-structure rules: `fileCount`, `unmatchedRequired` and the first 10 `forbiddenMatches`. Version-coverage rules: `fileCount`, `uncoveredCount` and the first 10 `uncovered` paths. Asset-attribute rules: the values read (`assetName` / `description` cut to 256 characters, `tags`)."
+                    description: "Pipeline rules: the measured value of each check, keyed by `outputField`. Metadata rules: `scope`, `evaluatedCount`, `failingCount` and the first 10 `failing` units (`{path, message}` for a file scope, `{assetLinkId, message}` for the links scope), plus `metadataKeys` on the asset scope; never a pattern. File-structure rules: `fileCount`, `unmatchedRequired` and the first 10 `forbiddenMatches`. Version-coverage rules: `fileCount`, `uncoveredCount` and the first 10 `uncovered` paths. Asset-attribute rules: the values read (`assetName` / `description` cut to 256 characters, `tags`)."
+                    example:
+                        scope: files
+                        evaluatedCount: 3
+                        failingCount: 1
+                        failing:
+                            - path: /models/bracket.glb
+                              message: "units: missing required schema fields: ['units']"
                 expected:
                     type: object
                     nullable: true
-                    description: "Pipeline rules: the tolerance of each check (`operator`, `value`, `min`, `max`), keyed by `outputField`. Other rules: each check's criteria keyed by check name; an asset-attribute check gives its `field` and `condition` rather than its pattern."
+                    description: "Pipeline rules: the tolerance of each check (`operator`, `value`, `min`, `max`), keyed by `outputField`. Metadata rules: `schemaRef` (`databaseId/schemaName`) and `scope`. Other rules: each check's criteria keyed by check name; an asset-attribute check gives its `field` and `condition` rather than its pattern."
             required:
                 - ruleName
                 - ruleType

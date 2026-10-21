@@ -90,7 +90,9 @@ web/
       common/               # ErrorBoundary, LoadingSpinner, StatusMessage
       compliance/           # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1 rules:
                             #   "Add rule" for all six types, the pipeline-rule input-file selector,
-                            #   typed fileStructure / versionCoverage / assetAttributes checks)
+                            #   the metadata-rule scope form (scope, include/exclude paths, link
+                            #   direction + type), typed fileStructure / versionCoverage /
+                            #   assetAttributes checks)
                             #   + complianceSchemaRules.ts;
                             #   ReasonModal.tsx (Cloudscape reason dialog); complianceStateBadge.tsx
                             #   (shared state -> StatusIndicator map, `exception` = info)

@@ -160,16 +160,57 @@ POST /compliance/schemas
 
 The rule types and what each check reads:
 
-| `ruleType`        | A check passes when                                                                                                                                                           | Reads                                                  |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `pipeline`        | The measurement in `outputField` is within the `tolerance` (asynchronous: a workflow execution runs first)                                                                    | The pipeline's `compliance-output.json`                |
-| `metadata`        | The metadata schema's required fields are present (`validateRequired`), typed as declared (`validateTypes`), and every `additionalRequiredFields` key is present              | Asset metadata, the referenced metadata schema         |
-| `relationship`    | The number of `direction` links of `relationshipType` is within `minCount` / `maxCount`                                                                                       | Asset links                                            |
-| `fileStructure`   | Every `requiredPaths` pattern matches some file, no file matches a `forbiddenPaths` pattern, and the file count is within `minFiles` / `maxFiles`                             | The asset's current, non-archived files                |
-| `versionCoverage` | Every current file not matched by `excludePaths` has its current S3 version recorded in some asset version                                                                    | The current files and the asset versions' file records |
-| `assetAttributes` | `assetName` / `description` matches `matches` or does not match `notMatches`; `tags` carries every `requiredTags` entry, no `forbiddenTags` entry and at least `minTags` tags | The asset record                                       |
+| `ruleType`        | A check passes when                                                                                                                                                                                    | Reads                                                                                                                                                                                           |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pipeline`        | The measurement in `outputField` is within the `tolerance` (asynchronous: a workflow execution runs first)                                                                                             | The pipeline's `compliance-output.json`                                                                                                                                                         |
+| `metadata`        | The metadata schema's required fields are present (`validateRequired`), typed as declared (`validateTypes`), and every `additionalRequiredFields` key is present, for every unit of the rule's `scope` | By `scope`: asset metadata (`asset`, default), each current file's metadata (`files`) or attributes (`fileAttributes`), or each asset link's metadata (`links`); the referenced metadata schema |
+| `relationship`    | The number of `direction` links of `relationshipType` is within `minCount` / `maxCount`                                                                                                                | Asset links                                                                                                                                                                                     |
+| `fileStructure`   | Every `requiredPaths` pattern matches some file, no file matches a `forbiddenPaths` pattern, and the file count is within `minFiles` / `maxFiles`                                                      | The asset's current, non-archived files                                                                                                                                                         |
+| `versionCoverage` | Every current file not matched by `excludePaths` has its current S3 version recorded in some asset version                                                                                             | The current files and the asset versions' file records                                                                                                                                          |
+| `assetAttributes` | `assetName` / `description` matches `matches` or does not match `notMatches`; `tags` carries every `requiredTags` entry, no `forbiddenTags` entry and at least `minTags` tags                          | The asset record                                                                                                                                                                                |
 
-Path, name and description patterns are Python regular expressions searched (`re.search`) in the value; a file path is matched without its leading `/`, so `^models/` anchors at the asset root. Every pattern is checked when the schema is saved — it must compile, may not repeat a group that itself repeats or alternates or use a backreference, and must stay within the backtracking budget (a path pattern, which runs against keys of up to 1024 characters, admits at most two unbounded quantifiers when it begins with `^` and one when it does not; a name or description pattern admits three and two) — and the `400` message names the field, never the pattern. Bounds: at most 25 checks per `fileStructure`, `versionCoverage` or `assetAttributes` rule; at most 25 patterns of 1-512 characters per `requiredPaths`, `forbiddenPaths` or `excludePaths` list; at most 50 tags of 1-256 characters per `requiredTags` or `forbiddenTags` list. See [Compliance — The vams-rules-v1 format](../concepts/compliance.md#the-vams-rules-v1-format) for each type in full, including why `versionCoverage` fails after every upload until a version is created.
+Path, name and description patterns are Python regular expressions searched (`re.search`) in the value; a file path is matched without its leading `/`, so `^models/` anchors at the asset root. Every pattern is checked when the schema is saved — it must compile, may not repeat a group that itself repeats or alternates or use a backreference, and must stay within the backtracking budget (a path pattern, which runs against keys of up to 1024 characters, admits at most two unbounded quantifiers when it begins with `^` and one when it does not; a name or description pattern admits three and two) — and the `400` message names the field, never the pattern. Bounds: at most 25 checks per `metadata`, `fileStructure`, `versionCoverage` or `assetAttributes` rule; at most 25 patterns of 1-512 characters per `requiredPaths`, `forbiddenPaths` or `excludePaths` list, and per metadata rule `includePaths` or `excludePaths` list; at most 50 tags of 1-256 characters per `requiredTags` or `forbiddenTags` list. See [Compliance — The vams-rules-v1 format](../concepts/compliance.md#the-vams-rules-v1-format) for each type in full, including why `versionCoverage` fails after every upload until a version is created.
+
+A metadata rule's `scope` selects what it validates, and its `metadataSchemaRef` must name a metadata schema of the matching entity type (`assetMetadata`, `fileMetadata`, `fileAttribute`, `assetLinkMetadata`); a schema that is not found under that type records the rule as `status: error`, never a pass. `includePaths` / `excludePaths` narrow the `files` and `fileAttributes` scopes and are refused on the others; `linkDirection` (`parents`, `children`, `related`) and `relationshipType` (`parentChild`, `related`) narrow the `links` scope and are refused on the others. Every file or link in scope must pass:
+
+```json
+{
+    "ruleType": "metadata",
+    "enforcement": "warn",
+    "scope": "files",
+    "metadataSchemaRef": { "databaseId": "GLOBAL", "schemaName": "modelFileMetadata" },
+    "includePaths": ["\\.(glb|stl)$"],
+    "excludePaths": ["\\.previewFile\\."],
+    "checks": [{ "name": "file-fields-present", "validateRequired": true, "validateTypes": true }]
+}
+```
+
+Its result names the failing files, at most ten:
+
+```json
+{
+    "ruleName": "model-file-metadata",
+    "ruleType": "metadata",
+    "enforcement": "warn",
+    "status": "evaluated",
+    "passed": false,
+    "message": "1 of 3 files fail: /models/bracket.glb: file-fields-present: missing required schema fields: ['units']",
+    "measured": {
+        "scope": "files",
+        "evaluatedCount": 3,
+        "failingCount": 1,
+        "failing": [
+            {
+                "path": "/models/bracket.glb",
+                "message": "file-fields-present: missing required schema fields: ['units']"
+            }
+        ]
+    },
+    "expected": { "schemaRef": "GLOBAL/modelFileMetadata", "scope": "files" }
+}
+```
+
+See [Metadata rules](../concepts/compliance.md#metadata-rules) for the scopes in full.
 
 :::note[Only vams-rules-v1 documents are accepted]
 `schemaBody` must be a `vams-rules-v1` document: an object with `schemaFormat` set to `vams-rules-v1` and at least one rule under `rules`. A plain JSON Schema, a template file's envelope (`metadata`, `schemaName`, `schemaBody`) or any other object is rejected with `400` and the message `schemaBody must be a vams-rules-v1 document`; the specific validation failure is written to the handler's log. A pipeline rule's `inputFiles` selects which of the asset's files the workflow receives (`matching`, `wholeAsset` or `explicit`); the modes and the arity rule are described in [Pipeline rules](../concepts/compliance.md#pipeline-rules).

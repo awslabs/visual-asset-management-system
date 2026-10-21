@@ -46,8 +46,10 @@ backend/
 │   │   ├── compliance/evaluationEngine.py          # Pure vams-rules-v1 rule logic (no AWS access):
 │   │   │                                           #   rule parsing/inheritance, the six rule types
 │   │   │                                           #   (pipeline, metadata, relationship, fileStructure,
-│   │   │                                           #   versionCoverage, assetAttributes), tolerances,
-│   │   │                                           #   verdict → state
+│   │   │                                           #   versionCoverage, assetAttributes), the metadata
+│   │   │                                           #   rule scopes (asset|files|fileAttributes|links,
+│   │   │                                           #   SCOPE_ENTITY_TYPE binds each to a metadata-schema
+│   │   │                                           #   entity type), tolerances, verdict → state
 │   │   ├── compliance/quarantineGuard.py           # quarantine-blocks-download guard shared by the four
 │   │   │                                           #   asset download Lambdas; resolves the asset-state
 │   │   │                                           #   table only when COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD=true
@@ -65,6 +67,10 @@ backend/
 │   │   │                                           #   written on the asset row by every upload completion;
 │   │   │                                           #   `assetVersion` stamp from asset-version create/revert;
 │   │   │                                           #   `assetEdit` from an asset edit of name/description/tags;
+│   │   │                                           #   stamp_asset_change (targeted, best-effort UpdateItem):
+│   │   │                                           #   `metadataEdit` from a metadata write, `linkChange`
+│   │   │                                           #   from a link create/delete, `workflowExecution` for a
+│   │   │                                           #   workflow execution's metadata write-back;
 │   │   │                                           #   completion instants lastUploadAt (user upload) and
 │   │   │                                           #   lastAssetVersionAt (create/revert), moved by no other writer
 │   │   ├── indexerEvents.py                        # s3_records_from_indexer_message: SQS→SNS→S3 unwrapping of a
@@ -106,7 +112,9 @@ backend/
 │   │   │                                           #   Shared modules (not Lambdas): complianceEvaluationStore (all
 │   │   │                                           #   DynamoDB/S3/Lambda access + run_evaluation; the asset row,
 │   │   │                                           #   current-file listing and file-versions table are read only
-│   │   │                                           #   for the rule types that use them), complianceNotifications
+│   │   │                                           #   for the rule types that use them, and the file-metadata,
+│   │   │                                           #   file-attribute and link-metadata rows only for a metadata
+│   │   │                                           #   rule of that scope), complianceNotifications
 │   │   ├── pipelines/                              # Pipeline CRUD (pipelineService = full CRUD;
 │   │   │                                           #   pipelineTemplateService = templates + tagSchema)
 │   │   ├── workflows/                              # Step Functions workflow mgmt. API-facing:

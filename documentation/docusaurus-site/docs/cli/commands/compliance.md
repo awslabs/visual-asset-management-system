@@ -113,10 +113,20 @@ The schema body is a `vams-rules-v1` document. A pipeline rule names the workflo
             "enforcement": "warn",
             "metadataSchemaRef": { "databaseId": "GLOBAL", "schemaName": "ownership" },
             "checks": [{ "name": "required-fields", "validateRequired": true }]
+        },
+        "model-file-metadata": {
+            "ruleType": "metadata",
+            "enforcement": "warn",
+            "scope": "files",
+            "metadataSchemaRef": { "databaseId": "GLOBAL", "schemaName": "modelFileMetadata" },
+            "includePaths": ["\\.(glb|stl)$"],
+            "checks": [{ "name": "file-fields", "validateRequired": true }]
         }
     }
 }
 ```
+
+A metadata rule's `scope` is `asset` (the default; the asset's own metadata), `files` or `fileAttributes` (each current file's metadata or attributes, narrowed by the schema's file type restriction and the rule's `includePaths` / `excludePaths`), or `links` (each asset link's metadata, narrowed by `linkDirection` and `relationshipType`). The referenced metadata schema must be of the scope's entity type (`assetMetadata`, `fileMetadata`, `fileAttribute`, `assetLinkMetadata`); a missing or mismatched schema records the rule as an error, not a pass. See [Metadata rules](../../concepts/compliance.md#metadata-rules).
 
 `pipelineRef.databaseId` is the **workflow's** database and `pipelineDatabaseId` the pipeline's; both accept `GLOBAL`. `templateId` is optional. A pipeline rule's `inputFiles` selects the asset files the execution receives: `{"mode": "matching"}` (the default) lists the asset's files and applies the workflow's, the pipeline's and the rule's own `filter` globs — a single-input workflow must be left with exactly one file; `{"mode": "wholeAsset"}` sends the asset root where the workflow allows it; `{"mode": "explicit", "keys": ["/path/file.glb"]}` sends the listed asset-relative files. `compliance-output.json` is optional for the pipeline: without it the checks can read only `execution_success` and `processing_duration_seconds`. Only `vams-rules-v1` bodies are accepted; any other body is rejected with `schemaBody must be a vams-rules-v1 document`.
 
