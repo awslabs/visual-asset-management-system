@@ -16,6 +16,7 @@ import { Stack, RemovalPolicy, Duration } from "aws-cdk-lib";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../../../config/config";
 import { contentImageTag } from "../../../../../helper/containerImageTag";
+import { codeBuildTriggerCode } from "../../../constructs/codeBuildTrigger";
 
 export interface IsaacLabCodeBuildConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -171,24 +172,7 @@ export class IsaacLabCodeBuildConstruct extends Construct {
                     runtime: Config.LAMBDA_PYTHON_RUNTIME,
                     handler: "index.handler",
                     timeout: Duration.minutes(1),
-                    code: cdk.aws_lambda.Code.fromInline(`
-import boto3
-import cfnresponse
-
-def handler(event, context):
-    try:
-        request_type = event.get("RequestType", "")
-        if request_type in ("Create", "Update"):
-            project_name = event["ResourceProperties"]["ProjectName"]
-            client = boto3.client("codebuild")
-            response = client.start_build(projectName=project_name)
-            build_id = response["build"]["id"]
-            cfnresponse.send(event, context, cfnresponse.SUCCESS, {"BuildId": build_id})
-        else:
-            cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
-    except Exception as e:
-        cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
-`),
+                    code: codeBuildTriggerCode(),
                 }
             );
 

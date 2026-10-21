@@ -1613,6 +1613,8 @@ The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, gran
 
 12. **Non-Root Containers Normalize Read Bits After COPY**: a container that drops to a non-root `USER` runs `RUN chmod -R a+rX <path>` on the line immediately after every `COPY` of source it reads. `COPY` preserves the build host's umask, so a hardened host (umask `077`/`027`) yields root-owned `600`/`640` files that raise `PermissionError: [Errno 13]` at import under the non-root user — invisible to the build, failing only at container runtime. `COPY --chown` alone is not sufficient. See "Read Bits on COPY'd Source in a Non-Root Container" above.
 
+13. **CodeBuild Build Triggers Use the Shared Handler**: every `*CodeBuild-construct.ts` gives its build-trigger function `code: codeBuildTriggerCode()` (`infra/lib/nestedStacks/pipelines/constructs/codeBuildTrigger.ts`), which inlines the single handler `constructs/codeBuildTrigger/index.py`. The handler returns its data, retries `start_build` on throttling and transient errors, and raises otherwise so `cr.Provider` reports `FAILED`; a Delete never raises. Never paste a handler that calls `cfnresponse.send(...)` — behind the provider framework that reports to nothing, and a caught exception then deploys as a success. Coverage: `infra/test/pipelines/codeBuildTriggerHandler.test.ts`, `backendPipelines/tests/test_codebuild_build_trigger_handler.py`.
+
 #### **Pipeline Configuration Rules**
 
 1. **Enable/Disable Flags**: Every pipeline must have an `enabled` boolean flag
