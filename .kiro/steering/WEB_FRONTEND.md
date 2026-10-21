@@ -189,6 +189,7 @@ web/
         PluginRegistry.ts   # Singleton registry (manages all viewers)
         viewerSources.ts    # Merges core + add-on + custom configs and manifests
         StylesheetManager.ts
+        streamFailure.ts    # Names why a streamed file failed to load
         types.ts
       components/           # Shared viewer UI components
       viewers/              # Individual viewer plugins
@@ -822,6 +823,7 @@ The 3D/media viewer system uses a plugin-based architecture:
 -   **manifest.ts** (`src/visualizerPlugin/viewers/manifest.ts`) -- Vite static analysis paths for dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` hold the add-on and fork entries
 -   **viewerSources.ts** (`src/visualizerPlugin/core/viewerSources.ts`) -- merges core, add-on and custom configs and manifests; a custom viewer whose `id` repeats a shipped one is skipped with a console error, and a shipped manifest key always wins
 -   **StylesheetManager** -- Per-plugin CSS lifecycle management
+-   **streamFailure.ts** (`src/visualizerPlugin/core/streamFailure.ts`) -- `probeStreamFailure(url, headers)` re-requests a streamed file whose loader failed without its HTTP status, and `describeStreamFailure(subject, failure)` names the cause (an AWS WAF block with its request ID, `401`, `403`, `404`, `429`, or no response at all). The Potree viewer reports its load failures through both, the Cesium viewer through `CesiumViewerPlugin/tilesetFailure.ts`, which reads the status off Cesium's `RequestErrorEvent`
 
 ### 8.2 Current Viewers (plugins)
 

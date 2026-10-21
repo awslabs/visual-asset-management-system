@@ -14,6 +14,7 @@ The 3D/media viewer system uses a plugin-based architecture:
 -   **viewerSources.ts** (`core/viewerSources.ts`) — Merges the three configs and manifests for the registry (see "Add-on and fork viewers")
 -   **StylesheetManager** (`core/StylesheetManager.ts`) — Per-plugin CSS lifecycle management
 -   **types.ts** (`core/types.ts`) — Shared `ViewerPluginProps` and config interfaces
+-   **streamFailure.ts** (`core/streamFailure.ts`) — `probeStreamFailure(url, headers)` re-requests a streamed file whose loader failed without its HTTP status, and `describeStreamFailure(subject, failure)` names the cause (an AWS WAF block with its request ID, `401`, `403`, `404`, `429`, or no response at all). The Potree viewer reports its load failures through both, the Cesium viewer through `CesiumViewerPlugin/tilesetFailure.ts`, which reads the status off Cesium's `RequestErrorEvent`
 
 Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below maps to a directory of that form (e.g. `potree-viewer` → `viewers/PotreeViewerPlugin/`). Per-viewer custom-install scripts live in `web/customInstalls/` (one dir per viewer, plus a shared `utility/` helper dir) and are executed by the `postinstall` chain in `web/package.json`.
 
