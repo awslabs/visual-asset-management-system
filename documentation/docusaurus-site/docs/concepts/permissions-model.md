@@ -69,8 +69,9 @@ Both default roles are seeded at deployment time. `admin` receives the administr
 `app.adminUserId`, plus the reserved `SYSTEM_USER` identity so system processes satisfy both
 authorization tiers. `basicReadOnly` grants GET on the read paths (assets, files, metadata, databases,
 pipelines, workflows, executions, tags, comments, subscriptions, metadata schemas), the non-mutating
-POST paths (`/auth/routes`, `/search`, `/check-subscription`), and management of the caller's own API
-keys.
+POST paths (`/auth/routes`, `/search`, `/check-subscription`), the file download request
+(`POST /database/{databaseId}/assets/{assetId}/download`, which the file viewers use), and management
+of the caller's own API keys.
 
 Two routes are administrative and belong to `admin` alone: detailed execution logs
 (`GET /workflows/executions/{executionId}/logs`) and execution permanent delete
@@ -372,7 +373,7 @@ needs to set a database's default bucket without holding the route can still do 
 | `/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}`          | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 | `/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`               | GET, HEAD | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 | `/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}` | GET, HEAD | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/download`                               | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/download`                               | POST      | `asset` (`GET`)    | `assetName`, `databaseId`, `assetType`, `tags` |
 | `/database/{databaseId}/assets/{assetId}/export`                                 | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 
 ### Asset version routes
