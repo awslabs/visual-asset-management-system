@@ -50,14 +50,17 @@ The complete list of third-party dependencies and their licenses is maintained i
 
 ### Optional LGPL-Licensed Components
 
-Certain optional components use LGPL-2.1 licensed libraries:
+Certain optional components use LGPL-licensed libraries:
 
 -   **OpenCascade.js** -- Dynamically loaded for CAD format support in the Three.js Viewer (STEP, IGES, BREP). Disabled by default and loaded on-demand from a CDN only when explicitly enabled.
 -   **CadQuery** -- Used in the CAD/Mesh Metadata Extraction pipeline and the 3D Preview Thumbnail pipeline for STEP/STP file tessellation.
+-   **casadi** (LGPL-3.0-or-later) and **nlopt** (LGPL-2.1-or-later) -- Optimization libraries that CadQuery requires, installed in the 3D Preview Thumbnail pipeline image.
 
 :::note
-LGPL-2.1 license terms apply only when these optional features are enabled. Review the license requirements with your legal team before enabling CAD-related features.
+LGPL license terms apply only when these optional features are enabled. Review the license requirements with your legal team before enabling CAD-related features.
 :::
+
+The 3D Preview Thumbnail pipeline image also installs two MPL-2.0 packages: certifi (required by requests) and tqdm (required by open3d). `NOTICE.md` lists both.
 
 ### 3D Preview Thumbnail Gaussian Splat Conversion Notice
 

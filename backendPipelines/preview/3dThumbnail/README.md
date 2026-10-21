@@ -237,7 +237,7 @@ MaterialX materials are not read (the `usd-core` build has no MaterialX plugin);
 
 ### Compute and Limits
 
-The container sizes its work to the task it runs in, read from its cgroup (memory limit; CPU quota and affinity), so it stays within whichever job size started it. The shipped state machine does not set `VAMS_COMPUTE_TIER`; when an orchestration sets it, the value is logged, and budgets never depend on it.
+The container sizes its work to the task it runs in, read from its cgroup (memory limit; CPU quota and affinity), so it stays within whichever job size started it. When the state machine sets `VAMS_COMPUTE_TIER` to the compute tier it chose, the value is logged; budgets never depend on it.
 
 | Budget    | Per vCPU  | Memory cap (35% of the limit) | Floor     | Ceiling    |
 | :-------- | :-------- | :---------------------------- | :-------- | :--------- |

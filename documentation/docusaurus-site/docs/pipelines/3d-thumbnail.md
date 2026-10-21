@@ -159,14 +159,16 @@ Enable this pipeline in `infra/config/config.json`:
 
 ### Configuration Options
 
-| Option                                | Default | Description                                                              |
-| ------------------------------------- | ------- | ------------------------------------------------------------------------ |
-| `enabled`                             | `false` | Deploy the 3D thumbnail pipeline infrastructure. Enables the global VPC. |
-| `autoRegisterWithVAMS`                | `false` | Automatically register the pipeline and workflow during CDK deployment.  |
-| `autoRegisterAutoTriggerOnFileUpload` | `false` | Automatically trigger the pipeline when supported 3D files are uploaded. |
+| Option                                | Default | Description                                                                           |
+| ------------------------------------- | ------- | ------------------------------------------------------------------------------------- |
+| `enabled`                             | `false` | Deploy the 3D thumbnail pipeline infrastructure. Requires `app.useGlobalVpc.enabled`. |
+| `autoRegisterWithVAMS`                | `true`  | Automatically register the pipeline and workflow during CDK deployment.               |
+| `autoRegisterAutoTriggerOnFileUpload` | `true`  | Automatically trigger the pipeline when supported 3D files are uploaded.              |
+
+The defaults are the values the shipped config templates carry. A pipeline block that omits a flag still registers the pipeline (`autoRegisterWithVAMS` falls back to `true`) but leaves the upload trigger off (`autoRegisterAutoTriggerOnFileUpload` falls back to `false`); see the [Configuration Reference](../deployment/configuration-reference.md).
 
 :::warning[License Notice]
-This pipeline is disabled by default because it depends on libraries with LGPL licenses (CadQuery/Open CASCADE for STEP file support). Review `requirements.lock` (every Python package, pinned) and `splat-transform/package-lock.json` (the Node.js packages) in the container directory and consult your legal team before enabling this pipeline. Other format handlers use MIT-licensed or Apache-licensed libraries.
+This pipeline is disabled by default because it depends on libraries with LGPL licenses: Open CASCADE, which CadQuery uses for STEP file support, and the casadi and nlopt solvers that CadQuery requires. It also installs two MPL-2.0 packages, certifi and tqdm. Review `requirements.lock` (every Python package, pinned) and `splat-transform/package-lock.json` (the Node.js packages) in the container directory and consult your legal team before enabling this pipeline. Other format handlers use MIT-licensed or Apache-licensed libraries.
 :::
 
 ## Input Parameters
