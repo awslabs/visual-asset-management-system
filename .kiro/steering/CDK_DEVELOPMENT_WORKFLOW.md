@@ -828,6 +828,31 @@ def send_response(event: Dict[str, Any], context: Any, status: str, reason: str 
 
 **In a fork, or for an external solution.** Pipelines have no custom lane and are not add-ons. A fork adds a pipeline without editing these core files by deploying it as its own stack and registering it through the API (`documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`), or as an externally owned pipeline bridge (`app.pipelines.externalPipelineBridges`); the custom nested stack (`infra/lib/nestedStacks/custom/customResources.ts`) is not a pipeline seam. An upstream pipeline that calls a vendor's service is still a core pipeline behind its own `app.pipelines.*` switch. The `/add-pipeline` skill's fork mode and `documentation/docusaurus-site/docs/developer/customizing-vams.md` (Known Limits) say the same; the add-on definition is in `documentation/docusaurus-site/docs/developer/addons-overview.md`.
 
+### **Fetching Files an Input References**
+
+A container job role usually reads every asset bucket, so a path written inside an uploaded file (a glTF URI, a USD sublayer/reference/payload or texture path, an OBJ `mtllib`, an FBX texture name) is untrusted input that could pull another asset's content into this one's output. `backendPipelines/preview/3dThumbnail/container/preview_pipeline/dependencies.py` is the worked example (ARCC BSC1, allowlist validation):
+
+-   Accept only relative paths that, normalised against the referring file's directory, stay inside the input's asset prefix (the key up to the `assetId` segment; the run's output files folder for a file an earlier step wrote; else the input's own directory — the case for an asset on a `bucketExistingKey` folder). Reject absolute paths, `..` escapes, any URI scheme, control characters and values over 1,024 characters. Percent-decode only formats whose references are URIs (glTF), and check the decoded value.
+-   Bound the fetch: a file count, a byte total from HeadObject before each download, a free-disk check, and a recursion depth for formats whose fetched files reference more files (USD layers).
+-   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference.
+-   When a third-party tool opens the referenced files itself (splat-transform reads an `.lcc2` scene's chunk files by the names its description lists), check every name the description lists before the tool starts, and refuse the conversion when one would leave the work directory or a needed file is missing. Do not rely on the fetch having skipped it: the tool would still open the path. `backendPipelines/preview/3dThumbnail/container/preview_pipeline/format_handlers/splat_handler.prepare_lcc2` is the worked example.
+
+### **Parsing XML From Uploaded Files**
+
+An uploaded XML file (COLLADA, 3MF, any XML sidecar) can carry a DTD that expands entities without bound or an external entity that reads local files or URLs. Parse it as `backendPipelines/preview/3dThumbnail/container/preview_pipeline/format_handlers/xml_mesh_handler.py` does (ARCC BSC12, secure XML parsing): an `xml.parsers.expat` parser whose `StartDoctypeDeclHandler`, `EntityDeclHandler`, `UnparsedEntityDeclHandler` and `ExternalEntityRefHandler` raise, with `SetParamEntityParsing(XML_PARAM_ENTITY_PARSING_NEVER)`, feeding an `ElementTree.TreeBuilder`. Never call `ElementTree.parse`/`fromstring` or `lxml` on input. The C-accelerated `ElementTree.XMLParser` does not expose its expat parser, so the handlers cannot be set on it. Check a zip-based input's central directory (total uncompressed size against free disk, compression ratio per member) before decompressing it (`utils/archive.py`). A format whose elements reference one another (3MF components, COLLADA `instance_node`) also bounds its expansion; see "Sizing a Container's Work to Its Task" below.
+
+### **Sizing a Container's Work to Its Task**
+
+A Batch/Fargate container reads its limits from its own cgroup rather than from a tier name or a constant, so it stays inside whichever job size started it. `backendPipelines/preview/3dThumbnail/container/preview_pipeline/resources.py` is the worked example:
+
+-   Memory from `/sys/fs/cgroup/memory.max` (v1 `memory/memory.limit_in_bytes` fallback; "max" or a near-2^63 value means unlimited); CPUs from the scheduler affinity capped by `cpu.max` (v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us`). `os.cpu_count()` alone reports the host's CPUs inside a quota.
+-   Derive work budgets (points, triangles) from both, and set `LP_NUM_THREADS` (Mesa llvmpipe) to the CPU count before the first GL context exists.
+-   Bound what a library allocates for the work, not only what it returns. VTK's `vtkQuadricClustering` allocates its grid densely (88 bytes per bin, occupied or not) and counts the bins in a C `int`, so a grid sized from the triangle budget alone overflows at the shipping budgets and aborts the process with an uncaught `std::bad_alloc` that no `except MemoryError` sees. `geometry_budget.py` also bounds the grid by the task's memory (`cluster_bin_limit`) and keeps the grid arithmetic in pure functions a test checks at each tier's budget without allocating.
+-   Bound how far an instancing format expands before any budget applies. A 3MF component, a COLLADA `instance_node`, a STEP assembly component or an FBX model connected to several parents may place the same child several times per level, so a few-KB file describes 2^depth placements and a depth limit alone allows billions. Each walk counts its nodes and placed geometry against one `format_handlers/scene_limits.SceneLimit` (the triangle budget, three vertices per triangle of it, 1,000,000 nodes) and parses each object or geometry once (ARCC BSC1). Where a library expands the scene itself (OCCT's STEP transfer visits every placement; Assimp builds every FBX model placement and copies instanced geometry), count the placements from the file before handing it over (`cad_handler.assembly_occurrences`, `format_handlers/fbx_scene.scene_size`) and refuse a file over the bound. A recursive native parser can also be exhausted by nesting depth alone, independent of placement count: in the same pass `fbx_scene.scene_size` refuses an FBX whose scopes (ASCII) or node records (binary) nest past a fixed depth (`MAX_FBX_NESTING_DEPTH`), since the reader descends into each level as it opens.
+-   Check the input size plus output headroom against `shutil.disk_usage` before downloading, and fail with a message naming both sizes; do not keep a fixed maximum-size constant.
+-   Download with a `TransferConfig` (parallel ranged GETs); stream line-oriented inputs from S3 (`get_object` + `iter_chunks`, resuming with a `Range` header after a dropped stream) and sample as they are read (`format_handlers/point_streams.py`).
+-   Log a compute-tier environment variable when the orchestration sets one, but never branch on it; log each phase's duration (`utils/timing.py`).
+
 ### **Reporting Failure on a Task-Token Pipeline**
 
 A pipeline registered with `waitForCallback: "Enabled"` receives an AWS Step Functions task token, and the
@@ -1464,6 +1489,15 @@ succeeds. The same holds for `COPY --from=<image>:<tag>` and for any installer U
 version. Coverage: the NVIDIA block of `infra/test/pipelines/containerBuildSources.test.ts`, which
 names the Dockerfiles explicitly because a `**/Dockerfile` glob passes locally and fails in CI on
 the gitignored splat Dockerfile.
+
+#### **Pinning a Container's Dependencies**
+
+Install a container's dependencies so that two builds of one commit ship the same code. `backendPipelines/preview/3dThumbnail/container/Dockerfile` is the worked example:
+
+-   Python packages come from a lock generated from `requirements.txt` with `uv pip compile --generate-hashes`, installed with `pip install --require-hashes`; `requirements.txt` holds only the direct dependencies, and the lock's header carries the command that regenerates it.
+-   npm tools come from a committed `package-lock.json`, installed with `npm ci`.
+-   A release tarball (Node.js) is downloaded at a fixed version and its SHA-256 is checked in the same `RUN`.
+-   Compilers and build tools stay in a builder stage; the runtime stage copies only the installed results, from the same digest-pinned base image.
 
 #### **Read Bits on COPY'd Source in a Non-Root Container**
 

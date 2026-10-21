@@ -17,7 +17,11 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.s3MetadataKeys import VAMS_PRIMARY_TYPE_METADATA_KEY
-from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
+from common.s3PathPatterns import (
+    PREVIEW_FILE_PATTERN,
+    ALLOWED_PREVIEW_FILE_EXTENSIONS,
+    select_newest_preview_file,
+)
 from common.apiRoutes import API_ASSET_EXPORT
 from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
 from common.dynamodb import query_all_items, batch_get_items
@@ -1084,29 +1088,6 @@ def is_allowed_preview_extension(file_path: str) -> bool:
         return extension.lower() in ALLOWED_PREVIEW_EXTENSIONS
     return False
 
-def get_top_preview_file(preview_files: List[str], filter_extensions: bool = True) -> Optional[str]:
-    """Get the top preview file from a list of preview files
-    
-    Args:
-        preview_files: List of preview file keys
-        filter_extensions: Whether to filter by allowed extensions
-        
-    Returns:
-        The top preview file key or None if no valid preview files
-    """
-    if not preview_files:
-        return None
-    
-    if filter_extensions:
-        # Filter by allowed extensions
-        allowed_files = [f for f in preview_files if is_allowed_preview_extension(f)]
-        if allowed_files:
-            return allowed_files[0]  # Return the first allowed file
-        return None
-    else:
-        # Return the first file without filtering
-        return preview_files[0]
-
 def spends_file_budget(file: Dict, include_folders: bool = False) -> bool:
     """Whether a listed row costs the caller one unit of `maxFiles`.
 
@@ -1468,13 +1449,16 @@ def process_asset_batch(
                 else:
                     base_files_list.append(file)
 
-            # Create lookup for preview files by base file key
+            # Preview candidates by base file key: (key, lastModified, isArchived), so the export
+            # attaches the same preview as the file listings (select_newest_preview_file).
             preview_lookup = {}
             for preview_file in preview_files_list:
                 base_key = get_base_file_for_preview(preview_file['key'])
-                if base_key not in preview_lookup:
-                    preview_lookup[base_key] = []
-                preview_lookup[base_key].append(preview_file['key'])
+                preview_lookup.setdefault(base_key, []).append((
+                    preview_file['key'],
+                    preview_file.get('dateCreatedCurrentVersion'),
+                    preview_file.get('isArchived', False),
+                ))
 
             # The executable blocklist check the download and stream routes make before they
             # hand out content, run on the version about to be signed for every file the loop
@@ -1570,8 +1554,7 @@ def process_asset_batch(
                 preview_file_path = ''
                 if not file['isFolder']:
                     base_file_key = file['key']
-                    preview_files_for_base = preview_lookup.get(base_file_key, [])
-                    top_preview = get_top_preview_file(preview_files_for_base, filter_extensions=True)
+                    top_preview = select_newest_preview_file(preview_lookup.get(base_file_key, []))
                     if top_preview:
                         if top_preview.startswith(asset_location_key):
                             preview_relative = top_preview[len(asset_location_key):]

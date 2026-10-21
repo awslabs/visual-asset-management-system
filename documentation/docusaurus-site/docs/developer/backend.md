@@ -466,11 +466,11 @@ from common.validators import (
 
 System-owned key names, path prefixes, and file-name patterns are defined once in dedicated modules under `backend/backend/common/`. Always import these constants instead of redefining the literal values at call sites, so all usages can be found and changed in one place.
 
-| Module                    | Defines                                                                                               |
-| ------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `s3MetadataKeys.py`       | S3 object user-metadata keys (`assetid`, `databaseid`, `vams-*` status and change-provenance keys)    |
-| `s3PathPatterns.py`       | Reserved S3 prefix folders, the `.previewFile.` marker, allowed preview extensions, write prefixes    |
-| `dynamoDbMetadataKeys.py` | Special DynamoDB metadata keys (`REINDEX_METADATA_RECORD`) and internal field prefixes (`VAMS_`, `_`) |
+| Module                    | Defines                                                                                                                                                                             |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `s3MetadataKeys.py`       | S3 object user-metadata keys (`assetid`, `databaseid`, `vams-*` status and change-provenance keys)                                                                                  |
+| `s3PathPatterns.py`       | Reserved S3 prefix folders, the `.previewFile.` marker, allowed preview extensions, write prefixes, and `select_newest_preview_file` (the preview attached when a file has several) |
+| `dynamoDbMetadataKeys.py` | Special DynamoDB metadata keys (`REINDEX_METADATA_RECORD`) and internal field prefixes (`VAMS_`, `_`)                                                                               |
 
 The permission object types, their constraint fields and the upload blocklists in `constants.py` are each built at import as core + add-on (`common/addonConstants.py`) + custom (`custom/customConstants.py`). Import the merged names (`ALLOWED_CONSTRAINT_OBJECT_TYPES`, `CONSTRAINT_OBJECT_TYPE_FIELDS`, `PERMISSION_CONSTRAINT_FIELDS`, `UNALLOWED_FILE_EXTENSION_LIST`, `UNALLOWED_MIME_LIST`), never the `CORE_*` lists they start from. An add-on or fork entry that breaks a rule raises at import; the rules are in [Extending VAMS in a Fork](customizing-vams.md#permission-object-types).
 
