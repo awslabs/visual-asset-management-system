@@ -17,6 +17,7 @@ from models.compliance import (
 
 SCHEMA_REF = {"databaseId": "db1", "schemaName": "Asset Schema"}
 SCHEMA_KEY = "db1/Asset Schema"
+SCHEMA_CACHE_KEY = "db1/Asset Schema/asset"
 PIPELINE_REF = {"databaseId": "GLOBAL", "workflowId": "wf-1",
                 "pipelineDatabaseId": "GLOBAL", "pipelineId": "pipe-1"}
 
@@ -48,34 +49,67 @@ def _fields(*defs):
         for name, type_, required in defs]))
 
 
+def _schema(fields=None, entity_type="assetMetadata", restriction=None):
+    """A metadata schema as the store returns it."""
+    return {"fields": fields if fields is not None else [], "entityType": entity_type,
+            "fileKeyTypeRestriction": restriction}
+
+
+def _evaluate(rule, metadata, fields=None, **inputs):
+    """An asset-scope evaluation of `rule` over `metadata` against a schema of `fields`."""
+    return engine.evaluate_metadata_rule(
+        "r", rule, engine.MetadataRuleInputs(asset_metadata=metadata, schema=_schema(fields),
+                                             **inputs))
+
+
 @pytest.mark.unit
 class TestMetadataRules:
 
     def test_required_schema_fields_present_passes(self):
         rule = _metadata_rule(validateRequired=True)
-        result = engine.evaluate_metadata_rule(
-            "r", rule, {"units": "m"}, _fields(("units", "string", True)))
+        result = _evaluate(rule, {"units": "m"}, _fields(("units", "string", True)))
         assert result.passed is True
         assert result.ruleType == "metadata"
         assert result.enforcement == "warn"
-        assert result.expected == {"schemaRef": SCHEMA_KEY}
-        assert result.measured == {"metadataKeys": ["units"]}
+        assert result.expected == {"schemaRef": SCHEMA_KEY, "scope": "asset"}
+        assert result.measured == {"scope": "asset", "evaluatedCount": 1, "failingCount": 0,
+                                   "failing": [], "metadataKeys": ["units"]}
 
     def test_a_missing_required_schema_field_fails_and_names_it(self):
         rule = _metadata_rule(validateRequired=True)
-        result = engine.evaluate_metadata_rule("r", rule, {}, _fields(("units", "string", True)))
+        result = _evaluate(rule, {}, _fields(("units", "string", True)))
         assert result.passed is False
         assert "units" in result.message
         assert "missing required schema fields" in result.message
+        assert result.measured["failingCount"] == 1
 
-    def test_required_check_is_skipped_when_the_schema_is_unknown(self):
+    def test_a_schema_that_was_not_found_is_a_tooling_error_not_a_pass(self):
         rule = _metadata_rule(validateRequired=True)
-        assert engine.evaluate_metadata_rule("r", rule, {}, None).passed is True
+        result = engine.evaluate_metadata_rule(
+            "r", rule, engine.MetadataRuleInputs(asset_metadata={}, schema=None))
+        assert result.status == "error"
+        assert result.passed is False
+        assert result.message == "Metadata schema not found"
 
-    def test_additional_required_fields_are_checked_without_a_schema(self):
+    def test_a_schema_whose_fields_cannot_be_read_is_a_tooling_error(self):
+        rule = _metadata_rule(validateRequired=True)
+        schema = dict(_schema(), fields=None)
+        result = engine.evaluate_metadata_rule(
+            "r", rule, engine.MetadataRuleInputs(asset_metadata={}, schema=schema))
+        assert result.status == "error"
+        assert result.message == "Metadata schema fields could not be read"
+
+    def test_a_schema_of_another_entity_type_is_a_tooling_error(self):
+        rule = _metadata_rule(validateRequired=True)
+        result = engine.evaluate_metadata_rule("r", rule, engine.MetadataRuleInputs(
+            asset_metadata={}, schema=_schema(entity_type="fileMetadata")))
+        assert result.status == "error"
+        assert result.message == "Metadata schema entity type does not match the rule scope"
+
+    def test_additional_required_fields_are_checked_against_a_schema_without_fields(self):
         rule = _metadata_rule(additionalRequiredFields=["owner"])
-        assert engine.evaluate_metadata_rule("r", rule, {"owner": "x"}, None).passed is True
-        failed = engine.evaluate_metadata_rule("r", rule, {}, None)
+        assert _evaluate(rule, {"owner": "x"}).passed is True
+        failed = _evaluate(rule, {})
         assert failed.passed is False
         assert "owner" in failed.message
 
@@ -87,22 +121,21 @@ class TestMetadataRules:
     ])
     def test_type_validation(self, value, type_, passes):
         rule = _metadata_rule(validateTypes=True)
-        result = engine.evaluate_metadata_rule(
-            "r", rule, {"f": value}, _fields(("f", type_, False)))
+        result = _evaluate(rule, {"f": value}, _fields(("f", type_, False)))
         assert result.passed is passes
         if not passes:
             assert "type mismatches" in result.message
 
     def test_type_validation_ignores_fields_the_asset_does_not_carry(self):
         rule = _metadata_rule(validateTypes=True)
-        assert engine.evaluate_metadata_rule("r", rule, {}, _fields(("f", "number", False))).passed
+        assert _evaluate(rule, {}, _fields(("f", "number", False))).passed
 
     def test_failures_from_several_checks_are_joined(self):
         rule = MetadataRule(**{"ruleType": "metadata", "enforcement": "warn",
                                "metadataSchemaRef": SCHEMA_REF,
                                "checks": [{"name": "a", "additionalRequiredFields": ["x"]},
                                           {"name": "b", "additionalRequiredFields": ["y"]}]})
-        result = engine.evaluate_metadata_rule("r", rule, {}, None)
+        result = _evaluate(rule, {})
         assert result.passed is False
         assert result.message.startswith("a:") and "; b:" in result.message
 
@@ -347,16 +380,17 @@ class TestEvaluateRules:
         results, pending = engine.evaluate_rules(
             typed,
             {"units": "m", "owner": "x"},
-            {SCHEMA_KEY: _fields(("units", "string", True))},
+            {SCHEMA_CACHE_KEY: _schema(_fields(("units", "string", True)))},
             {"parents": [{"relationshipType": "parentChild"}], "children": []},
         )
         assert [(r.ruleName, r.passed) for r in results] == [("m", True), ("r", True)]
         assert list(pending) == ["p"]
 
-    def test_a_metadata_rule_whose_schema_was_not_fetched_skips_schema_checks(self):
+    def test_a_metadata_rule_whose_schema_was_not_found_is_an_error_result(self):
         typed = {"m": _metadata_rule(validateRequired=True, validateTypes=True)}
         results, _ = engine.evaluate_rules(typed, {}, {}, {})
-        assert results[0].passed is True
+        assert results[0].status == "error"
+        assert results[0].message == "Metadata schema not found"
 
 
 @pytest.mark.unit

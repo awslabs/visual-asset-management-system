@@ -79,6 +79,25 @@ def conditional_check_failure():
         {"Error": {"Code": "ConditionalCheckFailedException", "Message": "x"}}, "UpdateItem")
 
 
+def metadata_schema_row(schema_name="Asset Schema", entity_type="assetMetadata", fields=(),
+                        database_id=DB, restriction=None):
+    """A metadata-schema-table row as the metadata schema service writes it: the entity-type
+    composite key, the entity type, and the field list as a JSON string."""
+    row = {
+        "metadataSchemaId": f"id-{schema_name}",
+        "databaseId": database_id,
+        "databaseId:metadataEntityType": f"{database_id}:{entity_type}",
+        "metadataSchemaEntityType": entity_type,
+        "schemaName": schema_name,
+        "fields": json.dumps({"fields": [
+            {"metadataFieldKeyName": name, "metadataFieldValueType": type_, "required": required}
+            for name, type_, required in fields]}),
+    }
+    if restriction is not None:
+        row["fileKeyTypeRestriction"] = restriction
+    return row
+
+
 class FakeEvaluationTable:
     """An in-memory stand-in for the evaluation table that HONORS the store's status conditions.
 
@@ -147,7 +166,8 @@ class Tables:
     def __init__(self, schema_body=RULES_SCHEMA_BODY, previous_state=None, previous_row=None,
                  metadata_keys=("owner",), parents=1, workflow_exists=True, pipeline_exists=True,
                  template_exists=True, workflow_config=None, pipeline_config=None,
-                 template_overrides=None, asset_files=DEFAULT_ASSET_FILES, schema_version=1):
+                 template_overrides=None, asset_files=DEFAULT_ASSET_FILES, schema_version=1,
+                 metadata_schema_found=True):
         self.schema = MagicMock(name="schema_table")
         self.schema.query.return_value = {"Items": [
             schema_row(body=schema_body, version=schema_version)]}
@@ -163,7 +183,12 @@ class Tables:
             {"metadataKey": key, "metadataValue": "v", "metadataValueType": "STRING"}
             for key in metadata_keys]}
         self.metadata_schema = MagicMock(name="metadata_schema_table")
-        self.metadata_schema.query.return_value = {"Items": []}
+        self.metadata_schema.query.return_value = {"Items": [
+            metadata_schema_row()]} if metadata_schema_found else {"Items": []}
+        self.file_attributes = MagicMock(name="file_attribute_table")
+        self.file_attributes.query.return_value = {"Items": []}
+        self.link_metadata = MagicMock(name="asset_links_metadata_table")
+        self.link_metadata.query.return_value = {"Items": []}
         self.links = MagicMock(name="asset_links_table")
         self.links.query.side_effect = lambda **kw: (
             {"Items": [{"relationshipType": "parentChild"}] * parents}
@@ -205,6 +230,8 @@ class Tables:
             patch(f"{STORE}.asset_file_metadata_table", self.metadata),
             patch(f"{STORE}.asset_file_versions_table", self.file_versions),
             patch(f"{STORE}.metadata_schema_table", self.metadata_schema),
+            patch(f"{STORE}.file_attribute_table", self.file_attributes),
+            patch(f"{STORE}.asset_links_metadata_table", self.link_metadata),
             patch(f"{STORE}.asset_links_table", self.links),
             patch(f"{STORE}.workflow_table", self.workflow),
             patch(f"{STORE}.pipeline_table", self.pipeline),
@@ -344,16 +371,27 @@ class TestSynchronousEvaluation:
         tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY)
         tables.metadata_schema.query.side_effect = [
             {"Items": []},
-            {"Items": [{"schemaName": "Asset Schema", "fields": json.dumps(
-                [{"metadataFieldKeyName": "units", "required": True}])}]},
+            {"Items": [metadata_schema_row(database_id="GLOBAL",
+                                           fields=[("units", "STRING", True)])]},
         ]
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
-        partitions = [c.kwargs["KeyConditionExpression"]._values[1]
-                      for c in tables.metadata_schema.query.call_args_list]
-        assert partitions == [DB, "GLOBAL"]
+        calls = [c.kwargs for c in tables.metadata_schema.query.call_args_list]
+        assert [c["IndexName"] for c in calls] == ["DatabaseIdMetadataEntityTypeIndex"] * 2
+        partitions = [c["KeyConditionExpression"]._values[1] for c in calls]
+        assert partitions == [f"{DB}:assetMetadata", "GLOBAL:assetMetadata"]
         metadata_result = next(r for r in result["ruleResults"] if r["ruleName"] == "owner-present")
         assert metadata_result["passed"] is False
         assert "units" in metadata_result["message"]
+
+    def test_a_metadata_schema_that_is_not_found_is_a_tooling_error_not_a_pass(self):
+        """A misspelt schemaName used to skip validateRequired / validateTypes and pass."""
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, metadata_schema_found=False)
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        metadata_result = next(r for r in result["ruleResults"] if r["ruleName"] == "owner-present")
+        assert metadata_result["status"] == "error"
+        assert metadata_result["message"] == "Metadata schema not found"
+        assert result["errorRules"] == ["owner-present"]
+        assert "evaluation_error" in tables.audit_events()
 
     def test_a_missing_schema_records_an_error_evaluation(self):
         """The evaluation row is `error`; the asset-state row gains the evaluation pointers and
@@ -2306,3 +2344,198 @@ class TestStatusCondition:
         expression, _, values = store.status_condition("a", "b")
         assert expression == "#cond_status = :cond_status0 OR #cond_status = :cond_status1"
         assert values == {":cond_status0": "a", ":cond_status1": "b"}
+
+
+# --- Metadata rule scopes -------------------------------------------------------------------------
+
+def _scoped_body(**rules):
+    """A vams-rules-v1 body of metadata rules, each `name=(scope, checks, extra)`, all naming the
+    `Model Schema` metadata schema in DB."""
+    return {"schemaFormat": "vams-rules-v1", "rules": {
+        name: {"ruleType": "metadata", "enforcement": "warn", "scope": scope,
+               "metadataSchemaRef": {"databaseId": DB, "schemaName": "Model Schema"},
+               "checks": checks, **extra}
+        for name, (scope, checks, extra) in rules.items()}}
+
+
+REQUIRE_UNITS = [{"name": "units", "validateRequired": True}]
+
+
+def _schema_lookup(*rows):
+    """A metadata-schema-table `query` side effect: the rows whose entity-type partition and
+    `schemaName` match the query's key condition and filter, as the GSI and filter would select."""
+    def query(**kwargs):
+        partition = kwargs["KeyConditionExpression"]._values[1]
+        name = kwargs["FilterExpression"]._values[1]
+        return {"Items": [row for row in rows if row["databaseId:metadataEntityType"] == partition
+                          and row["schemaName"] == name]}
+    return query
+
+
+def _file_metadata_rows(path, **values):
+    return [{"metadataKey": key, "metadataValue": value, "metadataValueType": "STRING",
+             "databaseId:assetId:filePath": f"{DB}:{ASSET}:{path}",
+             "databaseId:assetId": f"{DB}:{ASSET}"} for key, value in values.items()]
+
+
+def _link_row(link_id, relationship_type="parentChild"):
+    return {"assetLinkId": link_id, "relationshipType": relationship_type}
+
+
+@pytest.mark.unit
+class TestScopedMetadataRules:
+    """A metadata rule's scope selects which metadata it reads: the store reads that source once per
+    evaluation, only when a rule of the scope exists, and keys file rows by the same leading-'/' path
+    the S3 listing yields."""
+
+    def _tables(self, body, schema_rows, files=("/models/part.glb", "/models/plain.glb"),
+                file_rows=(), attribute_rows=(), parents=(), children=(), link_rows=None):
+        tables = Tables(schema_body=body, asset_files=files)
+        tables.metadata_schema.query.side_effect = _schema_lookup(*schema_rows)
+        asset_rows = [{"metadataKey": "owner", "metadataValue": "v", "metadataValueType": "STRING",
+                       "databaseId:assetId:filePath": f"{DB}:{ASSET}:/"}]
+        tables.metadata.query.side_effect = lambda **kw: {"Items": list(
+            file_rows) + asset_rows if kw.get("IndexName") == "DatabaseIdAssetIdIndex" else asset_rows}
+        tables.file_attributes.query.return_value = {"Items": list(attribute_rows)}
+        tables.links.query.side_effect = lambda **kw: {"Items": list(
+            parents if kw.get("IndexName") == "toAssetGSI" else children)}
+        link_rows = link_rows or {}
+        tables.link_metadata.query.side_effect = lambda **kw: {"Items": list(
+            link_rows.get(kw["KeyConditionExpression"]._values[1], []))}
+        return tables
+
+    @staticmethod
+    def _result(result, name):
+        return next(r for r in result["ruleResults"] if r["ruleName"] == name)
+
+    def test_a_files_rule_reads_the_asset_s_file_rows_once_and_fails_a_file_without_rows(self):
+        body = _scoped_body(per_file=("files", REQUIRE_UNITS, {}))
+        tables = self._tables(body, [metadata_schema_row(
+            "Model Schema", "fileMetadata", fields=[("units", "STRING", True)])],
+            file_rows=_file_metadata_rows("/models/part.glb", units="mm"))
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        rule = self._result(result, "per_file")
+        assert rule["passed"] is False
+        assert rule["measured"]["evaluatedCount"] == 2
+        assert rule["measured"]["failing"] == [{
+            "path": "/models/plain.glb",
+            "message": "units: missing required schema fields: ['units']"}]
+        assert rule["message"].startswith("1 of 2 files fail: /models/plain.glb: units:")
+        indexes = [c.kwargs.get("IndexName") for c in tables.metadata.query.call_args_list]
+        assert indexes.count("DatabaseIdAssetIdIndex") == 1
+        assert tables.s3_client.list_object_versions.call_count == 1
+        tables.file_attributes.query.assert_not_called()
+        tables.link_metadata.query.assert_not_called()
+
+    def test_a_file_attributes_rule_reads_the_attribute_table_and_the_schema_restriction(self):
+        body = _scoped_body(attrs=("fileAttributes", REQUIRE_UNITS, {}))
+        attribute_rows = [{"attributeKey": "units", "attributeValue": "mm",
+                           "attributeValueType": "STRING",
+                           "databaseId:assetId:filePath": f"{DB}:{ASSET}:/models/part.glb"}]
+        tables = self._tables(body, [metadata_schema_row(
+            "Model Schema", "fileAttribute", fields=[("units", "STRING", True)],
+            restriction=".glb")], files=("/models/part.glb", "/readme.txt"),
+            attribute_rows=attribute_rows)
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        rule = self._result(result, "attrs")
+        assert rule["passed"] is True
+        assert rule["measured"]["evaluatedCount"] == 1
+        query = tables.file_attributes.query.call_args.kwargs
+        assert query["IndexName"] == "DatabaseIdAssetIdIndex"
+        assert query["KeyConditionExpression"]._values[1] == f"{DB}:{ASSET}"
+
+    def test_a_links_rule_reads_each_link_s_metadata_in_its_scope_only(self):
+        body = _scoped_body(placement=("links", [{"name": "placed",
+                                                  "additionalRequiredFields": ["Matrix"]}],
+                                       {"linkDirection": "parents",
+                                        "relationshipType": "parentChild"}))
+        tables = self._tables(
+            body, [metadata_schema_row("Model Schema", "assetLinkMetadata")],
+            parents=[_link_row("link-a"), _link_row("link-r", "related")],
+            children=[_link_row("link-c")],
+            link_rows={"link-a": [{"assetLinkId": "link-a", "metadataKey": "Matrix",
+                                   "metadataValue": "1", "metadataValueType": "STRING"}]})
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        rule = self._result(result, "placement")
+        assert rule["passed"] is True
+        assert rule["measured"]["evaluatedCount"] == 1
+        read = [c.kwargs["KeyConditionExpression"]._values[1]
+                for c in tables.link_metadata.query.call_args_list]
+        assert read == ["link-a"]
+
+    def test_more_links_than_the_bound_errors_and_reads_no_link_metadata(self):
+        body = _scoped_body(placement=("links", REQUIRE_UNITS, {}))
+        tables = self._tables(
+            body, [metadata_schema_row("Model Schema", "assetLinkMetadata")],
+            children=[_link_row(f"link-{i:04d}")
+                      for i in range(store.engine.MAX_LINKS_PER_METADATA_RULE + 1)])
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        rule = self._result(result, "placement")
+        assert rule["status"] == "error"
+        assert "too many links" in rule["message"]
+        tables.link_metadata.query.assert_not_called()
+
+    def test_an_asset_scope_rule_reads_no_file_attribute_or_link_metadata_and_lists_no_files(self):
+        body = _scoped_body(own=("asset", [{"name": "o", "additionalRequiredFields": ["owner"]}], {}))
+        tables = self._tables(body, [metadata_schema_row("Model Schema", "assetMetadata")])
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert self._result(result, "own")["passed"] is True
+        assert [c.kwargs.get("IndexName") for c in tables.metadata.query.call_args_list] == [
+            "DatabaseIdAssetIdFilePathIndex"]
+        tables.file_attributes.query.assert_not_called()
+        tables.link_metadata.query.assert_not_called()
+        tables.s3_client.list_object_versions.assert_not_called()
+        tables.asset.get_item.assert_not_called()
+
+    def test_two_rules_on_one_schema_name_with_different_scopes_look_it_up_per_entity_type(self):
+        body = _scoped_body(own=("asset", REQUIRE_UNITS, {}), per_file=("files", REQUIRE_UNITS, {}))
+        tables = self._tables(body, [
+            metadata_schema_row("Model Schema", "assetMetadata", fields=[("units", "STRING", True)]),
+            metadata_schema_row("Model Schema", "fileMetadata")])
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        partitions = sorted(c.kwargs["KeyConditionExpression"]._values[1]
+                            for c in tables.metadata_schema.query.call_args_list)
+        assert partitions == [f"{DB}:assetMetadata", f"{DB}:fileMetadata"]
+        # The asset scope required `units` (the asset lacks it); the file schema requires nothing.
+        assert self._result(result, "own")["passed"] is False
+        assert self._result(result, "per_file")["passed"] is True
+
+    def test_a_schema_of_the_name_under_another_entity_type_is_not_found(self):
+        body = _scoped_body(per_file=("files", REQUIRE_UNITS, {}))
+        tables = self._tables(body, [
+            metadata_schema_row("Model Schema", "assetMetadata"),
+            metadata_schema_row("Model Schema", "assetMetadata", database_id="GLOBAL")])
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        rule = self._result(result, "per_file")
+        assert rule["status"] == "error"
+        assert rule["message"] == "Metadata schema not found"
+
+
+@pytest.mark.unit
+class TestMetadataRowGrouping:
+
+    def test_rows_group_by_path_with_the_asset_root_left_out(self):
+        rows = (_file_metadata_rows("/a.glb", units="mm", owner="x")
+                + _file_metadata_rows("/", owner="asset-level")
+                + _file_metadata_rows("b/c.glb", units="m"))
+        grouped = store._metadata_by_file_path(rows, DB, ASSET, ("metadataKey",),
+                                               ("metadataValue",), ("metadataValueType",))
+        assert grouped == {"/a.glb": {"units": "mm", "owner": "x"}, "/b/c.glb": {"units": "m"}}
+
+    def test_a_path_containing_a_colon_keeps_it(self):
+        rows = _file_metadata_rows("/scans/12:30.las", units="mm")
+        grouped = store._metadata_by_file_path(rows, DB, ASSET, ("metadataKey",),
+                                               ("metadataValue",), ("metadataValueType",))
+        assert grouped == {"/scans/12:30.las": {"units": "mm"}}
+
+    def test_another_asset_s_rows_are_ignored(self):
+        rows = [{"metadataKey": "units", "metadataValue": "mm",
+                 "databaseId:assetId:filePath": f"{DB}:other-asset:/a.glb"}]
+        assert store._metadata_by_file_path(rows, DB, ASSET, ("metadataKey",),
+                                            ("metadataValue",), ("metadataValueType",)) == {}
+
+    def test_values_are_typed(self):
+        rows = [{"metadataKey": "count", "metadataValue": "3", "metadataValueType": "NUMBER",
+                 "databaseId:assetId:filePath": f"{DB}:{ASSET}:/a.glb"}]
+        assert store._metadata_by_file_path(rows, DB, ASSET, ("metadataKey",), ("metadataValue",),
+                                            ("metadataValueType",)) == {"/a.glb": {"count": 3.0}}

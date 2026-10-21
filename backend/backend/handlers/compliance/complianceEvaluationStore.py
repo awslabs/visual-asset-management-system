@@ -4,7 +4,8 @@
 """Compliance evaluation store: the AWS-facing side of the evaluation engine.
 
 Owns every DynamoDB, S3 and Lambda access an evaluation needs — schema resolution, asset metadata
-and link reads, metadata-schema field lookup, the asset file listing and workflow / pipeline /
+and link reads, the file metadata, file attribute and asset-link metadata a scoped metadata rule
+reads, the entity-type-bound metadata-schema lookup, the asset file listing and workflow / pipeline /
 template reads that select a pipeline rule's input files, the asset row, current file versions and
 asset-version file records the file-structure, version-coverage and asset-attribute rules read,
 workflow-execution launch for pipeline rules, evaluation / asset-state / audit writes — and
@@ -145,6 +146,9 @@ try:
     asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     asset_links_table_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
     asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    asset_links_metadata_table_name = get_table_name(
+        ResourceKeys.ASSET_LINKS_METADATA_STORAGE_TABLE)
     asset_file_versions_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSIONS_STORAGE_TABLE)
     metadata_schema_table_name = get_table_name(ResourceKeys.METADATA_SCHEMA_STORAGE_TABLE_V2)
     workflow_table_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE_V2)
@@ -164,6 +168,8 @@ audit_table = dynamodb.Table(audit_table_name)
 asset_table = dynamodb.Table(asset_table_name)
 asset_links_table = dynamodb.Table(asset_links_table_name)
 asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name)
+file_attribute_table = dynamodb.Table(file_attribute_table_name)
+asset_links_metadata_table = dynamodb.Table(asset_links_metadata_table_name)
 asset_file_versions_table = dynamodb.Table(asset_file_versions_table_name)
 metadata_schema_table = dynamodb.Table(metadata_schema_table_name)
 workflow_table = dynamodb.Table(workflow_table_name)
@@ -244,25 +250,114 @@ def get_asset_metadata(database_id: str, asset_id: str) -> Dict[str, Any]:
     return metadata
 
 
-def get_metadata_schema_fields(
-    database_id: str, schema_name: str,
-) -> Optional[List[Dict[str, Any]]]:
-    """Field definitions of the metadata schema named `schema_name` in `database_id`, falling
-    back to the GLOBAL schema of that name. None when neither exists.
+def get_metadata_schema(
+    database_id: str, schema_name: str, entity_type: str,
+) -> Optional[Dict[str, Any]]:
+    """The metadata schema named `schema_name` of `entity_type` in `database_id`, falling back to the
+    GLOBAL schema of that name and type, as `{"fields": [{"field", "required", "type"}] or None,
+    "entityType", "fileKeyTypeRestriction"}`. None when neither exists; a schema of that name with
+    another entity type is not a match, so two schemas sharing a name never resolve arbitrarily.
 
-    `schemaName` is not a key on the metadata-schema table, so this reads the database's
-    partition of the `DatabaseIdIndex` GSI to exhaustion and filters by name.
+    Reads the `DatabaseIdMetadataEntityTypeIndex` GSI (partition `databaseId:metadataEntityType`,
+    projecting ALL) to exhaustion and filters by `schemaName`, which is not a key.
     """
     for candidate_database in _database_lookup_order(database_id):
         rows = query_all_items(
             metadata_schema_table,
-            IndexName="DatabaseIdIndex",
-            KeyConditionExpression=Key("databaseId").eq(candidate_database),
+            IndexName="DatabaseIdMetadataEntityTypeIndex",
+            KeyConditionExpression=Key("databaseId:metadataEntityType").eq(
+                f"{candidate_database}:{entity_type}"),
             FilterExpression=Attr("schemaName").eq(schema_name),
         )
         if rows:
-            return engine.normalize_metadata_schema_fields(rows[0].get("fields", "[]"))
+            row = rows[0]
+            stored_type = (row.get("metadataSchemaEntityType")
+                           or str(row.get("databaseId:metadataEntityType", "")).split(":", 1)[-1])
+            return {
+                "fields": engine.normalize_metadata_schema_fields(row.get("fields", "[]")),
+                "entityType": stored_type,
+                "fileKeyTypeRestriction": row.get("fileKeyTypeRestriction"),
+            }
     return None
+
+
+def _metadata_by_file_path(rows: List[Dict[str, Any]], database_id: str, asset_id: str,
+                           key_attributes: Tuple[str, ...], value_attributes: Tuple[str, ...],
+                           type_attributes: Tuple[str, ...]) -> Dict[str, Dict[str, Any]]:
+    """File metadata or attribute rows grouped by the file they belong to: `{"/path": {key: typed
+    value}}`. The path is the `databaseId:assetId:filePath` sort key with the asset's own
+    `databaseId:assetId:` prefix removed (a path may itself contain ':') and normalized to a single
+    leading '/' (backend Rule 13), the form `get_current_files` keys files by. Rows for `/` — the
+    asset's own metadata — are left out. A row's key, value and type are read from the first present
+    attribute of each tuple, the way `metadataService` reads attribute rows that predate the
+    `attribute*` names."""
+    prefix = f"{database_id}:{asset_id}:"
+
+    def first_present(row, names):
+        for name in names:
+            if row.get(name) is not None:
+                return row[name]
+        return None
+
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        composite = str(row.get("databaseId:assetId:filePath") or "")
+        if not composite.startswith(prefix):
+            continue
+        path = engine.normalize_relative_key(composite[len(prefix):])
+        key = first_present(row, key_attributes)
+        if path == "/" or not key:
+            continue
+        grouped.setdefault(path, {})[key] = engine.coerce_metadata_value(
+            first_present(row, value_attributes), first_present(row, type_attributes) or "STRING")
+    return grouped
+
+
+def get_file_metadata_by_path(database_id: str, asset_id: str) -> Dict[str, Dict[str, Any]]:
+    """Every file metadata row of the asset, grouped by file (`_metadata_by_file_path`): one read of
+    the asset-file-metadata table's `DatabaseIdAssetIdIndex` GSI (partition `databaseId:assetId`,
+    projecting ALL), paged to exhaustion."""
+    rows = query_all_items(
+        asset_file_metadata_table,
+        IndexName="DatabaseIdAssetIdIndex",
+        KeyConditionExpression=Key("databaseId:assetId").eq(f"{database_id}:{asset_id}"),
+    )
+    return _metadata_by_file_path(rows, database_id, asset_id, ("metadataKey",),
+                                  ("metadataValue",), ("metadataValueType",))
+
+
+def get_file_attributes_by_path(database_id: str, asset_id: str) -> Dict[str, Dict[str, Any]]:
+    """Every file attribute row of the asset, grouped by file: the file-attribute table's
+    `DatabaseIdAssetIdIndex` GSI, paged to exhaustion. Attribute rows carry `attributeKey`,
+    `attributeValue` and `attributeValueType`."""
+    rows = query_all_items(
+        file_attribute_table,
+        IndexName="DatabaseIdAssetIdIndex",
+        KeyConditionExpression=Key("databaseId:assetId").eq(f"{database_id}:{asset_id}"),
+    )
+    return _metadata_by_file_path(rows, database_id, asset_id,
+                                  ("attributeKey", "metadataKey"),
+                                  ("attributeValue", "metadataValue"),
+                                  ("attributeValueType", "metadataValueType"))
+
+
+def get_link_metadata(asset_link_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """The metadata of each asset link, typed: `{assetLinkId: {metadataKey: value}}`, a link without
+    rows mapped to {}. The asset-links metadata table is keyed by `assetLinkId` (SK `metadataKey`)
+    and has no asset-keyed index, so this is one query per link, each paged to exhaustion; the
+    caller bounds the ids (`engine.link_ids_to_read`)."""
+    metadata: Dict[str, Dict[str, Any]] = {}
+    for link_id in asset_link_ids:
+        rows = query_all_items(
+            asset_links_metadata_table,
+            KeyConditionExpression=Key("assetLinkId").eq(link_id),
+        )
+        metadata[link_id] = {
+            row["metadataKey"]: engine.coerce_metadata_value(
+                row.get("metadataValue"), row.get("metadataValueType") or "STRING")
+            for row in rows if row.get("metadataKey")
+        }
+    return metadata
 
 
 def _database_lookup_order(database_id: str) -> List[str]:
@@ -886,7 +981,8 @@ def run_evaluation(
     synchronously; pipeline rules launch workflow executions and leave the evaluation
     `pending_pipeline` until the workflow callback finalizes it. The asset row, the asset's current
     file listing and its asset-version file records are read only when a rule of a type that uses
-    them is present. Writes the evaluation record, the asset-state row and the audit entries, and returns
+    them is present, and the file metadata, file attribute and link metadata rows only when a
+    metadata rule of that scope is. Writes the evaluation record, the asset-state row and the audit entries, and returns
     `{evaluationId, verdict, complianceState, ruleResults, pipelineRulesPending, schemaVersion,
     exceptionApplied, hasRuleErrors, errorRules}`.
 
@@ -942,26 +1038,34 @@ def run_evaluation(
     groups = engine.split_rules(typed_rules)
 
     asset_metadata = get_asset_metadata(database_id, asset_id)
-    metadata_schema_fields = {}
-    for rule in typed_rules.values():
-        ref = getattr(rule, "metadataSchemaRef", None)
-        if ref is not None:
-            key = engine.metadata_schema_ref_key(ref)
-            if key not in metadata_schema_fields:
-                metadata_schema_fields[key] = get_metadata_schema_fields(ref.databaseId, ref.schemaName)
+    metadata_schemas: Dict[str, Optional[Dict[str, Any]]] = {}
+    for rule in groups.metadata.values():
+        ref = rule.metadataSchemaRef
+        key = engine.metadata_schema_ref_key(ref, rule.scope)
+        if key not in metadata_schemas:
+            metadata_schemas[key] = get_metadata_schema(
+                ref.databaseId, ref.schemaName, engine.SCOPE_ENTITY_TYPE[rule.scope])
     asset_links = get_asset_links(database_id, asset_id)
     # Read only for the rule types that use them: an evaluation without a file-structure,
-    # version-coverage or asset-attribute rule lists no S3 objects and reads no file versions.
+    # version-coverage, asset-attribute or file-scope metadata rule lists no S3 objects and reads no
+    # file versions, and each metadata scope's rows are read only when a rule of that scope exists.
     asset_row = get_asset_item(database_id, asset_id) if engine.needs_asset_row(groups) else None
     current_files = (get_current_files(database_id, asset_id, asset=asset_row)
                      if engine.needs_current_files(groups) and asset_row is not None else None)
     versioned_file_keys = (get_versioned_file_keys(database_id, asset_id)
                            if engine.needs_versioned_file_keys(groups) else None)
+    file_metadata_by_path = (get_file_metadata_by_path(database_id, asset_id)
+                             if engine.needs_file_metadata(groups) else None)
+    file_attributes_by_path = (get_file_attributes_by_path(database_id, asset_id)
+                               if engine.needs_file_attributes(groups) else None)
+    link_metadata_by_id = (get_link_metadata(engine.link_ids_to_read(groups.metadata, asset_links))
+                           if engine.needs_link_metadata(groups) else None)
 
     rule_results, pipeline_rules = engine.evaluate_rules(
-        typed_rules, asset_metadata, metadata_schema_fields, asset_links,
+        typed_rules, asset_metadata, metadata_schemas, asset_links,
         current_files=current_files, versioned_file_keys=versioned_file_keys,
-        asset_row=asset_row)
+        asset_row=asset_row, file_metadata_by_path=file_metadata_by_path,
+        file_attributes_by_path=file_attributes_by_path, link_metadata_by_id=link_metadata_by_id)
 
     base_record = _evaluation_record_base(evaluation_id, database_id, asset_id, schema_name,
                                           schema_version, evaluated_at, actor)

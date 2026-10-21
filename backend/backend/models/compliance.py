@@ -251,14 +251,6 @@ class MetadataCheck(BaseModel, extra='ignore'):
         return values
 
 
-class MetadataRule(BaseModel, extra='ignore'):
-    """Metadata rule: validates asset metadata against a VAMS metadata schema."""
-    ruleType: RuleType = Field(RuleType.metadata, const=True)
-    enforcement: EnforcementLevel
-    metadataSchemaRef: MetadataSchemaRef
-    checks: List[MetadataCheck] = Field(min_items=1)
-
-
 class RelationshipCheck(BaseModel, extra='ignore'):
     """A single check within a relationship rule."""
     name: str = Field(min_length=1, max_length=MAX_RULE_NAME_LENGTH)
@@ -290,8 +282,9 @@ class RelationshipRule(BaseModel, extra='ignore'):
     checks: List[RelationshipCheck] = Field(min_items=1)
 
 
-# Bounds on the file-structure, version-coverage and asset-attribute rules: the number of checks a
-# rule carries, the path patterns and tags a check lists, and the length of one pattern. Every
+# Bounds on the metadata, file-structure, version-coverage and asset-attribute rules: the number of
+# checks a rule carries, the path patterns and tags a check (or a metadata rule's file scope) lists,
+# and the length of one pattern. Every
 # pattern is also held to the `REGEX` validator's compile check and backtracking budget, the budget
 # computed for the longest value the pattern is searched in (`validate_patterns`).
 MAX_CHECKS_PER_RULE = 25
@@ -336,6 +329,57 @@ def validate_tags(field_name: str, tags: Optional[List[str]]) -> None:
     (valid, message) = validate({field_name: {'value': tags, 'validator': 'STRING_256_ARRAY'}})
     if not valid:
         raise ValueError(message)
+
+
+class MetadataScope(str, Enum):
+    """What a metadata rule validates. Each scope reads the metadata of one VAMS entity type, and
+    the rule's metadata schema must be of that type (`evaluationEngine.SCOPE_ENTITY_TYPE`)."""
+    asset = "asset"                    # the asset's own metadata (the default)
+    files = "files"                    # file metadata, per current non-archived file
+    fileAttributes = "fileAttributes"  # file attributes, per current non-archived file
+    links = "links"                    # asset-link metadata, per link of the asset
+
+
+# The scopes that iterate the asset's current files and accept `includePaths` / `excludePaths`.
+METADATA_FILE_SCOPES = (MetadataScope.files, MetadataScope.fileAttributes)
+
+
+class MetadataRule(BaseModel, extra='ignore'):
+    """Metadata rule: validates metadata against a VAMS metadata schema.
+
+    `scope` selects the metadata: the asset's own (`asset`, the default), each current file's
+    metadata (`files`) or attributes (`fileAttributes`), or each asset link's metadata (`links`).
+    `includePaths` / `excludePaths` narrow a file scope to the files whose path matches (Python
+    regular expressions searched in the asset-relative path without its leading '/'); they are
+    refused on any other scope. `linkDirection` / `relationshipType` narrow the links scope (absent:
+    every link of the asset, of either type) and are refused on any other scope.
+    """
+    ruleType: RuleType = Field(RuleType.metadata, const=True)
+    enforcement: EnforcementLevel
+    metadataSchemaRef: MetadataSchemaRef
+    scope: MetadataScope = MetadataScope.asset
+    includePaths: List[str] = Field(default_factory=list, max_items=MAX_PATH_PATTERNS)
+    excludePaths: List[str] = Field(default_factory=list, max_items=MAX_PATH_PATTERNS)
+    linkDirection: Optional[Literal["parents", "children", "related"]] = None
+    relationshipType: Optional[Literal["parentChild", "related"]] = None
+    checks: List[MetadataCheck] = Field(min_items=1, max_items=MAX_CHECKS_PER_RULE)
+
+    _trim_patterns = validator('includePaths', 'excludePaths', pre=True,
+                               allow_reuse=True)(trim_entries)
+
+    @root_validator(skip_on_failure=True)
+    def validate_scope_fields(cls, values):
+        scope = values.get("scope")
+        if scope in METADATA_FILE_SCOPES:
+            validate_patterns("includePaths", values.get("includePaths"), MAX_S3_OBJECT_KEY_BYTES)
+            validate_patterns("excludePaths", values.get("excludePaths"), MAX_S3_OBJECT_KEY_BYTES)
+        elif values.get("includePaths") or values.get("excludePaths"):
+            raise ValueError(
+                "'includePaths' and 'excludePaths' apply to the files and fileAttributes scopes only")
+        if scope != MetadataScope.links and (values.get("linkDirection") is not None
+                                             or values.get("relationshipType") is not None):
+            raise ValueError("'linkDirection' and 'relationshipType' apply to the links scope only")
+        return values
 
 
 class FileStructureCheck(BaseModel, extra='ignore'):

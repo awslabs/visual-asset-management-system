@@ -4,26 +4,30 @@
 """Compliance evaluation engine: pure rule logic for vams-rules-v1 schemas.
 
 Every function here is a pure function over data the caller has already fetched (schema
-bodies, asset metadata, metadata-schema field definitions, asset links, pipeline
-measurements, the asset row, the asset's current files and the file versions its asset versions
-record). DynamoDB / S3 / Lambda access lives in
+bodies, asset, file, file-attribute and asset-link metadata, metadata schemas, asset links,
+pipeline measurements, the asset row, the asset's current files and the file versions its asset
+versions record). DynamoDB / S3 / Lambda access lives in
 `handlers/compliance/complianceEvaluationStore.py`, which calls into this module.
 """
 
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
+from common.metadataSchemaValidation import extract_file_extension
 from customLogging.logger import safeLogger
 from models.compliance import (
     ASSET_ATTRIBUTE_TAGS,
+    METADATA_FILE_SCOPES,
     AssetAttributesRule,
     ComplianceRule,
     EvaluationVerdict,
     FileStructureRule,
     MetadataCheck,
     MetadataRule,
+    MetadataScope,
     PipelineRule,
     RelationshipCheck,
     RelationshipRule,
@@ -305,31 +309,90 @@ def run_metadata_check(
     return True, ""
 
 
-def evaluate_metadata_rule(
-    rule_name: str,
-    rule: MetadataRule,
-    asset_metadata: Dict[str, Any],
-    schema_fields: Optional[List[Dict[str, Any]]],
-) -> RuleResult:
-    """A metadata rule against the asset's metadata and its referenced schema's fields."""
-    all_passed = True
-    messages = []
-    for check in rule.checks:
-        passed, msg = run_metadata_check(check, asset_metadata, schema_fields)
-        if not passed:
-            all_passed = False
-            messages.append(msg)
+# The metadata-schema entity type each metadata rule scope reads: a rule's referenced schema must be
+# of this type. The values are `models.metadataSchema.MetadataSchemaEntityType` members (pinned by a
+# test rather than imported, so the engine stays free of the metadata-schema request models).
+SCOPE_ENTITY_TYPE = {
+    MetadataScope.asset: "assetMetadata",
+    MetadataScope.files: "fileMetadata",
+    MetadataScope.fileAttributes: "fileAttribute",
+    MetadataScope.links: "assetLinkMetadata",
+}
 
-    ref = rule.metadataSchemaRef
-    return RuleResult(
-        ruleName=rule_name,
-        ruleType="metadata",
-        enforcement=rule.enforcement.value,
-        passed=all_passed,
-        message="; ".join(messages) if messages else None,
-        measured={"metadataKeys": sorted(asset_metadata.keys())},
-        expected={"schemaRef": f"{ref.databaseId}/{ref.schemaName}"},
-    )
+# The most asset links a `links`-scope metadata rule reads, one metadata query per link (the same
+# bound as a cascade's nodes). An asset with more links in the rule's scope is a `status: error`
+# result, never a partial pass.
+MAX_LINKS_PER_METADATA_RULE = 500
+
+
+@dataclass
+class MetadataRuleInputs:
+    """What one metadata rule reads, as the store fetched it. `schema` is the rule's referenced
+    metadata schema (`{"fields", "entityType", "fileKeyTypeRestriction"}`) or None when no schema of
+    that name and the scope's entity type exists. The per-file maps are keyed by the asset-relative
+    path with a single leading '/'; `link_metadata_by_id` by assetLinkId. A source the rule's scope
+    does not read may be None."""
+    asset_metadata: Optional[Dict[str, Any]] = None
+    schema: Optional[Dict[str, Any]] = None
+    current_files: Optional[List["CurrentFile"]] = None
+    file_metadata_by_path: Optional[Dict[str, Dict[str, Any]]] = None
+    file_attributes_by_path: Optional[Dict[str, Dict[str, Any]]] = None
+    asset_links: Optional[Dict[str, List[Dict[str, Any]]]] = None
+    link_metadata_by_id: Optional[Dict[str, Dict[str, Any]]] = None
+
+
+def schema_applies_to_file(file_key_type_restriction: Any, relative_key: str) -> bool:
+    """Whether a metadata schema's `fileKeyTypeRestriction` admits a file, decided the way the
+    metadata write path decides it (`common.metadataSchemaValidation.get_aggregated_schemas`): no
+    restriction, or one listing `.all`, admits every file; a file with an extension
+    (`extract_file_extension`: the basename's text after its last dot, lowercased, with the dot) is
+    admitted when it equals one comma-delimited entry, stripped and lowercased; a file without an
+    extension is admitted, because the write path applies every schema, restricted ones included,
+    to such a file."""
+    if not isinstance(file_key_type_restriction, str) or not file_key_type_restriction.strip():
+        return True
+    allowed = [entry.strip().lower() for entry in file_key_type_restriction.split(",")]
+    if ".all" in allowed:
+        return True
+    extension = extract_file_extension(relative_key)
+    return extension is None or extension in allowed
+
+
+def links_in_scope(asset_links: Dict[str, List[Dict[str, Any]]], direction: Optional[str],
+                   relationship_type: Optional[str]) -> List[Dict[str, Any]]:
+    """The asset's link rows in `direction` (the `count_links` vocabulary; None or `related` is
+    both sides) of `relationship_type` (None: either type), one per assetLinkId, sorted by it."""
+    if direction == LINK_DIRECTION_PARENTS:
+        rows = asset_links.get(LINK_DIRECTION_PARENTS, [])
+    elif direction == LINK_DIRECTION_CHILDREN:
+        rows = asset_links.get(LINK_DIRECTION_CHILDREN, [])
+    else:
+        rows = (asset_links.get(LINK_DIRECTION_PARENTS, [])
+                + asset_links.get(LINK_DIRECTION_CHILDREN, []))
+    by_id: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        link_id = row.get("assetLinkId")
+        if not link_id:
+            continue
+        if relationship_type is not None and row.get("relationshipType") != relationship_type:
+            continue
+        by_id.setdefault(link_id, row)
+    return [by_id[link_id] for link_id in sorted(by_id)]
+
+
+def link_ids_to_read(metadata_rules: Dict[str, MetadataRule],
+                     asset_links: Dict[str, List[Dict[str, Any]]]) -> List[str]:
+    """The assetLinkIds whose metadata the `links`-scope rules read: the links in each rule's scope,
+    for the rules whose scope holds at most MAX_LINKS_PER_METADATA_RULE links (a rule over the bound
+    records an error and reads nothing), sorted."""
+    ids: Set[str] = set()
+    for rule in metadata_rules.values():
+        if rule.scope != MetadataScope.links:
+            continue
+        rows = links_in_scope(asset_links, rule.linkDirection, rule.relationshipType)
+        if len(rows) <= MAX_LINKS_PER_METADATA_RULE:
+            ids.update(row["assetLinkId"] for row in rows)
+    return sorted(ids)
 
 
 # --- Relationship rules ---
@@ -612,6 +675,150 @@ def _tooling_error(rule_name: str, rule_type: str, enforcement: str, message: st
                       passed=False, status=RULE_STATUS_ERROR, message=message)
 
 
+# Result messages of a metadata rule the tooling could not evaluate. They name no pattern.
+METADATA_SCHEMA_NOT_FOUND_MESSAGE = "Metadata schema not found"
+METADATA_SCHEMA_SCOPE_MISMATCH_MESSAGE = (
+    "Metadata schema entity type does not match the rule scope")
+METADATA_SCHEMA_FIELDS_UNREADABLE_MESSAGE = "Metadata schema fields could not be read"
+METADATA_UNAVAILABLE_MESSAGE = "Metadata could not be read"
+ASSET_LINKS_UNAVAILABLE_MESSAGE = "Asset links could not be read"
+TOO_MANY_LINKS_MESSAGE = (
+    f"The asset has more than {MAX_LINKS_PER_METADATA_RULE} links in the rule's scope; "
+    "too many links to evaluate")
+
+
+def _reported_units(failing: List[Tuple[str, str]]) -> str:
+    """`<unit>: <message>` for at most MAX_REPORTED_KEYS failing units, the remainder counted."""
+    shown = "; ".join(f"{unit}: {message}" for unit, message in failing[:MAX_REPORTED_KEYS])
+    extra = len(failing) - MAX_REPORTED_KEYS
+    return f"{shown}; and {extra} more" if extra > 0 else shown
+
+
+def _failed_check_messages(checks: List[MetadataCheck], metadata: Dict[str, Any],
+                           schema_fields: List[Dict[str, Any]]) -> List[str]:
+    """The messages of the checks one metadata dict fails, in check order."""
+    messages = []
+    for check in checks:
+        passed, message = run_metadata_check(check, metadata, schema_fields)
+        if not passed:
+            messages.append(message)
+    return messages
+
+
+def evaluate_metadata_rule(rule_name: str, rule: MetadataRule,
+                           data: MetadataRuleInputs) -> RuleResult:
+    """A metadata rule against the metadata its scope selects and its referenced schema.
+
+    `asset` checks the asset's own metadata. `files` / `fileAttributes` check each of the asset's
+    current, non-archived files (`data.current_files`, not the metadata rows, so a file without
+    rows fails `validateRequired`) that the schema's `fileKeyTypeRestriction` admits, that matches
+    an `includePaths` pattern when any is given and that matches no `excludePaths` pattern. `links`
+    checks the metadata of each asset link in `linkDirection` of `relationshipType`. The rule passes
+    when every evaluated unit passes every check; no unit in scope is a pass.
+
+    A missing schema, a schema of another entity type than the scope reads
+    (`SCOPE_ENTITY_TYPE`), a schema whose fields cannot be read, an input the scope needs that is
+    None, a pattern that does not compile, or more than MAX_LINKS_PER_METADATA_RULE links in scope
+    is a `status: error` result. `measured` carries the scope, the evaluated and failing counts and
+    the first MAX_REPORTED_KEYS failing units (plus `metadataKeys` on the asset scope); neither it,
+    `expected` nor the message carries a pattern."""
+    rule_type = rule.ruleType.value
+    enforcement = rule.enforcement.value
+    scope = MetadataScope(rule.scope)
+    schema = data.schema
+
+    def error(message: str) -> RuleResult:
+        return _tooling_error(rule_name, rule_type, enforcement, message)
+
+    if schema is None:
+        return error(METADATA_SCHEMA_NOT_FOUND_MESSAGE)
+    if schema.get("entityType") != SCOPE_ENTITY_TYPE[scope]:
+        return error(METADATA_SCHEMA_SCOPE_MISMATCH_MESSAGE)
+    schema_fields = schema.get("fields")
+    if schema_fields is None:
+        return error(METADATA_SCHEMA_FIELDS_UNREADABLE_MESSAGE)
+    ref = rule.metadataSchemaRef
+    expected = {"schemaRef": f"{ref.databaseId}/{ref.schemaName}", "scope": scope.value}
+
+    if scope == MetadataScope.asset:
+        if data.asset_metadata is None:
+            return error(METADATA_UNAVAILABLE_MESSAGE)
+        messages = _failed_check_messages(rule.checks, data.asset_metadata, schema_fields)
+        return RuleResult(
+            ruleName=rule_name,
+            ruleType=rule_type,
+            enforcement=enforcement,
+            passed=not messages,
+            message="; ".join(messages) if messages else None,
+            measured={
+                "scope": scope.value,
+                "evaluatedCount": 1,
+                "failingCount": 1 if messages else 0,
+                "failing": [{"message": "; ".join(messages)}] if messages else [],
+                "metadataKeys": sorted(data.asset_metadata.keys()),
+            },
+            expected=expected,
+        )
+
+    units: List[Tuple[str, Dict[str, Any]]] = []
+    if scope in METADATA_FILE_SCOPES:
+        unit_key, noun = "path", "files"
+        by_path = (data.file_metadata_by_path if scope == MetadataScope.files
+                   else data.file_attributes_by_path)
+        if data.current_files is None:
+            return error(FILES_UNAVAILABLE_MESSAGE)
+        if by_path is None:
+            return error(METADATA_UNAVAILABLE_MESSAGE)
+        try:
+            includes, excludes = _compile(rule.includePaths), _compile(rule.excludePaths)
+        except re.error:
+            logger.warning(f"Rule '{rule_name}' carries a path pattern that does not compile")
+            return error(INVALID_PATTERN_MESSAGE)
+        restriction = schema.get("fileKeyTypeRestriction")
+        for current in data.current_files:
+            subject = pattern_subject(current.relativeKey)
+            if not schema_applies_to_file(restriction, current.relativeKey):
+                continue
+            if includes and not any(regex.search(subject) for regex in includes):
+                continue
+            if any(regex.search(subject) for regex in excludes):
+                continue
+            units.append((current.relativeKey, by_path.get(current.relativeKey) or {}))
+    else:
+        unit_key, noun = "assetLinkId", "links"
+        if data.asset_links is None:
+            return error(ASSET_LINKS_UNAVAILABLE_MESSAGE)
+        rows = links_in_scope(data.asset_links, rule.linkDirection, rule.relationshipType)
+        if len(rows) > MAX_LINKS_PER_METADATA_RULE:
+            return error(TOO_MANY_LINKS_MESSAGE)
+        if data.link_metadata_by_id is None:
+            return error(METADATA_UNAVAILABLE_MESSAGE)
+        units = [(row["assetLinkId"], data.link_metadata_by_id.get(row["assetLinkId"]) or {})
+                 for row in rows]
+
+    failing: List[Tuple[str, str]] = []
+    for unit, metadata in units:
+        messages = _failed_check_messages(rule.checks, metadata, schema_fields)
+        if messages:
+            failing.append((unit, "; ".join(messages)))
+    return RuleResult(
+        ruleName=rule_name,
+        ruleType=rule_type,
+        enforcement=enforcement,
+        passed=not failing,
+        message=(f"{len(failing)} of {len(units)} {noun} fail: {_reported_units(failing)}"
+                 if failing else None),
+        measured={
+            "scope": scope.value,
+            "evaluatedCount": len(units),
+            "failingCount": len(failing),
+            "failing": [{unit_key: unit, "message": message}
+                        for unit, message in failing[:MAX_REPORTED_KEYS]],
+        },
+        expected=expected,
+    )
+
+
 def evaluate_file_structure_rule(
     rule_name: str,
     rule: FileStructureRule,
@@ -815,26 +1022,38 @@ def evaluate_asset_attributes_rule(
 def evaluate_rules(
     typed_rules: Dict[str, ComplianceRule],
     asset_metadata: Dict[str, Any],
-    metadata_schema_fields: Dict[str, Optional[List[Dict[str, Any]]]],
+    metadata_schemas: Dict[str, Optional[Dict[str, Any]]],
     asset_links: Dict[str, List[Dict[str, Any]]],
     current_files: Optional[List[CurrentFile]] = None,
     versioned_file_keys: Optional[Set[Tuple[str, str]]] = None,
     asset_row: Optional[Dict[str, Any]] = None,
+    file_metadata_by_path: Optional[Dict[str, Dict[str, Any]]] = None,
+    file_attributes_by_path: Optional[Dict[str, Dict[str, Any]]] = None,
+    link_metadata_by_id: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Tuple[List[RuleResult], Dict[str, PipelineRule]]:
     """Run every synchronous rule (metadata, relationship, file-structure, version-coverage,
     asset-attribute); return their results and the pipeline rules that still need a workflow
     execution.
 
-    `metadata_schema_fields` is keyed by `metadata_schema_ref_key(rule.metadataSchemaRef)`.
-    `current_files`, `versioned_file_keys` and `asset_row` are read only by the rule types that need
-    them (see `needs_current_files` / `needs_versioned_file_keys` / `needs_asset_row`); a rule whose
-    input is None records a `status: error` result.
+    `metadata_schemas` is keyed by `metadata_schema_ref_key(rule.metadataSchemaRef, rule.scope)`;
+    a key without a schema is a rule whose schema was not found. `current_files`,
+    `versioned_file_keys`, `asset_row`, `file_metadata_by_path`, `file_attributes_by_path` and
+    `link_metadata_by_id` are read only by the rules that need them (see the `needs_*` helpers); a
+    rule whose input is None records a `status: error` result.
     """
     groups = split_rules(typed_rules)
     results: List[RuleResult] = []
     for rule_name, rule in groups.metadata.items():
-        fields = metadata_schema_fields.get(metadata_schema_ref_key(rule.metadataSchemaRef))
-        results.append(evaluate_metadata_rule(rule_name, rule, asset_metadata, fields))
+        inputs = MetadataRuleInputs(
+            asset_metadata=asset_metadata,
+            schema=metadata_schemas.get(metadata_schema_ref_key(rule.metadataSchemaRef, rule.scope)),
+            current_files=current_files,
+            file_metadata_by_path=file_metadata_by_path,
+            file_attributes_by_path=file_attributes_by_path,
+            asset_links=asset_links,
+            link_metadata_by_id=link_metadata_by_id,
+        )
+        results.append(evaluate_metadata_rule(rule_name, rule, inputs))
     for rule_name, rule in groups.relationship.items():
         results.append(evaluate_relationship_rule(rule_name, rule, asset_links))
     for rule_name, rule in groups.fileStructure.items():
@@ -847,9 +1066,32 @@ def evaluate_rules(
     return results, groups.pipeline
 
 
+def _metadata_scopes(groups: RuleGroups) -> Set[MetadataScope]:
+    """The scopes the metadata rules read."""
+    return {MetadataScope(rule.scope) for rule in groups.metadata.values()}
+
+
+def needs_file_metadata(groups: RuleGroups) -> bool:
+    """Whether the rules read the asset's file metadata rows."""
+    return MetadataScope.files in _metadata_scopes(groups)
+
+
+def needs_file_attributes(groups: RuleGroups) -> bool:
+    """Whether the rules read the asset's file attribute rows."""
+    return MetadataScope.fileAttributes in _metadata_scopes(groups)
+
+
+def needs_link_metadata(groups: RuleGroups) -> bool:
+    """Whether the rules read the metadata of the asset's links."""
+    return MetadataScope.links in _metadata_scopes(groups)
+
+
 def needs_current_files(groups: RuleGroups) -> bool:
-    """Whether the rules read the asset's current file listing."""
-    return bool(groups.fileStructure or groups.versionCoverage)
+    """Whether the rules read the asset's current file listing: a file-structure or version-coverage
+    rule, or a metadata rule of a file scope (it iterates the current files, not the metadata
+    rows)."""
+    return bool(groups.fileStructure or groups.versionCoverage
+                or needs_file_metadata(groups) or needs_file_attributes(groups))
 
 
 def needs_versioned_file_keys(groups: RuleGroups) -> bool:
@@ -862,9 +1104,12 @@ def needs_asset_row(groups: RuleGroups) -> bool:
     return bool(groups.assetAttributes) or needs_current_files(groups)
 
 
-def metadata_schema_ref_key(ref) -> str:
-    """Lookup key for a metadata schema reference: 'databaseId/schemaName'."""
-    return f"{ref.databaseId}/{ref.schemaName}"
+def metadata_schema_ref_key(ref, scope: Any = MetadataScope.asset) -> str:
+    """Lookup key for a metadata rule's schema: 'databaseId/schemaName/scope'. The scope is part of
+    the key because it selects the entity type the schema is looked up under, so two rules naming
+    one schema with different scopes do not share an entry."""
+    scope_value = scope.value if isinstance(scope, MetadataScope) else str(scope)
+    return f"{ref.databaseId}/{ref.schemaName}/{scope_value}"
 
 
 def verdict_to_state(verdict: EvaluationVerdict) -> str:

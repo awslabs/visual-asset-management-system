@@ -202,6 +202,19 @@ _apv_module = _s3mk_importlib_util.module_from_spec(_apv_spec)
 _apv_spec.loader.exec_module(_apv_module)
 sys.modules['common.assetProvenance'] = _apv_module
 sys.modules['common'].assetProvenance = _apv_module
+# metadataSchemaValidation owns `extract_file_extension`, which the compliance evaluation engine
+# imports at module level to apply a metadata schema's fileKeyTypeRestriction exactly as the metadata
+# write path does. Registered for the same reason as indexerEvents. tests/handlers/metadata/conftest.py
+# loads its own copy over this one for that directory.
+_msv_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.metadataSchemaValidation',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common',
+                 'metadataSchemaValidation.py')
+)
+_msv_module = _s3mk_importlib_util.module_from_spec(_msv_spec)
+_msv_spec.loader.exec_module(_msv_module)
+sys.modules['common.metadataSchemaValidation'] = _msv_module
+sys.modules['common'].metadataSchemaValidation = _msv_module
 # `query_all_items` is the shared read-to-exhaustion helper (backend/CLAUDE.md Rule 14). Bind the
 # REAL one onto the MagicMock module, for the same reason `get_asset_object_from_id` is bound above:
 # a handler does `from common.dynamodb import query_all_items` at import time, so it captures
