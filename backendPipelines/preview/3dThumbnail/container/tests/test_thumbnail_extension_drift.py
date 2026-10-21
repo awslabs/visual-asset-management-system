@@ -79,6 +79,25 @@ class TestOneExtensionList:
         for trigger in workflow["triggers"]:
             assert _filters(trigger["inputFileFilters"]["allow"]) == EXTENSIONS
 
+    def test_the_upload_trigger_skips_lcc2_chunk_files(self):
+        """An .lcc2 scene's chunk files are .spz/.sog/.ply under data/3dgs/; uploading a scene must start
+        one run for the .lcc2, not one per chunk. Matching as the trigger matches a glob: case-folded
+        fnmatch on the asset-relative key."""
+        import fnmatch
+
+        def excluded(key, patterns):
+            return any(fnmatch.fnmatchcase(key.lower(), p.lower()) for p in patterns)
+
+        workflow = _schema("workflow.json")
+        assert workflow["systemConfig"]["inputFileFilters"]["exclude"] == [], "manual runs stay open"
+        for trigger in workflow["triggers"]:
+            patterns = trigger["inputFileFilters"]["exclude"]
+            assert excluded("/scan/data/3dgs/lod0_a.spz", patterns)
+            assert excluded("/data/3dgs/0.SOG", patterns)
+            assert not excluded("/scan/scene.lcc2", patterns)
+            assert not excluded("/models/data/chair.ply", patterns)
+            assert not excluded("/3dgs/scene.spz", patterns)
+
     def test_the_readme_supported_formats_table(self):
         assert _table_extensions(README, "## Supported Formats") == EXTENSIONS
 

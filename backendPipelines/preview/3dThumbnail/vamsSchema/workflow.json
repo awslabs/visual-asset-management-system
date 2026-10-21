@@ -89,7 +89,7 @@
                     "*.lcc",
                     "*.lcc2"
                 ],
-                "exclude": []
+                "exclude": ["*/data/3dgs/*"]
             },
             "defaultTemplateIds": {
                 "GLOBAL:preview-3d-thumbnail": "preview-3d-thumbnail-default"
