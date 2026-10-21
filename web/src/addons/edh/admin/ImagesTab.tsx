@@ -75,7 +75,7 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
     // The toolbar owns the search box, so the table's own is off.
     const { searchText, setSearchText, visibleRows } = useTextFilter(rows, searchableText);
 
-    // Templates are the apiRoutes.py path strings verbatim.
+    // Templates are the addonApiRoutes.py path strings verbatim.
     const canRegisterVdi = can("POST", "/addon/edh/admin/images/vdi");
     const canRegisterSimulation = can("POST", "/addon/edh/admin/images/simulation");
     const canDeleteVdi = can("DELETE", "/addon/edh/admin/images/vdi/{imageId}");

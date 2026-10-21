@@ -95,7 +95,7 @@ const AmiBuildsPanel: React.FC<AmiBuildsPanelProps> = ({ recipe, open, onOpenCha
     const { claim, release } = useInFlight();
     const [retireTarget, setRetireTarget] = useState<EdhAmiBuild | null>(null);
 
-    // Templates are the apiRoutes.py path strings verbatim.
+    // Templates are the addonApiRoutes.py path strings verbatim.
     const canRegister = can(
         "POST",
         "/addon/edh/admin/ami-recipes/{recipeId}/builds/{version}/register"

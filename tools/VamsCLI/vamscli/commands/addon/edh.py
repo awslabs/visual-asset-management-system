@@ -140,6 +140,10 @@ def format_workstation(result: Dict[str, Any]) -> str:
     lines.append(f"  Lease Expires:   {result.get('leaseExpiresAt') or 'none'}")
     lines.append(f"  Lease Stopped:   {result.get('leaseStoppedAt') or 'none'}")
     lines.append(f"  Lease Hours:     {result.get('leaseHoursAtLaunch') or 'N/A'}")
+    if result.get('rootSizeGb') is not None:
+        lines.append(f"  Root Size (GB):  {result.get('rootSizeGb')}")
+    if result.get('sessionBootstrap'):
+        lines.append(f"  Session Sign-in: {result.get('sessionBootstrap')}")
     return '\n'.join(lines)
 
 

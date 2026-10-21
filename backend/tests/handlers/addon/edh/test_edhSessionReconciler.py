@@ -214,16 +214,22 @@ def _default_revoke(event, row, *, delete_secret, actor):
 
 
 def _run(rows, desktops, *, revoke=None, keys=None, delete=None, bootstrap_enabled=True, current=None,
-         persist=None, api_key_service="vams-apiKeyService", schedule_answer=None, context=_MOCK_CONTEXT):
+         persist=None, api_key_service="vams-apiKeyService", schedule_answer=None, context=_MOCK_CONTEXT,
+         states=None):
     """One sweep with every collaborator replaced. ``keys`` is the session-key listing (a list, or the
     exception the listing raises); ``delete`` scripts the orphan-key deletion; ``current`` maps a bootstrap
     id to the row the consistent re-read returns when it differs from the scanned one (None for a row that
     is gone); ``persist`` scripts the conditional write, answering the updatedAt it wrote or None for a
     lost condition; ``api_key_service`` is the apiKeyService function name the environment carries;
-    ``schedule_answer`` is what EDH's schedule update raises; ``context`` is the invocation context.
+    ``schedule_answer`` is what EDH's schedule update raises; ``context`` is the invocation context;
+    ``states`` is what EDH's session-state read answers for unlisted rows (a list, or the exception it raises).
     The persist double carries ``order``, the sequence of persist and revoke calls."""
     client = create_autospec(EdhClient, instance=True)
     client.list_all_desktops.return_value = desktops
+    if isinstance(states, Exception):
+        client.get_desktop_states.side_effect = states
+    elif states is not None:
+        client.get_desktop_states.return_value = states
     if schedule_answer is not None:
         client.update_desktop_schedule.side_effect = schedule_answer
     client_factory = MagicMock(return_value=client)
@@ -2306,3 +2312,47 @@ def test_an_unreadable_lease_policy_is_counted_as_a_failure():
                          MagicMock(side_effect=RuntimeError("dynamodb unavailable"))):
         summary = rec.lambda_handler({}, MagicMock())
     assert summary == _summary(failed=1)
+
+
+@pytest.mark.unit
+class TestAnUnlistedDesktopIsConfirmedGoneBeforeItsRowIsDeleted:
+    """EDH's cluster listing leaving a desktop out is confirmed with the token-free session-state read
+    before the row is recorded DELETED, so one empty or truncated listing cannot detach every workstation
+    and revoke every credential while the desktops keep running."""
+
+    def test_an_empty_listing_of_desktops_edh_still_reports_running_deletes_nothing(self):
+        rows = [_row("a"), _row("b", state=rec.STATE_STOPPED, edhState="stopped")]
+        states = [_desktop("sess-a", "running"), _desktop("sess-b", "stopped")]
+        summary, revoke_fn, persist, _pager, client_factory, _delete = _run(rows, [], states=states)
+        client = client_factory.return_value
+        assert sorted(client.get_desktop_states.call_args.args[1]) == ["sess-a", "sess-b"]
+        assert client.get_desktop_states.call_args.args[0] == EDH_SERVICE_ACTOR_UID
+        # The running desktop is left as it is; the stopped one only has its key revoked, as any stopped
+        # desktop's is. Neither row is recorded DELETED.
+        assert _updates_for(persist, "a") == []
+        assert _updates_for(persist, "b")
+        assert "state" not in _written_for(persist, "b")
+        assert {c.args[1]["bootstrapId"] for c in revoke_fn.call_args_list} == {"b"}
+        assert summary["revoked"] == 1
+
+    def test_a_desktop_the_session_state_read_does_not_report_is_recorded_deleted(self):
+        summary, revoke_fn, persist, _pager, client_factory, _delete = _run([_row("gone")], [], states=[])
+        assert _written_for(persist, "gone").get("state") == rec.STATE_DELETED
+        assert {c.args[1]["bootstrapId"] for c in revoke_fn.call_args_list} == {"gone"}
+
+    def test_a_failed_session_state_read_leaves_every_unlisted_row_for_the_next_sweep(self):
+        summary, revoke_fn, persist, _pager, client_factory, delete_fn = _run(
+            [_row("a"), _row("b")], [], states=EdhUnavailableError("read timeout"),
+            keys=[{"apiKeyId": "key-a", "apiKeyName": "temporary-session-edh-a",
+                   "createdAt": (NOW - timedelta(days=2)).isoformat()}])
+        persist.assert_not_called()
+        revoke_fn.assert_not_called()
+        delete_fn.assert_not_called()
+        assert summary["deferred"] == 2
+        assert summary["failed"] >= 1
+
+    def test_listed_desktops_are_not_read_again(self):
+        _summary_, _revoke, _persist, _pager, client_factory, _delete = _run(
+            [_row("a")], [_desktop("sess-a")], states=[])
+        client_factory.return_value.get_desktop_states.assert_not_called()
+

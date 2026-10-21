@@ -363,12 +363,15 @@ describe("Batch IAM sits on the catalog registration Lambda alone, and only with
         (name) => {
             const expected = BATCH_ACTIONS.map((action) => `${REGISTRATION_HANDLER}: ${action}`);
             expect(containerActions(imageSynth(name))).toEqual(expected);
-            expect(containerActions(containersSynth(name))).toEqual(expected);
+            // With no job definition configured there is no name to scope a write to: only the listing.
+            expect(containerActions(containersSynth(name))).toEqual([
+                `${REGISTRATION_HANDLER}: batch:DescribeJobDefinitions`,
+            ]);
         }
     );
 
     test.each(EDH_TEMPLATES)(
-        "%s: the writes are scoped to the account's job definitions; only the listing is unscoped",
+        "%s: the writes are scoped to the configured job definitions; only the listing is unscoped",
         (name) => {
             const s = imageSynth(name);
             const [fn] = edhFunctions(s).filter((r) => handlerOf(r) === REGISTRATION_HANDLER);
@@ -386,7 +389,8 @@ describe("Batch IAM sits on the catalog registration Lambda alone, and only with
             // The stack is environment-bound, so region and account are inlined; the partition stays the
             // pseudo-parameter, which is what keeps a literal `arn:aws:` out of the template.
             expect(resourcesOf(writes[0])).toEqual([
-                `arn:\${AWS::Partition}:batch:${s.region}:${ACCOUNT}:job-definition/*`,
+                `arn:\${AWS::Partition}:batch:${s.region}:${ACCOUNT}:job-definition/edh-sim-train`,
+                `arn:\${AWS::Partition}:batch:${s.region}:${ACCOUNT}:job-definition/edh-sim-train:*`,
             ]);
             const reads = statements.filter((st) =>
                 actionsOf(st).includes("batch:DescribeJobDefinitions")

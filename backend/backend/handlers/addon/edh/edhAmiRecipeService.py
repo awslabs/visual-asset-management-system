@@ -150,6 +150,11 @@ def update_recipe(event):
     body = _parse_body(event)
     body["recipeId"] = recipe["recipeId"]
     model = parse(event=body, model=AmiRecipeRequestModel)
+    # Tier 2 covers the recipe as it is written as well as as it is stored: an update that moves the
+    # recipe to another OS family needs PUT on that family too.
+    if model.osFamily != recipe.get("osFamily") and not _allowed(
+            {"recipeId": recipe["recipeId"], "osFamily": model.osFamily}, "PUT"):
+        return authorization_error()
     try:
         updated = recipes.update_admin_recipe(recipe, model, _requesting_user_id())
     except recipes.RecipeConflict as err:

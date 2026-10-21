@@ -849,6 +849,14 @@ describe("EDH AMI builds", () => {
         expect(state?.properties.EventPattern["detail-type"]).toEqual([
             "EC2 Image Builder Image State Change",
         ]);
+        // Only this deployment's images invoke the registrar: other teams' builds in the account do not.
+        const prefix = edhFunctions(withAmiBuilds).find(
+            (f) => moduleOf(f) === "edhAmiRecipeService"
+        )!.properties.Environment.Variables.EDH_AMI_BUILD_PREFIX;
+        const [match] = state?.properties.EventPattern.resources ?? [];
+        expect(SynthResult.flatten(match.prefix)).toMatch(
+            new RegExp(`:imagebuilder:.*:image/${prefix}-$`)
+        );
         const sweep = rules.find((r) => r.properties.ScheduleExpression === "rate(30 minutes)");
         expect(JSON.stringify(sweep?.properties.Targets[0].Input)).toContain("sweep");
         // Both rules invoke the registrar and nothing else.
@@ -926,7 +934,7 @@ describe("EDH AMI builds", () => {
         }
     });
 
-    test("Image Builder grants are scoped to the deployment prefix and the AMI deletes to the recipe tag", () => {
+    test("Image Builder grants are scoped to the deployment prefix", () => {
         const policies = edhStackResources(withAmiBuilds).filter(
             (r) => r.type === "AWS::IAM::Policy"
         );
@@ -943,9 +951,75 @@ describe("EDH AMI builds", () => {
         }
         expect(text).toContain(":imagebuilder:");
         expect(text).toContain("-edh-*");
-        expect(text).toContain("aws:ResourceTag/vams:edhAmiRecipe");
         expect(text).toContain("iam:CreateServiceLinkedRole");
         expect(text).not.toMatch(/"imagebuilder:\*"/);
+    });
+
+    test("AMI and snapshot tagging and deletion are bound to this deployment's tag value", () => {
+        // The tag key alone scopes nothing: a role holding CreateTags on the key could tag any AMI and
+        // then delete it, another deployment's included. Every statement names the prefix as the value.
+        const fns = edhFunctions(withAmiBuilds);
+        const prefix = fns.find((f) => moduleOf(f) === "edhAmiRecipeService")!.properties
+            .Environment.Variables.EDH_AMI_BUILD_PREFIX;
+        const holders = fns.filter((fn) =>
+            statementsOf(withAmiBuilds, fn).some((st) =>
+                actionsOf(st).some((a: string) =>
+                    ["ec2:CreateTags", "ec2:DeregisterImage"].includes(a)
+                )
+            )
+        );
+        expect(holders.length).toBeGreaterThan(0);
+        for (const fn of holders) {
+            const sts = statementsOf(withAmiBuilds, fn).filter((st) =>
+                actionsOf(st).some((a: string) =>
+                    ["ec2:CreateTags", "ec2:DeregisterImage", "ec2:DeleteSnapshot"].includes(a)
+                )
+            );
+            expect(sts.length).toBeGreaterThanOrEqual(2);
+            for (const st of sts) {
+                const equals = st.Condition?.StringEquals ?? {};
+                const named = Object.entries(equals).filter(([key]) =>
+                    /^aws:(Request|Resource)Tag\/vams:deployment$/.test(key)
+                );
+                expect(named.length).toBeGreaterThan(0);
+                for (const [, value] of named) expect(value).toBe(prefix);
+                if (actionsOf(st).includes("ec2:CreateTags")) {
+                    const keys = st.Condition["ForAllValues:StringEquals"]["aws:TagKeys"];
+                    expect([...keys].sort()).toEqual(
+                        [
+                            "edh:visibility:edh-t1",
+                            "vams:deployment",
+                            "vams:edhAmiRecipe",
+                            "vams:edhAmiRecipeHash",
+                        ].sort()
+                    );
+                }
+            }
+        }
+    });
+
+    test("the catalog registration holds no Image Builder delete, AMI deregister or snapshot delete", () => {
+        // It seeds recipes and starts builds at deploy time; retiring, pruning and removing a recipe
+        // run in the recipe service and the registrar.
+        const fns = edhFunctions(withAmiBuilds);
+        const deleteActions = (fn: Resource) =>
+            statementsOf(withAmiBuilds, fn)
+                .flatMap((st) => actionsOf(st))
+                .filter(
+                    (a: string) =>
+                        a.startsWith("imagebuilder:Delete") ||
+                        a === "ec2:DeregisterImage" ||
+                        a === "ec2:DeleteSnapshot"
+                );
+        const registration = fns.find((f) => moduleOf(f) === "edhCatalogRegistration")!;
+        expect(registration).toBeDefined();
+        expect(deleteActions(registration)).toEqual([]);
+        for (const module of ["edhAmiRecipeService", "edhAmiBuildRegistrar"]) {
+            const fn = fns.find((f) => moduleOf(f) === module)!;
+            expect(deleteActions(fn)).toEqual(
+                expect.arrayContaining(["imagebuilder:DeleteImage", "ec2:DeregisterImage"])
+            );
+        }
     });
 
     test("only the registrar cancels an image creation, and only on this deployment's images", () => {

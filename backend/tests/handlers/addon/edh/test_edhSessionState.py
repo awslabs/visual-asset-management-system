@@ -31,7 +31,7 @@ INSTANCE_ID = "i-0123456789abcdef0"
 # The stamp a start whose outcome EDH did not confirm leaves on its row.
 START_REQUESTED_AT = "2026-09-08T12:00:00+00:00"
 
-# EDH session_state -> VAMS state (R13).
+# EDH session_state -> VAMS state.
 STATE_PAIRS = [
     ("pending", "CREATING"),
     ("placing", "CREATING"),

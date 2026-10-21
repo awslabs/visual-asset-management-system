@@ -909,13 +909,43 @@ describe("sessionBootstrap", () => {
         expect(withBootstrap()).not.toThrow();
     });
 
-    test("nothing is checked while bootstrap is disabled", () => {
+    test("only the secret name prefix is checked while bootstrap is disabled", () => {
         expect(
             withEdh((edh) => {
                 edh.sessionBootstrap.enabled = false;
                 edh.sessionBootstrap.sessionKeyTtlMinutes = 0;
-                edh.sessionBootstrap.secretNamePrefix = "no-trailing-slash";
                 edh.sessionBootstrap.workstationInstanceRoleArns = [];
+            })
+        ).not.toThrow();
+        // The prefix scopes the reconciler's PutSecretValue and DeleteSecret grant whatever the flag
+        // says, so an empty or malformed prefix (which would grant them on every secret) is refused.
+        for (const prefix of ["no-trailing-slash", ""]) {
+            expect(
+                withEdh((edh) => {
+                    edh.sessionBootstrap.enabled = false;
+                    edh.sessionBootstrap.secretNamePrefix = prefix;
+                })
+            ).toThrow(/sessionBootstrap.secretNamePrefix must be a Secrets Manager name prefix/);
+        }
+    });
+
+    test("the secret name prefix must not cover the root key or CA bundle secret", () => {
+        for (const enabled of [false, true]) {
+            expect(
+                withEdh((edh) => {
+                    edh.sessionBootstrap.enabled = enabled;
+                    edh.sessionBootstrap.workstationInstanceRoleArns = [
+                        "arn:aws:iam::123456789012:role/EdhDesktopInstanceRole",
+                    ];
+                    edh.edhAdminApiKeySecretArn = secretArn("aws");
+                    edh.sessionBootstrap.secretNamePrefix = "vams/";
+                })
+            ).toThrow(/must not cover the edhAdminApiKeySecretArn secret/);
+        }
+        expect(
+            withEdh((edh) => {
+                edh.edhAdminApiKeySecretArn = secretArn("aws");
+                edh.sessionBootstrap.secretNamePrefix = "vams/edh-session/";
             })
         ).not.toThrow();
     });

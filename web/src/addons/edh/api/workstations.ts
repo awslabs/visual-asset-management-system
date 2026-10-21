@@ -17,7 +17,7 @@ import type {
 const WORKSTATIONS_PATH = "addon/edh/workstations";
 
 const workstationPath = (sessionId: string, action?: string) =>
-    `${WORKSTATIONS_PATH}/${sessionId}${action ? `/${action}` : ""}`;
+    `${WORKSTATIONS_PATH}/${encodeURIComponent(sessionId)}${action ? `/${action}` : ""}`;
 
 /**
  * The launch reply never arrived: the gateway answered 502 or 504 after the request was sent, so the

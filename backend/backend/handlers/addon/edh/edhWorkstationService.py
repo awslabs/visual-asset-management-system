@@ -41,7 +41,7 @@ from common.addonResourceNames import AddonResourceKeys
 from common.resourceNames import get_table_name
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
-from handlers.auth import request_to_claims
+from handlers.auth import AUTH_METHOD_API_KEY, request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_actions, log_authorization
 from models.common import (
@@ -737,7 +737,7 @@ def _instance_type_runs_image(stack, instance_type):
 
 
 def create_workstation(event):
-    if claims_and_roles.get('authMethod') == 'apiKey':
+    if claims_and_roles.get('authMethod') == AUTH_METHOD_API_KEY:
         return authorization_error(
             body={'message': 'Workstation launch is not available to API key sessions'}, event=event)
 
@@ -1045,7 +1045,7 @@ def _lease_cleared(row, **attributes):
 
 
 def start_workstation(event, path):
-    if claims_and_roles.get('authMethod') == 'apiKey':
+    if claims_and_roles.get('authMethod') == AUTH_METHOD_API_KEY:
         return authorization_error(
             body={'message': 'Workstation start is not available to API key sessions'}, event=event)
     session_id, row, error = _owned_and_authorized(event, path, "POST")
@@ -1295,7 +1295,7 @@ def _reissue_session_key(event, row):
     overtook takes the fresh key back and revokes the secret's value, and one overtaken on a row that is
     still live leaves both with the desktop. A container the write created is bound to the desktop's
     instance. A table or bootstrap failure answers ``unavailable``; none changes the renew's own result."""
-    if claims_and_roles.get('authMethod') == 'apiKey':
+    if claims_and_roles.get('authMethod') == AUTH_METHOD_API_KEY:
         # A desktop's own session key keeps its lease alive but never mints or extends a key.
         return None
     if row.get('state') != STATE_ACTIVE or start_in_progress(row):
@@ -1435,7 +1435,11 @@ def connect_workstation(event, path):
     """The DCV connection URL of the caller's ACTIVE session: the ``connection_string`` EDH's per-user
     listing renders for that one desktop while it is running; EDH issues its connection token on this
     call. A row in any other stored state is not ready and EDH is not asked. The URL is a credential and
-    appears in the response body only."""
+    appears in the response body only. A caller that authenticated with an API key, a desktop's own
+    temporary session key included, is refused: the URL is a credential for the desktop."""
+    if claims_and_roles.get('authMethod') == AUTH_METHOD_API_KEY:
+        return authorization_error(
+            body={'message': 'Workstation connect is not available to API key sessions'}, event=event)
     session_id, row, error = _owned_and_authorized(event, path, "GET")
     if error is not None:
         return error
@@ -1480,7 +1484,11 @@ def windows_sign_in(event, path):
     """The Windows sign-in of the caller's ACTIVE Windows desktop: the account its connection string names
     and the password EDH generated for it, or no password for a directory (``DOMAIN\\user``) account. The
     route answers only what connect would connect to. The password is a credential and appears in the
-    response body only."""
+    response body only. A caller that authenticated with an API key, a desktop's own temporary session
+    key included, is refused, as connect refuses it."""
+    if claims_and_roles.get('authMethod') == AUTH_METHOD_API_KEY:
+        return authorization_error(
+            body={'message': 'Workstation Windows sign-in is not available to API key sessions'}, event=event)
     session_id, row, error = _owned_and_authorized(event, path, "GET")
     if error is not None:
         return error

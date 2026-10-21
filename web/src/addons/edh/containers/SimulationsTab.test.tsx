@@ -142,7 +142,7 @@ describe("SimulationsTab", () => {
         allow(() => true);
     });
 
-    it("exposes the route templates apiRoutes.py declares, verbatim, for can()", () => {
+    it("exposes the route templates addonApiRoutes.py declares, verbatim, for can()", () => {
         expect(CONTAINERS_CATALOG_ROUTE).toBe("/addon/edh/containers/catalog");
         expect(CONTAINERS_JOBS_ROUTE).toBe("/addon/edh/containers/jobs");
         expect(CONTAINERS_JOB_ROUTE).toBe("/addon/edh/containers/jobs/{jobId}");

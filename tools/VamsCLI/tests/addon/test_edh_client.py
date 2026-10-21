@@ -577,6 +577,32 @@ class TestAdminInstanceIdIsOnePathSegment:
         assert sent == []
 
 
+class TestOtherIdsAreEncodedAsOnePathSegment:
+    """An image, recipe or job id is formatted into its route as one encoded segment, so a `?`, `#` or
+    `/` in it cannot drop or redirect part of the id: `12?x=1` addresses image `12?x=1`, never image 12."""
+
+    @pytest.mark.parametrize("method,args,prefix", [
+        ("delete_edh_vdi_image", ("12?x=1",), "/addon/edh/admin/images/vdi/12%3Fx%3D1"),
+        ("delete_edh_simulation_image", ("12#x",), "/addon/edh/admin/images/simulation/12%23x"),
+        ("get_edh_ami_recipe", ("r/../x",), "/addon/edh/admin/ami-recipes/r%2F..%2Fx"),
+    ])
+    def test_a_reserved_character_is_sent_encoded(self, monkeypatch, method, args, prefix):
+        client = _client()
+        sent = _record_verbs(monkeypatch, client)
+        try:
+            getattr(client, method)(*args)
+        except Exception:
+            pass
+        ((_verb, endpoint),) = sent
+        assert endpoint == prefix
+
+    def test_a_plain_id_is_sent_as_it_is(self, monkeypatch):
+        client = _client()
+        sent = _record_verbs(monkeypatch, client)
+        client.delete_edh_vdi_image("12")
+        assert sent == [("delete", "/addon/edh/admin/images/vdi/12")]
+
+
 class _SessionAnswer:
     """An empty 200 from the session."""
 

@@ -42,13 +42,13 @@ const CONNECTION_URL = "https://dcv.example.internal/?authToken=x#s-1";
 /** A stand-in for the blank tab `window.open` hands back inside the click. */
 const fakeTab = () => ({ location: { replace: jest.fn() }, close: jest.fn(), opener: {} });
 
-let connect: { mutateAsync: jest.Mock; isPending: boolean };
+let connect: { mutateAsync: jest.Mock; reset: jest.Mock; isPending: boolean };
 let openSpy: jest.SpyInstance;
 
 describe("ConnectLink", () => {
     beforeEach(() => {
         jest.clearAllMocks();
-        connect = { mutateAsync: jest.fn(), isPending: false };
+        connect = { mutateAsync: jest.fn(), reset: jest.fn(), isPending: false };
         (queries.useWorkstationConnect as jest.Mock).mockReturnValue(connect);
         openSpy = jest.spyOn(window, "open");
     });
@@ -89,6 +89,8 @@ describe("ConnectLink", () => {
         await waitFor(() => expect(tab.location.replace).toHaveBeenCalledWith(CONNECTION_URL));
         expect(tab.close).not.toHaveBeenCalled();
         expect(mockToast.error).not.toHaveBeenCalled();
+        // The URL is a credential: the mutation state drops it once the tab has it.
+        expect(connect.reset).toHaveBeenCalled();
     });
 
     it("opens one tab and sends one request for a double-click", async () => {

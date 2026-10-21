@@ -606,7 +606,18 @@ class TestImagesAndCleanup:
         c.ib.delete_component.side_effect = c.ib.exceptions.ResourceDependencyException()
         warnings = ib_mod.delete_recipe_resources(c, {
             "pipelineArn": "arn:p", "recipeArn": "arn:r/1",
-            "componentArns": ["arn:aws:imagebuilder:us-east-1:123456789012:component/x/1.0.0/1"],
+            "componentArns": ["arn:aws:imagebuilder:us-east-1:123456789012:component/vams-t-edh-r-c01-x/1.0.0/1"],
             "infrastructureConfigurationArn": "arn:i", "distributionConfigurationArn": "arn:d"})
         assert c.ib.delete_image_pipeline.call_args.kwargs == {"imagePipelineArn": "arn:p"}
-        assert any("component/x" in w for w in warnings)
+        assert any("component/vams-t-edh-r-c01-x" in w for w in warnings)
+
+    def test_delete_recipe_resources_deletes_only_the_components_the_build_created(self):
+        # A recipe may reference the account's own component by arn, or a managed one: neither is the
+        # build's to delete. Only the inline components, named with the deployment prefix, are.
+        c = ctx()
+        own = "arn:aws:imagebuilder:us-east-1:123456789012:component/vams-t-edh-r-c02-setup/1.0.0/1"
+        referenced = "arn:aws:imagebuilder:us-east-1:123456789012:component/team-hardening/2.0.0/1"
+        managed = "arn:aws:imagebuilder:us-east-1:aws:component/update-linux/1.0.0/1"
+        warnings = ib_mod.delete_recipe_resources(c, {"componentArns": [managed, referenced, own]})
+        assert [call.kwargs["componentBuildVersionArn"] for call in c.ib.delete_component.call_args_list] == [own]
+        assert warnings == []

@@ -479,15 +479,17 @@ def delete_image_build(ctx: ImageBuilderContext, image_build_version_arn: str) -
 
 def delete_recipe_resources(ctx: ImageBuilderContext, image_builder: Dict[str, Any]) -> List[str]:
     """Pipeline, recipe, inline components, then the two configurations. A component another image
-    still references cannot be deleted; that is a warning, not a failure. Managed (``aws``) component
-    ARNs are never deleted."""
+    still references cannot be deleted; that is a warning, not a failure. Only the inline components
+    the build created, named with the deployment prefix, are deleted: a managed (``aws``) component or
+    one the recipe references by ``arn`` is left alone."""
     warnings: List[str] = []
     steps = [
         ("delete_image_pipeline", "imagePipelineArn", image_builder.get("pipelineArn")),
         ("delete_image_recipe", "imageRecipeArn", image_builder.get("recipeArn")),
     ]
+    own_component = f":{ctx.account}:component/{ctx.prefix.lower()}-"
     steps += [("delete_component", "componentBuildVersionArn", arn) for arn in image_builder.get("componentArns", [])
-              if f":{ctx.account}:" in str(arn)]
+              if own_component in str(arn)]
     steps += [
         ("delete_infrastructure_configuration", "infrastructureConfigurationArn",
          image_builder.get("infrastructureConfigurationArn")),

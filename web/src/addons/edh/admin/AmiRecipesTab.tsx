@@ -111,7 +111,7 @@ const AmiRecipesTab: React.FC<AmiRecipesTabProps> = ({ can }) => {
     // The toolbar owns the search box, so the table's own is off.
     const { searchText, setSearchText, visibleRows } = useTextFilter(rows, searchableText);
 
-    // Templates are the apiRoutes.py path strings verbatim.
+    // Templates are the addonApiRoutes.py path strings verbatim.
     const canCreate = can("POST", "/addon/edh/admin/ami-recipes");
     const canUpdate = can("PUT", "/addon/edh/admin/ami-recipes/{recipeId}");
     const canDelete = can("DELETE", "/addon/edh/admin/ami-recipes/{recipeId}");

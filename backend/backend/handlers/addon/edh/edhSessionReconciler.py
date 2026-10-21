@@ -94,6 +94,9 @@ session_table = dynamodb.Table(session_table_name)
 # Rows whose desktop may still be running. DELETED rows are terminal and are examined only while they
 # still carry a credential, or a start or credential claim inside its window.
 SWEPT_STATES = (STATE_CREATING, STATE_ACTIVE, STATE_STOPPED, STATE_ORPHANED)
+# States whose row is recorded DELETED when EDH's listing leaves its desktop out; that absence is confirmed
+# with EDH's session-state read before any such row is written.
+UNLISTED_CONFIRMED_STATES = frozenset({STATE_CREATING, STATE_ACTIVE, STATE_STOPPED})
 # States in which the desktop is definitely not running, so its credential is revoked ...
 REVOKING_STATES = frozenset({STATE_STOPPED, STATE_ORPHANED, STATE_DELETED})
 # ... and those in which the secret container goes with it. A STOPPED desktop keeps its container: the
@@ -227,6 +230,30 @@ def _desktop_for_row(row: Dict[str, Any], index: DesktopIndex) -> Optional[Dict[
     if not matches:
         return None
     return max(matches, key=lambda desktop: str(desktop.get(EDH_SESSION_CREATED_ON_FIELD) or ""))
+
+
+def _confirm_unlisted(rows: List[Dict[str, Any]], index: DesktopIndex, summary: Dict[str, int]) -> Set[str]:
+    """Confirm with EDH's token-free session-state read that the desktops of rows EDH's listing left out are
+    gone, before any such row is recorded DELETED: a desktop the read still reports active joins the index
+    under its session id. When the read fails, the session ids it was asked about are returned and their
+    rows sit this pass out, so one empty or truncated listing never detaches every workstation."""
+    missing = list(dict.fromkeys(
+        str(row["sessionId"]) for row in rows
+        if row.get("sessionId") and row.get("state") in UNLISTED_CONFIRMED_STATES
+        and str(row["sessionId"]) not in index.by_id))
+    if not missing:
+        return set()
+    try:
+        records = EdhClient(profile="batch").get_desktop_states(EDH_SERVICE_ACTOR_UID, missing)
+    except EdhError:
+        summary["failed"] += 1
+        logger.warning(f"EDH session-state read failed; {len(missing)} unlisted workstation(s) are left "
+                       "for the next sweep", exc_info=True)
+        return set(missing)
+    for record in records or []:
+        if isinstance(record, dict) and record.get(EDH_SESSION_ID_FIELD):
+            index.by_id[str(record[EDH_SESSION_ID_FIELD])] = record
+    return set()
 
 
 def _expiry_passed(value, now: datetime) -> bool:
@@ -705,20 +732,26 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, int]:
         logger.exception("EDH list_all failed; the sweep is skipped")
         raise
     index = _index_desktops(desktops)
+    scanned_rows = list(_scan_swept_rows(now))
+    unconfirmed = _confirm_unlisted(scanned_rows, index, summary)
 
     # Every key some row names, and the bootstrap of every desktop that may still be running -- by its row as
     # the scan returned it, or by the running or starting state EDH lists it in, which this pass records --
     # collected before any revoke, so the orphan pass touches neither.
     referenced: Set[str] = set()
     live: Set[str] = set()
-    for scanned in _scan_swept_rows(now):
+    for scanned in scanned_rows:
         summary["examined"] += 1
         bootstrap_id = scanned.get("bootstrapId")
         if scanned.get("apiKeyId"):
             referenced.add(str(scanned["apiKeyId"]))
-        if bootstrap_id and (session_row_live(scanned, now)
+        held_back = bool(scanned.get("sessionId")) and str(scanned["sessionId"]) in unconfirmed
+        if bootstrap_id and (held_back or session_row_live(scanned, now)
                              or _live_state(scanned, index) in (STATE_ACTIVE, STATE_CREATING)):
             live.add(str(bootstrap_id))
+        if held_back:
+            summary["deferred"] += 1
+            continue
         try:
             # The batch profile's time budget is per client instance, so each lease action and schedule
             # update opens its own.

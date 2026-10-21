@@ -84,6 +84,10 @@ def mock_safe_logger(service=None, service_name=None):
 sys.modules['handlers'] = MagicMock()
 sys.modules['handlers.auth'] = MagicMock()
 sys.modules['handlers.auth'].request_to_claims = lambda event: {"tokens": ["test_token"]}
+# The authMethod values handlers compare a caller's claims with; tests/handlers/auth/
+# test_request_to_claims_authMethod.py pins the real module's values to these.
+sys.modules['handlers.auth'].AUTH_METHOD_JWT = "jwt"
+sys.modules['handlers.auth'].AUTH_METHOD_API_KEY = "apiKey"
 sys.modules['handlers.authz'] = MagicMock()
 sys.modules['handlers.authz'].CasbinEnforcer = MagicMock()
 sys.modules['common'] = MagicMock()

@@ -18,6 +18,7 @@ from backend.backend.handlers.addon.edh.common.edhClient import EdhUnavailableEr
 from backend.backend.handlers.addon.edh.common.edhIdentity import edh_uid_for
 from backend.backend.handlers.addon.edh.common.edhSessionState import EDH_FIELD_INSTANCE_ID, EDH_SESSION_STATE_RUNNING
 from backend.tests.handlers.addon.edh.edhServiceTestSupport import (
+    API_KEY_CLAIMS,
     BOOTSTRAP_OWN,
     SESSION_OTHER,
     SESSION_OWN,
@@ -57,6 +58,20 @@ def _update_values(fakes):
 
 @pytest.mark.unit
 class TestConnect:
+    def test_an_api_key_caller_is_refused_before_edh_is_asked(self, monkeypatch):
+        # A desktop's own temporary session key authenticates as an API key: it must not obtain a DCV
+        # connection to any of the owner's desktops.
+        fakes = install_service_fakes(monkeypatch, claims=API_KEY_CLAIMS,
+                                      edh=FakeEdhClient(get_desktop_connection=_desktop()))
+        fakes.table.query.return_value = {"Items": [own_row()]}
+
+        response = _connect(fakes)
+
+        assert response["statusCode"] == 403
+        assert CONNECTION_URL not in response["body"]
+        assert fakes.edh.calls_to("get_desktop_connection") == []
+        fakes.table.update_item.assert_not_called()
+
     def test_the_owner_receives_the_connection_url(self, monkeypatch):
         fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_connection=_desktop()))
         fakes.table.query.return_value = {"Items": [own_row(connectionAvailable=False, edhState="starting")]}

@@ -79,6 +79,8 @@ const ConnectLink: React.FC<ConnectLinkProps> = ({ row }) => {
         try {
             const connection = await connect.mutateAsync(row.sessionId);
             tab.location.replace(connection.connectionUrl);
+            // The URL is a desktop credential: drop it from the mutation state once the tab has it.
+            connect.reset();
         } catch (err) {
             tab.close();
             toast.error("Connect failed", {

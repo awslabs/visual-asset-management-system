@@ -731,9 +731,9 @@ export const EDH_RULES: Rule[] = [
         id: "edh-sessionbootstrap-prefix",
         severity: "error",
         fieldPaths: ["app.addons.useEdhWorkstations.sessionBootstrap.secretNamePrefix"],
+        // Checked whenever the add-on is on: the prefix scopes the reconciler's revoke grant either way.
         appliesWhen: (c) => {
-            if (!edhEnabled(c) || !g(c, "app.addons.useEdhWorkstations.sessionBootstrap.enabled"))
-                return false;
+            if (!edhEnabled(c)) return false;
             const prefix = g(c, "app.addons.useEdhWorkstations.sessionBootstrap.secretNamePrefix");
             return typeof prefix !== "string" || !EDH_SECRET_PREFIX_PATTERN.test(prefix);
         },
@@ -745,14 +745,30 @@ export const EDH_RULES: Rule[] = [
         severity: "error",
         fieldPaths: ["app.addons.useEdhWorkstations.sessionBootstrap.secretNamePrefix"],
         appliesWhen: (c) => {
-            if (!edhEnabled(c) || !g(c, "app.addons.useEdhWorkstations.sessionBootstrap.enabled"))
-                return false;
+            if (!edhEnabled(c)) return false;
             const prefix = g(c, "app.addons.useEdhWorkstations.sessionBootstrap.secretNamePrefix");
             return (
                 typeof prefix === "string" && prefix.length > EDH_SESSION_SECRET_PREFIX_MAX_LENGTH
             );
         },
         message: `useEdhWorkstations.sessionBootstrap.secretNamePrefix must be at most ${EDH_SESSION_SECRET_PREFIX_MAX_LENGTH} characters: the shipped Linux recipes' session bootstrap component resolves it into a document the 16,000-character component limit applies to.`,
+    },
+    {
+        id: "edh-sessionbootstrap-prefix-covers-secret",
+        severity: "error",
+        fieldPaths: ["app.addons.useEdhWorkstations.sessionBootstrap.secretNamePrefix"],
+        appliesWhen: (c) => {
+            if (!edhEnabled(c)) return false;
+            const prefix = g(c, "app.addons.useEdhWorkstations.sessionBootstrap.secretNamePrefix");
+            if (typeof prefix !== "string" || prefix === "") return false;
+            return ["edhAdminApiKeySecretArn", "edhApiCaBundleSecretArn"].some((field) => {
+                const arn = g(c, `app.addons.useEdhWorkstations.${field}`);
+                const at = typeof arn === "string" ? arn.indexOf(":secret:") : -1;
+                return at >= 0 && arn.slice(at + ":secret:".length).startsWith(prefix);
+            });
+        },
+        message:
+            "useEdhWorkstations.sessionBootstrap.secretNamePrefix must not cover the edhAdminApiKeySecretArn or edhApiCaBundleSecretArn secret: the add-on's Lambdas may overwrite and delete every secret under the prefix.",
     },
     {
         id: "edh-sessionbootstrap-rolearns-required",

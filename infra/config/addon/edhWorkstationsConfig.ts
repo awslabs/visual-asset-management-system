@@ -430,6 +430,14 @@ export function edhVpcRequiringFeatures(config: Config): string[] {
 }
 
 /** Validates the add-on block. Normalizes `containers.enabled` to false while the add-on is off. */
+/** The secret name an AWS Secrets Manager secret ARN carries (with its random suffix), or undefined. */
+function secretNameOfArn(arn: unknown): string | undefined {
+    if (typeof arn !== "string") return undefined;
+    const marker = ":secret:";
+    const at = arn.indexOf(marker);
+    return at < 0 ? undefined : arn.slice(at + marker.length);
+}
+
 export function validateEdhWorkstationsConfig(config: Config): void {
     // EDH Workstations Configuration Validation
     const edh = config.app.addons.useEdhWorkstations;
@@ -614,7 +622,40 @@ export function validateEdhWorkstationsConfig(config: Config): void {
             );
         }
 
+        // The session secret prefix scopes the reconciler's revoke grant (PutSecretValue, DeleteSecret)
+        // whether or not session bootstrap is on, so it is checked whenever the add-on is enabled.
         const bootstrap = edh.sessionBootstrap;
+        if (
+            typeof bootstrap.secretNamePrefix !== "string" ||
+            !/^[A-Za-z0-9/_+=.@-]+\/$/.test(bootstrap.secretNamePrefix)
+        ) {
+            throw new Error(
+                `Configuration Error: ${edhPath}.sessionBootstrap.secretNamePrefix must be a Secrets ` +
+                    `Manager name prefix ending in '/' (letters, digits and /_+=.@-). Got: ${JSON.stringify(
+                        bootstrap.secretNamePrefix
+                    )}`
+            );
+        }
+        if (bootstrap.secretNamePrefix.length > EDH_SESSION_SECRET_PREFIX_MAX_LENGTH) {
+            throw new Error(
+                `Configuration Error: ${edhPath}.sessionBootstrap.secretNamePrefix must be at most ` +
+                    `${EDH_SESSION_SECRET_PREFIX_MAX_LENGTH} characters: the shipped Linux recipes' session ` +
+                    "bootstrap component resolves it into a document the 16,000-character component " +
+                    `limit applies to. Got ${bootstrap.secretNamePrefix.length} characters.`
+            );
+        }
+        for (const field of ["edhAdminApiKeySecretArn", "edhApiCaBundleSecretArn"] as const) {
+            const name = secretNameOfArn(edh[field]);
+            if (name !== undefined && name.startsWith(bootstrap.secretNamePrefix)) {
+                throw new Error(
+                    `Configuration Error: ${edhPath}.sessionBootstrap.secretNamePrefix must not cover the ` +
+                        `${field} secret: the add-on's Lambdas may overwrite and delete every secret under the ` +
+                        `prefix. Choose a prefix the operator's own secrets are not named under. Got: ${JSON.stringify(
+                            bootstrap.secretNamePrefix
+                        )}`
+                );
+            }
+        }
         if (bootstrap.enabled) {
             if (
                 !Number.isInteger(bootstrap.sessionKeyTtlMinutes) ||
@@ -625,25 +666,6 @@ export function validateEdhWorkstationsConfig(config: Config): void {
                         `of at least 1 when session bootstrap is enabled. Got: ${JSON.stringify(
                             bootstrap.sessionKeyTtlMinutes
                         )}`
-                );
-            }
-            if (
-                typeof bootstrap.secretNamePrefix !== "string" ||
-                !/^[A-Za-z0-9/_+=.@-]+\/$/.test(bootstrap.secretNamePrefix)
-            ) {
-                throw new Error(
-                    `Configuration Error: ${edhPath}.sessionBootstrap.secretNamePrefix must be a Secrets ` +
-                        `Manager name prefix ending in '/' (letters, digits and /_+=.@-). Got: ${JSON.stringify(
-                            bootstrap.secretNamePrefix
-                        )}`
-                );
-            }
-            if (bootstrap.secretNamePrefix.length > EDH_SESSION_SECRET_PREFIX_MAX_LENGTH) {
-                throw new Error(
-                    `Configuration Error: ${edhPath}.sessionBootstrap.secretNamePrefix must be at most ` +
-                        `${EDH_SESSION_SECRET_PREFIX_MAX_LENGTH} characters: the shipped Linux recipes' session ` +
-                        "bootstrap component resolves it into a document the 16,000-character component " +
-                        `limit applies to. Got ${bootstrap.secretNamePrefix.length} characters.`
                 );
             }
             if (

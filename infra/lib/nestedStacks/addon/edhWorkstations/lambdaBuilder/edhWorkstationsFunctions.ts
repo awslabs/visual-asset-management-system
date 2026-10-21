@@ -37,6 +37,17 @@ import { IAMArn, Service } from "../../../../helper/service-helper";
 // request the caller has already lost running against the EDH cluster.
 export const EDH_API_LAMBDA_TIMEOUT = Duration.seconds(API_GATEWAY_DEFAULT_TIMEOUT_SECONDS);
 
+// The tags the AMI recipe service and registrar write on an AMI and its snapshots, as
+// `common/edhImageBuilder.py` spells them: the recipe, its content hash and the deployment prefix, plus
+// EDH's per-cluster visibility tag. The IAM conditions on AMI tagging and deletion name these keys.
+const EDH_AMI_DEPLOYMENT_TAG = "vams:deployment";
+const EDH_AMI_VAMS_TAG_KEYS = [
+    "vams:edhAmiRecipe",
+    "vams:edhAmiRecipeHash",
+    EDH_AMI_DEPLOYMENT_TAG,
+];
+const EDH_VISIBILITY_TAG_PREFIX = "edh:visibility:";
+
 /** VPC placement shared by every add-on Lambda: isolated subnets behind the add-on security group. */
 export interface EdhLambdaNetwork {
     vpc: ec2.IVpc;
@@ -541,7 +552,7 @@ export function applyEdhAmiBuildEnvironmentAndPermissions(
     fn: lambda.Function,
     config: Config.Config,
     resources: EdhAmiBuildResources,
-    options: { cancelsBuilds?: boolean } = {}
+    options: { cancelsBuilds?: boolean; deletes?: boolean } = {}
 ): void {
     const stack = cdk.Stack.of(fn);
     const edh = config.app.addons.useEdhWorkstations;
@@ -580,25 +591,19 @@ export function applyEdhAmiBuildEnvironmentAndPermissions(
             actions: [
                 "imagebuilder:CreateComponent",
                 "imagebuilder:GetComponent",
-                "imagebuilder:DeleteComponent",
                 "imagebuilder:CreateImageRecipe",
                 "imagebuilder:GetImageRecipe",
-                "imagebuilder:DeleteImageRecipe",
                 "imagebuilder:CreateInfrastructureConfiguration",
                 "imagebuilder:GetInfrastructureConfiguration",
                 "imagebuilder:UpdateInfrastructureConfiguration",
-                "imagebuilder:DeleteInfrastructureConfiguration",
                 "imagebuilder:CreateDistributionConfiguration",
                 "imagebuilder:GetDistributionConfiguration",
                 "imagebuilder:UpdateDistributionConfiguration",
-                "imagebuilder:DeleteDistributionConfiguration",
                 "imagebuilder:CreateImagePipeline",
                 "imagebuilder:GetImagePipeline",
                 "imagebuilder:UpdateImagePipeline",
-                "imagebuilder:DeleteImagePipeline",
                 "imagebuilder:StartImagePipelineExecution",
                 "imagebuilder:GetImage",
-                "imagebuilder:DeleteImage",
                 "imagebuilder:ListComponentBuildVersions",
                 "imagebuilder:ListImagePipelineImages",
                 "imagebuilder:TagResource",
@@ -613,6 +618,31 @@ export function applyEdhAmiBuildEnvironmentAndPermissions(
             ].map((r) => imageBuilderArn(r)),
         })
     );
+    // The deletes belong to the Lambdas that retire, prune and remove recipes; the deploy-time catalog
+    // registration seeds recipes and starts builds only, so it is built without them.
+    const deletes = options.deletes !== false;
+    if (deletes) {
+        fn.addToRolePolicy(
+            new iam.PolicyStatement({
+                actions: [
+                    "imagebuilder:DeleteComponent",
+                    "imagebuilder:DeleteImageRecipe",
+                    "imagebuilder:DeleteInfrastructureConfiguration",
+                    "imagebuilder:DeleteDistributionConfiguration",
+                    "imagebuilder:DeleteImagePipeline",
+                    "imagebuilder:DeleteImage",
+                ],
+                resources: [
+                    "component",
+                    "image-recipe",
+                    "infrastructure-configuration",
+                    "distribution-configuration",
+                    "image-pipeline",
+                    "image",
+                ].map((r) => imageBuilderArn(r)),
+            })
+        );
+    }
     if (options.cancelsBuilds) {
         fn.addToRolePolicy(
             new iam.PolicyStatement({
@@ -654,20 +684,52 @@ export function applyEdhAmiBuildEnvironmentAndPermissions(
             resources: ["*"],
         })
     );
+    // AMI and snapshot tagging and deletion are bound to this deployment's `vams:deployment` tag value,
+    // so the grants never reach another deployment's images. The tag write is limited to the keys VAMS
+    // writes; an AMI already carries the deployment tag from its distribution configuration, while a
+    // snapshot is first tagged by the build's completion.
+    const amiTagRequest = {
+        StringEquals: { [`aws:RequestTag/${EDH_AMI_DEPLOYMENT_TAG}`]: resources.prefix },
+        "ForAllValues:StringEquals": {
+            "aws:TagKeys": [
+                ...EDH_AMI_VAMS_TAG_KEYS,
+                `${EDH_VISIBILITY_TAG_PREFIX}${edh.edhClusterId}`,
+            ],
+        },
+    };
     fn.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["ec2:CreateTags"],
-            resources: [ec2Arn("image"), ec2Arn("snapshot")],
-            conditions: { Null: { "aws:RequestTag/vams:edhAmiRecipe": "false" } },
+            resources: [ec2Arn("image")],
+            conditions: {
+                ...amiTagRequest,
+                StringEquals: {
+                    ...amiTagRequest.StringEquals,
+                    [`aws:ResourceTag/${EDH_AMI_DEPLOYMENT_TAG}`]: resources.prefix,
+                },
+            },
         })
     );
     fn.addToRolePolicy(
         new iam.PolicyStatement({
-            actions: ["ec2:DeregisterImage", "ec2:DeleteSnapshot"],
-            resources: [ec2Arn("image"), ec2Arn("snapshot")],
-            conditions: { Null: { "aws:ResourceTag/vams:edhAmiRecipe": "false" } },
+            actions: ["ec2:CreateTags"],
+            resources: [ec2Arn("snapshot")],
+            conditions: amiTagRequest,
         })
     );
+    if (deletes) {
+        fn.addToRolePolicy(
+            new iam.PolicyStatement({
+                actions: ["ec2:DeregisterImage", "ec2:DeleteSnapshot"],
+                resources: [ec2Arn("image"), ec2Arn("snapshot")],
+                conditions: {
+                    StringEquals: {
+                        [`aws:ResourceTag/${EDH_AMI_DEPLOYMENT_TAG}`]: resources.prefix,
+                    },
+                },
+            })
+        );
+    }
     // Public AMI parameters (`ssm:/aws/service/...`), which carry no account in their ARN.
     fn.addToRolePolicy(
         new iam.PolicyStatement({
@@ -712,7 +774,7 @@ export function applyEdhAmiBuildEnvironmentAndPermissions(
         [
             {
                 id: "AwsSolutions-IAM5",
-                reason: "Image Builder objects are created at runtime from recipe content and named with the deployment prefix, so the grant is scoped to that prefix; list and describe calls take no resource ARN; AMI and snapshot deletion is conditioned on the recipe tag VAMS writes; public AMI parameters live under /aws/service; the service-linked role name is fixed by Image Builder.",
+                reason: "Image Builder objects are created at runtime from recipe content and named with the deployment prefix, so the grant is scoped to that prefix; list and describe calls take no resource ARN; AMI and snapshot tagging and deletion are conditioned on this deployment's vams:deployment tag value (a snapshot's first tag write is conditioned on the request carrying it); public AMI parameters live under /aws/service; the service-linked role name is fixed by Image Builder.",
                 appliesTo: [
                     {
                         regex: "/^Resource::arn:.*:imagebuilder:.*:.*:(component|image-recipe|image-pipeline|image|infrastructure-configuration|distribution-configuration)\\/.*\\*$/g",

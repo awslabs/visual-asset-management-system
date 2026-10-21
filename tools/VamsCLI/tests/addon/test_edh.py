@@ -389,6 +389,18 @@ class TestWorkstationGetStartStop:
             assert result.exit_code == 0
             assert json.loads(result.output)['sessionBootstrap'] == outcome
 
+    @pytest.mark.parametrize("outcome", ["provisioned", "unavailable"])
+    def test_start_text_output_names_the_session_sign_in_outcome(self, cli_runner, generic_command_mocks,
+                                                                 outcome):
+        # A text-mode user sees whether the desktop's vamscli sign-in was placed, as --json-output shows.
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].start_edh_workstation.return_value = {
+                **WORKSTATION, 'state': 'CREATING', 'sessionBootstrap': outcome, 'rootSizeGb': 60}
+            result = cli_runner.invoke(cli, ['edh', 'workstation', 'start', 's-1'])
+            assert result.exit_code == 0
+            assert f"Session Sign-in: {outcome}" in result.output
+            assert "Root Size (GB):  60" in result.output
+
     def test_get_not_found_hints_at_the_listing(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('addon.edh') as mocks:
             mocks['api_client'].get_edh_workstation.side_effect = EdhWorkstationNotFoundError(

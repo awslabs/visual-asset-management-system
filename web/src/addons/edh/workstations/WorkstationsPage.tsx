@@ -50,7 +50,7 @@ import EdhFeatureTabs, {
 import SimulationsTab from "../containers/SimulationsTab";
 import type { WorkstationRecord } from "../types";
 
-// Route templates as `backend/backend/common/apiRoutes.py` declares them; `can()` matches them
+// Route templates as `backend/backend/common/addonApiRoutes.py` declares them; `can()` matches them
 // segment by segment against the caller's allowed routes.
 export const WORKSTATIONS_ROUTE = "/addon/edh/workstations";
 export const WORKSTATION_ROUTE = "/addon/edh/workstations/{sessionId}";

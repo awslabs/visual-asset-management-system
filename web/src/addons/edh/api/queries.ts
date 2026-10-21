@@ -76,7 +76,8 @@ export function useWorkstations() {
 
 /**
  * The connection URL of one active workstation, requested when the user clicks Connect and never on
- * render: the URL carries the desktop credential, so it is neither prefetched nor kept in the DOM.
+ * render: the URL carries the desktop credential, so it is neither prefetched nor kept in the DOM, and
+ * a settled call leaves the mutation cache as soon as nothing observes it.
  */
 export function useWorkstationConnect() {
     return useMutation({
@@ -84,6 +85,7 @@ export function useWorkstationConnect() {
             callService<WorkstationConnection>(() =>
                 workstationService.getWorkstationConnection(sessionId)
             ),
+        gcTime: 0,
     });
 }
 

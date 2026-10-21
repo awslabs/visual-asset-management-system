@@ -132,6 +132,31 @@ class TestRecipes:
         existing, model, user = fakes.recipes.update_admin_recipe.call_args.args
         assert model.recipeId == "al2023-desktop"
 
+    def test_put_that_changes_the_os_family_also_needs_put_on_the_new_family(self, monkeypatch):
+        # A role constrained to Linux recipes cannot rewrite a Linux recipe into a Windows one.
+        seen = []
+
+        def linux_only(obj, act):
+            seen.append((obj["edhOsFamily"], act))
+            return obj["edhOsFamily"] == "linux"
+
+        fakes = install(monkeypatch, enforce=linux_only)
+        body = {**RECIPE_BODY, "osFamily": "windows", "baseOs": "windows2022"}
+        response = service.lambda_handler(
+            make_event("PUT", recipe_path(), body=body, path_params={"recipeId": "al2023-desktop"}), {})
+        assert response["statusCode"] == 403
+        assert ("windows", "PUT") in seen
+        fakes.recipes.update_admin_recipe.assert_not_called()
+
+    def test_put_that_changes_the_os_family_is_saved_when_both_families_are_allowed(self, monkeypatch):
+        fakes = install(monkeypatch)
+        body = {**RECIPE_BODY, "osFamily": "windows", "baseOs": "windows2022"}
+        response = service.lambda_handler(
+            make_event("PUT", recipe_path(), body=body, path_params={"recipeId": "al2023-desktop"}), {})
+        assert response["statusCode"] == 200
+        _existing, model, _user = fakes.recipes.update_admin_recipe.call_args.args
+        assert model.osFamily == "windows"
+
     def test_delete_returns_the_warnings(self, monkeypatch):
         fakes = install(monkeypatch)
         fakes.recipes.delete_recipe.return_value = ["delete_component x: Dep"]

@@ -8,7 +8,7 @@
         {
             "name": "ROLE_NAME",
             "required": true,
-            "description": "The role name to create"
+            "description": "The existing role to attach these constraints to"
         }
     ],
     "constraints": [

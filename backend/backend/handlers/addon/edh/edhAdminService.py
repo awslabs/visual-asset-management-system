@@ -497,7 +497,7 @@ def register_image(event, kind_label):
     edh_uid = _caller_edh_uid()
     client = EdhClient(profile="api")
 
-    # Idempotent register (C-7): before registering, check if the stack already exists. If a stack of
+    # Idempotent register: before registering, check if the stack already exists. If a stack of
     # the same name with the same AMI is found, adopt it; if the AMI differs, refuse. A stranded first
     # request leaves the stack unassigned; the retry finds it by name, adopts, assigns, and succeeds.
     try:

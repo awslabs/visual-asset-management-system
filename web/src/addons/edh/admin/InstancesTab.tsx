@@ -86,7 +86,7 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
         setDraftMinutes(String(parsed));
         if (parsed !== idleMinutes) setIdleMinutes(parsed);
     };
-    // Templates are the apiRoutes.py path strings verbatim.
+    // Templates are the addonApiRoutes.py path strings verbatim.
     const canStale = can("GET", "/addon/edh/admin/instances/stale");
     const canStop = can("POST", "/addon/edh/admin/instances/{sessionId}/stop");
     const canDeactivate = can("POST", "/addon/edh/admin/instances/{sessionId}/deactivate");

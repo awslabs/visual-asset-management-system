@@ -10,6 +10,7 @@ before it has finished loading.
 
 import re
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import requests
 
@@ -98,6 +99,12 @@ def _edh_session_id(session_id: str) -> str:
     if not isinstance(session_id, str) or not _EDH_SESSION_ID.fullmatch(session_id):
         raise InvalidEdhRequestError("Workstation id must be 3-63 letters, digits, hyphens or underscores")
     return session_id
+
+
+def _edh_path_value(value) -> str:
+    """An image, recipe, build or job id as one encoded path segment: a `/`, `?` or `#` in it is sent
+    as part of the id, so the request addresses the resource the id names and no other."""
+    return quote(str(value), safe="")
 
 
 class EdhAPIClientMixin:
@@ -683,7 +690,7 @@ class EdhAPIClientMixin:
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = API_EDH_ADMIN_IMAGE_VDI.format(imageId=image_id)
+        endpoint = API_EDH_ADMIN_IMAGE_VDI.format(imageId=_edh_path_value(image_id))
 
         try:
             response = self.delete(endpoint, include_auth=True, raise_http_errors=True)
@@ -718,7 +725,7 @@ class EdhAPIClientMixin:
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = API_EDH_ADMIN_IMAGE_SIMULATION.format(imageId=image_id)
+        endpoint = API_EDH_ADMIN_IMAGE_SIMULATION.format(imageId=_edh_path_value(image_id))
 
         try:
             response = self.delete(endpoint, include_auth=True, raise_http_errors=True)
@@ -1048,7 +1055,7 @@ class EdhAPIClientMixin:
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = API_EDH_ADMIN_AMI_RECIPE.format(recipeId=recipe_id)
+        endpoint = API_EDH_ADMIN_AMI_RECIPE.format(recipeId=_edh_path_value(recipe_id))
         try:
             response = self.get(endpoint, include_auth=True, raise_http_errors=True)
             return response.json()
@@ -1142,7 +1149,7 @@ class EdhAPIClientMixin:
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = API_EDH_ADMIN_AMI_RECIPE.format(recipeId=recipe_id)
+        endpoint = API_EDH_ADMIN_AMI_RECIPE.format(recipeId=_edh_path_value(recipe_id))
         try:
             response = self.put(endpoint, data=data, include_auth=True, raise_http_errors=True)
             return response.json()
@@ -1171,7 +1178,7 @@ class EdhAPIClientMixin:
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = API_EDH_ADMIN_AMI_RECIPE.format(recipeId=recipe_id)
+        endpoint = API_EDH_ADMIN_AMI_RECIPE.format(recipeId=_edh_path_value(recipe_id))
         try:
             response = self.delete(endpoint, include_auth=True, raise_http_errors=True)
             return response.json()
@@ -1200,7 +1207,7 @@ class EdhAPIClientMixin:
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = API_EDH_ADMIN_AMI_RECIPE_BUILDS.format(recipeId=recipe_id)
+        endpoint = API_EDH_ADMIN_AMI_RECIPE_BUILDS.format(recipeId=_edh_path_value(recipe_id))
         try:
             response = self.get(endpoint, include_auth=True, raise_http_errors=True)
             return response.json()
@@ -1229,7 +1236,7 @@ class EdhAPIClientMixin:
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = API_EDH_ADMIN_AMI_RECIPE_BUILDS.format(recipeId=recipe_id)
+        endpoint = API_EDH_ADMIN_AMI_RECIPE_BUILDS.format(recipeId=_edh_path_value(recipe_id))
         try:
             response = self.post(endpoint, data={}, include_auth=True, raise_http_errors=True)
             return response.json()
@@ -1260,7 +1267,8 @@ class EdhAPIClientMixin:
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = API_EDH_ADMIN_AMI_RECIPE_BUILD_REGISTER.format(recipeId=recipe_id, version=version)
+        endpoint = API_EDH_ADMIN_AMI_RECIPE_BUILD_REGISTER.format(
+            recipeId=_edh_path_value(recipe_id), version=_edh_path_value(version))
         try:
             response = self.post(endpoint, data={}, include_auth=True, raise_http_errors=True)
             return response.json()
@@ -1291,7 +1299,8 @@ class EdhAPIClientMixin:
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = API_EDH_ADMIN_AMI_RECIPE_BUILD.format(recipeId=recipe_id, version=version)
+        endpoint = API_EDH_ADMIN_AMI_RECIPE_BUILD.format(
+            recipeId=_edh_path_value(recipe_id), version=_edh_path_value(version))
         try:
             response = self.delete(endpoint, include_auth=True, raise_http_errors=True)
             return response.json()
@@ -1450,7 +1459,7 @@ class EdhAPIClientMixin:
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
-        endpoint = API_EDH_CONTAINERS_JOB.format(jobId=job_id)
+        endpoint = API_EDH_CONTAINERS_JOB.format(jobId=_edh_path_value(job_id))
         params = self._edh_container_scope(backend, cluster, namespace)
 
         try:

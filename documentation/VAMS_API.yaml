@@ -9403,7 +9403,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
-                    description: "Caller lacks API-tier or object-tier access."
+                    description: "Caller lacks API-tier or object-tier access, or authenticated with an API key (`Workstation connect is not available to API key sessions`)."
                     content:
                         application/json:
                             schema:
@@ -9454,7 +9454,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
-                    description: "Caller lacks API-tier or object-tier access."
+                    description: "Caller lacks API-tier or object-tier access, or authenticated with an API key (`Workstation Windows sign-in is not available to API key sessions`)."
                     content:
                         application/json:
                             schema:

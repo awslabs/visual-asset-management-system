@@ -328,7 +328,7 @@ class TestRegisterImage:
 
 @pytest.mark.unit
 class TestRegisterImageIdempotency:
-    """C-7: register_image must be idempotent after a stranded first request."""
+    """register_image must be idempotent after a stranded first request."""
 
     def test_retry_after_duplicate_name_with_same_ami_adopts_and_succeeds(self, monkeypatch):
         """A retry that finds the stack with the same AMI adopts it and returns 201."""
@@ -435,7 +435,7 @@ class TestRegisterImageIdempotency:
         assert len([r for r in edh_proxy_records(fakes) if r["edhRoute"] == ec.EDH_ROUTE_PROJECTS]) >= 1
 
     def test_project_assign_failure_with_unknown_outcome_carries_flag(self, monkeypatch):
-        """H-R20: project assign failure with unknown outcome carries outcomeUnknown flag."""
+        """A project assign failure with an unknown outcome carries outcomeUnknown flag."""
         edh = FakeEdhClient(
             list_software_stacks=lambda kind: list(DCV_STACKS) + [dict(NEW_STACK)] if kind == "dcv" else [],
             assign_software_stack_to_project=EdhOutcomeUnknownError("timeout"),
@@ -451,7 +451,7 @@ class TestRegisterImageIdempotency:
         assert body.get("outcomeUnknown") is True
 
     def test_project_assign_failure_without_unknown_outcome_has_no_flag(self, monkeypatch):
-        """H-R20: project assign failure without unknown outcome has no outcomeUnknown flag."""
+        """A project assign failure without an unknown outcome has no outcomeUnknown flag."""
         edh = FakeEdhClient(
             list_software_stacks=lambda kind: list(DCV_STACKS) + [dict(NEW_STACK)] if kind == "dcv" else [],
             assign_software_stack_to_project=EdhApiError("Project assignment failed"),

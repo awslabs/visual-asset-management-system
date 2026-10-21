@@ -19,7 +19,7 @@ import SettingsTab from "./SettingsTab";
 
 type TabKey = "instances" | "capacity" | "images" | "amiRecipes" | "settings";
 
-// Each tab's panel is gated on the GET route it reads; the templates are the apiRoutes.py strings.
+// Each tab's panel is gated on the GET route it reads; the templates are the addonApiRoutes.py strings.
 // The instances resource is presented to administrators as EDH sessions.
 const TABS: Array<{ key: TabKey; label: string; route: string; what: string }> = [
     {

@@ -19,6 +19,7 @@ from backend.backend.handlers.addon.edh.common.edhClient import EdhUnavailableEr
 from backend.backend.handlers.addon.edh.common.edhIdentity import edh_uid_for
 from backend.backend.handlers.addon.edh.common.edhSessionState import EDH_FIELD_INSTANCE_ID
 from backend.tests.handlers.addon.edh.edhServiceTestSupport import (
+    API_KEY_CLAIMS,
     BOOTSTRAP_OWN,
     SESSION_OTHER,
     SESSION_OWN,
@@ -83,6 +84,18 @@ def _update_values(fakes):
 
 @pytest.mark.unit
 class TestWindowsSignIn:
+    def test_an_api_key_caller_is_refused_before_edh_is_asked(self, monkeypatch):
+        # A Linux desktop's temporary session key must not read the password of the owner's Windows desktop.
+        edh = FakeEdhClient(get_desktop_connection=_desktop())
+        fakes = install_service_fakes(monkeypatch, edh=edh, claims=API_KEY_CLAIMS)
+        fakes.table.query.return_value = {"Items": [_windows()]}
+
+        response = _sign_in(fakes)
+
+        assert response["statusCode"] == 403
+        assert PASSWORD not in response["body"]
+        assert fakes.edh.calls_to("get_desktop_connection") == []
+
     def test_the_owner_receives_the_windows_sign_in(self, monkeypatch):
         fakes = _installed(monkeypatch)
 

@@ -513,25 +513,31 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
 
         // Job definitions are registered by this Lambda with AWS Batch: EDH offers no create route and
         // lists a definition by the edh:visibility resource tag, which the registration writes. The
-        // listing action takes no resource ARN in IAM; the writes are scoped to the account's job
-        // definitions, whose ARNs carry a revision assigned at registration.
+        // listing action takes no resource ARN in IAM; the writes are scoped to the configured names
+        // (getConfig() requires each to begin with `edh-`), every revision of each, since the
+        // registration registers, tags and retires revisions of those names only.
         if (containers.enabled) {
-            registrationFunction.addToRolePolicy(
-                new iam.PolicyStatement({
-                    actions: [
-                        "batch:RegisterJobDefinition",
-                        "batch:DeregisterJobDefinition",
-                        "batch:TagResource",
-                    ],
-                    resources: [
-                        cdk.Stack.of(this).formatArn({
-                            service: "batch",
-                            resource: "job-definition",
-                            resourceName: "*",
-                        }),
-                    ],
-                })
+            const jobDefinitionArns = containers.jobDefinitions.flatMap((jobDefinition) =>
+                [jobDefinition.name, `${jobDefinition.name}:*`].map((resourceName) =>
+                    cdk.Stack.of(this).formatArn({
+                        service: "batch",
+                        resource: "job-definition",
+                        resourceName,
+                    })
+                )
             );
+            if (jobDefinitionArns.length > 0) {
+                registrationFunction.addToRolePolicy(
+                    new iam.PolicyStatement({
+                        actions: [
+                            "batch:RegisterJobDefinition",
+                            "batch:DeregisterJobDefinition",
+                            "batch:TagResource",
+                        ],
+                        resources: jobDefinitionArns,
+                    })
+                );
+            }
             registrationFunction.addToRolePolicy(
                 new iam.PolicyStatement({
                     actions: ["batch:DescribeJobDefinitions"],
@@ -543,9 +549,9 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
                 [
                     {
                         id: "AwsSolutions-IAM5",
-                        reason: "The catalog registration Lambda registers the deployment's EDH job definitions with AWS Batch. batch:DescribeJobDefinitions accepts no resource ARN, and a job definition's ARN carries the revision Batch assigns at registration, so the write actions are scoped to every job definition of this account and Region rather than to a name known at synth.",
+                        reason: "The catalog registration Lambda registers the deployment's configured EDH job definitions with AWS Batch. batch:DescribeJobDefinitions accepts no resource ARN; the write actions name each configured job definition, with a wildcard only over the revision Batch assigns at registration.",
                         appliesTo: [
-                            { regex: "/^Resource::arn:.*:batch:.*:job-definition\\/\\*$/g" },
+                            { regex: "/^Resource::arn:.*:batch:.*:job-definition\\/edh-.*:\\*$/g" },
                             { regex: "/^Resource::\\*$/g" },
                         ],
                     },
@@ -642,9 +648,19 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
             new events.Rule(this, "EdhAmiBuildStateRule", {
                 description:
                     "Completes an EDH AMI recipe build when Image Builder reports its image available or failed",
+                // Only this deployment's images: the event carries the image build version ARN, whose
+                // image name begins with the deployment prefix.
                 eventPattern: {
                     source: ["aws.imagebuilder"],
                     detailType: ["EC2 Image Builder Image State Change"],
+                    resources: events.Match.prefix(
+                        cdk.Stack.of(this).formatArn({
+                            service: "imagebuilder",
+                            resource: "image",
+                            resourceName: `${amiBuild.resources.prefix}-`,
+                            arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
+                        })
+                    ),
                 },
                 targets: [new eventsTargets.LambdaFunction(registrarFunction)],
             });
@@ -679,7 +695,8 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
             applyEdhAmiBuildEnvironmentAndPermissions(
                 registrationFunction,
                 props.config,
-                amiBuild.resources
+                amiBuild.resources,
+                { deletes: false }
             );
         }
 

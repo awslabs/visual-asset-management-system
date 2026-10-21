@@ -47,6 +47,7 @@ REQUIRED_ENV = (
 def _auth_stubs():
     auth = types.ModuleType("handlers.auth")
     auth.request_to_claims = lambda event: {"tokens": ["stub"], "roles": [], "mfaEnabled": False, "authMethod": "jwt"}
+    auth.AUTH_METHOD_API_KEY = "apiKey"
     authz = types.ModuleType("handlers.authz")
     authz.CasbinEnforcer = MagicMock()
     return {"handlers.auth": auth, "handlers.authz": authz}
