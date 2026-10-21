@@ -174,7 +174,24 @@ export default function VersionComments(props: VersionCommentsProps) {
         showLoading(true);
 
         try {
-            await deleteComment({ assetId, assetVersionIdAndCommentId });
+            const result = await deleteComment({ assetId, assetVersionIdAndCommentId });
+            // deleteComment resolves with 403 for a permission denial, [false, message] for any
+            // other rejected request and false for an empty reply, so a failure never reaches the
+            // catch below and has to be read off the result.
+            if (!Array.isArray(result) || result[0] !== true) {
+                const reason = (Array.isArray(result) && result[1]) || "Unknown error";
+                showMessage({
+                    type: "error",
+                    message:
+                        result === 403
+                            ? `Unable to delete ${Synonyms.comment}. You don't have permission to perform this action.`
+                            : `Unable to delete ${Synonyms.comment}: ${reason}`,
+                    dismissible: true,
+                });
+                setVisible(false);
+                setReload(true);
+                return;
+            }
             showMessage({
                 type: "success",
                 message: `${Synonyms.Comment} deleted successfully`,

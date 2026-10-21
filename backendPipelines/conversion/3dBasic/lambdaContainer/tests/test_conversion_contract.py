@@ -106,6 +106,10 @@ def _exporting_trimesh(*companion_names):
                 handle.write("companion")
 
     stub.load.return_value.export = MagicMock(side_effect=_export)
+    # One triangle: the handler refuses to export a model with no geometry (check_exportable), so a
+    # stubbed load has to return something that has some.
+    stub.load.return_value.vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0]]
+    stub.load.return_value.faces = [[0, 1, 2]]
     return stub
 
 

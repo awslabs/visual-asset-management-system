@@ -99,6 +99,47 @@ Output dir: {outputS3AssetFilesPath}
 ❌ Wrong output:   {outputS3AssetFilesPath}pump.e57.previewFile.gif  (relative path lost)
 ```
 
+## Files a Model Input References
+
+A model format can keep part of the model in other files: glTF/GLB buffers and images, an OBJ's
+`mtllib` and the `map_Kd` textures the MTL names, a PLY `TextureFile`. A pipeline that loads such a
+model downloads the input at its asset-relative path and fetches those files from the **input's own
+asset** beside it before loading; downloading the selected file alone loses them, and renaming it breaks
+`../` references.
+
+Every reference is untrusted input, because the pipeline role reads every asset bucket (ARCC BSC1, input
+validation by allowlist). Accept a reference only when it is a relative path that, normalised against
+the referring file's directory, stays inside the input's asset prefix; reject absolute paths, `..`
+escapes, URI schemes and control characters before any Amazon S3 call, and bound the file count, byte
+total and depth. Collect each name exactly as the loader will ask for it, so the fetch requests, and its
+warnings name, only files the loader reads: trimesh's OBJ loader asks for one material library, the
+rest of the line after the first `mtllib` anywhere in the text (spaces included), and its MTL parser
+asks only for each `map_Kd` value, the rest of its line. Hand the loader a resolver that serves **only**
+the fetched files and refuses every other name, so a reference outside the asset is refused or skipped,
+never read.
+
+The 3D Basic Conversion applies these rules in `conversion/3dBasic/lambdaContainer/referenced_files.py`
+(`resolve_reference` for the path rules, one collector per format, `ConfinedResolver`). It FAILS on a
+glTF/GLB buffer (the geometry) and skips a material library or texture image with a warning naming it
+(`Reference.required`).
+A skipped name is never in the resolver's set, and every name looked up counts toward the file limit,
+found or not. Real-trimesh coverage runs in a child interpreter (`tests/test_3dbasic_real_conversions.py`)
+since sibling modules stub `trimesh`.
+
+The two Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) log through
+`lambdaContainer/common/logger.py`, which is **not** in the `customLogging/logger.py` byte-identity set
+and redacts only `authorization`. A Lambda-container handler therefore checks `TaskToken` before it
+logs anything and never logs the event, as both handlers do
+(`tests/test_3dbasic_task_token_logging.py`, `tests/test_meshcad_task_token_logging.py`). The 3dBasic
+`.dockerignore` keeps `tests/`, the Poetry files and caches out of its `COPY . .`.
+
+VAMS reads a Lambda step's log group only for lines that contain the workflow execution id, so a line
+that names no run path (a referenced-file warning, for one) is missing from the run's log in VAMS. The
+3dBasic handler therefore puts the body's `workflowExecutionId` on every line with `logger.append_keys`
+after the task-token check, and removes it with `remove_keys` first thing in each invocation, because a
+reused execution environment keeps the logger's keys (`tests/test_3dbasic_execution_id_logging.py`).
+The CAD/mesh handler does not yet; its extractors log through loggers of their own.
+
 ## Reporting Failure on a Task-Token Pipeline
 
 A pipeline registered with `waitForCallback: "Enabled"` receives an AWS Step Functions task token, and the
@@ -323,7 +364,7 @@ partition. Author it with the block for your execution type present but empty:
       variations of it. A caller then gets a working zero-argument run.
     - **Mark none**, when the templates are _mutually exclusive outputs_ and picking for the caller
       would silently produce the wrong artifact. Four bundles are this shape: `conversion-3d-basic`
-      (convert-to-glb / -gltf / -obj / -stl), `rapid-pipeline` (to-glb / to-gltf), `vntana-model-ops`
+      (convert-to-glb / -gltf / -obj / -ply / -stl), `rapid-pipeline` (to-glb / to-gltf), `vntana-model-ops`
       (to-glb / -gltf / -usdz) and `3dRecon-splat-toolbox` (splat-objects /
       splat-environments-360). There is no defensible default target format or capture geometry, so
       the API refusing a run that names no `templateId` is the correct behaviour.

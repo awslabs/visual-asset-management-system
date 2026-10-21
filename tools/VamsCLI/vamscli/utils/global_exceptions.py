@@ -10,18 +10,31 @@ def _is_json_output() -> bool:
     return '--json-output' in sys.argv
 
 
-def _handle_global_error(error_type: str, error_message: str, additional_info=None):
+def _global_error_data(error_type: str, error_message: str, additional_info=None, exc=None) -> dict:
+    """The --json-output document of a global error, the same under pytest and in production."""
+    error_data = {"error": f"{error_type}: {error_message}"}
+    if exc is not None:
+        error_data["error_type"] = type(exc).__name__
+        # Machine-readable fields an exception names of its own; they never replace the two above.
+        fields = getattr(exc, "json_fields", None)
+        if isinstance(fields, dict):
+            for key, value in fields.items():
+                error_data.setdefault(key, value)
+    if additional_info:
+        if isinstance(additional_info, list):
+            error_data["additional_info"] = additional_info
+        else:
+            error_data["additional_info"] = [additional_info]
+    return error_data
+
+
+def _handle_global_error(error_type: str, error_message: str, additional_info=None, exc=None):
     """Handle global errors with JSON output support."""
     # In test environment, output error messages and raise ClickException with full message
     if 'pytest' in sys.modules:
         if _is_json_output():
             import json
-            error_data = {"error": f"{error_type}: {error_message}"}
-            if additional_info:
-                if isinstance(additional_info, list):
-                    error_data["additional_info"] = additional_info
-                else:
-                    error_data["additional_info"] = [additional_info]
+            error_data = _global_error_data(error_type, error_message, additional_info, exc)
             error_output = json.dumps(error_data, indent=2)
             click.echo(error_output)
             raise click.ClickException(error_output)
@@ -40,12 +53,7 @@ def _handle_global_error(error_type: str, error_message: str, additional_info=No
     # Production environment - output and exit
     if _is_json_output():
         import json
-        error_data = {"error": f"{error_type}: {error_message}"}
-        if additional_info:
-            if isinstance(additional_info, list):
-                error_data["additional_info"] = additional_info
-            else:
-                error_data["additional_info"] = [additional_info]
+        error_data = _global_error_data(error_type, error_message, additional_info, exc)
         click.echo(json.dumps(error_data, indent=2))
     else:
         click.echo(
@@ -139,27 +147,31 @@ def handle_global_exceptions():
                     SetupRequiredError, AuthenticationError, APIUnavailableError, ProfileError,
                     InvalidProfileNameError, ConfigurationError, OverrideTokenError, VersionMismatchError,
                     RetryExhaustedError, RateLimitExceededError, TokenExpiredError, PermissionDeniedError,
-                    APIError
+                    RequestBlockedError, APIError
                 )
+                from ..constants import WAF_ADMIN_HINT, WAF_OR_STAGE_ADMIN_HINT
                 
                 if isinstance(e, SetupRequiredError):
-                    _handle_global_error("Setup Required", str(e), "Run 'vamscli setup <api-gateway-url>' to get started.")
+                    _handle_global_error("Setup Required", str(e), "Run 'vamscli setup <api-gateway-url>' to get started.", exc=e)
+                elif isinstance(e, RequestBlockedError):
+                    info = (WAF_ADMIN_HINT if e.confirmed else WAF_OR_STAGE_ADMIN_HINT) + (f" Request ID: {e.request_id}." if e.request_id else "")
+                    _handle_global_error("Request Blocked", str(e), info, exc=e)
                 elif isinstance(e, AuthenticationError):
-                    _handle_global_error("Authentication Error", str(e), "Run 'vamscli auth login' to re-authenticate.")
+                    _handle_global_error("Authentication Error", str(e), "Run 'vamscli auth login' to re-authenticate.", exc=e)
                 elif isinstance(e, APIError):
-                    _handle_global_error("API Error", str(e))
+                    _handle_global_error("API Error", str(e), exc=e)
                 elif isinstance(e, APIUnavailableError):
-                    _handle_global_error("API Unavailable", str(e))
+                    _handle_global_error("API Unavailable", str(e), exc=e)
                 elif isinstance(e, ProfileError):
-                    _handle_global_error("Profile Error", str(e))
+                    _handle_global_error("Profile Error", str(e), exc=e)
                 elif isinstance(e, InvalidProfileNameError):
-                    _handle_global_error("Invalid Profile Name", str(e))
+                    _handle_global_error("Invalid Profile Name", str(e), exc=e)
                 elif isinstance(e, ConfigurationError):
-                    _handle_global_error("Configuration Error", str(e))
+                    _handle_global_error("Configuration Error", str(e), exc=e)
                 elif isinstance(e, OverrideTokenError):
-                    _handle_global_error("Override Token Error", str(e))
+                    _handle_global_error("Override Token Error", str(e), exc=e)
                 elif isinstance(e, VersionMismatchError):
-                    _handle_global_error("Version Mismatch", str(e))
+                    _handle_global_error("Version Mismatch", str(e), exc=e)
                 elif isinstance(e, RetryExhaustedError):
                     additional_info = [
                         "The API is currently throttling requests. You can:",
@@ -169,13 +181,13 @@ def handle_global_exceptions():
                         "  - VAMS_CLI_INITIAL_RETRY_DELAY (default: 1.0)",
                         "  - VAMS_CLI_MAX_RETRY_DELAY (default: 60.0)"
                     ]
-                    _handle_global_error("Rate Limit Exceeded", str(e), additional_info)
+                    _handle_global_error("Rate Limit Exceeded", str(e), additional_info, exc=e)
                 elif isinstance(e, RateLimitExceededError):
-                    _handle_global_error("Rate Limit Exceeded", str(e))
+                    _handle_global_error("Rate Limit Exceeded", str(e), exc=e)
                 elif isinstance(e, TokenExpiredError):
-                    _handle_global_error("Token Expired", str(e), "Your authentication token has expired. Run 'vamscli auth login' to re-authenticate.")
+                    _handle_global_error("Token Expired", str(e), "Your authentication token has expired. Run 'vamscli auth login' to re-authenticate.", exc=e)
                 elif isinstance(e, PermissionDeniedError):
-                    _handle_global_error("Permission Denied", str(e), "You do not have permission to perform this action. Contact your administrator if you believe this is an error.")
+                    _handle_global_error("Permission Denied", str(e), "You do not have permission to perform this action. Contact your administrator if you believe this is an error.", exc=e)
                 elif isinstance(e, click.ClickException):
                     # Let Click handle its own exceptions
                     raise

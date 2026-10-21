@@ -15,7 +15,7 @@ When `--json-output` is enabled:
 
 -   Status messages and progress indicators are suppressed
 -   Interactive confirmation prompts are skipped (use `--confirm` flags instead)
--   Errors are returned as JSON objects to stderr with a non-zero exit code
+-   Errors are returned as JSON objects to stdout with exit code `1` (see [JSON Error Format](#json-error-format))
 -   Password prompts are disabled (provide `--password` explicitly)
     :::
 
@@ -145,7 +145,11 @@ def run_vamscli(args):
         capture_output=True, text=True,
     )
     if result.returncode != 0:
-        raise RuntimeError(json.loads(result.stdout or result.stderr).get("message", result.stderr))
+        try:
+            error = json.loads(result.stdout).get("error")
+        except ValueError:
+            error = None  # a usage error (exit code 2) writes text to stderr only
+        raise RuntimeError(error or result.stderr)
     return json.loads(result.stdout)
 
 assets = run_vamscli(["assets", "list", "-d", "my-database", "--auto-paginate"])
@@ -405,6 +409,12 @@ The response payload is still written to stdout first, so a `--json-output` cons
 `overall_success`, `successful_files` / `failed_files`, and the per-file `failed_files` /
 `failed_downloads` lists.
 
+A transfer records an AWS WAF block or a permission denial against the file or upload sequence it
+struck, as it records any other failure: the error keeps its message, which for a block names the web
+ACL, but carries no heading, `error_type`, `blockedBy` or `requestId`. The one exception is
+`sync file push`, which stops with the global error when archiving or deleting a file or creating the
+asset version fails that way (see [sync file push](commands/sync.md#sync-file-push)).
+
 ```bash
 if ! RESULT=$(vamscli sync file push ./models -d my-db -a my-asset --allow-modify --json-output); then
     echo "$RESULT" | jq -r '.execution.uploads.failed_files'
@@ -414,15 +424,41 @@ fi
 
 ### JSON Error Format
 
-When `--json-output` is enabled, errors are output as JSON to stderr:
+When `--json-output` is enabled, a failed command writes one JSON error document to stdout and exits with code `1`. The document has one of two shapes.
+
+A **command error**, raised by the command itself (an asset that does not exist, a rejected value), carries `error`, the message, and `error_type`, the exception's class name:
 
 ```json
 {
-    "error_type": "Asset Not Found",
-    "message": "Asset 'my-asset' not found in database 'my-db'",
-    "helpful_message": "Use 'vamscli assets list -d my-db' to see available assets."
+    "error": "Asset 'my-asset' not found in database 'my-db'",
+    "error_type": "AssetNotFoundError"
 }
 ```
+
+A **global error**, raised on any command for setup, authentication, permission, throttling, version and AWS WAF problems, carries `error` as `<Heading>: <message>`, `error_type`, and `additional_info`, a list of follow-up lines, when the CLI has one:
+
+```json
+{
+    "error": "Request Blocked: The deployment's AWS WAF web ACL blocked this request before it reached VAMS (HTTP 403). A managed rule matched something in the request, most often a value in the request body. Signing in again does not change the result.",
+    "error_type": "RequestBlockedError",
+    "blockedBy": "waf",
+    "requestId": "E7BBKGcCvHcEXAMPLE=",
+    "additional_info": [
+        "Ask the VAMS administrator to find the request in the web ACL's sampled requests, or in its aws-waf-logs-vams-* log group, which names the rule that matched. Request ID: E7BBKGcCvHcEXAMPLE=."
+    ]
+}
+```
+
+Both shapes add the machine-readable fields the error carries, beside `error` and `error_type`:
+
+| Field       | Carried by                                                                                                                                                                                                  |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `blockedBy` | `RequestBlockedError`: `waf` when the response names the deployment's AWS WAF web ACL, `waf-or-stage` for a bare `403 Forbidden`, which a web ACL block and a base URL naming no deployed stage both return |
+| `requestId` | `RequestBlockedError`, when the response carries one: API Gateway's extended request ID from the body, else the `x-amz-apigw-id`, `x-amz-cf-id` or `x-amzn-RequestId` header, in that order                 |
+
+Global errors are kept through every `APIClient` method, so a web ACL block, a permission denial or an expired token keeps its heading and fields wherever a command lets it through to the global handler; file upload and download transfers record one per file or upload sequence instead (see [Partial Transfers Exit Non-Zero](#partial-transfers-exit-non-zero)). An error the CLI did not expect reports `error` as `Unexpected error: <message>`, with `traceback` under `--debug`.
+
+In text mode, a global error's `✗ <Heading>: <message>` line goes to stderr and its follow-up lines to stdout, and a command error writes its `✗` line and any hint to stderr; the exit code is `1` in both cases.
 
 ### Error Handling in Scripts
 
