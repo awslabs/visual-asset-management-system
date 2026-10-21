@@ -256,6 +256,32 @@ This software includes third party software subject to the following copyrights:
 
 The other packages in `requirements.lock` declare permissive licenses (MIT, BSD, Apache-2.0, ISC, PSF and similar) in their package metadata.
 
+**Preview 3D Thumbnail Pipeline native libraries bundled in the cadquery-ocp wheel** (cadquery-ocp 7.9.3.1.1, installed because cadquery requires it; the pipeline loads every library below when it reads a `.step` or `.stp` file)
+
+| Name                    | Version      | License                                                 | Notes                                                |
+| :---------------------- | :----------- | :------------------------------------------------------ | :--------------------------------------------------- |
+| cadquery-ocp            | 7.9.3.1.1    | Apache-2.0                                              | Python bindings for Open CASCADE Technology          |
+| Open CASCADE Technology | 7.9.3        | LGPL-2.1 with the Open CASCADE exception                | STEP reader and tessellator (the `libTK*` libraries) |
+| JBIG-KIT                | 2.1          | GPL-2.0-or-later                                        | JBIG image codec, linked through LibTIFF             |
+| FreeImage               | 3.18.0       | GPL-2.0, GPL-3.0 or FreeImage Public License 1.0        | Image library linked by Open CASCADE                 |
+| LibRaw                  | 0.19.5       | LGPL-2.1 or CDDL-1.0                                    | Camera RAW decoder, linked through FreeImage         |
+| FreeType                | 2.10.1       | FreeType License or GPL-2.0-or-later                    | Font rendering, linked by Open CASCADE               |
+| Fontconfig              | 2.13.1       | MIT-style (Fontconfig license)                          | Font configuration, linked by Open CASCADE           |
+| LibTIFF                 | 4.1.0        | libtiff (BSD-style)                                     | Linked through FreeImage                             |
+| libpng                  | 1.6.37       | libpng License 2.0                                      | Linked through FreeImage and FreeType                |
+| libjpeg-turbo           | 2.0.3        | IJG AND BSD-3-Clause AND Zlib                           | Linked through FreeImage, LibTIFF and LibRaw         |
+| libwebp                 | 0.6.1        | BSD-3-Clause                                            | Linked through FreeImage                             |
+| OpenJPEG                | 2.3.1        | BSD-2-Clause                                            | Linked through FreeImage                             |
+| jxrlib                  | 1.1          | BSD-2-Clause                                            | JPEG XR codec, linked through FreeImage              |
+| OpenEXR / IlmBase       | 2.3.0        | BSD-3-Clause                                            | Linked through FreeImage                             |
+| Little CMS              | 2.9          | MIT                                                     | Linked through FreeImage and LibRaw                  |
+| zstd                    | 1.5.7        | BSD-3-Clause or GPL-2.0                                 | Linked through FreeImage and LibTIFF                 |
+| XZ Utils (liblzma)      | 5.8.3        | 0BSD                                                    | Linked through FreeImage and LibTIFF                 |
+| libuuid (util-linux)    | not recorded | BSD-3-Clause                                            | Linked through Fontconfig                            |
+| libgomp                 | GCC 15.2.0   | GPL-3.0-or-later with GCC Runtime Library Exception 3.1 | OpenMP runtime, linked through FreeImage and LibRaw  |
+
+The wheel copies these libraries into `cadquery_ocp.libs/` and ships no license texts for them. Its SBOM (`cadquery_ocp-7.9.3.1.1.dist-info/sboms/auditwheel.cdx.json`) names the Ubuntu 20.04 packages that supplied JBIG-KIT through Little CMS, whose sources carry the license texts; zstd, liblzma, libuuid and libgomp are not in the SBOM.
+
 **Preview 3D Thumbnail Pipeline Gaussian Splat Conversion (Node.js, pinned by `container/splat-transform/package-lock.json`)**
 
 | Name                        | Version       | License      | Notes                                                                                                                                                                         |

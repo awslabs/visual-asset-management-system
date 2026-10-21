@@ -62,6 +62,8 @@ LGPL license terms apply only when these optional features are enabled. Review t
 
 The 3D Preview Thumbnail pipeline image also installs two MPL-2.0 packages: certifi (required by requests) and tqdm (required by open3d). `NOTICE.md` lists both.
 
+When the 3D Preview Thumbnail pipeline reads a STEP file, it also loads the native libraries that the cadquery-ocp wheel bundles with Open CASCADE. They include JBIG-KIT (GPL-2.0-or-later), FreeImage (GPL-2.0, GPL-3.0 or the FreeImage Public License), LibRaw (LGPL-2.1 or CDDL-1.0) and FreeType (FreeType License or GPL-2.0-or-later). `NOTICE.md` lists every bundled library with its version and license.
+
 ### 3D Preview Thumbnail Gaussian Splat Conversion Notice
 
 The 3D Preview Thumbnail pipeline converts `.spz`, `.sog`, `.ksplat`, `.lcc`, `.lcc2` and `.compressed.ply` Gaussian splats with the PlayCanvas [splat-transform](https://github.com/playcanvas/splat-transform) CLI (MIT license), installed at an exact version from a committed `package-lock.json`, and runs it on a pinned [Node.js](https://nodejs.org/) 22 release (MIT license) whose tarball is verified by SHA-256 when the image is built. Its dependency tree is permissively licensed (MIT, ISC, BSD-3-Clause, including the Dawn binaries bundled in `webgpu`); the full list is in `NOTICE.md`. Conversion runs on the CPU; no GPU is used.
