@@ -39,7 +39,7 @@ import {
     Popover,
     Icon,
 } from "@cloudscape-design/components";
-import { useNavigate } from "react-router";
+import { useNavigate, useParams } from "react-router";
 import DatabaseSelector from "../../components/selectors/DatabaseSelector";
 import { previewFileFormats, PREVIEW_FILE_PATTERN } from "../../common/constants/fileFormats";
 import { MAX_PREVIEW_FILE_SIZE } from "../../constants/uploadLimits";
@@ -59,7 +59,7 @@ import onSubmit, { onUploadRetry, UploadExecutionProps } from "./onSubmit";
 import DragDropFileUpload from "../../components/form/DragDropFileUpload";
 import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUploadTable";
 import localforage from "localforage";
-import { fetchTagsForAsset, fetchTagTypesForAsset } from "../../services/APIService";
+import { fetchDatabase, fetchTagsForAsset, fetchTagTypesForAsset } from "../../services/APIService";
 import { buildTagOptionGroups } from "../../common/utils/tagOptions";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import { TagType } from "../Tag/TagType.interface";
@@ -427,6 +427,34 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
     // holds before the fetch settles. `tagsLoaded` separates the two so the step is not reported
     // valid on a requirement that is merely unknown.
     const [tagsLoaded, setTagsLoaded] = useState(false);
+    const { databaseId: routeDatabaseId } = useParams<{ databaseId: string }>();
+    const databaseChosen = useRef(false);
+
+    // `/upload/:databaseId` preselects that database, with the upload restrictions the selector
+    // would carry, once its record loads. A database the caller cannot read leaves the choice to
+    // them, and neither a database the form already holds nor one picked meanwhile is replaced.
+    useEffect(() => {
+        if (!routeDatabaseId || assetDetailState.databaseId) return;
+        let cancelled = false;
+        fetchDatabase({ databaseId: routeDatabaseId }).then((database: any) => {
+            if (cancelled || databaseChosen.current) return;
+            if (!database || typeof database !== "object") return;
+            if (database.databaseId !== routeDatabaseId) return;
+            assetDetailDispatch({
+                type: "UPDATE_ASSET_DATABASE",
+                payload: {
+                    databaseId: routeDatabaseId,
+                    restrictMetadataOutsideSchemas:
+                        database.restrictMetadataOutsideSchemas || false,
+                    restrictFileUploadsToExtensions: database.restrictFileUploadsToExtensions || "",
+                },
+            });
+        });
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [routeDatabaseId]);
 
     useEffect(() => {
         if (!assetDetailState.tags) {
@@ -594,6 +622,7 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
                 >
                     <DatabaseSelector
                         onChange={(x: any) => {
+                            databaseChosen.current = true;
                             assetDetailDispatch({
                                 type: "UPDATE_ASSET_DATABASE",
                                 payload: {
