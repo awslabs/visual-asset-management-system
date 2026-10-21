@@ -56,7 +56,8 @@ except Exception as e:
     logger.info(f"Deadline Cloud client unavailable in this partition: {e}")
     deadline_client = None
 # Used only to stop a registered SageMaker training job or pipeline execution while reconciling a
-# failed run. Built the same way for the same reason; a None client reports the job as left running.
+# failed run, and to read its status when that stop is refused. Built the same way for the same
+# reason; a None client reports the job as left running.
 try:
     sagemaker_client = boto3.client('sagemaker', config=retry_config)
 except Exception as e:

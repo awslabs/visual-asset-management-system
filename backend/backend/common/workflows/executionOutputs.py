@@ -659,9 +659,9 @@ _SAGEMAKER_PIPELINE_SETTLED_STATUSES = frozenset(("Stopped", "Stopping", "Succee
 # running, as the service returns it (StopTrainingJob: "The request was rejected because the training
 # job is in status Stopped." / "... Completed."; StopPipelineExecution: "Pipeline execution with ARN
 # ... status 'Failed'. Only pipelines with 'Executing' status can be stopped."). Consulted only when the
-# Describe* call that normally classifies the refusal is itself unavailable (the failure path's role
-# holds the Stop grants alone), so a rewording degrades to a false "may still be running" warning there
-# rather than to a wrong classification. The unit tests pin these strings verbatim.
+# Describe* call that normally classifies the refusal itself fails (a throttle, a denial or a transient
+# service error), so a rewording degrades to a false "may still be running" warning there rather than to
+# a wrong classification. The unit tests pin these strings verbatim.
 _SAGEMAKER_TRAINING_NOT_RUNNING_RE = re.compile(
     r"training job is in status (Stopped|Stopping|Completed|Failed)\b", re.IGNORECASE)
 _SAGEMAKER_PIPELINE_NOT_RUNNING_RE = re.compile(
@@ -688,8 +688,8 @@ def _classify_sagemaker_stop_error(error, what, describe_status, settled_statuse
     code. For a state refusal the resource's live status is read through `describe_status` — on this
     exception path only, never on a stop that succeeded — and a status in `settled_statuses` is
     benign while any other status (a job still InProgress / Executing whose stop was refused) is
-    reported with that status. When Describe itself fails (the failure path's role holds no Describe
-    grant), the refusal is classified by SageMaker's own message against `not_running_re`, and a
+    reported with that status. When Describe itself fails (a throttle, a denial or a transient service
+    error), the refusal is classified by SageMaker's own message against `not_running_re`, and a
     message outside that wording is reported as the refusal code.
 
     The returned `reason` carries only an AWS error code or a SageMaker status word, never the service

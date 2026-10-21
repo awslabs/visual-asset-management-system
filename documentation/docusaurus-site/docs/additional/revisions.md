@@ -70,6 +70,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Potree point cloud viewer pipeline** — The container job role can send the workflow task-token heartbeat (`states:SendTaskHeartbeat`, scoped to the deployment account and region), so a long PDAL/Potree conversion keeps its parent task alive instead of logging an `AccessDeniedException` on every heartbeat.
 -   **`/generate-permissions` agent skill** — The deny-tagged overlay guidance and example use `is_one_of` on the list-valued `tags` field (previously `contains`, which the constraint API rejects), and the operator table states that `tags` accepts only `is_one_of` / `is_not_one_of`. (issue #391)
 -   **Assertion-shape guard passes on development** — The assetLinks batch_get helper test asserts the recorded `sleep` call count before asserting over its contents, so a zero-sleep test double fails instead of passing vacuously. (issue #414)
+-   **SageMaker stop on workflow failure classified by status** — The workflow error handler holds `sagemaker:DescribeTrainingJob` and `sagemaker:DescribePipelineExecution` on the same account and Region namespaces as its SageMaker Stop grants, so a refused stop of a registered training job or pipeline execution is classified by the job's live status, as on abort, rather than by the service's error wording. (issue #505)
 
 **Other changes:**
 
@@ -94,6 +95,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 -   **File view opens another asset's file without a reload** — Opening a file of a different asset in the same browser tab, for example by pasting its link into the address bar, loads that asset's file instead of showing "File Not Found" until the page is reloaded. (issue #492)
 -   **File view opens another file of the same asset without a reload** — Opening a different file of the same asset in the same browser tab, for example by pasting its link into the address bar, shows that file and any version the link names, instead of returning to the previous file or alternating between the two. (issue #496)
+-   **File view loads a link without a version once** — Opening a file from a link that names no version no longer looks the file up and shows the loading spinner a second time after the page adds the latest version to the URL. (issue #512)
 
 **Other changes:**
 
