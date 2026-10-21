@@ -361,8 +361,8 @@ Partition(): string  // Returns current partition
 **Encryption at rest for a new resource.** Any resource that supports encryption at rest takes
 `storageResources.encryption.kmsKey`, which is `undefined` when `config.app.useKmsCmkEncryption.enabled` is
 false. Log groups, EFS file systems and secrets have no encryption type to choose; they take the key and fall
-back to their service default without it. DynamoDB tables, S3 buckets and SQS queues choose the encryption
-type from the key (`encryption: kmsKey ? <customer managed type> : <service type>`). Given `CUSTOMER_MANAGED`,
+back to their service default without it. DynamoDB tables, S3 buckets, SQS queues and ECR repositories choose
+the encryption type from the key (`encryption: kmsKey ? <customer managed type> : <service type>`). Given `CUSTOMER_MANAGED`,
 `KMS` or `DSSE` and no key, CDK creates a new customer managed key for that one resource and retains it when
 the stack is deleted, and `kmsKeyLambdaPermissionAddToResourcePolicy`, handed the undefined shared key, grants
 nothing on it. SNS topics take the key as `masterKey` and have no server-side encryption without it. Inside
@@ -378,6 +378,14 @@ is defined exactly when the flag is on.
 | `logs.LogGroup`         | `encryptionKey`                      | The key policy already admits the Logs service principal      |
 | `efs.FileSystem`        | `encrypted: true` + `kmsKey`         | See trap 1                                                    |
 | `secretsmanager.Secret` | `encryptionKey`                      | See trap 2                                                    |
+| `ecr.Repository`        | `encryption` + `encryptionKey`       | `KMS` with the key imported by ARN, `AES_256` without         |
+
+An `ecr.Repository`'s encryption is immutable, so changing it replaces the repository, and AWS CloudFormation
+cannot replace an explicitly named resource under the same name. An explicit `repositoryName` must therefore
+change with the encryption, as `coordinateTransformCodeBuild-construct.ts` does with its `-kms` suffix. A
+CodeBuild build trigger that does not wait for the image carries the repository URI as a property, so the
+replacement re-fires the build into the new repository. Import the key by ARN, as for secrets (trap 2);
+Amazon ECR creates its own grants on the key, so the build and pull roles need no key permission.
 
 Three traps, each of which passes `cdk synth` and fails later:
 
@@ -423,7 +431,8 @@ node -e "const t=require('/tmp/cyclecheck/<stack>.template.json');
 ```
 
 Regression coverage for all of the above: `test/security/inPlaceUpdateSafety.test.ts`, which asserts the CMK-on and
-CMK-off directions, the exemption list, and the nested-stack dependency direction.
+CMK-off directions, the exemption list, and the nested-stack dependency direction;
+`test/pipelines/codeBuildEcrEncryption.test.ts` does the same for the CodeBuild repositories and their CMK flip.
 
 **S3 TLS enforcement.** Every S3 bucket gets `requireTLSAndAdditionalPolicyAddToResourcePolicy(bucket, config)` — Deny policy for `s3:*` when `aws:SecureTransport=false`, plus optional additional policy from `config/policy/s3AdditionalBucketPolicyConfig.json`.
 
