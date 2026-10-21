@@ -90,7 +90,7 @@ None.
 ```json
 {
     "region": "us-east-1",
-    "api": "https://abc123.execute-api.us-east-1.amazonaws.com/api",
+    "api": "https://abc123.execute-api.us-east-1.amazonaws.com/api/",
     "cognitoUserPoolId": "us-east-1_AbCdEfGhI",
     "cognitoAppClientId": "1a2b3c4d5e6f7g8h9i0j",
     "cognitoIdentityPoolId": "us-east-1:12345678-abcd-efgh-ijkl-123456789012",
@@ -105,7 +105,7 @@ None.
 | Field                     | Type   | Description                                                                                                                                     |
 | ------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `region`                  | string | Deployment Region.                                                                                                                              |
-| `api`                     | string | API base URL, including the stage path.                                                                                                         |
+| `api`                     | string | Stage-inclusive API Gateway invoke URL with a trailing slash; every other path is relative to it. See [Base URL](overview.md#base-url).         |
 | `cognitoUserPoolId`       | string | Amazon Cognito user pool identifier; `"undefined"` when Cognito is not the authentication provider.                                             |
 | `cognitoAppClientId`      | string | Amazon Cognito app client identifier; `"undefined"` when Cognito is not the authentication provider.                                            |
 | `cognitoIdentityPoolId`   | string | Amazon Cognito identity pool identifier; `"undefined"` when Cognito is not the authentication provider.                                         |
