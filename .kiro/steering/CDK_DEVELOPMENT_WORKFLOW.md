@@ -14,6 +14,8 @@ infra/
 │   └── infra.ts              # CDK entry point with stack orchestration
 ├── config/
 │   ├── config.ts             # Main configuration system with interfaces
+│   ├── configFile.ts         # resolveConfigFilePath(): CDK context `configFile` names the file (default config.json;
+│   │                         #   a name or relative path resolves in config/, an absolute path is used as given)
 │   ├── config.json           # Deployment-specific configuration
 │   ├── saml-config.ts        # SAML authentication configuration
 │   └── policy/               # IAM policy templates and configurations

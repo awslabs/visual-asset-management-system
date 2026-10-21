@@ -61,6 +61,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Append-only upload deny lists** — An add-on or fork can add blocked file extensions and MIME types; it cannot unblock a core entry. (issue #456)
 -   **Open `objectType` in the API spec** — `objectType` in the constraint request schemas of `VAMS_API.yaml` is a name pattern with the core types in its description instead of a closed enum. (issue #456)
 -   **Extending VAMS in a fork guide** — A developer guide page lists every extension point list by list (core, add-on and custom files), the permission object type and deny-list rules, the recommended naming conventions and the known limits, with a worked example covering each hook that registers its own `widget` object type and ships an inline constraint template; the permissions, API, architecture and developer pages describe extension object types, and the `/add-api-endpoint`, `/add-pipeline` and `/generate-permissions` agent skills gain fork notes. (issue #456)
+-   **Selectable configuration file** — The CDK context parameter `configFile` names the configuration file a deployment reads (`-c configFile=config.staging.json`), resolved in `infra/config/` unless it is an absolute path; without it the CDK app reads `config.json`. A missing or malformed file fails synthesis naming the path it tried, and `npm run check.quotas -- --config-file <name>` checks the same file. (issue #566)
 
 **Key fixes:**
 

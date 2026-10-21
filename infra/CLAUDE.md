@@ -33,6 +33,7 @@ infra/
     customResourceParamKeys.ts  # FORK EXTENSION POINT: custom SSM keys (mirrored in backend/custom/customResourceNames.py)
   config/
     config.ts                   # Config interfaces, getConfig(), constants
+    configFile.ts               # resolveConfigFilePath(): CDK context `configFile` -> path (default config.json)
     config.json                 # Active deployment configuration
     config.template.{commercial,govcloud,eusovereign}.json
     saml-config.ts              # SAML provider settings
@@ -180,7 +181,7 @@ Outside the core stack, `bin/infra.ts` creates the WAF stacks and, for each Regi
 
 ## Configuration System
 
-Configuration values resolve in order: CDK context (`-c key=value`) → `config/config.json` → environment variables → hardcoded defaults. `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetConfig(config)`.
+Configuration values resolve in order: CDK context (`-c key=value`) → `config/config.json` → environment variables → hardcoded defaults. `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetConfig(config)`. The file is `config/config.json` unless CDK context `configFile` names another (`-c configFile=config.staging.json`); `config/configFile.ts` (`resolveConfigFilePath`) resolves a name or relative path in `config/` and leaves an absolute path as given, and `scripts/assertDeployQuotas.ts` resolves its `--config-file` argument through the same function. Tests that mock `fs.readFileSync` on `p.endsWith("config.json")` keep working because the default path still ends in `config.json`.
 
 ### Key Constants (config/config.ts)
 

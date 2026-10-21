@@ -6,6 +6,20 @@ This page documents every configuration option available in the VAMS deployment 
 Configuration values are resolved using a fallback chain: CDK context parameters (`-c key=value`) take highest priority, followed by values in `config.json`, then environment variables, and finally hardcoded defaults.
 :::
 
+## Selecting the configuration file
+
+The CDK app reads `infra/config/config.json` unless the `configFile` context parameter names another file:
+
+```bash
+npx cdk deploy --all --require-approval never -c configFile=config.staging.json
+```
+
+| Parameter    | Default       | Description                                                                                                                                                                                                        |
+| ------------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `configFile` | `config.json` | The configuration file to read. A file name or relative path resolves in `infra/config/`; an absolute path is used as given. Synthesis fails with the path it tried when the file is missing or is not valid JSON. |
+
+The selected file has the same structure as `config.json`, and every option on this page applies to it. Where this page refers to `config.json`, it means the selected file. The pre-deploy quota check takes the same file with `npm run check.quotas -- --config-file <name>`.
+
 ## Top-level settings
 
 | Field  | Type   | Default | Description                                            |
