@@ -345,6 +345,10 @@ def lambda_handler(event, context):
     Returns:
         Dictionary with status code and message
     """
+    # The logger keeps its keys in a reused execution environment, so the previous invocation's
+    # workflow execution id is removed before anything is logged.
+    logger.remove_keys(['workflowExecutionId'])
+
     # Nothing from the event is logged until the task-token check has passed, and the event itself
     # is never logged: a run whose pipeline was registered with a callback by mistake carries a
     # Step Functions task token in its body, and this container's logger does not redact it. Only
@@ -367,6 +371,14 @@ def lambda_handler(event, context):
     # Check external task token if passed (Synchronous Pipeline so no task token should be passed)
     if 'TaskToken' in data:
         raise Exception("VAMS Workflow TaskToken found in pipeline input. Make sure to register this pipeline in VAMS as NOT needing a task token callback.")
+
+    # VAMS shows this step's log by reading the function's log group, which every run shares, for the
+    # lines that contain the run's workflow execution id. An extractor's warning names no S3 path that
+    # would carry it, so the id goes on every line from here on; the extractors log through child
+    # loggers of this one, which share its keys. A direct invocation without one logs without it.
+    workflow_execution_id = data.get('workflowExecutionId')
+    if isinstance(workflow_execution_id, str) and workflow_execution_id:
+        logger.append_keys(workflowExecutionId=workflow_execution_id)
 
     logger.info("Metadata extraction request received", extra={
         "inputManifestS3Location": data.get('inputManifestS3Location', ''),

@@ -13,7 +13,8 @@ from typing import Dict, Any, List, Optional, Tuple
 import trimesh
 from common.logger import safeLogger
 
-logger = safeLogger(service="cadMetadataExtraction_MeshExtractor")
+# A child of the handler's logger (lambda.py), so its lines carry the keys the handler appends.
+logger = safeLogger(service="cadMetadataExtractionPipeline", child=True)
 
 def extract_mesh_metadata(file_path: str) -> Dict[str, Any]:
     """
