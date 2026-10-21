@@ -118,6 +118,14 @@ export const DEFAULT_EXECUTION_LOG_READ_PREFIXES: readonly string[] = [
 // synchronous request/response API. Compared against, never assigned.
 export const API_GATEWAY_MAX_TIMEOUT_SECONDS = 300;
 
+/**
+ * Region names accepted for an external bucket's bucketRegion: a partition prefix
+ * (us, eu, ap, cn, eusc, ...), one or more area words (east, gov-west, iso-east,
+ * de-east, ...) and a digit. Rejects Availability Zone names and other malformed values
+ * without pinning the list of Regions, which grows.
+ */
+export const AWS_REGION_NAME_PATTERN = /^[a-z]{2,4}(-[a-z]+)+-\d{1,2}$/;
+
 // Amazon Cognito's username limit. Used to reject an over-long app.adminUserId at synthesis rather
 // than letting CreateUser fail mid-deploy and roll the core stack back.
 export const COGNITO_USERNAME_MAX_LENGTH = 128;
@@ -3495,14 +3503,6 @@ export interface ConfigPublicAssetS3Buckets {
     bucketRegion?: string;
     bucketKmsKeyArn?: string;
 }
-
-/**
- * Region names accepted for an external bucket's bucketRegion: a partition prefix
- * (us, eu, ap, cn, eusc, ...), one or more area words (east, gov-west, iso-east,
- * de-east, ...) and a digit. Rejects Availability Zone names and other malformed values
- * without pinning the list of Regions, which grows.
- */
-export const AWS_REGION_NAME_PATTERN = /^[a-z]{2,4}(-[a-z]+)+-\d{1,2}$/;
 
 /**
  * External asset bucket entries whose bucketRegion is set and differs from the
