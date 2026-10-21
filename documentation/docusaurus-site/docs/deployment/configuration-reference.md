@@ -684,7 +684,7 @@ Nested stack: `infra/lib/nestedStacks/pipelines/preview/pcPotreeViewer/pcPotreeV
 
 ### 3D preview thumbnail (`app.pipelines.usePreview3dThumbnail`)
 
-Generates animated GIF and static PNG preview thumbnails from 3D mesh, point cloud, CAD, and USD files. **Requires VPC.** Uses LGPL-licensed libraries. Supports input files up to 100 GB.
+Generates animated GIF and static PNG or JPEG preview thumbnails from 3D mesh, point cloud, CAD, USD and Gaussian splat files. **Requires VPC.** Uses LGPL-licensed libraries. The largest input is bounded by the free space of the task's 200 GiB work volume.
 
 :::note[Implemented by]
 Nested stack: `infra/lib/nestedStacks/pipelines/preview/3dThumbnail/preview3dThumbnailBuilder-nestedStack.ts` (`Preview3dThumbnailBuilderNestedStack`) — AWS Batch on Fargate.

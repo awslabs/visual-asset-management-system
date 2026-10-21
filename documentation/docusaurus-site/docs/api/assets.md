@@ -749,6 +749,8 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
 }
 ```
 
+Each file's preview path in the export is chosen the way the file listing chooses it: when a file has several `.previewFile.` objects, the newest one that is not archived.
+
 :::note[A Large Asset Is Returned Over Several Pages]
 `maxFiles` bounds the files one page returns across all of its assets, so a page can end before `maxAssets` assets when the budget runs out. An asset holding more files than the budget is returned over successive pages: its entry sets `files_truncated` to `true`, and `NextToken` resumes that asset's file list where the page stopped rather than moving on to the next asset.
 
