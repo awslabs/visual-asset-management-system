@@ -119,7 +119,7 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
                       inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location,
                       orchestration_event_prefix, external_task_token,
                       executing_userName, executing_requestContext, asset_id, database_id, groot_config,
-                      mode="finetune"):
+                      mode="finetune", input_bucket_region="", output_bucket_region=""):
     """
     Execute the Gr00t Fine-Tuning pipeline by invoking the openPipeline Lambda.
     Asset-level pipeline: downloads entire asset, not a single file.
@@ -139,6 +139,10 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "executingRequestContext": executing_requestContext,
         "assetId": asset_id,
         "databaseId": database_id,
+        # The Regions of the input and output asset buckets, from the manifest (empty when a bucket
+        # is in the deployment Region), so the Batch container addresses each bucket in its Region.
+        "inputBucketRegion": input_bucket_region,
+        "outputBucketRegion": output_bucket_region,
         "gr00tConfig": json.dumps(groot_config) if isinstance(groot_config, dict) else groot_config,
         # Lifted out of the resolved config so constructPipeline can name the Batch job and the
         # container can branch. 'finetune' unless a template asked for 'evaluate'.
@@ -330,7 +334,9 @@ def lambda_handler(event, context):
             resolved['assetId'],
             resolved['databaseId'],
             groot_config,
-            mode
+            mode,
+            input_bucket_region=resolved['inputBucketRegion'],
+            output_bucket_region=resolved['outputBucketRegion'],
         )
 
         return {

@@ -9,6 +9,7 @@ import "source-map-support/register";
 import * as cdk from "aws-cdk-lib";
 import { CoreVAMSStack } from "../lib/core-stack";
 import { buildWafStacks } from "../lib/cf-waf-stack";
+import { buildCrossRegionBucketNotificationStacks } from "../lib/crossRegionBucketNotifications-stack";
 import { AwsSolutionsChecks, NagSuppressions, NIST80053R5Checks } from "cdk-nag";
 import { Aspects, Annotations } from "aws-cdk-lib";
 import * as Config from "../config/config";
@@ -40,6 +41,15 @@ if (config.enableCdkNag) {
 const vamsCoreStackName = `${config.name}-core-${config.app.baseStackName}`;
 config.env.coreStackName = vamsCoreStackName;
 
+// One notification stack per Region that holds an external asset bucket outside the deployment
+// Region (Amazon S3 delivers bucket notifications only within the bucket's Region). None when every
+// asset bucket is in the deployment Region. The core stack subscribes its queues to these topics.
+const crossRegionBuckets = buildCrossRegionBucketNotificationStacks(
+    app,
+    config,
+    buildBootstrapSynthesizer(config)
+);
+
 // let ssmWafArn: string = "";
 
 //Deploy with WAF?
@@ -54,6 +64,7 @@ if (wafStacks) {
         },
         ssmWafArnRegional: wafStacks.regional.wafArn,
         ssmWafArnCloudfront: wafStacks.cloudfront ? wafStacks.cloudfront.wafArn : "",
+        crossRegionBucketTopics: crossRegionBuckets.topics,
         config: config,
         description: STACK_CORE_DESCRIPTION,
         synthesizer: buildBootstrapSynthesizer(config),
@@ -63,12 +74,17 @@ if (wafStacks) {
     if (wafStacks.cloudfront) {
         coreVamsStack.addStackDependency(wafStacks.cloudfront);
     }
+    for (const crossRegionStack of crossRegionBuckets.stacks) {
+        coreVamsStack.addStackDependency(crossRegionStack);
+    }
 
     //Stack level NAG supressions
     if (config.app.govCloud.enabled) {
         // Enable checks for NIST 800-53 R5
         // TODO: RE-ENABLE WHEN WORKING THROUGH ISSUES
         // Aspects.of(app).add(new NIST80053R5Checks({verbose: true}));
+        // (The cross-Region bucket notification stacks already run this check pack: see
+        // buildCrossRegionBucketNotificationStacks, which applies it under this same condition.)
 
         // Feature check suppression
         NagSuppressions.addStackSuppressions(
@@ -100,16 +116,23 @@ else {
         },
         ssmWafArnRegional: "",
         ssmWafArnCloudfront: "",
+        crossRegionBucketTopics: crossRegionBuckets.topics,
         config: config,
         description: STACK_CORE_DESCRIPTION,
         synthesizer: buildBootstrapSynthesizer(config),
     });
+
+    for (const crossRegionStack of crossRegionBuckets.stacks) {
+        coreVamsStack.addStackDependency(crossRegionStack);
+    }
 
     //Stack level NAG supressions
     if (config.app.govCloud.enabled) {
         // Enable checks for NIST 800-53 R5
         // TODO: RE-ENABLE WHEN WORKING THROUGH ISSUES
         // Aspects.of(app).add(new NIST80053R5Checks({verbose: true}));
+        // (The cross-Region bucket notification stacks already run this check pack: see
+        // buildCrossRegionBucketNotificationStacks, which applies it under this same condition.)
 
         // Feature check suppression
         NagSuppressions.addStackSuppressions(

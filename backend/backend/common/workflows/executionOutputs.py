@@ -217,7 +217,7 @@ def _key_eq(attr, value):
 # ---------------------------------------------------------------------------
 
 def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, output_files_prefix,
-                                 current_output_files=None):
+                                 current_output_files=None, output_bucket_region=""):
     """Resolve the next pipeline's input FILE entries (the shadowing logic).
 
     original_inputs: list of self-locating entries {relativePath, databaseId, assetId,
@@ -231,7 +231,10 @@ def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, outp
         located in the output bucket.
 
     current_output_files: the output-files listing when the caller already has it (the attribution
-        step in the same invocation lists the identical set), so the listing is not repeated."""
+        step in the same invocation lists the identical set), so the listing is not repeated.
+
+    output_bucket_region: the output bucket's Region, carried as bucketRegion on every entry that
+        points into it (shadowed inputs and new output files); an original input keeps its own."""
     output_files = (current_output_files if current_output_files is not None
                     else list_current_output_files(s3_client, output_bucket, output_files_prefix))
     output_by_rel = {}
@@ -251,19 +254,23 @@ def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, outp
                 rel, output_bucket, shadow["key"], shadow.get("versionId", ""),
                 database_id=entry.get("databaseId", ""), asset_id=entry.get("assetId", ""),
                 asset_root_s3_key=entry.get("assetRootS3Key", ""),
-                aux_preview_prefix=entry.get("auxPreviewPrefix", "")))
+                aux_preview_prefix=entry.get("auxPreviewPrefix", ""),
+                bucket_region=output_bucket_region))
         else:
             resolved.append(er.build_manifest_entry(
                 rel, entry.get("bucket", ""), entry.get("key", ""), entry.get("versionId", ""),
                 database_id=entry.get("databaseId", ""), asset_id=entry.get("assetId", ""),
                 asset_root_s3_key=entry.get("assetRootS3Key", ""),
-                aux_preview_prefix=entry.get("auxPreviewPrefix", "")))
+                aux_preview_prefix=entry.get("auxPreviewPrefix", ""),
+                bucket_region=entry.get("bucketRegion", ""),
+                bucket_account_id=entry.get("bucketAccountId", "")))
 
     # New output files (no matching original input path) become additional inputs, located in
     # the output bucket (no originating asset identity).
     for rel, f in output_by_rel.items():
         if rel not in seen_rel:
-            resolved.append(er.build_manifest_entry(rel, output_bucket, f["key"], f.get("versionId", "")))
+            resolved.append(er.build_manifest_entry(rel, output_bucket, f["key"], f.get("versionId", ""),
+                                                    bucket_region=output_bucket_region))
     return resolved
 
 
@@ -283,7 +290,8 @@ def build_resolved_manifest(s3_client, original_inputs, output_bucket, output_fi
     ctx = envelope_context or {}
     resolved_files = resolve_manifest_input_files(
         s3_client, original_inputs, output_bucket, output_files_prefix,
-        current_output_files=current_output_files)
+        current_output_files=current_output_files,
+        output_bucket_region=(ctx.get("outputs") or {}).get("bucketRegion", ""))
     return er.build_manifest_envelope(
         input_files=resolved_files,
         input_metadata_s3_location=ctx.get("inputMetadataS3Location", ""),
@@ -605,9 +613,9 @@ _SAGEMAKER_PIPELINE_SETTLED_STATUSES = frozenset(("Stopped", "Stopping", "Succee
 # running, as the service returns it (StopTrainingJob: "The request was rejected because the training
 # job is in status Stopped." / "... Completed."; StopPipelineExecution: "Pipeline execution with ARN
 # ... status 'Failed'. Only pipelines with 'Executing' status can be stopped."). Consulted only when the
-# Describe* call that normally classifies the refusal is itself unavailable (the failure path's role
-# holds the Stop grants alone), so a rewording degrades to a false "may still be running" warning there
-# rather than to a wrong classification. The unit tests pin these strings verbatim.
+# Describe* call that normally classifies the refusal itself fails (a throttle, a denial or a transient
+# service error), so a rewording degrades to a false "may still be running" warning there rather than to
+# a wrong classification. The unit tests pin these strings verbatim.
 _SAGEMAKER_TRAINING_NOT_RUNNING_RE = re.compile(
     r"training job is in status (Stopped|Stopping|Completed|Failed)\b", re.IGNORECASE)
 _SAGEMAKER_PIPELINE_NOT_RUNNING_RE = re.compile(
@@ -634,8 +642,8 @@ def _classify_sagemaker_stop_error(error, what, describe_status, settled_statuse
     code. For a state refusal the resource's live status is read through `describe_status` — on this
     exception path only, never on a stop that succeeded — and a status in `settled_statuses` is
     benign while any other status (a job still InProgress / Executing whose stop was refused) is
-    reported with that status. When Describe itself fails (the failure path's role holds no Describe
-    grant), the refusal is classified by SageMaker's own message against `not_running_re`, and a
+    reported with that status. When Describe itself fails (a throttle, a denial or a transient service
+    error), the refusal is classified by SageMaker's own message against `not_running_re`, and a
     message outside that wording is reported as the refusal code.
 
     The returned `reason` carries only an AWS error code or a SageMaker status word, never the service

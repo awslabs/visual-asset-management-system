@@ -25,6 +25,32 @@ logger = safeLogger(service="conversionTrimeshPipeline")
 s3_client = boto3.client('s3', config=retry_config)
 s3 = boto3.resource('s3', config=retry_config)
 
+# An asset bucket may be in another Region than this function: the manifest names each bucket's
+# Region, and a request for such a bucket is signed with a client for that Region. Buckets the
+# manifest does not place (the manifest's own bucket, legacy payloads) use the clients above.
+_bucket_regions = {}
+_s3_clients_by_region = {}
+# The regional us-east-1 endpoint rather than the global s3.amazonaws.com, which an interface
+# endpoint's private DNS does not cover inside a VPC.
+_regional_s3_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
+                             s3={'us_east_1_regional_endpoint': 'regional'})
+
+
+def _record_bucket_region(bucket_name, region):
+    if bucket_name and region and region != os.environ.get("AWS_REGION", ""):
+        _bucket_regions[bucket_name] = region
+
+
+def _s3_client_for_bucket(bucket_name):
+    region = _bucket_regions.get(bucket_name)
+    if not region:
+        return s3_client
+    client = _s3_clients_by_region.get(region)
+    if client is None:
+        client = boto3.client('s3', region_name=region, config=_regional_s3_config)
+        _s3_clients_by_region[region] = client
+    return client
+
 
 def download(bucket_name, object_key, file_path):
     logger.info(
@@ -34,7 +60,7 @@ def download(bucket_name, object_key, file_path):
     )
     try:
         with open(file_path, "wb") as data:
-            s3_client.download_fileobj(bucket_name, object_key, data)
+            _s3_client_for_bucket(bucket_name).download_fileobj(bucket_name, object_key, data)
     except ClientError as e:
         logger.exception(e)
         raise Exception("Could not download input file from S3 bucket")
@@ -53,7 +79,7 @@ def uploadV2(bucket_name, object_key, file_path):
         config = TransferConfig(multipart_threshold=1*GB, max_concurrency=10,
                                 multipart_chunksize=100*MB, use_threads=True
                                 )
-        s3.meta.client.upload_file(file_path, bucket_name, object_key,
+        _s3_client_for_bucket(bucket_name).upload_file(file_path, bucket_name, object_key,
                                    ExtraArgs={},
                                    Config=config,
                                    Callback=ProgressPercentage(file_path)
@@ -230,6 +256,7 @@ def resolve_inputs_from_manifest(data):
         first = input_files[0]
         if first.get("bucket") and first.get("key"):
             input_path = f"s3://{first['bucket']}/{first['key']}"
+            _record_bucket_region(first["bucket"], first.get("bucketRegion", ""))
         relative_subdir = relative_subdir_from_manifest_path(first.get("relativePath"))
     input_path = input_path or data.get("inputS3AssetFilePath", "")
     # Output-files path reconstructed from the outputs bucket + bucket-relative files prefix.
@@ -237,6 +264,7 @@ def resolve_inputs_from_manifest(data):
     output_path = ""
     if outputs.get("bucket") and outputs.get("files"):
         output_path = f"s3://{outputs['bucket']}/{outputs['files']}"
+        _record_bucket_region(outputs["bucket"], outputs.get("bucketRegion", ""))
     output_path = output_path or data.get("outputS3AssetFilesPath", "")
     return input_path, output_path, relative_subdir
 

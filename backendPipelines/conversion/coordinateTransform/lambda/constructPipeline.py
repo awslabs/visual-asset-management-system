@@ -222,6 +222,21 @@ def lambda_handler(event, context):
         raise
 
 
+def bucket_regions(event) -> dict:
+    """Bucket name -> Region for the asset buckets this job reads and writes, from the Regions the
+    vamsExecute Lambda resolved from the manifest. The container signs each bucket's requests with a
+    client for that Region. A bucket in the deployment Region (an empty Region, or an event from an
+    older Lambda) is left out: requests for it use the container's default client, as do the
+    auxiliary bucket's."""
+    regions = {}
+    for path_key, region_key in (("inputS3AssetFilePath", "inputBucketRegion"),
+                                 ("outputS3AssetFilesPath", "outputBucketRegion")):
+        uri, region = event.get(path_key) or "", event.get(region_key) or ""
+        if uri.startswith("s3://") and region:
+            regions[uri[len("s3://"):].split("/", 1)[0]] = region
+    return regions
+
+
 def _build_execution_params(event):
     """The state machine payload for the Batch container job."""
 
@@ -275,6 +290,7 @@ def _build_execution_params(event):
     definition = {
         "jobName": event.get("jobName"),
         "stages": [transform_stage],
+        "bucketRegions": bucket_regions(event),
         "assetId": event.get("assetId", ""),
         "databaseId": event.get("databaseId", ""),
         # Declared by the container's PipelineDefinition, so the key travels; the metadata CONTENT

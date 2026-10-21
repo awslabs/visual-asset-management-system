@@ -523,6 +523,8 @@ export function buildInterimPipelineTrackingFunction(
     storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadData(fun);
+    // The Region-routing S3 client resolves a bucket name's Region through the buckets table.
+    storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     // Reads original input files + output-files folder, and writes the next pipeline's
     // resolved input manifest into the asset bucket execution input folder.
     grantReadWritePermissionsToAllAssetBuckets(fun);
@@ -618,9 +620,15 @@ export function buildHandleExecutionErrorFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             // Stop a SageMaker training job or pipeline execution a pipeline this failure is about to
-            // stamp terminal registered as its sub-process. Scoped exactly as the abort path's grant is:
+            // stamp terminal registered as its sub-process, and describe it when the stop is refused so
+            // the refusal is classified by its live status. Scoped exactly as the abort path's grant is:
             // the two share the stop implementation and act on the same registration rows.
-            actions: ["sagemaker:StopTrainingJob", "sagemaker:StopPipelineExecution"],
+            actions: [
+                "sagemaker:StopTrainingJob",
+                "sagemaker:StopPipelineExecution",
+                "sagemaker:DescribeTrainingJob",
+                "sagemaker:DescribePipelineExecution",
+            ],
             resources: [
                 `arn:${Partition()}:sagemaker:${config.env.region}:${
                     config.env.account
