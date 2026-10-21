@@ -29,7 +29,11 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_UNARCHIVE,
     normalize_history_file_path,
 )
-from common.assetProvenance import asset_edit_provenance
+from common.assetProvenance import (
+    ASSET_CHANGE_SOURCE_LINK_CHANGE,
+    asset_edit_provenance,
+    stamp_asset_change,
+)
 from common.assetHistory import (
     CHANGE_SOURCE_EDIT,
     CHANGE_SOURCE_ARCHIVE,
@@ -1617,6 +1621,11 @@ def _delete_asset_links_for_permanent_deletion(databaseId: str, assetId: str, de
     -- the asset row is already gone by this point -- but the lookup itself is not swallowed,
     since a failed lookup here would leave every link behind while the deletion reported
     success.
+
+    Each removed link is recorded on the asset at its other end as a `linkChange`
+    (`common.assetProvenance.stamp_asset_change`, best-effort), so the compliance trigger
+    re-evaluates that asset's relationship and links-scope metadata rules, as a link deleted
+    through the asset-links API does.
     """
     asset_key = f"{databaseId}:{assetId}"
     link_ids = {}
@@ -1638,6 +1647,13 @@ def _delete_asset_links_for_permanent_deletion(databaseId: str, assetId: str, de
                 f"{asset_links_table_name} (assetLinkId={asset_link_id})")
         except Exception as e:
             logger.warning(f"Error deleting asset link {asset_link_id} for asset {assetId}: {e}")
+            continue
+        for db_attr, asset_attr in (("fromAssetDatabaseId", "fromAssetId"),
+                                    ("toAssetDatabaseId", "toAssetId")):
+            other = (item.get(db_attr), item.get(asset_attr))
+            if all(other) and other != (databaseId, assetId):
+                stamp_asset_change(asset_table, other[0], other[1],
+                                   ASSET_CHANGE_SOURCE_LINK_CHANGE)
 
 def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles):
     """Permanently delete an asset from all systems
