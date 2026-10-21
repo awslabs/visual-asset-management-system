@@ -91,7 +91,11 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap a tool so API/client errors are returned as data, not exceptions.
 
     Agents handle a structured ``{"error": ...}`` far better than a raised
-    exception, and it keeps one failing call from derailing a session.
+    exception, and it keeps one failing call from derailing a session. The
+    result is ``{"error", "error_type"}`` plus the exception's ``json_fields``,
+    which never replace those two: a ``RequestBlockedError`` (a request the
+    deployment's AWS WAF web ACL blocked) carries ``blockedBy`` and, when
+    known, ``requestId``.
     """
 
     @functools.wraps(fn)
@@ -99,7 +103,14 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
         try:
             return fn(*args, **kwargs)
         except Exception as exc:  # noqa: BLE001 - surface any failure cleanly
-            return {"error": str(exc), "error_type": type(exc).__name__}
+            result = {"error": str(exc), "error_type": type(exc).__name__}
+            # Machine-readable facts the exception carries (for example blockedBy and requestId), as
+            # the CLI's --json-output carries them.
+            fields = getattr(exc, "json_fields", None)
+            if isinstance(fields, dict):
+                for key, value in fields.items():
+                    result.setdefault(key, value)
+            return result
 
     return wrapper
 
