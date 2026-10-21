@@ -12374,7 +12374,7 @@ components:
                     nullable: true
                 previewFile:
                     type: string
-                    description: "Path to the preview file for this file, if any. Empty string if no preview file exists."
+                    description: "Path to the preview file for this file: the newest non-archived `.previewFile.` object when several exist. Empty string if no preview file exists."
                 changeSource:
                     type: string
                     description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileUnarchive, fileRevert, fileMetadataUpdate). Blank or absent for versions created before change provenance tracking was introduced."
@@ -12483,7 +12483,7 @@ components:
                     nullable: true
                 previewFile:
                     type: string
-                    description: "Path to the preview file for this file, if any. Empty string if no preview file exists."
+                    description: "Path to the preview file for this file: the newest non-archived `.previewFile.` object when several exist. Empty string if no preview file exists."
                 changeSource:
                     type: string
                     description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileUnarchive, fileRevert, fileMetadataUpdate). Blank or absent for versions created before change provenance tracking was introduced."
