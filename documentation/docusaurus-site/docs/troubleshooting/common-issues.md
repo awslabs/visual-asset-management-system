@@ -426,6 +426,16 @@ Because the alarm names worker responsiveness rather than an IAM permission, thi
 
 See [Configuration reference](../deployment/configuration-reference.md) for the full list of operator-supplied Deadline Cloud prerequisites.
 
+### 3D Preview Thumbnail Run Fails on a Large or Complex File
+
+**Symptoms:**
+
+-   The execution fails with a message such as `does not fit on the work volume`, `Out of memory loading the 3D file`, `FBX scene places more than`, `FBX file nests deeper than 256 levels`, `STEP assembly places more than 1,000,000 components`, `splat-transform did not finish within 1800 s`, `has an implausible compression ratio`, or `LCC2 chunk file`
+
+**Resolution:**
+
+These are fixed limits of the pipeline (see [Quotas](../additional/quotas.md)). Reduce or split the input; for an FBX file, export it as FBX 2011 (7.1) or later. For an `.lcc2` scene, upload its `data/3dgs/` folder beside the `.lcc2` file in the same asset. The AWS Batch job log in Amazon CloudWatch records the input size, the render budgets and each phase's duration.
+
 ### Pipeline Timeout vs. Workflow Timeout
 
 Pipeline step timeouts and overall workflow timeouts are configured separately. A pipeline step that exceeds its timeout will cause the workflow to fail.
@@ -437,7 +447,7 @@ Pipeline step timeouts and overall workflow timeouts are configured separately. 
 
 **Resolution:**
 
-Adjust the timeout values in the pipeline or workflow configuration. Large files (approaching the 100 GB limit for the 3D Thumbnail pipeline) may require extended processing time. Monitor the AWS Batch job logs and AWS Step Functions execution history to determine appropriate timeout values.
+Adjust the timeout values in the pipeline or workflow configuration. Large files may need more than the 1-hour job limit of the 3D Preview Thumbnail pipeline. Monitor the AWS Batch job logs and AWS Step Functions execution history to determine appropriate timeout values.
 
 :::tip
 For long-running pipeline operations, check the AWS Batch job logs in Amazon CloudWatch rather than relying solely on the API response or web UI status.
