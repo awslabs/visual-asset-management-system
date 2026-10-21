@@ -1,14 +1,15 @@
 openapi: "3.0.1"
 info:
     title: "Amazon Visual Asset Management System API"
-    description: "REST API (v1) for the Visual Asset Management System (VAMS). All endpoints are secured by a custom Lambda authorizer that validates JWT tokens from Amazon Cognito or external OAuth providers, and enforces two-tier ABAC/RBAC authorization. Surrounding whitespace is removed from a submitted `description` or version `comment` before any length constraint is applied and before the value is stored, so the value returned by a subsequent read is the trimmed one; a padded value whose trimmed length falls below the declared minLength is rejected. This applies to asset, asset version, database, tag, tag type, role, permission constraint and API key requests. Pipeline, pipeline template and workflow descriptions are stored as submitted. File paths, S3 keys, echoed upload tokens and search terms are never trimmed, because a surrounding space is part of the key or changes which rows match."
+    description: "REST API (v1) for the Visual Asset Management System (VAMS). All endpoints are secured by a custom Lambda authorizer that validates JWT tokens from Amazon Cognito or external OAuth providers, and enforces two-tier ABAC/RBAC authorization. Surrounding whitespace is removed from a submitted `description` or version `comment` before any length constraint is applied and before the value is stored, so the value returned by a subsequent read is the trimmed one; a padded value whose trimmed length falls below the declared minLength is rejected. This applies to asset, asset version, database, tag, tag type, role, permission constraint and API key requests. Pipeline, pipeline template and workflow descriptions are stored as submitted. File paths, S3 keys, echoed upload tokens and search terms are never trimmed, because a surrounding space is part of the key or changes which rows match. With AWS WAF enabled (`app.useWaf`), any operation can answer `403` before the request reaches VAMS when the deployment's web ACL blocks it at the API Gateway stage; that answer is the `RequestBlocked` response (`#/components/responses/RequestBlocked`), whose body carries `message`, `blockedBy: waf` and `requestId`, API Gateway's extended request ID, while a `403` from an authorization denial carries no `blockedBy`."
     version: "2022-01-27 01:29:36UTC"
 servers:
     - url: "{apiGatewayUrl}"
-      description: "Amazon API Gateway REST API invoke URL. The stage path (default: /api) is absorbed by the web distribution fronting (CloudFront or ALB)."
+      description: "Amazon API Gateway REST API invoke URL, including the fixed `api` stage path: `https://{restApiId}.execute-api.{region}.amazonaws.com/api`, with the domain suffix of the deployment's partition. Every path in this document is relative to it, so `/assets` is requested at `.../api/assets` and `/api/amplify-config` at `.../api/api/amplify-config`. The URL is the same whether the web application is served through Amazon CloudFront, through an Application Load Balancer (ALB), or not deployed. The web application URL reaches only a few of these paths: the CloudFront `/api/*` behavior forwards to the stage, which serves only `/api/amplify-config` and `/api/version` under that prefix, and the ALB answers `/api*` and `/secure-config*` with a 302 redirect to the stage. Call every other path on the invoke URL. A `PRIVATE` endpoint is reachable only through an execute-api VPC interface endpoint, either one VAMS created or one supplied through `optionalExternalPrivateApigVPCEId`. `GET /api/amplify-config` returns this URL, with a trailing slash, in `api`. Stage Path Fronting in the VAMS networking architecture documentation describes how each front maps the web application's paths onto the stage."
       variables:
           apiGatewayUrl:
-              default: ""
+              default: "https://abc123.execute-api.us-east-1.amazonaws.com/api"
+              description: "The stage-inclusive invoke URL with no trailing slash: the `api` value that `GET /api/amplify-config` returns, without its trailing slash, or the core stack's `APIGatewayEndpointOutput` output."
 security:
     - DefaultCognitoAuthorizer: []
 paths:
@@ -30,7 +31,7 @@ paths:
                                         example: "us-east-1"
                                     api:
                                         type: string
-                                        description: "API base URL, including the stage path"
+                                        description: "Stage-inclusive Amazon API Gateway invoke URL with a trailing slash (`https://{restApiId}.execute-api.{region}.amazonaws.com/api/`), built from the API Gateway domain name and stage of the request, so it is the same whether the request arrived through CloudFront, through an ALB redirect or directly. It is the base URL of every other path in this document; see Stage Path Fronting in the VAMS networking architecture documentation."
                                     cognitoUserPoolId:
                                         type: string
                                         description: "Amazon Cognito user pool identifier; 'undefined' when Cognito is not the authentication provider"
@@ -11057,6 +11058,25 @@ components:
                     type: string
             required:
                 - message
+        requestBlockedError:
+            type: object
+            description: "The body of the 403 API Gateway returns when the deployment's AWS WAF web ACL blocks a request at the stage (the WAF_FILTERED gateway response)."
+            properties:
+                message:
+                    type: string
+                    example: "Request blocked by the deployment's AWS WAF web ACL"
+                blockedBy:
+                    type: string
+                    enum:
+                        - waf
+                requestId:
+                    type: string
+                    description: "API Gateway's extended request ID, the value of the x-amz-apigw-id response header, which an administrator looks up as httpRequest.requestId in the web ACL's aws-waf-logs-vams-* log group. The web ACL's sampled requests carry no request ID."
+                    example: "E7BBKGcCvHcEXAMPLE="
+            required:
+                - message
+                - blockedBy
+                - requestId
         triggerTemplateError:
             type: object
             description: "A 400 error body for a headless-runnability rejection. The message object carries a triggerTemplateErrors list of human-readable strings. Common to every operation that returns this body: a template chosen as a trigger default, or referenced by a trigger as a default, has a required tag with no default value - the string names the offending template, its pipeline (or the workflow(s) using it), and the tag keys at fault. Setting a workflow trigger reports one further rejection in the same list, naming a pipeline of the trigger's parent workflow that requires a template for which no default is set from any source; see that operation's own 400 description. That rejection does not apply to the template create and update operations, which reach this body only through the required-tag check."
@@ -17242,6 +17262,13 @@ components:
             required:
                 - entries
 
+    responses:
+        RequestBlocked:
+            description: "The deployment's AWS WAF web ACL blocked the request at the API Gateway stage before it reached VAMS. Any operation can return it while app.useWaf is enabled; signing in again does not change the result."
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/requestBlockedError"
     parameters:
       maxItemsParam:
         name: maxItems

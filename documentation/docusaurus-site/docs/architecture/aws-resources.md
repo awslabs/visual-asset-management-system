@@ -202,7 +202,7 @@ VAMS deploys Lambda functions across builder files. All functions use Python 3.1
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **API Type**                | REST API (API Gateway v1). Selected by `app.api.apiType` (`"APIGATEWAY_REST"`).                                                                                                                                      |
 | **Endpoint Type**           | `REGIONAL` (public, no VPC endpoint) or `PRIVATE` (VPC interface endpoint only). Configurable via `app.api.apiGatewayRest.endpointType`.                                                                             |
-| **Stage Name**              | Fixed internal value `api` (not configurable; shared with the VamsCLI endpoint constants). The stage path is absorbed by the CloudFront originPath or ALB redirect, so client URLs remain `/api/*`.                  |
+| **Stage Name**              | Fixed internal value `api` (not configurable; shared with the VamsCLI endpoint constants). The CloudFront originPath or ALB redirect maps the web URL's `/api/*` paths onto it; other routes use the invoke URL.     |
 | **Authorizer**              | Custom Lambda authorizer (REQUEST type, returns IAM policy with wildcard resource for cache correctness). Validates JWT (Cognito/external OAuth), API keys, and optional IP allowlist.                               |
 | **Identity Source**         | `method.request.header.Authorization`                                                                                                                                                                                |
 | **CORS**                    | All origins (`*`), all standard HTTP methods, credentials disabled                                                                                                                                                   |
@@ -432,6 +432,15 @@ The `resourceNames`, `web/deployedUrl`, `location/apiKeyArn`, and `waf_acl_arn_*
 :::warning[Named parameters block redeploys]
 Because these parameters are explicitly named, an orphaned parameter left from a failed teardown conflicts with the same-named parameter on a subsequent redeploy. Delete every remaining parameter under the deployment's `/<name>-<baseStackName>/` prefix — every `resourceNames` parameter, not only the table names — plus any `waf_acl_arn_<wafStackName>` parameter, before redeploying with the same configuration name and account. Enumerate them with a recursive `get-parameters-by-path` call on the prefix rather than from a count or a list, so a parameter group added by a later release is not missed.
 :::
+
+## AWS Secrets Manager
+
+A default deployment creates no secret. The following are created when the feature that uses them is enabled:
+
+| Resource                       | Created when                                                      | Removal on teardown      | Custom name (redeploy collision) | Purpose                                                                                               |
+| ------------------------------ | ----------------------------------------------------------------- | ------------------------ | -------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **Physna credentials secret**  | `app.addons.usePhysnaSync.enabled` without `credentialsSecretArn` | Destroyed with the stack | No (auto-named)                  | Physna OAuth2 client id and secret, populated at deploy time                                          |
+| **Hugging Face token secrets** | An NVIDIA Cosmos or NVIDIA GR00T pipeline is enabled, one each    | Destroyed with the stack | No (auto-named)                  | Hugging Face API token the pipeline uses to download its models, populated at deploy time from config |
 
 ## AWS KMS
 

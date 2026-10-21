@@ -6,15 +6,13 @@ This section describes the VAMS REST API, which provides programmatic access to 
 
 ## Base URL
 
-All API endpoints are served through an Amazon API Gateway REST API deployed to a stage named `api`. The base URL includes that stage:
+All API endpoints are served by an Amazon API Gateway REST API under the fixed stage `api`. Every path on these pages is relative to the stage-inclusive invoke URL:
 
 ```
 https://{api-id}.execute-api.{region}.amazonaws.com/api
 ```
 
-This is the value of the `APIGatewayEndpointOutput` stack output. The paths documented on the following pages are appended to it, so `GET /database` is `https://{api-id}.execute-api.{region}.amazonaws.com/api/database`.
-
-When deployed behind CloudFront, the distribution forwards `/api/*` on the web domain to that stage, so the same request is `https://{web-domain}/api/database`. An Application Load Balancer (ALB) deployment answers `/api/*` on the web domain with a redirect to the execute-api URL above instead.
+The domain suffix follows the deployment's partition, for example `amazonaws.eu` in the AWS European Sovereign Cloud. The base URL is the same for an Amazon CloudFront, an Application Load Balancer (ALB) or an API-only deployment. The web application URL reaches only a few routes: the CloudFront `/api/*` behavior forwards `/api/amplify-config` and `/api/version` to the stage, and the ALB answers `/api*` and `/secure-config*` with a redirect to it. The web application, the VamsCLI and the VAMS MCP server send every other request to the invoke URL. A `PRIVATE` endpoint is reachable only through an execute-api VPC interface endpoint, either one VAMS created or one supplied through `optionalExternalPrivateApigVPCEId`. See [Stage Path Fronting](../architecture/networking.md#stage-path-fronting).
 
 The two unauthenticated routes carry `/api` in their own path, so on the execute-api host the stage segment appears twice:
 
@@ -24,7 +22,7 @@ The two unauthenticated routes carry `/api` in their own path, so on the execute
 | `GET /api/amplify-config` | `https://{api-id}.execute-api.{region}.amazonaws.com/api/api/amplify-config` | `https://{web-domain}/api/amplify-config` |
 
 :::info[Discovering the Base URL]
-After deployment, read `APIGatewayEndpointOutput` from the CDK stack outputs, or request `https://{web-domain}/api/amplify-config` from the web application's domain (`WebAppCloudFrontDistributionDomainName` or `webDistributionUrl` in the outputs): its `api` field is the base URL.
+After deployment, read the base URL from the core stack's `APIGatewayEndpointOutput` output, or from the `api` field of `GET /api/amplify-config`, which returns it with a trailing slash. Request `/api/amplify-config` on the web application URL, or on the invoke URL as `.../api/api/amplify-config`.
 :::
 
 ---
@@ -100,14 +98,28 @@ The `body` field contains a JSON-encoded string. When successful, the body conta
 
 VAMS uses standard HTTP status codes to indicate the result of an API request.
 
-| Status Code | Description                                                                                                                                                                       |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `200`       | The request succeeded.                                                                                                                                                            |
-| `400`       | Bad request. The request contains invalid parameters, fails validation, or targets a feature that is disabled (for example, Cognito user management when Cognito is not enabled). |
-| `401`       | Unauthorized. No VAMS handler returns this code; API Gateway returns it when a request carries no credential.                                                                     |
-| `403`       | Forbidden. The authenticated user does not have permission for the requested action.                                                                                              |
-| `404`       | Not found. The requested resource does not exist, or a feature-gated resource is unavailable (for example, search when the OpenSearch feature is not enabled).                    |
-| `500`       | Internal server error. An unexpected error occurred on the server.                                                                                                                |
+| Status Code | Description                                                                                                                                                                                                     |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `200`       | The request succeeded.                                                                                                                                                                                          |
+| `400`       | Bad request. The request contains invalid parameters, fails validation, or targets a feature that is disabled (for example, Cognito user management when Cognito is not enabled).                               |
+| `401`       | Unauthorized. No VAMS handler returns this code; API Gateway returns it when a request carries no credential.                                                                                                   |
+| `403`       | Forbidden. The authenticated user does not have permission for the requested action, or the deployment's AWS WAF web ACL blocked the request (see [Requests Blocked by AWS WAF](#requests-blocked-by-aws-waf)). |
+| `404`       | Not found. The requested resource does not exist, or a feature-gated resource is unavailable (for example, search when the OpenSearch feature is not enabled).                                                  |
+| `500`       | Internal server error. An unexpected error occurred on the server.                                                                                                                                              |
+
+### Requests Blocked by AWS WAF
+
+When the deployment enables AWS WAF (`app.useWaf`), a request that a web ACL rule blocks at the API Gateway stage never reaches VAMS. API Gateway answers it with HTTP `403` and this body, which names AWS WAF as the source and carries API Gateway's extended request ID:
+
+```json
+{
+    "message": "Request blocked by the deployment's AWS WAF web ACL",
+    "blockedBy": "waf",
+    "requestId": "E7BBKGcCvHcEXAMPLE="
+}
+```
+
+A `403` from an authorization denial carries no `blockedBy` field. Signing in again does not change a blocked request's result: a managed rule matched something in the request, most often a value in its body. An administrator looks the request ID up in the web ACL's `aws-waf-logs-vams-*` log group, where the request's record carries it as `httpRequest.requestId` and names the rule that matched; the response carries the same ID in its `x-amz-apigw-id` header. The web ACL's sampled requests carry no request ID; a request is matched there by its time, URI and client IP. A rate-based rule answers `429` with a `Retry-After` header instead (see [AWS WAF and Rate Limiting](../architecture/security.md#aws-waf-and-rate-limiting)).
 
 ---
 

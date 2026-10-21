@@ -122,6 +122,16 @@ To use a non-default profile, add `"env": { "VAMS_PROFILE": "myprofile" }`.
 
 ## Tools
 
+A tool returns a failure as data rather than raising it: `{"error", "error_type"}`
+plus the machine-readable fields the CLI's `--json-output` carries for the same
+error. An `error_type` of `RequestBlockedError` is a request the deployment's AWS
+WAF web ACL blocked before VAMS handled it, ahead of both authorization tiers. It
+carries `blockedBy` (`waf`, or `waf-or-stage` for a bare API Gateway `Forbidden`,
+which a base URL that names no deployed stage also produces) and, when known,
+`requestId`. Signing in again does not change it, and neither does retrying it:
+report the `requestId` to the VAMS administrator, who finds the rule that matched
+in the web ACL's sampled requests or its `aws-waf-logs-vams-*` log group.
+
 ### Read / search (always available)
 
 `list_allowed_api_routes`, `list_api_routes`, `list_constraint_permission_objects`,

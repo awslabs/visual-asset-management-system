@@ -327,6 +327,19 @@ FEATURE_AUTHPROVIDER_COGNITO_OIDC = "AUTHPROVIDER_COGNITO_OIDC"
 FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP = "AUTHPROVIDER_EXTERNALOAUTHIDP"
 FEATURE_DEADLINECLOUD_PIPELINES = "DEADLINECLOUD_PIPELINES"
 
+# What an administrator does with a request the deployment's AWS WAF web ACL blocked.
+WAF_ADMIN_HINT = (
+    "Ask the VAMS administrator to find the request in the web ACL's sampled requests, or in its "
+    "aws-waf-logs-vams-* log group, which names the rule that matched."
+)
+
+# What to check for a bare 403 "Forbidden", which a web ACL block and a URL naming no deployed stage share.
+WAF_OR_STAGE_ADMIN_HINT = (
+    "If the deployment has an AWS WAF web ACL, ask the VAMS administrator to find the request in its "
+    "sampled requests, or in its aws-waf-logs-vams-* log group. Otherwise run 'vamscli profile info' and "
+    "check that the API Gateway URL ends in the REST API stage path."
+)
+
 # Legacy constants for backward compatibility
 CONFIG_FILE = CONFIG_FILE_NAME
 AUTH_PROFILE_FILE = AUTH_FILE_NAME
