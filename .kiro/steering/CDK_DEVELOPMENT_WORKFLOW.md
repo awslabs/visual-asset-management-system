@@ -564,10 +564,12 @@ type to choose; they take the key and fall back to their service default without
 `AWS_MANAGED`, `S3_MANAGED` (no bucket key) and `SQS_MANAGED`. SNS topics take it as `masterKey` and have no
 server-side encryption without it. ECR repositories take `encryption: kmsKey ? KMS : AES_256` with the key
 imported by ARN (Amazon ECR creates its own grants on it, so the build and pull roles need no key permission).
-Their encryption is immutable, so changing it replaces the repository, and AWS CloudFormation cannot replace an
-explicitly named resource under the same name: a custom `repositoryName` must change with the encryption (the
-coordinate transform repository adds `-kms`), and a CodeBuild build trigger that does not wait for the image
-carries the repository URI as a property, so the replacement re-fires the build into the new repository.
+Given `KMS` and no key, CDK creates no key for a repository, which then uses the AWS managed `aws/ecr` key
+instead of the VAMS key. A repository's encryption is immutable, so changing it replaces the repository, and
+AWS CloudFormation cannot replace an explicitly named resource under the same name: a custom `repositoryName`
+must change with the encryption (the coordinate transform repository adds `-kms`), and a CodeBuild build
+trigger that does not wait for the image carries the repository URI as a property, so the replacement re-fires
+the build into the new repository.
 
 ```typescript
 // ✅ CORRECT - ECR repository, key imported by ARN; an explicit name follows the encryption

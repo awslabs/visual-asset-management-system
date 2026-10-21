@@ -364,11 +364,12 @@ Partition(): string  // Returns current partition
 false. Log groups, EFS file systems and secrets have no encryption type to choose; they take the key and fall
 back to their service default without it. DynamoDB tables, S3 buckets, SQS queues and ECR repositories choose
 the encryption type from the key (`encryption: kmsKey ? <customer managed type> : <service type>`). Given `CUSTOMER_MANAGED`,
-`KMS` or `DSSE` and no key, CDK creates a new customer managed key for that one resource and retains it when
-the stack is deleted, and `kmsKeyLambdaPermissionAddToResourcePolicy`, handed the undefined shared key, grants
-nothing on it. SNS topics take the key as `masterKey` and have no server-side encryption without it. Inside
-the storage nested stack, spread `dynamodbDefaultProps` / `s3DefaultProps`, which choose on the flag; the key
-is defined exactly when the flag is on.
+`KMS` or `DSSE` and no key, CDK creates a new customer managed key for that one table, bucket or queue and
+retains it when the stack is deleted, and `kmsKeyLambdaPermissionAddToResourcePolicy`, handed the undefined
+shared key, grants nothing on it. An ECR repository given `KMS` and no key gets no key from CDK and uses the
+AWS managed `aws/ecr` key instead of the VAMS key. SNS topics take the key as `masterKey` and have no
+server-side encryption without it. Inside the storage nested stack, spread `dynamodbDefaultProps` /
+`s3DefaultProps`, which choose on the flag; the key is defined exactly when the flag is on.
 
 | Resource                | Prop                                 | Notes                                                         |
 | ----------------------- | ------------------------------------ | ------------------------------------------------------------- |
