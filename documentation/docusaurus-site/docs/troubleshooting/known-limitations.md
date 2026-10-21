@@ -185,3 +185,9 @@ VAMS supports either Amazon CloudFront or Application Load Balancer for web host
 ### VPC Subnet IP Requirements
 
 When using a VPC, each subnet must have sufficient IP addresses for all deployed Lambda functions and VPC endpoints. The number of required IPs scales with the number of enabled pipelines and services. Refer to the [Configuration Guide](../deployment/configuration-reference.md) for subnet sizing guidance.
+
+---
+
+## Add-on Limitations
+
+Add-ons have limitations of their own, which each add-on's page lists; see [Add-ons Overview](../developer/addons-overview.md).

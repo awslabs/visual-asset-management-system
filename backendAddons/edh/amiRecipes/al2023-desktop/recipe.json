@@ -1,0 +1,26 @@
+{
+    "recipeId": "al2023-desktop",
+    "displayName": "Amazon Linux 2023 desktop",
+    "kind": "vdi",
+    "osFamily": "linux",
+    "baseOs": "amazonlinux2023",
+    "architecture": "x86_64",
+    "parentImage": "ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64",
+    "buildInstanceType": "m7i.large",
+    "rootSizeGb": 60,
+    "stackName": "VAMS AL2023 Desktop",
+    "profileId": 1,
+    "components": [
+        {
+            "arn": "arn:${AWS::Partition}:imagebuilder:${AWS::Region}:aws:component/update-linux/x.x.x"
+        },
+        { "file": "components/010-baseline.yml" },
+        { "file": "components/040-vamscli.yml" },
+        { "file": "components/060-session-bootstrap.yml" },
+        { "file": "components/065-profile-cleanup.yml" }
+    ],
+    "assets": [{ "id": "vamscli", "repoPath": "tools/VamsCLI" }],
+    "keepVersions": 3,
+    "recipeRevision": 1,
+    "description": "Amazon Linux 2023 with OS updates, baseline tooling and the VAMS CLI, signed in as the launching user when the desktop session starts; EDH installs Amazon DCV at the desktop's first boot."
+}

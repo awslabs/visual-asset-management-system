@@ -52,6 +52,7 @@ import {
     ALLOWED_API_ROUTES_CACHE_KEY,
 } from "../common/constants/authRoutes";
 import { normalizeFeaturesEnabled } from "../common/constants/featuresEnabled";
+import { RuntimeConfigContext } from "../context/RuntimeConfigContext";
 import { GlobalHeader } from "./../common/GlobalHeader";
 import { Header } from "./../authenticator/Header";
 import { Footer, PageFooter } from "./../authenticator/Footer";
@@ -1188,11 +1189,16 @@ const Auth: React.FC<AuthProps> = (props) => {
                 {/* Guards the shell itself (top navigation, router, footer). routes.tsx has a
                     second boundary around each page, so a page error stays inside the layout. */}
                 <ErrorBoundary componentName="The application">
-                    <Suspense
-                        fallback={<LoadingScreen slowNoticeAfterMs={APP_LOAD_SLOW_NOTICE_MS} />}
-                    >
-                        {props.children}
-                    </Suspense>
+                    {/* The children element is created once by index.tsx, so a config change reaches
+                        mounted consumers (the side navigation's feature-gated sections) only through
+                        this context, not through the re-render of Auth itself. */}
+                    <RuntimeConfigContext.Provider value={config}>
+                        <Suspense
+                            fallback={<LoadingScreen slowNoticeAfterMs={APP_LOAD_SLOW_NOTICE_MS} />}
+                        >
+                            {props.children}
+                        </Suspense>
+                    </RuntimeConfigContext.Provider>
                 </ErrorBoundary>
             </>
         );

@@ -1,10 +1,11 @@
 """API client for VamsCLI."""
 
 import json
+import re
 import threading
 import requests
 from typing import Dict, Any, List, Optional
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, unquote, urljoin, urlparse
 
 # Single-flight token refresh: concurrent uploads share one APIClient (one requests.Session)
 # and run API calls on parallel executor threads. Without serialization, a 403/401 on several
@@ -22,15 +23,52 @@ _TOKEN_REFRESH_LOCK = threading.Lock()
 # permissions problem.
 _ERROR_MESSAGE_KEYS = ("message", "Message", "errorMessage", "error")
 
-# Amazon API Gateway answers a request for a path outside any deployed route — most often a base URL
-# whose deployment stage is missing or misspelled — with a 403 whose body is exactly this. It is
-# indistinguishable from an authorization denial without the hint below.
+# Amazon API Gateway answers a request the deployment's AWS WAF web ACL blocked, and a request for a
+# path outside any deployed route — most often a base URL whose deployment stage is missing or
+# misspelled — with a 403 whose body is exactly this. It is indistinguishable from an authorization
+# denial without the hint below.
 _GATEWAY_UNKNOWN_ROUTE_MESSAGE = "Forbidden"
 _STAGE_HINT = (
-    " (a bare \"Forbidden\" from Amazon API Gateway usually means the request reached no deployed "
-    "route rather than that access was denied — most often the configured base URL is missing the "
-    "REST API stage path, or names the wrong one. Check `vamscli profile info` and re-run "
+    " (a bare \"Forbidden\" from Amazon API Gateway means the deployment's AWS WAF web ACL blocked the "
+    "request, or the request reached no deployed route, most often because the configured base URL is "
+    "missing the REST API stage path or names the wrong one. Check `vamscli profile info` and re-run "
     "`vamscli setup <base-url>` if the stored API Gateway URL has no stage segment.)"
+)
+
+# The party that answered an HTTP 403, as _classify_403 reads it from the response.
+FORBIDDEN_WAF = "waf"
+FORBIDDEN_WAF_OR_STAGE = "waf_or_stage"
+FORBIDDEN_RESOURCE_POLICY = "resource_policy"
+FORBIDDEN_AUTHORIZER = "authorizer"
+FORBIDDEN_NO_ROUTE = "no_route"
+FORBIDDEN_HANDLER = "handler"
+FORBIDDEN_UNKNOWN = "unknown"
+
+# The texts of the 403s _make_request attributes. A block's text holds no sign-in or permission wording,
+# which a person or a connector would act on; a denial's starts with "Access forbidden.".
+_WAF_BLOCKED_MESSAGE = (
+    "The deployment's AWS WAF web ACL blocked this request before it reached VAMS (HTTP 403). A managed "
+    "rule matched something in the request, most often a value in the request body. Signing in again "
+    "does not change the result."
+)
+_WAF_OR_STAGE_MESSAGE = (
+    "Amazon API Gateway refused this request with a bare 403 \"Forbidden\". The deployment's AWS WAF web "
+    "ACL answers a blocked request this way, and so does a base URL that names no deployed stage "
+    "(see 'vamscli profile info'). Signing in again does not change the result."
+)
+_RESOURCE_POLICY_MESSAGE = (
+    "Access forbidden. The API's resource policy refused the request: a private VAMS API accepts requests "
+    "only through the deployment's VPC endpoint. Check the network path, or contact your administrator."
+)
+_AUTHORIZER_DENIED_MESSAGE = (
+    "Access forbidden. The VAMS API authorizer refused the request even with a refreshed token. The "
+    "deployment may restrict API access by source IP address, or this credential is not accepted. "
+    "Contact your administrator."
+)
+_REDIRECT_TARGET_REFUSED_MESSAGE = (
+    "The request was redirected to {host}, which refused it (HTTP 403). That host is not the VAMS API, so "
+    "signing in again does not change the result: a presigned URL may have expired, or the network path "
+    "may not reach that host. Retry the command, or contact your administrator."
 )
 
 
@@ -88,6 +126,94 @@ def _api_error_message(response, fallback: str) -> str:
 
     return fallback
 
+
+def _classify_403(response) -> str:
+    """Which party answered an HTTP 403, read from the response alone; never raises.
+
+    Only the authorizer's deny can be cured by a fresh token. A web ACL block, a resource-policy deny,
+    a request outside every deployed route and a handler's refusal answer the same way however often
+    the request is resent.
+    """
+    try:
+        error_type = response.headers.get('x-amzn-ErrorType')
+    except Exception:
+        error_type = None
+    error_type = error_type if isinstance(error_type, str) else ''
+    authorizer_type = error_type.startswith('AccessDeniedException')
+    no_route_type = error_type.startswith(('MissingAuthenticationTokenException', 'IncompleteSignatureException'))
+    data = None
+    parsed_as_json = False
+    try:
+        if getattr(response, 'content', None):
+            data = response.json()
+            parsed_as_json = True
+    except Exception:
+        data = None
+    if isinstance(data, dict):
+        if data.get('blockedBy') == 'waf':
+            return FORBIDDEN_WAF
+        gateway_message = data.get('Message')
+        message = data.get('message')
+        # The API's DEFAULT_4XX response template carries API Gateway's own text under "message".
+        gateway_text = ' '.join(m.lower() for m in (gateway_message, message) if isinstance(m, str))
+        if 'execute-api:invoke' in gateway_text:
+            return FORBIDDEN_RESOURCE_POLICY
+        if ('explicit deny' in gateway_text or 'not authorized to access this resource' in gateway_text
+                or authorizer_type):
+            return FORBIDDEN_AUTHORIZER
+        if (message == 'Missing Authentication Token' or no_route_type
+                or 'authorization header' in str(message or gateway_message or '').lower()):
+            return FORBIDDEN_NO_ROUTE
+        if data == {'message': _GATEWAY_UNKNOWN_ROUTE_MESSAGE}:
+            return FORBIDDEN_WAF_OR_STAGE
+        if isinstance(message, str) and message.strip():
+            return FORBIDDEN_HANDLER
+        return FORBIDDEN_UNKNOWN
+    if authorizer_type:
+        return FORBIDDEN_AUTHORIZER
+    if no_route_type:
+        return FORBIDDEN_NO_ROUTE
+    # Any other JSON names no party; only a body that is not JSON at all is read as text.
+    if parsed_as_json:
+        return FORBIDDEN_UNKNOWN
+    try:
+        text = response.text
+    except Exception:
+        text = None
+    # Amazon CloudFront's error page for a request its web ACL blocked.
+    if isinstance(text, str) and 'request blocked' in text.lower():
+        return FORBIDDEN_WAF
+    return FORBIDDEN_UNKNOWN
+
+
+def _forbidden_request_id(response) -> Optional[str]:
+    """A blocked request's ID: the body's, else its x-amz-apigw-id, x-amz-cf-id or x-amzn-RequestId header."""
+    try:
+        data = response.json() if getattr(response, 'content', None) else None
+    except Exception:
+        data = None
+    if isinstance(data, dict) and isinstance(data.get('requestId'), str) and data['requestId'].strip():
+        return data['requestId'].strip()
+    # The IDs the regional web ACL log, the CloudFront web ACL log and the access log record.
+    for name in ('x-amz-apigw-id', 'x-amz-cf-id', 'x-amzn-RequestId'):
+        try:
+            header = response.headers.get(name)
+        except Exception:
+            header = None
+        if isinstance(header, str) and header.strip():
+            return header.strip()
+    return None
+
+
+def _redirected_host(response, request_url: str) -> Optional[str]:
+    """The host that answered after a followed redirect left the API's host, else None. Never raises."""
+    history = getattr(response, 'history', None)
+    final_url = getattr(response, 'url', None)
+    if not isinstance(history, list) or not history or not isinstance(final_url, str):
+        return None
+    host = urlparse(final_url).netloc
+    return host if host and host != urlparse(request_url).netloc else None
+
 from ..constants import (
     API_VERSION, API_AMPLIFY_CONFIG, DEFAULT_TIMEOUT, DEFAULT_READ_TIMEOUT, MAX_AUTH_RETRIES,
     MINIMUM_API_VERSION,
@@ -118,7 +244,7 @@ from ..constants import (
 from ..version import get_version
 from .exceptions import (
     APIError, VersionMismatchError, AuthenticationError, OverrideTokenError, 
-    TokenExpiredError, PermissionDeniedError,
+    TokenExpiredError, PermissionDeniedError, RequestBlockedError,
     APIUnavailableError, AssetNotFoundError, AssetAlreadyExistsError,
     DatabaseNotFoundError, DatabaseAlreadyExistsError, DatabaseDeletionError,
     BucketNotFoundError, InvalidDatabaseDataError, InvalidAssetDataError, FileUploadError,
@@ -136,8 +262,10 @@ from .exceptions import (
     WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
     ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError
 )
+from .exceptions import GlobalInfrastructureError, InvalidRequestPathError
 from .profile import ProfileManager, read_active_profile_name
 from .retry_config import get_retry_config
+from .addon_api_client import AddonAPIClientMixin
 from .custom_api_client import CustomAPIClientMixin
 
 
@@ -170,10 +298,28 @@ def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) ->
     )
 
 
-class APIClient(CustomAPIClientMixin):
+def _request_path(endpoint: str) -> str:
+    """The endpoint as it is joined onto the base URL, refused before any request when its path has an
+    empty, '.' or '..' segment, raw or percent-encoded: the join drops an empty segment and resolves a dot
+    segment (requests decodes an encoded dot first), so a path value carrying one would address another
+    route."""
+    path = endpoint.lstrip('/')
+    for segment in re.split(r'[?#]', path, maxsplit=1)[0].split('/'):
+        decoded = segment
+        while unquote(decoded) != decoded:
+            decoded = unquote(decoded)
+        # A dot segment behind an encoded slash, or before a ';' parameter, is refused too.
+        if not segment or any(part.split(';', 1)[0] in ('.', '..') for part in decoded.split('/')):
+            raise InvalidRequestPathError(
+                "A request path may not have an empty, '.' or '..' segment: it would address another route")
+    return path
+
+
+class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
     """HTTP client for VAMS API Gateway.
 
-    Inherits the methods a fork adds (``custom_api_client.CustomAPIClientMixin``, shipped empty).
+    Inherits the methods the optional add-ons add (``addon_api_client.AddonAPIClientMixin``) and
+    the methods a fork adds (``custom_api_client.CustomAPIClientMixin``, shipped empty).
     """
     
     def __init__(self, base_url: str, profile_manager: Optional[ProfileManager] = None):
@@ -222,7 +368,14 @@ class APIClient(CustomAPIClientMixin):
 
         `raise_http_errors` leaves a non-2xx as the original `requests.exceptions.HTTPError` instead
         of converting it to an `APIError` here, for callers that map the status code and the handler's
-        response body onto their own domain exception.
+        response body onto their own domain exception. An endpoint whose path has an empty, '.' or '..'
+        segment raises `InvalidRequestPathError` before anything is sent (`_request_path`).
+
+        A 403 is read first (`_classify_403`), whatever `raise_http_errors` says. After one send, a web
+        ACL block (with auth, a bare "Forbidden" too) raises `RequestBlockedError`, a request outside
+        every deployed route an `APIError`, and, with auth, a handler's or the resource policy's refusal
+        `PermissionDeniedError`. Only the authorizer's deny, or a 403 of no known shape, is refreshed and
+        resent.
         """
         # Import logging utilities
         from .logging import log_api_request, log_api_response
@@ -231,7 +384,7 @@ class APIClient(CustomAPIClientMixin):
         # Pre-flight validation for override tokens
         self._validate_token_before_request(include_auth)
         
-        url = urljoin(self.base_url + '/', endpoint.lstrip('/'))
+        url = urljoin(self.base_url + '/', _request_path(endpoint))
         headers = self._get_headers(include_auth)
         retry_config = get_retry_config()
         # The bearer token this request carries — passed to _try_refresh_token so concurrent 401/403
@@ -326,42 +479,68 @@ class APIClient(CustomAPIClientMixin):
                 else:
                     raise AuthenticationError("Authentication failed. Please run 'vamscli auth login' to re-authenticate.")
             
-            # Handle 403 errors - distinguish between expired tokens and permission issues
-            if response.status_code == 403 and include_auth and retry_count < MAX_AUTH_RETRIES:
-                # For override tokens, check if expired
-                if self.profile_manager.is_override_token():
-                    if self.profile_manager.is_token_expired():
-                        raise TokenExpiredError(
-                            "Override token has expired. Please provide a new token with "
-                            "'vamscli auth set-override -u <user-id> --token-stdin' or "
-                            "'vamscli auth login --user-id <user-id> --token-override-stdin'"
-                        )
-                    else:
-                        # Token not expired, this is a permission issue
-                        raise PermissionDeniedError(
-                            "Access forbidden. You do not have permission to perform this action. "
-                            "Contact your administrator if you believe this is an error."
-                        )
-                
-                # For Cognito tokens, try to refresh and retry
-                if self._try_refresh_token(token_before=request_token):
-                    return self._make_request(
-                        method, endpoint, include_auth, retry_count + 1,
-                        throttle_retry_count, raise_http_errors, **kwargs
+            # A 403 is answered by one of several parties, told apart by the response, or by the host a
+            # followed redirect reached. Only the authorizer's deny can be cured by a fresh token, so
+            # nothing else is refreshed or resent.
+            if response.status_code == 403:
+                redirected_host = _redirected_host(response, url)
+                if redirected_host:
+                    raise APIError(_REDIRECT_TARGET_REFUSED_MESSAGE.format(host=redirected_host))
+                forbidden = _classify_403(response)
+                if forbidden == FORBIDDEN_WAF or (forbidden == FORBIDDEN_WAF_OR_STAGE and include_auth):
+                    raise RequestBlockedError(
+                        _WAF_BLOCKED_MESSAGE if forbidden == FORBIDDEN_WAF else _WAF_OR_STAGE_MESSAGE,
+                        request_id=_forbidden_request_id(response),
+                        confirmed=forbidden == FORBIDDEN_WAF,
                     )
-                else:
-                    # Refresh failed - could be expired token or permission issue
-                    # Check if token is expired
-                    if self.profile_manager.is_token_expired():
-                        raise TokenExpiredError(
-                            "Authentication token has expired. Please run 'vamscli auth login' to re-authenticate."
+                if forbidden == FORBIDDEN_NO_ROUTE:
+                    raise APIError(
+                        f"No deployed API route matches {method.upper()} {urlparse(url).path} (HTTP 403). "
+                        "The deployment may be older than this CLI, or the add-on that serves the route "
+                        "is not deployed."
+                    )
+                if include_auth and forbidden == FORBIDDEN_RESOURCE_POLICY:
+                    raise PermissionDeniedError(_RESOURCE_POLICY_MESSAGE)
+                if include_auth and forbidden == FORBIDDEN_HANDLER:
+                    raise PermissionDeniedError(
+                        f"Access forbidden. {_api_error_message(response, _GATEWAY_UNKNOWN_ROUTE_MESSAGE)}")
+                if include_auth and retry_count < MAX_AUTH_RETRIES:
+                    # For override tokens, check if expired
+                    if self.profile_manager.is_override_token():
+                        if self.profile_manager.is_token_expired():
+                            raise TokenExpiredError(
+                                "Override token has expired. Please provide a new token with "
+                                "'vamscli auth set-override -u <user-id> --token-stdin' or "
+                                "'vamscli auth login --user-id <user-id> --token-override-stdin'"
+                            )
+                        else:
+                            # Token not expired, this is a permission issue
+                            raise PermissionDeniedError(
+                                "Access forbidden. You do not have permission to perform this action. "
+                                "Contact your administrator if you believe this is an error."
+                            )
+
+                    # For Cognito tokens, try to refresh and retry
+                    if self._try_refresh_token(token_before=request_token):
+                        return self._make_request(
+                            method, endpoint, include_auth, retry_count + 1,
+                            throttle_retry_count, raise_http_errors, **kwargs
                         )
                     else:
-                        # Not expired, this is a permission issue
-                        raise PermissionDeniedError(
-                            "Access forbidden. You do not have permission to perform this action. "
-                            "Contact your administrator if you believe this is an error."
-                        )
+                        # Refresh failed - could be expired token or permission issue
+                        # Check if token is expired
+                        if self.profile_manager.is_token_expired():
+                            raise TokenExpiredError(
+                                "Authentication token has expired. Please run 'vamscli auth login' to re-authenticate."
+                            )
+                        else:
+                            # Not expired, this is a permission issue
+                            raise PermissionDeniedError(
+                                "Access forbidden. You do not have permission to perform this action. "
+                                "Contact your administrator if you believe this is an error."
+                            )
+                if include_auth:
+                    raise PermissionDeniedError(_AUTHORIZER_DENIED_MESSAGE)
             
             response.raise_for_status()
             return response
@@ -653,6 +832,8 @@ class APIClient(CustomAPIClientMixin):
                 'match': api_version == cli_version
             }
             
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to check API version: {e}")
             
@@ -661,6 +842,8 @@ class APIClient(CustomAPIClientMixin):
         try:
             response = self.get(API_AMPLIFY_CONFIG, include_auth=False)
             return response.json()
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get Amplify configuration: {e}")
     
@@ -699,6 +882,17 @@ class APIClient(CustomAPIClientMixin):
                     f"a VAMS version older than {MINIMUM_API_VERSION}."
                 )
             
+            if response.status_code == 403:
+                forbidden = _classify_403(response)
+                if forbidden == FORBIDDEN_WAF:
+                    raise RequestBlockedError(_WAF_BLOCKED_MESSAGE, request_id=_forbidden_request_id(response))
+                if forbidden == FORBIDDEN_WAF_OR_STAGE:
+                    raise APIUnavailableError(
+                        "VAMS API answered the version check with a bare 403 \"Forbidden\": the deployment's "
+                        "AWS WAF web ACL blocked the request, or the stored API Gateway URL names no deployed "
+                        "stage (see 'vamscli profile info')."
+                    )
+
             response.raise_for_status()
             version_data = response.json()
             api_version = version_data.get('version', 'unknown')
@@ -715,7 +909,7 @@ class APIClient(CustomAPIClientMixin):
                 'compatible': True
             }
             
-        except APIUnavailableError:
+        except (APIUnavailableError, RequestBlockedError, GlobalInfrastructureError):
             # Re-raise our specific errors
             raise
         except requests.exceptions.ConnectionError:
@@ -769,6 +963,8 @@ class APIClient(CustomAPIClientMixin):
                 # Other HTTP errors
                 raise APIError(f"Login profile API call failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to call login profile API: {e}")
     
@@ -793,6 +989,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Feature switches API call failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to fetch feature switches: {e}")
     
@@ -832,6 +1031,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Asset creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create asset: {e}")
     
@@ -876,6 +1078,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Asset update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update asset: {e}")
     
@@ -919,6 +1124,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get asset: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get asset: {e}")
 
@@ -951,6 +1159,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Upload initialization failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to initialize upload: {e}")
 
@@ -1007,6 +1218,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Upload completion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to complete upload: {e}")
 
@@ -1032,6 +1246,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Folder creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create folder: {e}")
 
@@ -1051,6 +1268,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to list files: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list asset files: {e}")
 
@@ -1074,6 +1294,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get file info: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get file information: {e}")
 
@@ -1101,6 +1324,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"File move failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to move file: {e}")
 
@@ -1128,6 +1354,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"File copy failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to copy file: {e}")
 
@@ -1155,6 +1384,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"File archive failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to archive file: {e}")
 
@@ -1182,6 +1414,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"File unarchive failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to unarchive file: {e}")
 
@@ -1205,6 +1440,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Asset preview deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete asset preview: {e}")
 
@@ -1232,6 +1470,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Auxiliary files deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete auxiliary preview files: {e}")
 
@@ -1259,6 +1500,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"File deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete file: {e}")
 
@@ -1286,6 +1530,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"File revert failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to revert file version: {e}")
 
@@ -1313,6 +1560,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Set primary file failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to set primary file: {e}")
 
@@ -1369,6 +1619,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Asset archive failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to archive asset: {e}")
 
@@ -1431,6 +1684,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Asset unarchive failed: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to unarchive asset: {e}")
 
@@ -1486,6 +1742,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Asset deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete asset: {e}")
 
@@ -1527,6 +1786,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Database creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create database: {e}")
 
@@ -1580,6 +1842,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Database update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update database: {e}")
 
@@ -1615,6 +1880,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get database: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get database: {e}")
 
@@ -1646,6 +1914,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to list databases: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list databases: {e}")
 
@@ -1681,6 +1952,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Database deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete database: {e}")
 
@@ -1708,6 +1982,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to list buckets: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list buckets: {e}")
 
@@ -1744,6 +2021,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to list tags: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list tags: {e}")
 
@@ -1783,6 +2063,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Tag creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create tags: {e}")
 
@@ -1823,6 +2106,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Tag update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update tags: {e}")
 
@@ -1861,6 +2147,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Tag deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete tag: {e}")
 
@@ -1895,6 +2184,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to list tag types: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list tag types: {e}")
 
@@ -1931,6 +2223,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Tag type creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create tag types: {e}")
 
@@ -1965,6 +2260,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Tag type update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update tag types: {e}")
 
@@ -2008,6 +2306,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Tag type deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete tag type: {e}")
 
@@ -2055,6 +2356,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise AssetVersionOperationError(f"Asset version creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create asset version: {e}")
 
@@ -2108,6 +2412,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise AssetVersionRevertError(f"Asset version revert failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to revert asset version: {e}")
 
@@ -2148,6 +2455,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get asset versions: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get asset versions: {e}")
 
@@ -2187,6 +2497,9 @@ class APIClient(CustomAPIClientMixin):
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to get asset history: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to get asset history: {e}")
@@ -2234,6 +2547,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get asset version: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get asset version: {e}")
 
@@ -2287,6 +2603,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise AssetVersionOperationError(f"Asset version update failed: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update asset version: {e}")
 
@@ -2337,6 +2656,9 @@ class APIClient(CustomAPIClientMixin):
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise AssetVersionArchiveError(f"Asset version archive failed: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to archive asset version: {e}")
@@ -2389,6 +2711,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise AssetVersionArchiveError(f"Asset version unarchive failed: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to unarchive asset version: {e}")
 
@@ -2435,6 +2760,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Asset link creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create asset link: {e}")
 
@@ -2467,6 +2795,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get asset link: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get asset link: {e}")
 
@@ -2505,6 +2836,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Asset link update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update asset link: {e}")
 
@@ -2537,6 +2871,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Asset link deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete asset link: {e}")
 
@@ -2586,6 +2923,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get asset links: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get asset links for asset: {e}")
 
@@ -2636,6 +2976,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get asset metadata: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get asset metadata: {e}")
 
@@ -2687,6 +3030,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Asset metadata update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update asset metadata: {e}")
 
@@ -2729,6 +3075,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Asset metadata deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete asset metadata: {e}")
 
@@ -2786,6 +3135,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get file metadata: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get file metadata: {e}")
 
@@ -2844,6 +3196,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"File metadata update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update file metadata: {e}")
 
@@ -2894,6 +3249,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"File metadata deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete file metadata: {e}")
 
@@ -2933,6 +3291,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get asset link metadata: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get asset link metadata: {e}")
 
@@ -2978,6 +3339,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Asset link metadata update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update asset link metadata: {e}")
 
@@ -3014,6 +3378,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Asset link metadata deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete asset link metadata: {e}")
 
@@ -3051,6 +3418,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get database metadata: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get database metadata: {e}")
 
@@ -3094,6 +3464,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Database metadata update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update database metadata: {e}")
 
@@ -3128,6 +3501,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Database metadata deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete database metadata: {e}")
 
@@ -3181,6 +3557,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get metadata schema: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get metadata schema: {e}")
 
@@ -3245,6 +3624,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to list metadata schemas: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list metadata schemas: {e}")
 
@@ -3287,6 +3669,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get metadata schema: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get metadata schema by ID: {e}")
 
@@ -3333,6 +3718,9 @@ class APIClient(CustomAPIClientMixin):
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Metadata schema creation failed: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to create metadata schema: {e}")
@@ -3388,6 +3776,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Metadata schema update failed: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update metadata schema: {e}")
 
@@ -3441,6 +3832,9 @@ class APIClient(CustomAPIClientMixin):
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Metadata schema deletion failed: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to delete metadata schema: {e}")
@@ -3515,6 +3909,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Asset download failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to download asset file: {e}")
 
@@ -3574,6 +3971,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Asset bulk download failed: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to generate bulk download URLs: {e}")
 
@@ -3629,6 +4029,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Asset preview download failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to download asset preview: {e}")
 
@@ -3756,6 +4159,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Asset export failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to export asset: {e}")
 
@@ -3845,6 +4251,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to list pipelines: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to list pipelines: {e}")
 
@@ -3861,6 +4269,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to get pipeline: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get pipeline: {e}")
 
@@ -3880,6 +4290,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to create pipeline: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to create pipeline: {e}")
 
@@ -3896,6 +4308,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to update pipeline: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to update pipeline: {e}")
 
@@ -3910,6 +4324,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to archive pipeline: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to archive pipeline: {e}")
 
@@ -3943,6 +4359,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to list templates: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to list templates: {e}")
 
@@ -3958,6 +4376,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to get template: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get template: {e}")
 
@@ -3978,6 +4398,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to create template: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to create template: {e}")
 
@@ -3996,6 +4418,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to update template: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to update template: {e}")
 
@@ -4011,6 +4435,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to delete template: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to delete template: {e}")
 
@@ -4029,6 +4455,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to get tag schema: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get tag schema: {e}")
 
@@ -4047,6 +4475,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to set tag schema: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to set tag schema: {e}")
 
@@ -4068,6 +4498,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to list workflows: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to list workflows: {e}")
 
@@ -4084,6 +4516,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to get workflow: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get workflow: {e}")
 
@@ -4100,6 +4534,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to create workflow: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to create workflow: {e}")
 
@@ -4116,6 +4552,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to update workflow: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to update workflow: {e}")
 
@@ -4130,6 +4568,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to archive workflow: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to archive workflow: {e}")
 
@@ -4151,6 +4591,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to list triggers: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to list triggers: {e}")
 
@@ -4173,6 +4615,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to get trigger: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get trigger: {e}")
 
@@ -4192,6 +4636,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to set trigger: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to set trigger: {e}")
 
@@ -4208,6 +4654,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to delete trigger: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to delete trigger: {e}")
 
@@ -4234,6 +4682,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise WorkflowExecutionError(f"Workflow execution failed: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to execute workflow: {e}")
 
@@ -4266,6 +4716,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to list workflow executions: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to list workflow executions: {e}")
 
@@ -4281,6 +4733,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to list executions: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to list executions: {e}")
 
@@ -4309,6 +4763,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to get execution details: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get execution details: {e}")
 
@@ -4333,6 +4789,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to get execution detail metadata: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get execution detail metadata: {e}")
 
@@ -4369,6 +4827,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to get execution logs: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to get execution logs: {e}")
 
@@ -4387,6 +4847,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to abort execution: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to abort execution: {e}")
 
@@ -4406,6 +4868,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to re-run execution: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to re-run execution: {e}")
 
@@ -4425,6 +4889,8 @@ class APIClient(CustomAPIClientMixin):
             if e.response.status_code in (401, 403):
                 raise AuthenticationError(f"Authentication failed: {e}")
             raise APIError(f"Failed to permanently delete execution: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to permanently delete execution: {e}")
 
@@ -4477,6 +4943,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Search query failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to execute search query: {e}")
 
@@ -4529,6 +4998,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Simple search query failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to execute simple search query: {e}")
 
@@ -4560,6 +5032,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get search mapping: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get search mapping: {e}")
 
@@ -4593,6 +5068,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to list roles: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list roles: {e}")
 
@@ -4638,6 +5116,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Role creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create role: {e}")
 
@@ -4688,6 +5169,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Role update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update role: {e}")
 
@@ -4727,6 +5211,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Role deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete role: {e}")
 
@@ -4768,6 +5255,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to list Cognito users: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list Cognito users: {e}")
 
@@ -4817,6 +5307,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"User creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create Cognito user: {e}")
 
@@ -4867,6 +5360,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"User update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update Cognito user: {e}")
 
@@ -4911,6 +5407,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"User deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete Cognito user: {e}")
 
@@ -4960,6 +5459,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Password reset failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to reset Cognito user password: {e}")
 
@@ -4998,6 +5500,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to list constraints: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list constraints: {e}")
 
@@ -5028,6 +5533,9 @@ class APIClient(CustomAPIClientMixin):
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to list API routes: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to list API routes: {e}")
@@ -5060,6 +5568,9 @@ class APIClient(CustomAPIClientMixin):
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to list allowed API routes: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to list allowed API routes: {e}")
@@ -5094,6 +5605,9 @@ class APIClient(CustomAPIClientMixin):
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to list constraint permission objects: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to list constraint permission objects: {e}")
@@ -5134,6 +5648,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get constraint: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get constraint: {e}")
 
@@ -5189,6 +5706,8 @@ class APIClient(CustomAPIClientMixin):
                 
         except InvalidConstraintDataError:
             raise
+        except GlobalInfrastructureError:
+            raise
         except Exception as e:
             raise APIError(f"Failed to create constraint: {e}")
 
@@ -5236,6 +5755,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Constraint update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update constraint: {e}")
 
@@ -5275,6 +5797,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Constraint deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete constraint: {e}")
 
@@ -5320,7 +5845,7 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise TemplateImportError(f"Template import failed: {e}")
 
-        except (InvalidConstraintDataError, AuthenticationError, TemplateImportError):
+        except (InvalidConstraintDataError, AuthenticationError, TemplateImportError, GlobalInfrastructureError):
             raise
         except Exception as e:
             raise APIError(f"Failed to import constraints template: {e}")
@@ -5360,6 +5885,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to list user roles: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list user roles: {e}")
 
@@ -5402,6 +5930,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"User role creation failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create user roles: {e}")
 
@@ -5446,6 +5977,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"User role update failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update user roles: {e}")
 
@@ -5485,6 +6019,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"User role deletion failed: {e}")
                 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete user roles: {e}")
 
@@ -5539,6 +6076,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to list API keys: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list API keys: {e}")
 
@@ -5583,6 +6123,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get API key: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get API key: {e}")
 
@@ -5620,6 +6163,9 @@ class APIClient(CustomAPIClientMixin):
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"API key creation failed: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to create API key: {e}")
@@ -5664,6 +6210,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"API key update failed: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update API key: {e}")
 
@@ -5704,6 +6253,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"API key deletion failed: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete API key: {e}")
 
@@ -5740,6 +6292,9 @@ class APIClient(CustomAPIClientMixin):
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to list user API keys: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to list user API keys: {e}")
@@ -5787,6 +6342,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to get user API key: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to get user API key: {e}")
 
@@ -5827,6 +6385,9 @@ class APIClient(CustomAPIClientMixin):
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"API key creation failed: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to create user API key: {e}")
@@ -5875,6 +6436,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"API key update failed: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update user API key: {e}")
 
@@ -5916,6 +6480,9 @@ class APIClient(CustomAPIClientMixin):
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"API key deletion failed: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to delete user API key: {e}")
@@ -5983,6 +6550,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to list comments: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list comments: {e}")
 
@@ -6026,6 +6596,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to list version comments: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to list version comments: {e}")
 
@@ -6065,6 +6638,9 @@ class APIClient(CustomAPIClientMixin):
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to get comment: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to get comment: {e}")
@@ -6116,6 +6692,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to add comment: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to add comment: {e}")
 
@@ -6165,6 +6744,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to update comment: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update comment: {e}")
 
@@ -6209,6 +6791,9 @@ class APIClient(CustomAPIClientMixin):
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to delete comment: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to delete comment: {e}")
@@ -6258,6 +6843,9 @@ class APIClient(CustomAPIClientMixin):
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to list subscriptions: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to list subscriptions: {e}")
@@ -6323,6 +6911,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to create subscription: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to create subscription: {e}")
 
@@ -6373,6 +6964,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to update subscription: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to update subscription: {e}")
 
@@ -6422,6 +7016,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to delete subscription: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to delete subscription: {e}")
 
@@ -6470,6 +7067,9 @@ class APIClient(CustomAPIClientMixin):
             else:
                 raise APIError(f"Failed to unsubscribe: {e}")
 
+        except GlobalInfrastructureError:
+            raise
+
         except Exception as e:
             raise APIError(f"Failed to unsubscribe: {e}")
 
@@ -6516,6 +7116,9 @@ class APIClient(CustomAPIClientMixin):
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to check subscription: {e}")
+
+        except GlobalInfrastructureError:
+            raise
 
         except Exception as e:
             raise APIError(f"Failed to check subscription: {e}")

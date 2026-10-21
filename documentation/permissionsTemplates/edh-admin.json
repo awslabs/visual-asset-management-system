@@ -1,0 +1,214 @@
+{
+    "metadata": {
+        "name": "EDH Admin",
+        "description": "EDH workstation administration: everything in EDH User plus image registration and removal, session oversight (list, stale, stop, deactivate), capacity and health. Templates create constraints only: create the role first (POST /roles or `vamscli role create --mfa-required`), import this template with variableValues.ROLE_NAME, then assign users. mfaRequired is a role attribute chosen there, not a template property: an mfaRequired role is dropped from every request whose MFA claim is false, so it locks the administrator out of these routes rather than protecting them under an external OAuth IDP, with useGlobalVpc.useForAllLambdas=true (no Cognito MFA lookup), and for any request authenticated with a VAMS API key (a workstation session key, or a CLI or MCP session using an API key override). A CLI or MCP session signed in through Cognito carries the user's MFA state like the web.",
+        "version": "1.0"
+    },
+    "variables": [
+        {
+            "name": "ROLE_NAME",
+            "required": true,
+            "description": "The role name to create"
+        }
+    ],
+    "constraints": [
+        {
+            "name": "{{ROLE_NAME}}-web-routes",
+            "description": "Allow navigation to the EDH workstations and EDH admin pages for {{ROLE_NAME}}",
+            "objectType": "web",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/edh/workstations"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/edh/admin"
+                }
+            ],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-get",
+            "description": "Allow GET on the workstation, catalog and admin routes, the sign-in probes and the route listing for {{ROLE_NAME}}",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/secure-config"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/loginProfile"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/routes"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/addon/edh/workstations"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/addon/edh/catalog"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/addon/edh/admin"
+                }
+            ],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-post",
+            "description": "Allow POST for workstation launch, stop and start, image registration, admin instance stop and deactivate, and the login-profile write, for {{ROLE_NAME}}",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/loginProfile"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/addon/edh/workstations"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/addon/edh/admin"
+                }
+            ],
+            "groupPermissions": [
+                {
+                    "action": "POST",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-delete",
+            "description": "Allow DELETE of workstations and registered images for {{ROLE_NAME}}",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/addon/edh/workstations"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/addon/edh/admin"
+                }
+            ],
+            "groupPermissions": [
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-api-routes-put",
+            "description": "Allow PUT on the EDH admin routes (AMI recipe updates) for {{ROLE_NAME}}",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/addon/edh/admin"
+                }
+            ],
+            "groupPermissions": [
+                {
+                    "action": "PUT",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-workstations",
+            "description": "Allow every workstation action on any image, OS family and instance type for {{ROLE_NAME}}, including admin oversight of other users' instances",
+            "objectType": "edhWorkstation",
+            "criteriaAnd": [
+                {
+                    "field": "edhImageId",
+                    "operator": "contains",
+                    "value": ".*"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-images",
+            "description": "Allow viewing, registering and removing catalog images of any id and OS family for {{ROLE_NAME}}",
+            "objectType": "edhImage",
+            "criteriaAnd": [
+                {
+                    "field": "edhImageId",
+                    "operator": "contains",
+                    "value": ".*"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                },
+                {
+                    "action": "PUT",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
+            ]
+        }
+    ]
+}

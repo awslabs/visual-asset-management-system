@@ -97,6 +97,14 @@ Some viewer plugins and processing pipelines require separate commercial license
 | Veerum 3D Viewer              | [Veerum](https://veerum.com/)                                 | Commercial      |
 | RapidPipeline 3D Processor    | [RapidPipeline](https://rapidpipeline.com/) (AWS Marketplace) | Commercial      |
 
+### EDH Workstations Add-on Notice
+
+The EDH Workstations add-on integrates with [EDH](https://github.com/awslabs/engineering-development-hub), an external platform licensed under Apache-2.0 that the operator deploys and manages separately. VAMS ships no EDH code. EDH, not VAMS, installs Amazon DCV, the desktop environment, and the NVIDIA GPU driver when a desktop first boots.
+
+The shipped AMI recipes under `backendAddons/edh/amiRecipes/` fetch their build-time components rather than redistributing them: operating system packages and updates from each distribution's own sources (`dnf`, `apt`, and Windows Update), the AWS CLI v2 from its AWS-published installer, and the Python dependencies of the VAMS CLI from PyPI. Each component is subject to its own license terms, which apply to the operator who builds the recipe.
+
+The `isaacsim` recipe (`backendAddons/edh/amiRecipes/isaacsim/`) downloads and installs NVIDIA Isaac Sim 5.1 and NVIDIA Omniverse Kit (bundled with Isaac Sim 5.1) at image build time. Both are proprietary NVIDIA software subject to the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license). No NVIDIA software is redistributed with VAMS — the build fetches the standalone archive from NVIDIA's published download URL, which the recipe exposes as a parameter. Operators accept the NVIDIA Software License Agreement by building this recipe; the build answers NVIDIA's first-run licence and telemetry prompts non-interactively, which is a record of that acceptance, not a substitute for it.
+
 ### NVIDIA License Notices
 
 **Isaac Lab Training Pipeline:** Uses NVIDIA Isaac Sim container images, which are subject to the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license). Users must accept the NVIDIA EULA by setting `acceptNvidiaEula: true` in the deployment configuration to use this pipeline.

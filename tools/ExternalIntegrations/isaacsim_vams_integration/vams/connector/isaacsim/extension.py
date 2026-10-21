@@ -8,6 +8,7 @@ MJCF), executing processing workflows, and uploading scenes.
 
 import logging
 import os
+import re
 import tempfile
 
 import carb
@@ -15,8 +16,10 @@ import omni.ext
 import omni.kit.app
 import omni.ui as ui
 
-from .connector import IsaacVAMSConnector
+from .connector import IsaacVAMSConnector, MalformedXmlError, _free_prim_path, _prim_name
 from .vams_cli_service import (
+    PipelineTemplate,
+    VamsAccessDeniedError,
     VamsCliError,
     VamsNotInstalledError,
     VamsProfileNotSetupError,
@@ -34,8 +37,18 @@ _MJCF_EXTENSIONS = (".mjcf", ".xml")
 LABEL_WIDTH = 120
 VERTICAL_SPACING = 5
 HORIZONTAL_SPACING = 4
+# Longest workflow name/description text; the workflow panel scrolls sideways to fit its longest row.
+_WF_TEXT_CHARS = 48
 _CHECK = "* "
 _NOCHECK = "  "
+# Leads the status of a refused call on a session the desktop signed in, so the ways to recover read
+# first; the CLI's own error follows.
+_SIGN_IN_PENDING = ("access refused - if this desktop was just started, its VAMS sign-in may not have "
+                    "completed; select Refresh Databases later. If the sign-in has expired, renew the "
+                    "workstation's lease in VAMS, or sign in under Authentication")
+# A run refused for a template tag with no value; the connector does not collect template tags.
+_TEMPLATE_TAG_REFUSAL = re.compile(r"tag '[^']*' is required")
+_CHOOSE_TEMPLATE = "Choose a template"
 
 try:
     from isaacsim.gui.components.style import get_style as _get_nvidia_style
@@ -87,6 +100,77 @@ def _file_type(name):
     return "other"
 
 
+def _bounded(text):
+    return text if len(text) <= _WF_TEXT_CHARS else text[:_WF_TEXT_CHARS - 3] + "..."
+
+
+def _workflow_button(wf):
+    """A workflow list button's text and tooltip. Text cut to fit is carried whole in the tooltip."""
+    label = wf.workflow_name or wf.workflow_id
+    text = f"{label} - {wf.description}" if wf.description else label
+    tooltip = f"ID: {wf.workflow_id}  |  DB: {wf.database_id}"
+    if _bounded(text) != text:
+        tooltip = f"{tooltip}\n{text}"
+    return f"  {_bounded(text)}", tooltip
+
+
+def _asset_relative_key(file_key, asset_id):
+    """An execution's input file key as a path within its asset. The service records a file of the
+    asset as ``/<assetId>/<path>``; a key that does not start with the asset is returned as it is."""
+    prefix = f"/{asset_id}"
+    if asset_id and (file_key == prefix or file_key.startswith(f"{prefix}/")):
+        return file_key[len(prefix):] or "/"
+    return file_key
+
+
+def _choose_template_status(step):
+    return f"Choose a template for {step.label} before running"
+
+
+class _PipelineStep:
+    """One pipeline of the workflow in the Execute view: its record and templates, read once for the
+    view, and the template chosen for it."""
+
+    def __init__(self, ref, workflow_database_id):
+        self.pipeline_id = ref.get("pipelineId", "")
+        self.database_id = ref.get("pipelineDatabaseId") or workflow_database_id
+        self.ref_template_id = ref.get("defaultTemplateId") or ""
+        self.pipeline = None
+        self.templates = []
+        self.templates_error = None
+        # Index in the template choice; 0 is its "Choose a template" entry.
+        self.choice = 0
+
+    @property
+    def label(self):
+        return (self.pipeline.pipeline_name if self.pipeline else "") or self.pipeline_id
+
+    @property
+    def chosen(self):
+        return self.templates[self.choice - 1] if self.choice else None
+
+    @property
+    def fallback(self):
+        """The template the service runs this pipeline with when the run names none: the workflow
+        reference's defaultTemplateId, else, for a pipeline that requires one, its isDefault
+        template."""
+        if self.ref_template_id:
+            return next((t for t in self.templates if t.template_id == self.ref_template_id),
+                        PipelineTemplate(template_id=self.ref_template_id))
+        if self.pipeline and self.pipeline.requires_template:
+            return next((t for t in self.templates if t.is_default), None)
+        return None
+
+    @property
+    def needs_choice(self):
+        return (self.pipeline is not None and self.pipeline.requires_template
+                and self.templates_error is None and self.fallback is None)
+
+    @property
+    def template(self):
+        return self.chosen or self.fallback
+
+
 class VamsConnectorExtension(omni.ext.IExt):
 
     def on_startup(self, ext_id: str):
@@ -107,7 +191,8 @@ class VamsConnectorExtension(omni.ext.IExt):
             self._show_error_window(
                 "VAMS CLI Not Found",
                 "The VAMS CLI (vamscli) is not installed or not on PATH.\n\n"
-                "Install it with:\n  pip install vamscli\n\n"
+                "Install it from the VAMS repository (VamsCLI is not published on PyPI):\n"
+                "  pip install -e <path-to-VAMS>/tools/VamsCLI\n\n"
                 "Or set the path in extension settings:\n"
                 f"  {SETTING_VAMSCLI_PATH}",
             )
@@ -127,8 +212,12 @@ class VamsConnectorExtension(omni.ext.IExt):
         self._selected_asset = None
         self._selected_file = None
         self._selected_workflow = None
+        self._wf_steps = []
+        self._wf_problems = []
         self._export_name_model = ui.SimpleStringModel()
         self._export_desc_model = ui.SimpleStringModel()
+        # A session the CLI profile already held; shutting down leaves it signed in.
+        self._session_adopted = False
 
         # Frame / stack references (set during _build_window)
         self._auth_frame = None
@@ -146,23 +235,32 @@ class VamsConnectorExtension(omni.ext.IExt):
         self._wf_stack = None
         self._export_stack = None
 
-    def _check_existing_session(self):
+    def _adopt_existing_session(self):
+        """Takes over a session the CLI profile already holds, such as the one a workstation signs in
+        at desktop login. That sign-in can finish after the extension starts, so browsing checks for
+        one again until it is found."""
         try:
             status = self._connector.get_auth_status()
             if status.user_id and self._username_model:
                 self._username_model.set_value(status.user_id)
-            if status.authenticated and not status.is_expired:
-                self._connector._authenticated = True
-                self._set_status(f"Authenticated as {status.user_id}")
-                if self._auth_frame:
-                    self._auth_frame.collapsed = True
-                self._load_databases()
+            if not status.authenticated or status.is_expired:
+                return False
+            self._connector._authenticated = True
+            self._session_adopted = True
+            self._set_status(f"Authenticated as {status.user_id}")
+            if self._auth_frame:
+                self._auth_frame.collapsed = True
+            return True
         except Exception:
-            pass
+            return False
+
+    def _check_existing_session(self):
+        if self._adopt_existing_session():
+            self._load_databases()
 
     def on_shutdown(self):
         logger.info("VAMS Connector extension shutting down")
-        if self._connector and self._connector._authenticated:
+        if self._connector and self._connector._authenticated and not self._session_adopted:
             try:
                 self._connector.logout()
             except Exception:
@@ -215,11 +313,15 @@ class VamsConnectorExtension(omni.ext.IExt):
                     ui.Button("Logout", width=55, clicked_fn=lambda: _defer(self._on_logout))
 
     def _build_status_bar(self):
-        with ui.ZStack(height=20):
+        with ui.ZStack(height=0):
             ui.Rectangle(style={"background_color": 0xFF1A1A2E, "border_radius": 3})
-            self._status_label = ui.Label(
-                "  Not authenticated", style={"color": 0xFFAAAAAA, "font_size": 12}
-            )
+            with ui.VStack(height=0):
+                ui.Spacer(height=4)
+                self._status_label = ui.Label(
+                    "  Not authenticated", word_wrap=True,
+                    style={"color": 0xFFAAAAAA, "font_size": 12}
+                )
+                ui.Spacer(height=4)
 
     def _build_db_browser(self):
         self._db_frame = _section("Database Browser", collapsed=True)
@@ -267,6 +369,14 @@ class VamsConnectorExtension(omni.ext.IExt):
     def _set_status(self, text):
         if self._status_label:
             self._status_label.text = f"  {text}"
+            self._status_label.tooltip = text
+
+    def _failure_status(self, prefix, error):
+        """The status line for a failed call. A refusal of the session the desktop signed in usually
+        means that sign-in has not completed or has expired, so the line says how to recover."""
+        if self._session_adopted and isinstance(error, VamsAccessDeniedError):
+            return f"{prefix}: {_SIGN_IN_PENDING} ({error})"
+        return f"{prefix}: {error}"
 
     # =========================================================================
     # Auth
@@ -280,6 +390,7 @@ class VamsConnectorExtension(omni.ext.IExt):
             return
         self._set_status("Authenticating...")
         if self._connector.login(username, credential):
+            self._session_adopted = False
             self._set_status(f"Authenticated as {username}")
             if self._auth_frame:
                 self._auth_frame.collapsed = True
@@ -295,6 +406,7 @@ class VamsConnectorExtension(omni.ext.IExt):
             return
         self._set_status("Authenticating with token override...")
         if self._connector.login_with_token(user_id, token):
+            self._session_adopted = False
             kind = "API key" if token.startswith("vams_") else "token"
             self._set_status(f"Authenticated as {user_id} ({kind})")
             if self._auth_frame:
@@ -305,6 +417,7 @@ class VamsConnectorExtension(omni.ext.IExt):
 
     def _on_logout(self):
         self._connector.logout()
+        self._session_adopted = False
         self._selected_db = None
         self._selected_asset = None
         self._selected_file = None
@@ -325,11 +438,13 @@ class VamsConnectorExtension(omni.ext.IExt):
     # =========================================================================
 
     def _load_databases(self):
+        if not self._connector._authenticated:
+            self._adopt_existing_session()
         self._set_status("Loading databases...")
         try:
             self._databases = self._connector.list_databases()
         except VamsCliError as e:
-            self._set_status(f"Error: {e}")
+            self._set_status(self._failure_status("Error", e))
             return
         self._populate_db_list()
         if self._db_frame:
@@ -375,7 +490,7 @@ class VamsConnectorExtension(omni.ext.IExt):
         try:
             self._assets = self._connector.list_assets(self._selected_db.database_id)
         except VamsCliError as e:
-            self._set_status(f"Error: {e}")
+            self._set_status(self._failure_status("Error", e))
             return
         self._populate_asset_list()
         if self._asset_frame:
@@ -426,8 +541,11 @@ class VamsConnectorExtension(omni.ext.IExt):
                 self._selected_db.database_id, self._selected_asset.asset_id
             )
         except VamsCliError as e:
-            self._set_status(f"Error: {e}")
+            self._set_status(self._failure_status("Error", e))
             return
+        self._show_files()
+
+    def _show_files(self):
         self._populate_file_list()
         if self._file_frame:
             self._file_frame.collapsed = False
@@ -436,7 +554,9 @@ class VamsConnectorExtension(omni.ext.IExt):
         self._refresh_action_panel()
         self._refresh_export_panel()
         self._show_wf_placeholder()
-        self._set_status(f"{len(self._files)} file(s) in {self._selected_asset.asset_name}")
+        file_count = sum(1 for f in self._files
+                         if not f.is_folder and (f.relative_path or f.file_name).strip("/"))
+        self._set_status(f"{file_count} file(s) in {self._selected_asset.asset_name}")
 
     def _reload_files(self):
         if not self._selected_db or not self._selected_asset:
@@ -522,7 +642,7 @@ class VamsConnectorExtension(omni.ext.IExt):
             ui.Button("Download Only (save to disk)",
                       height=26,
                       clicked_fn=lambda: _defer(lambda: self._on_download_file(f)),
-                      tooltip="Download file to a local temporary directory without importing")
+                      tooltip="Download this file into ~/vams_downloads, under its path within the asset, without importing it")
 
     # =========================================================================
     # Workflows
@@ -606,13 +726,12 @@ class VamsConnectorExtension(omni.ext.IExt):
                     ui.Label("  No workflows found.", height=20, style={"color": 0xFF888888})
             else:
                 for wf in self._workflows:
-                    label = wf.workflow_name or wf.workflow_id
-                    desc = f"{label} - {wf.description}" if wf.description else label
+                    text, tooltip = _workflow_button(wf)
                     with ui.HStack(height=24, spacing=HORIZONTAL_SPACING):
                         ui.Button(
-                            f"  {desc}",
+                            text,
                             clicked_fn=lambda w=wf: _defer(lambda: self._show_wf_execute(w)),
-                            tooltip=f"ID: {wf.workflow_id}  |  DB: {wf.database_id}",
+                            tooltip=tooltip,
                         )
                         ui.Label(wf.database_id, width=80,
                                  style={"font_size": 10, "color": 0xFF777777})
@@ -641,14 +760,20 @@ class VamsConnectorExtension(omni.ext.IExt):
                     ui.Label("Started", style={"font_size": 10, "color": 0xFF666666})
                 for ex in self._workflow_executions:
                     s = ex.execution_status or "Unknown"
-                    fk = ex.input_file_key if ex.input_file_key and ex.input_file_key != "/" else "-"
+                    key = ex.input_file_key or ""
+                    shown = _asset_relative_key(key, asset_id)
+                    fk = shown if shown and shown != "/" else "-"
+                    # Elided, so a long workflow ID, key or date cannot widen the window.
                     with ui.HStack(height=18):
                         ui.Label(f"  {s}", width=85,
                                  style={"font_size": 11, "color": _status_color(s)})
-                        ui.Label(ex.workflow_id or "", width=110,
+                        ui.Label(ex.workflow_id or "", width=110, elided_text=True,
+                                 tooltip=ex.workflow_id or "",
                                  style={"font_size": 11, "color": 0xFFAAAAAA})
-                        ui.Label(fk, width=90, style={"font_size": 11, "color": 0xFFAAAAAA})
-                        ui.Label(ex.start_date or "", style={"font_size": 10, "color": 0xFF777777})
+                        ui.Label(fk, width=90, elided_text=True, tooltip=key,
+                                 style={"font_size": 11, "color": 0xFFAAAAAA})
+                        ui.Label(ex.start_date or "", elided_text=True,
+                                 style={"font_size": 10, "color": 0xFF777777})
 
         status = (f"{len(self._workflows)} workflow(s), "
                   f"{len(self._workflow_executions)} execution(s)")
@@ -662,15 +787,73 @@ class VamsConnectorExtension(omni.ext.IExt):
     def _show_wf_execute(self, wf):
         if not self._selected_db or not self._selected_asset:
             return
+        self._selected_workflow = wf
+        self._wf_steps, self._wf_problems = self._load_wf_steps(wf)
+        if self._wf_problems:
+            self._set_status(self._wf_problems[0])
+        self._render_wf_execute(wf)
+
+    def _load_wf_steps(self, wf):
+        """Read the workflow's pipelines, and the templates of those that run with one: the template
+        in use sets which files the pipeline takes, and one it requires may be chosen here."""
+        steps = [_PipelineStep(ref, wf.database_id) for ref in wf.specified_pipelines]
+        problems = []
+        for step in steps:
+            try:
+                step.pipeline = self._connector.get_pipeline(step.database_id, step.pipeline_id)
+            except VamsCliError as e:
+                cause = ("Run follows the workflow's filters only" if len(steps) == 1
+                         else "its filters do not gate Run and a template it requires cannot be "
+                              "chosen here")
+                problems.append(self._failure_status(
+                    f"Could not read pipeline {step.database_id}:{step.pipeline_id}, so {cause}", e))
+                continue
+            if not (step.ref_template_id or step.pipeline.requires_template):
+                continue
+            try:
+                step.templates = sorted(
+                    self._connector.list_pipeline_templates(step.database_id, step.pipeline_id),
+                    key=lambda t: (t.template_name or t.template_id).lower())
+            except VamsCliError as e:
+                step.templates_error = e
+                problems.append(self._failure_status(
+                    f"Could not read the templates of {step.label}, so its template cannot be "
+                    "chosen here", e))
+        return steps, problems
+
+    def _render_wf_execute(self, wf):
+        if not self._selected_db or not self._selected_asset:
+            return
         db_id = self._selected_db.database_id
         asset_id = self._selected_asset.asset_id
         asset_name = self._selected_asset.asset_name
-        self._selected_workflow = wf
         desc = wf.workflow_name or wf.description or wf.workflow_id
+        # The service judges every pipeline that takes files against the selection the workflow's
+        # filters admit, with the pipeline's own effective inputFileFilters.
+        gates = [step for step in self._wf_steps if step.pipeline is not None]
+        # A file the workflow's or a pipeline's inputFileFilters reject is a hard execute error, so
+        # it gets no Run button — the same reason arity 'none' and a refused whole-asset scope get
+        # none.
+        non_folders = [(f, (f.relative_path or f.file_name).strip("/")) for f in self._files
+                       if not f.is_folder and (f.relative_path or f.file_name).strip("/")]
+        runnable = [(f, fkey) for f, fkey in non_folders if wf.allows_file(fkey)
+                    and all(step.pipeline.allows_file(fkey, step.template) for step in gates)]
+        excluded_count = len(non_folders) - len(runnable)
+        filters = ("the input-file filters of this workflow and its pipelines" if gates
+                   else "this workflow's input-file filters")
+        no_file = f"No file in this asset passes {filters}."
+        whole_asset_refusal = no_file if non_folders and not runnable else None
         self._wf_stack.clear()
         with self._wf_stack:
-            ui.Label(f"  Execute: {desc}", height=20, style={"font_size": 13})
+            ui.Label(f"  Execute: {_bounded(desc)}", height=20, style={"font_size": 13},
+                     tooltip=desc if _bounded(desc) != desc else "")
             ui.Label(f"  Asset: {asset_name}", height=18, style={"font_size": 11, "color": 0xFF999999})
+            for problem in self._wf_problems:
+                ui.Label(f"  {problem}", word_wrap=True,
+                         style={"font_size": 11, "color": 0xFFDD6644})
+            for step in self._wf_steps:
+                if step.needs_choice:
+                    self._build_template_choice(wf, step)
 
             takes_input_files = wf.input_file_arity != "none"
             if not takes_input_files:
@@ -678,17 +861,12 @@ class VamsConnectorExtension(omni.ext.IExt):
                          height=20, style={"font_size": 11, "color": 0xFF888888})
             elif wf.allows_whole_asset:
                 ui.Button("  Run on Entire Asset", height=26,
-                          clicked_fn=lambda: _defer(lambda: self._execute_wf(wf, db_id, asset_id, None)))
+                          clicked_fn=lambda: _defer(lambda: self._execute_wf(
+                              wf, db_id, asset_id, None, refusal=whole_asset_refusal)))
             else:
                 ui.Label("  This workflow runs on a single file, not a whole asset.",
                          height=20, style={"font_size": 11, "color": 0xFF888888})
 
-            # A file the workflow's inputFileFilters reject is a hard execute error, so it gets no
-            # Run button — the same reason arity 'none' and a refused whole-asset scope get none.
-            non_folders = [(f, (f.relative_path or f.file_name).strip("/")) for f in self._files
-                           if not f.is_folder and (f.relative_path or f.file_name).strip("/")]
-            runnable = [(f, fkey) for f, fkey in non_folders if wf.allows_file(fkey)]
-            excluded_count = len(non_folders) - len(runnable)
             if takes_input_files and runnable:
                 ui.Label("  Or run on a file:" if wf.allows_whole_asset else "  Run on a file:",
                          height=18, style={"font_size": 11, "color": 0xFF888888})
@@ -700,18 +878,61 @@ class VamsConnectorExtension(omni.ext.IExt):
                                       lambda: self._execute_wf(wf, db_id, asset_id, k)
                                   ))
             elif takes_input_files and non_folders and not wf.allows_whole_asset:
-                ui.Label("  No file in this asset passes this workflow's input-file filters.",
-                         height=20, style={"font_size": 11, "color": 0xFF888888})
+                ui.Label(f"  {no_file}", word_wrap=True,
+                         style={"font_size": 11, "color": 0xFF888888})
             if takes_input_files and excluded_count and runnable:
-                ui.Label(f"    {excluded_count} file(s) excluded by this workflow's "
-                         "input-file filters.",
-                         height=16, style={"font_size": 10, "color": 0xFF888888})
+                ui.Label(f"    {excluded_count} file(s) excluded by {filters}.", word_wrap=True,
+                         style={"font_size": 10, "color": 0xFF888888})
             ui.Spacer(height=4)
             ui.Button("  Back to workflow list", height=22,
                       clicked_fn=lambda: _defer(self._refresh_wf_panel),
                       style={"Button": {"background_color": 0xFF333333}})
 
-    def _execute_wf(self, wf, db_id, asset_id, file_key):
+    def _build_template_choice(self, wf, step):
+        """A choice among the templates of a pipeline that requires one and has no default."""
+        name = _bounded(step.label)
+        if not step.templates:
+            ui.Label(f"  {name} requires a template and has no templates.", height=18,
+                     style={"font_size": 11, "color": 0xFFDD6644})
+            return
+        ui.Label(f"  Template for {name}:", height=18, style={"font_size": 11, "color": 0xFF888888})
+        names = [_bounded(t.template_name or t.template_id) for t in step.templates]
+        combo = ui.ComboBox(step.choice, _CHOOSE_TEMPLATE, *names, height=22)
+        combo.model.get_item_value_model().add_value_changed_fn(
+            lambda model, s=step: self._on_template_chosen(wf, s, model.as_int))
+
+    def _on_template_chosen(self, wf, step, index):
+        step.choice = index
+        # A choice answers the request to choose one, or replaces an earlier choice's status.
+        label = self._status_label.text if self._status_label else ""
+        if step.chosen and (label == f"  {_choose_template_status(step)}"
+                            or label.startswith(f"  Template for {step.label}: ")):
+            self._set_status(f"Template for {step.label}: "
+                             f"{step.chosen.template_name or step.chosen.template_id}")
+
+        # A pipeline's template sets which files are runnable. The view is rebuilt once the combo
+        # box's own callback has returned.
+        def _rerender():
+            if self._selected_workflow is wf:
+                self._render_wf_execute(wf)
+
+        _defer(_rerender)
+
+    def _execute_wf(self, wf, db_id, asset_id, file_key, refusal=None):
+        """Run ``wf`` on one file, or on the whole asset when ``file_key`` is None. A ``refusal`` is
+        the reason the service would refuse the run, shown instead of running it."""
+        if refusal:
+            self._set_status(refusal)
+            return
+        steps = self._wf_steps if self._selected_workflow is wf else []
+        for step in steps:
+            if step.needs_choice and not step.chosen:
+                self._set_status(_choose_template_status(step)
+                                 if step.templates
+                                 else f"{step.label} requires a template and has no templates")
+                return
+        pipeline_parameters = {step.pipeline_id: {"templateId": step.chosen.template_id}
+                               for step in steps if step.chosen}
         target = file_key or "entire asset"
         label = wf.workflow_name or wf.description or wf.workflow_id
         self._set_status(f"Executing {label} on {target}...")
@@ -719,11 +940,14 @@ class VamsConnectorExtension(omni.ext.IExt):
             result = self._connector.execute_workflow(
                 database_id=db_id, asset_id=asset_id,
                 workflow_id=wf.workflow_id, workflow_database_id=wf.database_id,
-                file_key=file_key,
+                file_key=file_key, pipeline_parameters=pipeline_parameters or None,
             )
             self._set_status(f"Workflow started: {result.get('executionId', '?')}")
         except VamsCliError as e:
-            self._set_status(f"Workflow error: {e}")
+            status = self._failure_status("Workflow error", e)
+            if _TEMPLATE_TAG_REFUSAL.search(str(e)):
+                status = f"{status} - run it from the VAMS web UI to set its template tags"
+            self._set_status(status)
 
     # =========================================================================
     # Export / Upload
@@ -756,15 +980,29 @@ class VamsConnectorExtension(omni.ext.IExt):
         asset_name = self._selected_asset.asset_name
         self._set_status(f"Exporting {filename} to {asset_name}...")
         try:
-            export_path = os.path.join(tempfile.gettempdir(), filename)
-            self._connector.export_and_upload_scene(
+            export_path = os.path.join(tempfile.mkdtemp(prefix="vams_export_"),
+                                       os.path.basename(filename))
+            result = self._connector.export_and_upload_scene(
                 self._selected_db.database_id, asset_name,
                 export_path=export_path,
                 asset_id=self._selected_asset.asset_id,
             )
-            self._set_status(f"Uploaded {filename} to {asset_name}")
         except Exception as e:
-            self._set_status(f"Export error: {e}")
+            self._set_status(self._failure_status("Export error", e))
+            return
+        uploaded = (f"Uploaded {filename} to {asset_name}"
+                    f"{self._unportable_note(result.get('unportablePaths', 0))}")
+        # The export was uploaded into the selected asset, so its file list now includes it.
+        try:
+            self._files = self._connector.list_files(
+                self._selected_db.database_id, self._selected_asset.asset_id
+            )
+        except VamsCliError as e:
+            self._set_status(self._failure_status(f"{uploaded}, but the file list did not refresh",
+                                                  e))
+            return
+        self._show_files()
+        self._set_status(uploaded)
 
     # =========================================================================
     # File actions
@@ -774,92 +1012,83 @@ class VamsConnectorExtension(omni.ext.IExt):
         file_key = f.relative_path or f.file_name
         return self._selected_db.database_id, self._selected_asset.asset_id, file_key
 
+    @staticmethod
+    def _unresolved_note(missing):
+        return f" ({missing} asset file(s) did not download)" if missing else ""
+
+    @staticmethod
+    def _unportable_note(count):
+        return (f" ({count} file path(s) point outside this asset and will not resolve elsewhere)"
+                if count else "")
+
     def _on_load_file(self, f):
         db_id, asset_id, file_key = self._file_context(f)
         self._set_status(f"Downloading {file_key}...")
         try:
-            local_dir = tempfile.mkdtemp(prefix="vams_")
-            if not self._connector.download_file(db_id, asset_id, file_key, local_dir):
-                self._set_status(f"Download failed: {file_key}")
-                return
-            local_file = os.path.abspath(os.path.join(local_dir, file_key.lstrip("/")))
-            if not os.path.isfile(local_file):
-                self._set_status(f"File not found: {local_file}")
-                return
+            local_file, missing = self._connector.fetch_local_copy(db_id, asset_id, file_key)
             import omni.usd
             omni.usd.get_context().open_stage(local_file)
-            self._set_status(f"Opened {file_key}")
+            self._set_status(f"Opened {file_key}{self._unresolved_note(missing)}")
         except Exception as e:
-            self._set_status(f"Load error: {e}")
-
-    @staticmethod
-    def _sanitize_prim_name(name):
-        """Make a string safe for use as a USD prim name (alphanumeric + underscore only)."""
-        import re
-        # Strip extension, replace invalid chars with underscore
-        base = os.path.splitext(os.path.basename(name))[0]
-        sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", base)
-        # Prim names cannot start with a digit
-        if sanitized and sanitized[0].isdigit():
-            sanitized = "_" + sanitized
-        return sanitized or "imported"
+            self._set_status(self._failure_status("Load error", e))
 
     def _on_add_usd_reference(self, f):
         db_id, asset_id, file_key = self._file_context(f)
-        prim_name = self._sanitize_prim_name(file_key)
-        prim_path = f"/World/{prim_name}"
         self._set_status(f"Downloading {file_key}...")
         try:
-            local_dir = tempfile.mkdtemp(prefix="vams_")
-            if not self._connector.download_file(db_id, asset_id, file_key, local_dir):
-                self._set_status(f"Download failed: {file_key}")
-                return
-            local_file = os.path.abspath(os.path.join(local_dir, file_key.lstrip("/")))
-            if not os.path.isfile(local_file):
-                self._set_status(f"File not found: {local_file}")
-                return
             import omni.usd
             stage = omni.usd.get_context().get_stage()
             if stage is None:
                 self._set_status("No active USD stage")
                 return
-            prim = stage.GetPrimAtPath(prim_path)
-            if not prim.IsValid():
-                prim = stage.DefinePrim(prim_path)
-            prim.GetReferences().AddReference(local_file)
-            self._set_status(f"Added reference at {prim_path}")
+            local_file, missing = self._connector.fetch_local_copy(db_id, asset_id, file_key)
+            prim_path = _free_prim_path(stage, f"/World/{_prim_name(file_key)}")
+            self._connector.add_reference_to_stage(stage, prim_path, local_file)
+            self._set_status(f"Added reference at {prim_path}{self._unresolved_note(missing)}")
         except Exception as e:
-            self._set_status(f"Reference error: {e}")
+            self._set_status(self._failure_status("Reference error", e))
 
     def _on_import_urdf(self, f):
         db_id, asset_id, file_key = self._file_context(f)
         self._set_status(f"Importing URDF {file_key}...")
         try:
-            prim = self._connector.download_and_import_urdf(db_id, asset_id, file_key)
-            self._set_status(f"Imported URDF as {prim}" if prim else "URDF import failed")
+            local_file, missing = self._connector.fetch_local_copy(db_id, asset_id, file_key)
+            prim = self._connector.import_urdf_file(local_file)
+            self._set_status(f"Imported URDF as {prim}{self._unresolved_note(missing)}" if prim
+                             else "URDF import failed")
         except Exception as e:
-            self._set_status(f"URDF error: {e}")
+            self._set_status(self._failure_status("URDF error", e))
 
     def _on_import_mjcf(self, f):
         db_id, asset_id, file_key = self._file_context(f)
         self._set_status(f"Importing MJCF {file_key}...")
         try:
-            ok = self._connector.download_and_import_mjcf(db_id, asset_id, file_key)
-            self._set_status(f"Imported MJCF {file_key}" if ok else "MJCF import failed")
+            local_file, missing = self._connector.fetch_local_copy(db_id, asset_id, file_key)
+            prim = self._connector.import_mjcf_file(local_file)
+            outcome = (f"Imported MJCF {file_key} as {prim}" if prim
+                       else f"MJCF import failed: {file_key}")
+            self._set_status(f"{outcome}{self._unresolved_note(missing)}")
+        except MalformedXmlError as e:
+            self._set_status(self._failure_status("MJCF error",
+                                                  f"{file_key} is not well-formed XML: {e.reason}"))
         except Exception as e:
-            self._set_status(f"MJCF error: {e}")
+            self._set_status(self._failure_status("MJCF error", e))
 
     def _on_download_file(self, f):
         db_id, asset_id, file_key = self._file_context(f)
-        local_path = os.path.join(tempfile.gettempdir(), "vams_downloads")
+        # Under the user's home: a fixed directory in the shared temp dir could be another user's.
+        local_path = os.path.join(os.path.expanduser("~"), "vams_downloads")
         self._set_status(f"Downloading {file_key}...")
         try:
             if self._connector.download_file(db_id, asset_id, file_key, local_path):
-                self._set_status(f"Downloaded to {local_path}")
+                self._set_status(
+                    f"Downloaded to {os.path.join(local_path, file_key.lstrip('/'))}")
             else:
                 self._set_status(f"Download failed: {file_key}")
+        except VamsCliError as e:
+            self._set_status(self._failure_status("Download failed", e))
         except Exception as e:
-            self._set_status(f"Download error: {e}")
+            self._set_status(self._failure_status("Download error", e))
 
     # =========================================================================
     # Error window

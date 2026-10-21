@@ -19,6 +19,7 @@ import { Config } from "../../../../config/config";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { NagSuppressions } from "cdk-nag";
 import { kmsKeyPolicyStatementGenerator } from "../../../helper/security";
+import { addonAdminDefaultConstraints } from "../../addon/addonDefaultConstraints";
 
 export interface DynamoDbAuthDefaultsAdminConstructStackProps extends cdk.StackProps {
     customResourceRole: iam.Role;
@@ -1467,6 +1468,7 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     S: "userRole",
                 },
             },
+            ...addonAdminDefaultConstraints(props.config, roleNameAdmin),
         ];
 
         let i = 0;

@@ -38,7 +38,7 @@ Tier 1 determines whether the user's role is allowed to call the specific API en
 :::info[Web routes control visibility only]
 Web route constraints control which pages appear in the navigation menu. They do not enforce data access -- a user who knows the API endpoint could still call it if the `api` constraint allows. Always pair `web` constraints with matching `api` constraints.
 
-The orchestration UI (Pipelines, Workflows, Executions pages) additionally implements **Tier-1 action graying** — actions the user is not allowed to perform (based on `GET /auth/routes/api/allowed`) are hidden or disabled. For example, the admin-only **Logs** and **Permanent Delete** actions in an execution's action menu are hidden unless the user's role allows the corresponding API routes. An execution's **Logs** tab is the exception: it remains present so the capability stays discoverable, and reports that the logs are not viewable.
+The orchestration UI (Pipelines, Workflows, Executions pages) and the add-on pages that use the same check additionally implement **Tier-1 action graying** — actions the user is not allowed to perform (based on `GET /auth/routes/api/allowed`) are hidden or disabled. The check fails closed, so a role that is not allowed `GET` on `/auth/routes/api/allowed` has every such action hidden or disabled. For example, the admin-only **Logs** and **Permanent Delete** actions in an execution's action menu are hidden unless the user's role allows the corresponding API routes. An execution's **Logs** tab is the exception: it remains present so the capability stays discoverable, and reports that the logs are not viewable.
 :::
 
 ### Tier 2 -- Object-level authorization
@@ -69,8 +69,9 @@ Both default roles are seeded at deployment time. `admin` receives the administr
 `app.adminUserId`, plus the reserved `SYSTEM_USER` identity so system processes satisfy both
 authorization tiers. `basicReadOnly` grants GET on the read paths (assets, files, metadata, databases,
 pipelines, workflows, executions, tags, comments, subscriptions, metadata schemas), the non-mutating
-POST paths (`/auth/routes`, `/search`, `/check-subscription`), and management of the caller's own API
-keys.
+POST paths (`/auth/routes`, `/search`, `/check-subscription`), the file download request
+(`POST /database/{databaseId}/assets/{assetId}/download`, which the file viewers use), and management
+of the caller's own API keys.
 
 Two routes are administrative and belong to `admin` alone: detailed execution logs
 (`GET /workflows/executions/{executionId}/logs`) and execution permanent delete
@@ -158,24 +159,26 @@ This object-type and field matrix — along with the criteria operators, the per
 
 ### Extension object types
 
-A deployment can register more object types for the entities its own extensions add, with their constraint fields, in the add-on or fork constants files (see [Extending VAMS in a Fork](../developer/customizing-vams.md#permission-object-types)). A registered type appears in the matrix above, in the constraint editor and in the `permissionObjects` response, and its constraints are validated and evaluated like those of a core type. **A registered type grants nothing by default.** The seeded constraints cover only the core types, so no role, the `admin` role included, can act on an entity of the new type until a constraint on that type allows it.
+A deployment can register more object types for the entities its own extensions add, with their constraint fields, in the add-on or fork constants files (see [Extending VAMS in a Fork](../developer/customizing-vams.md#permission-object-types)). A registered type appears in the matrix above, in the constraint editor and in the `permissionObjects` response, and its constraints are validated and evaluated like those of a core type. **A registered type grants nothing by default.** The seeded constraints cover only the core types and the types of an enabled add-on that seeds its own, so no role, the `admin` role included, can act on an entity of any other registered type until a constraint on that type allows it.
 
 ## Constraint criteria operators
 
 Criteria conditions use operators to match field values. The pattern-matching operators compare one string using a regular expression; the membership operators test a list. Criteria values are auto-escaped before being passed to the Casbin policy engine.
 
-| Operator           | Behavior                             | Internal Pattern                   | Example                              |
-| ------------------ | ------------------------------------ | ---------------------------------- | ------------------------------------ |
-| `equals`           | Exact match.                         | `regexMatch(^value\Z)`             | `databaseId equals my-project-db`    |
-| `contains`         | Value appears anywhere in the field. | `regexMatch((?s:.*)value(?s:.*))`  | `assetName contains draft`           |
-| `does_not_contain` | Value does not appear in the field.  | `!regexMatch((?s:.*)value(?s:.*))` | `assetName does_not_contain scratch` |
-| `starts_with`      | Field begins with the value.         | `regexMatch(^value.*)`             | `databaseId starts_with team-alpha-` |
-| `ends_with`        | Field ends with the value.           | `regexMatch((?s:.*)value\Z)`       | `assetName ends_with .e57`           |
-| `is_one_of`        | List contains the value.             | `value in r.obj.field`             | `tags is_one_of locked`              |
-| `is_not_one_of`    | List does not contain the value.     | `!(value in r.obj.field)`          | `tags is_not_one_of published`       |
+| Operator           | Behavior                                                                     | Internal Pattern                   | Example                              |
+| ------------------ | ---------------------------------------------------------------------------- | ---------------------------------- | ------------------------------------ |
+| `equals`           | Exact match.                                                                 | `regexMatch(^value\Z)`             | `databaseId equals my-project-db`    |
+| `contains`         | Value appears anywhere in the field.                                         | `regexMatch((?s:.*)value(?s:.*))`  | `assetName contains draft`           |
+| `does_not_contain` | Value does not appear in the field.                                          | `!regexMatch((?s:.*)value(?s:.*))` | `assetName does_not_contain scratch` |
+| `starts_with`      | Field begins with the value.                                                 | `regexMatch(^value.*)`             | `databaseId starts_with team-alpha-` |
+| `ends_with`        | Field ends with the value.                                                   | `regexMatch((?s:.*)value\Z)`       | `assetName ends_with .e57`           |
+| `is_one_of`        | List contains the value (a substring test on a single-string field).         | `value in r.obj.field`             | `tags is_one_of locked`              |
+| `is_not_one_of`    | List does not contain the value (a substring test on a single-string field). | `!(value in r.obj.field)`          | `tags is_not_one_of published`       |
 
 :::note[Match the operator to the field]
 Every field holds a single string except `tags`, which holds a list. Use the membership operators for `tags` and the pattern-matching operators for everything else — a constraint that pairs a pattern-matching operator with `tags` is rejected when it is saved.
+
+The reverse pairing is accepted when it is saved, but a membership operator on a single-string field evaluates as a substring test: `databaseId is_one_of prod` also matches `preprod` and `prod-archive`. Narrow a single-string field with `equals` or `starts_with`, and list several allowed values as separate `criteriaOr` conditions.
 
 The terminal anchor is `\Z` rather than `$`, and the generated wildcards span newlines, so a value's leading or trailing whitespace cannot satisfy a constraint written without it. The wildcards are scoped groups, which keeps a `.` inside your own value matching a single character rather than crossing lines.
 :::
@@ -244,7 +247,7 @@ A common mistake is creating a `database` constraint and assuming it automatical
 
 ## Permission templates
 
-VAMS provides pre-built JSON templates for common permission profiles (Database Admin, Database User, Database Read-Only, Global Read-Only, and Deny Tagged Assets). Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+VAMS provides pre-built JSON templates for common permission profiles (Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, and Deny Tagged Assets). Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
 
 For the complete list of templates, JSON format details, and instructions on applying templates via the CLI or API, see [Developer Guide: Permissions](../developer/permissions.md#permission-templates).
 
@@ -372,7 +375,7 @@ needs to set a database's default bucket without holding the route can still do 
 | `/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}`          | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 | `/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`               | GET, HEAD | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 | `/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}` | GET, HEAD | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/download`                               | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/download`                               | POST      | `asset` (`GET`)    | `assetName`, `databaseId`, `assetType`, `tags` |
 | `/database/{databaseId}/assets/{assetId}/export`                                 | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 
 ### Asset version routes
@@ -513,6 +516,8 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 | Route                  | Methods | Tier 2 Object Type | Tier 2 Fields                                  |
 | ---------------------- | ------- | ------------------ | ---------------------------------------------- |
 | `/addon/physna/viewer` | GET     | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+
+Routes of other add-ons are listed on each add-on's page.
 
 ## Performance considerations
 

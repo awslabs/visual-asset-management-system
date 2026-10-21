@@ -1,0 +1,147 @@
+name: vams-profile-cleanup
+description: Removes the VAMS CLI profiles and per-desktop directories that the user's deleted desktops left in the shared home, once per desktop sign-in.
+schemaVersion: 1.0
+phases:
+    - name: build
+      steps:
+          - name: InstallCleanupScript
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - |
+                        cat > /usr/local/bin/vams-profile-cleanup.sh <<'CLEANUP'
+                        #!/usr/bin/env bash
+                        set -uo pipefail
+
+                        # Every desktop of a user mounts the same home, and each one's sign-in leaves a CLI
+                        # profile edh-<instance id> and a directory ~/.vams/hosts/<instance id> in it. This
+                        # removes both for every other desktop EC2 no longer lists, which is one that was
+                        # deleted; a desktop that still exists, running or stopped, keeps them, and any doubt
+                        # removes nothing. It reads directory names, EC2's answer and the active profile's
+                        # name only, never what a profile holds, and always exits 0. Its argument is the name
+                        # of the profile that was active before the sign-in.
+                        WAS="${1:-}"
+                        VAMSCLI="${VAMSCLI:-/opt/vams/vamscli-venv/bin/vamscli}"
+                        PROFILES="${HOME}/.config/vamscli/profiles"
+                        HOSTS="${HOME}/.vams/hosts"
+                        ACTIVE="${HOME}/.config/vamscli/active_profile.json"
+                        ID_PATTERN='^i-[0-9a-f]{8,17}$'
+
+                        log() {
+                            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*"
+                        }
+
+                        # The ids of the other desktops that left a profile or a host directory here, once
+                        # each; a symbolic link is never taken for one.
+                        others() {
+                            local entry id
+                            local -A seen=()
+                            for entry in "${PROFILES}"/edh-i-* "${HOSTS}"/i-*; do
+                                id="${entry##*/}"
+                                id="${id#edh-}"
+                                if [ -d "${entry}" ] && [ ! -L "${entry}" ] && [[ "${id}" =~ ${ID_PATTERN} ]] \
+                                    && [ "${id}" != "${SELF}" ] && [ -z "${seen[${id}]:-}" ]; then
+                                    seen[${id}]=1
+                                    echo "${id}"
+                                fi
+                            done
+                        }
+
+                        remove_gone() {
+                            local -a ids
+                            local -A live=()
+                            local i id chunk answer words word path failed
+                            mapfile -t ids < <(others)
+                            if [ "${#ids[@]}" -eq 0 ]; then
+                                log "no other desktop left a profile here"
+                                return
+                            fi
+                            # At most 50 ids per call, each call also naming this desktop: an answer that does
+                            # not list it (a wrong region, an empty answer) says nothing about the others.
+                            for ((i = 0; i < ${#ids[@]}; i += 50)); do
+                                chunk="${SELF}"
+                                for id in "${ids[@]:i:50}"; do
+                                    chunk+=",${id}"
+                                done
+                                if ! answer="$(aws ec2 describe-tags --region "${REGION}" \
+                                        --filters Name=resource-type,Values=instance "Name=resource-id,Values=${chunk}" \
+                                        --query 'Tags[].ResourceId' --output text --cli-connect-timeout 10 --cli-read-timeout 20)"; then
+                                    log "EC2 could not be asked which desktops still exist; nothing removed"
+                                    return
+                                fi
+                                words="$(tr -s '[:space:]' '\n' <<<"${answer}")"
+                                if ! grep -qxF -- "${SELF}" <<<"${words}"; then
+                                    log "EC2's answer does not list this desktop (${SELF}); nothing removed"
+                                    return
+                                fi
+                                while read -r word; do
+                                    if [ -n "${word}" ]; then
+                                        live[${word}]=1
+                                    fi
+                                done <<<"${words}"
+                            done
+                            for id in "${ids[@]}"; do
+                                if [ -n "${live[${id}]:-}" ]; then
+                                    continue
+                                fi
+                                failed=""
+                                for path in "${PROFILES}/edh-${id}" "${HOSTS}/${id}"; do
+                                    if [ ! -L "${path}" ]; then
+                                        rm -rf -- "${path}" || failed=1
+                                    fi
+                                done
+                                if [ -n "${failed}" ]; then
+                                    log "could not remove all of edh-${id} and ~/.vams/hosts/${id}; the next sign-in tries again"
+                                else
+                                    log "removed edh-${id} and ~/.vams/hosts/${id}: EC2 no longer lists ${id}"
+                                fi
+                            done
+                        }
+
+                        # The active profile is shared by every desktop of the user, and a desktop's sign-in
+                        # points it at that desktop's own profile. The profile active before the sign-in becomes
+                        # active again when it is neither a desktop's profile nor a missing one; otherwise an
+                        # active profile that names either goes back to the edh alias, and any other stays.
+                        repair_active() {
+                            local active="" target=""
+                            if [ -f "${ACTIVE}" ]; then
+                                active="$(jq -r '.active_profile // empty' "${ACTIVE}" 2>/dev/null)"
+                            fi
+                            if [[ "${WAS}" =~ ^[A-Za-z0-9_-]+$ ]] && ! [[ "${WAS}" =~ ^edh-i- ]] \
+                                && [ -f "${PROFILES}/${WAS}/config.json" ]; then
+                                target="${WAS}"
+                            elif [ -n "${active}" ] && [ -f "${PROFILES}/edh/config.json" ] \
+                                && { [[ "${active}" =~ ^edh-i- ]] || [ ! -f "${PROFILES}/${active}/config.json" ]; }; then
+                                target=edh
+                            fi
+                            if [ -n "${target}" ] && [ "${target}" != "${active}" ]; then
+                                if "${VAMSCLI}" --profile "${target}" profile switch "${target}" --json-output >/dev/null; then
+                                    log "the active CLI profile was ${active}; it is ${target} again"
+                                else
+                                    log "the active CLI profile ${active} could not be switched to ${target}"
+                                fi
+                            fi
+                        }
+
+                        if ! SELF="$(/usr/local/bin/vams-instance-id)"; then
+                            log "this desktop's instance id could not be read; nothing removed"
+                        elif ! TOKEN="$(curl -fsS --max-time 5 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')" \
+                            || ! REGION="$(curl -fsS --max-time 5 -H "X-aws-ec2-metadata-token: ${TOKEN}" http://169.254.169.254/latest/meta-data/placement/region)"; then
+                            log "this desktop's region could not be read; nothing removed"
+                        else
+                            remove_gone
+                        fi
+                        repair_active
+                        exit 0
+                        CLEANUP
+                    - chmod 0755 /usr/local/bin/vams-profile-cleanup.sh
+    - name: validate
+      steps:
+          - name: CleanupInstalled
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -eux
+                    - bash -n /usr/local/bin/vams-profile-cleanup.sh
+                    - test -x /usr/local/bin/vams-profile-cleanup.sh

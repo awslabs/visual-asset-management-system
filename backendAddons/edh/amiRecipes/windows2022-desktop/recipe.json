@@ -1,0 +1,22 @@
+{
+    "recipeId": "windows2022-desktop",
+    "displayName": "Windows Server 2022 desktop",
+    "kind": "vdi",
+    "osFamily": "windows",
+    "baseOs": "windows2022",
+    "architecture": "x86_64",
+    "parentImage": "ssm:/aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base",
+    "buildInstanceType": "m7i.xlarge",
+    "rootSizeGb": 100,
+    "stackName": "VAMS Windows Server 2022 Desktop",
+    "profileId": 1,
+    "components": [
+        {
+            "arn": "arn:${AWS::Partition}:imagebuilder:${AWS::Region}:aws:component/update-windows/x.x.x"
+        },
+        { "file": "components/010-baseline.yml" }
+    ],
+    "keepVersions": 3,
+    "recipeRevision": 1,
+    "description": "Windows Server 2022 with Windows updates and a VAMS image-release marker; EDH installs Amazon DCV at the desktop's first boot."
+}

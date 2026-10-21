@@ -1,0 +1,37 @@
+{
+  "name": "virtual_desktops_not_found",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "PUT",
+    "path": "/api/dcv/virtual_desktops/stop",
+    "absolutePath": "/api/dcv/virtual_desktops/stop",
+    "query": {},
+    "headers": {
+      "X-EDH-USER": "vspikeaaaaaaaaaa"
+    },
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": {
+      "session_uuid": "3c2b1a09-8f7e-4d6c-b5a4-93827160fedc"
+    }
+  },
+  "response": {
+    "status": 500,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": false,
+      "message": "Unable to Stop Desktop 3c2b1a09-8f7e-4d6c-b5a4-93827160fedc (owner: vspikeaaaaaaaaaa):  Unable to find this session. Please refresh your browser and try again.  (Request ID: f8020a70-251a-4382-ac24-dc28a723567f)"
+    }
+  },
+  "expect": {},
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/dcv/stop_virtual_desktop.py",
+      "source/soca/cluster_manager/utils/errors/virtual_desktops.py",
+      "source/soca/cluster_manager/utils/error.py"
+    ]
+  }
+}

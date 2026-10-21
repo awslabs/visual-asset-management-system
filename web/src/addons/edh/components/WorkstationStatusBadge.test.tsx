@@ -1,0 +1,106 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React from "react";
+import { render, screen } from "@testing-library/react";
+import WorkstationStatusBadge, {
+    LAST_ERROR_COPY,
+    LAST_ERROR_FALLBACK_COPY,
+    describeLastError,
+} from "./WorkstationStatusBadge";
+
+describe("WorkstationStatusBadge", () => {
+    it.each([
+        ["CREATING", "Creating"],
+        ["ACTIVE", "Active"],
+        ["STOPPED", "Stopped"],
+        ["DELETED", "Deleted"],
+        ["ORPHANED", "Orphaned"],
+    ] as const)("renders %s as %s", (state, label) => {
+        render(<WorkstationStatusBadge state={state} />);
+        expect(screen.getByText(label)).toBeInTheDocument();
+    });
+
+    it("renders an active desktop EDH does not yet report connectable as Starting, with the moving dot", () => {
+        const { unmount } = render(
+            <WorkstationStatusBadge state="ACTIVE" connectionAvailable={false} edhState="pending" />
+        );
+        expect(screen.getByTitle("pending")).toHaveTextContent("Starting");
+        expect(screen.getByText("Starting").previousSibling).toHaveClass("animate-pulse");
+        unmount();
+        render(<WorkstationStatusBadge state="ACTIVE" connectionAvailable={true} />);
+        expect(screen.getByText("Active")).toBeInTheDocument();
+        expect(screen.queryByText("Starting")).not.toBeInTheDocument();
+    });
+
+    it("renders a creating row that carries a session as Starting: a stopped desktop being started again", () => {
+        const { unmount } = render(
+            <WorkstationStatusBadge state="CREATING" sessionId="s-2" edhState="pending" />
+        );
+        expect(screen.getByTitle("pending")).toHaveTextContent("Starting");
+        expect(screen.getByText("Starting").previousSibling).toHaveClass("animate-pulse");
+        unmount();
+        // A launch has no session yet and is being created.
+        render(<WorkstationStatusBadge state="CREATING" sessionId={null} />);
+        expect(screen.getByText("Creating")).toBeInTheDocument();
+        expect(screen.getByText("Creating").previousSibling).toHaveClass("animate-pulse");
+    });
+
+    it("renders an unmapped state as its raw value without throwing", () => {
+        render(<WorkstationStatusBadge state={"RESIZING" as any} />);
+        expect(screen.getByText("RESIZING")).toBeInTheDocument();
+    });
+
+    it("renders an empty state as Unknown", () => {
+        render(<WorkstationStatusBadge state={"" as any} />);
+        expect(screen.getByText("Unknown")).toBeInTheDocument();
+    });
+
+    it("exposes the raw EDH state as the badge title", () => {
+        render(<WorkstationStatusBadge state="ACTIVE" edhState="running" />);
+        expect(screen.getByTitle("running")).toHaveTextContent("Active");
+    });
+
+    it("carries no title when EDH has not reported a state", () => {
+        render(<WorkstationStatusBadge state="CREATING" edhState={null} />);
+        expect(screen.getByText("Creating").closest("span[title]")).toBeNull();
+    });
+
+    it("titles an orphaned badge with the explanation for its failure code", () => {
+        render(<WorkstationStatusBadge state="ORPHANED" lastError="QUOTA_EXCEEDED" />);
+        expect(screen.getByTitle(LAST_ERROR_COPY.QUOTA_EXCEEDED)).toHaveTextContent("Orphaned");
+    });
+
+    it("titles an orphaned badge EDH found no capacity for with the retry advice", () => {
+        render(<WorkstationStatusBadge state="ORPHANED" lastError="CAPACITY_UNAVAILABLE" />);
+        expect(
+            screen.getByTitle(
+                "EDH found no available AWS capacity for the chosen instance type. Launch again later or choose another instance type."
+            )
+        ).toHaveTextContent("Orphaned");
+        expect(describeLastError("CAPACITY_UNAVAILABLE")).not.toBe(LAST_ERROR_FALLBACK_COPY);
+    });
+
+    it("titles a stopped badge with the lease explanation when the lease stopped it", () => {
+        render(
+            <WorkstationStatusBadge state="STOPPED" edhState="stopped" lastError="LEASE_EXPIRED" />
+        );
+        expect(screen.getByTitle(LAST_ERROR_COPY.LEASE_EXPIRED)).toHaveTextContent("Stopped");
+    });
+
+    it("keeps the raw EDH state as the title of a stopped badge that carries no code", () => {
+        render(<WorkstationStatusBadge state="STOPPED" edhState="stopped" />);
+        expect(screen.getByTitle("stopped")).toHaveTextContent("Stopped");
+    });
+
+    it("falls back to the generic explanation for a missing or unknown code", () => {
+        const { unmount } = render(<WorkstationStatusBadge state="ORPHANED" lastError={null} />);
+        expect(screen.getByTitle(LAST_ERROR_FALLBACK_COPY)).toHaveTextContent("Orphaned");
+        unmount();
+        render(<WorkstationStatusBadge state="ORPHANED" lastError="SOMETHING_NEW" />);
+        expect(screen.getByTitle(LAST_ERROR_FALLBACK_COPY)).toHaveTextContent("Orphaned");
+        expect(describeLastError(undefined)).toBe(LAST_ERROR_FALLBACK_COPY);
+    });
+});

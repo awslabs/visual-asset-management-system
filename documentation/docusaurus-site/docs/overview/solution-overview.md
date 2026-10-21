@@ -46,6 +46,7 @@ VAMS delivers the following core capabilities:
 -   **Intelligent Search** -- Full-text and attribute-based search powered by Amazon OpenSearch Service across assets and files
 -   **Fine-Grained Access Control** -- Two-tier Attribute-Based and Role-Based Access Control (ABAC/RBAC) using Casbin policy enforcement
 -   **Multi-Region Deployment** -- Deploy to AWS commercial regions, AWS GovCloud (US), or the AWS European Sovereign Cloud with full partition awareness
+-   **Optional Add-ons** -- Synchronize data to Garnet Framework or Physna, or launch Amazon DCV desktops through the EDH Workstations add-on ([Add-ons Overview](../developer/addons-overview.md))
 
 ---
 
@@ -121,7 +122,7 @@ graph TB
 
     subgraph "Storage"
         S3["Amazon S3<br/>(Asset Buckets)"]
-        DDB["Amazon DynamoDB<br/>(20+ Tables)"]
+        DDB["Amazon DynamoDB<br/>(40+ Tables)"]
         OS["Amazon OpenSearch<br/>(Search Index)"]
     end
 
@@ -129,6 +130,11 @@ graph TB
         COG["Amazon Cognito<br/>/ External OAuth"]
         KMS["AWS KMS<br/>(Encryption)"]
         WAF["AWS WAF<br/>(Optional)"]
+    end
+
+    subgraph "Optional Add-ons"
+        ADDONAPI["Add-on API Functions"]
+        ADDONSYNC["Add-on Sync Functions<br/>via Amazon SQS"]
     end
 
     User --> CF
@@ -148,6 +154,9 @@ graph TB
     KMS --> DDB
     WAF --> CF
     WAF --> ALB
+    AUTH --> ADDONAPI
+    DDB --> ADDONSYNC
+    S3 --> ADDONSYNC
 ```
 
 The request flow follows this path: users authenticate through Amazon Cognito or an external OAuth provider, then access the application through Amazon CloudFront (commercial) or an Application Load Balancer (GovCloud and European Sovereign Cloud). All API requests pass through the REST API, which invokes a custom Lambda authorizer for JWT validation and IP-based access control before routing to the appropriate Lambda handler.
@@ -177,6 +186,7 @@ VAMS integrates with a range of AWS partner solutions and open-source projects f
 | [3D Reconstruction Toolkit](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | Pipeline          | Gaussian splat generation from media files                                            |
 | [Garnet Framework](https://garnet-framework.tech/)                                                                                                          | Addon             | Data synchronization to external NGSI-LD knowledge graphs                             |
 | [Physna](https://physna.com/)                                                                                                                               | Addon             | One-way sync to Physna of supported 3D/CAD files and metadata for geometric 3D search |
+| [EDH](https://github.com/awslabs/engineering-development-hub)                                                                                               | Addon             | Amazon DCV desktops, desktop AMIs and container jobs on an EDH cluster                |
 | [NVIDIA Isaac Lab](https://github.com/isaac-sim/IsaacSim)                                                                                                   | Pipeline          | Reinforcement learning training and evaluation                                        |
 
 ### Licensed Integrations

@@ -107,6 +107,8 @@ When Amazon Cognito is not available, VAMS supports external OAuth identity prov
 
 VAMS supports API key authentication for machine-to-machine access. API keys are stored as SHA-256 hashes in the `ApiKeyStorageTable`. The custom authorizer validates incoming API keys by hashing them and comparing against stored hashes, caching each key's record per key for `API_KEY_CACHE_TTL` (15 seconds). A key that is not found is cached as a negative result for the same lifetime, so repeated requests presenting an invalid key do not re-query the table.
 
+An API key whose name starts with the reserved prefix `temporary-session-` is a temporary session key: a short-lived key that a VAMS backend component mints on a user's behalf, through a Lambda cross-call, for one session. A caller that authenticates with a temporary session key cannot create or update API keys and receives `403`, so a session credential cannot outlive its session through a key of its own making. The API key service refuses a key name that carries the prefix with `400` unless the request is a Lambda cross-call, so no key a user creates passes for a temporary session key.
+
 ## Custom Lambda Authorizer
 
 VAMS uses a custom Lambda authorizer for all Amazon API Gateway endpoints, providing unified authentication across Amazon Cognito, external OAuth, and API key mechanisms.
@@ -253,7 +255,7 @@ flowchart TD
 
 **Tier 1 -- API Route Authorization** controls which API endpoints a user's role can access. Policies use `api` and `web` object types to gate route-level access.
 
-**Tier 2 -- Object Entity Authorization** controls which specific data entities a user can access. Policies use entity-type constraints (`database`, `asset`, `pipeline`, `workflow`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`, `apiKey`) with attribute-based rules.
+**Tier 2 -- Object Entity Authorization** controls which specific data entities a user can access. Policies use entity-type constraints (`database`, `asset`, `pipeline`, `workflow`, `tag`, `tagType`, `role`, `userRole`, `metadataSchema`) with attribute-based rules.
 
 ### Constraint Fields
 
@@ -330,15 +332,16 @@ To narrow the scope in a hardened deployment, give the roles VAMS pipelines are 
 
 All VAMS storage resources support encryption at rest:
 
-| Resource               | Default Encryption              | KMS CMK Encryption                 |
-| ---------------------- | ------------------------------- | ---------------------------------- |
-| Amazon DynamoDB tables | AWS managed keys                | Customer-managed KMS key           |
-| Amazon S3 buckets      | Amazon S3 managed keys (SSE-S3) | Customer-managed KMS key (SSE-KMS) |
-| Amazon SNS topics      | N/A                             | Customer-managed KMS key           |
-| Amazon SQS queues      | SQS managed encryption          | Customer-managed KMS key           |
-| Amazon CloudWatch Logs | N/A                             | Customer-managed KMS key           |
-| Amazon OpenSearch      | Service-managed                 | Customer-managed KMS key           |
-| Amazon EventBridge bus | AWS owned key                   | Customer-managed KMS key           |
+| Resource                    | Default Encryption                     | KMS CMK Encryption                 |
+| --------------------------- | -------------------------------------- | ---------------------------------- |
+| Amazon DynamoDB tables      | AWS managed keys                       | Customer-managed KMS key           |
+| Amazon S3 buckets           | Amazon S3 managed keys (SSE-S3)        | Customer-managed KMS key (SSE-KMS) |
+| Amazon SNS topics           | N/A                                    | Customer-managed KMS key           |
+| Amazon SQS queues           | SQS managed encryption                 | Customer-managed KMS key           |
+| Amazon CloudWatch Logs      | N/A                                    | Customer-managed KMS key           |
+| Amazon OpenSearch           | Service-managed                        | Customer-managed KMS key           |
+| Amazon EventBridge bus      | AWS owned key                          | Customer-managed KMS key           |
+| AWS Secrets Manager secrets | AWS managed key (`aws/secretsmanager`) | Customer-managed KMS key           |
 
 The web app bucket uses Amazon S3 managed keys (SSE-S3) whatever the `useKmsCmkEncryption` setting, and so does its access logs bucket when the web application is served through an Application Load Balancer (`app.useAlb.enabled`).
 
@@ -551,11 +554,31 @@ For custom bucket policy statements beyond network restrictions, `infra/config/p
 
 ## AWS WAF and Rate Limiting
 
-When `app.useWaf` is enabled, AWS WAF protects the Amazon API Gateway API and — when present — the Amazon CloudFront distribution or Application Load Balancer. The rules come from `infra/config/policy/wafPolicyConfig.json` and apply identically to the CloudFront-scoped and regional web ACLs. The shipped policy enforces the AWS Common Rule Set, Known Bad Inputs, and Amazon IP Reputation List in block mode, plus a rate-based rule.
+When `app.useWaf` is enabled, AWS WAF protects the Amazon API Gateway API and — when present — the Amazon CloudFront distribution or Application Load Balancer. The rules come from `infra/config/policy/wafPolicyConfig.json` and apply identically to the CloudFront-scoped and regional web ACLs. An enabled add-on can relax individual managed rules on its own routes in the regional web ACL; the add-on's page lists them (see [Add-ons Overview](../developer/addons-overview.md)). The shipped policy enforces the AWS Common Rule Set, Known Bad Inputs, and Amazon IP Reputation List in block mode, plus a rate-based rule.
 
 The rate-based rule limits each client to a fixed number of requests per rolling 5-minute window. It aggregates on the address AWS WAF observes on the connection. An `X-Forwarded-For` aggregation key is not applied: the header is supplied by the caller and can be rotated to evade the limit, and AWS WAF omits a request that omits the header from the rule's evaluation altogether. Requests arriving through Amazon CloudFront, an Application Load Balancer, or a shared corporate NAT gateway or VPN egress address therefore share a counter. The limit is set well above a single active user's normal request rate — VAMS issues many requests per user action (live execution-status polling, multi-part uploads, and large-file viewer streaming) — so that legitimate use is not throttled while request floods are still stopped.
 
-When the rate-based rule blocks a request, AWS WAF returns HTTP `429 Too Many Requests` with a small JSON body. This is the correct throttle status and is deliberately distinct from the `403 Forbidden` returned for an authorization denial, so a throttled request is never mistaken for a permission failure. On the REST API, Amazon API Gateway renders the block through its `WAF_FILTERED` gateway response, and the API's default `4XX` gateway response adds `Access-Control-Allow-Origin` and `Access-Control-Allow-Headers` to every response it renders, so a browser can read the `429` whether the API is called same-origin (the Amazon CloudFront topology, where the web application calls `/api/*` on its own distribution) or cross-origin (the Application Load Balancer topology, where the web application is served from the ALB host and the API from the `execute-api` host, or a client calling the API Gateway endpoint directly from another origin). The WAF response does not repeat those headers — a second copy would give `Access-Control-Allow-Origin` two values, which browsers reject. It carries `Retry-After` and `Access-Control-Expose-Headers: Retry-After`, because `Retry-After` is not a CORS-safelisted response header and a cross-origin caller cannot read it without the exposure. A throttled CORS preflight (`OPTIONS`) request still fails, because AWS WAF answers it before the API's MOCK integration and a preflight requires a success status. The VAMS web application and the VAMS CLI both treat `429` as a transient, retryable condition — they honor the `Retry-After` header and retry with backoff rather than forcing re-authentication. Tune the limit and the response code in `wafPolicyConfig.json`; see the [configuration reference](../deployment/configuration-reference.md).
+When the rate-based rule blocks a request, AWS WAF returns HTTP `429 Too Many Requests` with a small JSON body. This is the correct throttle status and is deliberately distinct from the `403 Forbidden` returned for an authorization denial, so a throttled request is never mistaken for a permission failure. On the REST API, Amazon API Gateway renders the block through its `WAF_FILTERED` gateway response, which keeps the rule's `429` and adds `Access-Control-Allow-Origin` and `Access-Control-Allow-Headers`. The web application calls the API Gateway endpoint cross-origin in every topology, because the Amazon CloudFront distribution's `/api/*` behavior reaches only the stage's `/api/amplify-config` and `/api/version` routes, so those headers are what let a browser read the `429`. The WAF response does not repeat them — a second copy would give `Access-Control-Allow-Origin` two values, which browsers reject. It carries `Retry-After: 1` and `Access-Control-Expose-Headers: Retry-After`, because `Retry-After` is not a CORS-safelisted response header and a cross-origin caller cannot read it without the exposure. A throttled CORS preflight (`OPTIONS`) request still fails, because AWS WAF answers it before the API's MOCK integration and a preflight requires a success status. The VAMS web application and the VAMS CLI both treat `429` as a transient, retryable condition — they honor the `Retry-After` header and retry with backoff rather than forcing re-authentication. Tune the limit and the response code in `wafPolicyConfig.json`; see the [configuration reference](../deployment/configuration-reference.md).
+
+### Requests the web ACL blocks
+
+When a managed rule blocks a request at the API Gateway stage, API Gateway answers HTTP `403` with a JSON body that names AWS WAF as the source and carries API Gateway's extended request ID (the `WAF_FILTERED` gateway response):
+
+```json
+{
+    "message": "Request blocked by the deployment's AWS WAF web ACL",
+    "blockedBy": "waf",
+    "requestId": "E7BBKGcCvHcEXAMPLE="
+}
+```
+
+A rule with its own custom response, such as the rate-based rule's `429`, returns that response instead. The body tells a block apart from an authorization denial, which also answers `403`, and the VAMS clients present it as a block:
+
+-   The VAMS CLI reports `Request Blocked` after sending the request once, with exit code `1` and, under `--json-output`, the `error_type` `RequestBlockedError` with `blockedBy` and `requestId`. It does not refresh the token, retry or clear stored credentials, because signing in again does not change the result. A bare `403 Forbidden` from API Gateway on a signed-in request is reported the same way with `blockedBy` `waf-or-stage`, because both a web ACL block without this body and a base URL that names no deployed stage answer that way. See [Request Blocked (AWS WAF)](../cli/troubleshooting/general.md#request-blocked-aws-waf).
+-   The VAMS MCP server returns the tool error with the `error_type` `RequestBlockedError` and the same `blockedBy` and `requestId` fields.
+-   The VAMS web application shows the block's message with the request ID, `Request blocked by the deployment's AWS WAF web ACL (request ID ...)`, rather than a permission message. The Potree and Cesium 3D Tileset viewers show it for a blocked preview or tileset request too. A block on a request's URI path also blocks the browser's CORS preflight for it, so the browser reports a network error with no status, and those viewers report that the request failed before VAMS answered it.
+
+An administrator finds the request by its ID in the web ACL's `aws-waf-logs-vams-*` log group, where its record carries the ID as `httpRequest.requestId` and names the rule that matched; the response carries the same ID in its `x-amz-apigw-id` header. The web ACL's sampled requests carry no request ID, so a request is matched there by its time, URI and client IP.
 
 ### Rule policy validation
 

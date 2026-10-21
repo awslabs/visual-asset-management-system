@@ -2,14 +2,15 @@
 module.exports = {
     darkMode: ["selector", ".awsui-dark-mode"],
     // The orchestration module plus the thin wrapper pages in src/pages that host it — those
-    // wrappers carry their own Tailwind classes for their loading/error panels.
+    // wrappers carry their own Tailwind classes for their loading/error panels — and each add-on
+    // module under src/addons/ that is built with Tailwind.
     //
-    // The wrapper pages are listed individually rather than as ./src/pages/**. Tailwind's utility
-    // CSS is global even though this glob is not: the glob decides which files are SCANNED, and
-    // every utility it emits lands in one stylesheet loaded on every page. Scanning a Cloudscape
-    // page therefore makes a plain layout class named after a utility (container, grid, flex,
-    // hidden, block, fixed) silently take on Tailwind's rule there, with nothing in the
-    // component's own styles to explain the result.
+    // The wrapper pages and add-on modules are listed individually rather than as ./src/pages/** or
+    // ./src/addons/**. Tailwind's utility CSS is global even though this glob is not: the glob
+    // decides which files are SCANNED, and every utility it emits lands in one stylesheet loaded on
+    // every page. Scanning a Cloudscape page therefore makes a plain layout class named after a
+    // utility (container, grid, flex, hidden, block, fixed) silently take on Tailwind's rule there,
+    // with nothing in the component's own styles to explain the result.
     content: [
         "./src/features/orchestration/**/*.{ts,tsx}",
         "./src/pages/PipelinesPage2.tsx",
@@ -21,6 +22,7 @@ module.exports = {
         "./src/pages/WorkflowTriggersPage.tsx",
         "./src/pages/ExecutionsPage.tsx",
         "./src/pages/ExecutionDetail.tsx",
+        "./src/addons/edh/**/*.{ts,tsx}",
     ],
     corePlugins: { preflight: false },
     theme: {

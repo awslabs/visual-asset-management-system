@@ -36,7 +36,7 @@ export interface IApiImplementation {
     readonly apiEndpoint: string;
     /** Full invoke URL including the stage path, e.g. `https://{host}/{stage}`. */
     readonly invokeUrlWithStage: string;
-    /** The deployment stage name fronting absorbs (CloudFront originPath / ALB redirect). */
+    /** The deployment stage name, onto which the web fronting maps `/api/*` (originPath / redirect). */
     readonly stageName: string;
 }
 
@@ -58,15 +58,15 @@ export interface RestApiGatewayConstructProps {
  * API Gateway REST implementation of the VAMS backend API.
  *
  * Builds a single `SpecRestApi` from the cross-stack {@link RouteRegistry}: renders one
- * inline OpenAPI document (with the custom REQUEST Lambda authorizer, CORS, and the
- * anonymous amplify-config/version routes), creates an explicit Deployment + Stage whose
- * logical id is hashed against the whole spec (so any cross-stack route change
- * auto-redeploys), grants API Gateway invoke on every registered Lambda, and optionally
- * associates a regional WAF web ACL.
+ * inline OpenAPI document (with the custom REQUEST Lambda authorizer, CORS, the gateway
+ * responses, and the anonymous amplify-config/version routes), creates an explicit Deployment + Stage whose
+ * logical id is hashed against the whole spec and the gateway responses (so any cross-stack
+ * route change auto-redeploys), grants API Gateway invoke on every registered Lambda, and
+ * optionally associates a regional WAF web ACL.
  *
  * The API is fully self-contained: it is publicly addressable on its own and does not
- * require CloudFront or an ALB in front of it. When a front is present it absorbs the
- * stage path, but direct execute-api access works the same.
+ * require CloudFront or an ALB in front of it. A front maps the web URL's `/api/*` paths onto
+ * the stage; clients call every other route on the stage-inclusive invoke URL.
  *
  */
 export class RestApiGatewayConstruct extends Construct implements IApiImplementation {
@@ -216,6 +216,31 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             timeoutSeconds: apiGatewayRest.apiGatewayTimeoutTime,
         });
 
+        // CORS headers on gateway-level responses (authorizer denials and errors).
+        // Responses produced by API Gateway itself — the custom authorizer returning
+        // Unauthorized (401) or Access Denied (403), a missing authentication token, and 4XX/5XX
+        // errors — never reach a Lambda, so the per-handler `commonHeaders()` cannot add the
+        // Access-Control-Allow-Origin header to them. Without it, the browser CORS-blocks these
+        // responses and a benign token-expiry 401 surfaces as an unexplained CORS/network error
+        // in the web app. Inject the allow-origin/headers on the default 4XX and 5XX gateway
+        // responses (these cover UNAUTHORIZED, ACCESS_DENIED, MISSING_AUTHENTICATION_TOKEN, etc.)
+        // and a request the AWS WAF web ACL blocked (WAF_FILTERED), whose body names the web ACL
+        // and the request ID, so cross-origin callers can read the real status.
+        const gatewayResponseCorsHeaders = {
+            "Access-Control-Allow-Origin": "'*'",
+            "Access-Control-Allow-Headers":
+                "'Authorization,Content-Type,Origin,Range,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent,Access-Control-Allow-Origin'",
+        };
+        const gatewayResponses = gatewayResponseDefinitions(gatewayResponseCorsHeaders);
+        // The responses are part of the API definition as well as resources of their own. AWS
+        // CloudFormation imports the definition again whenever it changes, and an import resets
+        // every gateway response the definition omits to its default, while a response resource is
+        // applied again only when it changes itself. The resources stay, so that no update deletes
+        // one after the import has set it.
+        Object.assign(spec, {
+            "x-amazon-apigateway-gateway-responses": openApiGatewayResponses(gatewayResponses),
+        });
+
         // 4) SpecRestApi with explicit deployment control
         this.restApi = new apigw.SpecRestApi(this, "Api", {
             apiDefinition: apigw.ApiDefinition.fromInline(spec),
@@ -264,31 +289,6 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             cfnRestApi.addPropertyOverride("EndpointAccessMode", "BASIC");
         }
 
-        // CORS headers on gateway-level responses (authorizer denials and errors).
-        // Responses produced by API Gateway itself — the custom authorizer returning
-        // Unauthorized (401) or Access Denied (403), a missing authentication token, and 4XX/5XX
-        // errors — never reach a Lambda, so the per-handler `commonHeaders()` cannot add the
-        // Access-Control-Allow-Origin header to them. Without it, the browser CORS-blocks these
-        // responses and a benign token-expiry 401 surfaces as an unexplained CORS/network error
-        // in the web app. Inject the allow-origin/headers on the default 4XX and 5XX gateway
-        // responses (these cover UNAUTHORIZED, ACCESS_DENIED, MISSING_AUTHENTICATION_TOKEN, etc.)
-        // so cross-origin callers can read the real status.
-        const gatewayResponseCorsHeaders = {
-            "Access-Control-Allow-Origin": "'*'",
-            "Access-Control-Allow-Headers":
-                "'Authorization,Content-Type,Origin,Range,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent,Access-Control-Allow-Origin'",
-        };
-        new apigw.GatewayResponse(this, "GatewayResponseDefault4XX", {
-            restApi: this.restApi,
-            type: apigw.ResponseType.DEFAULT_4XX,
-            responseHeaders: gatewayResponseCorsHeaders,
-        });
-        new apigw.GatewayResponse(this, "GatewayResponseDefault5XX", {
-            restApi: this.restApi,
-            type: apigw.ResponseType.DEFAULT_5XX,
-            responseHeaders: gatewayResponseCorsHeaders,
-        });
-
         // 5) Grant API Gateway permission to invoke every registered Lambda
         const sourceArn = `arn:${Partition()}:execute-api:${config.env.region}:${
             config.env.account
@@ -325,6 +325,7 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
 
         const deployment = new apigw.Deployment(this, "Deployment", { api: this.restApi });
         deployment.addToLogicalId(spec); // any spec change -> new deployment -> auto redeploy
+        addGatewayResponses(this, this.restApi, deployment, gatewayResponses);
 
         const stage = new apigw.Stage(this, "Stage", {
             deployment,
@@ -417,4 +418,93 @@ export function resolveApiGatewayVpcEndpointId(
     }
     const external = apiGatewayRest.optionalExternalPrivateApigVPCEId;
     return external && external !== "" ? external : undefined;
+}
+
+/** The body API Gateway answers a request the AWS WAF web ACL blocked with. */
+export const WAF_FILTERED_RESPONSE_TEMPLATE =
+    '{"message":"Request blocked by the deployment\'s AWS WAF web ACL","blockedBy":"waf","requestId":"$context.extendedRequestId"}';
+
+/** One gateway response: a response API Gateway itself produces, never a Lambda's. */
+export interface GatewayResponseDefinition {
+    id: string;
+    type: apigw.ResponseType;
+    statusCode?: string;
+    responseHeaders: Record<string, string>;
+    templates?: Record<string, string>;
+}
+
+/** The gateway responses of the REST API, each carrying the CORS headers. */
+export function gatewayResponseDefinitions(
+    corsHeaders: Record<string, string>
+): GatewayResponseDefinition[] {
+    return [
+        {
+            id: "GatewayResponseDefault4XX",
+            type: apigw.ResponseType.DEFAULT_4XX,
+            responseHeaders: corsHeaders,
+        },
+        {
+            id: "GatewayResponseDefault5XX",
+            type: apigw.ResponseType.DEFAULT_5XX,
+            responseHeaders: corsHeaders,
+        },
+        {
+            id: "GatewayResponseWafFiltered",
+            type: apigw.ResponseType.WAF_FILTERED,
+            statusCode: "403",
+            responseHeaders: corsHeaders,
+            templates: { "application/json": WAF_FILTERED_RESPONSE_TEMPLATE },
+        },
+    ];
+}
+
+/**
+ * The gateway responses as the `x-amazon-apigateway-gateway-responses` extension of an API
+ * definition, keyed by response type, with the values `addGatewayResponses` gives the resources.
+ */
+export function openApiGatewayResponses(
+    definitions: GatewayResponseDefinition[]
+): Record<string, Record<string, unknown>> {
+    return Object.fromEntries(
+        definitions.map((d) => [
+            d.type.responseType,
+            {
+                ...(d.statusCode ? { statusCode: d.statusCode } : {}),
+                responseParameters: Object.fromEntries(
+                    Object.entries(d.responseHeaders).map(([name, value]) => [
+                        `gatewayresponse.header.${name}`,
+                        value,
+                    ])
+                ),
+                ...(d.templates ? { responseTemplates: d.templates } : {}),
+            },
+        ])
+    );
+}
+
+/**
+ * Creates the gateway responses and ties them to the deployment. A gateway response reaches the stage
+ * only through a new deployment, and the deployment's logical id otherwise covers the spec alone.
+ */
+export function addGatewayResponses(
+    scope: Construct,
+    restApi: apigw.IRestApi,
+    deployment: apigw.Deployment,
+    definitions: GatewayResponseDefinition[]
+): apigw.GatewayResponse[] {
+    const responses = definitions.map(
+        (d) =>
+            new apigw.GatewayResponse(scope, d.id, {
+                restApi,
+                type: d.type,
+                statusCode: d.statusCode,
+                responseHeaders: d.responseHeaders,
+                templates: d.templates,
+            })
+    );
+    responses.forEach((response) => deployment.node.addDependency(response));
+    deployment.addToLogicalId({
+        gatewayResponses: definitions.map((d) => ({ ...d, type: d.type.responseType })),
+    });
+    return responses;
 }

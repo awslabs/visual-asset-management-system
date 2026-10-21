@@ -1,0 +1,109 @@
+{
+  "name": "software_stacks_target_nodes_list",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "GET",
+    "path": "/api/target_nodes/software_stacks",
+    "absolutePath": "/api/target_nodes/software_stacks",
+    "query": {},
+    "headers": {},
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": true,
+      "message": {
+        "1": {
+          "id": 1,
+          "stack_name": "vams-spike-simulation",
+          "ami_id": "ami-00000cdefabcdefab",
+          "ami_arch": "x86_64",
+          "ami_root_disk_size": 100,
+          "ami_user_data_variables": "SIM_MODE=batch",
+          "ami_connection_string": "ssh {{ TARGET_NODE_USER }}@{{ TARGET_NODE_PRIVATE_IP }}",
+          "os_family": "linux",
+          "created_on": "2026-09-10T12:00:00",
+          "created_by": "vspikeaaaaaaaaaa",
+          "is_active": true,
+          "deactivated_by": null,
+          "deactivated_on": null,
+          "thumbnail": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVQI12P4DwABAQEAG7buVgAAAABJRU5ErkJggg==",
+          "description": "VAMS spike simulation stack",
+          "launch_tenancy": "default",
+          "launch_host": null,
+          "target_node_profile_id": 1,
+          "target_node_user_data_id": 1,
+          "updated_by": null,
+          "updated_on": "2026-09-10T12:00:00",
+          "projects": [
+            {
+              "id": 1,
+              "created_on": "2026-09-01T00:00:00",
+              "created_by": "socaadmin",
+              "deactivated_on": null,
+              "deactivated_by": null,
+              "project_name": "default",
+              "is_active": true,
+              "description": "Default project",
+              "aws_budget": null,
+              "hardware_profile_id": null,
+              "updated_by": null,
+              "updated_on": "2026-09-01T00:00:00"
+            }
+          ],
+          "allowed_aws_budgets": [
+            null
+          ],
+          "allowed_projects": [
+            "default"
+          ],
+          "profile": {
+            "id": 1,
+            "profile_name": "default",
+            "created_on": "2026-09-01T00:00:00",
+            "created_by": "socaadmin",
+            "deactivated_on": null,
+            "deactivated_by": null,
+            "is_active": true,
+            "description": null,
+            "pattern_allowed_instance_types": "m5.large,m5.xlarge,m5.2xlarge",
+            "allowed_instance_types": "{\"x86_64\": [\"m5.large\", \"m5.xlarge\", \"m5.2xlarge\"], \"arm64\": []}",
+            "allowed_subnet_ids": "subnet-00000abcdefabcdef,subnet-00000bcdefabcdefa",
+            "max_root_size": 500,
+            "updated_by": null,
+            "updated_on": "2026-09-01T00:00:00"
+          },
+          "user_data": {
+            "created_on": "2026-09-01T00:00:00",
+            "created_by": "socaadmin",
+            "is_active": true,
+            "template_name": "default",
+            "user_data": "IyEvYmluL2Jhc2gKZWNobyB2YW1zLXNwaWtlCg==",
+            "description": "Default template",
+            "id": 1
+          },
+          "project_ids": [
+            1
+          ]
+        }
+      }
+    }
+  },
+  "expect": {
+    "count": 1,
+    "imageId": "ami-00000cdefabcdefab"
+  },
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/target_nodes/software_stacks.py",
+      "source/soca/cluster_manager/web_interface/models.py"
+    ]
+  }
+}

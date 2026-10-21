@@ -44,7 +44,8 @@ The deployment assigns the administrator account named by `app.adminUserId` to `
 `SYSTEM_USER` identity is also assigned to `admin` so system processes pass both authorization tiers.
 
 `basicReadOnly` reads assets, files, metadata, databases, pipelines, workflows, executions, tags,
-comments, subscriptions, and metadata schemas, and it may manage its own API keys. It cannot reach the
+comments, subscriptions, and metadata schemas, opens files in the viewers and downloads them, and it
+may manage its own API keys. It cannot reach the
 administrative routes that `admin` holds: detailed execution logs
 (`GET /workflows/executions/{executionId}/logs`) and execution permanent delete
 (`DELETE /workflows/executions/{executionId}/permanent`). Because read access is granted through
@@ -146,6 +147,8 @@ Roles can be configured to require multi-factor authentication (MFA). When a rol
 -   The role's constraints are only active when the user has authenticated with MFA in their current session.
 -   If the user has not completed MFA, the role is effectively ignored during authorization.
 -   This is useful for elevating privileges that should only be available during high-assurance sessions.
+-   The requirement is evaluated only for sessions signed in through Amazon Cognito with an ID token. It has no effect — the role is ignored — for a deployment that uses an external OAuth identity provider, for a deployment with `useGlobalVpc.useForAllLambdas` enabled, for a user who signs in through Amazon Cognito SAML or OIDC federation (Amazon Cognito does not manage a federated user's MFA), and for any request authenticated with a VAMS API key, such as a CLI or MCP session that uses an API key through `vamscli auth set-override` or `--token-override`. A CLI or MCP session signed in with `vamscli auth login` sends the user's Amazon Cognito token and carries the same MFA state as the web interface.
+-   The Amazon Cognito user pool offers MFA as optional, and VAMS has no page or command that registers a factor, so a factor is registered for the user in the user pool (see [TOTP software token MFA](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-mfa-totp.html) in the Amazon Cognito Developer Guide). The VAMS sign-in page and `vamscli auth login` then ask for the code. A user whose only role requires MFA has no access until then.
 
 ## Web route permissions
 
@@ -157,7 +160,7 @@ For the complete list of web routes, see [Permissions Model: Web Route Reference
 
 ## Permission templates
 
-VAMS includes pre-built permission templates for common access patterns such as Database Admin, Database User, Database Read-Only, Global Read-Only, and Deny Tagged Assets. Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+VAMS includes pre-built permission templates for common access patterns such as Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, and Deny Tagged Asset Editing. Add-ons can ship templates of their own; see each add-on's page. Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
 
 For template details, JSON format, and instructions on applying templates via the CLI or API, see [Developer Guide: Permissions](../developer/permissions.md#permission-templates).
 

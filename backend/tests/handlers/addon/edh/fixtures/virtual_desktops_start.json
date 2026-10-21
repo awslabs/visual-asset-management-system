@@ -1,0 +1,37 @@
+{
+  "name": "virtual_desktops_start",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "PUT",
+    "path": "/api/dcv/virtual_desktops/start",
+    "absolutePath": "/api/dcv/virtual_desktops/start",
+    "query": {},
+    "headers": {
+      "X-EDH-USER": "vspikeaaaaaaaaaa"
+    },
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": {
+      "session_uuid": "1b2c3d4e-5f60-4a7b-8c9d-0e1f2a3b4c5d"
+    }
+  },
+  "response": {
+    "status": 200,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": true,
+      "message": "Your virtual desktop is starting"
+    }
+  },
+  "expect": {
+    "sessionUuid": "1b2c3d4e-5f60-4a7b-8c9d-0e1f2a3b4c5d"
+  },
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/dcv/start_virtual_desktop.py"
+    ]
+  }
+}

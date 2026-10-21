@@ -21,7 +21,11 @@ import { NagSuppressions } from "cdk-nag";
 import { kmsKeyPolicyStatementGenerator } from "../../../helper/security";
 import { Service } from "../../../../lib/helper/service-helper";
 import * as ServiceHelper from "../../../../lib/helper/service-helper";
-import { addonReadOnlyApiRouteCriteria } from "../../addon/addonDefaultRoutes";
+import {
+    addonReadOnlyApiRouteCriteria,
+    addonReadOnlyWebRouteCriteria,
+} from "../../addon/addonDefaultRoutes";
+import { addonReadOnlyDefaultConstraints } from "../../addon/addonDefaultConstraints";
 
 export interface DynamoDbAuthDefaultsROConstructStackProps extends cdk.StackProps {
     customResourceRole: iam.Role;
@@ -336,6 +340,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                             },
                         },
+                        ...addonReadOnlyWebRouteCriteria(props.config, roleNameIDClean),
                     ],
                 },
                 description: {
@@ -882,6 +887,82 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                     S: "constraint",
                 },
                 sk: {
+                    S: `initial_${roleNameIDClean}_allow_download_api`,
+                },
+                constraintId: {
+                    S: `initial_${roleNameIDClean}_allow_download_api`,
+                },
+                criteriaAnd: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `0_${roleNameIDClean}_api_paths_download`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    S: "/database/",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `1_${roleNameIDClean}_api_paths_download`,
+                                },
+                                operator: {
+                                    S: "ends_with",
+                                },
+                                value: {
+                                    S: "/download",
+                                },
+                            },
+                        },
+                    ],
+                },
+                description: {
+                    S: "Allow POST on the file download route for basic user read only - the file viewers and the download action request a file through it, and the request body names the file and version",
+                },
+                groupPermissions: {
+                    L: [
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleName,
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}-allow-download-api`,
+                                },
+                                permission: {
+                                    S: "POST",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                    ],
+                },
+                name: {
+                    S: `${roleNameIDClean}-allow-download-api`,
+                },
+                objectType: {
+                    S: "api",
+                },
+            },
+            {
+                entityType: {
+                    S: "constraint",
+                },
+                sk: {
                     S: `initial_${roleNameIDClean}_allow_all_databases`,
                 },
                 constraintId: {
@@ -1405,6 +1486,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                     S: "api",
                 },
             },
+            ...addonReadOnlyDefaultConstraints(props.config, roleName, roleNameIDClean),
         ];
 
         let i = 0;

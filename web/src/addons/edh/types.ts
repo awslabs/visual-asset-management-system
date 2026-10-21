@@ -1,0 +1,293 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+export type WorkstationState = "CREATING" | "ACTIVE" | "STOPPED" | "DELETED" | "ORPHANED";
+export type EdhOsFamily = "linux" | "windows";
+
+/**
+ * Why a launch ended ORPHANED, or why the lease sweep stopped the desktop. The service stores
+ * these codes and never EDH's own wording.
+ */
+export type WorkstationLastError =
+    | "USER_NOT_PROVISIONED"
+    | "QUOTA_EXCEEDED"
+    | "IMAGE_UNAVAILABLE"
+    | "CAPACITY_UNAVAILABLE"
+    | "EDH_REFUSED"
+    | "LAUNCH_ERROR"
+    | "CREATE_TIMED_OUT"
+    | "LEASE_EXPIRED";
+
+/** What became of the per-session VAMS credential a launch places on the desktop. */
+export type SessionBootstrapOutcome = "provisioned" | "skipped" | "unavailable" | "disabled";
+
+/** One launch, as the workstation service returns it (also the session-table row). */
+export interface WorkstationRecord {
+    bootstrapId: string;
+    sessionId: string | null;
+    userId: string;
+    edhUid: string;
+    state: WorkstationState;
+    /** The raw EDH session state string, once EDH has reported one. */
+    edhState: string | null;
+    /** The failure code the row carries; null or absent when there is none. */
+    lastError?: string | null;
+    /** How many times the launch worker has started on this row. */
+    launchAttempts?: number;
+    name: string;
+    imageId: string;
+    osFamily: EdhOsFamily;
+    instanceType: string;
+    createdAt: string;
+    updatedAt: string;
+    connectionAvailable: boolean;
+    /** When the lease runs out; null or absent on a row no lease covers. */
+    leaseExpiresAt?: string | null;
+    /** When the lease stopped the desktop; cleared by a renewal. */
+    leaseStoppedAt?: string | null;
+    /** The lease window the launch was stamped with, in hours. */
+    leaseHoursAtLaunch?: number | null;
+    /**
+     * Present on the launch and start responses, and on a renew response when the renew re-issued,
+     * or tried to re-issue, the desktop's VAMS sign-in.
+     */
+    sessionBootstrap?: SessionBootstrapOutcome;
+}
+
+export interface CreateWorkstationRequest {
+    /** Client-generated uuid4; the launch's idempotency key. */
+    bootstrapId: string;
+    imageId: string;
+    instanceType: string;
+    name: string;
+    rootSizeGb: number;
+    osFamily: EdhOsFamily;
+    /** The lease window asked for, in hours; omitted for none. */
+    leaseHours?: number;
+}
+
+export interface WorkstationConnection {
+    sessionId: string;
+    connectionUrl: string;
+    osFamily: EdhOsFamily;
+}
+
+/** A running Windows workstation's sign-in; `password` is null for a directory account. */
+export interface WindowsSignIn {
+    sessionId: string;
+    username: string;
+    password: string | null;
+    directoryAccount: boolean;
+}
+
+/** `amiRecipe` for an image an AMI recipe build registered, `baseline` for every other image. */
+export type EdhCatalogImageCategory = "amiRecipe" | "baseline";
+
+export interface EdhCatalogImage {
+    imageId: string;
+    name: string;
+    baseOs: string;
+    osFamily: EdhOsFamily;
+    /** The image's CPU architecture as EDH registered it (`x86_64`, `arm64`); null when unknown. */
+    architecture?: string | null;
+    rootSize: number | null;
+    description: string | null;
+    category: EdhCatalogImageCategory;
+    /** The recipe, its display name and the build version of an `amiRecipe` image. */
+    recipeId?: string;
+    recipeDisplayName?: string;
+    recipeVersion?: number;
+}
+
+export interface EdhInstanceType {
+    instanceType: string;
+    /** The architecture groups of the deployment's desktop profile that list the type. */
+    architectures?: string[];
+}
+
+/** List responses carry `Items`, plus `NextToken` only when the service paginates. */
+export interface EdhListResponse<T> {
+    Items: T[];
+    NextToken?: string;
+}
+
+export type EdhContainerBackend = "batch" | "eks";
+export type EdhContainerCatalogKind = "jobDefinition" | "jobQueue" | "eksCluster";
+
+/** One curated catalog record, tagged with the listing it came from; an eksCluster item is `{kind, name}`. */
+export interface EdhContainerCatalogItem {
+    kind: EdhContainerCatalogKind;
+    [field: string]: unknown;
+}
+
+export interface EdhContainerCatalog {
+    Items: EdhContainerCatalogItem[];
+    /** Whether the deployment accepts the `eks` backend (experimental). */
+    eksEnabled: boolean;
+}
+
+/** Where an eks job lives; the list and kill routes take it as query parameters. */
+export interface EdhContainerScope {
+    cluster: string;
+    namespace?: string;
+}
+
+/** One of the caller's jobs: the EDH record plus the id, name, status, definition and handle the service names. */
+export interface EdhContainerJob {
+    backend: EdhContainerBackend;
+    /** The Batch job id, or the EKS job name; what the kill route takes as `{jobId}`. */
+    jobId: string;
+    jobName: string;
+    status: string;
+    edhJobDefinition: string;
+    jobHandle: string;
+    cluster?: string;
+    namespace?: string;
+    [field: string]: unknown;
+}
+
+export interface SubmitContainerJobRequest {
+    /** A Batch job-definition name (or ARN), or the image URI for the `eks` backend. */
+    jobDefinition: string;
+    /** A Batch job queue, or the cluster name for the `eks` backend. Required by the service. */
+    jobQueue: string;
+    /** Batch: letters, digits, hyphens, underscores (1-128), starting alphanumeric; eks: a lower-case DNS label (max 63). */
+    name: string;
+    command?: string[];
+    environment?: Record<string, string>;
+    vcpus?: number;
+    /** MiB; at least 512. */
+    memory?: number;
+    gpu?: number;
+    backend: EdhContainerBackend;
+}
+
+export interface SubmitContainerJobResponse {
+    jobId: string;
+    jobHandle: string;
+    backend: EdhContainerBackend;
+    jobDefinition: string;
+    jobQueue: string;
+    name: string;
+    message: string;
+    cluster?: string;
+    namespace?: string;
+}
+
+export interface KillContainerJobResponse {
+    jobId: string;
+    backend: EdhContainerBackend;
+    message: string;
+    cluster?: string;
+    namespace?: string;
+}
+
+export type EdhAmiRecipeKind = "vdi" | "simulation";
+export type EdhArchitecture = "x86_64" | "arm64";
+export type EdhAmiRecipeSource = "config" | "admin";
+export type EdhAmiBuildStatus =
+    | "QUEUED"
+    | "BUILDING"
+    | "REGISTERING"
+    | "AVAILABLE"
+    | "REGISTER_FAILED"
+    | "FAILED"
+    | "RETIRED";
+export type EdhAmiRecipeComponent = { arn: string } | { name: string; data: string };
+
+/** A repository directory a build fetches; a component reaches it as `${ASSET_<id>}`. */
+export interface EdhAmiRecipeAsset {
+    id: string;
+    repoPath: string;
+}
+
+export interface EdhAmiRecipeRequest {
+    recipeId: string;
+    displayName: string;
+    kind: EdhAmiRecipeKind;
+    osFamily: EdhOsFamily;
+    baseOs?: string;
+    architecture: EdhArchitecture;
+    parentImage: string;
+    /** One EC2 instance type, or a list Image Builder chooses among by availability. */
+    buildInstanceType: string | string[];
+    rootSizeGb: number;
+    stackName: string;
+    profileId: number;
+    components: EdhAmiRecipeComponent[];
+    /** The values a component reaches as `${PARAM_<key>}`. */
+    parameters?: Record<string, string>;
+    keepVersions?: number;
+    recipeRevision?: number;
+    description?: string;
+    enabled?: boolean;
+    /** On create, the recipe to duplicate; the new recipe takes its bundled files. */
+    duplicateOf?: string;
+}
+
+export interface EdhAmiBuild {
+    recipeId: string;
+    version: number;
+    status: EdhAmiBuildStatus;
+    contentHash?: string;
+    requestedBy?: string;
+    requestedAt?: string;
+    startedAt?: string;
+    completedAt?: string;
+    imageBuildVersionArn?: string;
+    resolvedParentAmi?: string;
+    amiId?: string;
+    snapshotIds?: string[];
+    edhStackId?: string;
+    edhStackName?: string;
+    edhKind?: string;
+    registeredAt?: string;
+    retiredAt?: string;
+    amiDeregisteredAt?: string;
+    amiInUseBy?: string[];
+    amiRemovalPending?: boolean;
+    error?: string;
+    retireWarning?: string;
+    pruneWarning?: string;
+    outcome?: string;
+}
+
+export interface EdhAmiRecipe extends EdhAmiRecipeRequest {
+    source: EdhAmiRecipeSource;
+    enabled: boolean;
+    contentHash: string;
+    /** The bundled files; a shipped recipe declares them and a duplicate keeps its source's. */
+    assets?: EdhAmiRecipeAsset[];
+    /** The recipe this one was duplicated from. */
+    duplicatedFrom?: string;
+    latestVersion?: number;
+    buildOnDeploy?: boolean;
+    latestBuild: EdhAmiBuild | null;
+    createdAt: string;
+    updatedAt: string;
+    createdBy?: string;
+    updatedBy?: string;
+}
+
+export const ACTIVE_BUILD_STATUSES: ReadonlyArray<EdhAmiBuildStatus> = [
+    "QUEUED",
+    "BUILDING",
+    "REGISTERING",
+];
+
+export interface LeasePolicy {
+    enabled: boolean;
+    leaseHours: number;
+    forced: boolean;
+    graceHours: number;
+    updatedAt?: string;
+    updatedBy?: string;
+}
+
+/** The lease policy as a launching user reads it: the terms, without the audit fields. */
+export type CatalogLeasePolicy = Pick<
+    LeasePolicy,
+    "enabled" | "leaseHours" | "forced" | "graceHours"
+>;

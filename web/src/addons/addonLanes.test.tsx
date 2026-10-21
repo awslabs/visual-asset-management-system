@@ -7,11 +7,12 @@
  * The add-on web lane (addons/addonRoutes.tsx, addons/addonNavigation.ts) sits between core and
  * custom, and its entries are handled exactly like core ones.
  *
- * Both add-on files ship empty, so each is mocked here with a probe entry, and so is the fork's
- * custom lane: the route table is core, then add-on, then custom; an add-on page is lazy-loaded and
+ * Each add-on file is mocked here with probe entries, independent of the add-ons it carries, and so
+ * is the fork's custom lane: the route table is core, then add-on, then custom; an add-on page is lazy-loaded and
  * rendered only when the `web` constraint allows its path; an add-on path that repeats a core path
  * never replaces the core page; and the add-on navigation section is filtered by the same check and
- * placed after the core sections and before the fork's.
+ * placed after the core sections and before the fork's. A navigation entry restricted to feature
+ * switches shows only while all of them are enabled, and appears when they arrive after mount.
  */
 
 import React from "react";
@@ -20,6 +21,7 @@ import { MemoryRouter } from "react-router-dom";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import { routeTable, AppRoutes } from "../routes";
 import { Navigation } from "../layout/Navigation";
+import { RuntimeConfigContext } from "../context/RuntimeConfigContext";
 import { checkWebRoutesAllowed, WebRouteCheck } from "../services/webRoutesCheck";
 
 jest.mock("../services/webRoutesCheck", () => ({ checkWebRoutesAllowed: jest.fn() }));
@@ -60,6 +62,20 @@ jest.mock("./addonNavigation", () => ({
             type: "section",
             text: "Add-on probe",
             items: [{ type: "link", text: "Add-on probe page", href: "#/addon-probe/" }],
+        },
+        {
+            type: "section",
+            text: "Add-on restricted probe",
+            featuresEnabledRestriction: ["ADDON_PROBE_FEATURE"],
+            items: [
+                { type: "link", text: "Add-on restricted page", href: "#/addon-restricted/" },
+                {
+                    type: "link",
+                    text: "Add-on two-switch page",
+                    href: "#/addon-restricted/both/",
+                    featuresEnabledRestriction: ["ADDON_PROBE_FEATURE", "ADDON_PROBE_OTHER"],
+                },
+            ],
         },
     ],
 }));
@@ -178,5 +194,52 @@ describe("navigation lanes", () => {
         await waitFor(() => expect(nav?.findLinkByHref("#/databases/")).toBeTruthy());
         expect(nav?.findLinkByHref("#/addon-probe/")).toBeFalsy();
         expect(screen.queryByText("Add-on probe")).not.toBeInTheDocument();
+    });
+
+    it("omits an entry restricted to a feature switch that is not enabled, without checking its route", async () => {
+        allowRoutes("/databases/", "/addon-probe/", "/addon-restricted/");
+        const { container } = render(
+            <RuntimeConfigContext.Provider value={{ featuresEnabled: ["ADDON_PROBE_OTHER"] }}>
+                <Navigation activeHref={"#/databases"} user={undefined} />
+            </RuntimeConfigContext.Provider>
+        );
+        const nav = () => createWrapper(container).findSideNavigation();
+
+        // Control: the unrestricted add-on section is offered.
+        await waitFor(() => expect(nav()?.findLinkByHref("#/addon-probe/")).toBeTruthy());
+        expect(nav()?.findLinkByHref("#/addon-restricted/")).toBeFalsy();
+        expect(screen.queryByText("Add-on restricted probe")).not.toBeInTheDocument();
+        const checked = mockCheckWebRoutesAllowed.mock.calls.flatMap(([routes]) =>
+            routes.map((route) => route.route__path)
+        );
+        expect(checked).toContain("/addon-probe/");
+        expect(checked).not.toContain("/addon-restricted/");
+    });
+
+    it("adds a restricted entry, its route checked, when its feature switch arrives after mount", async () => {
+        allowRoutes("/databases/", "/addon-restricted/", "/addon-restricted/both/");
+        // The config the shell holds before the secure config lands carries no feature switches.
+        const { container, rerender } = render(
+            <RuntimeConfigContext.Provider value={{}}>
+                <Navigation activeHref={"#/databases"} user={undefined} />
+            </RuntimeConfigContext.Provider>
+        );
+        const nav = () => createWrapper(container).findSideNavigation();
+        await waitFor(() => expect(nav()?.findLinkByHref("#/databases/")).toBeTruthy());
+        expect(nav()?.findLinkByHref("#/addon-restricted/")).toBeFalsy();
+
+        rerender(
+            <RuntimeConfigContext.Provider value={{ featuresEnabled: ["ADDON_PROBE_FEATURE"] }}>
+                <Navigation activeHref={"#/databases"} user={undefined} />
+            </RuntimeConfigContext.Provider>
+        );
+
+        await waitFor(() => expect(nav()?.findLinkByHref("#/addon-restricted/")).toBeTruthy());
+        expect(screen.getByText("Add-on restricted probe")).toBeInTheDocument();
+        const lastCheck = mockCheckWebRoutesAllowed.mock.calls.at(-1)![0];
+        expect(lastCheck.map((route) => route.route__path)).toContain("/addon-restricted/");
+        // Every switch an entry lists must be on: the second one is still absent.
+        expect(nav()?.findLinkByHref("#/addon-restricted/both/")).toBeFalsy();
+        expect(screen.queryByText("Add-on two-switch page")).not.toBeInTheDocument();
     });
 });

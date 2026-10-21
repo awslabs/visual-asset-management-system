@@ -23,12 +23,12 @@ const WAF_RATE_LIMIT_BODY_CONTENT = JSON.stringify({
 
 // Headers on the throttle response. The REGIONAL ACL is associated with the REST API stage, and
 // API Gateway renders a WAF block — this custom response included — through its WAF_FILTERED
-// gateway response, which `GatewayResponseDefault4XX` (rest-api-gateway-construct.ts) decorates
-// with the API's CORS allow headers (Access-Control-Allow-Origin, Access-Control-Allow-Headers)
-// on every 4XX it renders. A browser can therefore read the 429 in every topology, and the WAF
-// response must not repeat those headers: API Gateway appends WAF's copy to its own, the browser
-// sees `Access-Control-Allow-Origin: *, *` and rejects the response outright. Allow-Methods is
-// not needed either — it matters only on a preflight, and a throttled OPTIONS is answered by WAF
+// gateway response, which `gatewayResponseDefinitions` (rest-api-gateway-construct.ts) decorates
+// with the API's CORS allow headers (Access-Control-Allow-Origin, Access-Control-Allow-Headers),
+// so the web app, which calls the stage cross-origin, can read the 429. The WAF response must not
+// repeat those headers: API Gateway appends WAF's copy to its own, the browser sees
+// `Access-Control-Allow-Origin: *, *` and rejects the response outright. Allow-Methods is not
+// needed either — it matters only on a preflight, and a throttled OPTIONS is answered by WAF
 // before the API's MOCK integration, so it can never be a successful preflight. What API Gateway
 // does not add is Retry-After, the delta the web apiClient sleeps before its single retry (a
 // short value is right for a rule that counts over a 5-minute window), and
@@ -93,10 +93,36 @@ export interface WafPolicyConfig {
     }>;
 }
 
+/**
+ * Managed rules relaxed on a set of URI paths only. Applied on the policy path: in each policy
+ * group for the named managed rule group that is in block mode, each named rule is set to count,
+ * and a rule evaluated after every other rule in the ACL blocks a request carrying any of their
+ * labels unless its URI path starts with one of the prefixes. A rule the policy counts or allows
+ * keeps the policy's action and is not re-blocked; a rule the policy blocks is relaxed and re-blocked
+ * like any other.
+ */
+export interface WafScopedRuleExclusion {
+    managedRuleGroupName: string; // e.g. AWSManagedRulesCommonRuleSet
+    // The rule's name within the group and the label it adds when it matches (the group's
+    // AvailableLabels). A rule set to count still adds its label, which the re-block rule matches.
+    rules: Array<{ name: string; label: string }>;
+    // Compared with STARTS_WITH against the path as received and again after URL_DECODE then
+    // NORMALIZE_PATH, and both must match, so neither an encoded slash inside a path parameter nor a
+    // dot segment lets a request to another route fall under a prefix.
+    uriPathPrefixes: string[];
+    reapplyRuleName: string; // name and metric name of the rule that blocks the labels elsewhere
+    // Managed rules outside the exclusion that requests under its prefixes are known to match. A
+    // synth warning names each one the policy enforces: a named rule while its group runs in block
+    // mode and the policy neither counts nor allows it, a whole group (no name) while it runs in
+    // block mode.
+    unrelaxedRules?: Array<{ managedRuleGroupName: string; name?: string }>;
+}
+
 export interface Wafv2BasicConstructProps extends cdk.StackProps {
     readonly wafScope?: WAFScope;
     readonly rules?: Array<wafv2.CfnWebACL.RuleProperty | cdk.IResolvable> | cdk.IResolvable;
     readonly wafPolicy?: WafPolicyConfig;
+    readonly scopedRuleExclusions?: WafScopedRuleExclusion[];
     readonly stackName?: string;
     readonly env?: cdk.Environment;
 }
@@ -125,22 +151,99 @@ const legacyDefaultRules: Array<wafv2.CfnWebACL.RuleProperty> = [
     },
 ];
 
+/** A statement matching any of `statements`; WAF requires an OR statement to have two or more. */
+function anyOf(
+    statements: Array<wafv2.CfnWebACL.StatementProperty>
+): wafv2.CfnWebACL.StatementProperty {
+    return statements.length === 1 ? statements[0] : { orStatement: { statements } };
+}
+
+/** A STARTS_WITH match of `prefix` against the URI path after `textTransformations`. */
+function uriPathStartsWith(
+    prefix: string,
+    textTransformations: Array<wafv2.CfnWebACL.TextTransformationProperty>
+): wafv2.CfnWebACL.StatementProperty {
+    return {
+        byteMatchStatement: {
+            searchString: prefix,
+            fieldToMatch: { uriPath: {} },
+            textTransformations,
+            positionalConstraint: "STARTS_WITH",
+        },
+    };
+}
+
+/**
+ * The rule re-applying a scoped exclusion's relaxed rules off its paths: block a request carrying
+ * any of `labels` unless its URI path starts with one of the exclusion's prefixes both as received
+ * and once URL decoded and then normalized. API Gateway routes on the path as received, where an
+ * encoded slash stays inside one path parameter, and normalization resolves `..` segments, so a
+ * request reaching another route through either is not taken for one under the prefix.
+ */
+function buildScopedExclusionRule(
+    exclusion: WafScopedRuleExclusion,
+    labels: string[],
+    priority: number
+): wafv2.CfnWebACL.RuleProperty {
+    const onExcludedPath = anyOf(
+        exclusion.uriPathPrefixes.map((prefix) => ({
+            andStatement: {
+                statements: [
+                    uriPathStartsWith(prefix, [{ priority: 0, type: "NONE" }]),
+                    uriPathStartsWith(prefix, [
+                        { priority: 0, type: "URL_DECODE" },
+                        { priority: 1, type: "NORMALIZE_PATH" },
+                    ]),
+                ],
+            },
+        }))
+    );
+    return {
+        name: exclusion.reapplyRuleName,
+        priority,
+        action: { block: {} },
+        statement: {
+            andStatement: {
+                statements: [
+                    anyOf(labels.map((key) => ({ labelMatchStatement: { scope: "LABEL", key } }))),
+                    { notStatement: { statement: onExcludedPath } },
+                ],
+            },
+        },
+        visibilityConfig: {
+            sampledRequestsEnabled: true,
+            cloudWatchMetricsEnabled: true,
+            metricName: exclusion.reapplyRuleName,
+        },
+    };
+}
+
 /**
  * Build WAF rules from a policy config: managed rule groups (block or count-only per
- * `block`) plus rate-based rules for L7 DDoS / brute-force throttling. `wafScopeString` is
- * the ACL scope the rules are being built for, reported alongside any policy warning.
+ * `block`), rate-based rules for L7 DDoS / brute-force throttling, and one re-block rule per
+ * scoped exclusion that relaxed a rule. `wafScopeString` is the ACL scope the rules are being
+ * built for, reported alongside any policy warning.
  */
 function buildRulesFromPolicy(
     policy: WafPolicyConfig,
     scope: Construct,
-    wafScopeString: string
+    wafScopeString: string,
+    exclusions: Array<WafScopedRuleExclusion>
 ): Array<wafv2.CfnWebACL.RuleProperty> {
     const rules: Array<wafv2.CfnWebACL.RuleProperty> = [];
+
+    // The labels each scoped exclusion relaxed, re-blocked after the other rules. An exclusion
+    // with no path prefix relaxes nothing.
+    const scopedExclusions = exclusions.filter((e) => e.uriPathPrefixes.length > 0);
+    const relaxedLabels: string[][] = scopedExclusions.map(() => []);
+    warnUnrelaxedRules(policy, scope, wafScopeString, scopedExclusions);
 
     for (const group of policy.managedRuleGroups || []) {
         // Per-rule action overrides (e.g. set SizeRestrictions_BODY to count) so a single rule can
         // be relaxed while the rest of the managed group stays in block mode.
-        const ruleActionOverrides = (group.ruleActionOverrides || []).map((o) => ({
+        const ruleActionOverrides: Array<wafv2.CfnWebACL.RuleActionOverrideProperty> = (
+            group.ruleActionOverrides || []
+        ).map((o) => ({
             name: o.name,
             actionToUse:
                 o.action === "count"
@@ -149,6 +252,31 @@ function buildRulesFromPolicy(
                     ? { allow: {} }
                     : { block: {} },
         }));
+        // Scoped exclusions: in a group in block mode each named rule counts, and the re-block rule
+        // built after the loop blocks its label off the exclusion's paths. A rule the policy counts
+        // or allows is relaxed everywhere already and keeps the policy's action; a rule the policy
+        // blocks is relaxed here and re-blocked off the paths like any other.
+        if (group.block !== false) {
+            scopedExclusions.forEach((exclusion, index) => {
+                if (exclusion.managedRuleGroupName !== group.managedRuleGroupName) return;
+                for (const rule of exclusion.rules) {
+                    const policyAction = (group.ruleActionOverrides || []).find(
+                        (o) => o.name === rule.name
+                    )?.action;
+                    if (policyAction === "count" || policyAction === "allow") continue;
+                    const relaxed = { name: rule.name, actionToUse: { count: {} } };
+                    const existing = ruleActionOverrides.findIndex((o) => o.name === rule.name);
+                    if (existing >= 0) {
+                        ruleActionOverrides[existing] = relaxed;
+                    } else {
+                        ruleActionOverrides.push(relaxed);
+                    }
+                    if (!relaxedLabels[index].includes(rule.label)) {
+                        relaxedLabels[index].push(rule.label);
+                    }
+                }
+            });
+        }
         rules.push({
             name: group.name,
             priority: group.priority,
@@ -221,7 +349,58 @@ function buildRulesFromPolicy(
         });
     }
 
+    // Re-block rules come after every other rule, so the relaxed rules' labels are already set.
+    let reapplyPriority = Math.max(0, ...rules.map((r) => r.priority)) + 1;
+    scopedExclusions.forEach((exclusion, index) => {
+        if (relaxedLabels[index].length) {
+            rules.push(
+                buildScopedExclusionRule(exclusion, relaxedLabels[index], reapplyPriority++)
+            );
+        }
+    });
+
     return rules;
+}
+
+/**
+ * Reports, at synth, each managed rule an active scoped exclusion names as unrelaxed that the
+ * policy enforces, since requests under the exclusion's paths that match it are still blocked.
+ */
+function warnUnrelaxedRules(
+    policy: WafPolicyConfig,
+    scope: Construct,
+    wafScopeString: string,
+    exclusions: Array<WafScopedRuleExclusion>
+): void {
+    const blockModeGroups = (policy.managedRuleGroups || []).filter((g) => g.block !== false);
+    for (const exclusion of exclusions) {
+        for (const entry of exclusion.unrelaxedRules || []) {
+            const groups = blockModeGroups.filter(
+                (g) => g.managedRuleGroupName === entry.managedRuleGroupName
+            );
+            const enforced = entry.name
+                ? groups.some((g) => {
+                      const action = (g.ruleActionOverrides || []).find(
+                          (o) => o.name === entry.name
+                      )?.action;
+                      return action !== "count" && action !== "allow";
+                  })
+                : groups.length > 0;
+            if (!enforced) continue;
+            const subject = entry.name
+                ? `the ${entry.name} rule of ${entry.managedRuleGroupName}`
+                : `the ${entry.managedRuleGroupName} rule group`;
+            cdk.Annotations.of(scope).addWarningV2(
+                `VAMS:WafPolicy:${exclusion.reapplyRuleName}:unrelaxed:${entry.managedRuleGroupName}` +
+                    (entry.name ? `:${entry.name}` : ""),
+                `WAF policy enforces ${subject} in the ${wafScopeString} web ACL, which the scoped ` +
+                    `rule exclusion "${exclusion.reapplyRuleName}" does not relax: a request under ` +
+                    `${exclusion.uriPathPrefixes.join(", ")} that matches it is still blocked. ` +
+                    `Override the rule to count, or run the group in count mode, in ` +
+                    `config/policy/wafPolicyConfig.json if those requests must pass.`
+            );
+        }
+    }
 }
 
 /**
@@ -258,11 +437,17 @@ export class Wafv2BasicConstruct extends Construct {
         // Rule precedence: explicit props.rules > policy config > legacy default.
         // A populated config/policy/wafPolicyConfig.json applies best-practice managed
         // rule groups in block mode plus rate-based DDoS protection; an empty/absent
-        // config falls back to the legacy count-only Common Rule Set.
+        // config falls back to the legacy count-only Common Rule Set. Scoped rule
+        // exclusions apply to the policy rules only.
         const resolvedRules =
             props.rules ||
             (props.wafPolicy
-                ? buildRulesFromPolicy(props.wafPolicy, this, wafScopeString)
+                ? buildRulesFromPolicy(
+                      props.wafPolicy,
+                      this,
+                      wafScopeString,
+                      props.scopedRuleExclusions || []
+                  )
                 : legacyDefaultRules);
 
         /*

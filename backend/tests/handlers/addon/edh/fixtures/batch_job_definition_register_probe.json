@@ -1,0 +1,34 @@
+{
+  "name": "batch_job_definition_register_probe",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "POST",
+    "path": "/api/containers/batch/job_definition",
+    "absolutePath": "/api/containers/batch/job_definition",
+    "query": {},
+    "headers": {},
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": {
+      "job_definition": "vams-spike-jobdef",
+      "type": "container"
+    }
+  },
+  "response": {
+    "status": 405,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "message": "The method is not allowed for the requested URL."
+    }
+  },
+  "expect": {},
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/containers/batch/job_definition.py",
+      "source/soca/cluster_manager/web_interface/app.py"
+    ]
+  }
+}

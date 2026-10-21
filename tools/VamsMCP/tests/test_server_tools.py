@@ -54,6 +54,50 @@ def test_tool_result_wraps_errors(mock_client):
     assert result["error_type"] == "RuntimeError"
 
 
+def test_tool_result_carries_what_a_blocked_request_names(mock_client):
+    """A request the deployment's AWS WAF web ACL blocked reaches the agent with the keys the CLI's
+    --json-output gives it, so the agent can tell a block from a permission denial and report the
+    request ID rather than retry."""
+    from vamscli.utils.exceptions import RequestBlockedError
+
+    mock_client.api.get_database.side_effect = RequestBlockedError("m", request_id="r-1")
+    assert server.get_database("db1") == {
+        "error": "m", "error_type": "RequestBlockedError", "blockedBy": "waf", "requestId": "r-1"}
+
+
+def test_tool_result_carries_an_unconfirmed_block_without_a_request_id(mock_client):
+    """A bare API Gateway "Forbidden" is a block or a base URL that names no stage, and says so."""
+    from vamscli.utils.exceptions import RequestBlockedError
+
+    mock_client.api.get_database.side_effect = RequestBlockedError("m", confirmed=False)
+    assert server.get_database("db1") == {
+        "error": "m", "error_type": "RequestBlockedError", "blockedBy": "waf-or-stage"}
+
+
+def test_tool_result_never_lets_json_fields_replace_the_error_or_its_type():
+    class Colliding(Exception):
+        json_fields = {"error": "replaced", "error_type": "Replaced", "extra": 1}
+
+    @server.tool_result
+    def tool():
+        raise Colliding("kept")
+
+    assert tool() == {"error": "kept", "error_type": "Colliding", "extra": 1}
+
+
+def test_tool_result_returns_an_error_whose_json_fields_are_not_a_mapping():
+    """The wrapper must never raise: a json_fields that is not a mapping is left out, not read."""
+
+    class Odd(Exception):
+        json_fields = ["blockedBy"]
+
+    @server.tool_result
+    def tool():
+        raise Odd("kept")
+
+    assert tool() == {"error": "kept", "error_type": "Odd"}
+
+
 def test_search_assets_builds_request(mock_client):
     mock_client.api.search_query.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
     mock_client.trim_search_results.return_value = {"total": 0, "returned": 0, "results": []}

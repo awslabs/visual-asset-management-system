@@ -1,0 +1,38 @@
+name: vams-isaacsim-kernel
+description: Holds the kernel Ubuntu 24.04 boots and installs the headers and extra modules its driver build needs.
+schemaVersion: 1.0
+phases:
+    - name: build
+      steps:
+          - name: HoldKernel
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euxo pipefail
+                    - export DEBIAN_FRONTEND=noninteractive
+                    - apt-mark hold linux-aws linux-image-aws linux-headers-aws linux-modules-extra-aws linux-tools-aws
+          - name: InstallKernelModules
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euxo pipefail
+                    - export DEBIAN_FRONTEND=noninteractive
+                    - apt-get -o DPkg::Lock::Timeout=600 update -y
+                    - |
+                        # DKMS builds the GPU driver against the running kernel at the desktop's first
+                        # boot, so an image whose kernel has no published modules fails here instead.
+                        if ! apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends \
+                            "linux-headers-$(uname -r)" "linux-modules-extra-$(uname -r)"; then
+                            echo "kernel $(uname -r): the archive carries no headers or extra modules for it"
+                            exit 1
+                        fi
+    - name: validate
+      steps:
+          - name: KernelModulesPresent
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -eux
+                    - dpkg -s "linux-headers-$(uname -r)" >/dev/null
+                    - dpkg -s "linux-modules-extra-$(uname -r)" >/dev/null
+                    - apt-mark showhold | grep -qx linux-aws

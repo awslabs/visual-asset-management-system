@@ -36,14 +36,15 @@ pie title Typical Monthly Cost Distribution (with Amazon OpenSearch Serverless)
 
 VAMS cost varies based on the deployment features you enable. The following configuration options affect your monthly costs:
 
-| Configuration                    | Description                                                                                                                       | Cost Impact                                                                                         |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| **C-0: VPC**                     | Deploy VPC with variable endpoints based on pipeline and service needs. Option to import existing VPC and subnets with endpoints. | $0 -- $311 per month depending on endpoint count and number of Availability Zones                   |
-| **C-1: Web Distribution**        | Amazon CloudFront (default) or Application Load Balancer                                                                          | Amazon CloudFront: $0 (free tier for first 1 TB). Application Load Balancer: ~$25 -- $53 per month. |
-| **C-2: Amazon OpenSearch**       | Serverless (default), Provisioned, or disabled                                                                                    | Serverless: ~$703 per month. Provisioned: ~$744 -- $916 per month. Disabled: $0.                    |
-| **C-3: AWS Lambda in VPC**       | Deploy all AWS Lambda functions inside VPC (optional)                                                                             | Included in VPC endpoint costs                                                                      |
-| **C-4: Amazon Location Service** | Map tile retrieval for database location views (default in commercial)                                                            | ~$40 per month for 1,000 tile retrievals                                                            |
-| **C-5: Processing Pipelines**    | Use-case specific pipelines (optional). Requires VPC.                                                                             | Variable based on pipeline usage (see pipeline costs below)                                         |
+| Configuration                    | Description                                                                                                                       | Cost Impact                                                                                                                 |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **C-0: VPC**                     | Deploy VPC with variable endpoints based on pipeline and service needs. Option to import existing VPC and subnets with endpoints. | $0 -- ~$594 per month for the endpoints the VPC stack creates, depending on endpoint count and number of Availability Zones |
+| **C-1: Web Distribution**        | Amazon CloudFront (default) or Application Load Balancer                                                                          | Amazon CloudFront: $0 (free tier for first 1 TB). Application Load Balancer: ~$25 -- $53 per month.                         |
+| **C-2: Amazon OpenSearch**       | Serverless (default), Provisioned, or disabled                                                                                    | Serverless: ~$703 per month. Provisioned: ~$744 -- $916 per month. Disabled: $0.                                            |
+| **C-3: AWS Lambda in VPC**       | Deploy all AWS Lambda functions inside VPC (optional)                                                                             | Included in VPC endpoint costs                                                                                              |
+| **C-4: Amazon Location Service** | Map tile retrieval for database location views (default in commercial)                                                            | ~$40 per month for 1,000 tile retrievals                                                                                    |
+| **C-5: Processing Pipelines**    | Use-case specific pipelines (optional). Requires VPC.                                                                             | Variable based on pipeline usage (see pipeline costs below)                                                                 |
+| **C-6: Add-ons**                 | Optional integrations with external solutions (see [Add-ons Overview](../developer/addons-overview.md))                           | Variable; each add-on's page lists the costs it adds                                                                        |
 
 ---
 
@@ -86,11 +87,11 @@ Classic Serverless and any deployment that holds minimum OCUs above zero carry a
 
 ### Networking (Conditional)
 
-| AWS Service                 | Monthly Cost (Commercial) | Monthly Cost (GovCloud) | Notes                                                                                                               |
-| --------------------------- | ------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| **VPC Endpoints**           | $0 -- $240.91             | $0 -- $311.13           | 1--11 endpoints per Availability Zone (up to 3 AZ). Required when VPC is enabled. Cost depends on enabled features. |
-| **Amazon Location Service** | ~$40.00                   | N/A                     | 1,000 map tile retrievals. Commercial regions only.                                                                 |
-| **AWS WAF**                 | ~$5.00                    | ~$5.00                  | Base cost for web ACL. Additional rules and request volume add cost.                                                |
+| AWS Service                 | Monthly Cost (Commercial) | Monthly Cost (GovCloud) | Notes                                                                                                                                                                                                                                                                                                                                  |
+| --------------------------- | ------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **VPC Endpoints**           | $0 -- ~$481.80            | $0 -- ~$593.97          | 9--22 interface endpoints (up to 21 in GovCloud) that the VPC stack creates when `addVpcEndpoints` is enabled, each billed in every Availability Zone (up to 3 AZ). Cost depends on enabled features. A private Amazon OpenSearch Serverless collection and the Application Load Balancer web distribution each add one more endpoint. |
+| **Amazon Location Service** | ~$40.00                   | N/A                     | 1,000 map tile retrievals. Commercial regions only.                                                                                                                                                                                                                                                                                    |
+| **AWS WAF**                 | ~$5.00                    | ~$5.00                  | Base cost for web ACL. Additional rules and request volume add cost.                                                                                                                                                                                                                                                                   |
 
 ---
 
@@ -134,7 +135,7 @@ The choice between Amazon OpenSearch Serverless and Provisioned significantly af
 
 ### VPC Endpoint Count
 
-Each VPC interface endpoint costs approximately $7.30 per month per Availability Zone. Enabling more pipelines and services increases the number of required VPC endpoints. A deployment with all features enabled across 3 Availability Zones can require up to 11 endpoints.
+Each VPC interface endpoint costs approximately $7.30 per month per Availability Zone. Enabling more pipelines, services, and add-ons increases the number of required VPC endpoints. A deployment that creates its own endpoints starts with 9 interface endpoints, and one with every pipeline and service enabled can require up to 22 (21 in GovCloud) in each of up to 3 Availability Zones. A private Amazon OpenSearch Serverless collection and the Application Load Balancer web distribution each add one endpoint outside this count, and the Application Load Balancer creates its Amazon S3 endpoint even when `addVpcEndpoints` is disabled.
 
 ---
 

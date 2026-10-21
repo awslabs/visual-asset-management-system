@@ -31,7 +31,7 @@ vamscli setup <BASE_URL> [OPTIONS]
 ### What setup does
 
 1. Validates the base URL format (accepts any HTTP/HTTPS URL).
-2. If the base URL is a direct Amazon API Gateway `execute-api` endpoint with no path, appends the REST API stage segment (`/api`) so the bootstrap calls resolve. A front (Amazon CloudFront or ALB) absorbs the stage, so a fronted or custom-domain URL is used unchanged.
+2. If the base URL is a direct Amazon API Gateway `execute-api` endpoint with no path, appends the REST API stage segment (`/api`) so the bootstrap calls resolve. A front (Amazon CloudFront or ALB) maps the bootstrap routes `/api/version` and `/api/amplify-config` onto the stage, so a fronted or custom-domain URL is used unchanged.
 3. Checks API version compatibility using the base URL.
 4. Fetches Amplify configuration from `<base-url>/api/amplify-config`.
 5. Extracts the Amazon API Gateway URL from the `api` field in the response (this value already includes the stage path).
@@ -71,11 +71,11 @@ Configuration is saved to `~/.config/vamscli/profiles/{profile_name}/`. Each pro
 :::
 
 :::note[Amazon API Gateway stage path]
-The VAMS backend is an Amazon API Gateway REST API served under the fixed stage path `/api`. When you point `setup` at a front (Amazon CloudFront, ALB, or a custom domain), the front maps `/api/*` onto the stage and you use the front's URL as-is. When you point `setup` directly at the `execute-api` endpoint, the CLI appends the stage segment automatically, so use the bare endpoint URL (for example `https://abcdef1234.execute-api.us-west-2.amazonaws.com`) — do not add `/api` yourself.
+The VAMS backend is an Amazon API Gateway REST API served under the fixed stage path `/api`. When you point `setup` at a front (Amazon CloudFront, ALB, or a custom domain), the front maps `/api/*` onto the stage for the bootstrap calls only, `/api/version` and `/api/amplify-config`, and you use the front's URL as-is; every later command calls the Amazon API Gateway URL that `setup` stores. When you point `setup` directly at the `execute-api` endpoint, the CLI appends the stage segment automatically, so use the bare endpoint URL (for example `https://abcdef1234.execute-api.us-west-2.amazonaws.com`) — do not add `/api` yourself.
 :::
 
 :::warning[Re-run setup after a deployment endpoint change]
-A profile stores the Amazon API Gateway URL it was set up against. If the deployment's API Gateway identifier or invoke URL changes — which an update that replaces the API does — the stored URL stops resolving to a valid endpoint and every request from that profile fails. Re-run `vamscli setup <BASE_URL> --force` for the profile to pick up the current endpoint. A profile that targets an Amazon CloudFront, ALB, or custom-domain front is unaffected as long as the front's URL is unchanged.
+A profile stores the Amazon API Gateway URL it was set up against: the `execute-api` invoke URL in the `api` field of `/api/amplify-config`, which every command uses, whatever base URL `setup` was given. If the deployment's API Gateway identifier or invoke URL changes — which an update that replaces the API does — the stored URL stops resolving to a valid endpoint and every request from that profile fails. Re-run `vamscli setup <BASE_URL> --force` for the profile to pick up the current endpoint. A profile set up through an Amazon CloudFront, ALB, or custom-domain front needs this too, even when the front's URL is unchanged.
 :::
 
 ---
@@ -423,8 +423,9 @@ Output includes total count, list of enabled feature names, and last updated tim
 | `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito user pool federated to a SAML identity provider                |
 | `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito user pool federated to an OIDC identity provider               |
 | `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                              |
-| `PHYSNA_ADDON`                  | Physna add-on frontend features                                               |
 | `DEADLINECLOUD_PIPELINES`       | AWS Deadline Cloud pipeline execution type                                    |
+
+An enabled add-on adds feature switches of its own, which `vamscli features list` also shows and which are listed on the add-on's pages. See [Add-ons Overview](../../developer/addons-overview.md).
 
 ---
 

@@ -1,0 +1,99 @@
+# CLAUDE.md -- EDH Workstations add-on (backend)
+
+> Auto-loaded when Claude Code works within `backend/backend/handlers/addon/edh/`. Covers the EDH Workstations add-on's Lambdas, its shared modules, the add-on lane entries it registers, and the rules its tests hold. Every rule in `backend/CLAUDE.md` and `backend/tests/CLAUDE.md` applies here as well; this file adds what is specific to EDH. Tests live in `backend/tests/handlers/addon/edh/`; each invariant below names the test that pins it. The Kiro mirror is `.kiro/steering/ADDON_EDH_WORKSTATIONS.md` (root `CLAUDE.md` Rule 11).
+
+---
+
+## Layout
+
+The folder holds only the Lambda entry points; shared modules live in `common/`.
+
+| Entry point              | What it is                                                                                                                                                                                                        |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `edhWorkstationService`  | Workstation and catalog routes (`/addon/edh/workstations*`, `/addon/edh/catalog/*`): launch, list, get, connect, Windows sign-in, stop, start, renew, delete                                                      |
+| `edhLaunchWorker`        | Asynchronous half of a launch: creates the EDH desktop and binds the session row to it                                                                                                                            |
+| `edhAdminService`        | Admin routes (`/addon/edh/admin/*` but the AMI recipes): images, instances, capacity, health, lease settings, all under the EDH root key                                                                          |
+| `edhAmiRecipeService`    | AMI recipe routes (`/addon/edh/admin/ami-recipes*`)                                                                                                                                                               |
+| `edhAmiBuildRegistrar`   | Completes AMI builds: invoked by the Image Builder state-change rule and a 30-minute sweep that closes missed builds, retries failed registrations, starts queued builds and removes pruned AMIs no instance uses |
+| `edhContainerService`    | Container routes (`/addon/edh/containers/*`): the catalog, and submit, list and kill of the caller's jobs, scoped to the caller's EDH uid                                                                         |
+| `edhSessionReconciler`   | Scheduled sweep (every 15 minutes whenever the add-on is deployed) that reconciles session rows with EDH                                                                                                          |
+| `edhCatalogRegistration` | Deploy-time custom resource: registers the predefined images with EDH and the container job definitions with AWS Batch, seeds AMI recipes with build-on-deploy builds, and seeds the lease policy row             |
+
+| `common/` module         | What it is                                                                                                                                      |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `edhClient.py`           | Budgeted root-key REST client for the EDH API                                                                                                   |
+| `edhIdentity.py`         | VAMS user to EDH uid mapping                                                                                                                    |
+| `edhSessionState.py`     | Session-row states, the EDH `session_state` mapping, `lastError` codes, the never-auto-start schedule, the credential claim, `session_row_live` |
+| `edhCatalogFields.py`    | Model to EDH software-stack field mapping, and `stack_architecture`, which the launch catalog and the admin image listing share                 |
+| `edhLeasePolicy.py`      | The lease settings row and the pure lease decisions (`resolve_launch_lease`, `lease_action`)                                                    |
+| `edhSessionBootstrap.py` | Per-session API key and Secrets Manager secret: mint, re-issue, bind, revoke                                                                    |
+| `edhAmiRecipes.py`       | AMI recipe build lifecycle                                                                                                                      |
+| `edhAmiRecipeStore.py`   | Recipe and build table access                                                                                                                   |
+| `edhImageBuilder.py`     | EC2 Image Builder calls and component-document substitution                                                                                     |
+
+The models are in `backend/backend/models/addon/edh.py`.
+
+## Add-on lane entries
+
+EDH registers everything core sees through the add-on lane files, never through a core list:
+
+-   **Routes**: the `# EDH Workstations` section of `common/addonApiRoutes.py` (`EDH_ROUTES`, part of `ADDON_ROUTES`). `tests/handlers/addon/edh/test_edh_api_routes.py` asserts every path, method, group and category; handlers dispatch on these constants.
+-   **Permission object types and fields**: `edhWorkstation` (EDH Image ID, EDH OS Family, EDH Instance Type), `edhImage` (EDH Image ID, EDH OS Family) and `edhContainer` (EDH Job Definition), with the fields `edhImageId`, `edhOsFamily`, `edhInstanceType`, `edhJobDefinition`, in `common/addonConstants.py` (`test_edh_permission_object_types.py`).
+-   **Log redaction keys**: `X-EDH-TOKEN`, `rootKey`, `connection_string`, `authToken`, `session_token`, `authentication_token`, `session_local_admin_password`, `broker_session_id` and `password` in `ADDON_LOG_SENSITIVE_KEYS` — the root-key header and secret field, a desktop's DCV tokens, the connection string that embeds one, the Windows sign-in password, and the throw-away password the client sends when it creates a directory user. Both the structured logger and `common/logRedaction.py` redact them (`test_edh_log_redaction_keys.py`).
+-   **Resource-name keys**: `AddonResourceKeys.EDH_SESSION_STORAGE_TABLE` (`addon/dynamoTables/edhSessionStorage`) and `AddonResourceKeys.EDH_AMI_RECIPE_STORAGE_TABLE` (`addon/dynamoTables/edhAmiRecipeStorage`) in `common/addonResourceNames.py`, mirrored by `infra/common/addonResourceParamKeys.ts`, resolved with `get_table_name` and the break-glass `EDH_SESSION_STORAGE_TABLE_NAME` / `EDH_AMI_RECIPE_STORAGE_TABLE_NAME` (`test_edh_resource_keys.py`).
+-   **Permission template decisions**: `tests/handlers/addon/edh/addonRouteGrants.py` (`ROUTE_GRANTS`) records the methods `edh-user.json` and `edh-admin.json` allow on each EDH route; the core template test evaluates them. No shipped template grants the container routes. `test_edh_permission_templates.py` checks the two templates' shape.
+
+## Module constants at the top
+
+The EDH source (this folder, `common/` among it, and `models/addon/edh.py`) and the EDH tests (`backend/tests/handlers/addon/edh/`) declare each module-level `UPPER_CASE` constant, one directly in a module-level `if`/`try`/`with` included, before the module's first function or class. A constant whose value reads a function or class of its module at import (a name only in a lambda's body does not count), directly or through other module-level names, follows the last definition it needs instead, with no other definition between them. The rest of the backend is not held to this (`test_edh_module_constants_at_top.py`).
+
+## Session keys
+
+A desktop's VAMS credential is a temporary session key (`backend/CLAUDE.md`, Authorization System):
+
+-   `edhSessionBootstrap.SESSION_KEY_NAME_PREFIX` is the core `TEMPORARY_SESSION_KEY_NAME_PREFIX` followed by `edh-`. A key is named `temporary-session-edh-<bootstrapId>` at launch and start, and a renewal's re-issue adds `-r<YYYYmmddHHMMSS>`, so the key it replaces keeps its name; `bootstrap_id_from_key_name` maps either name back. apiKeyService therefore refuses key create and update to a desktop holding one, and lets only the bootstrap's Lambda cross-call create a key under the prefix (`test_edh_session_key.py`).
+-   The key is minted through a `lambdaCrossCall` invoke of apiKeyService on the admin create route as the launching user, carrying the user's real MFA state; the invoke is single-attempt and bounded by the request's deadline. The value reaches the desktop only through the Secrets Manager secret `<EDH_SESSION_SECRET_PREFIX><bootstrapId>`, whose read grant is bound to the desktop's EC2 instance once EDH places it (`test_edhSessionBootstrap_mint.py`, `test_edhSessionBootstrap_secrets.py`).
+-   `revoke_session` deletes the key the row names and then every other key of the bootstrap it lists as `SYSTEM_USER`; `every_key=False` deletes only the named key. `delete_other_session_keys` is the listing half on its own, under the caller's deadline (`test_edhSessionBootstrap_secrets.py`).
+-   `bootstrap_applies(row)` is the mint gate: false for a Windows row, which every mint answers `disabled`, while revoke and cleanup keep `is_enabled()` (`test_edhSessionBootstrap_windows.py`). The module loads with the feature's environment absent, and aborts the import when the feature is on and a variable is missing (`test_edhSessionBootstrap_mint.py`).
+-   Launch and start answer `403` to a caller that authenticated with an API key, so a session key cannot start another desktop (`test_edhWorkstationService_create.py`, `test_edhWorkstationService_session_create.py`, `test_edhWorkstationService_session_lifecycle.py`). A renewal from an API-key caller renews the lease and re-issues nothing (`test_edhWorkstationService_renew.py`).
+-   A renewal of an `ACTIVE` row with no start in progress re-issues the key under a credential claim (`credentialClaimedAt`, fresh for `CREDENTIAL_CLAIM_SECONDS`): it mints through `mint_reissue_key`, names the key on the row conditioned on the claim, `ACTIVE` and the `apiKeyId` read after the claim, writes the secret through `write_reissued_secret`, and releases the claim. A start is refused while a claim is fresh; it deletes the key the row names before the mint and, once EDH has accepted the start, every other key of the bootstrap, best effort within the request's deadline less `KEY_CLEANUP_RESERVE_SECONDS_START`. A rollback takes back only the minted key (`test_edhWorkstationService_renew.py`, `test_edhWorkstationService_session_lifecycle.py`).
+
+## Reads of EDH desktop state
+
+-   List, get, the start pre-read and the read after a lost stop, start or delete answer read desktop state through `EdhClient.get_desktop_states`, EDH's token-free `session_state` route, for the session ids of the caller's own rows only. Connect and Windows sign-in read the per-user `list` narrowed to the row's session through `get_desktop_connection`, at most one connection token per request EDH answers, and match the answer to the row by session id. No other route or handler module reads the per-user list (`test_edhWorkstationService_token_reads.py`).
+-   `GET /addon/edh/workstations/{sessionId}/windows-sign-in` returns the user name and EDH's `session_local_admin_password` of the owner's running Windows desktop, a null password with `directoryAccount` for a domain-qualified name, audited as `workstationWindowsSignIn` and never logged (`test_edhWorkstationService_windows_sign_in.py`).
+
+## Launch checks
+
+-   A launch whose instance type the image's own nested `profile` lists only under architectures of another family than the image's (`x86_64` and `i386` are one family) is refused after Tier 2 with `400` `instanceType does not match the image's architecture`, before any EDH call, row, mint or worker. It passes to EDH's own check when the stack has no `ami_arch`, no readable `profile`, or lists the type under no architecture. A launch whose `rootSizeGb` is below the image's registered root size is refused after Tier 2. `models/addon/edh.py` `ARCHITECTURE_FAMILIES` and `architecture_family` are the family table this check and the AMI recipe checks share (`test_edhWorkstationService_create.py`).
+-   The launch catalog's images carry `architecture` and its instance types `architectures`; `GET /addon/edh/catalog/images` adds `category` `amiRecipe` (with `recipeId`, `recipeDisplayName`, `recipeVersion`) for a stack an AVAILABLE AMI recipe build registered, else `baseline`. The recipe table is not read while `EDH_AMI_BUILDS_ENABLED` is not `true`, and a failed read lists every image `baseline` with a warning. Recipe images come first, each group in numeric-aware name order (`test_edhWorkstationService_catalog_images.py`, `test_edhWorkstationService_catalog_instance_types.py`).
+-   `edhLaunchWorker` sends `session_type` `console` for a Windows row and `virtual` for any other, reads the session id back through `EdhClient.find_desktop_by_name` (owner-strict on `session_owner` and `session_name`), then sets the never-auto-start schedule as the row's EDH uid and stamps `scheduleAppliedAt`; a schedule failure is logged and left to the sweep, never orphaning or retrying the launch (`test_edhLaunchWorker.py`).
+
+## The reconciler sweep
+
+`edhSessionReconciler` re-reads each row before deciding and writes conditionally (`test_edhSessionReconciler.py`):
+
+-   It takes the lease decision for a row before the ordinary reconciliation of that row (see the next section).
+-   It revokes the credentials of stopped, orphaned, deleted or expired sessions while the environment names the apiKeyService function; a credential it cannot revoke is counted `skipped`, and a revoke of a row under a fresh credential claim is held and counted `deferred`.
+-   It removes the secrets of desktops that are gone and stamps `DELETED` rows that hold no credential with the `expiresAt` TTL.
+-   It applies the never-auto-start schedule once to every non-`DELETED` row with a session id EDH lists and no `scheduleAppliedAt`, only on a pass with nothing else to write or revoke, at most 50 schedule calls per sweep and none after the first EDH error other than not-found or within the last 120 seconds of the run. A later schedule change made through EDH's API is left as it is.
+-   While session bootstrap is on, it deletes expired or aged orphan `temporary-session-edh-*` keys, keeping every unexpired key of a live row's bootstrap, and audits an orphan deleted past its expiry as `expire` and any other as `revoke`.
+
+## The lease settings row
+
+The session table carries one row that is not a session: the workstation lease policy, under the reserved `bootstrapId` value `SETTINGS#lease` (`common/edhLeasePolicy.py` `LEASE_SETTINGS_KEY`). Two properties make that safe, and both must hold for any row of this kind: the literal cannot collide with a session row's partition key, which is the raw client-generated `bootstrapId`, always a 36-character UUID; and the row carries no `state`, so the state-filtered scans that read session rows never yield it. The catalog-registration custom resource writes it once at deploy (insert-if-absent) and the admin settings route thereafter (`test_edhLeasePolicy.py`).
+
+The reconciler reads the policy once per sweep. It stops a desktop past `leaseExpiresAt` and stamps `leaseStoppedAt`, deletes one whose grace window has elapsed, and skips the step entirely when the policy is disabled or could not be read: a lease action stops or deletes someone's desktop, so inaction is the safe direction on every failure (`test_edhSessionReconciler.py`).
+
+## AMI recipes
+
+-   A recipe POST with `duplicateOf` runs Tier 2 `GET` on the source under its own OS family and copies its `assets` and `assetPrefix`; create and update refuse a `stackName` another recipe uses, compared trimmed and without case (`test_edhAmiRecipeService.py`).
+-   Create, update and duplicate refuse with `400` (`edhAmiRecipes.RecipeInvalid`) a recipe whose build instance types, or whose `ami-` or `ssm:` parent AMI, EC2 reports as another architecture family than its `architecture`, and pass a failed lookup, a type or image of no known family and an `edhStack:` parent. A build start refuses with `409`, before any Image Builder object, a parent EC2 does not find and a parent or build instance type of another family (`test_edhAmiRecipes.py`, `test_edhAmiRecipeService.py`).
+-   `edhAmiRecipeStore.content_hash` folds the asset prefix, assets, parameters and the deployment values a recipe's documents name only when the recipe carries them, so a recipe without them keeps its hash. The table name resolves at import or, when that fails, on first use in `_table` (`test_edhAmiRecipeStore.py`).
+-   `edhImageBuilder.substitute_component_data` resolves `${ASSET_<id>}`, `${PARAM_<key>}` and `${DEPLOY_<key>}` (from the closed `DEPLOYMENT_PARAMETERS` map) in one pass before `create_component`, and refuses a document with an unresolved placeholder; `component_documents` applies the 16000-character limit to the resolved documents (`test_edhImageBuilder.py`).
+-   A recipe delete removes every build row, the sweep's only record of an AMI it still has to remove, so `delete_recipe` refuses with `409` `a build's AMI removal is pending` (`AMI_REMOVAL_PENDING`) while a build of its consistent listing holds an AMI not yet deregistered and is beyond `keepVersions` with a `PRUNABLE` status or `RETIRED` with `amiRemovalPending`, and releases its delete mark. `prune_amis` and `delete_recipe` pick those builds through the one helper `_ami_removal_candidates` (`test_edhAmiRecipes.py` `TestDeleteWhileAnAmiRemovalIsPending`, `test_edhAmiRecipeService.py` `TestDeleteRefusals`).
+
+## Tests
+
+-   `backend/tests/handlers/addon/edh/conftest.py` pins the real `common.constants` (`edhRealConstants.install_real_constants`) and seeds the environment the EDH modules read at import, including the break-glass table names, so collection makes no SSM call.
+-   **Captured EDH exchanges are sanitizer fixed points.** Every file under `tests/handlers/addon/edh/fixtures/` is a request/response envelope emitted by `fixtureSanitizer.py` (`sanitize_document` redacts the keys in `SECRET_KEY_NAMES`, drops the token header and maps hostnames), and it must stay a byte-for-byte fixed point of that function: `test_fixtures_are_sanitized.py` re-runs the sanitizer over every file and fails on any difference. Run a new capture through `sanitize_document` before committing it. The directory is prettier-ignored by the root `.prettierignore` entry `backend/tests/handlers/addon/*/fixtures/`, since reformatting a fixture would break the fixed point.

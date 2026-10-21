@@ -105,6 +105,7 @@ VAMS provides centralized management of simulation assets with the NVIDIA Isaac 
 -   Workflow system for chaining asset processing steps
 -   API and CLI access for CI/CD integration with robotics development pipelines
 -   Metadata schemas for tracking simulation parameters and training configurations
+-   EDH Workstations add-on for GPU desktops with NVIDIA Isaac Sim and the VAMS Isaac Sim connector pre-installed, and for containerized simulation jobs
 
 ---
 
@@ -122,6 +123,7 @@ VAMS serves as the central asset repository for digital twin 3D models, with the
 
 -   Garnet Framework addon for NGSI-LD digital twin knowledge graph synchronization
 -   Physna Sync addon for VAMS->Physna data sync to support 3D/CAD AI geometric 3D searching in Physna
+-   EDH Workstations addon for launching Amazon DCV desktops next to the assets they work on, optionally with the user's VAMS CLI signed in on the desktop
 -   Asset versioning with alias naming for tracking as-built model revisions
 -   Cross-database asset linking for connecting related twin representations
 -   Multiple viewer plugins for visualizing different aspects of the digital twin

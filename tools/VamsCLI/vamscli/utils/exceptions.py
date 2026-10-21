@@ -1,5 +1,7 @@
 """Custom exceptions for VamsCLI."""
 
+from typing import Optional
+
 
 class VamsCLIError(Exception):
     """Base exception for VamsCLI errors."""
@@ -61,6 +63,19 @@ class PermissionDeniedError(GlobalInfrastructureError):
     pass
 
 
+class RequestBlockedError(GlobalInfrastructureError):
+    """Raised when the deployment's AWS WAF web ACL blocked a request before VAMS handled it (HTTP 403)."""
+
+    def __init__(self, message: str, request_id: Optional[str] = None, confirmed: bool = True):
+        super().__init__(message)
+        self.request_id = request_id
+        self.confirmed = confirmed
+        # Carried into --json-output beside the error.
+        self.json_fields = {"blockedBy": "waf" if confirmed else "waf-or-stage"}
+        if request_id:
+            self.json_fields["requestId"] = request_id
+
+
 class VersionMismatchError(GlobalInfrastructureError):
     """Raised when CLI and API versions don't match."""
     pass
@@ -89,6 +104,12 @@ class BusinessLogicError(VamsCLIError):
 # General API and validation errors
 class APIError(BusinessLogicError):
     """Raised when API calls fail."""
+    pass
+
+
+class InvalidRequestPathError(APIError):
+    """Raised before any request when an endpoint path has an empty, '.' or '..' segment, which would
+    address another route."""
     pass
 
 
@@ -748,3 +769,4 @@ class UserRoleDeletionError(UserRoleError):
 class InvalidUserRoleDataError(UserRoleError):
     """Raised when user role data is invalid."""
     pass
+

@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo } from "react";
 import { useState } from "react";
 import { SideNavigation, Spinner } from "@cloudscape-design/components";
 import { checkWebRoutesAllowed } from "../services/webRoutesCheck";
 import config from "../config";
 import Synonyms from "../synonyms";
+import { useFeaturesEnabled } from "../context/RuntimeConfigContext";
 import { addonNavSections } from "../addons/addonNavigation";
 import { customNavSections } from "../custom/customNavigation";
 
@@ -37,6 +38,30 @@ function CenterSpinner() {
             <Spinner size="large" />
         </div>
     );
+}
+
+/**
+ * Recursively drops the entries (sections, links, expandable link groups) whose
+ * `featuresEnabledRestriction` names a feature switch the deployment has not enabled; an entry
+ * shows only when every switch it lists is on. The property is stripped from the entries kept,
+ * since SideNavigation does not take it.
+ */
+function restrictNavItemsByFeatures(items: any[], enabledFeatures: string[]): any[] {
+    const result: any[] = [];
+    for (const { featuresEnabledRestriction, ...item } of items) {
+        const restriction: string[] = Array.isArray(featuresEnabledRestriction)
+            ? featuresEnabledRestriction
+            : [];
+        if (!restriction.every((feature) => enabledFeatures.includes(feature))) {
+            continue;
+        }
+        result.push(
+            Array.isArray(item.items)
+                ? { ...item, items: restrictNavItemsByFeatures(item.items, enabledFeatures) }
+                : item
+        );
+    }
+    return result;
 }
 
 /**
@@ -102,18 +127,12 @@ function filterNavItems(items: any[], allowedRoutes: any[]): any[] {
     });
 }
 
-export function Navigation({
-    activeHref,
-    header = navHeader,
-    onFollowHandler = defaultOnFollowHandler,
-    user,
-}: {
-    activeHref: any;
-    header?: any;
-    onFollowHandler?: any;
-    user: any;
-}) {
-    const filteredNavItems = [
+/**
+ * The side-navigation entries. Any entry may carry `featuresEnabledRestriction: string[]`, the
+ * feature switches that must all be enabled for it to show.
+ */
+function navItems(): any[] {
+    return [
         {
             type: "link",
             text: "Home",
@@ -183,16 +202,40 @@ export function Navigation({
         ...addonNavSections,
         ...customNavSections,
     ];
+}
+
+export function Navigation({
+    activeHref,
+    header = navHeader,
+    onFollowHandler = defaultOnFollowHandler,
+    user,
+}: {
+    activeHref: any;
+    header?: any;
+    onFollowHandler?: any;
+    user: any;
+}) {
+    // Read live: the secure config that carries featuresEnabled lands after a first login, so an
+    // entry restricted to a feature switch appears when it does rather than on the next reload.
+    const featuresKey = JSON.stringify(useFeaturesEnabled());
+    const filteredNavItems = useMemo(
+        () => restrictNavItemsByFeatures(navItems(), JSON.parse(featuresKey)),
+        [featuresKey]
+    );
 
     const [navigationItems, setNavigationItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
+    // Re-checked whenever the item list changes (a feature switch arriving after mount adds links
+    // that were never checked). A check that resolves after a newer one started is discarded.
     useEffect(() => {
+        let stale = false;
         const allRoutes = collectRoutes(filteredNavItems);
 
         try {
             checkWebRoutesAllowed(allRoutes)
                 .then((allowed) => {
+                    if (stale) return;
                     const allowedRoutes = allowed.map((r) => "#" + r.route__path);
 
                     const filtered = filterNavItems(filteredNavItems, allowedRoutes);
@@ -200,12 +243,16 @@ export function Navigation({
                     setLoading(false);
                 })
                 .catch((error) => {
+                    if (stale) return;
                     console.error(error);
                     setNavigationItems([]);
                     setLoading(false);
                 });
         } catch (e) {}
-    }, []);
+        return () => {
+            stale = true;
+        };
+    }, [filteredNavItems]);
 
     return loading ? (
         <CenterSpinner />

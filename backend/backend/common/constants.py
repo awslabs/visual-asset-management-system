@@ -1,16 +1,18 @@
 import keyword
 import re
 
-# The add-on and fork lanes for the permission object types and upload deny lists below. Each is
-# merged into its core list right after that list (see "Extension lanes").
+# The add-on and fork lanes for the permission object types, upload deny lists and log-redaction
+# keys below. Each is merged into its core list right after that list (see "Extension lanes").
 from common.addonConstants import (
     ADDON_CONSTRAINT_OBJECT_TYPE_FIELDS,
+    ADDON_LOG_SENSITIVE_KEYS,
     ADDON_PERMISSION_CONSTRAINT_FIELDS,
     ADDON_UNALLOWED_FILE_EXTENSIONS,
     ADDON_UNALLOWED_MIME_TYPES,
 )
 from custom.customConstants import (
     CUSTOM_CONSTRAINT_OBJECT_TYPE_FIELDS,
+    CUSTOM_LOG_SENSITIVE_KEYS,
     CUSTOM_PERMISSION_CONSTRAINT_FIELDS,
     CUSTOM_UNALLOWED_FILE_EXTENSIONS,
     CUSTOM_UNALLOWED_MIME_TYPES,
@@ -20,11 +22,12 @@ from custom.customConstants import (
 # Extension lanes
 #
 # The add-ons (common/addonConstants.py) and a fork (custom/customConstants.py) extend the
-# permission object types, their constraint fields and the upload deny lists. Each public list is
-# core + add-on + custom, built once at import right after its CORE_* list; every rule is checked
-# here and a broken one raises ConstantsExtensionError naming the lane file and the entry, so a bad
-# extension fails every Lambda's import and the backend tests rather than loosening authorization
-# at runtime. With every lane empty each public list equals its CORE_* list exactly.
+# permission object types, their constraint fields, the upload deny lists and the log-redaction
+# keys. Each public list is core + add-on + custom, built once at import right after its CORE_*
+# list; every rule is checked here and a broken one raises ConstantsExtensionError naming the lane
+# file and the entry, so a bad extension fails every Lambda's import and the backend tests rather
+# than loosening authorization at runtime. With every lane empty each public list equals its CORE_*
+# list exactly.
 # ---------------------------------------------------------------------------
 
 class ConstantsExtensionError(ValueError):
@@ -67,6 +70,11 @@ EVALUATOR_RESERVED_ATTRIBUTES = frozenset({
 # ':' or whitespace, and a MIME type has no parameters.
 EXTENSION_DENY_EXTENSION_PATTERN = r"^\.[a-z0-9][a-z0-9_+-]{0,31}$"
 EXTENSION_DENY_MIME_PATTERN = r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$"
+
+# A log-redaction key an extension adds: a key, header or field name. Both redactors match a key
+# case-insensitively (the structured logger on the whole lower-cased key name, the free-text
+# redactor through escaped alternations), so letters, digits, '_' and '-' are enough.
+EXTENSION_LOG_KEY_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]{1,63}$"
 
 
 def _require(condition, source, message):
@@ -190,6 +198,30 @@ def merge_deny_list(kind, core, lanes, entry_pattern):
             merged.append(entry)
             owner[entry] = source
     return merged
+
+
+def merge_log_keys(kind, core, lanes, entry_pattern=EXTENSION_LOG_KEY_PATTERN):
+    """Return core + each lane's keys as a tuple (append-only), raising on a malformed or repeated key.
+
+    ``lanes`` is a sequence of ``(source, entries)``. A key must fully match ``entry_pattern`` and
+    must not repeat a core key or one another lane already added, compared case-insensitively
+    because both redactors match keys that way. The core keys are returned unchanged at the front,
+    so no lane can remove or reorder one.
+    """
+    merged = list(core)
+    owner = {str(entry).casefold(): "core" for entry in core}
+    compiled = re.compile(entry_pattern)
+    for source, entries in lanes:
+        _require(isinstance(entries, (list, tuple)), source, f"the {kind} lane must be a list")
+        for entry in entries:
+            _require(isinstance(entry, str) and compiled.fullmatch(entry) is not None, source,
+                     f"{kind} {entry!r} must match {entry_pattern}")
+            folded = entry.casefold()
+            _require(folded not in owner, source,
+                     f"{kind} {entry!r} is already redacted by {owner.get(folded)}")
+            merged.append(entry)
+            owner[folded] = source
+    return tuple(merged)
 
 
 ALLOWED_ASSET_LINKS = {
@@ -389,6 +421,12 @@ def get_constraint_fields_for_object_type(object_type):
 # Role field validation constants
 ALLOWED_ROLE_SOURCES = ['INTERNAL_SYSTEM']
 
+# Name prefix reserved for temporary session keys: short-lived API keys a backend component mints for
+# one session through a Lambda cross-call. A caller authenticating with one is refused where a key
+# could be created or updated, so a session credential cannot outlive its session through a key of
+# its own making, and no user can create a key under the prefix (handlers/auth/apiKeyService.py).
+TEMPORARY_SESSION_KEY_NAME_PREFIX = "temporary-session-"
+
 #Unallowed file extension list. Entries are lower-case and compared against the lower-cased
 #extension (common/s3.py validateUnallowedFileExtensionAndContentType); tests/common/
 #test_s3_blocklist_case_insensitive.py rejects an entry that is not lower-case or is listed twice.
@@ -453,6 +491,43 @@ UNALLOWED_MIME_LIST = merge_deny_list(
     [(ADDON_CONSTANTS_SOURCE, ADDON_UNALLOWED_MIME_TYPES),
      (CUSTOM_CONSTANTS_SOURCE, CUSTOM_UNALLOWED_MIME_TYPES)],
     EXTENSION_DENY_MIME_PATTERN,
+)
+
+# ---------------------------------------------------------------------------
+# Log redaction
+#
+# The key names whose values are never logged or returned in log text. There are two core lists,
+# because the two redactors cover different ground; one add-on list and one fork list extend both,
+# so whatever an extension calls a credential is redacted in structured logs and in returned log
+# text alike.
+# ---------------------------------------------------------------------------
+
+# Credential-shaped keys the structured logger (customLogging.logger.mask_sensitive_data) redacts.
+# Matching is on the WHOLE lower-cased key name, so the api-key identifier fields (apiKeyId,
+# apiKeyName, apiKeyHash) stay in the clear and the audit trail keeps naming which key an action used.
+CORE_LOG_SENSITIVE_KEYS = ("authorization", "idJwtToken", "Credentials", "AccessKeyId", "SecretAccessKey",
+                           "SessionToken", "apiKey", "apiKeySecret", "rawKey")
+
+# Keys the free-text redactor (common/logRedaction.py) finds in log text returned to a caller: the
+# AWS and token credential keys above, plus the two that reach a caller only through returned log
+# text: the security-token header, and a Step Functions task token (an opaque capability to complete
+# or fail the pending pipeline task that no IAM policy can resource-scope).
+CORE_LOG_TEXT_SENSITIVE_KEYS = ("authorization", "idJwtToken", "Credentials", "AccessKeyId",
+                                "SecretAccessKey", "SessionToken", "x-amz-security-token", "TaskToken")
+
+# The names the redactors import: core + add-on + custom, append-only (see "Extension lanes").
+LOG_SENSITIVE_KEYS = merge_log_keys(
+    "log key",
+    CORE_LOG_SENSITIVE_KEYS,
+    [(ADDON_CONSTANTS_SOURCE, ADDON_LOG_SENSITIVE_KEYS),
+     (CUSTOM_CONSTANTS_SOURCE, CUSTOM_LOG_SENSITIVE_KEYS)],
+)
+
+LOG_TEXT_SENSITIVE_KEYS = merge_log_keys(
+    "log key",
+    CORE_LOG_TEXT_SENSITIVE_KEYS,
+    [(ADDON_CONSTANTS_SOURCE, ADDON_LOG_SENSITIVE_KEYS),
+     (CUSTOM_CONSTANTS_SOURCE, CUSTOM_LOG_SENSITIVE_KEYS)],
 )
 
 

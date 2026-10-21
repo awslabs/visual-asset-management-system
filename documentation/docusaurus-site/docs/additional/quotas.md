@@ -1,6 +1,6 @@
 # Service Quotas and Limits
 
-This page documents the service quotas, default limits, and configurable thresholds for the Visual Asset Management System (VAMS). Some limits are inherent to AWS services, while others are configurable through the VAMS deployment configuration.
+This page documents the service quotas, default limits, and configurable thresholds for the Visual Asset Management System (VAMS). Some limits are inherent to AWS services, while others are configurable through the VAMS deployment configuration. An enabled add-on has limits of its own, listed on the add-on's page (see [Add-ons Overview](../developer/addons-overview.md)).
 
 ---
 
@@ -285,11 +285,11 @@ Amazon Cognito service quotas can be increased through the AWS Service Quotas co
 
 ## Network and VPC Limits
 
-| Parameter                                            | Value                      |
-| ---------------------------------------------------- | -------------------------- |
-| VPC endpoints per configuration                      | 1-11 per Availability Zone |
-| Availability Zones required (ALB)                    | 2 minimum                  |
-| Availability Zones required (OpenSearch Provisioned) | 2 or 3 (default 2)         |
-| Availability Zones required (Lambda in VPC)          | 1 minimum                  |
+| Parameter                                            | Value                                                                                                                                                                                           |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| VPC interface endpoints per configuration            | 9-22 created by the VPC stack (up to 21 in GovCloud), each in every Availability Zone the VPC uses; a private Amazon OpenSearch Serverless collection and the ALB web distribution add one each |
+| Availability Zones required (ALB)                    | 2 minimum                                                                                                                                                                                       |
+| Availability Zones required (OpenSearch Provisioned) | 2 or 3 (default 2)                                                                                                                                                                              |
+| Availability Zones required (Lambda in VPC)          | 1 minimum                                                                                                                                                                                       |
 
 For detailed cost implications of VPC endpoint configurations, see the [cost estimates](../overview/costs.md).

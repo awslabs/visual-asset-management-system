@@ -267,6 +267,33 @@ The SuperSplat Editor renders through WebGPU and has no WebGL fallback.
 
 Use a browser with WebGPU enabled: current Google Chrome or Microsoft Edge, Safari 26 or later, or Mozilla Firefox where WebGPU is enabled. Where a browser policy disables WebGPU or the machine has no supported GPU driver, open `.ply` files with the BabylonJS or PlayCanvas Gaussian Splat viewer and `.sog` files with the PlayCanvas Gaussian Splat viewer instead; `.lcc` and `.splat` files have no alternative viewer.
 
+### Point Cloud or 3D Tileset Viewer Reports a Load Failure
+
+The Potree Viewer and the Cesium 3D Tileset Viewer stream their files from the API, and each names the cause when a file fails to load.
+
+**Symptoms:**
+
+-   The Potree Viewer shows "Potree Viewer Auxiliary Preview files not currently available" with a prompt to run the Point Cloud Potree Viewer Pipeline
+-   Either viewer shows a message beginning "Unable to load" or "Unable to reach" instead of the model, or the Potree Viewer shows one beginning "Unable to display"
+-   The Cesium 3D Tileset Viewer shows **Error Loading 3D Tileset** with a message beginning "Tileset loading failed for", or with "N of N tilesets failed to load" when every selected tileset failed
+-   The Cesium 3D Tileset Viewer renders the scene under an **Incomplete 3D Tileset** banner
+
+**Resolution:**
+
+| Message                                                                          | Cause and resolution                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Preview files not currently available, with the pipeline prompt                  | The point cloud has no Potree preview files. Run the Point Cloud Potree Viewer Pipeline on the file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `Request blocked by the deployment's AWS WAF web ACL (request ID ...)`           | A web ACL rule blocked the request. Find the request by its ID in the web ACL's log group to see the rule that matched (see [Requests the web ACL blocks](../architecture/security.md#requests-the-web-acl-blocks)).                                                                                                                                                                                                                                                                                                                                                                  |
+| `Unable to reach ...`                                                            | The request failed before VAMS answered it, so the browser reports no status: a network failure, Amazon API Gateway throttling of the browser's CORS preflight (`OPTIONS`) request, or an AWS WAF block of the preflight by a rule on the request's URI path or by the rate-based rule. Each file and tile request has its own preflight. Look for an `OPTIONS` request to the file's path at that time in the REST API access log group, where a `429` status is throttling (see [429 Rate Limiting](#429-rate-limiting)), and, when AWS WAF is enabled, in the web ACL's log group. |
+| `Unable to display ...`                                                          | The file downloads, but the Potree Viewer could not read it. Check the file, or run the Point Cloud Potree Viewer Pipeline on it again to regenerate the preview files.                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `Tileset loading failed for ...`                                                 | Cesium could not use the tileset for a reason other than a failed request, such as tileset JSON it cannot read. The text after the colon is Cesium's message. Check the tileset file.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `N of N tilesets failed to load`                                                 | Every selected tileset failed to load. The message goes on to name the cause of the first failure, which has its own row in this table.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `you don't have permission to view it`                                           | The role cannot read the file. An administrator grants the role access to the file's database or asset.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `Asset is not currently allowing file distribution` or `Asset not distributable` | The asset's **Is Distributable** setting is off, so the API streams none of its files. Set **Is Distributable?** to **Yes** under **Edit** on the asset's page to view the file.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `your session is no longer valid`                                                | The sign-in expired. Sign in again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `too many requests`                                                              | Amazon API Gateway or the web ACL's rate-based rule throttled the request. See [429 Rate Limiting](#429-rate-limiting).                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **Incomplete 3D Tileset** banner                                                 | Some tiles or tilesets failed to load while the rest of the scene loaded. The banner counts the tilesets that failed and names the cause of the first, and counts the failed tile requests and shows Cesium's message for the last one, such as `Request has failed. Status Code: 403`.                                                                                                                                                                                                                                                                                               |
+
 ### Login Loop or Configuration Fetch Failures
 
 Users may experience a login loop where the application repeatedly redirects to the sign-in page.
@@ -289,7 +316,7 @@ Users may experience a login loop where the application repeatedly redirects to 
 
 ### 429 Rate Limiting
 
-VAMS applies API rate limiting through Amazon API Gateway throttling.
+A `429 Too Many Requests` comes from Amazon API Gateway stage throttling or, when `app.useWaf` is enabled, from the web ACL's rate-based rule.
 
 **Symptoms:**
 
@@ -298,20 +325,24 @@ VAMS applies API rate limiting through Amazon API Gateway throttling.
 
 **Resolution:**
 
-Increase the rate limits in `infra/config/config.json`:
+Increase the stage limits in `infra/config/config.json`:
 
 ```json
 {
     "app": {
         "api": {
-            "globalRateLimit": 100,
-            "globalBurstLimit": 200
+            "apiGatewayRest": {
+                "globalRateLimit": 100,
+                "globalBurstLimit": 200
+            }
         }
     }
 }
 ```
 
-The default values are `globalRateLimit: 50` requests per second and `globalBurstLimit: 100`. Redeploy after changing these values.
+The default values are `app.api.apiGatewayRest.globalRateLimit: 50` requests per second and `app.api.apiGatewayRest.globalBurstLimit: 100`. Every caller of the API shares them, and each browser CORS preflight request counts against them. Redeploy after changing these values.
+
+A `429` from the web ACL's rate-based rule carries `Retry-After: 1` and is recorded in the web ACL's log group; the stage limits do not affect it. Raise the rule's `limit`, the number of requests each IP address may make in a 5-minute window, in `infra/config/policy/wafPolicyConfig.json` (see [WAF rule policy](../deployment/configuration-reference.md#waf-rule-policy-configpolicywafpolicyconfigjson)).
 
 :::warning
 Increasing rate limits raises the potential cost of Amazon API Gateway usage and may affect downstream service limits. Monitor your Amazon CloudWatch metrics after adjustments.

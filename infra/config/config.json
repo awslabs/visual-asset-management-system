@@ -87,6 +87,14 @@
         },
         "pipelines": {
             "deadlineCloudExecutionTypeEnabled": false,
+            "externalPipelineBridges": [],
+            "executionLogReadPrefixes": [
+                "/aws/vendedlogs/VAMSStateMachine-*",
+                "/aws/vendedlogs/VAMSstateMachine-*",
+                "/aws/vendedlogs/Pipelines/*",
+                "/aws/batch/job",
+                "/aws/sagemaker/TrainingJobs"
+            ],
             "useConversion3dBasic": {
                 "enabled": true,
                 "autoRegisterWithVAMS": true
@@ -289,6 +297,54 @@
                 "credentialsSecretArn": "",
                 "clientId": "",
                 "clientSecret": ""
+            },
+            "useEdhWorkstations": {
+                "enabled": false,
+                "edhApiEndpoint": "",
+                "edhAdminApiKeySecretArn": "",
+                "edhApiCaBundleSecretArn": "",
+                "edhApiTlsServerName": "",
+                "edhClusterId": "",
+                "autoProvisionUsers": true,
+                "edhAllowedInstanceTypes": [],
+                "vdi": {
+                    "defaultProject": "default",
+                    "virtualDesktopProfileId": 0,
+                    "lease": {
+                        "enabled": false,
+                        "leaseHours": 8,
+                        "forced": false,
+                        "graceHours": 24
+                    }
+                },
+                "sessionBootstrap": {
+                    "enabled": false,
+                    "sessionKeyTtlMinutes": 480,
+                    "secretNamePrefix": "vams/edh-session/",
+                    "workstationInstanceRoleArns": [],
+                    "launchManifest": false
+                },
+                "amiBuilds": {
+                    "enabled": false,
+                    "includeShippedRecipes": true,
+                    "buildSubnetId": "",
+                    "buildTimeoutMinutes": 180,
+                    "keepVersionsDefault": 3
+                },
+                "predefinedImages": {
+                    "vdi": [],
+                    "simulationAmis": [],
+                    "amiRecipes": [],
+                    "registrationRevision": 1
+                },
+                "containers": {
+                    "enabled": false,
+                    "buildAndPushImages": [],
+                    "existingEcrImages": [],
+                    "jobDefinitions": [],
+                    "eksEnabled": false,
+                    "imagePullRoleArns": []
+                }
             }
         },
         "authProvider": {

@@ -72,6 +72,9 @@ export class ApiBuilderNestedStack extends NestedStack {
     // lambdas invoke the metadata service.
     public metadataServiceFunction!: lambda.Function;
     public uploadFileFunction!: lambda.Function;
+    // The API key service. Add-on Lambdas that mint a per-session key for a user invoke it with a
+    // lambdaCrossCall event rather than writing the key table themselves.
+    public apiKeyServiceFunction!: lambda.Function;
 
     constructor(
         parent: Construct,
@@ -918,6 +921,7 @@ export class ApiBuilderNestedStack extends NestedStack {
             vpc,
             subnets
         );
+        this.apiKeyServiceFunction = authFunctions.apiKeyService;
 
         // NOTE: the auth constraints service and its routes (/auth/constraints,
         // /auth/constraints/{constraintId}, /auth/constraints/permissionObjects, and

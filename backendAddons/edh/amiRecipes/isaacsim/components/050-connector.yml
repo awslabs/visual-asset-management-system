@@ -1,0 +1,43 @@
+name: vams-isaacsim-connector
+description: The VAMS Isaac Sim connector extension installed as a Kit extension-folder child and pointed at the CLI virtual environment.
+schemaVersion: 1.0
+phases:
+    - name: build
+      steps:
+          - name: FetchExtension
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - |
+                        # Kit's --ext-folder names a folder that CONTAINS extensions, so the connector
+                        # tree becomes a child directory named after the extension it declares.
+                        rm -rf /opt/vams/isaacsim-connector
+                        mkdir -p /opt/vams/isaacsim-connector/vams.connector.isaacsim
+                    - /usr/local/bin/aws s3 cp --recursive --only-show-errors "${ASSET_connector}" /opt/vams/isaacsim-connector/vams.connector.isaacsim
+                    - test -f /opt/vams/isaacsim-connector/vams.connector.isaacsim/config/extension.toml
+                    - test -d /opt/vams/isaacsim-connector/vams.connector.isaacsim/vams/connector/isaacsim
+          - name: PointTheExtensionAtTheEdhProfileAndTheCli
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - toml=/opt/vams/isaacsim-connector/vams.connector.isaacsim/config/extension.toml
+                    - sed -i 's|^exts\."vams\.connector\.isaacsim"\.profile = .*|exts."vams.connector.isaacsim".profile = "edh"|' "$toml"
+                    - sed -i 's|^exts\."vams\.connector\.isaacsim"\.vamscli_path = .*|exts."vams.connector.isaacsim".vamscli_path = "/opt/vams/vamscli-venv/bin/vamscli"|' "$toml"
+          - name: OpenPermissionsToEveryDesktopUser
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - chmod -R a+rX /opt/vams/isaacsim-connector
+    - name: validate
+      steps:
+          - name: SettingsRewritten
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -eux
+                    - toml=/opt/vams/isaacsim-connector/vams.connector.isaacsim/config/extension.toml
+                    - grep -Fq 'exts."vams.connector.isaacsim".profile = "edh"' "$toml"
+                    - grep -Fq 'exts."vams.connector.isaacsim".vamscli_path = "/opt/vams/vamscli-venv/bin/vamscli"' "$toml"

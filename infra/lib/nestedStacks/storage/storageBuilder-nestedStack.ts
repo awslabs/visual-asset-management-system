@@ -872,7 +872,9 @@ export function storageResourcesBuilder(
         // pipeline schema bundles live in the same bucket under vamsSchema/, uploaded by a separate
         // per-registration deployment, so they are excluded from the prune — otherwise refreshing an
         // artefact deletes every bundle while the registration resources still expect to read them.
-        exclude: ["vamsSchema/*"],
+        // addon/ is reserved for the trees the add-on stacks upload under addon/<addon>/, and is
+        // excluded for the same reason.
+        exclude: ["vamsSchema/*", "addon/*"],
     });
 
     //S3 Buckets handling for assets

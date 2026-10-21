@@ -5,6 +5,10 @@ cdk.out
 # .gitignore already covers as cdk.out.* . Without the same pattern here, one such directory
 # makes prettier-check report ~1900 generated CloudFormation templates as unformatted.
 cdk.out.*
+# CDK writes this context cache itself on every synth/deploy, in its own formatting, and it is tracked
+# so the cached lookups are reproducible. Formatting it only holds until the next synth, so leaving it
+# in scope makes prettier-check fail after any deploy. Path-anchored, so it excludes this one generated
+# file rather than every cdk.context.json at any depth.
 infra/cdk.context.json
 .mypy_cache
 .pytest_cache
@@ -20,6 +24,12 @@ web/public/potree_libs
 web/public/viewers
 web/test-results
 web/playwright-report
+# The repo-root review/planning register only (gitignored, local-only). ANCHORED with a leading
+# slash: a bare `docs` carries no path separator, so it matches a directory of that name at EVERY
+# depth — which silently excluded all 135 pages of documentation/docusaurus-site/docs as well. That
+# is invisible in CI, because `prettier --check` reports "All matched files use Prettier code style!"
+# after matching zero files. Confirm a page is reachable with `prettier --file-info <path>`, which
+# answers `"ignored": true` rather than pretending to have checked it.
 /docs
 .plans
 web/e2e/.auth
@@ -31,3 +41,37 @@ web/e2e/fixtures/*.json
 *.patch
 # Gitignored local scratch that prettier would otherwise report forever (it never ships).
 backendPipelines/3dRecon/splatToolbox/container/LOCAL_DEBUG_README.md
+# Runtime artefacts the smoke suites write beside themselves (resource ids recorded between runs,
+# and the harness's own tmpfile()). Untracked, but prettier does not read .gitignore, so without
+# these a single smoke run leaves prettier-check failing.
+#
+# Both depths, deliberately. A pattern carrying a path separator is ANCHORED, so
+# `tools/smoketest/_*.json` matches only the top directory and not `tools/smoketest/v260/`, where the
+# per-wave suites keep their state (`_export_vehicle.json`, `_g5_pre_deploy.json`). Running one v260
+# suite otherwise left prettier-check failing on files the next run rewrites anyway. Kept as two lines
+# rather than replaced by the `**` form alone so the top-level intent stays readable.
+tools/smoketest/_*.json
+tools/smoketest/**/_*.json
+# MSBuild output for the ArcGIS Pro connector. Its own .gitignore covers bin/ and obj/, which again
+# prettier does not consult — building the connector once otherwise reports two generated
+# VamsConnector.deps.json files as unformatted forever.
+tools/ExternalIntegrations/arcgispro-connector-for-vams/bin
+tools/ExternalIntegrations/arcgispro-connector-for-vams/obj
+
+# Seeded live-test fixtures. These are copied third-party sample data and hand-authored probe files
+# whose exact bytes are the point of the fixture — a tileset.json's sibling reference, an HTML probe's
+# inline script. Reformatting them changes what the fixture tests. Path-anchored with a trailing slash
+# so it matches these directories only, not any directory that happens to share the name.
+tools/smoketest/_seed_viewers/
+tools/smoketest/_seed_3d/
+tools/smoketest/_seed_tileset_root/
+
+# Captured add-on API fixtures. An add-on's backend tests keep sanitized request/response captures in
+# their fixtures/ directory, and each file must stay byte-for-byte what the add-on's sanitizer emits (its
+# tests re-run the sanitizer over every file); reformatting them would fail that guard, so they are
+# excluded like the seeded live-test fixtures above.
+backend/tests/handlers/addon/*/fixtures/
+
+# Subagent-driven-development workspace (gitignored scratch: ledgers, briefs, reports, review diffs).
+# Anchored like /docs above so only the repo-root directory is excluded.
+/.superpowers
