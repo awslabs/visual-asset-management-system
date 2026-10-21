@@ -376,7 +376,7 @@ class TestRunWithProfiles:
 
 
 class TestShippedProfileTemplates:
-    """The two profile templates as deployed (every tag at its default), end to end."""
+    """The three profile templates as deployed (every tag at its default), end to end."""
 
     def test_the_construction_site_template(self, tmp_path, monkeypatch, vsb_task_token):
         from video_sop_bom_pipeline import bedrock
@@ -415,3 +415,42 @@ class TestShippedProfileTemplates:
             "sop.json", "sop.md", "process_doc.json", "process_doc.md", "overview.json", "overview.md"}
         assert [call["toolConfig"]["toolChoice"]["tool"]["name"] for call in fake.calls] == [bedrock.WINDOW_TOOL, bedrock.FINALIZE_TOOL]
         assert "business process" in fake.calls[0]["messages"][0]["content"][0]["text"]
+
+    def test_the_construction_site_finalize_names_the_supplied_site(self, tmp_path, monkeypatch, vsb_task_token):
+        from video_sop_bom_pipeline import bedrock
+
+        config = dict(_render_template("video-sop-bom-construction-site"), productName="Riverside Tower")
+        payload = {"summary": "s", "safety_notes": [], "dependency_edges": [], "equipment_list": [],
+                   "activity_log": {"site_context": {"site_name": "Riverside Tower"}, "entries": []},
+                   "site_report": {"report_title": "Construction Site Walkthrough Report", "site_name": "Riverside Tower",
+                                   "executive_summary": "ok"}}
+        definition = _definition(config)
+        status, _, _, fake, _ = _run(tmp_path, monkeypatch, definition=definition,
+                                     responder=_bedrock_script(finalize=tool_use_response(bedrock.FINALIZE_TOOL, payload)))
+        assert status == "SUCCEEDED"
+        finalize_text = fake.calls[-1]["messages"][0]["content"][0]["text"]
+        assert "Riverside Tower is the site name for this run" in finalize_text
+        assert "[[" not in finalize_text
+
+    def test_the_generic_template(self, tmp_path, monkeypatch, vsb_task_token):
+        from video_sop_bom_pipeline import bedrock
+
+        config = _render_template("video-sop-bom-generic")
+        payload = {"summary": "s", "safety_notes": ["Wear gloves."], "dependency_edges": [],
+                   "tools_and_materials": [{"name": "torque wrench", "type": "Tool", "quantity": "1",
+                                            "specification": "10 Nm", "used_in_steps": [1], "notes": ""}],
+                   "overview": {"title": "Cognex In-Sight 2800", "summary": "ok", "stats": [], "sections": []}}
+        definition = _definition(config)
+        status, s3, _, fake, _ = _run(tmp_path, monkeypatch, definition=definition,
+                                      responder=_bedrock_script(finalize=tool_use_response(bedrock.FINALIZE_TOOL, payload)))
+        assert status == "SUCCEEDED"
+        names = _deliverables(s3, definition)
+        assert {"sop.json", "sop.md", "tools_and_materials.json", "tools_and_materials.md", "overview.json",
+                "overview.md", "frames.json"} <= names
+        assert not any(name.startswith(("bom.", "lab-summary.")) for name in names)
+        window_text = fake.calls[0]["messages"][0]["content"][0]["text"]
+        assert "narrated procedure video" in window_text and "[[" not in window_text
+        assert "a product teardown video transcript" not in window_text, "the built-in teardown prompt was not replaced"
+        assert fake.calls[0]["system"] == [{"text": load_prompt("system_boundary").strip()}], "no profile system text"
+        assert any(call["toolConfig"]["toolChoice"]["tool"]["name"] == bedrock.VISION_TOOL for call in fake.calls)
+        assert "Cognex In-Sight 2800 is the procedure name for this run" in fake.calls[-1]["messages"][0]["content"][0]["text"]

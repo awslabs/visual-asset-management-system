@@ -318,10 +318,11 @@ class TestPipelineAndWorkflowBundle:
 
 @pytest.mark.unit
 class TestTemplates:
-    def test_four_templates_with_the_full_one_the_only_default(self):
+    def test_five_templates_with_the_full_one_the_only_default(self):
         templates = _templates()
         assert set(templates) == {"video-sop-bom-full", "video-sop-bom-transcript-only",
-                                  "video-sop-bom-construction-site", "video-sop-bom-business-process"}
+                                  "video-sop-bom-construction-site", "video-sop-bom-business-process",
+                                  "video-sop-bom-generic"}
         for stem, template in templates.items():
             assert template["templateId"] == stem
         assert [stem for stem, template in templates.items() if template.get("isDefault") is True] == \
@@ -445,7 +446,7 @@ class TestTemplates:
                 assert tag["description"].strip() and len(tag["description"]) <= 1024, (stem, tag["tagKey"])
 
 
-_PROFILE_TEMPLATES = ("video-sop-bom-construction-site", "video-sop-bom-business-process")
+_PROFILE_TEMPLATES = ("video-sop-bom-construction-site", "video-sop-bom-business-process", "video-sop-bom-generic")
 _CONTAINER_PROFILE_RULES = os.path.join(
     _PIPELINE_DIR, "container", "video_sop_bom_pipeline", "profileRules.py")
 # The largest configBody the bundle may ship. Templates are listed with their bodies inline (the
@@ -512,6 +513,34 @@ class TestProfileTemplates:
         assert config["runVisualVerification"] is False, "fixed in the body, as transcript-only fixes its mode"
         assert set(config["profile"]["prompts"]) == {"window_extraction", "finalize"}
         assert [a["name"] for a in config["profile"]["artifacts"]] == ["process_doc", "overview"]
+
+    def test_the_construction_site_reports_carry_the_supplied_site_name(self):
+        # SITE_NAME fills productName, which reaches finalize as [[PRODUCT_NAME]]; both reports' site_name
+        # fields are tied to it rather than left for the model to infer from the narration.
+        finalize = _render_with_defaults(_templates()["video-sop-bom-construction-site"])["profile"]["prompts"]["finalize"]
+        assert "[[PRODUCT_NAME]] is the site name for this run" in finalize
+        assert "as site_name in activity_log.site_context and in site_report" in finalize
+        assert '"site_name": <string or null>' not in finalize
+        assert finalize.count('"site_name": "<the site name above>"') == 2
+
+    def test_the_generic_template_is_the_domain_neutral_procedure_profile(self):
+        template = _templates()["video-sop-bom-generic"]
+        tags = {tag["tagKey"]: tag for tag in template["tagSchema"]}
+        assert list(tags) == ["LANGUAGE_CODE", "VIDEO_ORDER", "PROCEDURE_NAME", "MAX_KEY_FRAMES",
+                              "RUN_VISUAL_VERIFICATION", "ADDITIONAL_INSTRUCTIONS"]
+        assert tags["RUN_VISUAL_VERIFICATION"]["default"] is True
+        config = _render_with_defaults(template)
+        assert config["productName"] == "", "PROCEDURE_NAME fills productName; blank falls back to the asset name"
+        assert config["runVisualVerification"] is True
+        profile = config["profile"]
+        assert profile["profileId"] == "generic"
+        assert set(profile["prompts"]) == {"window_extraction", "vision_verification", "finalize"}
+        assert [a["name"] for a in profile["artifacts"]] == ["tools_and_materials", "overview"]
+        prompts = " ".join(profile["prompts"].values()).lower()
+        assert "narrated procedure video" in profile["prompts"]["window_extraction"]
+        # The one teardown mention is the field-mapping note every profile carries.
+        assert prompts.count("teardown") == 1 and "the tool's fields were designed for product teardowns" in prompts
+        assert "write it, exactly as given, as the title of the overview" in profile["prompts"]["finalize"]
 
     def test_no_template_names_a_model(self):
         # One model per deployment: app.pipelines.useGenAiVideoSopBom.bedrockModelId, with the job
