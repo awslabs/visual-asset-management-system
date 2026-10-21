@@ -27,16 +27,24 @@
                 "*.laz",
                 "*.e57",
                 "*.ptx",
-                "*.fls",
-                "*.fws",
+                "*.pts",
                 "*.pcd",
                 "*.drc",
+                "*.off",
+                "*.3mf",
+                "*.dae",
                 "*.stp",
                 "*.step",
                 "*.usd",
                 "*.usda",
                 "*.usdc",
-                "*.usdz"
+                "*.usdz",
+                "*.spz",
+                "*.sog",
+                "*.splat",
+                "*.ksplat",
+                "*.lcc",
+                "*.lcc2"
             ],
             "exclude": []
         },
@@ -62,18 +70,26 @@
                     "*.laz",
                     "*.e57",
                     "*.ptx",
-                    "*.fls",
-                    "*.fws",
+                    "*.pts",
                     "*.pcd",
                     "*.drc",
+                    "*.off",
+                    "*.3mf",
+                    "*.dae",
                     "*.stp",
                     "*.step",
                     "*.usd",
                     "*.usda",
                     "*.usdc",
-                    "*.usdz"
+                    "*.usdz",
+                    "*.spz",
+                    "*.sog",
+                    "*.splat",
+                    "*.ksplat",
+                    "*.lcc",
+                    "*.lcc2"
                 ],
-                "exclude": []
+                "exclude": ["*/data/3dgs/*"]
             },
             "defaultTemplateIds": {
                 "GLOBAL:preview-3d-thumbnail": "preview-3d-thumbnail-default"
