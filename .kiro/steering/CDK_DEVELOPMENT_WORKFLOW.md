@@ -562,7 +562,26 @@ type to choose; they take the key and fall back to their service default without
 (`encryption` + `encryptionKey`), S3 buckets (the same, plus `bucketKeyEnabled`) and SQS queues
 (`encryption` + `encryptionMasterKey`) choose the encryption type from the key, as above; without it they use
 `AWS_MANAGED`, `S3_MANAGED` (no bucket key) and `SQS_MANAGED`. SNS topics take it as `masterKey` and have no
-server-side encryption without it.
+server-side encryption without it. ECR repositories take `encryption: kmsKey ? KMS : AES_256` with the key
+imported by ARN (Amazon ECR creates its own grants on it, so the build and pull roles need no key permission).
+Given `KMS` and no key, CDK creates no key for a repository, which then uses the AWS managed `aws/ecr` key
+instead of the VAMS key. A repository's encryption is immutable, so changing it replaces the repository, and
+AWS CloudFormation cannot replace an explicitly named resource under the same name: a custom `repositoryName`
+must change with the encryption (the coordinate transform repository adds `-kms`), and a CodeBuild build
+trigger that does not wait for the image carries the repository URI as a property, so the replacement re-fires
+the build into the new repository.
+
+```typescript
+// ✅ CORRECT - ECR repository, key imported by ARN; an explicit name follows the encryption
+const encryptionKey = props.storageResources.encryption.kmsKey
+    ? kms.Key.fromKeyArn(this, "MyEcrKmsKeyRef", props.storageResources.encryption.kmsKey.keyArn)
+    : undefined;
+const repository = new ecr.Repository(this, "MyRepo", {
+    repositoryName: ["my-repo", ...(encryptionKey ? ["kms"] : [])].join("-"),
+    encryption: encryptionKey ? ecr.RepositoryEncryption.KMS : ecr.RepositoryEncryption.AES_256,
+    encryptionKey,
+});
+```
 
 ```typescript
 // ✅ CORRECT - CloudWatch log group
@@ -613,7 +632,8 @@ Three traps, each of which passes `cdk synth` and fails later:
 
 Verify before deploying: a cycle is invisible to `cdk synth` and appears only at changeset creation. Synth
 and confirm the storage nested stack takes no parameter fed from another nested stack's output. Regression
-coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`.
+coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`, and `infra/test/pipelines/codeBuildEcrEncryption.test.ts`
+for the CodeBuild repositories and their CMK flip.
 
 ### **Dependency Management Standards**
 

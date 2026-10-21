@@ -169,8 +169,8 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
          * after the rename the new repository held 0 images while the Batch job definition referenced
          * `f0462fcacd8a838acf19eb56badf08a2`, the deploy exited 0, and the image had to be built by hand.
          *
-         * An auto-named repository has no rename to trigger this, which is why the rule applies only to
-         * the explicitly named ones.
+         * An auto-named repository is replaced only when its encryption changes, which
+         * `codeBuildEcrEncryption.test.ts` covers, so this rule is about the explicitly named ones.
          */
         it("an explicitly named repository's build trigger depends on that repository", () => {
             const named = ecrRepositories(synth).filter((r) => r.properties.RepositoryName);
