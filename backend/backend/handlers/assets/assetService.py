@@ -369,6 +369,32 @@ def enhance_assets_with_version_info(assets):
         enhanced_assets.append(enhanced_asset)
     return enhanced_assets
 
+def format_asset_response(record):
+    """The response body for one enriched asset record.
+
+    The record is validated as an AssetResponseModel. A stored record without a description or an
+    isDistributable flag gets '' and False. A record that still does not validate is returned at the
+    top level as stored, without its object__type and with currentVersion as a plain dictionary, so
+    it serializes like a validated one.
+    """
+    try:
+        return AssetResponseModel(**record).dict()
+    except ValidationError:
+        pass
+    normalized = {k: v for k, v in record.items() if k != 'object__type'}
+    if normalized.get('description') is None:
+        normalized['description'] = ''
+    if normalized.get('isDistributable') is None:
+        normalized['isDistributable'] = False
+    if isinstance(normalized.get('currentVersion'), CurrentVersionModel):
+        normalized['currentVersion'] = normalized['currentVersion'].dict()
+    try:
+        return AssetResponseModel(**normalized).dict()
+    except ValidationError as v:
+        logger.warning(f"Asset {normalized.get('databaseId')}:{normalized.get('assetId')} does not match "
+                       f"the response model, returned as stored: {validation_error_message(v)}")
+        return normalized
+
 def enhance_asset_with_version_info(asset):
     """Enhance asset with version information from versions table
     
@@ -2030,13 +2056,7 @@ def handle_get_request(event):
             enhanced_asset["bucketName"] = bucketDetails['bucketName']
 
             # Convert to AssetResponseModel for consistent response format
-            try:
-                response_model = AssetResponseModel(**enhanced_asset)
-                return success(body=response_model.dict())
-            except ValidationError as v:
-                logger.exception(f"Error converting asset to response model: {v}")
-                # Fall back to raw response if conversion fails
-                return success(body={"message": enhanced_asset})
+            return success(body=format_asset_response(enhanced_asset))
 
         # Case 2: Get assets for a specific database
         elif 'databaseId' in path_parameters:
@@ -2086,14 +2106,7 @@ def handle_get_request(event):
             enhanced_items = enrich_asset_listing_page(assets_result.get('Items', []))
             
             # Convert enhanced items to AssetResponseModel instances
-            formatted_items = []
-            for item in enhanced_items:
-                try:
-                    asset_model = AssetResponseModel(**item)
-                    formatted_items.append(asset_model.dict())
-                except ValidationError:
-                    # Fall back to raw item if conversion fails
-                    formatted_items.append(item)
+            formatted_items = [format_asset_response(item) for item in enhanced_items]
             
             # Build response with formatted items
             response = {
@@ -2143,14 +2156,7 @@ def handle_get_request(event):
             enhanced_items = enrich_asset_listing_page(assets_result.get('Items', []))
             
             # Convert enhanced items to AssetResponseModel instances
-            formatted_items = []
-            for item in enhanced_items:
-                try:
-                    asset_model = AssetResponseModel(**item)
-                    formatted_items.append(asset_model.dict())
-                except ValidationError:
-                    # Fall back to raw item if conversion fails
-                    formatted_items.append(item)
+            formatted_items = [format_asset_response(item) for item in enhanced_items]
             
             # Build response with formatted items
             response = {
