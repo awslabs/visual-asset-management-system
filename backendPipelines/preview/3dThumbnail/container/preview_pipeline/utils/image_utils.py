@@ -10,10 +10,38 @@ logger = get_logger()
 
 MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024  # 5MB
 
+# GIF palette slot that marks a pixel transparent. A frame is quantised to at most this many colours
+# (indices 0 .. _GIF_TRANSPARENT_INDEX - 1) and its palette is always written with all 256 entries,
+# so the transparent index lies inside every frame's palette.
+_GIF_TRANSPARENT_INDEX = 255
+_GIF_PALETTE_ENTRIES = 256
+# A pixel whose alpha is below this is written transparent; GIF transparency is binary.
+_GIF_ALPHA_THRESHOLD = 128
 
-def _threshold_alpha(a):
-    """Return 255 if alpha is below 128, else 0. Used for GIF transparency mask."""
-    return 255 if a < 128 else 0
+
+def _rgba_to_gif_frame(rgba: np.ndarray) -> Image.Image:
+    """One RGBA frame as a palette image whose transparent pixels use _GIF_TRANSPARENT_INDEX.
+
+    The colours are quantised from the opaque pixels' RGB only, so the background does not take
+    palette slots from the model, and the palette is padded to the full 256 entries so the
+    transparent index is a valid entry of the frame's own palette.
+    """
+    rgba = np.ascontiguousarray(rgba, dtype=np.uint8)
+    transparent = rgba[..., 3] < _GIF_ALPHA_THRESHOLD
+    rgb = rgba[..., :3].copy()
+    if transparent.any() and not transparent.all():
+        # Fill the background with an opaque pixel's colour so it adds no colour to the palette.
+        rgb[transparent] = rgb[~transparent][0]
+    quantised = Image.fromarray(rgb).quantize(colors=_GIF_TRANSPARENT_INDEX)
+    palette = (quantised.getpalette() or [])[: _GIF_TRANSPARENT_INDEX * 3]
+    palette += [0] * (_GIF_PALETTE_ENTRIES * 3 - len(palette))
+
+    indices = np.array(quantised, dtype=np.uint8)
+    indices[transparent] = _GIF_TRANSPARENT_INDEX
+    frame = Image.frombytes("P", (indices.shape[1], indices.shape[0]), indices.tobytes())
+    frame.putpalette(palette)
+    frame.info["transparency"] = _GIF_TRANSPARENT_INDEX
+    return frame
 
 
 def save_gif(frames, output_path, duration_ms=100, loop=0):
@@ -23,36 +51,33 @@ def save_gif(frames, output_path, duration_ms=100, loop=0):
     output_path: path to write .gif file
     duration_ms: per-frame duration in milliseconds
     loop: 0 = infinite loop
+
+    RGBA frames keep their transparency on every frame. Palette optimisation stays off for them:
+    Pillow's optimiser shrinks each frame's local palette to the colours it uses (4, 8, 128 entries)
+    while still declaring index 255 transparent, an index outside that palette, which decoders
+    treat inconsistently -- some show the background as opaque on those frames.
     """
     if not frames:
         raise ValueError("No frames provided to save_gif")
 
     has_alpha = frames[0].ndim == 3 and frames[0].shape[2] == 4
 
-    pil_frames = []
-    for f in frames:
-        img = Image.fromarray(f)
-        if img.mode == "RGBA" and has_alpha:
-            # Convert RGBA to palette mode with transparency
-            alpha = img.split()[3]
-            p_img = img.convert("RGB").convert("P", palette=Image.ADAPTIVE, colors=255)
-            # Set transparency for pixels where alpha < 128
-            mask = Image.fromarray(np.array(alpha.point(_threshold_alpha), dtype=np.uint8), mode="L")
-            p_img.paste(255, mask)  # Index 255 = transparent
-            pil_frames.append(p_img)
-        else:
-            pil_frames.append(img.convert("P", palette=Image.ADAPTIVE, colors=256))
+    if has_alpha:
+        pil_frames = [_rgba_to_gif_frame(f) for f in frames]
+    else:
+        pil_frames = [Image.fromarray(f).convert("P", palette=Image.ADAPTIVE, colors=256)
+                      for f in frames]
 
     save_kwargs = {
         "save_all": True,
         "append_images": pil_frames[1:],
         "duration": duration_ms,
         "loop": loop,
-        "optimize": True,
+        "optimize": not has_alpha,
     }
 
     if has_alpha:
-        save_kwargs["transparency"] = 255
+        save_kwargs["transparency"] = _GIF_TRANSPARENT_INDEX
         save_kwargs["disposal"] = 2  # Restore to background between frames
 
     pil_frames[0].save(output_path, **save_kwargs)
@@ -85,10 +110,13 @@ def save_jpeg(image_array, output_path, quality=85):
     logger.info(f"Saved JPEG to {output_path} ({os.path.getsize(output_path) / 1024:.1f} KB)")
 
 
-def ensure_under_size_limit(frames, output_path, max_bytes=MAX_FILE_SIZE_BYTES):
+def ensure_under_size_limit(frames, output_path, max_bytes=MAX_FILE_SIZE_BYTES, still_frame=None):
     """
     Attempt to save frames as GIF under the size limit. If GIF is too large,
     progressively reduce quality and ultimately fall back to a single PNG or JPEG.
+
+    still_frame is the image the PNG/JPEG fallback writes (the caller passes the front
+    three-quarter view); without it the fallback takes the middle frame.
 
     Returns the final output path (may change extension if falling back).
     """
@@ -125,7 +153,7 @@ def ensure_under_size_limit(frames, output_path, max_bytes=MAX_FILE_SIZE_BYTES):
 
     # Strategy 4: Fall back to single PNG (preserves transparency)
     logger.info("Falling back to single PNG frame...")
-    middle_frame = frames[len(frames) // 2]
+    middle_frame = frames[len(frames) // 2] if still_frame is None else still_frame
     png_path = os.path.splitext(output_path)[0] + ".png"
     save_png(middle_frame, png_path)
     if os.path.getsize(png_path) <= max_bytes:
