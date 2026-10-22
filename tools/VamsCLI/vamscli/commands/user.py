@@ -481,11 +481,10 @@ def reset_password(ctx: click.Context, user_id: str, confirm: bool, json_output:
     """
     Reset a Cognito user's password.
 
-    This command starts Cognito's password reset flow. Cognito emails the user a reset
-    code — or, for an account that has never completed a first sign-in, a new invitation
-    carrying a fresh temporary password. Nothing is returned in the response, so the new
-    credential cannot be read from the output or scripted against. The user must change
-    their password on their next login.
+    This command replaces the user's password with a new temporary password, which Cognito
+    emails to the user in the registration (invitation) message. Nothing is returned in the
+    response, so the new credential cannot be read from the output or scripted against. The
+    user must change their password on their next login.
 
     The --confirm flag is required to prevent accidental password resets.
     

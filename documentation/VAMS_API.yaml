@@ -1273,7 +1273,7 @@ paths:
     /user/cognito/{userId}/resetPassword:
         post:
             summary: "Reset a Cognito user's password."
-            description: "Reset a user's password using Cognito's built-in password reset. Cognito auto-generates a new temporary password and sends it to the user's email. The user must change the password on next login. Only available when Cognito is enabled."
+            description: "Reset a user's password. The current password stops working, and Cognito generates a new temporary password and emails it to the user in the registration (invitation) message. The user must change the password on next login. The user account and its attributes are kept. Only available when Cognito is enabled."
             requestBody:
                 required: true
                 content:
