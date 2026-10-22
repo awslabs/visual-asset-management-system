@@ -566,10 +566,12 @@ def validate_workflow_save(workflow_system_config, pipeline_configs, trigger=Non
       - metadata mismatch: a pipeline needs a metadata type the workflow gate has off,
       - inert file-scoped metadata: arity 'none' with fileMetadata/fileAttributes asked for,
       - arity mismatch: workflow multi vs pipeline single,
-      - filter shadowing: workflow filters that would exclude everything a pipeline needs,
+      - filter shadowing: workflow filters that would exclude everything the FIRST step needs (a
+        later step also receives earlier steps' output, which the workflow's filters never narrow),
       - trigger-default sanity: a default template whose required tags are not all defaulted.
 
-    pipeline_configs: list of {pipelineId, pipelineDatabaseId, enabled, archived, systemConfig}.
+    pipeline_configs: list of {pipelineId, pipelineDatabaseId, enabled, archived, systemConfig}, in
+      workflow step order.
     trigger: optional {undefaultedRequiredTagsByTemplateId: {templateId: [tagKey, ...]}} for the
       trigger-default check. The workflow save path passes no trigger; trigger saves run the hard
       equivalent in common/workflows/triggerTemplateValidation.
@@ -583,7 +585,7 @@ def validate_workflow_save(workflow_system_config, pipeline_configs, trigger=Non
 
     warnings.extend(arity_none_metadata_warnings(wsc, "the workflow"))
 
-    for pipeline in pipeline_configs or []:
+    for position, pipeline in enumerate(pipeline_configs or []):
         pid = pipeline.get("pipelineId", "")
         pdb = pipeline.get("pipelineDatabaseId", "")
         label = _pipeline_label(pdb, pid)
@@ -614,7 +616,12 @@ def validate_workflow_save(workflow_system_config, pipeline_configs, trigger=Non
                 "multi-file executions may fail this pipeline."
             )
 
-        # Filter shadowing, two independent ways a workflow can starve a pipeline of its input:
+        # Filter shadowing, two independent ways a workflow can starve a pipeline of its input. Both
+        # describe the FIRST step only: the workflow's filters bound the run's selection, and from the
+        # second step on a step also receives every earlier step's output, which those filters never
+        # narrow — a later step reading only the type an earlier step writes is a valid chain.
+        if position > 0:
+            continue
         p_filters = psc.get("inputFileFilters") or {}
         p_allow = p_filters.get("allow") or []
 

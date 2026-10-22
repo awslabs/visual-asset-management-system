@@ -878,6 +878,35 @@ class TestValidateWorkflowSave:
         _, warns = ev.validate_workflow_save(wf, pipes)
         assert not any("exclude" in w for w in warns)
 
+    # #715: the workflow's filters bound the run's SELECTION only. From the second step on, a step
+    # also receives earlier steps' output, which the workflow's filters never narrow, so the two
+    # filter-shadowing checks describe the first step alone.
+    @staticmethod
+    def _chain(first_allow, later_allow):
+        return [{"pipelineId": "convert", "pipelineDatabaseId": "db", "enabled": True,
+                 "archived": False, "systemConfig": {"inputFileFilters": {"allow": first_allow}}},
+                {"pipelineId": "consume", "pipelineDatabaseId": "db", "enabled": True,
+                 "archived": False, "systemConfig": {"inputFileFilters": {"allow": later_allow}}}]
+
+    def test_workflow_allow_list_does_not_starve_a_later_step(self):
+        wf = {"inputFileArity": "one", "metadataInputs": {},
+              "inputFileFilters": {"allow": ["*.obj"]}}
+        _, warns = ev.validate_workflow_save(wf, self._chain(["*.obj"], ["*.glb"]))
+        assert warns == []
+
+    def test_workflow_exclude_does_not_starve_a_later_step(self):
+        wf = {"inputFileArity": "one", "metadataInputs": {},
+              "inputFileFilters": {"exclude": ["*.glb"]}}
+        _, warns = ev.validate_workflow_save(wf, self._chain(["*.obj"], ["*.glb"]))
+        assert warns == []
+
+    def test_workflow_filters_still_shadow_the_first_step(self):
+        wf = {"inputFileArity": "one", "metadataInputs": {},
+              "inputFileFilters": {"allow": ["*.glb"]}}
+        _, warns = ev.validate_workflow_save(wf, self._chain(["*.obj"], ["*.glb"]))
+        assert any("db:convert" in w and "may exclude everything" in w for w in warns)
+        assert not any("db:consume" in w for w in warns)
+
     def test_trigger_default_undefaulted_warns(self):
         wf = {"inputFileArity": "one", "metadataInputs": {}, "inputFileFilters": {}}
         errs, warns = ev.validate_workflow_save(
