@@ -9967,6 +9967,10 @@ components:
                     type: string
                     default: ""
                     description: "Comma-delimited list of allowed file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'). '.all' or an empty string allows all extensions."
+                assetCount:
+                    type: integer
+                    readOnly: true
+                    description: "Number of active (non-archived) assets in the database. Not filtered by permissions, so it can exceed the assets the caller can list or open."
             required:
                 - databaseId
                 - description
