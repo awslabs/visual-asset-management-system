@@ -104,7 +104,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 
 -   **ID**: `image-viewer`
 -   **Extensions**: `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`
--   **Features**: Image display with zoom and pan
+-   **Features**: Image display fitted to the viewer panel
 -   **Multi-file**: No
 -   **Dependencies**: None
 
