@@ -1092,7 +1092,7 @@ paths:
     /auth/routes/api/allowed:
         get:
             summary: "List the API routes the current user is authorized to call."
-            description: "Retrieve the API routes (and the HTTP methods on each) that the requesting user is authorized to call based on their authorization constraints. Routes with no allowed methods are omitted."
+            description: "Retrieve the API routes (and the HTTP methods on each) that the requesting user is authorized to call based on their authorization constraints. Routes with no allowed methods are omitted. Each {param} path segment is evaluated with the placeholder value 'vams:any', so a route__path criterion that names a concrete value in a parameter position (for example starts_with '/database/projA/') never matches a templated route on this check: under an allow with a positive operator, or a deny with does_not_contain or is_not_one_of, the route is left out although calls on the matching concrete paths are allowed; under a deny with a positive operator, or an allow with does_not_contain or is_not_one_of, the route is listed although those calls are refused with 403. Constraints whose values name only literal segments (for example starts_with '/database/') are reflected exactly."
             responses:
                 "200":
                     description: Allowed API routes retrieved successfully.

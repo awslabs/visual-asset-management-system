@@ -413,6 +413,15 @@ Retrieves the API routes (and the HTTP methods on each) that the requesting user
 GET /auth/routes/api/allowed
 ```
 
+:::note[Templated path segments]
+Each `{param}` segment of a route is evaluated with the placeholder value `vams:any`. A `route__path` criterion whose value names a concrete value in a parameter position, for example `starts_with` `/database/projA/`, therefore never matches a templated route on this check. The same holds for a pattern in that position that cannot match `vams:any`, such as `[a-z0-9-]+`. On the check, such a criterion is false for `equals`, `contains`, `starts_with`, `ends_with` and `is_one_of`, and true for `does_not_contain` and `is_not_one_of`. Assuming no other constraint decides the route:
+
+-   The route is left out of the listing, although calls on the matching concrete paths are allowed, when the constraint is an allow with a positive operator, or a deny with `does_not_contain` or `is_not_one_of`.
+-   The route stays in the listing, although calls on those concrete paths are refused with 403, when the constraint is a deny with a positive operator, or an allow with `does_not_contain` or `is_not_one_of`.
+
+Constraints whose values name only literal segments, such as `starts_with` `/database/` or `contains` `/workflows`, are reflected exactly.
+:::
+
 #### Response
 
 ```json
