@@ -2125,10 +2125,7 @@ export const fetchAssetS3Files = async ({
                 const nextResponse = await apiClient.get(
                     `database/${databaseId}/assets/${assetId}/listFiles`,
                     {
-                        queryStringParameters: {
-                            includeArchived: includeArchived.toString(),
-                            startingToken: nextToken,
-                        },
+                        queryStringParameters: { ...queryParams, startingToken: nextToken },
                     }
                 );
 
@@ -2153,10 +2150,7 @@ export const fetchAssetS3Files = async ({
                     const nextResponse = await apiClient.get(
                         `database/${databaseId}/assets/${assetId}/listFiles`,
                         {
-                            queryStringParameters: {
-                                includeArchived: includeArchived.toString(),
-                                startingToken: nextToken,
-                            },
+                            queryStringParameters: { ...queryParams, startingToken: nextToken },
                         }
                     );
 
