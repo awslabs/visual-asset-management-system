@@ -195,21 +195,33 @@ code {
     width: auto;
 }
 
-.visualizer-footer a {
+.visualizer-footer button {
     margin-left: 10px;
+    background: none;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    line-height: 0;
     cursor: pointer;
 }
 
-.visualizer-footer a:first-child {
+.visualizer-footer button:focus-visible {
+    outline: 2px solid white;
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+.visualizer-footer button:first-child {
     margin-left: 0;
 }
 
-.visualizer-footer a.selected svg {
+.visualizer-footer button.selected svg {
     transform: scale(1);
     fill: yellow;
 }
 
-.visualizer-footer a.selected svg path {
+.visualizer-footer button.selected svg path {
     color: yellow;
 }
 
