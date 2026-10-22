@@ -150,7 +150,7 @@ class ApiClient {
         } catch (tokenError) {
             const alive = await ensureValidSession();
             if (!alive) {
-                logoutExpired();
+                void logoutExpired();
                 throw tokenError;
             }
             if (!retried) {
@@ -187,7 +187,7 @@ class ApiClient {
                 const forceRefresh = response.status === 401 && !retried;
                 const alive = await ensureValidSession(forceRefresh);
                 if (!alive) {
-                    logoutExpired();
+                    void logoutExpired();
                 } else if (forceRefresh) {
                     // Re-issue once through request() so the Authorization header is rebuilt
                     // from the refreshed token rather than replaying the rejected one. Safe to

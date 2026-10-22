@@ -29,6 +29,7 @@ import {
     scheduleExpiryTimer,
     clearExpiryTimer,
     registerFocusRevalidation,
+    clearLocalStore,
     clearStoredSession,
     SESSION_EXPIRED_KEY,
     SESSION_RETURN_TO_KEY,
@@ -701,7 +702,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                 })
                 .catch((error) => {
                     console.error(error);
-                    signOutWithError("auth_error", "Failed to get access token"); // Catching error when redirect code is missing and start new sign in process.
+                    void signOutWithError("auth_error", "Failed to get access token"); // Catching error when redirect code is missing and start new sign in process.
                 });
         }
     }, [triggerExternalOAuth]); // triggerExternalOAuth dependency is needed to for the useEffect to execute in the right order
@@ -1237,7 +1238,8 @@ const parseJwt = (
     return JSON.parse(jsonPayload);
 };
 
-const signOutWithError = (key = "auth_error", value = "Unauthorized") => {
+const signOutWithError = async (key = "auth_error", value = "Unauthorized") => {
+    await clearLocalStore();
     // Reset amplify info
     signOut()
         .then(() => {

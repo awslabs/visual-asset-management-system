@@ -8,6 +8,7 @@ import {
     computeTimerDelayMs,
     scheduleExpiryTimer,
     clearExpiryTimer,
+    clearLocalStore,
     clearStoredSession,
     logoutExpired,
     navigation,
@@ -22,6 +23,10 @@ const mockSignOut = jest.fn().mockResolvedValue(undefined);
 jest.mock("aws-amplify/auth", () => ({
     signOut: (...a: any[]) => mockSignOut(...a),
 }));
+const mockLocalforageClear = jest.fn();
+jest.mock("localforage", () => ({
+    clear: (...a: any[]) => mockLocalforageClear(...a),
+}));
 
 const utils = tokenUtils as jest.Mocked<typeof tokenUtils>;
 
@@ -30,6 +35,8 @@ describe("sessionManager", () => {
 
     beforeEach(() => {
         jest.clearAllMocks();
+        mockSignOut.mockReset().mockResolvedValue(undefined);
+        mockLocalforageClear.mockReset().mockResolvedValue(undefined);
         jest.useRealTimers();
         localStorage.clear();
         __resetForTests();
@@ -107,29 +114,72 @@ describe("sessionManager", () => {
     });
 
     describe("logoutExpired", () => {
-        it("is idempotent — only the first call redirects", () => {
-            logoutExpired("#/assets");
-            logoutExpired("#/other");
+        it("is idempotent — only the first call redirects", async () => {
+            const first = logoutExpired("#/assets");
+            const second = logoutExpired("#/other");
+            await Promise.all([first, second]);
             expect(localStorage.getItem(SESSION_RETURN_TO_KEY)).toBe("#/assets");
             // Second call did not redirect again.
             expect(redirectSpy).toHaveBeenCalledTimes(1);
         });
 
-        it("preserves theme across the localStorage wipe", () => {
+        it("preserves theme across the localStorage wipe", async () => {
             localStorage.setItem("vams-theme-preference", "light");
             localStorage.setItem("user", JSON.stringify({ username: "u" }));
-            logoutExpired("#/assets");
+            await logoutExpired("#/assets");
             expect(localStorage.getItem("vams-theme-preference")).toBe("light");
             expect(localStorage.getItem("user")).toBeNull();
             expect(localStorage.getItem(SESSION_EXPIRED_KEY)).toBe("true");
         });
 
-        it("preserves the viewer settings across the localStorage wipe", () => {
+        it("preserves the viewer settings across the localStorage wipe", async () => {
             localStorage.setItem("ov_viewer_settings", '{"a":1}');
             localStorage.setItem("ov_camera_settings", '{"b":2}');
-            logoutExpired("#/assets");
+            await logoutExpired("#/assets");
             expect(localStorage.getItem("ov_viewer_settings")).toBe('{"a":1}');
             expect(localStorage.getItem("ov_camera_settings")).toBe('{"b":2}');
+        });
+
+        it("empties the localforage store before signing out of Amplify", async () => {
+            const order: string[] = [];
+            mockLocalforageClear.mockImplementation(async () => {
+                order.push("localforage.clear");
+            });
+            mockSignOut.mockImplementation(async () => {
+                order.push("signOut");
+            });
+
+            await logoutExpired("#/assets");
+
+            expect(order).toEqual(["localforage.clear", "signOut"]);
+            expect(redirectSpy).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    describe("clearLocalStore", () => {
+        it("clears the localforage store", async () => {
+            await clearLocalStore();
+            expect(mockLocalforageClear).toHaveBeenCalledTimes(1);
+        });
+
+        it("resolves when clearing fails", async () => {
+            mockLocalforageClear.mockRejectedValue(new Error("IndexedDB unavailable"));
+            await expect(clearLocalStore()).resolves.toBeUndefined();
+        });
+
+        it("stops waiting after two seconds when clearing does not finish", async () => {
+            jest.useFakeTimers();
+            mockLocalforageClear.mockReturnValue(new Promise(() => {}));
+            let settled = false;
+            const pending = clearLocalStore().then(() => {
+                settled = true;
+            });
+
+            await jest.advanceTimersByTimeAsync(1_999);
+            expect(settled).toBe(false);
+            await jest.advanceTimersByTimeAsync(1);
+            await pending;
+            expect(settled).toBe(true);
         });
     });
 

@@ -17,7 +17,7 @@ import { PageFooter } from "./authenticator/Footer";
 import config from "./config";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "./features/orchestration/components/ToastProvider";
-import { clearStoredSession } from "./utils/sessionManager";
+import { clearLocalStore, clearStoredSession } from "./utils/sessionManager";
 
 const queryClient = new QueryClient({
     defaultOptions: {
@@ -62,7 +62,8 @@ function App() {
 
     const menuText = user?.username;
 
-    const signOut = () => {
+    const signOut = async () => {
+        await clearLocalStore();
         clearStoredSession();
         amplifySignOut()
             .then(() => {
@@ -117,7 +118,7 @@ function App() {
                                 description: menuText,
                                 iconName: "user-profile",
                                 onItemClick: (e) => {
-                                    if (e?.detail?.id === "signout") signOut();
+                                    if (e?.detail?.id === "signout") void signOut();
                                 },
                                 items: [{ id: "signout", text: "Sign out" }],
                             },

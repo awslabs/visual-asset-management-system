@@ -4,6 +4,7 @@
  */
 
 import { signOut } from "aws-amplify/auth";
+import localforage from "localforage";
 import { ensureSessionValid, getCurrentTokenExpiryMs } from "./authTokenUtils";
 
 /** localStorage keys read by Auth.tsx to drive the login-screen message and route restore. */
@@ -22,6 +23,7 @@ const SKEW_MS = 60_000; // refresh this long before expiry
 const MIN_TIMER_MS = 5_000; // floor against tight reschedule loops
 const MAX_TIMER_MS = 60 * 60 * 1000; // cap against bad exp data
 const DEFAULT_TIMER_MS = 5 * 60 * 1000; // fallback when expiry is unknown
+const LOCAL_STORE_CLEAR_TIMEOUT_MS = 2_000; // sign-out waits at most this long for IndexedDB
 
 /** Navigation seam — isolates the untestable browser redirect so it can be spied in tests. */
 export const navigation = {
@@ -87,7 +89,7 @@ async function onExpiryTimer(): Promise<void> {
     if (ok) {
         await scheduleExpiryTimer();
     } else {
-        logoutExpired();
+        void logoutExpired();
     }
 }
 
@@ -102,7 +104,7 @@ export function registerFocusRevalidation(): () => void {
         }
         void ensureValidSession().then((ok) => {
             if (!ok) {
-                logoutExpired();
+                void logoutExpired();
             }
         });
     };
@@ -112,6 +114,26 @@ export function registerFocusRevalidation(): () => void {
         window.removeEventListener("focus", handler);
         document.removeEventListener("visibilitychange", handler);
     };
+}
+
+/**
+ * Empty the browser's localforage (IndexedDB) store for a sign-out. Waits at most
+ * LOCAL_STORE_CLEAR_TIMEOUT_MS, and a failure is ignored, so sign-out always proceeds.
+ */
+export async function clearLocalStore(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+        await Promise.race([
+            localforage.clear(),
+            new Promise<void>((resolve) => {
+                timer = setTimeout(resolve, LOCAL_STORE_CLEAR_TIMEOUT_MS);
+            }),
+        ]);
+    } catch {
+        // Sign-out continues without the store cleared.
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 /**
@@ -129,17 +151,19 @@ export function clearStoredSession(): void {
 }
 
 /**
- * Tear down a session that can no longer be refreshed: stop the timer, sign out of
- * Amplify, clear localStorage (keeping display preferences), record the expired flag + the route
- * to return to, then redirect to the login screen. Idempotent — first caller wins.
+ * Tear down a session that can no longer be refreshed: stop the timer, empty the localforage
+ * store, sign out of Amplify, clear localStorage (keeping display preferences), record the
+ * expired flag + the route to return to, then redirect to the login screen. Idempotent — first
+ * caller wins.
  */
-export function logoutExpired(returnTo: string = window.location.hash): void {
+export async function logoutExpired(returnTo: string = window.location.hash): Promise<void> {
     if (loggingOut) {
         return;
     }
     loggingOut = true;
     clearExpiryTimer();
 
+    await clearLocalStore();
     void signOut().catch(() => {});
     clearStoredSession();
     localStorage.setItem(SESSION_EXPIRED_KEY, "true");
