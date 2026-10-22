@@ -773,13 +773,19 @@ class VamsConnectorExtension(omni.ext.IExt):
         in use sets which files the pipeline takes, and one it requires may be chosen here."""
         steps = [_PipelineStep(ref, wf.database_id) for ref in wf.specified_pipelines]
         problems = []
-        for step in steps:
+        for position, step in enumerate(steps):
             try:
                 step.pipeline = self._connector.get_pipeline(step.database_id, step.pipeline_id)
             except VamsCliError as e:
-                cause = ("Run follows the workflow's filters only" if len(steps) == 1
-                         else "its filters do not gate Run and a template it requires cannot be "
-                              "chosen here")
+                # Only the first pipeline's filters gate Run, so only its loss changes which files
+                # are offered.
+                if len(steps) == 1:
+                    cause = "Run follows the workflow's filters only"
+                elif position == 0:
+                    cause = ("its filters do not gate Run and a template it requires cannot be "
+                             "chosen here")
+                else:
+                    cause = "a template it requires cannot be chosen here"
                 problems.append(self._failure_status(
                     f"Could not read pipeline {step.database_id}:{step.pipeline_id}, so {cause}", e))
                 continue
@@ -803,18 +809,22 @@ class VamsConnectorExtension(omni.ext.IExt):
         asset_id = self._selected_asset.asset_id
         asset_name = self._selected_asset.asset_name
         desc = wf.workflow_name or wf.description or wf.workflow_id
-        # The service judges every pipeline that takes files against the selection the workflow's
-        # filters admit, with the pipeline's own effective inputFileFilters.
-        gates = [step for step in self._wf_steps if step.pipeline is not None]
-        # A file the workflow's or a pipeline's inputFileFilters reject is a hard execute error, so
-        # it gets no Run button — the same reason arity 'none' and a refused whole-asset scope get
-        # none.
+        # The service judges the FIRST pipeline (first in workflow order, whatever its arity)
+        # against the selection the workflow's filters admit, with that pipeline's own effective
+        # inputFileFilters. A later pipeline receives the selection plus every file the earlier
+        # ones wrote and is checked when the run reaches it, so its filters do not gate Run: one
+        # that reads only the type the first pipeline writes is a valid chain.
+        first = self._wf_steps[0] if self._wf_steps else None
+        gate = first if first is not None and first.pipeline is not None else None
+        # A file the workflow's or the first pipeline's inputFileFilters reject is a hard execute
+        # error, so it gets no Run button — the same reason arity 'none' and a refused whole-asset
+        # scope get none.
         non_folders = [(f, (f.relative_path or f.file_name).strip("/")) for f in self._files
                        if not f.is_folder and (f.relative_path or f.file_name).strip("/")]
         runnable = [(f, fkey) for f, fkey in non_folders if wf.allows_file(fkey)
-                    and all(step.pipeline.allows_file(fkey, step.template) for step in gates)]
+                    and (gate is None or gate.pipeline.allows_file(fkey, gate.template))]
         excluded_count = len(non_folders) - len(runnable)
-        filters = ("the input-file filters of this workflow and its pipelines" if gates
+        filters = ("the input-file filters of this workflow and its first pipeline" if gate
                    else "this workflow's input-file filters")
         no_file = f"No file in this asset passes {filters}."
         whole_asset_refusal = no_file if non_folders and not runnable else None
