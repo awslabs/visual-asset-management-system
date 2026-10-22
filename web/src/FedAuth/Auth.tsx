@@ -162,9 +162,9 @@ interface Config {
     externalOAuthIdpDiscoveryEndpoint?: string;
 
     /**
-     * VAMS Features that are enabled
+     * VAMS Features that are enabled (normalized to an array when secure-config is applied)
      */
-    featuresEnabled?: string;
+    featuresEnabled?: string[];
 
     /**
      * VAMS Backend Stackname
@@ -186,6 +186,31 @@ interface Config {
      * HTML banner message to be displayed at the top of all web UI pages
      */
     bannerHtmlMessage?: string;
+
+    /**
+     * External OAUTH IDP scope added when the user signs in with MFA
+     */
+    externalOAuthIdpScopeMfa?: string;
+
+    /**
+     * Label for the external OAUTH IDP login button
+     */
+    externalOAuthIdpDisplayName?: string;
+
+    /**
+     * Deployed web URL, from secure-config
+     */
+    webDeployedUrl?: string;
+
+    /**
+     * Set on the stand-in object stored when amplify-config could not be loaded
+     */
+    _configError?: boolean;
+
+    /**
+     * Message shown on the configuration error page
+     */
+    _errorMessage?: string;
 }
 
 function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
@@ -431,7 +456,7 @@ const Auth: React.FC<AuthProps> = (props) => {
         return () => observer.disconnect();
     }, []);
 
-    const [config, setConfig] = useState(appCache.getItem("config"));
+    const [config, setConfig] = useState<Config | null>(appCache.getItem("config"));
     const [authError, setauthError] = useState<string | null>(() =>
         localStorage.getItem("auth_error")
     );
@@ -500,14 +525,14 @@ const Auth: React.FC<AuthProps> = (props) => {
                 window.DISABLE_COGNITO = false;
             }
 
+            // amplify-config carries this object only for a federated Cognito deployment.
             if (
-                config.cognitoFederatedConfig === undefined ||
-                config.cognitoFederatedConfig === "undefined" ||
-                config.cognitoFederatedConfig === ""
+                config.cognitoFederatedConfig !== null &&
+                typeof config.cognitoFederatedConfig === "object"
             ) {
-                window.COGNITO_FEDERATED = false;
-            } else {
                 window.COGNITO_FEDERATED = true;
+            } else {
+                window.COGNITO_FEDERATED = false;
             }
 
             //Configure Amplify
@@ -568,7 +593,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                         _configError: true,
                         _errorMessage:
                             "The API returned a configuration response but it is missing required fields (e.g., 'api' endpoint).",
-                    });
+                    } as Config);
                 }
             });
         }
@@ -734,7 +759,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                         featuresEnabled: normalizeFeaturesEnabled(value.featuresEnabled),
                         locationServiceApiUrl: value.locationServiceApiUrl,
                         webDeployedUrl: value.webDeployedUrl || "",
-                    };
+                    } as Config;
                     appCache.setItem("config", withSecureConfig);
                     setConfig(withSecureConfig);
                 })
@@ -785,8 +810,10 @@ const Auth: React.FC<AuthProps> = (props) => {
     //Both Effect
     //Once logged in, fetch and cache the API routes the user is authorized to
     //call, and periodically renew the cache while the session is active. The
-    //cached list is not consumed by the UI yet -- it will drive enabling/
-    //disabling web functionality tied to API access in a future release.
+    //cached list feeds isApiRouteAllowed (common/constants/authRoutes.ts), which
+    //API Key Management (pages/auth/ApiKeys.tsx) uses to choose between admin and
+    //self-service mode. The cache key, the cached shape and the TTL must not change
+    //without updating that page.
     useEffect(() => {
         if (!isLoggedIn) {
             return;

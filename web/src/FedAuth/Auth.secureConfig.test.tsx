@@ -228,3 +228,25 @@ describe("Auth secure-config fetch", () => {
         expect(mockGetSecureConfig).toHaveBeenCalledTimes(3);
     }, 30000);
 });
+
+describe("Auth federated Cognito detection", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockGetSecureConfig.mockResolvedValue(SECURE_CONFIG);
+    });
+
+    it.each([
+        ["an IdP configuration object", { customCognitoAuthDomain: "auth.test" }, true],
+        ["absent", undefined, false],
+        ["null", null, false],
+    ])(
+        "treats cognitoFederatedConfig that is %s (%p) as federated: %p",
+        async (_label, federated, expected) => {
+            seedMode({ ...COGNITO_CONFIG, cognitoFederatedConfig: federated });
+
+            renderAuth();
+
+            await waitFor(() => expect((window as any).COGNITO_FEDERATED).toBe(expected));
+        }
+    );
+});
