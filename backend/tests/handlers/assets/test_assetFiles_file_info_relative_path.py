@@ -35,12 +35,14 @@ def _file_info(monkeypatch, base_key, file_path):
         "ETag": '"e"',
         "Metadata": {},
     }
+    # No preview objects: every listing the preview lookup makes comes back empty
+    s3_client.get_paginator.return_value.paginate.return_value = []
+    s3_client.list_objects_v2.return_value = {"Contents": []}
     monkeypatch.setattr(af, "s3_client", s3_client)
     monkeypatch.setattr(af, "get_asset_with_permissions",
                         lambda databaseId, assetId, op, claims: {"assetId": assetId})
     monkeypatch.setattr(af, "get_asset_s3_location", lambda asset: (BUCKET, base_key))
     monkeypatch.setattr(af, "is_file_archived", lambda bucket, key, version_id=None: False)
-    monkeypatch.setattr(af, "find_newest_preview_file_for_base", lambda bucket, key: None)
     return af.get_file_info("db1", "xabc", file_path, False, CLAIMS)
 
 
