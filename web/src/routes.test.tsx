@@ -169,6 +169,33 @@ describe("routeTable", () => {
     });
 });
 
+/**
+ * Side navigation highlights a link only when a route's `active` value equals that link's href
+ * exactly, and the nav hrefs are hash routes with a trailing slash ("#/", "#/assets/").
+ */
+describe("routeTable active highlight", () => {
+    const activeFor = (path: string) => routeTable.find((route) => route.path === path)?.active;
+
+    it.each([
+        ["/", "#/"],
+        ["/search", "#/"],
+        ["/databases/:databaseId/assets/:assetId", "#/assets/"],
+        ["/databases/:databaseId/assets/:assetId/download", "#/assets/"],
+        ["/metadataschema", "#/metadataschema/"],
+        ["/metadataschema/:databaseId", "#/metadataschema/"],
+    ])("highlights the matching nav link for %s", (path, href) => {
+        expect(activeFor(path)).toBe(href);
+    });
+
+    it("uses a hash href for every routed page", () => {
+        const notHash = routeTable
+            .filter((route) => route.path !== "*")
+            .filter((route) => !route.active.startsWith("#/"))
+            .map((route) => route.path);
+        expect(notHash).toEqual([]);
+    });
+});
+
 describe("AppRoutes", () => {
     /** Resolve the permission check by allowing only the given route paths. */
     function allowRoutes(...allowedPaths: string[]) {

@@ -52,9 +52,9 @@ export interface RouteOption {
 }
 
 const coreRouteTable: RouteOption[] = [
-    { path: "/", Page: LandingPage, active: "/" },
-    { path: "/search", Page: SearchPage, active: "/" },
-    { path: "/search/:databaseId/assets", Page: SearchPage, active: "/" },
+    { path: "/", Page: LandingPage, active: "#/" },
+    { path: "/search", Page: SearchPage, active: "#/" },
+    { path: "/search/:databaseId/assets", Page: SearchPage, active: "#/" },
     { path: "/assets", Page: SearchPage, active: "#/assets/" },
     { path: "/databases", Page: Databases, active: "#/databases/" },
     {
@@ -65,12 +65,12 @@ const coreRouteTable: RouteOption[] = [
     {
         path: "/databases/:databaseId/assets/:assetId",
         Page: ViewAsset,
-        active: "/assets",
+        active: "#/assets/",
     },
     {
         path: "/databases/:databaseId/assets/:assetId/download",
         Page: AssetDownloadsPage,
-        active: "/assets",
+        active: "#/assets/",
     },
     {
         path: "/databases/:databaseId/assets/:assetId/uploads",
@@ -206,12 +206,12 @@ const coreRouteTable: RouteOption[] = [
     {
         path: "/metadataschema/:databaseId",
         Page: MetadataSchema,
-        active: "#/metadataschema",
+        active: "#/metadataschema/",
     },
     {
         path: "/metadataschema",
         Page: MetadataSchema,
-        active: "#/metadataschema",
+        active: "#/metadataschema/",
     },
     {
         path: "*",
