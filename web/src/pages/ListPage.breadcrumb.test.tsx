@@ -31,7 +31,9 @@ describe("ListPage breadcrumb", () => {
                                 singularNameTitleCase="Model"
                                 pluralName="models"
                                 pluralNameTitleCase="Models"
-                                listDefinition={{ elementId: "assetId", columnDefinitions: [] }}
+                                listDefinition={
+                                    { elementId: "assetId", columnDefinitions: [] } as any
+                                }
                                 fetchElements={jest.fn().mockResolvedValue([])}
                                 fetchAllElements={jest.fn().mockResolvedValue([])}
                             />
