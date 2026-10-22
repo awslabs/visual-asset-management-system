@@ -66,14 +66,33 @@ export async function toTupleWithWarnings<T = any>(
     }
 }
 
+/** Upper bound on the pages pageAll requests, far above any real listing. */
+export const PAGE_ALL_MAX_PAGES = 1000;
+
+/**
+ * Requests every page of a NextToken listing. Rejects when a response repeats a token already
+ * requested or the page bound is reached, since callers need the complete set.
+ */
 export async function pageAll(
     fetchPage: (token?: string) => Promise<any>,
     itemsKey = "Items"
 ): Promise<any[]> {
     let out: any[] = [];
     let token: string | undefined = undefined;
+    const requested = new Set<string>();
+    let pages = 0;
     do {
+        if (token !== undefined) {
+            if (requested.has(token)) {
+                throw new Error("Listing returned a page token it had already returned");
+            }
+            requested.add(token);
+        }
+        if (pages >= PAGE_ALL_MAX_PAGES) {
+            throw new Error(`Listing exceeded ${PAGE_ALL_MAX_PAGES} pages`);
+        }
         const resp = await fetchPage(token);
+        pages += 1;
         const msg = unwrapMessage(resp);
         out = out.concat(msg?.[itemsKey] || []);
         token = msg?.NextToken || resp?.NextToken;
