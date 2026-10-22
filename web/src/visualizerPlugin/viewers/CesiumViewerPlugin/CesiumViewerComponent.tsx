@@ -131,7 +131,10 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
 
     // Retry callback for a tileset resource. An expired ID token is refused with 403 (401 from
     // some front doors), so on either status the fresh auth headers are copied into the retried
-    // request and into the tileset's root resource, which the later tile requests derive from.
+    // request and into the tileset's root resource. Cesium copies a resource's headers when it
+    // derives one, so the fresh header reaches the retried request and the resources derived from
+    // the root after the refresh. A tile resource derived before the refresh keeps the earlier
+    // token: each of its requests goes out once with that token, is refused, and is retried once.
     const refreshAuthOnDenial = useCallback(
         async (retried: any, error: any, root: any): Promise<boolean> => {
             const status = error?.statusCode;
