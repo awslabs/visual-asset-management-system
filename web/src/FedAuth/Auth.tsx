@@ -504,6 +504,12 @@ const Auth: React.FC<AuthProps> = (props) => {
     const [isLoggedIn, setisLoggedIn] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
 
+    // The app neither reads nor writes the browser asset store (localforage), so any records left
+    // in it are cleared once per page load, for a signed-out visitor as for a signed-in session.
+    useEffect(() => {
+        void clearLocalStore();
+    }, []);
+
     // TODO: Refactor how/when handleExternalOauthSignIn() & External OAuth Effects are called without needing to do this
     // This line in combination with the useEffect dependency allows for the useEffects to execute in the right order
     const [triggerExternalOAuth, setTriggerExternalOAuth] = useState(false);

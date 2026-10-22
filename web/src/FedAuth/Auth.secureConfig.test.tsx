@@ -83,6 +83,7 @@ jest.mock("../utils/sessionManager", () => ({
     scheduleExpiryTimer: jest.fn().mockResolvedValue(undefined),
     clearExpiryTimer: jest.fn(),
     registerFocusRevalidation: jest.fn(() => () => {}),
+    clearLocalStore: jest.fn().mockResolvedValue(undefined),
     SESSION_EXPIRED_KEY: "session_expired",
     SESSION_RETURN_TO_KEY: "session_return_to",
 }));

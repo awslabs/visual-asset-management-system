@@ -117,8 +117,9 @@ export function registerFocusRevalidation(): () => void {
 }
 
 /**
- * Empty the browser's localforage (IndexedDB) store for a sign-out. Waits at most
- * LOCAL_STORE_CLEAR_TIMEOUT_MS, and a failure is ignored, so sign-out always proceeds.
+ * Empty the browser's localforage (IndexedDB) store. Auth runs it once per page load, and every
+ * sign-out runs it. Waits at most LOCAL_STORE_CLEAR_TIMEOUT_MS, and a failure is ignored, so a
+ * sign-out always proceeds.
  */
 export async function clearLocalStore(): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
