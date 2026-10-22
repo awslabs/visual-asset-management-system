@@ -265,14 +265,12 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: Checkout repo
-              # Major-version tag of a GitHub-maintained action, the repo's current pinning
-              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/checkout@v4
 
             - name: Setup node
-              # Major-version tag of a GitHub-maintained action, the repo's current pinning
-              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/setup-node@v4
               with:
@@ -311,14 +309,12 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: Checkout repo
-              # Major-version tag of a GitHub-maintained action, the repo's current pinning
-              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/checkout@v4
 
             - name: Setup Python for the backend suite
-              # Major-version tag of a GitHub-maintained action, the repo's current pinning
-              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/setup-python@v4
               with:
