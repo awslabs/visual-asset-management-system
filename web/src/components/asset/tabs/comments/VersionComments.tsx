@@ -71,7 +71,7 @@ interface VersionCommentsProps {
     userId: string;
     setReload: (reload: boolean) => void;
     defaultExpanded: boolean;
-    version: {
+    version?: {
         Comment: string;
         dateModified: string;
         S3Version: string;
@@ -83,16 +83,8 @@ interface VersionCommentsProps {
 }
 
 export default function VersionComments(props: VersionCommentsProps) {
-    const {
-        loading,
-        showLoading,
-        userId,
-        setReload,
-        defaultExpanded,
-        version,
-        comments,
-        showMessage,
-    } = props;
+    const { loading, showLoading, userId, setReload, defaultExpanded, comments, showMessage } =
+        props;
     const [expanded, setExpanded] = useState(defaultExpanded);
     const [visible, setVisible] = useState(false);
     const [editVisible, setEditVisible] = useState(false);
@@ -220,7 +212,7 @@ export default function VersionComments(props: VersionCommentsProps) {
     const handleEditComment = async () => {
         if (!commentToEdit) return;
 
-        const [assetId] = commentToEdit["assetVersionId:commentId"].split(":");
+        const assetId = commentToEdit.assetId;
         showLoading(true);
 
         try {
@@ -279,13 +271,13 @@ export default function VersionComments(props: VersionCommentsProps) {
         <div>
             <ExpandableSection
                 variant="container"
-                header={`Version ${version.Version}`}
+                header={Synonyms.Comments}
                 expanded={expanded}
                 onChange={({ detail }) => setExpanded(detail.expanded)}
             >
                 <div>
                     {comments.length === 0 ? (
-                        <div className="noCommentsDiv">{`No ${Synonyms.comments} for this version`}</div>
+                        <div className="noCommentsDiv">{`No ${Synonyms.comments} yet`}</div>
                     ) : (
                         comments.map((comment) => (
                             <div
