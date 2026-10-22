@@ -166,6 +166,7 @@ export class CoordinateTransformConstruct extends Construct {
                     vpc: props.vpc,
                     pipelineSubnets: props.pipelineSubnets,
                     pipelineSecurityGroups: props.pipelineSecurityGroups,
+                    kmsKey: props.kmsKey,
                 }
             );
 

@@ -96,6 +96,7 @@ export class Metadata3dLabelingConstruct extends NestedStack {
                             }),
                             user: "root",
                             command: ["bash", "-c", layerBundlingCommand()],
+                            platform: "linux/amd64", //Fix to the LINUX_AMD64 platform to standardize instruction set across all loads
                         },
                     }
                 ),

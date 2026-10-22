@@ -10,6 +10,11 @@
  * user's email, the CLI GETs it to validate a session. A grant present on only one of them produces a
  * role that works in one client and 403s in the other.
  *
+ * The role must likewise reach `POST /database/{databaseId}/assets/{assetId}/download`, through which
+ * the file viewers and the download action request a file. The route is a read carried in a POST
+ * body, so the role's GET constraint does not reach it, and the grant is narrowed to paths that start
+ * with `/database/` and end with `/download` so that no write route under `/database` matches it.
+ *
  * This applies to existing deployments as much as to new ones. `deployment/update-the-solution.md`
  * records that every default constraint - each one whose id begins `initial_admin_` or
  * `initial_basicro_` - is written back to Amazon DynamoDB and replaced in full on every deployment,
@@ -48,12 +53,15 @@ interface SeededConstraint {
     routeValuesOr: string[];
     /** route__path values in criteriaAnd (the narrowing list). */
     routeValuesAnd: string[];
+    /** route__path criteria in criteriaAnd, with their operators. */
+    routeCriteriaAnd: { operator: string; value: string }[];
     permissions: { permission: string; permissionType: string }[];
 }
 
 /** `value: { S: "..." }`, tolerating comment lines between the brace and the string. */
 const VALUE_RE = /value: \{\s*(?:\/\/[^\n]*\n\s*)*S: "([^"]*)"/g;
 const FIELD_RE = /field: \{\s*S: "([^"]*)"/g;
+const OPERATOR_RE = /operator: \{\s*S: "([^"]*)"/g;
 const PERMISSION_RE = /permission: \{\s*S: "([^"]*)"/g;
 const PERMISSION_TYPE_RE = /permissionType: \{\s*S: "([^"]*)"/g;
 
@@ -61,7 +69,10 @@ const PERMISSION_TYPE_RE = /permissionType: \{\s*S: "([^"]*)"/g;
  * Route values of one criteria list. The keys appear in a fixed order (criteriaOr and/or
  * criteriaAnd, then description), so a list ends at whichever of the other two keys follows it.
  */
-function criteriaRouteValues(segment: string, key: "criteriaOr" | "criteriaAnd"): string[] {
+function criteriaRoutes(
+    segment: string,
+    key: "criteriaOr" | "criteriaAnd"
+): { operator: string; value: string }[] {
     const start = segment.indexOf(`${key}: {`);
     if (start === -1) return [];
     const otherKey = key === "criteriaOr" ? "criteriaAnd: {" : "criteriaOr: {";
@@ -73,13 +84,21 @@ function criteriaRouteValues(segment: string, key: "criteriaOr" | "criteriaAnd")
     // Each criterion is {field, id, operator, value}; pair the fields with the values positionally
     // so a criterion on some other field is not read as a route grant.
     const fields = [...region.matchAll(FIELD_RE)].map((m) => m[1]);
+    const operators = [...region.matchAll(OPERATOR_RE)].map((m) => m[1]);
     const values = [...region.matchAll(VALUE_RE)].map((m) => m[1]);
-    if (fields.length !== values.length) {
+    if (fields.length !== values.length || operators.length !== values.length) {
         throw new Error(
-            `${key}: read ${fields.length} fields but ${values.length} values - the reader is out of step with the construct`
+            `${key}: read ${fields.length} fields, ${operators.length} operators and ${values.length} values - the reader is out of step with the construct`
         );
     }
-    return values.filter((_value, i) => fields[i] === "route__path");
+    return values
+        .map((value, i) => ({ field: fields[i], operator: operators[i], value }))
+        .filter((criterion) => criterion.field === "route__path")
+        .map(({ operator, value }) => ({ operator, value }));
+}
+
+function criteriaRouteValues(segment: string, key: "criteriaOr" | "criteriaAnd"): string[] {
+    return criteriaRoutes(segment, key).map((criterion) => criterion.value);
 }
 
 function parseSeededConstraints(source: string): SeededConstraint[] {
@@ -106,6 +125,7 @@ function parseSeededConstraints(source: string): SeededConstraint[] {
             id: start.id,
             routeValuesOr: criteriaRouteValues(segment, "criteriaOr"),
             routeValuesAnd: criteriaRouteValues(segment, "criteriaAnd"),
+            routeCriteriaAnd: criteriaRoutes(segment, "criteriaAnd"),
             permissions: permissions.map((permission, p) => ({
                 permission,
                 permissionType: permissionTypes[p],
@@ -184,5 +204,34 @@ describe("seeded basicReadOnly api constraints", () => {
         const reparsed = parseSeededConstraints(mutated);
         expect(pick(reparsed, "allow_post_apis").routeValuesOr).not.toContain("/auth/loginProfile");
         expect(pick(reparsed, "allow_get_apis").routeValuesOr).toContain("/auth/loginProfile");
+    });
+});
+
+describe("seeded basicReadOnly file download grant", () => {
+    it("grants POST on paths that start with /database/ and end with /download, and nothing wider", () => {
+        const constraint = byId("allow_download_api");
+        expect(constraint.permissions).toEqual([{ permission: "POST", permissionType: "allow" }]);
+        expect(constraint.routeCriteriaAnd).toEqual([
+            { operator: "starts_with", value: "/database/" },
+            { operator: "ends_with", value: "/download" },
+        ]);
+        // A route value in criteriaOr would be OR-joined after the AND list and widen the grant.
+        expect(constraint.routeValuesOr).toEqual([]);
+    });
+
+    it("keeps the broad POST constraint off /database", () => {
+        // The download grant is its own narrowed constraint; a /database prefix on the general POST
+        // list would open every write route under it (create folder, copy, move, revert).
+        expect(byId("allow_post_apis").routeValuesOr).not.toContain("/database");
+        expect(byId("allow_post_apis").routeValuesOr).not.toContain("/database/");
+    });
+
+    it("reads the operators of each criterion, not only its values", () => {
+        // Control for the operator pairing: the execution-logs deny narrows on a starts_with and
+        // widens on an ends_with, so a reader that shifted operators by one would report them swapped.
+        const deny = byId("deny_execution_logs");
+        expect(deny.routeCriteriaAnd).toEqual([
+            { operator: "starts_with", value: "/workflows/executions/" },
+        ]);
     });
 });

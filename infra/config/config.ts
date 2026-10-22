@@ -14,6 +14,11 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import { region_info } from "aws-cdk-lib";
 import { oidcSettings } from "./oidc-config";
 import { samlSettings } from "./saml-config";
+import {
+    CONFIG_FILE_CONTEXT_KEY,
+    DEFAULT_CONFIG_FILE_NAME,
+    resolveConfigFilePath,
+} from "./configFile";
 
 dotenv.config({ quiet: true });
 
@@ -481,18 +486,39 @@ function validateWafPolicy(policy: any) {
 }
 
 export function getConfig(app: cdk.App): Config {
-    const file: string = readFileSync(join(__dirname, "config.json"), {
-        encoding: "utf8",
-        flag: "r",
-    });
+    // CDK context `configFile` names the file (`-c configFile=config.staging.json`); default config.json.
+    const configFilePath = resolveConfigFilePath(app.node.tryGetContext(CONFIG_FILE_CONTEXT_KEY));
+    let file: string;
+    try {
+        file = readFileSync(configFilePath, {
+            encoding: "utf8",
+            flag: "r",
+        });
+    } catch (error) {
+        const reason = (error as Error).message;
+        throw new Error(
+            `Configuration Error: cannot read the configuration file ${configFilePath} (${reason}). ` +
+                `Set CDK context \`${CONFIG_FILE_CONTEXT_KEY}\` to a file in infra/config/ or to an ` +
+                `absolute path, for example \`-c ${CONFIG_FILE_CONTEXT_KEY}=${DEFAULT_CONFIG_FILE_NAME}\`.`
+        );
+    }
 
-    const configPublic: ConfigPublic = JSON.parse(file);
+    let configPublic: ConfigPublic;
+    try {
+        configPublic = JSON.parse(file);
+    } catch (error) {
+        throw new Error(
+            `Configuration Error: the configuration file ${configFilePath} is not valid JSON ` +
+                `(${(error as Error).message}).`
+        );
+    }
     const config: Config = <Config>configPublic;
 
     //Debugging Variables
     config.dockerDefaultPlatform = <string>process.env.DOCKER_DEFAULT_PLATFORM;
     config.enableCdkNag = true;
 
+    console.log("Configuration File: ", configFilePath);
     console.log("Python Version: ", LAMBDA_PYTHON_RUNTIME.name);
     console.log("Node Version: ", LAMBDA_NODE_RUNTIME.name);
 

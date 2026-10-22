@@ -9,6 +9,7 @@ import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as codebuild from "aws-cdk-lib/aws-codebuild";
 import * as s3assets from "aws-cdk-lib/aws-s3-assets";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as kms from "aws-cdk-lib/aws-kms";
 import * as cr from "aws-cdk-lib/custom-resources";
 import * as path from "path";
 import { Stack, RemovalPolicy, Duration } from "aws-cdk-lib";
@@ -21,6 +22,8 @@ export interface CoordinateTransformCodeBuildConstructProps extends cdk.StackPro
     vpc: ec2.IVpc;
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
+    /** `storageResources.encryption.kmsKey`: the shared VAMS key, undefined when the CMK is off. */
+    kmsKey?: kms.IKey;
 }
 
 export class CoordinateTransformCodeBuildConstruct extends Construct {
@@ -65,12 +68,35 @@ export class CoordinateTransformCodeBuildConstruct extends Construct {
         // either get different repositories, and only an orphan left by a failed teardown of the SAME
         // configuration can conflict. removalPolicy DESTROY + emptyOnDelete means an ordinary teardown
         // removes it.
-        const repositoryName = [props.config.name, props.config.app.baseStackName, "coordtransform"]
+        //
+        // Amazon ECR cannot change a repository's encryption after it is created, so turning
+        // useKmsCmkEncryption on or off replaces the repository, and AWS CloudFormation cannot replace
+        // a custom-named resource under the same name. The name therefore carries `-kms` when the key
+        // is used: a flip creates the repository under the other name, the build trigger re-fires on
+        // its new URI, and the old repository is deleted in the cleanup phase.
+        const repositoryName = [
+            props.config.name,
+            props.config.app.baseStackName,
+            "coordtransform",
+            ...(props.kmsKey ? ["kms"] : []),
+        ]
             .join("-")
             .toLowerCase();
 
+        // Imported by ARN, not passed as the key object, so no grant CDK derives can land in the key
+        // policy of the storage nested stack (infra/CLAUDE.md, encryption trap 2). Amazon ECR creates
+        // its own grants on the key when the repository is created; pushing and pulling need no
+        // permission on the key.
+        const encryptionKey = props.kmsKey
+            ? kms.Key.fromKeyArn(this, "CoordTransformEcrKmsKeyRef", props.kmsKey.keyArn)
+            : undefined;
+
         this.repository = new ecr.Repository(this, "EcrRepo-CoordTransform", {
             repositoryName,
+            encryption: encryptionKey
+                ? ecr.RepositoryEncryption.KMS
+                : ecr.RepositoryEncryption.AES_256,
+            encryptionKey,
             removalPolicy: RemovalPolicy.DESTROY,
             emptyOnDelete: true,
             imageScanOnPush: true,
@@ -192,7 +218,8 @@ def handler(event, context):
         //
         // MEASURED on the reference deployment: after the rename, the new repository held 0 images while
         // the job definition referenced tag `f0462...`, and the build had to be started by hand. Including
-        // the URI makes the rename itself the thing that re-fires the build.
+        // the URI makes the rename itself the thing that re-fires the build, including the `-kms` rename
+        // of a CMK flip.
         new cdk.CustomResource(this, "BuildTriggerCR-CoordTransform", {
             serviceToken: triggerProvider.serviceToken,
             properties: {
