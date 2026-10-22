@@ -1026,15 +1026,22 @@ def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: 
         Tuple of (total_size, success, error_message)
     """
     try:
-        list_parts_response = s3.list_parts(
-            Bucket=bucket_name,
-            Key=key,
-            UploadId=upload_id
-        )
+        # ListParts returns at most 1,000 parts per call, so page with PartNumberMarker
+        uploaded_parts = []
+        list_parts_kwargs = {
+            'Bucket': bucket_name,
+            'Key': key,
+            'UploadId': upload_id
+        }
+        while True:
+            list_parts_response = s3.list_parts(**list_parts_kwargs)
+            uploaded_parts.extend(list_parts_response.get('Parts', []))
+            if not list_parts_response.get('IsTruncated'):
+                break
+            list_parts_kwargs['PartNumberMarker'] = list_parts_response['NextPartNumberMarker']
         
         # Calculate total size from all uploaded parts
         total_file_size = 0
-        uploaded_parts = list_parts_response.get('Parts', [])
         
         # Verify all requested parts are uploaded and calculate size
         uploaded_part_numbers = {part['PartNumber'] for part in uploaded_parts}
