@@ -324,7 +324,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                                             marginBottom: "4px",
                                         }}
                                     >
-                                        Asset Id
+                                        {Synonyms.Asset} Id
                                     </div>
                                     <div style={{ marginBottom: "16px" }}>{asset?.assetId}</div>
                                     <div
