@@ -42,7 +42,7 @@ Returns a list of all files in the specified asset, including file metadata, siz
     "items": [
         {
             "fileName": "building.ifc",
-            "key": "/models/building.ifc",
+            "key": "asset-001/models/building.ifc",
             "relativePath": "/models/building.ifc",
             "isFolder": false,
             "size": 15728640,
@@ -60,7 +60,7 @@ Returns a list of all files in the specified asset, including file metadata, siz
         },
         {
             "fileName": "textures",
-            "key": "/textures/",
+            "key": "asset-001/textures/",
             "relativePath": "/textures/",
             "isFolder": true,
             "size": 0,
@@ -71,6 +71,8 @@ Returns a list of all files in the specified asset, including file metadata, siz
     "NextToken": "eyJ..."
 }
 ```
+
+`key` is the full Amazon S3 object key, which starts with the asset's base key. `relativePath` is the file's path under that base key, which is also what File Info returns.
 
 `changeSource` and `changeUserId` describe how the current version of each file was created. When `changeSource` is `workflowExecution`, `changeWorkflowId` and `changeWorkflowExecutionId` name the workflow and execution that wrote it; they are `null` for every other change source, and in `basic` mode, which performs no per-object read.
 
@@ -105,7 +107,7 @@ Retrieves detailed information about a specific file, including S3 metadata, ver
 ```json
 {
     "fileName": "building.ifc",
-    "key": "/models/building.ifc",
+    "key": "asset-001/models/building.ifc",
     "relativePath": "/models/building.ifc",
     "isFolder": false,
     "size": 15728640,

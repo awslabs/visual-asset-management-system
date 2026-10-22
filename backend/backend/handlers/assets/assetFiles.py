@@ -3148,6 +3148,9 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
         # For preview files or folders, set empty preview file
         metadata['previewFile'] = ""
     
+    # The path relative to the asset's base key, whatever that base key is
+    metadata['relativePath'] = '/' + relative_path_for_lookup
+    
     # Return response model
     return FileInfoResponseModel(**metadata)
 
