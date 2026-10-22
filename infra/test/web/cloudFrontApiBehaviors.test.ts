@@ -121,12 +121,12 @@ describe("CloudFront /api/* behaviors (commercial)", () => {
         );
     });
 
-    test("the catch-all read timeout follows the integration timeout", () => {
+    test("the catch-all read timeout is one second above the integration timeout", () => {
         const synth = s();
         const behavior = behaviors(synth).find((b) => b.PathPattern === "/api/*");
         const timeout = commercialTemplate.app.api.apiGatewayRest.apiGatewayTimeoutTime;
         expect(timeout).toBe(29);
-        expect(originOf(synth, behavior).CustomOriginConfig.OriginReadTimeout).toBe(timeout);
+        expect(originOf(synth, behavior).CustomOriginConfig.OriginReadTimeout).toBe(timeout + 1);
     });
 
     test("an integration timeout above 60 seconds caps the read timeout at 60", () => {

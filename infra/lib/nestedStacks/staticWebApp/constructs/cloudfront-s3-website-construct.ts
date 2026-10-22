@@ -356,14 +356,14 @@ export function addBehaviorToCloudFrontDistribution(
         });
     }
 
-    // The origin response timeout follows the integration timeout, capped at 60 seconds so the value
-    // stays inside CloudFront's default per-origin response timeout quota.
+    // The origin response timeout is one second above the integration timeout, so the REST API answers a
+    // timed-out integration before CloudFront does, capped at 60 seconds (CloudFront's default quota).
     cloudFrontDistribution.addBehavior(
         "/api/*",
         new cloudfrontOrigins.HttpOrigin(apiUrl, {
             originSslProtocols: [cloudfront.OriginSslPolicy.TLS_V1_2],
             protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
-            readTimeout: Duration.seconds(Math.min(apiGatewayTimeoutSeconds, 60)),
+            readTimeout: Duration.seconds(Math.min(apiGatewayTimeoutSeconds + 1, 60)),
         }),
         {
             cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
