@@ -1543,6 +1543,26 @@ class TestExecuteOrchestration:
         assert resolved == {}
         mock_row.assert_not_called()
 
+    def test_same_pipeline_in_two_steps_with_params_resolves(self):
+        # One pipeline (same database and id) referenced by two steps is not ambiguous: its
+        # parameters belong to that one pipeline, so the run resolves instead of being refused.
+        records = [
+            {"databaseId": "db1", "pipelineId": "convert", "systemConfig": {}, "_jobName": "a"},
+            {"databaseId": "db1", "pipelineId": "convert", "systemConfig": {}, "_jobName": "b"},
+        ]
+        params = {"convert": {"templateId": "t1"}}
+        template_row = {"templateId": "t1", "configBody": "x: 1", "configFormat": "yaml",
+                        "bodyStorage": "inline"}
+        with patch(f"{MOD}._get_template_row", return_value=template_row) as mock_row, \
+             patch(f"{MOD}._rehydrate_template_row", return_value=template_row), \
+             patch(f"{MOD}._load_tag_schema_fields", return_value=[]), \
+             patch(f"{MOD}._get_default_template_id", return_value=""):
+            errors, resolved = ewv2._resolve_pipeline_configs(records, params, "run-bucket")
+        assert errors == []
+        assert set(resolved.keys()) == {"db1:convert"}
+        assert resolved["db1:convert"]["templateId"] == "t1"
+        mock_row.assert_called_with("db1", "convert", "t1")
+
     def test_params_for_a_distinct_pipeline_id_still_resolve(self):
         # Control: parameters for an id only one pipeline carries are not affected by another id
         # that two pipelines share without parameters.

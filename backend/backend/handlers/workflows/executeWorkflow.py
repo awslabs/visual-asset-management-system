@@ -1140,14 +1140,15 @@ def _resolve_pipeline_configs(pipeline_records, pipeline_exec_params, default_bu
     template's overrides map (for the cross-entity validator's effective-config merge)."""
     errors = []
     resolved = {}
-    # Execute parameters are keyed by pipelineId alone, so parameters for an id that two of the
-    # workflow's pipelines share (in different databases) would apply to both; refuse the run
-    pipeline_id_counts = {}
+    # Execute parameters are keyed by pipelineId alone, so parameters for an id that pipelines in
+    # different databases share would apply to all of them; refuse the run. One pipeline (same
+    # database and id) referenced by several steps is not ambiguous and resolves normally.
+    databases_by_pipeline_id = {}
     for record in pipeline_records:
-        pipeline_id = record.get("pipelineId", "")
-        pipeline_id_counts[pipeline_id] = pipeline_id_counts.get(pipeline_id, 0) + 1
-    if any(count > 1 and pipeline_exec_params.get(pipeline_id)
-           for pipeline_id, count in pipeline_id_counts.items()):
+        databases_by_pipeline_id.setdefault(record.get("pipelineId", ""), set()).add(
+            record.get("databaseId", ""))
+    if any(len(database_ids) > 1 and pipeline_exec_params.get(pipeline_id)
+           for pipeline_id, database_ids in databases_by_pipeline_id.items()):
         return [PIPELINE_PARAMS_AMBIGUOUS_MESSAGE], {}
     for record in pipeline_records:
         pipeline_id = record.get("pipelineId", "")
