@@ -273,6 +273,37 @@ describe("AppRoutes", () => {
         }
     });
 
+    it("shows a no-access panel, not the landing page, for a route the role does not allow", async () => {
+        allowRoutes("/databases");
+
+        renderAt("/pipelines");
+
+        await waitFor(() =>
+            expect(screen.getByText("You do not have access to this page")).toBeInTheDocument()
+        );
+        expect(screen.queryByTestId("pipelines-page")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("landing-page")).not.toBeInTheDocument();
+        expect(screen.getByText("Go to Home")).toBeInTheDocument();
+    });
+
+    it("shows a not-found panel for an unknown route", async () => {
+        allowRoutes("/pipelines");
+
+        renderAt("/no-such-page");
+
+        await waitFor(() => expect(screen.getByText("Page not found")).toBeInTheDocument());
+        expect(screen.queryByTestId("landing-page")).not.toBeInTheDocument();
+    });
+
+    it("shows the landing page at / for any role", async () => {
+        allowRoutes(/* none */);
+
+        renderAt("/");
+
+        await waitFor(() => expect(screen.getByTestId("landing-page")).toBeInTheDocument());
+        expect(screen.queryByText("You do not have access to this page")).not.toBeInTheDocument();
+    });
+
     it("positive control: renders the gated page when the permission check allows it", async () => {
         // Proves the assertion above is about the fail-open list rather than about a harness
         // that never renders a gated page at all.

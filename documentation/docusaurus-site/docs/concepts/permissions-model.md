@@ -255,7 +255,7 @@ The following web routes can be checked via the `web` object type with the `rout
 
 | Route Path                                                           | Page                                  |
 | -------------------------------------------------------------------- | ------------------------------------- |
-| `*`                                                                  | Default landing page (always allowed) |
+| `*`                                                                  | Page not found (always allowed)       |
 | `/`                                                                  | Default landing page (always allowed) |
 | `/assetIngestion`                                                    | Asset ingestion                       |
 | `/assets`                                                            | Assets listing                        |

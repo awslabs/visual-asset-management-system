@@ -215,7 +215,7 @@ const coreRouteTable: RouteOption[] = [
     {
         path: "*",
         Page: LandingPage,
-        active: "/",
+        active: "",
     },
 ];
 
@@ -268,6 +268,41 @@ export function PageErrorPanel({ onHome }: { onHome: () => void }) {
                 }
             >
                 This page could not be displayed. The rest of the application is still available.
+            </Alert>
+        </Box>
+    );
+}
+
+/**
+ * Rendered in place of a page the user's role does not allow. The page's own data calls are
+ * also refused by the API; this only explains why the page is not shown.
+ */
+export function NoAccessPanel({ onHome }: { onHome: () => void }) {
+    return (
+        <Box padding="l">
+            <Alert
+                type="warning"
+                statusIconAriaLabel="Warning"
+                header="You do not have access to this page"
+                action={<Button onClick={onHome}>Go to Home</Button>}
+            >
+                Your roles do not allow this page. Contact your administrator if you need access.
+            </Alert>
+        </Box>
+    );
+}
+
+/** Rendered for a URL that matches no page. */
+export function NotFoundPanel({ onHome }: { onHome: () => void }) {
+    return (
+        <Box padding="l">
+            <Alert
+                type="info"
+                statusIconAriaLabel="Info"
+                header="Page not found"
+                action={<Button onClick={onHome}>Go to Home</Button>}
+            >
+                No page exists at this address.
             </Alert>
         </Box>
     );
@@ -399,6 +434,10 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                                     onRetry={retryRoutesCheck}
                                     onHome={() => navigate("/")}
                                 />
+                            ) : path === "*" ? (
+                                <NotFoundPanel onHome={() => navigate("/")} />
+                            ) : !allowedRoutes.includes(path) ? (
+                                <NoAccessPanel onHome={() => navigate("/")} />
                             ) : (
                                 // Suspense catches the lazy-load promise, not a render error.
                                 // Without a boundary here an uncaught error in any page
@@ -426,13 +465,7 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
         );
     };
 
-    const filterRoute = (routeOptions: RouteOption) => {
-        return allowedRoutes.includes(routeOptions.path);
-    };
-
-    // While the check has failed every route is mounted, so a deep link reaches the
-    // could-not-check panel rather than the catch-all.
-    const mountedRoutes = routesCheckFailed ? routeTable : routeTable.filter(filterRoute);
-
-    return <Routes>{mountedRoutes.map(buildRoute)}</Routes>;
+    // Every route is mounted, so a URL the user may not open reaches the no-access panel and an
+    // unknown URL the not-found panel, instead of either falling through to the landing page.
+    return <Routes>{routeTable.map(buildRoute)}</Routes>;
 };

@@ -157,9 +157,9 @@ Roles can be configured to require multi-factor authentication (MFA). When a rol
 
 ## Web route permissions
 
-Web route constraints control which pages appear in the navigation menu and are accessible by URL. If a user does not have a `web` constraint that allows GET access to a specific route path, that page is hidden from the navigation and returns a 403 error if accessed directly.
+Web route constraints control which pages appear in the navigation menu and are accessible by URL. If a user does not have a `web` constraint that allows GET access to a specific route path, that page is hidden from the navigation, and opening it directly shows **You do not have access to this page** with a **Go to Home** button. An address that matches no page shows **Page not found**.
 
-The landing page routes (`/` and `*`) are always allowed regardless of constraints, ensuring all users can reach the landing information page.
+The landing page route (`/`) is always allowed regardless of constraints, ensuring all users can reach the landing information page.
 
 For the complete list of web routes, see [Permissions Model: Web Route Reference](../concepts/permissions-model.md#web-route-reference).
 
