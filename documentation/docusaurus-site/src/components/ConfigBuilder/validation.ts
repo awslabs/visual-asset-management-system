@@ -1777,10 +1777,9 @@ export const RULES: Rule[] = [
     // (config.ts: "Cloudfront + ALB check (not more than 1)", "Cloudfront + ALB neither warning
     // check", "CloudFront Custom Domain Configuration Validation") -----
     //
-    // Take the severities from the two branches, not from those two leading comments: in config.ts
-    // the comment naming a check sits above the OTHER one's branch. Enabling BOTH distributions is
-    // the `throw new Error("...cannot have both enabled.")`; enabling NEITHER is the
-    // `console.warn("...API-DRIVEN SOLUTION-ONLY DEPLOYMENT.")`, which is a supported topology.
+    // Enabling BOTH distributions is the `throw new Error("...cannot have both enabled.")` under
+    // "not more than 1"; enabling NEITHER is the `console.warn("...API-DRIVEN SOLUTION-ONLY
+    // DEPLOYMENT.")` under "neither warning check", which is a supported topology.
     {
         id: "frontend-both",
         severity: "error",
