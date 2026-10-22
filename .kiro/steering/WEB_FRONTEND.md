@@ -297,9 +297,9 @@ import SpaceBetween from "@cloudscape-design/components/space-between";
 // INCORRECT -- never import from the barrel export
 import { Button, Table } from "@cloudscape-design/components";
 
-// CORRECT (orchestration module)
-import { Button } from "@radix-ui/themes";
-<div className="flex gap-2">...</div>;
+// CORRECT (orchestration module: Radix primitives styled with Tailwind, as in components/Dialog.tsx)
+import * as RadixDialog from "@radix-ui/react-dialog";
+<RadixDialog.Content className="rounded-md bg-white p-4 shadow-lg">...</RadixDialog.Content>;
 ```
 
 **Always import individual Cloudscape components from their subpath**, not from the barrel export. This is critical for bundle size. In the orchestration module, use Tailwind utility classes and Radix primitives.
