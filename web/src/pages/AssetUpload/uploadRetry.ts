@@ -114,14 +114,6 @@ export function isRateLimitError(error: any): boolean {
 }
 
 /**
- * Check if error is a 503 error
- */
-export function is503Error(error: any): boolean {
-    const statusCode = extractStatusCode(error);
-    return statusCode === 503;
-}
-
-/**
  * Get backoff time for retry based on error type
  */
 export function getBackoffTime(error: any, retryCount: number): number {
