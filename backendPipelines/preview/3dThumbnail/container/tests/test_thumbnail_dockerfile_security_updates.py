@@ -10,6 +10,10 @@ AWS Fargate patches the host, not the image's own packages. The runtime stage is
 the builder stage is held to the same rule because the compilers and the venv it produces run on its
 packages.
 
+The runtime image does not ship a package manager. npm installs splat-transform in the builder, and the
+pipeline runs only ``node``, so npm, npx and corepack, which arrive with the Node.js release tarball, are
+deleted in the install layer before the runtime stage copies ``/opt/node``.
+
 Read from the Dockerfile itself, instruction by instruction, with continuation lines joined, and split
 into stages at each FROM.
 """
@@ -61,6 +65,12 @@ def _package_layer(stage):
     return layers[0]
 
 
+def _is_root_user(instruction):
+    """Whether a ``USER`` instruction runs as root: its user part, before any ``:group``, is root or 0."""
+    user = instruction[len("USER "):].strip().split(":", 1)[0]
+    return user in ("root", "0")
+
+
 @pytest.mark.unit
 class TestTheImageTakesDebianSecurityUpdates:
     def test_the_dockerfile_keeps_its_builder_and_runtime_stages(self):
@@ -92,4 +102,67 @@ class TestTheImageTakesDebianSecurityUpdates:
 
     def test_the_runtime_stage_still_drops_to_a_non_root_user(self):
         users = [i for i in _stages()[-1] if i.startswith("USER ")]
-        assert users and users[-1] not in ("USER root", "USER 0"), users
+        assert users and not _is_root_user(users[-1]), users
+
+    @pytest.mark.parametrize("instruction, root", [
+        ("USER root", True), ("USER 0", True), ("USER root:root", True), ("USER 0:0", True),
+        ("USER 0:10001", True), ("USER root:appuser", True),
+        ("USER appuser", False), ("USER 10001", False), ("USER appuser:appuser", False),
+        ("USER 10001:10001", False),
+    ])
+    def test_the_user_check_reads_the_user_before_any_group(self, instruction, root):
+        # Control for the check above: a `user:group` form names root by its user part.
+        assert _is_root_user(instruction) is root
+
+
+# What the Node.js 22 linux-x64 tarball installs besides `node` itself.
+_PACKAGE_MANAGER = {
+    "/opt/node/bin/npm",
+    "/opt/node/bin/npx",
+    "/opt/node/bin/corepack",
+    "/opt/node/lib/node_modules/npm",
+    "/opt/node/lib/node_modules/corepack",
+}
+_NPM_CI = re.compile(r"\bnpm ci\b")
+_PACKAGE_MANAGER_WORD = re.compile(r"\b(?:npm|npx|corepack)\b")
+
+
+def _steps(instruction):
+    return [step.strip() for step in instruction[len("RUN "):].split("&&")]
+
+
+def _removed_paths(step):
+    return set(step.split()[2:]) if step.startswith("rm -rf ") else set()
+
+
+@pytest.mark.unit
+class TestTheRuntimeImageShipsNoPackageManager:
+    def _builder_install_layer(self):
+        builder = _stages()[0]
+        layers = [n for n, i in enumerate(builder) if i.startswith("RUN ") and _NPM_CI.search(i)]
+        assert len(layers) == 1, layers
+        return builder, layers[0]
+
+    def test_the_install_layer_removes_npm_npx_and_corepack_after_it_has_used_them(self):
+        builder, index = self._builder_install_layer()
+        steps = _steps(builder[index])
+        install = next(n for n, s in enumerate(steps) if _NPM_CI.search(s))
+        version_check = next(n for n, s in enumerate(steps) if "cli.mjs --version" in s)
+        after = steps[max(install, version_check) + 1:]
+        removed = set().union(*(_removed_paths(s) for s in after))
+        assert _PACKAGE_MANAGER <= removed, sorted(_PACKAGE_MANAGER - removed)
+        assert {p for p in removed if p.startswith("/opt/node")} == _PACKAGE_MANAGER, sorted(removed)
+        removal = next(n for n, s in enumerate(after) if _removed_paths(s) & _PACKAGE_MANAGER)
+        assert not any(_PACKAGE_MANAGER_WORD.search(s) for s in after[removal + 1:]), after
+
+    def test_nothing_later_in_the_builder_puts_a_package_manager_back(self):
+        builder, index = self._builder_install_layer()
+        later = builder[index + 1:]
+        assert not any("/opt/node" in i or _PACKAGE_MANAGER_WORD.search(i) for i in later), later
+
+    def test_the_runtime_stage_takes_node_only_from_the_builder(self):
+        runtime = _stages()[-1]
+        copies = [i for i in runtime if i.startswith("COPY ") and "/opt/node" in i]
+        assert copies == ["COPY --from=builder /opt/node /opt/node"], copies
+        assert not any(_PACKAGE_MANAGER_WORD.search(i) for i in runtime), [
+            i for i in runtime if _PACKAGE_MANAGER_WORD.search(i)]

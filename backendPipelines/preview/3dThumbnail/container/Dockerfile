@@ -8,7 +8,9 @@
 # Pinned by digest, not by tag. `python:3.12-slim` is a moving reference: a rebuild months apart can
 # produce a different image from identical sources, so an image that stops working cannot be told apart
 # from a change in this repository. The tag is kept alongside the digest for readability -- Docker
-# resolves the digest and ignores the tag.
+# resolves the digest and ignores the tag. Debian packages are the exception: each stage's upgrade layer
+# (below) takes what Debian has published on the build day, so two builds of one commit can differ in
+# Debian patch level, and the build log's `apt-get upgrade` lines list what moved.
 #
 # The digest is the multi-arch INDEX (`application/vnd.oci.image.index.v1+json`), not a single
 # platform's manifest, which is what keeps `--platform=linux/amd64` resolving. Pinning a per-platform
@@ -23,8 +25,13 @@
 # Both stages pin the same digest; move them together. The digest resolves to 3.12.15-slim-trixie.
 #
 # The pin fixes the Debian packages at the day the digest was built, so each stage's package layer runs
-# `apt-get upgrade -y` first: the security updates Debian has published since then are applied when the
-# image is built. AWS Batch on AWS Fargate patches the host, not the packages inside this image.
+# `apt-get upgrade -y` first: the security updates Debian has published since then go into the image that
+# build produces. AWS Batch on AWS Fargate patches the host, not the packages inside this image. A deployed
+# image takes later Debian updates only when this directory changes and the build runs on a cold cache:
+# CDK (ecs.AssetImage.fromAsset) skips the build when the directory's asset hash is already in the
+# bootstrap ECR repository, and Docker reuses the cached upgrade layer, whose instruction and pinned parent
+# do not change and which comes before every COPY. To take new updates deliberately, move the digest, or
+# rebuild with --no-cache after a change to this directory.
 
 # ---------------------------------------------------------------------------------------------------
 # Builder stage: compilers, the Python environment, Node.js and splat-transform. Only the installed
@@ -75,7 +82,8 @@ RUN python3 -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[
 # splat-transform at the exact version and dependency tree of the committed package-lock.json
 # (npm ci fails when the two disagree). Install scripts are skipped: the CLI's only native dependency
 # (webgpu, Dawn) ships prebuilt binaries and is used for GPU work this pipeline never requests; the
-# other platforms' binaries are removed.
+# other platforms' binaries are removed. npm, npx and corepack are then deleted from /opt/node: the
+# pipeline runs only node, so the package manager and its own dependencies are not shipped.
 COPY splat-transform/package.json splat-transform/package-lock.json /opt/splat-transform/
 RUN chmod -R a+rX /opt/splat-transform && \
     cd /opt/splat-transform && \
@@ -83,6 +91,8 @@ RUN chmod -R a+rX /opt/splat-transform && \
     rm -rf node_modules/webgpu/dist/darwin-universal node_modules/webgpu/dist/linux-arm64 \
            node_modules/webgpu/dist/win32-arm64 node_modules/webgpu/dist/win32-x64 && \
     /opt/node/bin/node node_modules/@playcanvas/splat-transform/bin/cli.mjs --version && \
+    rm -rf /opt/node/lib/node_modules/npm /opt/node/lib/node_modules/corepack \
+           /opt/node/bin/npm /opt/node/bin/npx /opt/node/bin/corepack && \
     chmod -R a+rX /opt/splat-transform
 
 # ---------------------------------------------------------------------------------------------------
