@@ -336,8 +336,13 @@ accumulate every record for a user-facing GET. When ordering or enrichment requi
 the full set first (e.g. metadata schema injection/ordering), enrich the full set,
 then offset-slice to the page. Limits that bound response size or protect Lambda
 runtime (e.g. `MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST`, worker-pool caps) stay as named
-constants with a rationale comment — keep them. CLI and web clients that consume a
-paginated GET must follow `NextToken` to retrieve the complete set.
+constants with a rationale comment — keep them. A count cap does not bound a response
+whose items vary in size: upload initialization (`uploadFile.py` `initialize_upload`)
+also estimates its presigned-URL response from each file's part count and key
+(`MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES` and the overhead constants in `models/assetsV3.py`)
+and refuses an over-budget request with a generic `400` before it creates any multipart
+upload. CLI and web clients that consume a paginated GET must follow `NextToken` to
+retrieve the complete set.
 
 **The token must round-trip, and nothing checks that for you.** The value the handler emits
 has to be something the request model accepts back, on the parameter the handler actually

@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 from datetime import datetime, timedelta
 from botocore.config import Config
+from botocore.utils import percent_encode
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -48,7 +49,9 @@ from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
     CompleteUploadRequestModel, CompleteUploadResponseModel, FileCompletionResult,
     CompleteExternalUploadRequestModel, ExternalFileModel,
-    AssetUploadTableModel
+    AssetUploadTableModel,
+    MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES, UPLOAD_PART_URL_FIXED_OVERHEAD_BYTES,
+    UPLOAD_RESPONSE_FILE_OVERHEAD_BYTES, UPLOAD_RESPONSE_BASE_OVERHEAD_BYTES,
 )
 
 # Configure AWS clients with retry configuration
@@ -183,6 +186,18 @@ def generate_presigned_url(key, upload_id, part_number, bucket, expiration=token
         ExpiresIn=int(expiration)
     )
     return url
+
+def estimate_initialize_response_file_bytes(relative_key, temp_s3_key, num_parts):
+    """Upper bound on the bytes one file adds to the serialized upload-initialize response.
+
+    The relativeKey is serialized twice, into the JSON body and then into the Lambda proxy
+    envelope, so it is measured that way. Each part's presigned URL carries the temporary key
+    percent-encoded as botocore encodes it for the request path, so a key of non-ASCII
+    characters costs up to three times its UTF-8 length in every part.
+    """
+    part_bytes = UPLOAD_PART_URL_FIXED_OVERHEAD_BYTES + len(percent_encode(temp_s3_key, safe='/~'))
+    return (UPLOAD_RESPONSE_FILE_OVERHEAD_BYTES + len(json.dumps(json.dumps(relative_key)))
+            + num_parts * part_bytes)
 
 def get_database_details(databaseId):
     """Get database details from DynamoDB including file upload restrictions
@@ -1119,6 +1134,8 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     # the earlier files with multipart uploads already created in S3 and no upload record to find them
     # by, so they linger until the bucket lifecycle rule expires them.
     temp_s3_keys = []
+    file_num_parts = []
+    estimated_response_bytes = UPLOAD_RESPONSE_BASE_OVERHEAD_BYTES
     for file in request_model.files:
         if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
             raise VAMSGeneralErrorResponse(f"Files contain an unsupported file extension")
@@ -1153,7 +1170,18 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         if exceeds_s3_object_key_limit(final_s3_key) or exceeds_s3_object_key_limit(temp_s3_key):
             raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
 
+        num_parts = calculate_num_parts(file.file_size, file.num_parts)
+        estimated_response_bytes += estimate_initialize_response_file_bytes(
+            file.relativeKey, temp_s3_key, num_parts)
         temp_s3_keys.append(temp_s3_key)
+        file_num_parts.append(num_parts)
+
+    # The response carries one presigned URL per part, and each URL carries its file's key, so the
+    # total-parts cap alone does not keep the response under the Lambda response limit. Refuse a
+    # request whose estimated response is over the budget here, before any multipart upload exists,
+    # with a message that does not echo the keys.
+    if estimated_response_bytes > MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES:
+        raise VAMSGeneralErrorResponse("Upload request too large; split the files across several requests")
 
     # Additional business logic validation
     if uploadType == "assetPreview" and asset.get('previewLocation'):
@@ -1172,9 +1200,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
 
     # Every file has already passed validation above, so no rejection can occur once the first
     # multipart upload has been created.
-    for file, temp_s3_key in zip(request_model.files, temp_s3_keys):
-        # Calculate number of parts
-        num_parts = calculate_num_parts(file.file_size, file.num_parts)
+    for file, temp_s3_key, num_parts in zip(request_model.files, temp_s3_keys, file_num_parts):
         total_parts += num_parts
         
         # Handle zero-byte files differently - don't create them yet, just return special response

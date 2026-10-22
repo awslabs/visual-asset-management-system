@@ -61,16 +61,19 @@ File upload initialization (stage 1) is limited to **20 upload initializations p
 
 ### Upload Request Size Limits
 
-A single upload-initialize request is bounded by three limits, each defined as a named constant in the backend:
+A single upload-initialize request is bounded by four limits, each defined as a named constant in the backend:
 
 | Limit                                  | Value      | Purpose                                                                                                                                         |
 | -------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | Files per request                      | **1,000**  | Bounds the request body size. Bulk uploads beyond this are split into multiple requests by the web app and VamsCLI.                             |
 | Parts per file                         | **10,000** | Matches the Amazon S3 hard limit on parts per multipart object.                                                                                 |
 | Total parts across all files (request) | **1,500**  | Bounds the upload-initialize Lambda's time and memory **and** keeps the presigned-URL response under the response-size limits (see note below). |
+| Estimated response size (request)      | **5 MiB**  | Keeps the presigned-URL response under the response-size limits when the file keys are long (see note below).                                   |
 
-:::note[Why the 1,500 total-parts cap is also a response-size guard]
-The upload-initialize response returns one presigned URL per part. The total-parts-per-request cap therefore directly bounds the response payload, keeping it under the **AWS Lambda synchronous response limit (6 MB)** and the **Amazon API Gateway payload limit**. At 2,048 bytes per presigned URL, 1,500 parts and 1,000 files with maximum-length keys give a response of about 4.5 MB. This value is not purely a throttle — raising it requires re-checking the worst-case response size (total parts × presigned-URL length) against those limits.
+:::note[Why the upload-initialize response is bounded twice]
+The upload-initialize response returns one presigned URL per part, and each URL carries a signed query string of about 2 KB plus the file's Amazon S3 key, percent-encoded. The total-parts cap bounds the number of URLs. The backend also estimates the response from each file's part count and key, and refuses a request whose estimate is over 5 MiB with `400` ("Upload request too large; split the files across several requests") before it creates any multipart upload. Together they keep the response under the **AWS Lambda synchronous response limit (6 MB)** and the **Amazon API Gateway payload limit**. Neither value is purely a throttle — raising either requires re-checking the worst-case response size (total parts × presigned-URL length) against those limits.
+
+With ordinary keys, 1,500 parts and 1,000 files give a response of about 4.5 MB, inside the estimate. A key of non-ASCII characters costs up to three times its UTF-8 length in every URL, so a request with long non-ASCII keys is refused below 1,500 parts: a file whose key is 1,024 bytes of non-ASCII characters fits about 930 parts in one request. For such a file, send fewer, larger parts.
 
 Because one file is initialized in one request, the cap also bounds a single file's part count: at 1 GiB parts, which the web app uses for files over 15 GB, one file can be up to 1,500 GiB.
 :::
