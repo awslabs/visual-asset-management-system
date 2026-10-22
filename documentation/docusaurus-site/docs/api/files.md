@@ -601,11 +601,12 @@ Each entry in `files` is an object:
 
 **Error Responses:**
 
-| Status | Description                                                       |
-| ------ | ----------------------------------------------------------------- |
-| `400`  | Invalid parameters, blocked file extension, or blocked MIME type. |
-| `403`  | Not authorized to upload files to this asset.                     |
-| `500`  | Internal server error.                                            |
+| Status | Description                                                                                                                          |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters, blocked file extension, or blocked MIME type.                                                                    |
+| `403`  | Not authorized to upload files to this asset.                                                                                        |
+| `429`  | Rate limit exceeded: at most 20 upload initializations per user per minute. The `Retry-After` header gives the seconds to wait (60). |
+| `500`  | Internal server error.                                                                                                               |
 
 :::info[Blocked File Types]
 For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. Corresponding MIME types are also blocked. The destination file name of a move, rename or copy gets the same extension check.
