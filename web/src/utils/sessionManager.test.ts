@@ -8,6 +8,7 @@ import {
     computeTimerDelayMs,
     scheduleExpiryTimer,
     clearExpiryTimer,
+    clearStoredSession,
     logoutExpired,
     navigation,
     SESSION_EXPIRED_KEY,
@@ -121,6 +122,40 @@ describe("sessionManager", () => {
             expect(localStorage.getItem("vams-theme-preference")).toBe("light");
             expect(localStorage.getItem("user")).toBeNull();
             expect(localStorage.getItem(SESSION_EXPIRED_KEY)).toBe("true");
+        });
+
+        it("preserves the viewer settings across the localStorage wipe", () => {
+            localStorage.setItem("ov_viewer_settings", '{"a":1}');
+            localStorage.setItem("ov_camera_settings", '{"b":2}');
+            logoutExpired("#/assets");
+            expect(localStorage.getItem("ov_viewer_settings")).toBe('{"a":1}');
+            expect(localStorage.getItem("ov_camera_settings")).toBe('{"b":2}');
+        });
+    });
+
+    describe("clearStoredSession", () => {
+        it("keeps the display preferences and removes every other key", () => {
+            localStorage.setItem("vams-theme-preference", "light");
+            localStorage.setItem("ov_viewer_settings", '{"a":1}');
+            localStorage.setItem("ov_camera_settings", '{"b":2}');
+            localStorage.setItem("user", JSON.stringify({ username: "u" }));
+            localStorage.setItem("oauth2_token", "t");
+            localStorage.setItem("CognitoIdentityServiceProvider.client.u.idToken", "x");
+
+            clearStoredSession();
+
+            expect(localStorage.getItem("vams-theme-preference")).toBe("light");
+            expect(localStorage.getItem("ov_viewer_settings")).toBe('{"a":1}');
+            expect(localStorage.getItem("ov_camera_settings")).toBe('{"b":2}');
+            expect(localStorage.length).toBe(3);
+        });
+
+        it("does not create preference keys that were not set", () => {
+            localStorage.setItem("user", "u");
+
+            clearStoredSession();
+
+            expect(localStorage.length).toBe(0);
         });
     });
 });

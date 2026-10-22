@@ -29,6 +29,7 @@ import {
     scheduleExpiryTimer,
     clearExpiryTimer,
     registerFocusRevalidation,
+    clearStoredSession,
     SESSION_EXPIRED_KEY,
     SESSION_RETURN_TO_KEY,
 } from "../utils/sessionManager";
@@ -1237,7 +1238,7 @@ const signOutWithError = (key = "auth_error", value = "Unauthorized") => {
         .catch((error) => {
             console.log("User sign out error", error);
         });
-    localStorage.clear();
+    clearStoredSession();
     localStorage.setItem(key, value);
     window.location.href = "/";
 };

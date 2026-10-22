@@ -9,8 +9,14 @@ import { ensureSessionValid, getCurrentTokenExpiryMs } from "./authTokenUtils";
 /** localStorage keys read by Auth.tsx to drive the login-screen message and route restore. */
 export const SESSION_EXPIRED_KEY = "session_expired";
 export const SESSION_RETURN_TO_KEY = "session_return_to";
-/** localStorage key for the persisted theme preference (preserved across forced logout). */
+/** localStorage key for the persisted theme preference. */
 const THEME_PREFERENCE_KEY = "vams-theme-preference";
+/** localStorage keys holding display preferences, kept when a sign-out clears localStorage. */
+const PRESERVED_PREFERENCE_KEYS = [
+    THEME_PREFERENCE_KEY,
+    "ov_viewer_settings",
+    "ov_camera_settings",
+];
 
 const SKEW_MS = 60_000; // refresh this long before expiry
 const MIN_TIMER_MS = 5_000; // floor against tight reschedule loops
@@ -109,8 +115,22 @@ export function registerFocusRevalidation(): () => void {
 }
 
 /**
+ * Clear localStorage for a sign-out while keeping the display preferences (theme and the
+ * Online 3D Viewer settings). Every other key, including Amplify's token keys, is removed.
+ */
+export function clearStoredSession(): void {
+    const kept = PRESERVED_PREFERENCE_KEYS.map((key) => [key, localStorage.getItem(key)] as const);
+    localStorage.clear();
+    for (const [key, value] of kept) {
+        if (value !== null) {
+            localStorage.setItem(key, value);
+        }
+    }
+}
+
+/**
  * Tear down a session that can no longer be refreshed: stop the timer, sign out of
- * Amplify, wipe localStorage (preserving theme), record the expired flag + the route
+ * Amplify, clear localStorage (keeping display preferences), record the expired flag + the route
  * to return to, then redirect to the login screen. Idempotent — first caller wins.
  */
 export function logoutExpired(returnTo: string = window.location.hash): void {
@@ -120,12 +140,8 @@ export function logoutExpired(returnTo: string = window.location.hash): void {
     loggingOut = true;
     clearExpiryTimer();
 
-    const theme = localStorage.getItem(THEME_PREFERENCE_KEY);
     void signOut().catch(() => {});
-    localStorage.clear();
-    if (theme) {
-        localStorage.setItem(THEME_PREFERENCE_KEY, theme);
-    }
+    clearStoredSession();
     localStorage.setItem(SESSION_EXPIRED_KEY, "true");
     if (returnTo) {
         localStorage.setItem(SESSION_RETURN_TO_KEY, returnTo);
