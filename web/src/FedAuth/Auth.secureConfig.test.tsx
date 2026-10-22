@@ -294,7 +294,7 @@ describe("Auth holds the app until the feature switches are known", () => {
 
     it("shows the deployment banner above the loading screen while it holds", async () => {
         seedMode(COGNITO_CONFIG);
-        mockGetSecureConfig.mockReturnValue(new Promise(() => {}));
+        mockGetSecureConfig.mockReturnValue(new Promise(() => undefined));
 
         renderAuth();
 
@@ -311,7 +311,7 @@ describe("Auth holds the app until the feature switches are known", () => {
         jest.useFakeTimers();
         try {
             seedMode(COGNITO_CONFIG);
-            mockGetSecureConfig.mockReturnValue(new Promise(() => {}));
+            mockGetSecureConfig.mockReturnValue(new Promise(() => undefined));
 
             renderAuth();
 
