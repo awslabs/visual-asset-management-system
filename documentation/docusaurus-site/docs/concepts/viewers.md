@@ -279,6 +279,10 @@ The SuperSplat editor's tools and export/download features operate in the browse
 
 Files are delivered to the SuperSplat editor via presigned Amazon S3 URLs passed through a `?load=` query parameter. The presigned URLs enable direct range-request access to Amazon S3, supporting future streaming capabilities for large splat datasets.
 
+:::note[The file URL is recorded in web logs]
+Each SuperSplat view records its working presigned URL in the web access logs and, when `app.useWaf` is `true`, in the AWS WAF log group. See [SuperSplat Editor File URLs in Web Logs](../troubleshooting/known-limitations.md#supersplat-editor-file-urls-in-web-logs) for the log locations, how long they keep the URL, and the settings that limit it.
+:::
+
 ---
 
 ## Related pages
