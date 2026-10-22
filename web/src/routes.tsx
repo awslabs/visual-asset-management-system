@@ -465,7 +465,7 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
         );
     };
 
-    // Every route is mounted, so a URL the user may not open reaches the no-access panel and an
-    // unknown URL the not-found panel, instead of either falling through to the landing page.
+    // Every route is mounted, so a URL the role does not allow reaches the no-access panel and an
+    // unknown URL the not-found panel.
     return <Routes>{routeTable.map(buildRoute)}</Routes>;
 };
