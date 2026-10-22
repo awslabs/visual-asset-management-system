@@ -315,7 +315,7 @@ An add-on's viewer, and a licensed viewer that ships disabled (VNTANA, VEERUM), 
 | `supportsMultiFile`          | boolean           | Can handle multiple files at once                    |
 | `canFullscreen`              | boolean           | Supports fullscreen mode                             |
 | `priority`                   | number            | Lower = listed first when multiple viewers match     |
-| `loadStrategy`               | "lazy" \| "eager" | When to load the component                           |
+| `loadStrategy`               | "lazy" \| "eager" | Not read; every viewer loads on first use            |
 | `category`                   | string            | Viewer category (3d, media, document, data, preview) |
 | `featuresEnabledRestriction` | string[]?         | Required feature flags                               |
 | `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
