@@ -6,6 +6,8 @@
 import os
 import boto3
 import json
+import secrets
+import string
 from datetime import datetime
 from botocore.exceptions import ClientError
 from botocore.config import Config
@@ -42,6 +44,11 @@ logger = safeLogger(service_name="CognitoUserService")
 
 # Largest page Cognito's ListUsers accepts.
 COGNITO_LIST_USERS_PAGE_SIZE = 60
+
+# Random password set during a reset; long enough for any pool minimum and the 256 maximum.
+UNUSABLE_PASSWORD_LENGTH = 64
+# Symbols from the set Cognito counts as special characters.
+UNUSABLE_PASSWORD_SYMBOLS = "^$*.[]{}()?!@#%&/,><:;|_~"
 
 # Global variables for claims and roles
 claims_and_roles = {}
@@ -393,14 +400,35 @@ def delete_cognito_user(user_id, claims_and_roles):
         raise VAMSGeneralErrorResponse("Error deleting user")
 
 
+def generate_unusable_password():
+    """Return a random password that satisfies the user pool password policy.
+
+    It is set on the account only so that the account moves to FORCE_CHANGE_PASSWORD; it is
+    never returned, logged or sent, and the invitation resend replaces it with the temporary
+    password Cognito generates.
+    """
+    required = [
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.digits),
+        secrets.choice(UNUSABLE_PASSWORD_SYMBOLS),
+    ]
+    alphabet = string.ascii_letters + string.digits + UNUSABLE_PASSWORD_SYMBOLS
+    rest = [secrets.choice(alphabet) for _ in range(UNUSABLE_PASSWORD_LENGTH - len(required))]
+    characters = required + rest
+    secrets.SystemRandom().shuffle(characters)
+    return "".join(characters)
+
+
 def reset_user_password(user_id, claims_and_roles):
     """Reset a Cognito user's password
 
-    Starts the Cognito password reset flow with admin_reset_user_password, which puts the
-    account into RESET_REQUIRED state and emails the user a password reset code. An account
-    that has never completed a first sign-in has no password to reset, so for those Cognito
-    resends the invitation message with a new temporary password. The account itself is left
-    in place on both paths, along with its email, phone and other attributes.
+    Replaces the user's password with a new temporary password and emails it with the user
+    pool's invitation message. admin_set_user_password with Permanent=False puts the account
+    into FORCE_CHANGE_PASSWORD with a random password nobody holds, and admin_create_user with
+    MessageAction RESEND then has Cognito generate a temporary password and email it. The user
+    must set a new password at their next sign-in. The account itself is left in place, along
+    with its sub, email, phone and other attributes.
 
     Args:
         user_id: The user ID to reset password for
@@ -414,38 +442,33 @@ def reset_user_password(user_id, claims_and_roles):
 
         logger.info(f"Resetting password for Cognito user {user_id}")
 
-        try:
-            cognito_client.admin_reset_user_password(
-                UserPoolId=user_pool_id,
-                Username=user_id
-            )
-            logger.info(f"Started the password reset flow for user {user_id}")
-            delivery_detail = "A password reset code has been sent to their email."
-        except ClientError as e:
-            error_code = e.response['Error']['Code']
-            if error_code == 'UserNotFoundException':
-                raise VAMSGeneralErrorResponse("User not found")
-            if error_code not in ('NotAuthorizedException', 'InvalidParameterException'):
-                raise
+        cognito_client.admin_set_user_password(
+            UserPoolId=user_pool_id,
+            Username=user_id,
+            Password=generate_unusable_password(),
+            Permanent=False
+        )
+        logger.info(f"Replaced the password of user {user_id}; the account requires a password change")
 
-            # The reset code flow needs an account that has completed its first sign-in and
-            # has a verified email or phone; otherwise the invitation message is resent
-            logger.info(f"Password reset flow unavailable for user {user_id} ({error_code}), resending invitation")
+        try:
             cognito_client.admin_create_user(
                 UserPoolId=user_pool_id,
                 Username=user_id,
                 MessageAction='RESEND',
                 DesiredDeliveryMediums=['EMAIL']
             )
-            logger.info(f"Resent the invitation message for user {user_id}")
-            delivery_detail = "A new temporary password has been sent to their email."
-
-        logger.info(f"Successfully reset password for Cognito user {user_id}")
+        except ClientError as e:
+            logger.exception(f"Cognito error sending the temporary password: {e.response['Error']['Code']}")
+            raise VAMSGeneralErrorResponse(
+                "The password was reset but the temporary password email could not be sent. "
+                "Reset the password again to resend it."
+            )
+        logger.info(f"Sent a temporary password to user {user_id}")
 
         now = datetime.utcnow().isoformat()
         return CognitoUserOperationResponseModel(
             success=True,
-            message=f"Password reset successfully for user {user_id}. {delivery_detail}",
+            message=f"Password reset successfully for user {user_id}. A new temporary password has been sent to their email.",
             userId=user_id,
             operation="resetPassword",
             timestamp=now
