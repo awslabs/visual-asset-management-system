@@ -38,7 +38,6 @@ web/
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
-    reportWebVitals.ts      # Web vitals reporting
     setupTests.ts           # Jest setup
 
     features/orchestration/ # Pipeline/workflow/execution management (React 18, Tailwind, Radix)
