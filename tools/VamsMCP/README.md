@@ -299,8 +299,10 @@ its member's execution id and each `notAbortable` entry carries its member's
 
 `create_pipeline` and `update_pipeline` can return a `warnings` array on a
 successful save (for example a `requireTemplate` pipeline with no default template
-chosen, or the stale-deployment notice after an `executionConfig` change).
-The save succeeded; the warnings still need relaying.
+chosen, or, after an `executionConfig` change, how many referencing workflows are
+being redeployed in the background). The save succeeded; the warnings still need
+relaying. A workflow launch that the background redeploy has not reached yet
+redeploys the workflow first, or returns a retryable `409` and starts nothing.
 
 `create_pipeline_template`, `update_pipeline_template`, and
 `set_pipeline_template_tag_schema` reject an unrecognized key in a tag definition

@@ -41,6 +41,7 @@ if "common.workflows.stepfunctions_builder" not in sys.modules:
     sys.modules["common.workflows.stepfunctions_builder"] = _stub
 
 from backend.backend.handlers.workflows import executeWorkflow as ewv2
+from backend.tests.workflowDeploymentStub import with_current_deployment
 
 MOD = "backend.backend.handlers.workflows.executeWorkflow"
 
@@ -1153,10 +1154,13 @@ def _allow_enforcer():
 
 @pytest.mark.unit
 class TestExecuteOrchestration:
-    def _patches(self, workflow=_WORKFLOW, pipeline=_PIPELINE):
-        """Patch the record fetches, bucket resolution, S3, SFN, and table writers for a happy path."""
+    def _patches(self, workflow=_WORKFLOW, pipeline=_PIPELINE, deployed_from=None):
+        """Patch the record fetches, bucket resolution, S3, SFN, and table writers for a happy path.
+        The workflow is stamped as deployed from `deployed_from` (default: `pipeline`), so the
+        launch-time deployment check passes without a redeploy."""
         return {
-            "get_workflow": patch(f"{MOD}._get_workflow", return_value=dict(workflow)),
+            "get_workflow": patch(f"{MOD}._get_workflow", return_value=with_current_deployment(
+                workflow, deployed_from if deployed_from is not None else [pipeline])),
             "get_pipeline": patch(f"{MOD}._get_pipeline", return_value=dict(pipeline)),
             "get_asset": patch(f"{MOD}._get_asset", return_value=dict(_ASSET)),
             "default_bucket": patch(f"{MOD}._default_run_bucket",
