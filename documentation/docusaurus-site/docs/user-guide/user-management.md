@@ -112,7 +112,7 @@ When you update a user's email or phone number through the VAMS interface, the n
 
 ## Resetting a user password
 
-Password reset in VAMS recreates the user account in Amazon Cognito with the same email and phone number attributes, generating a new temporary password that is sent to the user's email.
+Password reset in VAMS replaces the user's password in Amazon Cognito with a new temporary password and sends it to the user's email in the registration (invitation) message. The user account, its email and phone number attributes, and its VAMS role assignments are kept.
 
 1. On the **User Management** page, select the user whose password you want to reset.
 2. Choose **Reset Password**.
