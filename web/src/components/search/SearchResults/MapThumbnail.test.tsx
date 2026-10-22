@@ -9,7 +9,7 @@
  * leaves view or unmounts.
  */
 import React from "react";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, within } from "@testing-library/react";
 import MapThumbnail, { MAX_LIVE_MAP_THUMBNAILS } from "./MapThumbnail";
 
 let mockLiveMaps = 0;
@@ -72,10 +72,14 @@ const located = (i: number) => ({
 const Rows = ({ count }: { count: number }) => (
     <>
         {Array.from({ length: count }, (_, i) => (
-            <MapThumbnail key={i} assetData={located(i)} mapStyleUrl="style.json" />
+            <div key={i} data-testid={`row-${i}`}>
+                <MapThumbnail assetData={located(i)} mapStyleUrl="style.json" />
+            </div>
         ))}
     </>
 );
+
+const row = (i: number) => within(screen.getByTestId(`row-${i}`));
 
 beforeEach(() => {
     mockLiveMaps = 0;
@@ -101,10 +105,19 @@ describe("MapThumbnail live map budget", () => {
     });
 
     it("hands a freed slot to a waiting thumbnail when one leaves view", () => {
-        const { unmount } = render(<Rows count={MAX_LIVE_MAP_THUMBNAILS + 1} />);
-        expect(screen.getAllByTestId("map-thumbnail-placeholder")).toHaveLength(1);
+        const last = MAX_LIVE_MAP_THUMBNAILS;
+        const { unmount } = render(<Rows count={last + 1} />);
 
-        const first = observers[0];
+        // The first rows hold the live maps; the last row waits on a placeholder.
+        for (let i = 0; i < last; i++) {
+            expect(row(i).getByTestId("live-map")).toBeInTheDocument();
+        }
+        expect(row(last).getByTestId("map-thumbnail-placeholder")).toBeInTheDocument();
+        expect(row(last).queryByTestId("live-map")).toBeNull();
+
+        const firstRow = screen.getByTestId("row-0");
+        const first = observers.find((o) => firstRow.contains(o.element ?? null));
+        if (!first) throw new Error("no observer for the first row");
         act(() => {
             first.callback(
                 [{ isIntersecting: false, target: first.element } as IntersectionObserverEntry],
@@ -112,9 +125,13 @@ describe("MapThumbnail live map budget", () => {
             );
         });
 
-        // The scrolled-away thumbnail is now the placeholder, and the waiting one has its map.
-        expect(screen.getAllByTestId("live-map")).toHaveLength(MAX_LIVE_MAP_THUMBNAILS);
-        expect(screen.getAllByTestId("map-thumbnail-placeholder")).toHaveLength(1);
+        // The scrolled-away row is now the placeholder, and the waiting row has the freed map.
+        expect(row(0).getByTestId("map-thumbnail-placeholder")).toBeInTheDocument();
+        expect(row(0).queryByTestId("live-map")).toBeNull();
+        expect(row(last).getByTestId("live-map")).toBeInTheDocument();
+        for (let i = 1; i < last; i++) {
+            expect(row(i).getByTestId("live-map")).toBeInTheDocument();
+        }
         unmount();
         expect(mockLiveMaps).toBe(0);
     });
