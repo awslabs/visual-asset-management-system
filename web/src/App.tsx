@@ -17,6 +17,7 @@ import { PageFooter } from "./authenticator/Footer";
 import config from "./config";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "./features/orchestration/components/ToastProvider";
+import { clearStoredSession } from "./utils/sessionManager";
 
 const queryClient = new QueryClient({
     defaultOptions: {
@@ -62,7 +63,7 @@ function App() {
     const menuText = user?.username;
 
     const signOut = () => {
-        localStorage.clear();
+        clearStoredSession();
         amplifySignOut()
             .then(() => {
                 console.log("User signed out - signout button clicked");

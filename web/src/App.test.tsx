@@ -10,15 +10,19 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import App from "./App";
 
+let mockUtilities: any[] = [];
 jest.mock("@cloudscape-design/components", () => ({
-    TopNavigation: ({ utilities }: any) => (
-        <div data-testid="top-navigation">
-            {(utilities || []).map((utility: any) => utility.text).join(",")}
-        </div>
-    ),
+    TopNavigation: ({ utilities }: any) => {
+        mockUtilities = utilities || [];
+        return (
+            <div data-testid="top-navigation">
+                {(utilities || []).map((utility: any) => utility.text).join(",")}
+            </div>
+        );
+    },
 }));
 
 jest.mock("./routes", () => ({ AppRoutes: () => <div data-testid="app-routes" /> }));
@@ -71,6 +75,26 @@ describe("App shell", () => {
             const logged = log.mock.calls.map((call) => call.map(String).join(" "));
             expect(logged.filter((line) => line.includes("current user is"))).toEqual([]);
         } finally {
+            log.mockRestore();
+        }
+    });
+
+    it("keeps the theme preference and removes the session keys on header sign-out", async () => {
+        // jsdom reports the "/" redirect as an unimplemented navigation; that is not under test.
+        const error = jest.spyOn(console, "error").mockImplementation(() => {});
+        const log = jest.spyOn(console, "log").mockImplementation(() => {});
+        try {
+            localStorage.setItem("vams-theme-preference", "light");
+            localStorage.setItem("user", JSON.stringify({ username: "u1" }));
+
+            render(<App />);
+            const userMenu = mockUtilities.find((utility) => utility.text === "u1");
+            userMenu.onItemClick({ detail: { id: "signout" } });
+
+            await waitFor(() => expect(localStorage.getItem("user")).toBeNull());
+            expect(localStorage.getItem("vams-theme-preference")).toBe("light");
+        } finally {
+            error.mockRestore();
             log.mockRestore();
         }
     });
