@@ -337,7 +337,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 }
             }
         };
-    }, [viewerMode, customParameters, cesiumLoaded]);
+    }, [customParameters, cesiumLoaded]);
 
     // Helper function to configure camera for tileset viewing
     const configureCameraForTileset = useCallback((tileset: any, geolocated: boolean) => {
