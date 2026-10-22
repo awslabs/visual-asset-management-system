@@ -43,9 +43,13 @@ class TestCurrentVersionAlias:
     @pytest.mark.parametrize("alias, expected", [("v2", "v2"), ("", None)], ids=["aliased", "empty"])
     def test_the_listings_report_the_alias(self, alias, expected):
         m = _load()
-        helper = MagicMock(return_value=([_row(alias)], []))
-        with patch.object(m, "batch_get_items", helper):
+        resource = MagicMock()
+        resource.batch_get_item.return_value = {
+            "Responses": {m.asset_versions_table_name: [_row(alias)]}}
+        per_item = MagicMock()
+        with patch.object(m, "dynamodb", resource), patch.object(m, "versions_table", per_item):
             [enhanced] = m.enhance_assets_with_version_info([_asset()])
 
-        helper.assert_called_once()
+        assert resource.batch_get_item.call_args_list  # the row came from the batched read
+        per_item.get_item.assert_not_called()
         assert enhanced["currentVersion"].versionAlias == expected
