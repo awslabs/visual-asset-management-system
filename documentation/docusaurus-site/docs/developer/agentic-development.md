@@ -110,7 +110,7 @@ The frontend steering document (`web/CLAUDE.md`) enforces the use of VAMS Synony
 // CORRECT - use Synonyms for customizable display names
 import Synonyms from "../../synonyms";
 <Header>{Synonyms.Assets}</Header>
-<p>Select a {Synonyms.Database}</p>
+<p>{`Select the ${Synonyms.database} to continue`}</p>
 ```
 
 The steering document specifies that Synonyms must be used in headers, labels, descriptions, placeholders, alt text, error messages, success messages, button text, modal titles, and empty state text. It also specifies that Synonyms must not be used in API request body values, variable names, route paths, or log messages.

@@ -467,7 +467,7 @@ import Synonyms from "../../synonyms";
 <FormField label={`${Synonyms.Asset} Name`}>
 
 // Descriptions and inline text -- use lowercase synonyms
-<p>{`Select a ${Synonyms.database} to continue`}</p>
+<p>{`Select the ${Synonyms.database} to continue`}</p>
 placeholder={`Search ${Synonyms.assets} and files...`}
 
 // Error messages

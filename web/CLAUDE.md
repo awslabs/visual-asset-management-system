@@ -1189,7 +1189,7 @@ const token = await getDualValidAccessToken();
 // CORRECT -- use Synonyms for customizable display names
 import Synonyms from "../../synonyms";
 <Header>{Synonyms.Assets}</Header>
-<p>Select a {Synonyms.Database}</p>
+<p>{`Select the ${Synonyms.database} to continue`}</p>
 ```
 
 See section 9.4 for the full Synonyms rules.
