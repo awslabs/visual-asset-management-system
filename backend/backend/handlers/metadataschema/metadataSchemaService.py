@@ -657,7 +657,7 @@ def handle_get_request(event):
                     return success(body=response_model.dict())
                 except ValidationError as v:
                     logger.exception(f"Error converting schema to response model: {v}")
-                    return success(body={"message": schema})
+                    return success(body=schema)
             else:
                 return general_error(body={"message": "Metadata schema not found"}, status_code=404, event=event)
         
