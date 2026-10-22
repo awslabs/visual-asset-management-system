@@ -361,8 +361,9 @@ def update_state_machine(
     state_machine_arn: str,
     definition: Dict[str, Any],
     role_arn: str,
-    log_group_arn: str
-) -> None:
+    log_group_arn: str,
+    publish: bool = False
+) -> Optional[str]:
     """
     Update an existing Step Functions state machine.
     
@@ -372,10 +373,18 @@ def update_state_machine(
         definition: New ASL definition dictionary
         role_arn: ARN of the IAM role for the state machine
         log_group_arn: ARN of the CloudWatch log group
+        publish: also publish the updated revision as a new version, in the same request
+
+    Returns:
+        The published version ARN when publish is True, else None
     """
     definition_json = serialize_definition(definition)
-    
-    sf_client.update_state_machine(
+
+    kwargs = {}
+    if publish:
+        kwargs['publish'] = True
+
+    response = sf_client.update_state_machine(
         stateMachineArn=state_machine_arn,
         definition=definition_json,
         roleArn=role_arn,
@@ -390,8 +399,27 @@ def update_state_machine(
         },
         tracingConfiguration={
             'enabled': True
-        }
+        },
+        **kwargs
     )
+    if not publish:
+        return None
+    return (response or {}).get('stateMachineVersionArn')
+
+
+def publish_state_machine_version(sf_client, state_machine_arn: str) -> str:
+    """
+    Publish the current revision of a state machine as a new version.
+
+    Args:
+        sf_client: boto3 Step Functions client
+        state_machine_arn: ARN of the state machine
+
+    Returns:
+        The published version ARN
+    """
+    response = sf_client.publish_state_machine_version(stateMachineArn=state_machine_arn)
+    return response['stateMachineVersionArn']
 
 
 def format_s3_uri_with_states_format(

@@ -12,8 +12,7 @@ HANGS instead of failing, and a timeout names no test.
 
 The four loops, and what bounds each:
 
-* ``_referencing_workflow_labels`` -- BOUNDED by ``MAX_REFERENCING_WORKFLOW_PAGES`` pages and
-  ``MAX_REFERENCING_WORKFLOWS`` labels;
+* ``_referencing_workflows`` -- BOUNDED by ``MAX_REFERENCING_WORKFLOW_PAGES`` pages;
 * ``find_pipeline_id_owner`` -- BOUNDED by ``MAX_ID_LOOKUP_PAGES`` pages, returns a single id;
 * ``get_pipeline_templates`` -- BOUNDED by its ``limit`` (``MAX_DETAIL_TEMPLATES``), which is also the
   query ``Limit``, and returns as soon as that many descriptors are collected;
@@ -22,7 +21,7 @@ The four loops, and what bounds each:
   item rather than capped here: a cap would turn a reported total into a silently partial one, which
   is a contract decision.
 
-Two of the four (``_template_count``, ``_referencing_workflow_labels``) sit inside a best-effort
+Two of the four (``_template_count``, ``_referencing_workflows``) sit inside a best-effort
 ``except Exception`` that returns a degraded value. That is why the shared reader raises a
 ``BaseException``: an ``Exception`` would be swallowed and the hang would read as an ordinary
 degraded result.
@@ -179,8 +178,8 @@ class TestTemplateCountPaging:
 
 @pytest.mark.unit
 class TestReferencingWorkflowLookupPaging:
-    """BOUNDED: the walk stops at MAX_REFERENCING_WORKFLOW_PAGES pages / MAX_REFERENCING_WORKFLOWS
-    labels, so this loop cannot accumulate an unbounded set. The paging form still has to be right,
+    """BOUNDED: the walk stops at MAX_REFERENCING_WORKFLOW_PAGES pages, so this loop cannot
+    accumulate an unbounded set. The paging form still has to be right,
     because within the cap the referencing workflow can sit on any page."""
 
     def test_a_referencing_workflow_on_a_later_page_is_found(self):
@@ -188,13 +187,14 @@ class TestReferencingWorkflowLookupPaging:
             {"Items": [_workflow("wf-page-1")],
              "LastEvaluatedKey": {"allListPartition": "workflow", "dateModified": "1"}},
             {"Items": [_workflow("wf-page-2", ["db1:pipe1"])]},
-            name="_referencing_workflow_labels",
+            name="_referencing_workflows",
         )
         table = MagicMock()
         table.query.side_effect = pager
 
         with patch(f"{MOD}._workflow_table", return_value=table):
-            labels = ps._referencing_workflow_labels("db1", "pipe1")
+            matches, _complete = ps._referencing_workflows("db1", "pipe1")
+            labels = [match["label"] for match in matches]
 
         assert labels == ["db1:wf-page-2"]
         pager.assert_paged_to_exhaustion()
@@ -204,13 +204,13 @@ class TestReferencingWorkflowLookupPaging:
             {"Items": [_workflow("wf-page-1")],
              "LastEvaluatedKey": {"allListPartition": "workflow", "dateModified": "1"}},
             {"Items": [_workflow("wf-page-2", ["db1:pipe1"])]},
-            name="_referencing_workflow_labels",
+            name="_referencing_workflows",
         )
         table = MagicMock()
         table.query.side_effect = pager
 
         with patch(f"{MOD}._workflow_table", return_value=table):
-            ps._referencing_workflow_labels("db1", "pipe1")
+            ps._referencing_workflows("db1", "pipe1")
 
         assert all(call["IndexName"] == "WorkflowsByDateGSI" for call in pager.calls), pager.calls
         # The attributes the match NEEDS are projected on every continuation. Asserted as containment
@@ -221,17 +221,19 @@ class TestReferencingWorkflowLookupPaging:
             assert {"databaseId", "workflowId", "specifiedPipelines"} <= projected, call
 
     def test_terminates_against_an_under_stubbed_reader(self):
-        """The lookup is best-effort (``except Exception`` -> ``[]``), so the guard must outrank it."""
+        """The lookup is best-effort (``except Exception`` -> what it found), so the guard must
+        outrank it."""
         table = MagicMock()
         # The reader must be willing to serve MORE reads than the loop's own page cap allows, or the
         # bound below cannot fail: the default stub cap (12) is under MAX_REFERENCING_WORKFLOW_PAGES,
         # so a value-form loop would trip the stub instead of the assertion.
-        reader = BareMockReader(name="_referencing_workflow_labels",
+        reader = BareMockReader(name="_referencing_workflows",
                                 max_reads=ps.MAX_REFERENCING_WORKFLOW_PAGES + 5)
         table.query.side_effect = reader
 
         with patch(f"{MOD}._workflow_table", return_value=table):
-            labels = ps._referencing_workflow_labels("db1", "pipe1")
+            matches, _complete = ps._referencing_workflows("db1", "pipe1")
+            labels = [match["label"] for match in matches]
 
         assert labels == []
         # The bare-Mock page advertises no LastEvaluatedKey, so the loop must have ended on that

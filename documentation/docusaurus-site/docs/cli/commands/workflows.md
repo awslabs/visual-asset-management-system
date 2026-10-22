@@ -122,7 +122,8 @@ state machine.
 ## workflow update
 
 Update a workflow. Only supplied fields change; at least one is required. Changing the pipeline set
-(`--pipeline` / `--specified-pipelines`) redeploys the state machine.
+(`--pipeline` / `--specified-pipelines`) redeploys the state machine. An update without them also
+redeploys it when a referenced pipeline's execution settings changed since the last deploy.
 
 ```bash
 vamscli workflow update -d my-db -w my-workflow --description "Updated"

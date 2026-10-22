@@ -663,7 +663,7 @@ def build_workflow_execution_record(
     execution_id, workflow_database_id, workflow_id, workflow_arn,
     workflow_execution_arn, execution_start_date, execution_status,
     triggered_by_user_id, trigger_type, execution_log_group_arn,
-    last_sfn_sync_check_date="", execution_group_id="",
+    last_sfn_sync_check_date="", execution_group_id="", workflow_version_arn="",
 ):
     """Main WorkflowExecutionsStorageTableV2 row (workflow-keyed; no asset coupling).
 
@@ -706,6 +706,10 @@ def build_workflow_execution_record(
     # ungrouped executions do not populate the WorkflowExecutionsByGroupGSI.
     if execution_group_id:
         record["executionGroupId"] = execution_group_id
+    # The published state machine version the execution was started on: the exact definition it ran.
+    # Absent for an execution started on the unqualified state machine ARN.
+    if workflow_version_arn:
+        record["workflowVersionArn"] = workflow_version_arn
     return record
 
 
