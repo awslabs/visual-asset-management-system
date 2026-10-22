@@ -76,34 +76,49 @@ To minimize the chance of these failures, keep the availability zone count and s
 
 ### Docker Buildx Container Image Errors
 
-When deploying with AWS CDK using Docker, you may encounter errors related to container image builds, particularly `failed commit on ref "manifest-sha256:..."` or `Lambda function XXX reached terminal FAILED state due to InvalidImage`.
+The 3D Basic Conversion and CAD/Mesh Metadata Extraction pipelines deploy as AWS Lambda container images, which AWS CDK builds with Docker and pushes to Amazon ECR during `npx cdk deploy`. Pushing one of these images or creating its function can fail with `failed commit on ref "manifest-sha256:..."` or `Lambda function XXX reached terminal FAILED state due to InvalidImage`.
 
 **Symptoms:**
 
 -   `unexpected status from PUT request to https://....dkr.ecr.REGION.amazonaws.com/v2/foo/manifests/bar: 400 Bad Request`
--   `InvalidImage(ImageLayerFailure: UnsupportedImageLayerDetected)` errors during Lambda function creation
--   Container images fail to push to Amazon ECR
+-   `InvalidImage(ImageLayerFailure: UnsupportedImageLayerDetected)` or `The image manifest, config or layer media type for the source image ... is not supported` while AWS CloudFormation creates the pipeline's Lambda function
+-   The conversion pipeline nested stack fails and the core stack rolls back
+
+**Cause:**
+
+AWS Lambda accepts a container image only as a single-platform image manifest. When Docker stores images in the containerd image store, the default in Docker Desktop 4.34 and later and in new installations of Docker Engine 29 and later, a build adds a provenance attestation by default and the image is pushed as an OCI image index, which Lambda rejects. The AWS CDK CLI version pinned in `infra/package.json` turns that default off for every image it builds: it runs the build with `BUILDX_NO_DEFAULT_ATTESTATIONS=1` regardless of the value in your shell. A deployment run with `npx cdk` from the `infra/` directory therefore pushes a single manifest.
+
+When the error appears anyway, the image index is already cached. AWS CDK tags each image with a hash of its source, and it skips the build and the push when an image with that tag exists, first in the bootstrap container assets repository in Amazon ECR and then as the local Docker image `cdkasset-<hash>`. An image index pushed by an earlier attempt, for example one built by another AWS CDK CLI version or outside the AWS CDK CLI, is reused by every later deployment until its tag is deleted.
 
 **Resolution:**
 
-This is a known issue with certain Docker buildx versions. Set the following environment variable before running `cdk deploy`:
+1. Run the deployment from the `infra/` directory with `npx cdk` so that the pinned AWS CDK CLI builds the images. `npx cdk --version` shows the version in use.
+2. List the asset hashes of the two conversion images. In `cdk.out/*.assets.json`, written by the failed deployment or by `npx cdk synth`, each image under `dockerImages` is keyed by its hash, which this command (run from the `infra/` directory) prints on the line before the image's `displayName`:
 
-```bash
-export BUILDX_NO_DEFAULT_ATTESTATIONS=1
-```
+    ```bash
+    grep -B1 -E 'vamsExecute(3dBasic|MeshCadMetadataExtraction)Conversion/AssetImage' cdk.out/*.assets.json
+    ```
 
-Additionally, if deploying from an ARM64 machine (such as Apple Silicon Mac), you may need to clear the Docker cache and configure cross-platform emulation:
+3. Delete those image tags from the container assets repository. With the default bootstrap qualifier, the repository is named `cdk-hnb659fds-container-assets-<account>-<region>`:
 
-```bash
-# Clear Docker cache
-docker system prune -a
+    ```bash
+    aws ecr batch-delete-image \
+        --repository-name cdk-hnb659fds-container-assets-<account>-<region> \
+        --image-ids imageTag=<hash>
+    ```
 
-# Set cross-platform emulation
-docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-```
+4. Remove the local copies, so AWS CDK builds the images again instead of pushing the cached ones:
 
-:::tip
-Set `BUILDX_NO_DEFAULT_ATTESTATIONS=1` permanently in your shell profile (`.bashrc`, `.zshrc`) to avoid repeating this step on every deployment.
+    ```bash
+    docker image rm cdkasset-<hash>
+    ```
+
+5. Deploy again with `npx cdk deploy --all --require-approval never`.
+
+Removing these two images is sufficient; clearing the whole Docker cache is not required.
+
+:::note[ARM64 hosts]
+Every VAMS container image is pinned to `linux/amd64`. Docker Desktop on macOS and Windows includes the emulation that builds these images on an ARM64 host such as a Mac with Apple silicon, so no emulation setup is required. On an ARM64 Linux host running Docker Engine, install amd64 emulation as described in the Docker [multi-platform builds](https://docs.docker.com/build/building/multi-platform/) guide.
 :::
 
 :::note[Alternative container engines]
@@ -267,6 +282,33 @@ The SuperSplat Editor renders through WebGPU and has no WebGL fallback.
 
 Use a browser with WebGPU enabled: current Google Chrome or Microsoft Edge, Safari 26 or later, or Mozilla Firefox where WebGPU is enabled. Where a browser policy disables WebGPU or the machine has no supported GPU driver, open `.ply` files with the BabylonJS or PlayCanvas Gaussian Splat viewer and `.sog` files with the PlayCanvas Gaussian Splat viewer instead; `.lcc` and `.splat` files have no alternative viewer.
 
+### Point Cloud or 3D Tileset Viewer Reports a Load Failure
+
+The Potree Viewer and the Cesium 3D Tileset Viewer stream their files from the API, and each names the cause when a file fails to load.
+
+**Symptoms:**
+
+-   The Potree Viewer shows "Potree Viewer Auxiliary Preview files not currently available" with a prompt to run the Point Cloud Potree Viewer Pipeline
+-   Either viewer shows a message beginning "Unable to load" or "Unable to reach" instead of the model, or the Potree Viewer shows one beginning "Unable to display"
+-   The Cesium 3D Tileset Viewer shows **Error Loading 3D Tileset** with a message beginning "Tileset loading failed for", or with "N of N tilesets failed to load" when every selected tileset failed
+-   The Cesium 3D Tileset Viewer renders the scene under an **Incomplete 3D Tileset** banner
+
+**Resolution:**
+
+| Message                                                                          | Cause and resolution                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Preview files not currently available, with the pipeline prompt                  | The point cloud has no Potree preview files. Run the Point Cloud Potree Viewer Pipeline on the file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `Request blocked by the deployment's AWS WAF web ACL (request ID ...)`           | A web ACL rule blocked the request. Find the request by its ID in the web ACL's log group to see the rule that matched (see [AWS WAF and Rate Limiting](../architecture/security.md#aws-waf-and-rate-limiting)).                                                                                                                                                                                                                                                                                                                                                                      |
+| `Unable to reach ...`                                                            | The request failed before VAMS answered it, so the browser reports no status: a network failure, Amazon API Gateway throttling of the browser's CORS preflight (`OPTIONS`) request, or an AWS WAF block of the preflight by a rule on the request's URI path or by the rate-based rule. Each file and tile request has its own preflight. Look for an `OPTIONS` request to the file's path at that time in the REST API access log group, where a `429` status is throttling (see [429 Rate Limiting](#429-rate-limiting)), and, when AWS WAF is enabled, in the web ACL's log group. |
+| `Unable to display ...`                                                          | The file downloads, but the Potree Viewer could not read it. Check the file, or run the Point Cloud Potree Viewer Pipeline on it again to regenerate the preview files.                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `Tileset loading failed for ...`                                                 | Cesium could not use the tileset for a reason other than a failed request, such as tileset JSON it cannot read. The text after the colon is Cesium's message. Check the tileset file.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `N of N tilesets failed to load`                                                 | Every selected tileset failed to load. The message goes on to name the cause of the first failure, which has its own row in this table.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `you don't have permission to view it`                                           | The role cannot read the file. An administrator grants the role access to the file's database or asset.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `Asset is not currently allowing file distribution` or `Asset not distributable` | The asset's **Is Distributable** setting is off, so the API streams none of its files. Set **Is Distributable?** to **Yes** under **Edit** on the asset's page to view the file.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `your session is no longer valid`                                                | The sign-in expired. Sign in again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `too many requests`                                                              | Amazon API Gateway or the web ACL's rate-based rule throttled the request. See [429 Rate Limiting](#429-rate-limiting).                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **Incomplete 3D Tileset** banner                                                 | Some tiles or tilesets failed to load while the rest of the scene loaded. The banner counts the tilesets that failed and names the cause of the first, and counts the failed tile requests and shows Cesium's message for the last one, such as `Request has failed. Status Code: 403`.                                                                                                                                                                                                                                                                                               |
+
 ### Login Loop or Configuration Fetch Failures
 
 Users may experience a login loop where the application repeatedly redirects to the sign-in page.
@@ -426,6 +468,16 @@ Because the alarm names worker responsiveness rather than an IAM permission, thi
 
 See [Configuration reference](../deployment/configuration-reference.md) for the full list of operator-supplied Deadline Cloud prerequisites.
 
+### 3D Preview Thumbnail Run Fails on a Large or Complex File
+
+**Symptoms:**
+
+-   The execution fails with a message such as `does not fit on the work volume`, `Out of memory loading the 3D file`, `FBX scene places more than`, `FBX file nests deeper than 256 levels`, `STEP assembly places more than 1,000,000 components`, `splat-transform did not finish within 1800 s`, `has an implausible compression ratio`, or `LCC2 chunk file`
+
+**Resolution:**
+
+These are fixed limits of the pipeline (see [Quotas](../additional/quotas.md)). Reduce or split the input; for an FBX file, export it as FBX 2011 (7.1) or later. For an `.lcc2` scene, upload its `data/3dgs/` folder beside the `.lcc2` file in the same asset. The AWS Batch job log in Amazon CloudWatch records the input size, the render budgets and each phase's duration.
+
 ### Pipeline Timeout vs. Workflow Timeout
 
 Pipeline step timeouts and overall workflow timeouts are configured separately. A pipeline step that exceeds its timeout will cause the workflow to fail.
@@ -437,7 +489,7 @@ Pipeline step timeouts and overall workflow timeouts are configured separately. 
 
 **Resolution:**
 
-Adjust the timeout values in the pipeline or workflow configuration. Large files (approaching the 100 GB limit for the 3D Thumbnail pipeline) may require extended processing time. Monitor the AWS Batch job logs and AWS Step Functions execution history to determine appropriate timeout values.
+Adjust the timeout values in the pipeline or workflow configuration. Large files may need more than the 1-hour job limit of the 3D Preview Thumbnail pipeline. Monitor the AWS Batch job logs and AWS Step Functions execution history to determine appropriate timeout values.
 
 :::tip
 For long-running pipeline operations, check the AWS Batch job logs in Amazon CloudWatch rather than relying solely on the API response or web UI status.

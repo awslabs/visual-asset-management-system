@@ -13,6 +13,7 @@ export interface SearchPageViewProps {
     state: any;
     dispatch: Dispatch<ReducerAction<any>>;
     onShowToast?: (title: string, message: string) => void;
+    onCreateAsset?: () => void;
 }
 
 /**

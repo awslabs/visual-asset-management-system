@@ -143,7 +143,13 @@ asymmetry other callers rely on):
     and that every `CLIENT.api.*` call resolves on `APIClient`) — keep it passing.
 
 5. **Return data, not exceptions.** Wrap tool bodies with `@tool_result` so
-   failures return `{"error": ..., "error_type": ...}`.
+   failures return `{"error": ..., "error_type": ...}` plus the exception's
+   `json_fields`, merged without replacing those two, as the CLI's
+   `--json-output` carries them: for example `blockedBy` (`waf`, or `waf-or-stage`
+   for a bare API Gateway `Forbidden`) and `requestId` of a `RequestBlockedError`,
+   a request the deployment's AWS WAF web ACL blocked before VAMS handled it. A new
+   machine-readable fact belongs on the CLI exception's `json_fields`, so the CLI
+   and every tool carry it alike.
 6. **API Gateway URL only.** The server rejects CloudFront URLs implicitly (the
    profile stores the API Gateway URL). Never point at the CloudFront web URL.
 7. **Match the endpoint's list field.** `paginate()` normalizes results onto

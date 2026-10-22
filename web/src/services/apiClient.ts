@@ -17,6 +17,14 @@ export class ApiError extends Error {
     }
 }
 
+/**
+ * Whether an error is a request the deployment's AWS WAF web ACL blocked, rather than a permission
+ * denial.
+ */
+export function isRequestBlocked(error: unknown): boolean {
+    return error instanceof ApiError && error.status === 403 && error.body?.blockedBy === "waf";
+}
+
 interface ApiClientOptions {
     queryStringParameters?: Record<string, string>;
     body?: any;
@@ -54,7 +62,9 @@ function flattenErrorMessage(message: any): string {
 
 /**
  * Parse error response body and extract the most useful error message.
- * API errors typically return {"message": "..."} in the response body.
+ * API errors typically return {"message": "..."} in the response body. A request the AWS WAF web
+ * ACL blocked returns {"message", "blockedBy": "waf", "requestId"}, and its message names the
+ * request ID the administrator looks up.
  */
 async function parseErrorResponse(response: Response): Promise<ApiError> {
     let body: any = null;
@@ -62,7 +72,14 @@ async function parseErrorResponse(response: Response): Promise<ApiError> {
 
     try {
         body = await response.json();
-        if (body?.message) {
+        if (
+            response.status === 403 &&
+            body?.blockedBy === "waf" &&
+            typeof body.message === "string"
+        ) {
+            const requestId = typeof body.requestId === "string" ? body.requestId : "";
+            errorMessage = requestId ? `${body.message} (request ID ${requestId})` : body.message;
+        } else if (body?.message) {
             errorMessage = flattenErrorMessage(body.message);
         } else if (typeof body === "string") {
             errorMessage = body;
@@ -133,9 +150,10 @@ class ApiClient {
     /**
      * Single request path for all verbs. On an auth-looking failure (a 401/403, or a
      * pre-request token fetch that threw) it asks the auth layer whether a valid token
-     * can still be produced: dead session -> forced logout; alive session -> the failure
-     * was a genuine permission denial (surface it) or a transient token issue (retry once
-     * after a successful refresh). `retried` guards against loops / double-sends.
+     * can still be produced: dead session -> forced logout; alive session -> a token fetch
+     * that threw is retried once, a 401 forces one refresh and one re-send, and a 403 (the
+     * authorizer's deny, a Casbin decision, or a request the AWS WAF web ACL blocked) is
+     * surfaced without a refresh. `retried` guards against loops / double-sends.
      */
     private async request(
         method: HttpMethod,
@@ -178,11 +196,11 @@ class ApiClient {
                 throw await parseErrorResponse(response);
             }
             if (response.status === 401 || response.status === 403) {
-                // A 401 is the authorizer rejecting the token, so force a refresh before
-                // judging the session: the token can be valid when the header is built and
-                // expired by the time the authorizer validates it (clock skew, slow request),
-                // in which case the locally stored expiry still reads as valid. A 403 is a
-                // Casbin decision on an accepted token, so never refresh for it.
+                // The REST authorizer denies a token it rejects with a 403; a 401 means the
+                // request carried no token, so force a refresh before judging the session and
+                // re-send once. A 403 (the authorizer's deny, a Casbin decision, or a request
+                // the AWS WAF web ACL blocked) is never refreshed, because only a fresh sign-in
+                // or an administrator can change it.
                 const forceRefresh = response.status === 401 && !retried;
                 const alive = await ensureValidSession(forceRefresh);
                 if (!alive) {
@@ -193,7 +211,7 @@ class ApiClient {
                     // repeat any verb: a 401 means the handler never ran.
                     return this.request(method, path, options, true);
                 }
-                // Alive: a real Casbin permission denial — fall through and surface it.
+                // Alive: a denial or a block, not an expired session — surface it.
             }
             throw await parseErrorResponse(response);
         }

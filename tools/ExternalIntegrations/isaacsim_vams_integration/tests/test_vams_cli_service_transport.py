@@ -16,6 +16,8 @@ would carry nothing at all.
 """
 
 import json
+import os
+import re
 import subprocess
 
 import pytest
@@ -27,6 +29,11 @@ from vams.connector.isaacsim.vams_cli_service import (
     VamsProfileNotSetupError,
     VamsTransferError,
 )
+
+# VamsCLI is installed from the VAMS repository. It is not published on PyPI, so a bare
+# ``pip install vamscli`` asks a package index for a package VAMS never put there.
+INSTALL_FROM_REPOSITORY = "pip install -e <path-to-VAMS>/tools/VamsCLI"
+FROM_INDEX = re.compile(r"pip install vamscli(?![\w./-])")
 
 
 class _CompletedProcess:
@@ -41,11 +48,13 @@ class _Recorder:
 
     def __init__(self):
         self.argvs = []
+        self.envs = []
         self.results = []
         self.raises = None
 
-    def run(self, cmd, **_kwargs):
+    def run(self, cmd, **kwargs):
         self.argvs.append(list(cmd))
+        self.envs.append(kwargs.get("env"))
         if self.raises is not None:
             raise self.raises
         return self.results.pop(0) if self.results else _CompletedProcess()
@@ -149,10 +158,10 @@ class TestTransferFailuresKeepTheirReport:
             transport.service._execute_command(["assets", "download", "x", "--json-output"])
         assert "Transfer failed: 2 of 2" in str(excinfo.value)
 
-    def test_a_single_file_download_failure_becomes_false_at_the_connector(self, transport,
-                                                                          tmp_path, monkeypatch):
-        """`IsaacVAMSConnector.download_file` maps any VamsCliError to False; the raised message is
-        what reaches the Kit log, so it has to say which file failed and why."""
+    def test_a_single_file_download_failure_reaches_the_connectors_caller(self, transport,
+                                                                         tmp_path, monkeypatch):
+        """`IsaacVAMSConnector.download_file` passes the VamsCliError on; its message is what
+        reaches the Kit log and the status line, so it has to say which file failed and why."""
         from vams.connector.isaacsim.connector import IsaacVAMSConnector
 
         connector = IsaacVAMSConnector()
@@ -161,7 +170,9 @@ class TestTransferFailuresKeepTheirReport:
             "overall_success": False, "total_files": 1, "successful_files": 0, "failed_files": 1,
             "failed_downloads": [{"relative_key": "/a.glb", "error": "404 Not Found"}],
         }))]
-        assert connector.download_file("db", "a1", "/a.glb", str(tmp_path / "out")) is False
+        with pytest.raises(VamsTransferError) as excinfo:
+            connector.download_file("db", "a1", "/a.glb", str(tmp_path / "out"))
+        assert "/a.glb" in str(excinfo.value)
 
 
 class TestErrorDocumentsAndFailureBranches:
@@ -211,13 +222,15 @@ class TestErrorDocumentsAndFailureBranches:
         transport.raises = FileNotFoundError(2, "No such file or directory")
         with pytest.raises(VamsNotInstalledError) as excinfo:
             transport.service._execute_command(["database", "list", "--json-output"])
-        assert "pip install vamscli" in str(excinfo.value)
+        assert INSTALL_FROM_REPOSITORY in str(excinfo.value)
+        assert not FROM_INDEX.search(str(excinfo.value))
 
     def test_a_missing_executable_at_construction(self, monkeypatch):
         monkeypatch.setattr(module.shutil, "which", lambda _name: None)
         with pytest.raises(VamsNotInstalledError) as excinfo:
             module.VamsCliService(vamscli_path="definitely-not-on-path-vamscli")
-        assert "pip install vamscli" in str(excinfo.value)
+        assert INSTALL_FROM_REPOSITORY in str(excinfo.value)
+        assert not FROM_INDEX.search(str(excinfo.value))
 
     def test_non_json_stdout_is_reported_with_the_output(self, transport):
         transport.results = [_CompletedProcess(stdout="Retrieving files...\n")]
@@ -287,3 +300,84 @@ class TestAuthGateFailureModes:
         transport.service.logout()
         assert transport.service._cached_username is None
         assert transport.service._cached_credential is None
+
+
+class TestTheSubprocessTrustStore:
+    """Isaac Sim sets ``SSL_CERT_FILE`` in its own process, and Amazon S3 certificate verification
+    fails against that bundle, so the CLI subprocess never inherits it."""
+
+    @pytest.fixture
+    def pems(self, tmp_path, monkeypatch):
+        system = tmp_path / "system.pem"
+        system.write_bytes(b"SYSTEM")
+        bundled = tmp_path / "amazon-ca-bundle.pem"
+        bundled.write_bytes(b"AMAZON")
+        monkeypatch.setattr(module, "_merged_ca_file", None)
+        monkeypatch.setenv("SSL_CERT_FILE", "/isaac-sim/kit/cert.pem")
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/isaac-sim/kit/cert.pem")
+        return system, bundled, tmp_path / "absent.pem"
+
+    def _use(self, monkeypatch, *, bundled, system_files):
+        monkeypatch.setattr(module, "_BUNDLED_CA_FILE", str(bundled))
+        monkeypatch.setattr(module, "_SYSTEM_CA_FILES", tuple(str(p) for p in system_files))
+        # The helper's keyword defaults were bound at import, so route the call through the patches.
+        real = module._ca_environment
+        monkeypatch.setattr(module, "_ca_environment", lambda env: real(
+            env, bundled_file=module._BUNDLED_CA_FILE, system_files=module._SYSTEM_CA_FILES))
+
+    def test_the_system_bundle_replaces_an_inherited_one(self, transport, pems, monkeypatch):
+        system, _bundled, absent = pems
+        self._use(monkeypatch, bundled=absent, system_files=(absent, system))
+        transport.service._execute_command(["asset", "list"])
+        env = transport.envs[-1]
+        assert env["SSL_CERT_FILE"] == str(system)
+        assert env["REQUESTS_CA_BUNDLE"] == str(system)
+
+    def test_an_inherited_bundle_is_dropped_when_there_is_nothing_to_name(self, transport, pems,
+                                                                          monkeypatch):
+        _system, _bundled, absent = pems
+        self._use(monkeypatch, bundled=absent, system_files=(absent,))
+        transport.service._execute_command(["asset", "list"])
+        env = transport.envs[-1]
+        assert "SSL_CERT_FILE" not in env
+        assert "REQUESTS_CA_BUNDLE" not in env
+
+    def test_a_bundled_bundle_alone_is_named_without_a_system_bundle(self, transport, pems,
+                                                                    monkeypatch):
+        _system, bundled, absent = pems
+        self._use(monkeypatch, bundled=bundled, system_files=(absent,))
+        transport.service._execute_command(["asset", "list"])
+        assert transport.envs[-1]["SSL_CERT_FILE"] == str(bundled)
+
+    def test_the_merged_bundle_is_private_to_this_process(self, transport, pems, monkeypatch):
+        system, bundled, _absent = pems
+        # A file another local user planted at the old shared path is never read.
+        planted = os.path.join(module.tempfile.gettempdir(), "vams_ca_bundle.pem")
+        self._use(monkeypatch, bundled=bundled, system_files=(system,))
+        transport.service._execute_command(["asset", "list"])
+        merged = transport.envs[-1]["SSL_CERT_FILE"]
+        assert merged != planted
+        assert transport.envs[-1]["REQUESTS_CA_BUNDLE"] == merged
+        with open(merged, "rb") as f:
+            content = f.read()
+        assert content.startswith(b"SYSTEM") and b"AMAZON" in content
+        if os.name == "posix":
+            assert os.stat(os.path.dirname(merged)).st_mode & 0o077 == 0
+
+    def test_the_merged_bundle_is_written_once_and_rewritten_if_removed(self, transport, pems,
+                                                                       monkeypatch):
+        system, bundled, _absent = pems
+        self._use(monkeypatch, bundled=bundled, system_files=(system,))
+        transport.service._execute_command(["asset", "list"])
+        transport.service._execute_command(["asset", "list"])
+        first, second = transport.envs[-2]["SSL_CERT_FILE"], transport.envs[-1]["SSL_CERT_FILE"]
+        assert first == second
+        os.remove(first)
+        transport.service._execute_command(["asset", "list"])
+        assert os.path.isfile(transport.envs[-1]["SSL_CERT_FILE"])
+
+    def test_the_parent_environment_is_left_as_it_was(self, transport, pems, monkeypatch):
+        system, _bundled, absent = pems
+        self._use(monkeypatch, bundled=absent, system_files=(system,))
+        transport.service._execute_command(["asset", "list"])
+        assert os.environ["SSL_CERT_FILE"] == "/isaac-sim/kit/cert.pem"

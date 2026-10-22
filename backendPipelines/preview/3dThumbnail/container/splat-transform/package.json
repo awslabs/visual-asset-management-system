@@ -1,0 +1,8 @@
+{
+    "name": "vams-3dthumb-splat-transform",
+    "private": true,
+    "license": "Apache-2.0",
+    "dependencies": {
+        "@playcanvas/splat-transform": "3.10.1"
+    }
+}
