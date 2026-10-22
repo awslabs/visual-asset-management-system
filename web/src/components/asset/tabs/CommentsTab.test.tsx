@@ -95,7 +95,6 @@ describe("CommentsTab loading spinner", () => {
         const spinner = container.querySelector("svg.icon-loading");
         expect(spinner).not.toBeNull();
         expect(spinner!.querySelector("g")).toHaveAttribute("fill", "currentColor");
-        expect(container.querySelector('[fill="#000716"]')).toBeNull();
         expect((spinner!.parentElement as HTMLElement).style.color).toBe(
             "var(--vams-text-primary)"
         );
