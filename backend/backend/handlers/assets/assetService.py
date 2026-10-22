@@ -270,7 +270,9 @@ def _current_version_from_row(version_item):
         DateModified=version_item.get('dateCreated', ''),
         Comment=version_item.get('comment', ''),
         description=version_item.get('description', ''),
-        createdBy=version_item.get('createdBy', 'SYSTEM_USER')
+        createdBy=version_item.get('createdBy', 'SYSTEM_USER'),
+        # A version without an alias is stored with '' and reported as null
+        versionAlias=version_item.get('versionAlias') or None
     )
 
 def get_current_version_info(asset):
