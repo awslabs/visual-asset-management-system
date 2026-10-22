@@ -378,8 +378,8 @@ def get_initialized_file_keys(upload_details, uploadId):
 
     Completion accepts a submitted relativeKey only if initialization recorded it. A record saved
     before the list was stored has no 'files' attribute; such an upload is completed without the
-    membership check (the blocklist checks still run) and the gap is logged. The table has no
-    TTL, so the gap is bounded by complete_upload refusing a record whose expiresAt has passed:
+    membership check (the blocklist checks still run) and the gap is logged. The gap is bounded
+    by complete_upload refusing a record whose expiresAt has passed:
     a record without the list is completed without the membership check until it expires, seven
     days after it was initialized. External (workflow-output) records never carry the list and
     are refused by complete_upload before this helper is consulted.
@@ -1831,12 +1831,12 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     if upload_details['uploadType'] != uploadType:
         raise VAMSGeneralErrorResponse(f"Upload type mismatch.")
 
-    # Refuse a record past its expiresAt. The table has no TTL, so without this an initialized
-    # record lives until a completion succeeds or the asset is deleted; in particular a record
-    # saved before the initialized file list was stored (no 'files' attribute) would stay
-    # completable without the membership check indefinitely. expiresAt is epoch seconds, set by
-    # every writer (initialize: 7 days; workflow output: 1 day); a missing or unreadable value
-    # counts as expired.
+    # Refuse a record past its expiresAt. The table's TTL on expiresAt removes an expired record
+    # only some time after it expires, so until then this check is what keeps it from completing;
+    # in particular a record saved before the initialized file list was stored (no 'files'
+    # attribute) is completable without the membership check only until it expires. expiresAt is
+    # epoch seconds, set by every writer (initialize: 7 days; workflow output: 1 day); a missing or
+    # unreadable value counts as expired.
     try:
         expires_at = int(upload_details.get('expiresAt', 0))
     except (TypeError, ValueError):

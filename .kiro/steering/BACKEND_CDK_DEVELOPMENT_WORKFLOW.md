@@ -2417,6 +2417,8 @@ optional_table = dynamodb.Table(optional_table_name) if optional_table_name else
 
 **Every path that writes an object under a new name checks that name first.** Upload initialize and completion (`uploadFile.py`) and the move, rename and copy destination (`assetFiles.py` `move_file` / `copy_file`) call `validateUnallowedFileExtensionAndContentType` on the key before any S3 write. A new write path gets the same check.
 
+**Upload records expire on `expiresAt`.** `AssetUploadsStorageTable` has a DynamoDB TTL on `expiresAt` (epoch seconds, set by every writer: 7 days from upload initialize, 1 day for workflow-output records). TTL removes an expired record only some time after it expires, so `complete_upload` still refuses a record whose `expiresAt` has passed. A new writer to the table sets `expiresAt` as a Number.
+
 ### **AWS Client Configuration Pattern**
 
 ```python

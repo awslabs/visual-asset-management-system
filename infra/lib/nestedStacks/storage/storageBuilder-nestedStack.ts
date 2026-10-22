@@ -2099,6 +2099,8 @@ export function storageResourcesBuilder(
             name: "assetId",
             type: dynamodb.AttributeType.STRING,
         },
+        // Upload records carry expiresAt in epoch seconds; DynamoDB removes them once it passes
+        timeToLiveAttribute: "expiresAt",
     });
 
     assetUploadsStorageTable.addGlobalSecondaryIndex({
