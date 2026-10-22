@@ -3,9 +3,9 @@
 
 """Every stated upload-initialization rate limit matches MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE.
 
-The limit is a hardcoded constant in uploadFile.py. The API specification, the quotas and known
-limitations pages and the check_user_rate_limit docstring state it, so each statement is read
-back and compared with the constant.
+The limit is a hardcoded constant in uploadFile.py. The API specification, the API reference, the
+quotas and known limitations pages and the check_user_rate_limit docstring state it, so each
+statement is read back and compared with the constant.
 """
 
 import os
@@ -26,6 +26,7 @@ _DOCS = _REPOSITORY_ROOT / "documentation" / "docusaurus-site" / "docs"
 _STATED_IN = [
     _REPOSITORY_ROOT / "documentation" / "VAMS_API.yaml",
     _DOCS / "additional" / "quotas.md",
+    _DOCS / "api" / "files.md",
     _DOCS / "troubleshooting" / "known-limitations.md",
 ]
 # "20 upload initializations per user per minute", "**20 upload initializations ...",
