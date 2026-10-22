@@ -169,3 +169,15 @@ class TestMetadataSearchModes:
         with pytest.raises(search_module.VAMSGeneralErrorResponse) as raised:
             builder._build_index_query(request, ["db1"], "asset")
         assert "metadataQuery" in str(raised.value)
+
+    def test_field_name_with_a_space_is_escaped_in_the_field_only(self, search_module):
+        clause = _query_builder(search_module)._build_metadata_search_query(
+            "Project Code:A1 B2", "both", "asset"
+        )
+        assert clause["query_string"]["query"] == 'MD_.Project\\ Code:"A1 B2"'
+
+    def test_field_name_tab_is_escaped(self, search_module):
+        clause = _query_builder(search_module)._build_metadata_search_query(
+            "Project\tCode:A1", "both", "asset"
+        )
+        assert clause["query_string"]["query"] == 'MD_.Project\\\tCode:"A1"'

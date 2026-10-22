@@ -1435,6 +1435,8 @@ class DualIndexQueryBuilder:
         # otherwise alter the parsed query. Wildcards are never meaningful in a
         # field name, so do not preserve them here.
         escaped_field_name = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=False)
+        # Whitespace ends a field name in query_string syntax, so escape it in the name only
+        escaped_field_name = re.sub(r'(\s)', r'\\\1', escaped_field_name)
 
         # Check if user provided wildcards
         has_wildcards = '*' in value_part or '?' in value_part
