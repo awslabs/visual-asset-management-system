@@ -1253,6 +1253,10 @@ class DualIndexQueryBuilder:
             # Add minimum score for text searches
             if request.query or request.metadataQuery:
                 query["min_score"] = 0.01
+
+            # Match explanations are built from the highlights
+            if request.includeHighlights is False and not request.explainResults:
+                query.pop("highlight")
             
             return query
         except VAMSGeneralErrorResponse:
