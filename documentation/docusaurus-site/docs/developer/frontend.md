@@ -99,6 +99,8 @@ The following service files are the only files that may import `apiClient`:
 
 Always import Cloudscape components from their individual subpaths. Barrel imports cause the entire library to be bundled.
 
+This applies to new imports. A new file, or a Cloudscape component newly imported into an existing file, uses a subpath import, even in a file that already imports from the barrel. Existing barrel imports stay as they are; do not convert them.
+
 ```typescript
 // CORRECT -- tree-shakeable individual imports
 import Button from "@cloudscape-design/components/button";

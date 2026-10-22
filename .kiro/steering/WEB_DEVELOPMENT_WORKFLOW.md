@@ -168,7 +168,7 @@ web/
 #### **Step 2: Component Implementation**
 
 -   [ ] **Add copyright header**: Apache-2.0 header with `2026` year
--   [ ] **Use Cloudscape components**: Import from individual subpaths
+-   [ ] **Use Cloudscape components**: Import from individual subpaths (new imports; see Rule 2)
 -   [ ] **Use Synonyms**: For all user-visible "Asset", "Database", "Comment" text
 -   [ ] **Use TypeScript**: All new files must be `.ts` or `.tsx`
 -   [ ] **Import from service layer**: Never import `apiClient` directly
@@ -188,7 +188,7 @@ web/
 
 -   [ ] **No TypeScript errors**: Run `npm run typecheck` or check IDE (`npm run build` does not type-check)
 -   [ ] **No broken imports**: Verify relative paths (no path aliases in this project)
--   [ ] **Cloudscape subpath imports**: Not barrel exports
+-   [ ] **Cloudscape subpath imports**: Not barrel exports (new imports; see Rule 2)
 -   [ ] **Service layer compliance**: No direct `apiClient` imports in components/pages
 -   [ ] **Synonyms compliance**: No hardcoded "Asset"/"Database"/"Comment" in user-visible text
 -   [ ] **HashRouter compliance**: No `BrowserRouter` usage
@@ -235,6 +235,8 @@ The EXISTING app uses AWS Cloudscape Design System. The NEW orchestration module
     Real instance: `<div className="container">` wrapped the asset-view comment editor. VAMS defines no `.container` rule, so the only match was Tailwind's `.container` utility and its responsive max-widths (640/768/1024/1280/1536px), which capped the comment box on any wide viewport. The component's own styles gave no hint — the editor filled its parent correctly and the parent was the clamped element — so it was only findable by measuring the rendered DOM. When a width or spacing problem has no explanation in the component's own styles, walk the ancestors' computed `max-width` in the browser before changing the component.
 
 Import Cloudscape from individual subpaths, NEVER from the barrel export.
+
+This applies to new imports. A new file, or a Cloudscape component newly imported into an existing file, uses a subpath import, even in a file that already imports from the barrel. Existing barrel imports stay as they are; do not convert them.
 
 ```typescript
 // CORRECT -- tree-shakeable individual imports
@@ -860,7 +862,7 @@ npm run prettier-fix
 ### **Compliance Checks**
 
 -   [ ] Copyright headers present on all new/modified files
--   [ ] Cloudscape components imported from subpaths (not barrel)
+-   [ ] Cloudscape components imported from subpaths (not barrel) (new imports; see Rule 2)
 -   [ ] API calls go through service layer (no direct `apiClient` imports in components)
 -   [ ] `Synonyms` used for all user-visible entity names
 -   [ ] All pages lazy-loaded in `routes.tsx`
@@ -926,7 +928,7 @@ npm run prettier-fix
 ## 🚫 **Anti-Patterns Summary**
 
 1. **Importing apiClient in components/pages** -- use service layer files
-2. **Importing Cloudscape from barrel export** -- use individual subpaths
+2. **Importing Cloudscape from barrel export** -- use individual subpaths (new imports; see Rule 2)
 3. **Using BrowserRouter** -- must use HashRouter
 4. **Eagerly importing pages** -- must use React.lazy
 5. **Adding Redux/Zustand/MobX** -- use Context + useReducer

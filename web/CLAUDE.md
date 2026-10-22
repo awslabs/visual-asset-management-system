@@ -223,6 +223,8 @@ import * as RadixDialog from "@radix-ui/react-dialog";
 
 **Always import individual Cloudscape components from their subpath**, not from the barrel export. This is critical for bundle size. In the orchestration module, use Tailwind utility classes and Radix primitives.
 
+This applies to new imports. A new file, or a Cloudscape component newly imported into an existing file, uses a subpath import, even in a file that already imports from the barrel. Existing barrel imports stay as they are; do not convert them.
+
 ### Rule 3: All API Calls Go Through Service Layer Files
 
 All API calls MUST go through service-layer files in `src/services/`. Components and pages MUST NEVER import `apiClient` directly.
