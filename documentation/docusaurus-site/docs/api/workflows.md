@@ -1417,6 +1417,8 @@ The route is keyed on the execution identifier because an execution may span inp
         "workflowDatabaseId": "GLOBAL",
         "workflowName": "Convert and preview",
         "workflowDescription": "Convert 3D files and generate preview thumbnails",
+        "workflowVersion": 3,
+        "workflowVersionCurrent": true,
         "workflowSystemConfig": {
             "inputFileArity": "one",
             "outputTarget": { "locationType": "asset", "allowOverride": false }
@@ -1595,6 +1597,8 @@ Two settings blocks in the response describe different points in time, so a view
 `pipelines[].effectiveSystemConfig` is the resolved `systemConfig` **that step ran under** — the pipeline's own block with the chosen template's `overrides` applied — captured when the execution launched. `pipelines[].templateOverrides` reports those overrides alone, so a reader can see what the template changed. Both are empty objects when a step's settings were not captured.
 
 `workflowSystemConfig` is the workflow's `systemConfig` **as it stands now**, read from the workflow definition rather than snapshotted, so it reflects any edit made since the run. It is the outer gate of the workflow → pipeline → template chain.
+
+`workflowVersion` is the published workflow state machine version the execution started on, and `workflowVersionCurrent` is `true` while the workflow still runs that version and `false` once its state machine has been redeployed since the run. A save from the workflow builder always redeploys it, as does an API or CLI update that supplies the step list (`specifiedPipelines`); a change to a setting one of its pipelines contributes to the state machine (execution type, target, callback mode, timeouts, Deadline Cloud job settings) redeploys it too. Running the workflow again then runs the newer definition. The flag does not track `workflowSystemConfig` or the pipeline names and descriptions: they are read live and can change without a redeploy, so they may differ from what the run used whatever the flag says. Each step's `effectiveSystemConfig` is the snapshot it ran under. Both fields are `null` for an execution started before versions were recorded, and `workflowVersionCurrent` is also `null` when the workflow no longer records a current version (for example, the workflow was deleted).
 :::
 
 :::note[Traceability, not internals]
