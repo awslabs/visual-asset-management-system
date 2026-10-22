@@ -2,11 +2,17 @@ name: Build and Scan for Vulnerabilities
 
 on:
     push:
-        branches: [main, "release/**"]
+        branches: [main, "release/**", development, "development-*"]
     pull_request:
-        branches: [main, "release/**"]
+        branches: [main, "release/**", development, "development-*"]
 
-# Least-privilege token: the build job only checks out code and uploads artifacts
+# A new commit on a pull request cancels that pull request's older run. Push runs are keyed on their
+# own run ID, so they are never cancelled.
+concurrency:
+    group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+    cancel-in-progress: true
+
+# Least-privilege token: the jobs only check out code and upload artifacts
 permissions:
     contents: read
 
@@ -131,16 +137,6 @@ jobs:
             #   working-directory: vams/web
             #   run: npm audit
 
-            # The web suite runs on a PUSH to main or a release branch, not on every pull request.
-            # Scoped to pushes so PR feedback stays fast
-            - name: Web test
-              if: github.event_name == 'push'
-              working-directory: vams/web
-              env:
-                  CI: "true"
-              run: npx jest --ci --coverage
-            #####
-
             - name: Web build
               working-directory: vams/web
               env:
@@ -190,30 +186,65 @@ jobs:
               with:
                   input_path: vams/infra/cdk.out/vams-core-prod-us-east-1.template.json
 
-            #####
-            # The backend suite runs on a PUSH to main or a release branch.
-            #
-            # `pytest` directly rather than `make all`: that target chains install + flake8 + mypy +
-            # coverage, and its sibling `test` target invokes `ptw` — pytest-WATCH, which never exits and
-            # would hang a runner. Running the suite is the property being restored here; adding lint and
-            # type-check in the same step would make an unrelated mypy finding read as a test regression.
-            #
-            # `backendPipelines` stays out deliberately. Those suites must be invoked one directory per
-            # process: 12 test-module basenames are duplicated across pipeline `lambda/tests/` dirs.
-            # Adding them needs a matrix over ~30 directories, which is a separate change.
-            # The backend requires Python >= 3.13 (backend/pyproject.toml: requires-python = ">=3.13,<4"),
-            # and EVERY line of requirements-dev.txt carries a `; python_version >= "3.13"` marker
-            # because it is exported from a lock resolved under that constraint. Under the job's 3.12.7
-            # interpreter every marker evaluates FALSE, so `pip install -r requirements-dev.txt` installs
-            # nothing, exits 0, and pytest then fails at collection — a green install followed by an
-            # inexplicable failure.
-            #
-            # Switched here rather than job-wide: these are the LAST steps in the job, so nothing after
-            # them can be affected, and the earlier VamsCLI/ash/synth steps keep the interpreter they
-            # already pass on. (VamsCLI declares >= 3.12, so it would tolerate 3.13 too — but changing
-            # what currently passes is not part of restoring the backend suite.)
+    # The web unit suite, on every push and pull request the workflow runs for. A job of its own so
+    # it runs beside build instead of lengthening it. The viewer postinstall builds are skipped: the
+    # unit suite does not load them.
+    web-test:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repo
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/checkout@v4
+
+            - name: Setup node
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
+
+            - name: Pin npm version
+              run: npm install -g npm@11.19.1
+
+            - name: Npm ci web directory
+              working-directory: web
+              run: npm ci --ignore-scripts
+
+            - name: Web test
+              working-directory: web
+              env:
+                  CI: "true"
+              run: npx jest --ci --coverage
+
+    # The backend suite, on every push and pull request the workflow runs for.
+    #
+    # `pytest` directly rather than `make all`: that target chains install + flake8 + mypy +
+    # coverage, and its sibling `test` target invokes `ptw` — pytest-WATCH, which never exits and
+    # would hang a runner. Adding lint and type-check here would make an unrelated mypy finding read
+    # as a test regression.
+    #
+    # `backendPipelines` stays out deliberately. Those suites must be invoked one directory per
+    # process: 12 test-module basenames are duplicated across pipeline `lambda/tests/` dirs.
+    # Adding them needs a matrix over ~30 directories, which is a separate change.
+    #
+    # The backend requires Python >= 3.13 (backend/pyproject.toml: requires-python = ">=3.13,<4"),
+    # and EVERY line of requirements-dev.txt carries a `; python_version >= "3.13"` marker
+    # because it is exported from a lock resolved under that constraint. Under an older interpreter
+    # every marker evaluates FALSE, so `pip install -r requirements-dev.txt` installs nothing,
+    # exits 0, and pytest then fails at collection.
+    backend-test:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repo
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/checkout@v4
+
             - name: Setup Python for the backend suite
-              if: github.event_name == 'push'
               # Major-version tag of a GitHub-maintained action, the repo's current pinning
               # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
@@ -222,12 +253,9 @@ jobs:
                   python-version: 3.13
 
             - name: Install backend dependencies
-              if: github.event_name == 'push'
-              working-directory: vams/backend
+              working-directory: backend
               run: pip install -r requirements-dev.txt
 
             - name: Run backend pytest tests
-              if: github.event_name == 'push'
-              working-directory: vams/backend
+              working-directory: backend
               run: pytest -q --tb=short
-            #####

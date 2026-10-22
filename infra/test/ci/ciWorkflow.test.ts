@@ -59,4 +59,27 @@ describe("CI workflow", () => {
             expect(command).toContain("--coverage");
         });
     });
+
+    test("the web and backend suites run on pull requests as well as pushes", () => {
+        expect(runCommands(text).some((command) => /^pytest\b/.test(command))).toBe(true);
+        expect(text).not.toMatch(/if:\s*\$?\{?\{?\s*github\.event_name\s*==\s*['"]push['"]/);
+    });
+
+    test("push and pull_request both filter on main, release, development and development-*", () => {
+        const filters = [...text.matchAll(/^\s+branches:\s*\[(.*)\]\s*$/gm)].map((m) =>
+            m[1].split(",").map((b) => b.trim().replace(/^"|"$/g, ""))
+        );
+        expect(filters.length).toBe(2);
+        filters.forEach((branches) => {
+            expect(branches).toEqual(
+                expect.arrayContaining(["main", "release/**", "development", "development-*"])
+            );
+        });
+    });
+
+    test("a new pull request commit cancels that pull request's older run", () => {
+        expect(text).toMatch(
+            /^concurrency:\n\s+group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}\n\s+cancel-in-progress: true$/m
+        );
+    });
 });
