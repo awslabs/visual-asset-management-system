@@ -23,7 +23,10 @@ import {
 } from "../api/adminQueries";
 import type { EdhAdminInstance } from "../api/admin";
 import { unconfirmedNotice } from "../api/outcome";
-import WorkstationStatusBadge, { describeLastError } from "../components/WorkstationStatusBadge";
+import WorkstationStatusBadge, {
+    EdhFailureDetail,
+    describeLastError,
+} from "../components/WorkstationStatusBadge";
 import { useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
 import type { WorkstationState } from "../types";
@@ -189,6 +192,7 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                                     {describeLastError(row.original.lastError)}
                                 </span>
                             )}
+                            <EdhFailureDetail failure={row.original.edhFailure} />
                         </div>
                     ) : (
                         "—"

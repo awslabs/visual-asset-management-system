@@ -241,10 +241,11 @@ class TestWorkstationRecordModel:
         # Control: a declared attribute of the same body does project.
         assert projected["bootstrapId"] == BOOTSTRAP_ID
 
-    @pytest.mark.parametrize("stamp", ["scheduleAppliedAt", "credentialClaimedAt", "startRequestedAt"])
+    @pytest.mark.parametrize("stamp", ["scheduleAppliedAt", "credentialClaimedAt", "startRequestedAt",
+                                       "edhFailureReadAt"])
     def test_the_rows_own_stamps_never_project(self, stamp):
-        # The sweep's schedule stamp, a renew's credential claim and a start's slot are bookkeeping the
-        # row keeps for itself.
+        # The sweep's schedule stamp, a renew's credential claim, a start's slot and the last read of a
+        # failed launch's reason are bookkeeping the row keeps for itself.
         body = _record_body(**{stamp: "2026-09-28T12:00:00.000000+00:00"})
         projected = parse(event=body, model=edh_models.WorkstationRecordModel).dict()
         assert stamp not in projected
@@ -255,6 +256,36 @@ class TestWorkstationRecordModel:
         assert set(edh_models.WORKSTATION_ROW_INTERNAL_FIELDS) == {
             "apiKeyId", "secretArn", "secretName", "keyExpiresAt", "instanceId", "secretBoundInstanceId", "expiresAt"}
         assert set(edh_models.WORKSTATION_ROW_INTERNAL_FIELDS).isdisjoint(edh_models.WorkstationRecordModel.__fields__)
+
+    def test_a_row_without_a_launch_failure_reason_projects_null(self):
+        projected = parse(event=_record_body(), model=edh_models.WorkstationRecordModel).dict()
+        assert "edhFailure" in projected
+        assert projected["edhFailure"] is None
+
+    def test_a_stored_launch_failure_reason_is_returned_as_stored(self):
+        failure = {"event": "placement_failed", "errorCode": "InsufficientInstanceCapacity",
+                   "operation": "CreateCapacityReservation", "observedAt": "2026-10-22T15:23:00+00:00"}
+        body = _record_body(state="ORPHANED", lastError="CAPACITY_UNAVAILABLE", edhFailure=dict(failure))
+        assert parse(event=body, model=edh_models.WorkstationRecordModel).dict()["edhFailure"] == failure
+
+    def test_a_reason_without_an_aws_code_keeps_the_absent_keys_absent(self):
+        failure = {"event": "session-failed", "checkpoint": "dcv_server_start",
+                   "observedAt": "2026-10-22T15:23:00+00:00"}
+        projected = parse(event=_record_body(edhFailure=dict(failure)), model=edh_models.WorkstationRecordModel)
+        assert projected.dict()["edhFailure"] == failure
+
+    def test_only_the_contract_keys_of_a_stored_reason_project(self):
+        stored = {"event": "placement_failed", "observedAt": "2026-10-22T15:23:00+00:00",
+                  "subStatus": "EDH text", "connection_string": "https://dcv.example.internal/?authToken=abc"}
+        projected = parse(event=_record_body(edhFailure=stored), model=edh_models.WorkstationRecordModel).dict()
+        assert projected["edhFailure"] == {"event": "placement_failed", "observedAt": "2026-10-22T15:23:00+00:00"}
+        assert set(edh_models.EDH_FAILURE_FIELDS) == {"event", "errorCode", "operation", "checkpoint", "observedAt"}
+
+    @pytest.mark.parametrize("stored", ["placement_failed", ["placement_failed"], 7, {"errorCode": "X"},
+                                        {"event": 7}])
+    def test_a_stored_reason_that_is_not_a_failure_map_projects_null(self, stored):
+        projected = parse(event=_record_body(edhFailure=stored), model=edh_models.WorkstationRecordModel).dict()
+        assert projected["edhFailure"] is None
 
     def test_lease_fields_carry_values(self):
         model = parse(

@@ -8,8 +8,12 @@ import { render, screen } from "@testing-library/react";
 import WorkstationStatusBadge, {
     LAST_ERROR_COPY,
     LAST_ERROR_FALLBACK_COPY,
+    describeEdhFailure,
     describeLastError,
 } from "./WorkstationStatusBadge";
+import type { EdhFailure } from "../types";
+
+const OBSERVED_AT = "2026-10-22T10:00:00Z";
 
 describe("WorkstationStatusBadge", () => {
     it.each([
@@ -102,5 +106,74 @@ describe("WorkstationStatusBadge", () => {
         render(<WorkstationStatusBadge state="ORPHANED" lastError="SOMETHING_NEW" />);
         expect(screen.getByTitle(LAST_ERROR_FALLBACK_COPY)).toHaveTextContent("Orphaned");
         expect(describeLastError(undefined)).toBe(LAST_ERROR_FALLBACK_COPY);
+    });
+});
+
+describe("describeEdhFailure", () => {
+    it("names the AWS error code and the operation EDH called", () => {
+        expect(
+            describeEdhFailure({
+                event: "placement_failed",
+                errorCode: "InsufficientInstanceCapacity",
+                operation: "CreateCapacityReservation",
+                observedAt: OBSERVED_AT,
+            })
+        ).toBe("AWS: InsufficientInstanceCapacity (CreateCapacityReservation)");
+    });
+
+    it("names the AWS error code alone when no operation was captured", () => {
+        expect(
+            describeEdhFailure({
+                event: "placement_failed",
+                errorCode: "VcpuLimitExceeded",
+                observedAt: OBSERVED_AT,
+            })
+        ).toBe("AWS: VcpuLimitExceeded");
+    });
+
+    it("names the checkpoint of a desktop setup failure", () => {
+        expect(
+            describeEdhFailure({
+                event: "session-failed",
+                checkpoint: "dcv_session_create",
+                observedAt: OBSERVED_AT,
+            })
+        ).toBe("Desktop setup failed at dcv_session_create");
+    });
+
+    it("prefers the AWS error code to the checkpoint when both were captured", () => {
+        expect(
+            describeEdhFailure({
+                event: "session-failed",
+                errorCode: "InsufficientInstanceCapacity",
+                operation: "RunInstances",
+                checkpoint: "instance_launch",
+                observedAt: OBSERVED_AT,
+            })
+        ).toBe("AWS: InsufficientInstanceCapacity (RunInstances)");
+    });
+
+    it.each<[string, EdhFailure | null | undefined]>([
+        ["null", null],
+        ["absent", undefined],
+        [
+            "a failure with neither an error code nor a checkpoint",
+            {
+                event: "placement_failed",
+                observedAt: OBSERVED_AT,
+            },
+        ],
+        [
+            "empty and null fields",
+            {
+                event: "session-failed",
+                errorCode: "",
+                operation: null,
+                checkpoint: null,
+                observedAt: OBSERVED_AT,
+            },
+        ],
+    ])("returns null for %s", (_label, failure) => {
+        expect(describeEdhFailure(failure)).toBeNull();
     });
 });

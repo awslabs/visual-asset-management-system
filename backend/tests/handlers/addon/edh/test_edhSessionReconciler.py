@@ -217,14 +217,15 @@ def _default_revoke(event, row, *, delete_secret, actor):
 
 def _run(rows, desktops, *, revoke=None, keys=None, delete=None, bootstrap_enabled=True, current=None,
          persist=None, api_key_service="vams-apiKeyService", schedule_answer=None, context=_MOCK_CONTEXT,
-         states=None):
+         states=None, failure=None):
     """One sweep with every collaborator replaced. ``keys`` is the session-key listing (a list, or the
     exception the listing raises); ``delete`` scripts the orphan-key deletion; ``current`` maps a bootstrap
     id to the row the consistent re-read returns when it differs from the scanned one (None for a row that
     is gone); ``persist`` scripts the conditional write, answering the updatedAt it wrote or None for a
     lost condition; ``api_key_service`` is the apiKeyService function name the environment carries;
     ``schedule_answer`` is what EDH's schedule update raises; ``context`` is the invocation context;
-    ``states`` is what EDH's session-state read answers for unlisted rows (a list, or the exception it raises).
+    ``states`` is what EDH's session-state read answers for unlisted rows (a list, or the exception it raises);
+    ``failure`` is what EDH's launch-failure read answers (a map, None, or the exception it raises).
     The persist double carries ``order``, the sequence of persist and revoke calls."""
     client = create_autospec(EdhClient, instance=True)
     client.list_all_desktops.return_value = desktops
@@ -234,6 +235,10 @@ def _run(rows, desktops, *, revoke=None, keys=None, delete=None, bootstrap_enabl
         client.get_desktop_states.return_value = states
     if schedule_answer is not None:
         client.update_desktop_schedule.side_effect = schedule_answer
+    if isinstance(failure, Exception):
+        client.get_desktop_failure.side_effect = failure
+    else:
+        client.get_desktop_failure.return_value = failure
     client_factory = MagicMock(return_value=client)
     table = MagicMock()
     half = max(1, len(rows) // 2)
@@ -300,7 +305,7 @@ def _conditions_for(persist, bootstrap_id):
 def _summary(**counts):
     """The sweep's summary with every counter zero unless given."""
     return {"examined": 0, "updated": 0, "revoked": 0, "scheduled": 0, "deferred": 0, "skipped": 0,
-            "failed": 0, "orphanKeysDeleted": 0, **counts}
+            "failed": 0, "orphanKeysDeleted": 0, "failuresCaptured": 0, **counts}
 
 
 @pytest.mark.unit
@@ -1275,8 +1280,10 @@ def _stopped_unscheduled(bootstrap_id):
 
 
 def _orphaned_unscheduled(bootstrap_id):
+    # Read for its launch failure a minute ago, so the capture (test_edhSessionReconciler_launch_failure.py)
+    # leaves the row to the schedule step these tests are about.
     return _uncredentialed(bootstrap_id, state=rec.STATE_ORPHANED, edhState="error", connectionAvailable=False,
-                           lastError=LAST_ERROR_LAUNCH_ERROR)
+                           lastError=LAST_ERROR_LAUNCH_ERROR, edhFailureReadAt=(NOW - timedelta(minutes=1)).isoformat())
 
 
 def _schedule_updates(client_factory):

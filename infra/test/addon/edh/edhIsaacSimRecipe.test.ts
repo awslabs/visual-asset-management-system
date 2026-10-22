@@ -172,13 +172,16 @@ describe("the shipped Isaac Sim recipe", () => {
     });
 
     test("carries the Isaac Sim parameters, with the archive digest pinned", () => {
+        // Isaac Sim 6.0.1 and later are tested on NVIDIA driver 595 (Linux), so 595 is the minimum the
+        // launcher accepts. The digest is the SHA-256 of NVIDIA's 6.2.0 archive, whose MD5 matched
+        // the one NVIDIA publishes for it.
         expect(loaded.manifest.parameters).toEqual({
-            isaacSimVersion: "5.1.0",
+            isaacSimVersion: "6.2.0",
             isaacSimDownloadUrl:
-                "https://downloads.isaacsim.nvidia.com/isaac-sim-standalone-5.1.0-linux-x86_64.zip",
-            isaacSimSha256: "6ab0109278c4868b6d796d5e435a0116874cd50a392edfa7cc3350debfb7a187",
+                "https://downloads.isaacsim.nvidia.com/isaac-sim-standalone-6.2.0-linux-x86_64.zip",
+            isaacSimSha256: "aac4f9065f36d56f56a6523931710fad3ea9c3e5eeb067b781fa53098fcf19f2",
             isaacSimLauncher: "isaac-sim.sh",
-            nvidiaDriverMinMajor: "570",
+            nvidiaDriverMinMajor: "595",
         });
     });
 
@@ -211,6 +214,46 @@ describe("the shipped Isaac Sim recipe", () => {
         expect(kernel).toContain("linux-headers-$(uname -r)");
         expect(kernel).toContain("linux-modules-extra-$(uname -r)");
         expect(kernel).toContain("set -euxo pipefail");
+    });
+
+    test("the kernel component keeps nouveau from loading, so EDH's driver install does not abort", () => {
+        // The extra modules carry nouveau. EDH blacklists it and installs the NVIDIA driver in the
+        // same boot, and nvidia-installer aborts while nouveau is loaded, so the image must boot
+        // with nouveau already kept out: a modprobe.d blacklist in the initramfs and on the kernel
+        // command line.
+        const kernel = componentBodies.find(({ relative }) =>
+            relative.endsWith("010-kernel.yml")
+        )!.body;
+        expect(kernel).toContain("- name: DisableNouveau");
+        expect(kernel).toContain("blacklist nouveau");
+        expect(kernel).toContain("options nouveau modeset=0");
+        expect(kernel).toContain("/etc/modprobe.d/vams-blacklist-nouveau.conf");
+        expect(kernel).toContain("modprobe.blacklist=nouveau");
+        expect(kernel).toContain("/etc/default/grub.d/90-vams-nouveau.cfg");
+        expect(kernel).toContain("update-initramfs -u -k all");
+        expect(kernel).toContain("update-grub");
+        // The validate phase proves both reached the image.
+        const validate = kernel.slice(kernel.indexOf("- name: validate"));
+        expect(validate).toContain("/etc/modprobe.d/vams-blacklist-nouveau.conf");
+        expect(validate).toContain("modprobe.blacklist=nouveau");
+        // The blacklist runs after the extra modules are installed and before update-linux.
+        expect(kernel.indexOf("- name: DisableNouveau")).toBeGreaterThan(
+            kernel.indexOf("- name: InstallKernelModules")
+        );
+    });
+
+    test("the preflight tells a failed driver install from one still pending", () => {
+        const autolaunch = componentBodies.find(({ relative }) =>
+            relative.endsWith("070-autolaunch.yml")
+        )!.body;
+        expect(autolaunch).toContain("result=driver-install-failed");
+        expect(autolaunch).toContain("reason=nouveau-loaded");
+        expect(autolaunch).toContain("ERROR: Installation has failed");
+        expect(autolaunch).toContain("/var/log/nvidia-installer.log");
+        // The failed-install check runs before the pending-install answer.
+        expect(autolaunch.indexOf("result=driver-install-failed")).toBeLessThan(
+            autolaunch.indexOf("result=no-driver")
+        );
     });
 
     test("every asset, parameter and deployment placeholder a component uses is declared", () => {

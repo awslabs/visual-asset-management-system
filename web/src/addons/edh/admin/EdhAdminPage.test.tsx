@@ -983,6 +983,76 @@ describe("EdhAdminPage", () => {
         expect(screen.getByText("Creating")).toBeInTheDocument();
     });
 
+    it("shows the AWS error EDH reported beside a failed launch's reason, and nothing for a row without one", async () => {
+        (adminQueries.useEdhAdminInstances as jest.Mock).mockReturnValue(
+            query([
+                INSTANCES[0],
+                {
+                    ...INSTANCES[0],
+                    sessionId: null,
+                    bootstrapId: "b-8",
+                    name: "cad-8",
+                    edhState: null,
+                    state: "ORPHANED",
+                    lastError: "QUOTA_EXCEEDED",
+                    edhFailure: {
+                        event: "placement_failed",
+                        errorCode: "VcpuLimitExceeded",
+                        operation: "RunInstances",
+                        observedAt: "2026-10-22T10:00:00Z",
+                    },
+                },
+                {
+                    ...INSTANCES[0],
+                    sessionId: null,
+                    bootstrapId: "b-9",
+                    name: "cad-9",
+                    edhState: null,
+                    state: "ORPHANED",
+                    lastError: "LAUNCH_ERROR",
+                    edhFailure: null,
+                },
+            ])
+        );
+        allow();
+        render(<EdhAdminPage />);
+        const user = userEvent.setup();
+        await user.click(screen.getByRole("tab", { name: "Sessions" }));
+        const reason = screen.getByText(describeLastError("QUOTA_EXCEEDED"));
+        const detail = screen.getByText("AWS: VcpuLimitExceeded (RunInstances)");
+        expect(reason.parentElement).toContainElement(detail);
+        // The launch without a captured failure keeps its reason alone.
+        expect(screen.getByText(describeLastError("LAUNCH_ERROR"))).toBeInTheDocument();
+        expect(screen.getAllByText(/^AWS: /)).toHaveLength(1);
+        expect(screen.queryByText(/^Desktop setup failed at /)).not.toBeInTheDocument();
+    });
+
+    it("the stale view shows the setup checkpoint of a failed launch", async () => {
+        (adminQueries.useEdhStaleInstances as jest.Mock).mockReturnValue(
+            query([
+                STALE[0],
+                {
+                    ...STALE[1],
+                    lastError: "LAUNCH_ERROR",
+                    edhFailure: {
+                        event: "session-failed",
+                        checkpoint: "dcv_session_create",
+                        observedAt: "2026-10-22T10:00:00Z",
+                    },
+                },
+            ])
+        );
+        allow();
+        render(<EdhAdminPage />);
+        const user = userEvent.setup();
+        await user.click(screen.getByRole("tab", { name: "Sessions" }));
+        // The all-sessions rows carry no failure detail.
+        expect(screen.queryByText(/^AWS: /)).not.toBeInTheDocument();
+        await user.selectOptions(screen.getByLabelText("Session view"), "stale");
+        expect(screen.getByText("Desktop setup failed at dcv_session_create")).toBeInTheDocument();
+        expect(screen.queryByText(/^AWS: /)).not.toBeInTheDocument();
+    });
+
     it("the stale view names why each session is stale and takes the stopped-minutes filter", async () => {
         (adminQueries.useEdhStaleInstances as jest.Mock).mockReturnValue(query(STALE));
         allow();

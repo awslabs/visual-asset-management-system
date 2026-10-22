@@ -61,7 +61,9 @@ vamscli edh workstation list
 vamscli edh workstation list --json-output | jq '.Items[] | select(.state == "ACTIVE") | .sessionId'
 ```
 
-Each record carries `bootstrapId`, `sessionId` (null until the launch worker, or else the reconciler's next sweep, reads it back from EDH), `userId` (the VAMS user who launched it), `edhUid` (the EDH identity the desktop runs as), `state` (`CREATING`, `ACTIVE`, `STOPPED`, `DELETED`, `ORPHANED`), `edhState` (EDH's own session state, once reported), `lastError` (why a launch ended `ORPHANED`: `USER_NOT_PROVISIONED`, `QUOTA_EXCEEDED`, `IMAGE_UNAVAILABLE`, `CAPACITY_UNAVAILABLE`, `EDH_REFUSED`, `LAUNCH_ERROR` or `CREATE_TIMED_OUT`; `LEASE_EXPIRED` on a desktop the lease sweep stopped; null otherwise), `launchAttempts`, `name`, `imageId`, `osFamily`, `instanceType`, `rootSizeGb`, `createdAt`, `updatedAt`, `connectionAvailable` (`true` while EDH reports the desktop `running`; `connect` then fetches its connection URL), `leaseExpiresAt` (null when no lease applies), `leaseStoppedAt` (set once the sweep has stopped the desktop at expiry, otherwise null) and `leaseHoursAtLaunch` (the policy hours stamped at launch, null when no lease applied). The list is returned in one page. In CLI mode the table shows the identifier, name, state, last error, instance type, OS family and creation time.
+Each record carries `bootstrapId`, `sessionId` (null until the launch worker, or else the reconciler's next sweep, reads it back from EDH), `userId` (the VAMS user who launched it), `edhUid` (the EDH identity the desktop runs as), `state` (`CREATING`, `ACTIVE`, `STOPPED`, `DELETED`, `ORPHANED`), `edhState` (EDH's own session state, once reported), `lastError` (why a launch ended `ORPHANED`: `USER_NOT_PROVISIONED`, `QUOTA_EXCEEDED`, `IMAGE_UNAVAILABLE`, `CAPACITY_UNAVAILABLE`, `EDH_REFUSED`, `LAUNCH_ERROR` or `CREATE_TIMED_OUT`; `LEASE_EXPIRED` on a desktop the lease sweep stopped; null otherwise), `edhFailure` (the launch failure VAMS captured from EDH's own record of a desktop that never ran, null when none was captured; see below), `launchAttempts`, `name`, `imageId`, `osFamily`, `instanceType`, `rootSizeGb`, `createdAt`, `updatedAt`, `connectionAvailable` (`true` while EDH reports the desktop `running`; `connect` then fetches its connection URL), `leaseExpiresAt` (null when no lease applies), `leaseStoppedAt` (set once the sweep has stopped the desktop at expiry, otherwise null) and `leaseHoursAtLaunch` (the policy hours stamped at launch, null when no lease applied). The list is returned in one page. In CLI mode the table shows the identifier, name, state, last error, instance type, OS family and creation time; it has no column for `edhFailure`, which `edh workstation get` shows and `--json-output` carries.
+
+`edhFailure` is a map of `event` (`placement_failed` when EDH could not place the desktop, `session-failed` when the desktop's setup failed), `errorCode` and `operation` (the AWS error code and the AWS operation EDH's status named, for example `InsufficientInstanceCapacity` from `CreateCapacityReservation`), `checkpoint` (for `session-failed`, the setup step it stopped at) and `observedAt` (when VAMS captured it); `errorCode`, `operation` and `checkpoint` are absent when EDH's status did not name them. EDH's own wording is never returned. A capacity error code (`InsufficientInstanceCapacity`, `InsufficientCapacity`, `InsufficientHostCapacity`, `InsufficientReservedInstanceCapacity`, `Unsupported`) records `lastError` `CAPACITY_UNAVAILABLE`, and a limit (`VcpuLimitExceeded`, `InstanceLimitExceeded`, `ReservationCapacityExceeded`, `MaxSpotInstanceCountExceeded`) records `QUOTA_EXCEEDED`, in place of a generic `LAUNCH_ERROR`.
 
 ### edh workstation create
 
@@ -85,7 +87,7 @@ vamscli edh workstation create --image-id <ID> --instance-type <TYPE> --name <NA
 ```bash
 vamscli edh workstation create --image-id 12 --instance-type g5.2xlarge --name "Design desk" --root-size-gb 200 --os-family linux
 vamscli edh workstation create --image-id 12 --instance-type g5.2xlarge --name "Design desk" --root-size-gb 200 --os-family windows --json-output
-vamscli edh workstation list --json-output | jq '.Items[] | select(.bootstrapId == "<BOOTSTRAP_ID>") | {state, sessionId, lastError}'
+vamscli edh workstation list --json-output | jq '.Items[] | select(.bootstrapId == "<BOOTSTRAP_ID>") | {state, sessionId, lastError, edhFailure}'
 ```
 
 The response carries the record plus `sessionBootstrap` — `provisioned`, `skipped`, `unavailable` or `disabled`, the outcome of placing a session key for the desktop (always `disabled` for a Windows workstation, which takes no session key; see [POST /addon/edh/workstations](../../api/addon.md#post-addonedhworkstations)). A repeat with the same `--bootstrap-id` by the user who launched it returns the stored record with HTTP 200 and no `sessionBootstrap`, and launches nothing; a `--bootstrap-id` that another user's launch holds is refused with HTTP 409 `bootstrapId is already in use`. An `--instance-type` outside the deployment's allow-list is refused with HTTP 400 `instanceType is not permitted in this deployment`, and one the image's EDH profile lists only under architectures of another family than the image's (`x86_64` and `i386` are one family) with HTTP 400 `instanceType does not match the image's architecture`, and one outside the `launchInstanceTypes` of an image an AMI recipe built with HTTP 400 `instanceType is not offered for this image`. A `--root-size-gb` below the image's `rootSize` is refused with HTTP 400 `Root disk size must be at least <n> GB for this image`.
@@ -109,6 +111,13 @@ vamscli edh workstation get SESSION_ID [OPTIONS]
 ```bash
 vamscli edh workstation get 3f9a1c2e-0b7d-4e6f-9a21-5c8d7e6f4b30
 vamscli edh workstation get 3f9a1c2e-0b7d-4e6f-9a21-5c8d7e6f4b30 --json-output
+```
+
+In CLI mode a workstation that carries an `edhFailure` (see [edh workstation list](#edh-workstation-list)) shows it on an `EDH failure:` line beneath `Last Error`: the AWS error code and operation, the error code alone when EDH's status named no operation, or `desktop setup failed at <checkpoint>`. A workstation without one has no such line; `--json-output` returns the record, `edhFailure` included, unchanged.
+
+```text
+  Last Error:      CAPACITY_UNAVAILABLE
+  EDH failure:     InsufficientInstanceCapacity (CreateCapacityReservation)
 ```
 
 ### edh workstation start
@@ -704,11 +713,11 @@ vamscli edh admin instances list [OPTIONS]
 vamscli edh admin instances list
 ```
 
-Each item carries `sessionId`, `edhState`, `owner`, `name`, `createdAt`, `updatedAt`, `userId`, `bootstrapId`, `state`, `lastError`, `imageId`, `osFamily` and `instanceType`; `userId`, `bootstrapId`, `updatedAt` and `lastError` are `null` for a session VAMS did not launch.
+Each item carries `sessionId`, `edhState`, `owner`, `name`, `createdAt`, `updatedAt`, `userId`, `bootstrapId`, `state`, `lastError`, `edhFailure`, `imageId`, `osFamily` and `instanceType`; `userId`, `bootstrapId`, `updatedAt`, `lastError` and `edhFailure` are `null` for a session VAMS did not launch, and `edhFailure` is `null` too when VAMS captured no launch failure for the session (its fields are described under [edh workstation list](#edh-workstation-list)). In CLI mode each session is printed as its JSON item, and one that carries an `edhFailure` is followed by the `EDH failure:` line `edh workstation get` shows, for example `  EDH failure:     VcpuLimitExceeded (RunInstances)`.
 
 ### edh admin instances stale
 
-List the sessions whose state is `STOPPED` or `ORPHANED` and whose record last changed at least the threshold ago (`staleReason: "stopped"`), plus sessions VAMS knows but EDH no longer lists (`staleReason: "missingInEdh"`) — the candidates for `stop` and `deactivate`. Every item carries `stale: true` and a `staleReason` of `stopped` or `missingInEdh`; the response also echoes the `idleMinutes` threshold that was applied.
+List the sessions whose state is `STOPPED` or `ORPHANED` and whose record last changed at least the threshold ago (`staleReason: "stopped"`), plus sessions VAMS knows but EDH no longer lists (`staleReason: "missingInEdh"`) — the candidates for `stop` and `deactivate`. Every item carries `stale: true` and a `staleReason` of `stopped` or `missingInEdh`, and the fields of an `edh admin instances list` item, `edhFailure` with its `EDH failure:` line among them; the response also echoes the `idleMinutes` threshold that was applied.
 
 ```bash
 vamscli edh admin instances stale [OPTIONS]

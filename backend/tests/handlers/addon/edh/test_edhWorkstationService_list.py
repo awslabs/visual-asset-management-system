@@ -202,9 +202,10 @@ class TestWorkstationList:
             "ORPHANED", LAST_ERROR_LAUNCH_ERROR, False)
         written = [set(call[1]["ExpressionAttributeValues"].values())
                    for call in fakes.table.update_item.call_args_list]
-        # The failed launch is written first; the revoke then clears the credential attributes.
+        # The failed launch is written first; the revoke then clears the credential attributes, and the read of
+        # EDH's reason for the failure (none scripted here) stamps the row.
         assert written, "the failed launch was never written"
-        assert len(written) <= 2
+        assert len(written) <= 3
         assert {"ORPHANED", LAST_ERROR_LAUNCH_ERROR} <= written[0]
         assert {(c.args[1]["bootstrapId"], c.kwargs["delete_secret"]) for c in revoke_fn.call_args_list} == {
             (BOOTSTRAP_OWN, True)}

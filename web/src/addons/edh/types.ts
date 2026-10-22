@@ -23,6 +23,25 @@ export type WorkstationLastError =
 /** What became of the per-session VAMS credential a launch places on the desktop. */
 export type SessionBootstrapOutcome = "provisioned" | "skipped" | "unavailable" | "disabled";
 
+/** The EDH event a captured launch failure came from: a refused placement, or a failed desktop setup. */
+export type EdhFailureEvent = "placement_failed" | "session-failed";
+
+/**
+ * The launch failure VAMS captured from EDH's own record of the desktop: the AWS error code and
+ * operation parsed from EDH's status, or the setup checkpoint of a failed desktop. Never EDH's wording.
+ */
+export interface EdhFailure {
+    event: EdhFailureEvent;
+    /** The AWS error code, e.g. `InsufficientInstanceCapacity`; absent when EDH's status names none. */
+    errorCode?: string | null;
+    /** The AWS operation that returned the code, e.g. `CreateCapacityReservation`. */
+    operation?: string | null;
+    /** For `session-failed`, the EDH checkpoint the setup failed at. */
+    checkpoint?: string | null;
+    /** When VAMS captured it (ISO-8601 UTC). */
+    observedAt: string;
+}
+
 /** One launch, as the workstation service returns it (also the session-table row). */
 export interface WorkstationRecord {
     bootstrapId: string;
@@ -34,6 +53,8 @@ export interface WorkstationRecord {
     edhState: string | null;
     /** The failure code the row carries; null or absent when there is none. */
     lastError?: string | null;
+    /** The launch failure VAMS captured from EDH; null or absent when it captured none. */
+    edhFailure?: EdhFailure | null;
     /** How many times the launch worker has started on this row. */
     launchAttempts?: number;
     name: string;

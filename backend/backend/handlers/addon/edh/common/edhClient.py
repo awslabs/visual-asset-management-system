@@ -52,7 +52,8 @@ from urllib3.util.ssl_ import create_urllib3_context
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, general_error
 from .edhSessionState import (
-    EDH_FIELD_INSTANCE_ID, EDH_SCHEDULE_DAYS, EDH_SCHEDULE_FIELD, EDH_SESSION_ID_FIELD, EDH_SESSION_STATE_FIELD,
+    EDH_FIELD_INSTANCE_ID, EDH_RECENT_EVENTS_FIELD, EDH_SCHEDULE_DAYS, EDH_SCHEDULE_FIELD, EDH_SESSION_ID_FIELD,
+    EDH_SESSION_STATE_FIELD, edh_failure_from_events,
 )
 
 logger = safeLogger(service_name="EdhClient")
@@ -988,6 +989,39 @@ class EdhClient:
                     and row.get(EDH_SESSION_OWNER_FIELD) is not None
                     and row.get(EDH_SESSION_OWNER_FIELD) == edh_uid):
                 return row
+        return None
+
+    def get_desktop_failure(self, edh_uid, session_id) -> Optional[dict]:
+        """The reason EDH recorded for the failed launch of the caller's desktop ``session_id``: the shared
+        session-state parser's map of the newest ``placement_failed`` or ``session-failed`` event of EDH's
+        per-user record of the desktop, or None when EDH lists no such desktop of the caller or records no
+        failure for it. The list is narrowed to the one session and asked for the active desktop first and,
+        only when it answers no record of it, the inactive one (EDH deactivates a desktop whose placement
+        failed within minutes): at most two requests. A record counts only when its ``session_uuid`` is the
+        id asked for and its ``session_owner`` is the caller. Of the record only the events are read; its
+        connection string, tokens and password are never returned or logged. EDH's text of the failure is
+        logged, cut short, and never returned."""
+        if not edh_uid:
+            raise ValueError("A desktop failure read names the caller's EDH uid")
+        if session_id is None or not _SESSION_UUID_PATTERN.fullmatch(str(session_id)):
+            raise ValueError("A desktop failure read names one session id in UUID form")
+        session_id = str(session_id)
+        for is_active in (True, False):
+            parsed = self.request("GET", EDH_ROUTE_DESKTOPS_LIST, edh_uid=edh_uid,
+                                  params={"is_active": is_active, EDH_SESSION_ID_FIELD: session_id})
+            record = next((row for row in _as_list(_payload(parsed), key_field=EDH_SESSION_ID_FIELD)
+                           if isinstance(row, dict)
+                           and str(row.get(EDH_SESSION_ID_FIELD)) == session_id
+                           and row.get(EDH_SESSION_OWNER_FIELD) is not None
+                           and row.get(EDH_SESSION_OWNER_FIELD) == edh_uid), None)
+            if record is None:
+                continue
+            failure, text = edh_failure_from_events(record.get(EDH_RECENT_EVENTS_FIELD))
+            if failure is not None:
+                logger.warning("EDH recorded a failed launch",
+                               extra={"edhSessionId": session_id, "edhEvent": failure["event"],
+                                      "edhFailureText": text})
+            return failure
         return None
 
     def find_desktop_by_name(self, edh_uid, session_name: str) -> Optional[dict]:

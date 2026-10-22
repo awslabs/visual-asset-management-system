@@ -25,7 +25,11 @@ for good, whether or not a key is still recorded beside it. A row recorded DELET
 left carries the expiry the table's TTL removes it by. A row EDH lists by session id that has not had
 its desktop's EDH schedule set is given the schedule that never starts the desktop automatically, once,
 on a pass that leaves the row otherwise unchanged; the sweep makes at most a fixed number of such calls,
-none after the first refusal and none once too little of the invocation is left. Session keys that no
+none after the first refusal and none once too little of the invocation is left. A row the pass leaves
+ORPHANED with a session id and no captured reason is given the reason EDH recorded for its failed launch,
+read from EDH's per-user listing as the row's owner -- the listing is owner-scoped -- at most once per row
+per read interval and within a per-sweep allowance of such reads; a read that fails writes only its stamp.
+Session keys that no
 row names at all (a mint whose reply was lost, a row that is gone, a key a re-issue replaced) have their
 records deleted once expired or older than one sweep's grace, save that every unexpired key of a desktop
 that may still be running -- its row stored ACTIVE or CREATING or under a fresh start or credential
@@ -74,12 +78,13 @@ from .common.edhClient import (
 from .common.edhIdentity import SYSTEM_USER_ID
 from .common.edhLeasePolicy import lease_action, parse_iso, read_lease_policy
 from .common.edhSessionState import (
-    CREDENTIAL_CLAIM_SECONDS, EDH_FIELD_INSTANCE_ID, EDH_SCHEDULE_FIELD,
+    CREDENTIAL_CLAIM_SECONDS, EDH_FAILURE_FIELD, EDH_FIELD_INSTANCE_ID, EDH_SCHEDULE_FIELD,
     EDH_SESSION_STATE_FIELD, EXPIRES_AT_FIELD, LAST_ERROR_CREATE_TIMED_OUT, LAST_ERROR_LAUNCH_ERROR,
     LAST_ERROR_LEASE_EXPIRED, MAX_LAUNCH_ATTEMPTS, START_IN_PROGRESS_SECONDS,
     STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED, credential_claim_fresh,
-    credential_claim_stamp, deleted_row_expiry, never_auto_start_schedule, observed_row_attributes,
-    schedule_never_auto_starts, session_row_live, start_in_progress, start_stamp, state_for_edh_session_state,
+    credential_claim_stamp, deleted_row_expiry, edh_failure_attributes, edh_failure_read_due,
+    never_auto_start_schedule, observed_row_attributes, schedule_never_auto_starts, session_row_live,
+    start_in_progress, start_stamp, state_for_edh_session_state,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -135,6 +140,11 @@ SYSTEM_EVENT = {"lambdaCrossCall": {"userName": SYSTEM_USER_ID}}
 # answers slowly. Rows left over are taken up by the next sweep.
 MAX_SCHEDULE_APPLIES_PER_SWEEP = 50
 SCHEDULE_APPLY_TIME_FLOOR_SECONDS = 120
+# Reads of a failed launch's reason one sweep makes at most, and the invocation time below which it starts
+# none: each is one or two reads of EDH's per-user listing under the batch profile. Rows left over are read
+# by the next sweep or by their owner's next list.
+MAX_FAILURE_READS_PER_SWEEP = 50
+FAILURE_READ_TIME_FLOOR_SECONDS = 120
 
 
 class DesktopIndex(NamedTuple):
@@ -163,6 +173,21 @@ class ScheduleSweep:
         if self.deadline is not None and self.deadline - time.monotonic() < SCHEDULE_APPLY_TIME_FLOOR_SECONDS:
             return "time"
         return None
+
+
+class FailureReadSweep:
+    """One sweep's allowance of reads of a failed launch's reason: the reads left, and the monotonic instant
+    the invocation ends at (None when unknown)."""
+
+    def __init__(self, deadline: Optional[float] = None):
+        self.remaining = MAX_FAILURE_READS_PER_SWEEP
+        self.deadline = deadline
+
+    def holding(self) -> bool:
+        """Whether no read may start now: the allowance is spent or too little of the invocation is left."""
+        if self.remaining <= 0:
+            return True
+        return self.deadline is not None and self.deadline - time.monotonic() < FAILURE_READ_TIME_FLOOR_SECONDS
 
 
 def _invocation_deadline(context) -> Optional[float]:
@@ -723,9 +748,41 @@ def _apply_schedule(row: Dict[str, Any], index: DesktopIndex, now: datetime,
     logger.info(f"EDH schedule set to never start automatically for bootstrap {bootstrap_id}")
 
 
+def _capture_launch_failure(row: Dict[str, Any], seen_updated_at, now: datetime,
+                            client_factory: Callable[[], EdhClient], summary: Dict[str, int],
+                            failure_reads: FailureReadSweep) -> None:
+    """Give a row this pass leaves ORPHANED with a session id, no captured reason and no read within the
+    interval the reason EDH recorded for its failed launch, with the ``lastError`` it implies and the read's
+    stamp, under a write conditioned on ``seen_updated_at``, the updatedAt the row carries after this pass.
+    The read names the row's own EDH uid, since EDH's per-user listing is owner-scoped, and runs on its own
+    client within the sweep's allowance; a row the allowance holds is left unstamped for a later read. A read
+    that fails is counted and writes the stamp alone; a write another writer overtook is deferred."""
+    if not edh_failure_read_due(row, now):
+        return
+    if failure_reads.holding():
+        return
+    failure_reads.remaining -= 1
+    try:
+        failure = client_factory().get_desktop_failure(row.get("edhUid"), row["sessionId"])
+    except (EdhError, ValueError):
+        summary["failed"] += 1
+        logger.warning(f"EDH's reason for the failed launch of bootstrap {row['bootstrapId']} was not read, and is "
+                       "read again later", exc_info=True)
+        failure = None
+    attributes = edh_failure_attributes(row, failure, now)
+    # A read that found nothing records no change of the row, so it leaves updatedAt as it is.
+    if _persist(row["bootstrapId"], attributes, seen_updated_at, touch=bool(failure)) is None:
+        summary["deferred"] += 1
+        return
+    if EDH_FAILURE_FIELD in attributes:
+        summary["failuresCaptured"] += 1
+        logger.info(f"Recorded EDH's reason for the failed launch of bootstrap {row['bootstrapId']}")
+
+
 def _reconcile(scanned: Dict[str, Any], index: DesktopIndex, now: datetime, summary: Dict[str, int],
                client_factory: Optional[Callable[[], EdhClient]] = None,
-               policy: Optional[Dict[str, Any]] = None, schedule: Optional[ScheduleSweep] = None) -> None:
+               policy: Optional[Dict[str, Any]] = None, schedule: Optional[ScheduleSweep] = None,
+               failure_reads: Optional[FailureReadSweep] = None) -> None:
     """Reconcile one row the scan returned. The row is re-read before anything is decided and left alone
     while a request of its own is inside it; the state is claimed with a conditional write before the
     credential is touched, and the credential attributes are cleared, under the same condition, only
@@ -739,7 +796,9 @@ def _reconcile(scanned: Dict[str, Any], index: DesktopIndex, now: datetime, summ
     bears the action out: a stop for a desktop it lists as running, starting or stopped, a delete for one
     it lists as stopped or no longer lists; in any other case the row takes the ordinary path. A row the
     ordinary path leaves unchanged has its desktop's EDH schedule set when the sweep's schedule allowance
-    is given, unless a lease stop EDH refused on this pass: its schedule is left to a later one."""
+    is given, unless a lease stop EDH refused on this pass: its schedule is left to a later one. A row the
+    ordinary path leaves ORPHANED is then given the reason EDH recorded for its failed launch when the sweep's
+    allowance of such reads is given."""
     bootstrap_id = scanned["bootstrapId"]
     row = _read_row(bootstrap_id)
     if row is None:
@@ -762,9 +821,12 @@ def _reconcile(scanned: Dict[str, Any], index: DesktopIndex, now: datetime, summ
         # The credential stays recorded and unclaimed; the state reconciliation still runs.
         summary["skipped"] += 1
         revoke = delete_secret = False
+    capture = failure_reads is not None and client_factory is not None
     if not updates and not revoke:
         if schedule is not None and client_factory is not None and not lease_failed:
             _apply_schedule(row, index, now, client_factory, summary, schedule)
+        if capture:
+            _capture_launch_failure(row, row.get("updatedAt"), now, client_factory, summary, failure_reads)
         return
     claim = updates
     if revoke:
@@ -782,6 +844,8 @@ def _reconcile(scanned: Dict[str, Any], index: DesktopIndex, now: datetime, summ
     if updates:
         summary["updated"] += 1
     if not revoke:
+        if capture:
+            _capture_launch_failure({**row, **updates}, stamp, now, client_factory, summary, failure_reads)
         return
     try:
         cleared = bootstrap.revoke_session(SYSTEM_EVENT, row, delete_secret=delete_secret, actor=SYSTEM_USER_ID)
@@ -797,21 +861,27 @@ def _reconcile(scanned: Dict[str, Any], index: DesktopIndex, now: datetime, summ
     cleared = {**cleared, "credentialClaimedAt": None}
     if "startRequestedAt" in claim:
         cleared = {**cleared, "startRequestedAt": None}
-    if _persist(bootstrap_id, cleared, stamp) is None:
+    settled = _persist(bootstrap_id, cleared, stamp)
+    if settled is None:
         # Another write reached the row after the revoke: the credential attributes wait for the next sweep,
         # and the claim goes all the same.
         _release_claim(bootstrap_id, claim)
         summary["deferred"] += 1
-    elif not updates:
+        return
+    if not updates:
         summary["updated"] += 1
+    if capture:
+        _capture_launch_failure({**row, **updates}, settled, now, client_factory, summary, failure_reads)
 
 
 def lambda_handler(event, context: LambdaContext) -> Dict[str, int]:
     now = _now()
     client = EdhClient(profile="batch")
     summary = {"examined": 0, "updated": 0, "revoked": 0, "scheduled": 0, "deferred": 0, "skipped": 0,
-               "failed": 0, "orphanKeysDeleted": 0}
-    schedule = ScheduleSweep(_invocation_deadline(context))
+               "failed": 0, "orphanKeysDeleted": 0, "failuresCaptured": 0}
+    deadline = _invocation_deadline(context)
+    schedule = ScheduleSweep(deadline)
+    failure_reads = FailureReadSweep(deadline)
     try:
         policy = read_lease_policy()
     except Exception:
@@ -853,7 +923,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, int]:
             # The batch profile's time budget is per client instance, so each lease action and schedule
             # update opens its own.
             _reconcile(scanned, index, now, summary, client_factory=lambda: EdhClient(profile="batch"),
-                       policy=policy, schedule=schedule)
+                       policy=policy, schedule=schedule, failure_reads=failure_reads)
         except Exception:
             summary["failed"] += 1
             logger.exception(f"Reconcile failed for bootstrap {bootstrap_id}")

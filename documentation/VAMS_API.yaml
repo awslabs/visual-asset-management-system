@@ -11510,6 +11510,7 @@ components:
                 - leaseExpiresAt
                 - leaseStoppedAt
                 - leaseHoursAtLaunch
+                - edhFailure
             properties:
                 bootstrapId:
                     type: string
@@ -11584,6 +11585,40 @@ components:
                     type: integer
                     nullable: true
                     description: "The lease the workstation was launched with, in hours. A renewal recomputes the expiry from the policy in force at the time and leaves this value alone."
+                edhFailure:
+                    allOf:
+                        - $ref: "#/components/schemas/edhLaunchFailure"
+                    nullable: true
+                    description: "The reason EDH recorded for a failed launch, once VAMS has read it for an ORPHANED record with a session id; null otherwise."
+        edhLaunchFailure:
+            type: object
+            description: "The reason EDH recorded for a failed launch, parsed from EDH's own events; EDH's text is never returned. A capacity or account-limit errorCode makes a generic LAUNCH_ERROR read CAPACITY_UNAVAILABLE or QUOTA_EXCEEDED."
+            required:
+                - event
+                - observedAt
+            properties:
+                event:
+                    type: string
+                    enum:
+                        - placement_failed
+                        - session-failed
+                    description: "`placement_failed`: EDH's asynchronous placement gave up; `session-failed`: the desktop's setup failed."
+                errorCode:
+                    type: string
+                    pattern: "^[A-Za-z][A-Za-z0-9.]{0,63}$"
+                    description: "The AWS error code EDH's record names, such as `InsufficientInstanceCapacity`; absent when it names none."
+                operation:
+                    type: string
+                    pattern: "^[A-Za-z][A-Za-z0-9]{0,63}$"
+                    description: "The AWS operation that returned errorCode, such as `CreateCapacityReservation`; absent with errorCode."
+                checkpoint:
+                    type: string
+                    pattern: "^[A-Za-z0-9_.-]{1,64}$"
+                    description: "For `session-failed`, the setup step the desktop stopped at; absent otherwise."
+                observedAt:
+                    type: string
+                    format: date-time
+                    description: "When VAMS read the reason from EDH (UTC)."
         edhWorkstationList:
             type: object
             required:
@@ -11915,7 +11950,7 @@ components:
                     type: boolean
         edhAdminInstance:
             type: object
-            description: "An EDH session joined with the VAMS session record. userId, bootstrapId, updatedAt and lastError are null for a session VAMS did not launch; imageId, osFamily and instanceType then come from the EDH record. owner, name and state come from EDH's record or the VAMS row and are null when neither carries them."
+            description: "An EDH session joined with the VAMS session record. userId, bootstrapId, updatedAt, lastError and edhFailure are null for a session VAMS did not launch; imageId, osFamily and instanceType then come from the EDH record. owner, name and state come from EDH's record or the VAMS row and are null when neither carries them."
             properties:
                 sessionId:
                     type: string
@@ -11947,6 +11982,11 @@ components:
                 lastError:
                     type: string
                     nullable: true
+                edhFailure:
+                    allOf:
+                        - $ref: "#/components/schemas/edhLaunchFailure"
+                    nullable: true
+                    description: "The launch-failure reason of the joined VAMS record; null when it holds none or no record joins."
                 imageId:
                     type: string
                     nullable: true

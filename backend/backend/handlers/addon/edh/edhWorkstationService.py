@@ -89,8 +89,9 @@ from .common.edhSessionState import (
     LAST_ERROR_LEASE_EXPIRED,
     START_IN_PROGRESS_SECONDS, STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED,
     WORKER_PAYLOAD_KEYS,
-    credential_claim_stamp, deleted_row_expiry, observed_row_attributes, session_row_live, start_in_progress,
-    start_stamp, start_stamp_cleared, state_for_edh_session_state,
+    credential_claim_stamp, deleted_row_expiry, edh_failure_attributes, edh_failure_read_due,
+    observed_row_attributes, session_row_live, start_in_progress, start_stamp, start_stamp_cleared,
+    state_for_edh_session_state,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -151,12 +152,16 @@ WINDOWS_USERNAME_QUERY_FIELD = "username"
 EDH_AUDIT_ROUTES = {
     "get_desktop_states": ("GET", EDH_ROUTE_DESKTOPS_SESSION_STATE),
     "get_desktop_connection": ("GET", EDH_ROUTE_DESKTOPS_LIST),
+    "get_desktop_failure": ("GET", EDH_ROUTE_DESKTOPS_LIST),
     "stop_desktop": ("PUT", EDH_ROUTE_DESKTOPS_STOP),
     "start_desktop": ("PUT", EDH_ROUTE_DESKTOPS_START),
     "delete_desktop": ("DELETE", EDH_ROUTE_DESKTOPS_DELETE),
     "list_software_stacks": ("GET", EDH_SOFTWARE_STACK_ROUTES["dcv"]),
     "list_profiles": ("GET", EDH_PROFILE_ROUTES["dcv"]),
 }
+# The edhProxy operation of the read of the reason EDH recorded for a failed launch, which the list and get
+# routes make for a row that is or becomes ORPHANED.
+LAUNCH_FAILURE_OPERATION = "workstationLaunchFailure"
 # Launch, start and renew response field naming the session-bootstrap outcome beside the record.
 RESPONSE_FIELD_SESSION_BOOTSTRAP = "sessionBootstrap"
 
@@ -617,6 +622,28 @@ def _record_failed_launches(event, rows, unanswered):
         _revoke_session_credential(event, row, delete_secret=True)
 
 
+def _capture_launch_failures(event, client, rows, edh_uid):
+    """Record on each row due a read -- ORPHANED, with a session id, without a captured reason and not read
+    within the interval -- the reason EDH recorded for its failed launch, from the caller's per-user listing
+    narrowed to that session (a desktop that never ran has no DCV session, so EDH issues no connection token
+    for it), together with the ``lastError`` the reason implies and the read's stamp. A read that fails is
+    logged and writes the stamp alone; a row deleted since it was read keeps what its deletion wrote."""
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        if not edh_failure_read_due(row, now):
+            continue
+        try:
+            failure = _call_edh(event, client, "get_desktop_failure", LAUNCH_FAILURE_OPERATION, edh_uid,
+                                edh_uid, row['sessionId'])
+        except (EdhError, ValueError) as err:
+            logger.warning(f"EDH's reason for the failed launch of bootstrap {row['bootstrapId']} was not read "
+                           f"({type(err).__name__}), and is read again later")
+            failure = None
+        if not _update_live_row(row, **edh_failure_attributes(row, failure, now)):
+            logger.info(f"Bootstrap {row['bootstrapId']} was deleted since it was read, so its launch failure is "
+                        "not recorded")
+
+
 def _desktop_after_lost_answer(event, client, row, edh_uid, operation, lost):
     """EDH's record of the row's desktop, from the read of the desktop's state after ``lost`` -- a desktop
     call whose answer never came -- and merged onto the row; None when EDH no longer reports it. A read of
@@ -654,6 +681,7 @@ def list_workstations(event):
         desktops = _desktop_states(event, client, rows, edh_uid, "workstationList", unanswered)
         _merge_edh_state(rows, desktops)
         _record_failed_launches(event, rows, unanswered)
+        _capture_launch_failures(event, client, rows, edh_uid)
     enforcer = _enforcer() if len(claims_and_roles["tokens"]) > 0 else None
     items = []
     for row in rows:
@@ -1051,6 +1079,7 @@ def get_workstation(event, path):
     desktops = _desktop_states(event, client, [row], edh_uid, "workstationGet", unanswered)
     _merge_edh_state([row], desktops)
     _record_failed_launches(event, [row], unanswered)
+    _capture_launch_failures(event, client, [row], edh_uid)
     return success(body=_record(row))
 
 

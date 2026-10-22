@@ -6,7 +6,7 @@
 import { apiClient } from "../../../services/apiClient";
 import { toTuple } from "../../../features/orchestration/api/client";
 import { toOutcomeTuple } from "./outcome";
-import type { LeasePolicy } from "../types";
+import type { EdhFailure, LeasePolicy } from "../types";
 
 export type EdhImageKind = "vdi" | "simulation";
 
@@ -42,6 +42,8 @@ export interface EdhAdminInstance {
     /** The VAMS state derived from EDH's session_state, or the row's when EDH lists no desktop. */
     state: string | null;
     lastError: string | null;
+    /** The launch failure VAMS captured from EDH, from the joined VAMS row; null when there is none. */
+    edhFailure?: EdhFailure | null;
     imageId: string | null;
     osFamily: string | null;
     instanceType: string | null;

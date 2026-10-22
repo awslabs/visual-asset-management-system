@@ -1,5 +1,5 @@
 name: vams-isaacsim-kernel
-description: Holds the kernel Ubuntu 24.04 boots and installs the headers and extra modules its driver build needs.
+description: Holds the kernel Ubuntu 24.04 boots, installs the headers and extra modules its driver build needs, and keeps nouveau from loading so the NVIDIA driver install can run.
 schemaVersion: 1.0
 phases:
     - name: build
@@ -26,6 +26,24 @@ phases:
                             echo "kernel $(uname -r): the archive carries no headers or extra modules for it"
                             exit 1
                         fi
+          - name: DisableNouveau
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euxo pipefail
+                    - |
+                        # The extra modules above carry nouveau, which loads at boot on every NVIDIA GPU.
+                        # EDH blacklists it and installs the NVIDIA driver in the same boot, with no reboot
+                        # in between, and nvidia-installer aborts while nouveau is loaded, leaving the
+                        # desktop without a driver. The image therefore boots with nouveau kept out: a
+                        # modprobe.d blacklist, copied into the initramfs, and the kernel command line.
+                        printf 'blacklist nouveau\noptions nouveau modeset=0\n' \
+                            > /etc/modprobe.d/vams-blacklist-nouveau.conf
+                        printf '%s\n' \
+                            'GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} modprobe.blacklist=nouveau nouveau.modeset=0"' \
+                            > /etc/default/grub.d/90-vams-nouveau.cfg
+                        update-initramfs -u -k all
+                        update-grub
     - name: validate
       steps:
           - name: KernelModulesPresent
@@ -36,3 +54,5 @@ phases:
                     - dpkg -s "linux-headers-$(uname -r)" >/dev/null
                     - dpkg -s "linux-modules-extra-$(uname -r)" >/dev/null
                     - apt-mark showhold | grep -qx linux-aws
+                    - grep -qx 'blacklist nouveau' /etc/modprobe.d/vams-blacklist-nouveau.conf
+                    - grep -q 'modprobe.blacklist=nouveau' /boot/grub/grub.cfg

@@ -29,7 +29,10 @@ import {
     useWorkstationMutations,
 } from "../api/queries";
 import { unconfirmedNotice } from "../api/outcome";
-import WorkstationStatusBadge, { describeLastError } from "../components/WorkstationStatusBadge";
+import WorkstationStatusBadge, {
+    EdhFailureDetail,
+    describeLastError,
+} from "../components/WorkstationStatusBadge";
 import DeleteWorkstationDialog from "../components/DeleteWorkstationDialog";
 import NotEnabledPanel from "../components/NotEnabledPanel";
 import { useTextFilter } from "../components/useTextFilter";
@@ -447,6 +450,7 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                                 {describeLastError(row.original.lastError)}
                             </span>
                         )}
+                        <EdhFailureDetail failure={row.original.edhFailure} />
                     </div>
                 ),
             },

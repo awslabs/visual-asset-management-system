@@ -102,6 +102,15 @@ phases:
                         {
                             echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) vams-isaacsim-preflight"
                             if ! command -v nvidia-smi > /dev/null 2>&1; then
+                                INSTALLER_LOG=/var/log/nvidia-installer.log
+                                if grep -q 'ERROR: Installation has failed' "${INSTALLER_LOG}" 2>/dev/null; then
+                                    if grep -q 'Nouveau kernel driver is currently in use' "${INSTALLER_LOG}"; then
+                                        echo "result=driver-install-failed reason=nouveau-loaded the NVIDIA driver install stopped because the nouveau driver was loaded; see ${INSTALLER_LOG}"
+                                    else
+                                        echo "result=driver-install-failed the NVIDIA driver install failed; see ${INSTALLER_LOG}"
+                                    fi
+                                    exit 1
+                                fi
                                 echo "result=no-driver nvidia-smi is not installed; EDH installs the driver on the first boot, so a reboot may be pending"
                                 exit 1
                             fi

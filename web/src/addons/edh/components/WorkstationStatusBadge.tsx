@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import type { WorkstationLastError, WorkstationState } from "../types";
+import type { EdhFailure, WorkstationLastError, WorkstationState } from "../types";
 
 interface WorkstationStatusBadgeProps {
     state: WorkstationState;
@@ -47,6 +47,35 @@ export const LAST_ERROR_FALLBACK_COPY = "The launch did not complete.";
 export function describeLastError(code?: string | null): string {
     return (code && LAST_ERROR_COPY[code as WorkstationLastError]) || LAST_ERROR_FALLBACK_COPY;
 }
+
+const present = (value: unknown): value is string => typeof value === "string" && value !== "";
+
+/**
+ * The detail line for the launch failure VAMS captured from EDH: the AWS error code (with the
+ * operation that returned it when captured), else the checkpoint a desktop setup failed at; null when
+ * the row carries no failure or the failure names neither.
+ */
+export function describeEdhFailure(failure?: EdhFailure | null): string | null {
+    if (!failure) return null;
+    if (present(failure.errorCode)) {
+        return present(failure.operation)
+            ? `AWS: ${failure.errorCode} (${failure.operation})`
+            : `AWS: ${failure.errorCode}`;
+    }
+    if (present(failure.checkpoint)) return `Desktop setup failed at ${failure.checkpoint}`;
+    return null;
+}
+
+/**
+ * The captured failure as a line of text beneath the row's reason, or nothing when the row carries
+ * none. Shared by My Workstations and the admin Sessions tab.
+ */
+export const EdhFailureDetail: React.FC<{ failure?: EdhFailure | null }> = ({ failure }) => {
+    const detail = describeEdhFailure(failure);
+    return detail ? (
+        <span className="block text-xs text-text-secondary font-mono break-all">{detail}</span>
+    ) : null;
+};
 
 interface StatusStyle {
     label: string;

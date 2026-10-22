@@ -479,6 +479,15 @@ empty, or it contains the image's architecture; pass only such a type to
 A row's `session_id` is its `sessionId`, or its `bootstrapId` while a launch has no
 session id yet (`create_edh_workstation` answers 202 with `sessionId` null and
 `state` CREATING; `lastError` names why a launch ended ORPHANED).
+A row also carries `edhFailure`, the launch failure VAMS captured from EDH's own
+record of a desktop that never ran: `event` (`placement_failed` or
+`session-failed`), `errorCode` and `operation` (the AWS error code and operation
+EDH's status named, such as `InsufficientInstanceCapacity` from
+`CreateCapacityReservation`), `checkpoint` (the desktop setup step a
+`session-failed` stopped at) and `observedAt`, the first three absent when not
+captured; it is null when VAMS captured none, and EDH's own wording is never
+returned. The items of `list_edh_admin_instances` and `list_edh_stale_instances`
+carry it from the joined VAMS row, null for a session VAMS did not launch.
 The `admin` reads require the EDH admin routes;
 `get_edh_capacity` and `get_edh_health` are in the `autoApprove` addition below, while
 `list_edh_admin_instances` and `list_edh_stale_instances` name other users,

@@ -60,13 +60,13 @@
         { "id": "connector", "repoPath": "tools/ExternalIntegrations/isaacsim_vams_integration" }
     ],
     "parameters": {
-        "isaacSimVersion": "5.1.0",
-        "isaacSimDownloadUrl": "https://downloads.isaacsim.nvidia.com/isaac-sim-standalone-5.1.0-linux-x86_64.zip",
-        "isaacSimSha256": "6ab0109278c4868b6d796d5e435a0116874cd50a392edfa7cc3350debfb7a187",
+        "isaacSimVersion": "6.2.0",
+        "isaacSimDownloadUrl": "https://downloads.isaacsim.nvidia.com/isaac-sim-standalone-6.2.0-linux-x86_64.zip",
+        "isaacSimSha256": "aac4f9065f36d56f56a6523931710fad3ea9c3e5eeb067b781fa53098fcf19f2",
         "isaacSimLauncher": "isaac-sim.sh",
-        "nvidiaDriverMinMajor": "570"
+        "nvidiaDriverMinMajor": "595"
     },
     "keepVersions": 3,
     "recipeRevision": 1,
-    "description": "Ubuntu 24.04 with NVIDIA Isaac Sim 5.1, the VAMS CLI and the VAMS Isaac Sim connector; EDH installs Amazon DCV, the desktop and the GPU driver at the desktop's first boot."
+    "description": "Ubuntu 24.04 with NVIDIA Isaac Sim 6.2, the VAMS CLI and the VAMS Isaac Sim connector; EDH installs Amazon DCV, the desktop and the GPU driver at the desktop's first boot."
 }

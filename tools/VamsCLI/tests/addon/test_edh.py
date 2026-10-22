@@ -49,6 +49,40 @@ WORKSTATION = {
     "launchAttempts": 1,
 }
 
+# A launch EDH's placement refused, with the AWS error VAMS captured from EDH's record of it.
+CAPACITY_FAILURE = {
+    "event": "placement_failed",
+    "errorCode": "InsufficientInstanceCapacity",
+    "operation": "CreateCapacityReservation",
+    "observedAt": "2026-10-22T10:00:00Z",
+}
+
+ORPHANED_WORKSTATION = {
+    **WORKSTATION, "bootstrapId": "b-orphan", "sessionId": None, "state": "ORPHANED", "edhState": None,
+    "connectionAvailable": False, "lastError": "CAPACITY_UNAVAILABLE", "edhFailure": CAPACITY_FAILURE,
+}
+
+# Each captured failure shape and the text after `EDH failure:` that shows it.
+EDH_FAILURE_TEXTS = [
+    (CAPACITY_FAILURE, "InsufficientInstanceCapacity (CreateCapacityReservation)"),
+    ({"event": "placement_failed", "errorCode": "VcpuLimitExceeded", "observedAt": "2026-10-22T10:00:00Z"},
+     "VcpuLimitExceeded"),
+    ({"event": "session-failed", "checkpoint": "dcv_session_create", "observedAt": "2026-10-22T10:00:00Z"},
+     "desktop setup failed at dcv_session_create"),
+    ({"event": "session-failed", "errorCode": "InsufficientInstanceCapacity", "operation": "RunInstances",
+      "checkpoint": "instance_launch", "observedAt": "2026-10-22T10:00:00Z"},
+     "InsufficientInstanceCapacity (RunInstances)"),
+]
+
+# Bodies that carry no failure to show: none captured, or one naming neither a code nor a checkpoint.
+NO_EDH_FAILURES = [
+    {},
+    {"edhFailure": None},
+    {"edhFailure": {"event": "placement_failed", "observedAt": "2026-10-22T10:00:00Z"}},
+    {"edhFailure": {"event": "session-failed", "errorCode": "", "checkpoint": None,
+                    "observedAt": "2026-10-22T10:00:00Z"}},
+]
+
 CONNECT = {
     "sessionId": "s-1",
     "connectionUrl": "https://dcv.example.internal:8443/?authToken=abc123def#s-1",
@@ -267,6 +301,32 @@ class TestWorkstationList:
             assert 'bootstrap id' in result.output
             assert 's-1 ' in result.output and 's-1*' not in result.output
 
+    def test_list_text_keeps_its_columns_and_leaves_the_edh_failure_to_get(self, cli_runner, generic_command_mocks):
+        # The table keeps its width; the captured failure is shown by `get` and carried by --json-output.
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].list_edh_workstations.return_value = {'Items': [WORKSTATION]}
+            plain = cli_runner.invoke(cli, ['edh', 'workstation', 'list'])
+            mocks['api_client'].list_edh_workstations.return_value = {
+                'Items': [WORKSTATION, ORPHANED_WORKSTATION]}
+            result = cli_runner.invoke(cli, ['edh', 'workstation', 'list'])
+            assert result.exit_code == 0
+            header = next(line for line in plain.output.splitlines() if 'Identifier' in line)
+            assert header in result.output.splitlines()
+            assert 'CAPACITY_UNAVAILABLE' in result.output
+            assert 'InsufficientInstanceCapacity' not in result.output
+            assert 'EDH failure' not in result.output
+            orphan_row = next(line for line in result.output.splitlines() if 'b-orphan*' in line)
+            assert orphan_row.split() == ['b-orphan*', 'Design', 'desk', 'ORPHANED', 'CAPACITY_UNAVAILABLE',
+                                          'g5.2xlarge', 'linux', '2026-09-08T10:00:00Z']
+
+    def test_list_json_output_carries_the_edh_failure_unchanged(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            body = {'Items': [WORKSTATION, ORPHANED_WORKSTATION]}
+            mocks['api_client'].list_edh_workstations.return_value = body
+            result = cli_runner.invoke(cli, ['edh', 'workstation', 'list', '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output)['Items'][1]['edhFailure'] == CAPACITY_FAILURE
+
 
 class TestWorkstationCreate:
     BASE = ['edh', 'workstation', 'create', '--image-id', '12', '--instance-type', 'g5.2xlarge',
@@ -424,6 +484,41 @@ class TestWorkstationGetStartStop:
             assert result.exit_code == 0
             assert f"Session Sign-in: {outcome}" in result.output
             assert "Root Size (GB):  60" in result.output
+
+    @pytest.mark.parametrize("failure,text", EDH_FAILURE_TEXTS)
+    def test_get_text_shows_the_failure_vams_captured_from_edh(self, cli_runner, generic_command_mocks,
+                                                                failure, text):
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].get_edh_workstation.return_value = {
+                **ORPHANED_WORKSTATION, 'edhFailure': failure}
+            result = cli_runner.invoke(cli, ['edh', 'workstation', 'get', 'b-orphan'])
+            assert result.exit_code == 0
+            lines = result.output.splitlines()
+            # The detail sits beneath the reason code, in the record's own label column.
+            last_error = lines.index("  Last Error:      CAPACITY_UNAVAILABLE")
+            assert lines[last_error + 1] == f"  EDH failure:     {text}"
+
+    @pytest.mark.parametrize("extra", NO_EDH_FAILURES)
+    def test_get_text_shows_no_edh_failure_line_without_one(self, cli_runner, generic_command_mocks, extra):
+        with generic_command_mocks('addon.edh') as mocks:
+            record = {key: value for key, value in ORPHANED_WORKSTATION.items() if key != 'edhFailure'}
+            mocks['api_client'].get_edh_workstation.return_value = {**record, **extra}
+            result = cli_runner.invoke(cli, ['edh', 'workstation', 'get', 'b-orphan'])
+            assert result.exit_code == 0
+            assert "Last Error:      CAPACITY_UNAVAILABLE" in result.output
+            assert "EDH failure" not in result.output
+
+    def test_get_json_output_carries_the_edh_failure_unchanged(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].get_edh_workstation.return_value = ORPHANED_WORKSTATION
+            result = cli_runner.invoke(cli, ['edh', 'workstation', 'get', 'b-orphan', '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output) == ORPHANED_WORKSTATION
+
+    def test_get_help_names_the_edh_failure(self, cli_runner):
+        result = cli_runner.invoke(cli, ['edh', 'workstation', 'get', '--help'])
+        assert result.exit_code == 0
+        assert 'EDH failure' in result.output
 
     def test_get_not_found_hints_at_the_listing(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('addon.edh') as mocks:
@@ -1210,6 +1305,60 @@ class TestAdminInstances:
             assert result.exit_code == 0
             assert f'Found 1 {noun}' in result.output
             assert '"sessionId": "s-9"' in result.output
+
+    @pytest.mark.parametrize("command,method", [
+        ("list", "list_edh_admin_instances"), ("stale", "list_edh_stale_instances")])
+    @pytest.mark.parametrize("failure,text", EDH_FAILURE_TEXTS)
+    def test_listings_show_the_edh_failure_beneath_the_session_that_carries_it(
+            self, cli_runner, generic_command_mocks, command, method, failure, text):
+        with generic_command_mocks('addon.edh') as mocks:
+            getattr(mocks['api_client'], method).return_value = {'Items': [
+                {'sessionId': 's-9', 'state': 'ACTIVE', 'lastError': None, 'edhFailure': None},
+                {'sessionId': None, 'bootstrapId': 'b-8', 'state': 'ORPHANED',
+                 'lastError': 'CAPACITY_UNAVAILABLE', 'edhFailure': failure},
+            ]}
+            result = cli_runner.invoke(cli, ['edh', 'admin', 'instances', command])
+            assert result.exit_code == 0
+            # Each session is still its JSON block, the failure map included; the failed one gains the line.
+            assert '"bootstrapId": "b-8"' in result.output
+            assert '"edhFailure": {' in result.output
+            assert result.output.count("EDH failure:") == 1
+            lines = result.output.splitlines()
+            detail = lines.index(f"  EDH failure:     {text}")
+            assert lines[detail - 1] == "}"
+            assert lines.index('  "bootstrapId": "b-8",') < detail
+
+    @pytest.mark.parametrize("command,method", [
+        ("list", "list_edh_admin_instances"), ("stale", "list_edh_stale_instances")])
+    @pytest.mark.parametrize("extra", NO_EDH_FAILURES)
+    def test_listings_show_no_edh_failure_line_without_one(self, cli_runner, generic_command_mocks,
+                                                           command, method, extra):
+        with generic_command_mocks('addon.edh') as mocks:
+            getattr(mocks['api_client'], method).return_value = {'Items': [
+                {'sessionId': None, 'bootstrapId': 'b-8', 'state': 'ORPHANED', 'lastError': 'LAUNCH_ERROR',
+                 **extra}]}
+            result = cli_runner.invoke(cli, ['edh', 'admin', 'instances', command])
+            assert result.exit_code == 0
+            assert '"bootstrapId": "b-8"' in result.output
+            assert "EDH failure:" not in result.output
+
+    @pytest.mark.parametrize("command,method", [
+        ("list", "list_edh_admin_instances"), ("stale", "list_edh_stale_instances")])
+    def test_listings_json_output_carries_the_edh_failure_unchanged(self, cli_runner, generic_command_mocks,
+                                                                    command, method):
+        with generic_command_mocks('addon.edh') as mocks:
+            body = {'Items': [{'sessionId': None, 'bootstrapId': 'b-8', 'state': 'ORPHANED',
+                               'lastError': 'CAPACITY_UNAVAILABLE', 'edhFailure': CAPACITY_FAILURE}]}
+            getattr(mocks['api_client'], method).return_value = body
+            result = cli_runner.invoke(cli, ['edh', 'admin', 'instances', command, '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output) == body
+
+    @pytest.mark.parametrize("command", ["list", "stale"])
+    def test_listing_help_names_the_edh_failure(self, cli_runner, command):
+        result = cli_runner.invoke(cli, ['edh', 'admin', 'instances', command, '--help'])
+        assert result.exit_code == 0
+        assert 'edhFailure' in result.output
 
     def test_stale_forwards_idle_minutes_only_when_given(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('addon.edh') as mocks:

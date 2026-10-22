@@ -494,8 +494,8 @@ from NVIDIA's published download URL, which the recipe exposes as a parameter.
 
 | Component            | Version                      | License            | Usage                                                                                           |
 | -------------------- | ---------------------------- | ------------------ | ----------------------------------------------------------------------------------------------- |
-| NVIDIA Isaac Sim     | 5.1.0                        | NVIDIA Proprietary | Simulation application installed into the workstation image (NVIDIA Software License Agreement) |
-| NVIDIA Omniverse Kit | bundled with Isaac Sim 5.1.0 | NVIDIA Proprietary | Application framework Isaac Sim and the VAMS connector extension run on                         |
+| NVIDIA Isaac Sim     | 6.2.0                        | NVIDIA Proprietary | Simulation application installed into the workstation image (NVIDIA Software License Agreement) |
+| NVIDIA Omniverse Kit | bundled with Isaac Sim 6.2.0 | NVIDIA Proprietary | Application framework Isaac Sim and the VAMS connector extension run on                         |
 
 Operators accept the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license)
 by building this recipe; the build answers NVIDIA's first-run licence and telemetry prompts

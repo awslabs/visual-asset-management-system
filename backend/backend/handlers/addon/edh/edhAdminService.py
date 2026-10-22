@@ -50,6 +50,7 @@ from models.common import (
 )
 from models.addon.edh import (
     LeaseSettingsRequestModel, RegisterSimulationImageRequestModel, RegisterVdiImageRequestModel,
+    edh_failure_projection,
 )
 from .common.edhCatalogFields import (
     IMAGE_KIND_SIMULATION, IMAGE_KIND_VDI, KIND_BY_IMAGE_KIND, KIND_DCV, KIND_TARGET_NODES,
@@ -624,7 +625,8 @@ def _stack_id_from_label(label):
 
 
 def _instance_item(record, row):
-    """One admin instance view: EDH's list_all record joined with the VAMS session row."""
+    """One admin instance view: EDH's list_all record joined with the VAMS session row, carrying the row's
+    captured launch-failure reason (``edhFailure``) or None."""
     record = record if isinstance(record, dict) else {}
     row = row or {}
 
@@ -645,6 +647,7 @@ def _instance_item(record, row):
         "bootstrapId": row.get('bootstrapId'),
         "state": state_for_edh_session_state(edh_state, row.get('state')),
         "lastError": row.get('lastError'),
+        "edhFailure": edh_failure_projection(row.get('edhFailure')),
         "imageId": str(image_id) if image_id is not None else None,
         "osFamily": row.get('osFamily') or record_str(EDH_FIELD_SESSION_OS_FAMILY),
         "instanceType": row.get('instanceType') or record_str(EDH_FIELD_SESSION_INSTANCE_TYPE),

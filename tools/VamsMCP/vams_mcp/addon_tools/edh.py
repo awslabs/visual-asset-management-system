@@ -45,7 +45,14 @@ def register(
         (CREATING|ACTIVE|STOPPED|DELETED|ORPHANED), `edhState`, `lastError` (why a launch ended
         ORPHANED: USER_NOT_PROVISIONED, QUOTA_EXCEEDED, IMAGE_UNAVAILABLE, CAPACITY_UNAVAILABLE,
         EDH_REFUSED, LAUNCH_ERROR or CREATE_TIMED_OUT; LEASE_EXPIRED on a desktop the lease sweep stopped;
-        null otherwise),
+        null otherwise), `edhFailure` (the launch failure VAMS captured from EDH's own record of a
+        desktop that never ran, as `{event, errorCode, operation, checkpoint, observedAt}`: `event`
+        (`placement_failed` or `session-failed`), `errorCode` and `operation` the AWS error code and
+        the AWS operation EDH's status named, e.g. `InsufficientInstanceCapacity` from
+        `CreateCapacityReservation`, `checkpoint` the desktop setup step a `session-failed` stopped at,
+        each absent when not captured, and `observedAt` when VAMS captured it; null when none was
+        captured. A capacity code makes `lastError` CAPACITY_UNAVAILABLE and a vCPU or instance limit
+        QUOTA_EXCEEDED; EDH's own wording is never returned),
         `launchAttempts`, `imageId`, `osFamily`, `instanceType`, `rootSizeGb`, `createdAt`, `updatedAt`,
         `connectionAvailable`, and `leaseExpiresAt`, `leaseStoppedAt` and `leaseHoursAtLaunch` (null
         when no lease applies). Every session tool takes `session_id` as the row's `sessionId`, or its
@@ -64,7 +71,10 @@ def register(
         or its `bootstrapId` for a launch that has not received one (state CREATING or ORPHANED). A
         `bootstrapId` is accepted only while the row has no `sessionId`: once EDH assigns one, the
         `bootstrapId` is reported as not found, so follow a launch with list_edh_workstations. A
-        workstation owned by another user is reported as not found, not as forbidden. Reading it makes
+        workstation owned by another user is reported as not found, not as forbidden. The record carries
+        the fields of a list_edh_workstations row, `lastError` and `edhFailure` (the AWS error code and
+        operation, or the setup checkpoint, VAMS captured from EDH for a failed launch; null when none
+        was captured) among them. Reading it makes
         EDH issue no connection token; `connectionAvailable` is true while EDH reports the desktop
         running."""
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
@@ -129,7 +139,11 @@ def register(
     @mcp.tool()
     @tool_result
     def list_edh_admin_instances() -> Dict[str, Any]:
-        """ADMIN: list EVERY user's EDH workstation sessions on the cluster, as `Items`. Rows name the
+        """ADMIN: list EVERY user's EDH workstation sessions on the cluster, as `Items`. Each item joins
+        the EDH session with its VAMS row and carries that row's `lastError` and `edhFailure` (the AWS
+        error code and operation, or the setup checkpoint, VAMS captured from EDH for a failed launch,
+        shaped as on a list_edh_workstations row; null for a session VAMS did not launch or captured
+        no failure for). Rows name the
         owning user, which is why this tool is not in the README's `autoApprove` sample. Not
         paginated."""
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
@@ -141,7 +155,8 @@ def register(
         """ADMIN: list the workstation sessions in state STOPPED or ORPHANED whose state last changed
         more than `idle_minutes` ago (server default 120; `staleReason` `stopped`), plus sessions VAMS
         knows but EDH no longer lists (`staleReason` `missingInEdh`), as `Items` (the body also echoes
-        the `idleMinutes` applied; each item carries `stale` and `staleReason`) — the candidates for
+        the `idleMinutes` applied; each item carries `stale` and `staleReason`, and `edhFailure` as
+        list_edh_admin_instances does, null when none was captured) — the candidates for
         deactivate_edh_admin_instance. ACTIVE desktops are never listed here, however long unused; see
         list_edh_admin_instances for them. Rows name the owning user, so this tool is not in
         `autoApprove`. Not paginated."""

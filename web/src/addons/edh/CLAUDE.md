@@ -20,7 +20,8 @@ web/src/addons/edh/
   api/            # workstations.ts catalog.ts admin.ts containers.ts amiRecipes.ts (the apiClient callers)
                   #   queries.ts adminQueries.ts containerQueries.ts amiRecipeQueries.ts (TanStack hooks, module-local qk, polling cadence)
                   #   outcome.ts (EdhRequestError, toOutcomeTuple, unconfirmedNotice: a mutation EDH did not confirm, a start in progress)
-  components/     # WorkstationStatusBadge.tsx DeleteWorkstationDialog.tsx TabStrip.tsx (roving-tabindex tablist shared by both pages)
+  components/     # WorkstationStatusBadge.tsx (also describeLastError, describeEdhFailure and EdhFailureDetail; see
+                  #   Launch Failures) DeleteWorkstationDialog.tsx TabStrip.tsx (roving-tabindex tablist shared by both pages)
                   #   EdhFeatureTabs.tsx NotEnabledPanel.tsx (both pages' "not enabled" notice) useTextFilter.ts (the toolbar search
                   #   the three EDH lists share) useInFlight.ts (the synchronous double-submit guard every EDH mutation handler claims)
   workstations/   # WorkstationsPage.tsx (one h1 above the Workstations / Simulations strip; the Simulations tab is selected from the
@@ -77,6 +78,12 @@ The module keeps its own `api/` directory (`web/CLAUDE.md` Rule 3 lists an add-o
 
 -   The callers return `[boolean, data]` tuples through `toTuple`; the EDH mutations use `toOutcomeTuple` from `outcome.ts`, which keeps the status and body a page reads for an unconfirmed outcome (`EdhRequestError`).
 -   The query hooks use the module-local `qk` factory (keys under `"edh"`, never colliding with the orchestration module's). `computeWorkstationRefetchInterval` polls every `WORKSTATION_POLL_TRANSITIONAL_MS` while a listed workstation is still changing state, every `WORKSTATION_POLL_STABLE_MS` once all are settled (EDH can still stop one on idle), and not at all for an empty list.
+
+---
+
+## Launch Failures
+
+A failed launch shows, beneath its **Orphaned** badge, the sentence `describeLastError` gives for its `lastError` code (`LAST_ERROR_COPY`; the user guide and the overview quote each sentence, and `infra/test/addon/edh/docs/edhWorkstationsDocs.test.ts` checks them). When the row also carries `edhFailure` (the AWS error or setup checkpoint VAMS captured from EDH), `EdhFailureDetail` adds one more line of text: `AWS: <errorCode> (<operation>)`, `AWS: <errorCode>`, or `Desktop setup failed at <checkpoint>`, as `describeEdhFailure` formats it. A row whose `edhFailure` is null or absent, or names neither a code nor a checkpoint, gets no line. My Workstations and the admin **Sessions** tab (both views) render the same component, so the two pages always agree. EDH's own status text never reaches the web: the service stores only the parsed fields.
 
 ---
 

@@ -7,13 +7,16 @@ The VAMS states a session row carries, the mapping from EDH's ``session_state`` 
 codes an ORPHANED row keeps in ``lastError`` and the lease-expiry code a STOPPED row keeps, the
 expiry a DELETED row leaves the table by, the form a start's stamp and a credential claim are written
 in and the windows they hold for, when a row's desktop may still be running on a key of its bootstrap,
-the launch worker's payload keys and attempt ceiling, and the EDH schedule VAMS gives every desktop. A
-pure module: no AWS client, no environment read.
+the launch worker's payload keys and attempt ceiling, and the EDH schedule VAMS gives every desktop. It
+also reads the reason EDH recorded for a failed launch out of the desktop's recent events, says which
+``lastError`` that reason implies, and when a row is due a read for one. A pure module: no AWS client, no
+environment read.
 """
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
-from typing import Dict
+from typing import Dict, Optional, Tuple
 
 # Session row states.
 STATE_CREATING = "CREATING"
@@ -68,6 +71,38 @@ LAST_ERROR_CODES = frozenset({
     LAST_ERROR_CAPACITY_UNAVAILABLE, LAST_ERROR_EDH_REFUSED, LAST_ERROR_LAUNCH_ERROR,
     LAST_ERROR_CREATE_TIMED_OUT, LAST_ERROR_LEASE_EXPIRED,
 })
+# The AWS error codes, parsed from the reason EDH recorded for a failed launch, that turn a generic
+# LAUNCH_ERROR on an ORPHANED row into CAPACITY_UNAVAILABLE or QUOTA_EXCEEDED; any other code leaves it.
+CAPACITY_ERROR_CODES = frozenset({
+    "InsufficientInstanceCapacity", "InsufficientCapacity", "InsufficientHostCapacity",
+    "InsufficientReservedInstanceCapacity", "Unsupported",
+})
+QUOTA_ERROR_CODES = frozenset({
+    "VcpuLimitExceeded", "InstanceLimitExceeded", "ReservationCapacityExceeded", "MaxSpotInstanceCountExceeded",
+})
+
+# The reason EDH recorded for a failed launch, as VAMS stores it on the row (``edhFailure``), and the stamp of
+# the last read for one (``edhFailureReadAt``), which holds the next read off for the interval. EDH's per-user
+# listing carries a desktop's last few events under ``recent_events``; a failure is the newest
+# ``placement_failed`` (the asynchronous placement gave up) or ``session-failed`` (the desktop's bootstrap
+# failed) among them. Its free text (``sub_status``) is logged, cut to the limit, and never stored.
+EDH_FAILURE_FIELD = "edhFailure"
+EDH_FAILURE_READ_AT_FIELD = "edhFailureReadAt"
+EDH_FAILURE_READ_INTERVAL_SECONDS = 300
+EDH_RECENT_EVENTS_FIELD = "recent_events"
+EDH_EVENT_TYPE_FIELD = "event_type"
+EDH_EVENT_CHECKPOINT_FIELD = "checkpoint"
+EDH_EVENT_SUB_STATUS_FIELD = "sub_status"
+EDH_EVENT_RECEIVED_AT_FIELD = "received_at"
+EDH_EVENT_PLACEMENT_FAILED = "placement_failed"
+EDH_EVENT_SESSION_FAILED = "session-failed"
+EDH_FAILURE_EVENT_TYPES = frozenset({EDH_EVENT_PLACEMENT_FAILED, EDH_EVENT_SESSION_FAILED})
+EDH_FAILURE_TEXT_LOG_LIMIT = 300
+# The AWS error code and operation in EDH's text, as botocore words a ClientError, and the checkpoint name a
+# bootstrap failure keeps; anything else is left out of the stored reason.
+EDH_FAILURE_AWS_ERROR_PATTERN = re.compile(
+    r"An error occurred \(([A-Za-z][A-Za-z0-9.]{0,63})\) when calling the ([A-Za-z][A-Za-z0-9]{0,63}) operation")
+EDH_FAILURE_CHECKPOINT_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
 # The launch worker's invocation payload: the row's identity, echoed so the worker's log names it.
 WORKER_PAYLOAD_KEYS = ("bootstrapId", "userId", "edhUid", "imageId", "instanceType", "osFamily", "rootSizeGb", "name")
@@ -223,3 +258,104 @@ def observed_row_attributes(row, desktop):
         str(edh_state).lower() == EDH_SESSION_STATE_RUNNING
         and (EDH_CONNECTION_STRING_FIELD not in desktop or bool(connection_string)))
     return {key: value for key, value in attributes.items() if row.get(key) != value}
+
+
+def _event_instant(event):
+    """When EDH received an event, as an aware datetime (one without an offset read as UTC); None when the
+    event carries no readable time."""
+    try:
+        instant = datetime.fromisoformat(str(event.get(EDH_EVENT_RECEIVED_AT_FIELD)).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return instant if instant.tzinfo is not None else instant.replace(tzinfo=timezone.utc)
+
+
+def _newest_failure_event(events):
+    """The newest ``placement_failed`` or ``session-failed`` entry of ``events`` (EDH lists them oldest first):
+    by the time EDH received it, then by position, an entry without a readable time ranking below one with a
+    time. None when ``events`` is not a list or holds no failure."""
+    if not isinstance(events, list):
+        return None
+    failures = [(index, event) for index, event in enumerate(events)
+                if isinstance(event, dict) and event.get(EDH_EVENT_TYPE_FIELD) in EDH_FAILURE_EVENT_TYPES]
+    if not failures:
+        return None
+
+    def rank(entry):
+        index, event = entry
+        instant = _event_instant(event)
+        return (instant is not None, instant or datetime.min.replace(tzinfo=timezone.utc), index)
+
+    return max(failures, key=rank)[1]
+
+
+def edh_failure_from_events(events) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+    """(the stored shape of the newest failure in a desktop's ``recent_events``, EDH's own text of it cut to
+    ``EDH_FAILURE_TEXT_LOG_LIMIT`` for the caller to log), or (None, None) when there is no failure. The map
+    carries ``event``; ``errorCode`` and ``operation`` when EDH's text names an AWS error in botocore's words;
+    and, for ``session-failed``, ``checkpoint`` when EDH's checkpoint name is a plain token. EDH's text is
+    never in the map, and is None when EDH's is not a string."""
+    event = _newest_failure_event(events)
+    if event is None:
+        return None, None
+    failure = {"event": event[EDH_EVENT_TYPE_FIELD]}
+    sub_status = event.get(EDH_EVENT_SUB_STATUS_FIELD)
+    if not isinstance(sub_status, str):
+        sub_status = None
+    match = EDH_FAILURE_AWS_ERROR_PATTERN.search(sub_status) if sub_status else None
+    if match:
+        failure["errorCode"], failure["operation"] = match.group(1), match.group(2)
+    checkpoint = event.get(EDH_EVENT_CHECKPOINT_FIELD)
+    if (failure["event"] == EDH_EVENT_SESSION_FAILED and isinstance(checkpoint, str)
+            and EDH_FAILURE_CHECKPOINT_PATTERN.fullmatch(checkpoint)):
+        failure["checkpoint"] = checkpoint
+    return failure, (sub_status[:EDH_FAILURE_TEXT_LOG_LIMIT] if sub_status is not None else None)
+
+
+def edh_failure_last_error(failure, stored_last_error):
+    """The ``lastError`` an ORPHANED row holds once ``failure`` is known: a specific code the row already holds
+    is kept; a generic ``LAUNCH_ERROR``, or none, becomes ``CAPACITY_UNAVAILABLE`` or ``QUOTA_EXCEEDED`` for an
+    AWS error code of those sets, and ``LAUNCH_ERROR`` otherwise."""
+    if stored_last_error and stored_last_error != LAST_ERROR_LAUNCH_ERROR:
+        return stored_last_error
+    code = (failure or {}).get("errorCode")
+    if code in CAPACITY_ERROR_CODES:
+        return LAST_ERROR_CAPACITY_UNAVAILABLE
+    if code in QUOTA_ERROR_CODES:
+        return LAST_ERROR_QUOTA_EXCEEDED
+    return LAST_ERROR_LAUNCH_ERROR
+
+
+def edh_failure_read_due(row, now=None) -> bool:
+    """True when the row is an ORPHANED desktop with a session id that holds no captured reason, and its last
+    read for one is not inside the interval at ``now`` (the current instant when not given). A stamp written up
+    to one interval after ``now`` holds the read off too; an absent, blank, unreadable or further-ahead stamp
+    holds nothing, and one without an offset is read as UTC."""
+    if row.get('state') != STATE_ORPHANED or not row.get('sessionId') or row.get(EDH_FAILURE_FIELD):
+        return False
+    stamp = row.get(EDH_FAILURE_READ_AT_FIELD)
+    if not isinstance(stamp, str) or not stamp:
+        return True
+    try:
+        read_at = datetime.fromisoformat(stamp)
+    except ValueError:
+        return True
+    if read_at.tzinfo is None:
+        read_at = read_at.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    window = timedelta(seconds=EDH_FAILURE_READ_INTERVAL_SECONDS)
+    return not -window <= now - read_at < window
+
+
+def edh_failure_attributes(row, failure, now):
+    """The row attributes one read for a failed launch's reason writes at ``now``: always its stamp; when the
+    read found a reason, the reason with ``observedAt``, and the ``lastError`` it implies when that differs from
+    the row's."""
+    observed = now.isoformat()
+    attributes = {EDH_FAILURE_READ_AT_FIELD: observed}
+    if failure:
+        attributes[EDH_FAILURE_FIELD] = {**failure, "observedAt": observed}
+        last_error = edh_failure_last_error(failure, row.get('lastError'))
+        if last_error != row.get('lastError'):
+            attributes['lastError'] = last_error
+    return attributes

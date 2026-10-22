@@ -175,6 +175,7 @@ class FakeEdhClient:
         self.results = {
             "get_desktop_states": [],
             "get_desktop_connection": None,
+            "get_desktop_failure": None,
             "find_desktop_by_name": None,
             "create_desktop": {},
             "stop_desktop": {},
@@ -209,6 +210,9 @@ class FakeEdhClient:
 
     def get_desktop_connection(self, edh_uid, session_id):
         return self._answer("get_desktop_connection", edh_uid, session_id)
+
+    def get_desktop_failure(self, edh_uid, session_id):
+        return self._answer("get_desktop_failure", edh_uid, session_id)
 
     def find_desktop_by_name(self, edh_uid, session_name):
         return self._answer("find_desktop_by_name", edh_uid, session_name)

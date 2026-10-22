@@ -22,6 +22,7 @@ import backend.backend.handlers.addon.edh.edhWorkstationService as service
 CAPTURES = {
     "get_desktop_states": "virtual_desktops_session_state.json",
     "get_desktop_connection": "virtual_desktops_list_active.json",
+    "get_desktop_failure": "virtual_desktops_list_inactive.json",
     "stop_desktop": "virtual_desktops_stop.json",
     "start_desktop": "virtual_desktops_start.json",
     "delete_desktop": "virtual_desktops_delete.json",

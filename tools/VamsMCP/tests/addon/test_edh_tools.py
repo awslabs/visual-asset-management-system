@@ -975,6 +975,64 @@ def test_the_build_start_docstring_names_the_parent_and_architecture_refusals(fr
     assert fragment in _docstring_of("start_edh_ami_recipe_build")
 
 
+# --- Captured EDH launch failure (edhFailure) ------------------------------------------------
+
+# The failure VAMS captured from EDH for a launch EDH's placement refused.
+EDH_FAILURE = {
+    "event": "placement_failed",
+    "errorCode": "InsufficientInstanceCapacity",
+    "operation": "CreateCapacityReservation",
+    "observedAt": "2026-10-22T10:00:00Z",
+}
+
+# The tools whose rows carry `edhFailure`: the user's workstation reads and the admin session listings.
+EDH_FAILURE_TOOLS = (
+    "list_edh_workstations", "get_edh_workstation", "list_edh_admin_instances", "list_edh_stale_instances")
+
+
+@pytest.mark.parametrize("tool", EDH_FAILURE_TOOLS)
+def test_the_session_read_docstrings_name_the_edh_failure(tool):
+    """An agent explaining a failed launch learns from the description that the row carries the AWS
+    error VAMS captured from EDH, and that it is null when none was captured."""
+    docstring = _docstring_of(tool)
+    assert "`edhFailure`" in docstring, f"{tool} docstring does not name `edhFailure`"
+    assert "null" in docstring[docstring.index("`edhFailure`"):]
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    ["`event` (`placement_failed` or `session-failed`)", "`errorCode`", "`operation`", "`checkpoint`",
+     "`observedAt`", "CAPACITY_UNAVAILABLE", "QUOTA_EXCEEDED"])
+def test_the_workstation_list_docstring_states_the_edh_failure_fields(fragment):
+    assert fragment in _docstring_of("list_edh_workstations")
+
+
+@pytest.mark.parametrize(
+    "tool,method,args",
+    [("list_edh_workstations", "list_edh_workstations", ()),
+     ("get_edh_workstation", "get_edh_workstation", ("b-1",)),
+     ("list_edh_admin_instances", "list_edh_admin_instances", ()),
+     ("list_edh_stale_instances", "list_edh_stale_instances", ())],
+)
+def test_the_session_reads_pass_the_edh_failure_through_unchanged(client, reads, tool, method, args):
+    row = {"bootstrapId": "b-1", "sessionId": None, "state": "ORPHANED",
+           "lastError": "CAPACITY_UNAVAILABLE", "edhFailure": dict(EDH_FAILURE)}
+    body = row if tool == "get_edh_workstation" else {"Items": [row, {**row, "edhFailure": None}]}
+    getattr(client.api, method).return_value = body
+    answer = reads[tool](*args)
+    assert answer == body
+    rows = [answer] if tool == "get_edh_workstation" else answer["Items"]
+    assert rows[0]["edhFailure"] == EDH_FAILURE
+    assert all("edhFailure" in r for r in rows)
+
+
+def test_the_readme_states_the_edh_failure():
+    section = " ".join(_edh_section().split())
+    assert "`edhFailure`" in section
+    for fragment in ("`errorCode`", "`operation`", "`checkpoint`", "`list_edh_admin_instances`"):
+        assert fragment in section[section.index("`edhFailure`"):]
+
+
 # --- Container jobs ----------------------------------------------------------------------------
 
 

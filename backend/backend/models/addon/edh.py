@@ -48,6 +48,10 @@ BATCH_RESERVED_ENVIRONMENT_PREFIX = 'AWS_BATCH'
 WORKSTATION_ROW_INTERNAL_FIELDS = (
     'apiKeyId', 'secretArn', 'secretName', 'keyExpiresAt', 'instanceId', 'secretBoundInstanceId', 'expiresAt',
 )
+# The keys of the launch-failure reason a row carries (``edhFailure``) and returns, and the EDH events it
+# names; a stored value that is not such a map projects as None, and any other key is dropped.
+EDH_FAILURE_FIELDS = ('event', 'errorCode', 'operation', 'checkpoint', 'observedAt')
+EDH_FAILURE_EVENTS = ('placement_failed', 'session-failed')
 
 AMI_RECIPE_KINDS = ('vdi', 'simulation')
 EDH_ARCHITECTURES = ('x86_64', 'arm64')
@@ -97,6 +101,14 @@ def architecture_family(value) -> Optional[str]:
     """The family of an architecture name as AWS spells it, or None for one of no known family (the mac
     architectures, an empty or differently cased value, anything not a string)."""
     return ARCHITECTURE_FAMILIES.get(value) if isinstance(value, str) else None
+
+
+def edh_failure_projection(value) -> Optional[Dict[str, str]]:
+    """The launch-failure reason as the API returns it: the string values of ``EDH_FAILURE_FIELDS`` from a
+    stored map whose ``event`` is one of ``EDH_FAILURE_EVENTS``; None for anything else."""
+    if not isinstance(value, dict) or value.get('event') not in EDH_FAILURE_EVENTS:
+        return None
+    return {key: value[key] for key in EDH_FAILURE_FIELDS if isinstance(value.get(key), str)}
 
 
 class CreateWorkstationRequestModel(BaseModel, extra='ignore'):
@@ -152,6 +164,10 @@ class WorkstationRecordModel(BaseModel, extra='ignore'):
     leaseExpiresAt: Optional[str] = None
     leaseStoppedAt: Optional[str] = None
     leaseHoursAtLaunch: Optional[int] = None
+    # The reason EDH recorded for a failed launch, once VAMS captured it; its read stamp is not declared.
+    edhFailure: Optional[Dict[str, str]] = None
+
+    _project_edh_failure = validator('edhFailure', pre=True, allow_reuse=True)(edh_failure_projection)
 
     @root_validator
     def validate_fields(cls, values):

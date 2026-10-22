@@ -169,6 +169,7 @@ The add-on depends on the following EDH settings. Several of them are satisfied 
 | [Browser access to Amazon DCV](#browser-access-to-amazon-dcv)               | The `--client-ip` ranges                                                   | Admit every range your users connect from                                                          |
 | [Desktop instance role](#desktop-instance-role)                             | `VdiNodeRole`, which holds `ec2:DescribeTags` in the high-scale layout     | Session bootstrap only: name the role in VAMS, and add `ec2:DescribeTags` where the role lacks it  |
 | [AWS Batch queue and image pulls](#aws-batch-queue-and-image-pulls)         | An AWS Fargate queue                                                       | Containers only: an Amazon EC2 job queue tagged for the cluster, and image pull access             |
+| [GPU desktops and the NVIDIA driver](#gpu-desktops-and-the-nvidia-driver)   | GRID driver pin `grid-19.4` (driver 580)                                   | Isaac Sim desktops only: pin an R595 GRID driver that the cluster's driver mirror holds            |
 
 ### Root key
 
@@ -274,6 +275,38 @@ This setting applies only with `sessionBootstrap.enabled`. The resource policy V
 ### AWS Batch queue and image pulls
 
 This setting applies only with `containers.enabled`. EDH lists the AWS Batch job queues and job definitions that carry the tag `edh:visibility:<cluster name>` with the value `true`. EDH's default AWS Batch environment is an AWS Fargate compute environment behind the queue `<cluster name>-default-queue`, while VAMS registers only Amazon EC2 job definitions, so container jobs need a job queue backed by an Amazon EC2 compute environment, tagged `edh:visibility:<cluster name>` with the value `true` and named with the `edh-` prefix, such as `<cluster name>-ec2-queue`. EDH submits jobs under its controller role, whose policy allows `batch:SubmitJob` only on job queues and job definitions whose names begin with `edh-`, so each `containers.jobDefinitions[].name` begins with `edh-` as well, and CDK synthesis rejects a name that does not. A job queue named otherwise still appears on the **Simulations** tab, but EDH refuses every submission to it.
+
+### GPU desktops and the NVIDIA driver
+
+This setting applies to desktops on NVIDIA GPU instance types, and is required for the shipped `isaacsim` recipe. VAMS images carry no GPU driver: EDH installs it at each desktop's first boot. For a Linux desktop on an instance family that supports both driver kinds, which covers every type the `isaacsim` recipe offers, EDH installs the NVIDIA GRID driver from the folder its `grid_drivers/version` setting names, under the `grid_drivers/s3_bucket_path` location. Both are Parameter Store parameters:
+
+-   `/edh/<cluster name>/system/gpu/gpu_settings/nvidia/linux/grid_drivers/version`: a folder name such as `grid-19.4`, or `latest`. EDH's default is `grid-19.4`, which holds driver 580.
+-   `/edh/<cluster name>/system/gpu/gpu_settings/nvidia/linux/grid_drivers/s3_bucket_path`: AWS's public `s3://ec2-linux-nvidia-drivers` bucket, or, when EDH's resource mirroring is on (its default), the cluster's own copy under `s3://<cluster bucket>/<cluster name>/resources_mirroring/ec2-linux-nvidia-drivers`.
+
+Isaac Sim 6.2, which the `isaacsim` recipe installs, needs an R595 driver: NVIDIA tests Isaac Sim 6.0.1 to 6.2.0 on driver 595, and the recipe's launcher refuses an older one (`nvidiaDriverMinMajor` is `595`). In AWS's bucket the R595 GRID drivers are `grid-20.0` (595.58.03), `grid-20.1` (595.71.05) and `grid-20.2` (595.91.07). A mirrored cluster holds only the folders it copied at install, typically the default pin, `grid-17.1` for Amazon Linux 2 and `latest`, where `latest` is AWS's newest driver on the day the cluster was installed. List what the cluster holds before you pin:
+
+```bash
+CLUSTER=edh-demo
+DRIVERS=$(aws ssm get-parameter \
+    --name "/edh/${CLUSTER}/system/gpu/gpu_settings/nvidia/linux/grid_drivers/s3_bucket_path" \
+    --query Parameter.Value --output text)
+aws s3 ls "${DRIVERS}/" --recursive
+```
+
+Then set the pin to a folder that holds an R595 driver (`NVIDIA-Linux-x86_64-595.*-grid-aws.run`), either `latest` when it holds one, or a `grid-20.*` folder. A mirrored cluster has no `grid-20.*` folder until you copy one in, for example `aws s3 cp --recursive s3://ec2-linux-nvidia-drivers/grid-20.2/ "${DRIVERS}/grid-20.2/"`. A named folder keeps the driver fixed, while `latest` changes whenever the mirror is refreshed.
+
+```bash
+aws ssm put-parameter --overwrite \
+    --name "/edh/${CLUSTER}/system/gpu/gpu_settings/nvidia/linux/grid_drivers/version" \
+    --value grid-20.2
+```
+
+EDH's configuration cache picks up a change under `/edh/<cluster name>/` within seconds while its SSM-to-cache sync is on, which EDH's default installation enables; no restart is needed. The pin applies to desktops created afterwards: a desktop keeps the driver its first boot installed. To return to the default, set the parameter back to `grid-19.4`. EDH does not fall back to another folder when the pinned driver fails to install, unless `grid_drivers/allow_latest_fallback` is `true`, so a desktop whose driver did not install shows no NVIDIA driver until the pin is fixed and a new desktop is launched.
+
+Two account settings decide whether a GPU desktop can launch at all:
+
+-   **Service quota.** G instances count against the Amazon EC2 quota **Running On-Demand G and VT instances** (`L-DB2E81BA`), in vCPUs, in the cluster's Region. A `g5.16xlarge` desktop alone uses 64. Check it, and request an increase, in the Service Quotas console. A launch over the quota ends `ORPHANED` with `QUOTA_EXCEEDED`.
+-   **Capacity.** EDH reserves the desktop's instance in one subnet when it places the desktop, and does not retry in another subnet or Availability Zone. When AWS has no capacity for that type there, the launch ends `ORPHANED` with `CAPACITY_UNAVAILABLE` and the AWS error EDH recorded (`InsufficientInstanceCapacity`). Launching again with the same type usually fails the same way, so choose another type; see [Launch failure reasons](overview.md#launch-failure-reasons).
 
 The job definitions VAMS registers name no execution role, so on an Amazon EC2 compute environment the Amazon ECS container instance role pulls the image. A container instance role in the same account whose IAM policy grants Amazon ECR read access, such as one with the AWS managed policy `AmazonEC2ContainerServiceforEC2Role`, pulls from the VAMS-owned repositories without further setup. A role whose IAM policy grants `ecr:GetAuthorizationToken` but not the pull actions on these repositories is named in `containers.imagePullRoleArns`, and the repository policy then grants it `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer` and `ecr:BatchCheckLayerAvailability`; a repository policy cannot grant `ecr:GetAuthorizationToken`. See [Containers](overview.md#containers).
 
@@ -451,6 +484,16 @@ With `sessionBootstrap.enabled`, each Linux workstation receives its own short-l
 With `amiBuilds.enabled`, administrators build versioned desktop AMIs with EC2 Image Builder from the recipes shipped under `backendAddons/edh/amiRecipes/` or defined on the **AMI Recipes** tab, and VAMS registers each finished build in EDH as a software stack, which the launch wizard lists under **Custom AMI Recipe** while the build is available. A build launches in `amiBuilds.buildSubnetId`, or by default in the first VAMS private subnet, falling back to the first isolated subnet. The shipped recipes install packages from the internet, so their build subnet needs a route to a NAT gateway, and they register against virtual desktop profile `1`. A VPC that VAMS creates has private subnets only when another enabled feature adds them; in the connected-VPC layout without them, add a subnet with NAT egress to that VPC and set `amiBuilds.buildSubnetId` to it (see the [configuration reference](../../deployment/configuration-reference.md#edh-workstations-appaddonsuseedhworkstations)).
 
 To register a shipped recipe against another profile, or change it otherwise, duplicate it. The duplicate form on the **AMI Recipes** tab sets the profile id and the copy's other fields; from the CLI, `vamscli edh admin ami-recipe duplicate` makes the copy and `vamscli edh admin ami-recipe update --file` changes it. The copy keeps the shipped recipe's bundled files, which cannot be changed. With `app.useWaf` enabled, the deployment's regional web ACL lets recipe bodies that read the instance metadata service through on the recipe routes only; every other managed rule still applies to them, and synthesis warns when the rule policy enforces one a recipe body can match (see [AWS WAF exemption for AMI recipes](resources.md#aws-waf-exemption-for-ami-recipes) and [WAF rule policy](../../deployment/configuration-reference.md#waf-rule-policy-configpolicywafpolicyconfigjson)). See [AMI recipes](overview.md#ami-recipes).
+
+Before users launch desktops from the shipped `isaacsim` recipe (Isaac Sim 6.2 on Ubuntu 24.04), check that:
+
+-   The cluster's GRID driver pin names an R595 driver the cluster holds, as [GPU desktops and the NVIDIA driver](#gpu-desktops-and-the-nvidia-driver) describes.
+-   Virtual desktop profile `1`, and `edhAllowedInstanceTypes` when it is set, allow at least one of the recipe's instance types (the RTX `g5`, `g6`, `gr6`, `g6e` and `g7e` sizes listed in [Isaac Sim recipe](overview.md#isaac-sim-recipe)), and a root volume of at least 150 GB.
+-   The account's G-instance quota covers the sizes users pick.
+-   Users' address ranges are on the cluster's client prefix list (see [Browser access to Amazon DCV](#browser-access-to-amazon-dcv)).
+-   The build subnet reaches `downloads.isaacsim.nvidia.com` for the 13 GB Isaac Sim archive, as well as the Ubuntu archive, `awscli.amazonaws.com` and PyPI.
+
+A desktop's first boot installs the driver and reboots, and Isaac Sim starts after the user signs in to the desktop; the first start warms shaders for five to ten minutes. When Isaac Sim does not start, `/var/log/vams-isaacsim-preflight.log` on the desktop says why; see the troubleshooting table in [Isaac Sim recipe](overview.md#isaac-sim-recipe).
 
 ### Containers
 

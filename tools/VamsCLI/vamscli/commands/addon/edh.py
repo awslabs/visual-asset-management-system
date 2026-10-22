@@ -91,6 +91,44 @@ def format_items(result: Dict[str, Any], noun: str) -> str:
     return '\n'.join(blocks)
 
 
+def describe_edh_failure(failure: Any) -> Optional[str]:
+    """The text shown for the launch failure VAMS captured from EDH (a record's `edhFailure`): the AWS
+    error code, with the operation that returned it when captured, else the checkpoint a desktop setup
+    failed at; None when there is no failure or it names neither. The web formats the same fields."""
+    if not isinstance(failure, dict):
+        return None
+    code, operation, checkpoint = (failure.get(key) for key in ('errorCode', 'operation', 'checkpoint'))
+    if isinstance(code, str) and code:
+        return f"{code} ({operation})" if isinstance(operation, str) and operation else code
+    if isinstance(checkpoint, str) and checkpoint:
+        return f"desktop setup failed at {checkpoint}"
+    return None
+
+
+def _edh_failure_line(item: Dict[str, Any]) -> Optional[str]:
+    """The `EDH failure:` line of a record that carries a captured failure, in the record's label column."""
+    detail = describe_edh_failure(item.get('edhFailure'))
+    return f"  EDH failure:     {detail}" if detail else None
+
+
+def format_admin_sessions(result: Dict[str, Any], noun: str) -> str:
+    """The admin session listings: one JSON block per session, as format_items renders them, each
+    followed by its `EDH failure:` line when the session carries a captured launch failure."""
+    items = result.get('Items', []) if isinstance(result, dict) else []
+    if not items:
+        return f"No {noun} found."
+    blocks = []
+    for item in items:
+        if not isinstance(item, dict):
+            blocks.append(f"  - {item}")
+            continue
+        blocks.append(json.dumps(item, indent=2))
+        line = _edh_failure_line(item)
+        if line:
+            blocks.append(line)
+    return '\n'.join(blocks)
+
+
 def _identifier(item: Dict[str, Any]) -> str:
     """The value the workstation commands accept for a row: its session id, or -- for a launch that has
     not received one -- its bootstrap id, marked so the reader can tell the two apart."""
@@ -130,6 +168,9 @@ def format_workstation(result: Dict[str, Any]) -> str:
     lines.append(f"  State:           {result.get('state', 'N/A')}")
     lines.append(f"  EDH State:       {result.get('edhState') or 'N/A'}")
     lines.append(f"  Last Error:      {result.get('lastError') or 'none'}")
+    edh_failure = _edh_failure_line(result)
+    if edh_failure:
+        lines.append(edh_failure)
     lines.append(f"  Launch Attempts: {result.get('launchAttempts', 0)}")
     lines.append(f"  Image ID:        {result.get('imageId', 'N/A')}")
     lines.append(f"  OS Family:       {result.get('osFamily', 'N/A')}")
@@ -156,7 +197,8 @@ def format_launch_accepted(result: Dict[str, Any]) -> str:
         "  The launch runs asynchronously. The session id is assigned once EDH has created the",
         "  desktop; until then the bootstrap id identifies this workstation:",
         f"    vamscli edh workstation get {bootstrap_id}",
-        "  A launch EDH refuses ends in state ORPHANED with the reason under Last Error.",
+        "  A launch EDH refuses ends in state ORPHANED with the reason under Last Error, and the AWS",
+        "  error EDH reported, when VAMS captured one, under EDH failure.",
     ])
 
 
@@ -302,7 +344,10 @@ def workstation_get(ctx: click.Context, session_id: str, json_output: bool):
     """Show one of your workstations by SESSION_ID.
 
     SESSION_ID is the workstation's session id, or the bootstrap id of a launch that has not
-    received one. A workstation that belongs to another user is reported as not found.
+    received one. A workstation that belongs to another user is reported as not found. A launch that
+    ended ORPHANED shows its reason under Last Error and, when VAMS captured the failure from EDH
+    (the record's edhFailure), the AWS error code and operation, or the desktop setup checkpoint,
+    under EDH failure.
 
     Examples:
         vamscli edh workstation get SESSION_ID
@@ -956,6 +1001,10 @@ def instances():
 def instances_list(ctx: click.Context, json_output: bool):
     """List every user's workstation sessions on the cluster.
 
+    Each session is printed as its JSON item. A session whose launch failed and for which VAMS
+    captured the failure from EDH (the item's edhFailure) is followed by an `EDH failure:` line naming
+    the AWS error code and operation, or the desktop setup checkpoint, as `workstation get` shows it.
+
     Examples:
         vamscli edh admin instances list
         vamscli edh admin instances list --json-output
@@ -972,7 +1021,7 @@ def instances_list(ctx: click.Context, json_output: bool):
             result,
             json_output,
             success_message=f"Found {len(items)} session(s)",
-            cli_formatter=lambda r: format_items(r, "sessions"),
+            cli_formatter=lambda r: format_admin_sessions(r, "sessions"),
         )
     except EdhError as e:
         output_error(e, json_output, error_type="EDH Error")
@@ -989,7 +1038,8 @@ def instances_list(ctx: click.Context, json_output: bool):
 def instances_stale(ctx: click.Context, idle_minutes: Optional[int], json_output: bool):
     """List the sessions idle longer than the threshold, plus sessions VAMS knows but EDH no longer
     lists (staleReason "missingInEdh") -- the candidates for stop / deactivate. The response also
-    carries the idleMinutes threshold that was applied.
+    carries the idleMinutes threshold that was applied. A failed launch whose failure VAMS captured
+    from EDH (the item's edhFailure) is followed by an `EDH failure:` line, as in `instances list`.
 
     Examples:
         vamscli edh admin instances stale
@@ -1008,7 +1058,7 @@ def instances_stale(ctx: click.Context, idle_minutes: Optional[int], json_output
             result,
             json_output,
             success_message=f"Found {len(items)} stale session(s)",
-            cli_formatter=lambda r: format_items(r, "stale sessions"),
+            cli_formatter=lambda r: format_admin_sessions(r, "stale sessions"),
         )
     except EdhError as e:
         output_error(e, json_output, error_type="EDH Error")

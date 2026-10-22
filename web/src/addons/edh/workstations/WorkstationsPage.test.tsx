@@ -93,6 +93,33 @@ const orphanedRow: WorkstationRecord = {
     lastError: "QUOTA_EXCEEDED",
 };
 
+// A launch EDH's placement refused for capacity, with the AWS error VAMS captured from EDH.
+const capacityFailedRow: WorkstationRecord = {
+    ...orphanedRow,
+    bootstrapId: "b-6",
+    name: "Big box",
+    lastError: "CAPACITY_UNAVAILABLE",
+    edhFailure: {
+        event: "placement_failed",
+        errorCode: "InsufficientInstanceCapacity",
+        operation: "CreateCapacityReservation",
+        observedAt: "2026-10-22T10:00:00Z",
+    },
+};
+
+// A desktop EDH placed whose setup then failed at a named checkpoint.
+const setupFailedRow: WorkstationRecord = {
+    ...orphanedRow,
+    bootstrapId: "b-7",
+    name: "Setup box",
+    lastError: "LAUNCH_ERROR",
+    edhFailure: {
+        event: "session-failed",
+        checkpoint: "dcv_session_create",
+        observedAt: "2026-10-22T10:00:00Z",
+    },
+};
+
 // A launch the worker is still on: no session yet, last written moments ago.
 const creatingRow: WorkstationRecord = {
     ...activeRow,
@@ -801,6 +828,39 @@ describe("WorkstationsPage", () => {
         expect(screen.getByText("Expired, removing")).toBeInTheDocument();
         expect(screen.getByText(LAST_ERROR_COPY.LEASE_EXPIRED)).toBeInTheDocument();
         expect(screen.getByTitle(LAST_ERROR_COPY.LEASE_EXPIRED)).toHaveTextContent("Stopped");
+    });
+
+    it("shows the AWS error EDH reported beneath the reason, and nothing for a row without one", () => {
+        (queries.useWorkstations as jest.Mock).mockReturnValue(
+            list([
+                capacityFailedRow,
+                setupFailedRow,
+                { ...orphanedRow, edhFailure: null },
+                activeRow,
+            ])
+        );
+        renderPage();
+
+        // The reason stays, with the captured detail as its own line of text beneath it.
+        const reason = screen.getByText(LAST_ERROR_COPY.CAPACITY_UNAVAILABLE);
+        const detail = screen.getByText(
+            "AWS: InsufficientInstanceCapacity (CreateCapacityReservation)"
+        );
+        expect(reason.parentElement).toContainElement(detail);
+        expect(screen.getByText("Desktop setup failed at dcv_session_create")).toBeInTheDocument();
+        // The row without a captured failure shows its reason and no detail line.
+        expect(screen.getByText(LAST_ERROR_COPY.QUOTA_EXCEEDED)).toBeInTheDocument();
+        expect(screen.getAllByText(/^AWS: /)).toHaveLength(1);
+        expect(screen.getAllByText(/^Desktop setup failed at /)).toHaveLength(1);
+    });
+
+    it("shows no failure detail when no row carries one", () => {
+        (queries.useWorkstations as jest.Mock).mockReturnValue(list([orphanedRow, activeRow]));
+        renderPage();
+
+        expect(screen.getByText(LAST_ERROR_COPY.QUOTA_EXCEEDED)).toBeInTheDocument();
+        expect(screen.queryByText(/^AWS: /)).not.toBeInTheDocument();
+        expect(screen.queryByText(/^Desktop setup failed at /)).not.toBeInTheDocument();
     });
 
     it("shows why a launch was orphaned, offers only Delete, and deletes it by its bootstrap id", async () => {

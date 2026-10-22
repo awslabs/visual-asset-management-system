@@ -89,7 +89,7 @@ The launch runs asynchronously. Until VAMS reads the created desktop back from E
 1. Watch the launch in the list, selecting it by its `bootstrapId`, until it reports `ACTIVE` and a session id, then address it by that `sessionId`:
 
     ```bash
-    vamscli edh workstation list --json-output | jq '.Items[] | select(.bootstrapId == "<BOOTSTRAP_ID>") | {state, sessionId, lastError}'
+    vamscli edh workstation list --json-output | jq '.Items[] | select(.bootstrapId == "<BOOTSTRAP_ID>") | {state, sessionId, lastError, edhFailure}'
     ```
 
 2. A launch whose record has not changed for 15 minutes while `CREATING` can be deleted by its bootstrap id with `--confirm`; one that ends `ORPHANED` is explained under [Launch Ended ORPHANED](#launch-ended-orphaned).
@@ -308,21 +308,22 @@ Read the image's `rootSize` from `vamscli edh catalog images` and launch again w
 **Symptoms:**
 
 -   `edh workstation create` returned `Workstation launch accepted (HTTP 202)`, but `edh workstation list` now reports the launch `ORPHANED` with a `lastError` code
+-   `edh workstation get BOOTSTRAP_ID` may also show an `EDH failure:` line, such as `InsufficientInstanceCapacity (CreateCapacityReservation)`, `VcpuLimitExceeded (RunInstances)` or `desktop setup failed at <checkpoint>`
 
 **Cause:**
 
-The launch itself runs after the command returns. When EDH refuses it, VAMS records a generic code rather than EDH's own message, and the same field carries the code the lease sweep writes when it stops a workstation:
+The launch itself runs after the command returns. When EDH refuses it, VAMS records a generic code rather than EDH's own message, and the same field carries the code the lease sweep writes when it stops a workstation. When EDH's own record of the desktop names the AWS error behind a failed placement, or the setup step a desktop failed at, VAMS also stores that as `edhFailure` (shown on the `EDH failure:` line; see [edh workstation list](cli-commands.md#edh-workstation-list)), and an AWS capacity or limit code turns a generic `LAUNCH_ERROR` into `CAPACITY_UNAVAILABLE` or `QUOTA_EXCEEDED`:
 
-| `lastError`            | Meaning                                                                                                                                                                  |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `USER_NOT_PROVISIONED` | The deployment does not auto-provision EDH identities and yours does not exist yet                                                                                       |
-| `QUOTA_EXCEEDED`       | EDH's per-user or profile quota (session count or budget) is used up                                                                                                     |
-| `CAPACITY_UNAVAILABLE` | EDH found no available AWS capacity for the chosen instance type                                                                                                         |
-| `IMAGE_UNAVAILABLE`    | The chosen image is no longer registered in EDH                                                                                                                          |
-| `EDH_REFUSED`          | EDH rejected the request (an instance type the image's profile does not allow, …)                                                                                        |
-| `LAUNCH_ERROR`         | EDH reports the desktop in an `error` state, or the last launch attempt failed without a definite refusal                                                                |
-| `CREATE_TIMED_OUT`     | The launch made no progress for 30 minutes after its record's last write (5 minutes once all three launch attempts had started) and was closed by the reconciler's sweep |
-| `LEASE_EXPIRED`        | Not a launch refusal: the sweep stopped a workstation whose lease ran out, leaving it `STOPPED`                                                                          |
+| `lastError`            | Meaning                                                                                                                                                                     |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `USER_NOT_PROVISIONED` | The deployment does not auto-provision EDH identities and yours does not exist yet                                                                                          |
+| `QUOTA_EXCEEDED`       | EDH's per-user or profile quota (session count or budget) is used up, or AWS refused the instance for an account limit (`edhFailure` names it, such as `VcpuLimitExceeded`) |
+| `CAPACITY_UNAVAILABLE` | EDH found no available AWS capacity for the chosen instance type (`edhFailure` names the AWS code, such as `InsufficientInstanceCapacity`)                                  |
+| `IMAGE_UNAVAILABLE`    | The chosen image is no longer registered in EDH                                                                                                                             |
+| `EDH_REFUSED`          | EDH rejected the request (an instance type the image's profile does not allow, …)                                                                                           |
+| `LAUNCH_ERROR`         | EDH reports the desktop in an `error` state, or the last launch attempt failed without a definite refusal                                                                   |
+| `CREATE_TIMED_OUT`     | The launch made no progress for 30 minutes after its record's last write (5 minutes once all three launch attempts had started) and was closed by the reconciler's sweep    |
+| `LEASE_EXPIRED`        | Not a launch refusal: the sweep stopped a workstation whose lease ran out, leaving it `STOPPED`                                                                             |
 
 **Resolution:**
 
@@ -332,9 +333,9 @@ The launch itself runs after the command returns. When EDH refuses it, VAMS reco
     vamscli edh workstation delete BOOTSTRAP_ID --confirm
     ```
 
-2. For `USER_NOT_PROVISIONED`, ask the EDH cluster operator to provision your EDH identity — the `edhUid` shown by `vamscli edh workstation get BOOTSTRAP_ID --json-output`. For `QUOTA_EXCEEDED`, stop or delete a workstation you no longer need (`vamscli edh workstation list`) or ask an administrator to check `vamscli edh admin capacity`. For `EDH_REFUSED`, retry with an instance type from `edh catalog instance-types` and an image from `edh catalog images`. For `CAPACITY_UNAVAILABLE`, launch again later or with another instance type from `edh catalog instance-types`; an administrator can add EDH subnets in more Availability Zones. EDH refuses a launch for capacity only where the cluster's `AsyncPlacement` is `false` and `EnableCapacityReservation` is `true`; with EDH's asynchronous placement, a shortage arrives as `LAUNCH_ERROR`.
+2. For `USER_NOT_PROVISIONED`, ask the EDH cluster operator to provision your EDH identity — the `edhUid` shown by `vamscli edh workstation get BOOTSTRAP_ID --json-output`. For `QUOTA_EXCEEDED`, stop or delete a workstation you no longer need (`vamscli edh workstation list`) or ask an administrator to check `vamscli edh admin capacity`. For `EDH_REFUSED`, retry with an instance type from `edh catalog instance-types` and an image from `edh catalog images`. For `CAPACITY_UNAVAILABLE`, launch again with another instance type from `edh catalog instance-types`, or later; EDH reserves a desktop's capacity in one subnet, so the same type soon after usually fails the same way, and an administrator can add EDH subnets in more Availability Zones. EDH refuses a launch for capacity only where the cluster's `AsyncPlacement` is `false` and `EnableCapacityReservation` is `true`; with EDH's asynchronous placement, a shortage arrives as an `edhFailure` with a capacity `errorCode` and `lastError` `CAPACITY_UNAVAILABLE`, or as `LAUNCH_ERROR` when VAMS could not read the reason from EDH. For an `edhFailure` `VcpuLimitExceeded` (or another limit code under `QUOTA_EXCEEDED`), the AWS account's vCPU quota for the instance family is used up: stop or delete a workstation of the same family, or ask an administrator to raise the Amazon EC2 quota in the cluster's account and Region (for G instances, **Running On-Demand G and VT instances**) in Service Quotas.
 
-3. `LAUNCH_ERROR` and `CREATE_TIMED_OUT` are cluster-side; an administrator can confirm the proxy's view of the cluster with `vamscli edh admin health`. `LEASE_EXPIRED` is not a launch outcome at all — see [Start Refused Because the Lease Expired](#start-refused-because-the-lease-expired).
+3. `LAUNCH_ERROR` and `CREATE_TIMED_OUT` are cluster-side; an administrator can confirm the proxy's view of the cluster with `vamscli edh admin health`. An `EDH failure:` line `desktop setup failed at <checkpoint>` names the step at which EDH's setup of the desktop stopped; give it to the cluster operator. `LEASE_EXPIRED` is not a launch outcome at all — see [Start Refused Because the Lease Expired](#start-refused-because-the-lease-expired).
 
 ### Windows Launch Ended ORPHANED With QUOTA_EXCEEDED
 

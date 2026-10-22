@@ -1,10 +1,12 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Only connect and Windows sign-in may read EDH's per-user desktop list, which issues a connection token
-per desktop it renders; every other workstation and catalog route reads desktop state through the
-token-free session-state route or not at all, and no other handler module names the per-user route or its
-wrapper.
+"""Only connect and Windows sign-in may read EDH's per-user desktop list for a desktop that can run, which
+issues a connection token per desktop it renders; every other workstation and catalog route reads desktop
+state through the token-free session-state route or not at all. The one other read of the per-user list is
+the launch-failure read (in-dev D8), which the list and get routes and the session sweep make for an
+ORPHANED row's own session only -- a desktop that never ran has no DCV session, so EDH issues no token for
+it -- and no other handler module names the per-user route or either wrapper.
 
 Every workstation and catalog route is driven through ``lambda_handler`` with the setups the route suites
 already use, and its EDH calls are read from the scripted client. The audit maps, the client module and
@@ -78,6 +80,11 @@ HANDLER_DIR = Path(service.__file__).resolve().parent
 CLIENT_PATH = HANDLER_DIR / "common" / "edhClient.py"
 PER_USER_ROUTE = "/api/dcv/virtual_desktops/list"
 CONNECTION_WRAPPER = "get_desktop_connection"
+# The launch-failure read, and the functions allowed to call it: the service's list/get capture and the sweep's.
+FAILURE_WRAPPER = "get_desktop_failure"
+PER_USER_WRAPPERS = (CONNECTION_WRAPPER, FAILURE_WRAPPER)
+FAILURE_CALLERS = {"edhWorkstationService.py": "_capture_launch_failures",
+                   "edhSessionReconciler.py": "_capture_launch_failure"}
 # A library module the module walks must parse, and a floor on how many they parse: the package and its
 # common/ subpackage hold 18 besides the client, the package root alone 9.
 LIBRARY_MODULE = "common/edhSessionState.py"
@@ -242,11 +249,11 @@ def _route_loads(trees):
                  or (isinstance(node, ast.Attribute) and node.attr == "EDH_ROUTE_DESKTOPS_LIST"))]
 
 
-def _connection_wrapper_names(trees):
-    """Every attribute named for, and every string equal to, the connection wrapper: [(file name, node)]."""
+def _connection_wrapper_names(trees, wrapper=CONNECTION_WRAPPER):
+    """Every attribute named for, and every string equal to, a per-user wrapper: [(file name, node)]."""
     return [(name, node) for name, tree in trees for node in ast.walk(tree)
-            if (isinstance(node, ast.Attribute) and node.attr == CONNECTION_WRAPPER)
-            or (isinstance(node, ast.Constant) and node.value == CONNECTION_WRAPPER)]
+            if (isinstance(node, ast.Attribute) and node.attr == wrapper)
+            or (isinstance(node, ast.Constant) and node.value == wrapper)]
 
 
 def _function_body_ids(tree, *names):
@@ -256,11 +263,12 @@ def _function_body_ids(tree, *names):
     return set().union(*(_node_ids(function) for function in functions))
 
 
-def _client_tree():
-    """The client module, parsed, and the ids of every node inside EdhClient's connection wrapper."""
+def _client_tree(*wrappers):
+    """The client module, parsed, and the ids of every node inside the named EdhClient wrappers (both
+    per-user wrappers when none is named)."""
     tree = ast.parse(CLIENT_PATH.read_text(encoding="utf-8"), filename=str(CLIENT_PATH))
     (client_class,) = [node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "EdhClient"]
-    return tree, _function_body_ids(client_class, CONNECTION_WRAPPER)
+    return tree, _function_body_ids(client_class, *(wrappers or PER_USER_WRAPPERS))
 
 
 def _route_definition(tree):
@@ -325,7 +333,7 @@ class TestTokenReads:
         }
         routed = {(handler, wrapper) for handler, tables in maps.items() for table in tables
                   for wrapper, route in table.items() if EDH_ROUTE_DESKTOPS_LIST in _route_values(route)}
-        assert routed == {("edhWorkstationService", CONNECTION_WRAPPER)}
+        assert routed == {("edhWorkstationService", wrapper) for wrapper in PER_USER_WRAPPERS}
 
     def test_only_the_connection_wrapper_names_the_per_user_route_in_the_client(self):
         # Module-level helpers, other classes and every EdhClient member are walked alike.
@@ -336,9 +344,10 @@ class TestTokenReads:
         assert [id(node) for node in literal] == [id(_route_definition(tree))]
         assert not hasattr(EdhClient, "list_desktops")
 
-    def test_the_client_walk_finds_the_connection_wrappers_route_load(self):
-        """Control for the walk above: it finds the wrapper's own load of the route."""
-        tree, allowed = _client_tree()
+    @pytest.mark.parametrize("wrapper", PER_USER_WRAPPERS)
+    def test_the_client_walk_finds_each_per_user_wrappers_route_load(self, wrapper):
+        """Control for the walk above: it finds each wrapper's own load of the route."""
+        tree, allowed = _client_tree(wrapper)
         loads = _route_loads([(CLIENT_PATH.name, tree)])
         assert any(id(node) in allowed for _name, node in loads)
 
@@ -354,19 +363,20 @@ class TestTokenReads:
         literal = [(name, node.lineno) for name, tree in trees for node in ast.walk(tree)
                    if isinstance(node, ast.Constant) and node.value == PER_USER_ROUTE]
         assert literal == []
-        _key, value = _audit_routes_entry(_service_tree(trees), CONNECTION_WRAPPER)
-        allowed = _node_ids(value)
+        allowed = set().union(*(_node_ids(_audit_routes_entry(_service_tree(trees), wrapper)[1])
+                                for wrapper in PER_USER_WRAPPERS))
         stray = [(name, node.lineno) for name, node in _route_loads(trees)
                  if name != "edhWorkstationService.py" or id(node) not in allowed]
         assert stray == []
 
-    def test_the_route_walk_finds_the_connection_wrappers_audit_entry(self):
-        """Control for the walk above: it finds the one load it allows."""
+    @pytest.mark.parametrize("wrapper", PER_USER_WRAPPERS)
+    def test_the_route_walk_finds_each_per_user_wrappers_audit_entry(self, wrapper):
+        """Control for the walk above: it finds the load in each entry it allows, in the service only."""
         trees = _handler_trees()
-        _key, value = _audit_routes_entry(_service_tree(trees), CONNECTION_WRAPPER)
+        _key, value = _audit_routes_entry(_service_tree(trees), wrapper)
         loads = _route_loads(trees)
-        assert [name for name, _node in loads] == ["edhWorkstationService.py"]
-        assert id(loads[0][1]) in _node_ids(value)
+        assert {name for name, _node in loads} == {"edhWorkstationService.py"}
+        assert any(id(node) in _node_ids(value) for _name, node in loads)
 
     def test_only_connect_and_sign_in_call_the_connection_wrapper(self):
         trees = _handler_trees()
@@ -376,6 +386,38 @@ class TestTokenReads:
         stray = [(name, node.lineno) for name, node in _connection_wrapper_names(trees)
                  if name != "edhWorkstationService.py" or id(node) not in allowed]
         assert stray == []
+
+    def test_only_the_failure_captures_call_the_failure_wrapper(self):
+        trees = dict(_handler_trees())
+        key, _value = _audit_routes_entry(trees["edhWorkstationService.py"], FAILURE_WRAPPER)
+        allowed = {id(key)}
+        for name, function in FAILURE_CALLERS.items():
+            allowed |= _function_body_ids(trees[name], function)
+        stray = [(name, node.lineno) for name, node in _connection_wrapper_names(trees.items(), FAILURE_WRAPPER)
+                 if id(node) not in allowed]
+        assert stray == []
+
+    def test_the_failure_wrapper_walk_finds_the_audit_key_and_both_captures(self):
+        """Control for the walk above: the audit key, and a use in each capture function."""
+        trees = dict(_handler_trees())
+        found = _connection_wrapper_names(trees.items(), FAILURE_WRAPPER)
+        assert {name for name, _node in found} == set(FAILURE_CALLERS)
+        ids = {id(node) for _name, node in found}
+        key, _value = _audit_routes_entry(trees["edhWorkstationService.py"], FAILURE_WRAPPER)
+        assert id(key) in ids
+        for name, function in FAILURE_CALLERS.items():
+            assert ids & _function_body_ids(trees[name], function), function
+
+    def test_the_failure_read_asks_for_the_orphaned_rows_own_session_only(self, monkeypatch):
+        orphaned = own_row(state="ORPHANED", edhState="error", connectionAvailable=False,
+                           lastError=LAST_ERROR_EDH_REFUSED)
+        response, fakes = _list(monkeypatch, [own_row(bootstrapId=BOOTSTRAP_CREATING, sessionId=SESSION_OTHER),
+                                              orphaned],
+                                [state_record(SESSION_OTHER), state_record(SESSION_OWN, "error")])
+
+        assert response["statusCode"] == 200
+        assert fakes.edh.calls_to(FAILURE_WRAPPER) == [(edh_uid_for(USER), SESSION_OWN)]
+        assert fakes.edh.calls_to(CONNECTION_WRAPPER) == []
 
     def test_the_wrapper_walk_finds_the_audit_key_and_the_two_calls(self):
         """Control for the walk above: the audit key, and one call in each of connect and sign-in."""
