@@ -107,7 +107,7 @@
 }
 
 :global(.awsui-dark-mode) :global([data-amplify-authenticator]) :global(input::placeholder) {
-    color: var(--vams-text-disabled) !important;
+    color: var(--vams-text-secondary) !important;
 }
 
 /* Password visibility toggle icon */
