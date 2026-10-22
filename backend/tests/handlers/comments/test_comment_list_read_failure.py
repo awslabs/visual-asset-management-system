@@ -4,8 +4,8 @@
 """A failed comment read answers 500 instead of an empty list.
 
 GET /comments/assets/{assetId} and GET /comments/assets/{assetId}/assetVersionId/{assetVersionId}
-used to catch every exception from the comment query and return [], which the handler sent as
-200 {"message": []}: a DynamoDB fault read as "this asset has no comments".
+let an exception from the comment query reach the handler, which answers 500, so a DynamoDB
+fault is never reported as 200 {"message": []} ("this asset has no comments").
 """
 
 import json
