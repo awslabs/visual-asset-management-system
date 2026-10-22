@@ -138,7 +138,7 @@ jobs:
               working-directory: vams/web
               env:
                   CI: "true"
-              run: npx jest --ci
+              run: npx jest --ci --coverage
             #####
 
             - name: Web build

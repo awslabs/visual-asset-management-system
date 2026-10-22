@@ -1266,7 +1266,7 @@ When adding new styles, use CSS custom properties from `theme.css` or Cloudscape
 -   **Framework:** Jest 30 (`jsdom` environment via `jest-environment-jsdom`), `@testing-library/react`
 -   **Config:** `web/jest.config.js`; jest-dom matchers registered via `setupFilesAfterEnv` -> `src/setupTests.ts`
 -   **Cloudscape preset:** `@cloudscape-design/jest-preset` (transforms Cloudscape CSS/JS)
--   **Coverage thresholds:** Very low (~1%, set in `jest.config.js`) — raise as coverage grows
+-   **Coverage thresholds:** the suite's measured global coverage rounded down to a whole percent (statements, lines and branches 28%, functions 30%; set in `jest.config.js`). CI runs `npx jest --ci --coverage`, so a change that drops coverage below them fails the build — raise them as coverage grows
 -   **Run tests:** `npm test` (with coverage) or `npx jest` for a faster run
 
 ### 11.2 Test File Conventions
