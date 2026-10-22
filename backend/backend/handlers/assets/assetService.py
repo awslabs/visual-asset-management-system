@@ -215,7 +215,7 @@ def enrich_asset_listing_page(items):
     details are resolved once per distinct bucketId for the page, so a page costs a handful of reads
     rather than two per asset. Each returned record is identical to what the per-asset
     enhance_asset_with_version_info + get_default_bucket_details pair produces. Records without a
-    bucketId are skipped so one malformed item cannot fail the whole listing.
+    bucketId are skipped so one malformed item cannot fail the whole listing, and a record whose bucket cannot be read is listed with bucketName None.
 
     Args:
         items: Asset dictionaries for the page, in response order
@@ -233,13 +233,20 @@ def enrich_asset_listing_page(items):
 
     enhanced_items = enhance_assets_with_version_info(listed_items)
 
-    # Per-request memo: a page typically spans one or two buckets
+    # Per-request memo: a page typically spans one or two buckets. A bucketId whose bucket record
+    # cannot be read is memoized as None, and its assets are listed with a null bucketName.
     bucket_details_by_id = {}
     for enhanced_item in enhanced_items:
         bucket_id = enhanced_item['bucketId']
         if bucket_id not in bucket_details_by_id:
-            bucket_details_by_id[bucket_id] = get_default_bucket_details(bucket_id)
-        enhanced_item["bucketName"] = bucket_details_by_id[bucket_id]['bucketName']
+            try:
+                bucket_details_by_id[bucket_id] = get_default_bucket_details(bucket_id)
+            except VAMSGeneralErrorResponse:
+                logger.error(f"Bucket details unavailable for bucketId {bucket_id}; "
+                             f"its assets are listed without a bucketName")
+                bucket_details_by_id[bucket_id] = None
+        bucket_details = bucket_details_by_id[bucket_id]
+        enhanced_item["bucketName"] = bucket_details['bucketName'] if bucket_details else None
 
     return enhanced_items
 
