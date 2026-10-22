@@ -48,7 +48,7 @@ COGNITO_LIST_USERS_PAGE_SIZE = 60
 # Random password set during a reset; long enough for any pool minimum and the 256 maximum.
 UNUSABLE_PASSWORD_LENGTH = 64
 # Symbols from the set Cognito counts as special characters.
-UNUSABLE_PASSWORD_SYMBOLS = "^$*.[]{}()?!@#%&/,><:;|_~"
+UNUSABLE_PASSWORD_SYMBOLS = "^$*.[]{}()?!@#%&/,><:;|_~"  # nosec B105 - character set for random generation, not a password
 
 # Global variables for claims and roles
 claims_and_roles = {}
