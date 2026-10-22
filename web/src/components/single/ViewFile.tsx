@@ -239,9 +239,10 @@ function ViewFileForAsset() {
     // The file and preview streaming APIs refuse a non-distributable asset, so the visualizer and its
     // view selector are left out entirely and the page shows only versions and metadata. This page is
     // normally reached from the file manager, which hides its own entry points for such an asset; a
-    // direct link is still allowed to land here. Compared against false so an asset record that
-    // predates the field, and the empty record held before the fetch resolves, both render the viewer.
-    const isNotDistributable = asset?.isDistributable === false;
+    // direct link is still allowed to land here. A fetched record without the flag is not
+    // distributable, as the API treats it; the empty record held before the fetch resolves (no
+    // assetId) still renders the viewer.
+    const isNotDistributable = !!asset?.assetId && asset.isDistributable !== true;
 
     usePageTitle(
         databaseId,
