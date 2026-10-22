@@ -879,8 +879,9 @@ A workflow may declare a default in `systemConfig.defaultOutputFileBaseExecution
 default is stored **unresolved**, so its template tags are substituted per execution — a single stored
 `/{{jobName}}/` gives every run its own output folder. `{{jobName}}` resolves to the first step's
 generated job name joined to that step's `pipelineExecutionId` (for example
-`fb522-convert-3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a`), at most 80 characters, so its value differs on every run. Resolution follows
-the request:
+`fb522-convert-3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a`), at most 80 characters, so its value differs on
+every run. A re-run reuses the prefix its original execution resolved, so it writes into that
+execution's folder. Resolution follows the request:
 
 | `outputFileBaseExecutionPathExtension` on the request | Prefix used                  |
 | ----------------------------------------------------- | ---------------------------- |

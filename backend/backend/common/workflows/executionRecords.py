@@ -188,9 +188,9 @@ def run_job_name(step_job_name: str, pipeline_execution_id: str) -> str:
     across runs, and two steps that share a pipeline or a job name usually carry the same one (one
     deploy generates every step's uuid fragment within the same instant), so the pipeline execution
     id, minted per step per run, is what makes the value distinct for every step of every execution.
-    The step job name is trimmed to fit, never the id. Both parts
-    carry only the id character set (letters, digits, '-', '_'), so the value is a single path
-    segment with no '/', ':' or whitespace.
+    The step job name is trimmed to fit, never the id. Both parts carry only the id character set
+    (letters, digits, '-', '_'), so the value is a single path segment with no '/', ':' or
+    whitespace.
 
     The run-bucket output prefixes keep the stored step job name (pipeline_output_prefixes), because
     the deployed state machine bakes that name into them."""
