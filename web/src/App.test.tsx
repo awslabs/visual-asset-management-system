@@ -36,6 +36,8 @@ jest.mock("./hooks/useThemeSettings", () => ({
     useThemeSettings: () => ({ theme: "dark", setTheme: jest.fn(), density: "comfortable" }),
 }));
 jest.mock("aws-amplify/auth", () => ({ signOut: jest.fn().mockResolvedValue(undefined) }));
+const mockLocalforageClear = jest.fn().mockResolvedValue(undefined);
+jest.mock("localforage", () => ({ clear: (...a: any[]) => mockLocalforageClear(...a) }));
 
 describe("App shell", () => {
     beforeEach(() => {
@@ -93,6 +95,7 @@ describe("App shell", () => {
 
             await waitFor(() => expect(localStorage.getItem("user")).toBeNull());
             expect(localStorage.getItem("vams-theme-preference")).toBe("light");
+            expect(mockLocalforageClear).toHaveBeenCalledTimes(1);
         } finally {
             error.mockRestore();
             log.mockRestore();
