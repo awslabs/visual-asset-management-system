@@ -1134,6 +1134,14 @@ def _resolve_and_authorize_metadata_sources(metadata_source_assets, candidate_so
 # Template resolution phase
 #######################
 
+# The resolution error for execute parameters that two of a workflow's same-id pipelines would share.
+PIPELINE_PARAMS_AMBIGUOUS_MESSAGE = (
+    "pipelineExecutionParameters are keyed by pipeline id, and this workflow has two pipelines with "
+    "that id in different databases, so the parameters would apply to both. Run the workflow without "
+    "parameters for that pipeline id, or give one of the pipelines a different id."
+)
+
+
 def _resolve_pipeline_configs(pipeline_records, pipeline_exec_params, default_bucket_name):
     """Per-pipeline template resolution + tag validation (templateResolution 5-case contract).
 
@@ -1143,6 +1151,15 @@ def _resolve_pipeline_configs(pipeline_records, pipeline_exec_params, default_bu
     template's overrides map (for the cross-entity validator's effective-config merge)."""
     errors = []
     resolved = {}
+    # Execute parameters are keyed by pipelineId alone, so parameters for an id that two of the
+    # workflow's pipelines share (in different databases) would apply to both; refuse the run
+    pipeline_id_counts = {}
+    for record in pipeline_records:
+        pipeline_id = record.get("pipelineId", "")
+        pipeline_id_counts[pipeline_id] = pipeline_id_counts.get(pipeline_id, 0) + 1
+    if any(count > 1 and pipeline_exec_params.get(pipeline_id)
+           for pipeline_id, count in pipeline_id_counts.items()):
+        return [PIPELINE_PARAMS_AMBIGUOUS_MESSAGE], {}
     for record in pipeline_records:
         pipeline_id = record.get("pipelineId", "")
         pipeline_db = record.get("databaseId", "")
