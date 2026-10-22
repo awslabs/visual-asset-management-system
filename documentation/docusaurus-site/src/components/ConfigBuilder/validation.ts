@@ -194,6 +194,8 @@ function physnaHasInlineCreds(cfg: ConfigShape): boolean {
 /**
  * True if any external-OAuth IdP required field is unset (config.ts: the
  * `useExternalOAuthIdp` required-field checks under "Check when implementing auth providers").
+ * The MFA scope, principal domain and discovery endpoint are optional there: only "" and the
+ * "UNDEFINED" placeholder are rejected for them, so their template null passes.
  */
 function oauthFieldsMissing(cfg: ConfigShape): boolean {
     const base = "app.authProvider.useExternalOAuthIdp";
@@ -202,14 +204,20 @@ function oauthFieldsMissing(cfg: ConfigShape): boolean {
         "lambdaAuthorizorJWTIssuerUrl",
         "lambdaAuthorizorJWTAudience",
         "idpAuthClientId",
-        "idpAuthPrincipalDomain",
         "idpAuthProviderScope",
-        "idpAuthProviderScopeMfa",
         "idpAuthProviderTokenEndpoint",
         "idpAuthProviderAuthorizationEndpoint",
+    ];
+    const optionalPaths = [
+        "idpAuthPrincipalDomain",
+        "idpAuthProviderScopeMfa",
         "idpAuthProviderDiscoveryEndpoint",
     ];
-    return requiredPaths.some((p) => isUnset(g(cfg, `${base}.${p}`)));
+    const isPlaceholder = (value: unknown) => value === "" || value === "UNDEFINED";
+    return (
+        requiredPaths.some((p) => isUnset(g(cfg, `${base}.${p}`))) ||
+        optionalPaths.some((p) => isPlaceholder(g(cfg, `${base}.${p}`)))
+    );
 }
 
 /** True if any Cosmos model is enabled (config.ts: "Cosmos Predict/Transfer validation"). */
@@ -1593,7 +1601,7 @@ export const RULES: Rule[] = [
         appliesWhen: (c) =>
             g(c, "app.authProvider.useExternalOAuthIdp.enabled") && oauthFieldsMissing(c),
         message:
-            "External OAuth IdP requires all of its fields (provider URL, client ID, scopes, principal domain, endpoints, JWT issuer URL and audience).",
+            "External OAuth IdP requires its provider URL, client ID, scope, token and authorization endpoints, JWT issuer URL and audience. The MFA scope, principal domain and discovery endpoint may be left null, but not empty or UNDEFINED.",
     },
 
     // ----- Cognito federation: SAML or OIDC, or neither
