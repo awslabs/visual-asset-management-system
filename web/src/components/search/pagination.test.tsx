@@ -20,7 +20,9 @@ jest.mock("react-map-gl/maplibre", () => {
     const ReactActual = jest.requireActual("react");
     return {
         __esModule: true,
-        default: ReactActual.forwardRef((props: any, _ref: any) => <div>{props.children}</div>),
+        default: ReactActual.forwardRef((props: any, ref: any) => (
+            <div ref={ref}>{props.children}</div>
+        )),
         Marker: () => null,
         Popup: () => null,
         NavigationControl: () => null,
@@ -129,8 +131,8 @@ describe("Search map view pagination", () => {
             </MemoryRouter>
         );
         const pagination = createWrapper(document.body).findPagination();
-        expect(pagination).not.toBeNull();
-        const pageNumbers = pagination!
+        if (!pagination) throw new Error("the map view renders no paginator");
+        const pageNumbers = pagination
             .findPageNumbers()
             .map((p) => Number(p.getElement().textContent))
             .filter((n) => !Number.isNaN(n));
