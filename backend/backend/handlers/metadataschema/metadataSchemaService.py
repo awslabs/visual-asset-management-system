@@ -659,6 +659,18 @@ def handle_get_request(event):
                     logger.exception(f"Error converting schema to response model: {v}")
                     return success(body=schema)
             else:
+                # A missing schema is checked as a provisional object in the path's database, so
+                # the 404 is answered only to a caller allowed to read schemas there
+                provisional_schema = {
+                    "databaseId": path_parameters['databaseId'],
+                    "object__type": "metadataSchema",
+                    "metadataSchemaName": "",
+                    "metadataSchemaEntityType": ""
+                }
+                if len(claims_and_roles["tokens"]) == 0:
+                    return authorization_error()
+                if not CasbinEnforcer(claims_and_roles).enforce(provisional_schema, "GET"):
+                    return authorization_error()
                 return general_error(body={"message": "Metadata schema not found"}, status_code=404, event=event)
         
         # Case 2: List metadata schemas with filters

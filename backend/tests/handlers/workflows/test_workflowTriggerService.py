@@ -101,9 +101,21 @@ class TestWorkflowTriggerService:
     def test_parent_workflow_not_found(self, mock_enforcer, mock_claims, mock_parent):
         mock_claims.return_value = {"tokens": ["u"]}
         mock_enforcer.return_value = _enforcer()
-        mock_parent.return_value = (False, None)
+        # A missing workflow whose provisional check allows answers 404.
+        mock_parent.return_value = (True, None)
         resp = lambda_handler(_event("GET", BASE, PARAMS), MagicMock())
         assert resp["statusCode"] == 404
+
+    @patch(f"{MOD}._enforce_parent_workflow")
+    @patch(f"{MOD}.request_to_claims")
+    @patch(f"{MOD}.CasbinEnforcer")
+    def test_parent_workflow_not_found_and_denied(self, mock_enforcer, mock_claims, mock_parent):
+        mock_claims.return_value = {"tokens": ["u"]}
+        mock_enforcer.return_value = _enforcer()
+        # A missing workflow whose provisional check is denied answers 403, not 404.
+        mock_parent.return_value = (False, None)
+        resp = lambda_handler(_event("GET", BASE, PARAMS), MagicMock())
+        assert resp["statusCode"] == 403
 
     @patch(f"{MOD}._enforce_parent_workflow")
     @patch(f"{MOD}.request_to_claims")

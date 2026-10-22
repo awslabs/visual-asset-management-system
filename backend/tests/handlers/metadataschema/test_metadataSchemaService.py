@@ -399,6 +399,26 @@ class TestGetSingleSchemaParsesStoredFields:
 
         assert _status(response) == 404
 
+    def test_a_missing_schema_in_a_denied_database_is_refused(self, enforcer, claims, schema_table):
+        schema_table.query.return_value = {"Items": []}
+        installed = enforcer(_enforcer(allowed={OWNING_DATABASE_ID}))
+
+        response = svc.handle_get_request(_get_event(database_id="other-db"))
+
+        assert _status(response) == 403
+        checked = [obj for obj, act in installed.calls if act == "GET"]
+        assert checked == [{"databaseId": "other-db", "object__type": "metadataSchema",
+                            "metadataSchemaName": "", "metadataSchemaEntityType": ""}]
+
+    def test_a_missing_schema_in_an_allowed_database_is_not_found(self, enforcer, claims,
+                                                                  schema_table):
+        schema_table.query.return_value = {"Items": []}
+        enforcer(_enforcer(allowed={OWNING_DATABASE_ID}))
+
+        response = svc.handle_get_request(_get_event(database_id=OWNING_DATABASE_ID))
+
+        assert _status(response) == 404
+
 
 @pytest.mark.unit
 class TestUpdateReserializesFields:

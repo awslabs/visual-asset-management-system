@@ -354,16 +354,18 @@ def _authorize_referenced_templates(database_id, workflow_item, default_template
 
 
 def _enforce_parent_workflow(database_id, workflow_id, action, claims_and_roles):
-    """Tier-2: authorize against the owning workflow object. Returns (allowed, workflow_item)."""
+    """Tier-2: authorize against the owning workflow object. Returns (allowed, workflow_item).
+
+    When the workflow does not exist, workflow_item is None and the check runs against a provisional
+    record carrying only the path ids, so the caller answers 404 only when that check allows.
+    """
     item = _workflow_table().get_item(
         Key={"databaseId": database_id, "workflowId": workflow_id}
     ).get("Item")
-    if not item:
-        return None, None
     if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
-        obj = dict(item)
+        obj = dict(item) if item else {"databaseId": database_id, "workflowId": workflow_id}
         obj["object__type"] = OBJECT_TYPE_WORKFLOW
-        obj.setdefault("name", item.get("workflowName", ""))
+        obj.setdefault("name", obj.get("workflowName", ""))
         return CasbinEnforcer(claims_and_roles).enforce(obj, action), item
     return False, item
 
@@ -610,10 +612,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         # Tier-2 against the owning workflow; action mirrors the HTTP verb.
         allowed_obj, workflow_item = _enforce_parent_workflow(
             database_id, workflow_id, method, claims_and_roles)
-        if workflow_item is None:
-            return validation_error(status_code=404, body={"message": "Workflow not found"}, event=event)
         if not allowed_obj:
             return authorization_error()
+        if workflow_item is None:
+            return validation_error(status_code=404, body={"message": "Workflow not found"}, event=event)
 
         # A trigger type in the path must be a supported type. The path value is a trigger KEY: the
         # bare type addresses a workflow's first trigger of that type, and "type#triggerId" addresses an
