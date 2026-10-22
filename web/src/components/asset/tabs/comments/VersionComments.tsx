@@ -71,13 +71,6 @@ interface VersionCommentsProps {
     userId: string;
     setReload: (reload: boolean) => void;
     defaultExpanded: boolean;
-    version?: {
-        Comment: string;
-        dateModified: string;
-        S3Version: string;
-        Version: string;
-        description: string;
-    };
     comments: CommentType[];
     showMessage: ShowMessageFunction;
 }
