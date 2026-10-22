@@ -40,7 +40,7 @@
         {
             "id": "image-viewer",
             "name": "Image Viewer",
-            "description": "View images with zoom and pan capabilities",
+            "description": "View images fitted to the viewer panel",
             "componentPath": "./viewers/ImageViewerPlugin/ImageViewerComponent",
             "supportedExtensions": [".png", ".jpg", ".jpeg", ".svg", ".gif"],
             "supportsMultiFile": false,
