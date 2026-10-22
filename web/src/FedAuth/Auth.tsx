@@ -319,6 +319,14 @@ const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({
 let oauth2Client: OAuth2Client;
 
 /**
+ * The redirect_uri sent to the external OAuth IdP on both the authorize and the token request:
+ * the page URL without its query string or hash route. The hash route travels in `state`.
+ */
+function getOAuthRedirectUri(): string {
+    return window.location.origin + window.location.pathname;
+}
+
+/**
  * Gets the OAuth2Client instance for use by other modules
  * Returns null if not initialized
  */
@@ -676,7 +684,7 @@ const Auth: React.FC<AuthProps> = (props) => {
 
             // request access token
             setIsLoading(true);
-            const redirectUri = window.location.href.split(/[?#]/)[0];
+            const redirectUri = getOAuthRedirectUri();
 
             oauth2Client.authorizationCode
                 .getTokenFromCodeRedirect(document.location.toString(), {
@@ -887,7 +895,7 @@ const Auth: React.FC<AuthProps> = (props) => {
             if (config && config.externalOAuthIdpScope && config.externalOAuthIdpScopeMfa) {
                 // Start oauth2 flow
                 const authorizeUri = await oauth2Client.authorizationCode.getAuthorizeUri({
-                    redirectUri: window.location.href,
+                    redirectUri: getOAuthRedirectUri(),
                     state: document.location.href,
                     codeVerifier,
                     scope: [
