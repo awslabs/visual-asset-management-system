@@ -263,7 +263,7 @@ export class SplatToolboxCodeBuildConstruct extends Construct {
         new cdk.CfnOutput(this, "SplatToolboxCodeBuildProject", {
             value: project.projectName,
             description:
-                "CodeBuild project name for the Splat Toolbox container. Check build status, then run the pipeline once it prints SUCCEEDED: aws codebuild batch-get-builds --ids \"$(aws codebuild list-builds-for-project --project-name <value> --max-items 1 --query 'ids[0]' --output text)\" --query 'builds[0].buildStatus' --output text",
+                "CodeBuild project name for the Splat Toolbox container. Check build status, then run the pipeline once it prints SUCCEEDED: aws codebuild batch-get-builds --ids \"$(aws codebuild list-builds-for-project --project-name <value> --no-paginate --query 'ids[0]' --output text)\" --query 'builds[0].buildStatus' --output text",
         });
     }
 }
