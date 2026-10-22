@@ -6,12 +6,10 @@ files recorded at initialization.
 
 ``complete_upload`` has two object-creating branches: a zero-byte file (``uploadIdS3 ==
 "zero-byte"``) and a regular multipart completion. A multipart upload completed with no parts
-is a cancelled file: it is aborted and creates nothing. Only the multipart branch used to reach
-the blocklist, and only after the object existed; the zero-byte branch (and the no-parts branch,
-which once wrote an empty file) wrote an object under whatever ``relativeKey`` the request
-carried. The request's keys were also never compared with the keys the upload was
-initialized with, so a valid ``uploadId`` could create zero-byte objects under names that
-had passed no check at all.
+is a cancelled file: it is aborted and creates nothing. Both object-creating branches run the
+blocklist on the submitted ``relativeKey`` before any object exists, and completion accepts only
+the keys the upload was initialized with, so a valid ``uploadId`` cannot create an object under
+a name that passed no check.
 
 The blocklist's own rule (which extensions, how case is treated) lives in
 ``common.s3.validateUnallowedFileExtensionAndContentType`` and is pinned by that module's
