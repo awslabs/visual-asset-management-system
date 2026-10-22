@@ -1009,29 +1009,35 @@ describe("EDH Workstations documentation matches the code it describes", () => {
     });
 
     describe("navigation and tab labels", () => {
-        /** The top-level entries of the add-on navigation array, as source text. */
+        /** The add-on navigation lists (main menu, admin area) the navigation file exports. */
+        const NAV_EXPORTS = ["addonNavMainSections", "addonNavAdminSections"];
+        /** The top-level entries of every add-on navigation array, as source text. */
         const navSections = (): string[] => {
             const source = read(WEB_NAVIGATION);
-            // The array literal opens after the `=`; the `[]` of the declared type is not it.
-            const open = source.indexOf("= [", source.indexOf("export const addonNavSections")) + 2;
             const out: string[] = [];
-            let depth = 0;
-            let from = -1;
-            for (let i = open + 1; i < source.length; i++) {
-                const ch = source[i];
-                if (ch === '"') {
-                    const close = source.indexOf('"', i + 1);
-                    if (close === -1)
-                        throw new Error(`unterminated string literal from offset ${i}`);
-                    i = close;
-                } else if (ch === "{") {
-                    if (depth === 0) from = i;
-                    depth += 1;
-                } else if (ch === "}") {
-                    depth -= 1;
-                    if (depth === 0) out.push(source.slice(from, i + 1));
-                } else if (ch === "]" && depth === 0) {
-                    break;
+            for (const name of NAV_EXPORTS) {
+                const declared = source.indexOf(`export const ${name}`);
+                if (declared === -1) throw new Error(`${WEB_NAVIGATION} does not export ${name}`);
+                // The array literal opens after the `=`; the `[]` of the declared type is not it.
+                const open = source.indexOf("= [", declared) + 2;
+                let depth = 0;
+                let from = -1;
+                for (let i = open + 1; i < source.length; i++) {
+                    const ch = source[i];
+                    if (ch === '"') {
+                        const close = source.indexOf('"', i + 1);
+                        if (close === -1)
+                            throw new Error(`unterminated string literal from offset ${i}`);
+                        i = close;
+                    } else if (ch === "{") {
+                        if (depth === 0) from = i;
+                        depth += 1;
+                    } else if (ch === "}") {
+                        depth -= 1;
+                        if (depth === 0) out.push(source.slice(from, i + 1));
+                    } else if (ch === "]" && depth === 0) {
+                        break;
+                    }
                 }
             }
             return out;
@@ -1058,6 +1064,7 @@ describe("EDH Workstations documentation matches the code it describes", () => {
 
         test("the sources declare the labels (count control)", () => {
             expect(navSections().length).toBeGreaterThanOrEqual(2);
+            expect(navLabels()).toContain("Virtual Workstations");
             expect(navLabels()).toContain("Workstation Admin");
             // The Simulations link carries its own containers restriction inside the first section.
             expect(navLabels()).toContain("Simulations");

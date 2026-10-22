@@ -10,8 +10,9 @@
  * Each add-on file is mocked here with probe entries, independent of the add-ons it carries, and so
  * is the fork's custom lane: the route table is core, then add-on, then custom; an add-on page is lazy-loaded and
  * rendered only when the `web` constraint allows its path; an add-on path that repeats a core path
- * never replaces the core page; and the add-on navigation section is filtered by the same check and
- * placed after the core sections and before the fork's. A navigation entry restricted to feature
+ * never replaces the core page; and the add-on navigation sections are filtered by the same check,
+ * the main-menu ones placed after "Orchestrate & Automate" and the admin ones after the core admin
+ * sections and before "User", with the fork's after everything. A navigation entry restricted to feature
  * switches shows only while all of them are enabled, and appears when they arrive after mount.
  */
 
@@ -57,7 +58,14 @@ jest.mock("../custom/customRoutes", () => {
 });
 
 jest.mock("./addonNavigation", () => ({
-    addonNavSections: [
+    addonNavAdminSections: [
+        {
+            type: "section",
+            text: "Add-on admin probe",
+            items: [{ type: "link", text: "Add-on admin page", href: "#/addon-admin-probe/" }],
+        },
+    ],
+    addonNavMainSections: [
         {
             type: "section",
             text: "Add-on probe",
@@ -175,15 +183,56 @@ describe("navigation lanes", () => {
         return container;
     }
 
-    it("places the add-on section after the core sections and before the fork's", async () => {
-        allowRoutes("/databases/", "/addon-probe/", "/custom/probe/");
+    it("places the add-on main-menu section after Orchestrate & Automate, ahead of the admin area", async () => {
+        allowRoutes("/executions/", "/addon-probe/", "/metadataschema/", "/auth/api-keys/");
         const container = await renderNavigation();
         const nav = createWrapper(container).findSideNavigation();
 
         await waitFor(() => expect(nav?.findLinkByHref("#/addon-probe/")).toBeTruthy());
         const text = container.textContent ?? "";
-        expect(text.indexOf("Add-on probe")).toBeGreaterThan(text.indexOf("Databases"));
-        expect(text.indexOf("Custom probe")).toBeGreaterThan(text.indexOf("Add-on probe"));
+        const executions = text.indexOf("Executions");
+        expect(executions).toBeGreaterThan(-1);
+        expect(text.indexOf("Add-on probe")).toBeGreaterThan(executions);
+        expect(text.indexOf("Metadata Schema")).toBeGreaterThan(text.indexOf("Add-on probe"));
+        expect(text.indexOf("API Key Management")).toBeGreaterThan(text.indexOf("Add-on probe"));
+    });
+
+    it("places the add-on admin section after the core admin sections and before User", async () => {
+        allowRoutes("/auth/userroles/", "/addon-admin-probe/", "/auth/api-keys/");
+        const container = await renderNavigation();
+        const nav = createWrapper(container).findSideNavigation();
+
+        await waitFor(() => expect(nav?.findLinkByHref("#/addon-admin-probe/")).toBeTruthy());
+        const text = container.textContent ?? "";
+        const usersInRoles = text.indexOf("Users in Roles");
+        expect(usersInRoles).toBeGreaterThan(-1);
+        expect(text.indexOf("Add-on admin probe")).toBeGreaterThan(usersInRoles);
+        expect(text.indexOf("API Key Management")).toBeGreaterThan(
+            text.indexOf("Add-on admin probe")
+        );
+    });
+
+    it("keeps the fork's section after every core and add-on section", async () => {
+        allowRoutes("/addon-probe/", "/addon-admin-probe/", "/auth/api-keys/", "/custom/probe/");
+        const container = await renderNavigation();
+        const nav = createWrapper(container).findSideNavigation();
+
+        await waitFor(() => expect(nav?.findLinkByHref("#/custom/probe/")).toBeTruthy());
+        const text = container.textContent ?? "";
+        const custom = text.indexOf("Custom probe");
+        expect(custom).toBeGreaterThan(text.indexOf("Add-on probe"));
+        expect(custom).toBeGreaterThan(text.indexOf("Add-on admin probe"));
+        expect(custom).toBeGreaterThan(text.indexOf("API Key Management"));
+    });
+
+    it("filters the add-on admin section by the same web-route check", async () => {
+        allowRoutes("/auth/api-keys/");
+        const container = await renderNavigation();
+        const nav = createWrapper(container).findSideNavigation();
+
+        await waitFor(() => expect(nav?.findLinkByHref("#/auth/api-keys/")).toBeTruthy());
+        expect(nav?.findLinkByHref("#/addon-admin-probe/")).toBeFalsy();
+        expect(screen.queryByText("Add-on admin probe")).not.toBeInTheDocument();
     });
 
     it("filters the add-on section by the same web-route check", async () => {

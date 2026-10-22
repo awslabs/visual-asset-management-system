@@ -8,8 +8,10 @@
  * addons/addonFeatures.ts), read through the real route table and the real side navigation.
  *
  * Each route serves its page without parameters and highlights the navigation link that leads to it;
- * the Simulations route opens the Workstations page on that tab. The two navigation sections sit
- * after the core "User" section, show only while EDH_WORKSTATIONS is enabled (the Simulations link
+ * the Simulations route opens the Workstations page on that tab. "Virtual Workstations" sits in the
+ * main menu after the core "Orchestrate & Automate" section and "Admin - Workstations" in the admin
+ * area after the core admin sections and before "User"; both show only while EDH_WORKSTATIONS is
+ * enabled (the Simulations link
  * also needs EDH_CONTAINERS), are filtered by the web-route check, and appear when the feature
  * switches arrive after mount.
  */
@@ -157,18 +159,30 @@ describe("EDH routes", () => {
 });
 
 describe("EDH navigation sections", () => {
-    it("places both sections after the core User section", async () => {
-        allowRoutes("/auth/api-keys/", "/edh/workstations/", "/edh/admin/");
+    it("places Virtual Workstations after Orchestrate & Automate and Admin - Workstations before User", async () => {
+        allowRoutes(
+            "/executions/",
+            "/metadataschema/",
+            "/auth/userroles/",
+            "/auth/api-keys/",
+            "/edh/workstations/",
+            "/edh/admin/"
+        );
         const container = renderNavigation([addonFeaturesEnabled.EDH_WORKSTATIONS]);
 
         await waitFor(() => expect(findNavLink(container, ADMIN_HREF)).toBeTruthy());
         const text = container.textContent ?? "";
-        expect(text.indexOf("Virtual Workstations")).toBeGreaterThan(
-            text.indexOf("API Key Management")
-        );
-        expect(text.indexOf("Admin - Workstations")).toBeGreaterThan(
-            text.indexOf("Virtual Workstations")
-        );
+        const at = (label: string) => {
+            const index = text.indexOf(label);
+            expect(index).toBeGreaterThan(-1);
+            return index;
+        };
+        // Main menu: right after the core Orchestrate & Automate links, ahead of the admin area.
+        expect(at("Virtual Workstations")).toBeGreaterThan(at("Executions"));
+        expect(at("Metadata Schema")).toBeGreaterThan(at("Virtual Workstations"));
+        // Admin area: after the core admin sections, ahead of the User section.
+        expect(at("Admin - Workstations")).toBeGreaterThan(at("Users in Roles"));
+        expect(at("API Key Management")).toBeGreaterThan(at("Admin - Workstations"));
     });
 
     it("offers My Workstations when the switch is on and the route is allowed", async () => {

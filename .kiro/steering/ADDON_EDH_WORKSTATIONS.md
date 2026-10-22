@@ -257,12 +257,12 @@ web/src/addons/edh/
 
 ### Web lane entries
 
-| Lane             | File                        | EDH entries                                                                                                                                                                        |
-| ---------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Routes           | `addons/addonRoutes.tsx`    | `/edh/workstations`, `/edh/workstations/simulations` (the same lazy page, opened on its Simulations tab) and `/edh/admin`; each `active` is the href of the nav link it highlights |
-| Navigation       | `addons/addonNavigation.ts` | "Virtual Workstations" (My Workstations, Simulations) and "Admin - Workstations" (Workstation Admin). Lane order places both after the core "User" section                         |
-| Feature switches | `addons/addonFeatures.ts`   | `EDH_WORKSTATIONS`, `EDH_CONTAINERS`, `EDH_AMI_RECIPES`, each declared in `infra/common/addonAppFeatures.ts`                                                                       |
-| Tailwind content | `web/tailwind.config.js`    | The one line `./src/addons/edh/**/*.{ts,tsx}` (the shells live in `pages/`, inside the glob)                                                                                       |
+| Lane             | File                        | EDH entries                                                                                                                                                                                                                                              |
+| ---------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Routes           | `addons/addonRoutes.tsx`    | `/edh/workstations`, `/edh/workstations/simulations` (the same lazy page, opened on its Simulations tab) and `/edh/admin`; each `active` is the href of the nav link it highlights                                                                       |
+| Navigation       | `addons/addonNavigation.ts` | "Virtual Workstations" (My Workstations, Simulations) in `addonNavMainSections`, after the core "Orchestrate & Automate" section; "Admin - Workstations" (Workstation Admin) in `addonNavAdminSections`, after the core admin sections and before "User" |
+| Feature switches | `addons/addonFeatures.ts`   | `EDH_WORKSTATIONS`, `EDH_CONTAINERS`, `EDH_AMI_RECIPES`, each declared in `infra/common/addonAppFeatures.ts`                                                                                                                                             |
+| Tailwind content | `web/tailwind.config.js`    | The one line `./src/addons/edh/**/*.{ts,tsx}` (the shells live in `pages/`, inside the glob)                                                                                                                                                             |
 
 The web routes sit under `/edh/workstations` and `/edh/admin`, so the `web` grants in `edh-user.json`, `edh-admin.json` and the read-only default (`starts_with` `/edh/workstations`) cover the Simulations route too.
 

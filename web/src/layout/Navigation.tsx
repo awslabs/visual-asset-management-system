@@ -10,7 +10,7 @@ import { checkWebRoutesAllowed } from "../services/webRoutesCheck";
 import config from "../config";
 import Synonyms from "../synonyms";
 import { useFeaturesEnabled } from "../context/RuntimeConfigContext";
-import { addonNavSections } from "../addons/addonNavigation";
+import { addonNavAdminSections, addonNavMainSections } from "../addons/addonNavigation";
 import { customNavSections } from "../custom/customNavigation";
 
 const navHeader: { href: string; logo?: { alt: string; src: string } } = {
@@ -156,6 +156,8 @@ function navItems(): any[] {
                 { type: "link", text: "Executions", href: "#/executions/" },
             ],
         },
+        // The add-ons' main-menu sections (addons/addonNavigation.ts)
+        ...addonNavMainSections,
         { type: "divider" },
         {
             type: "section",
@@ -192,14 +194,14 @@ function navItems(): any[] {
                     : []),
             ],
         },
+        // The add-ons' admin-area sections (addons/addonNavigation.ts)
+        ...addonNavAdminSections,
         {
             type: "section",
             text: "User",
             items: [{ type: "link", text: "API Key Management", href: "#/auth/api-keys/" }],
         },
-        // Sections the add-ons add (addons/addonNavigation.ts), then a fork's
-        // (custom/customNavigation.ts, shipped empty)
-        ...addonNavSections,
+        // A fork's sections (custom/customNavigation.ts, shipped empty)
         ...customNavSections,
     ];
 }

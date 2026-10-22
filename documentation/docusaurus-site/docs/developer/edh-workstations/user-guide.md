@@ -63,7 +63,7 @@ The administrator role for the **Workstation Admin** page is created with **Requ
 
 ## Navigation
 
-The add-on adds two sections to the side navigation panel, after **User**: **Virtual Workstations** and **Admin - Workstations**. They are present when the deployment enables the add-on and appear as soon as you sign in, without a reload. Each link shows only when your role allows its web route (see [Permissions you need](#permissions-you-need)).
+The add-on adds two sections to the side navigation panel: **Virtual Workstations** in the main menu, after **Orchestrate & Automate**, and **Admin - Workstations** with the administration sections, after **Admin - Auth** and before **User**. They are present when the deployment enables the add-on and appear as soon as you sign in, without a reload. Each link shows only when your role allows its web route (see [Permissions you need](#permissions-you-need)).
 
 ### Virtual Workstations
 
