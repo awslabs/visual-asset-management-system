@@ -50,6 +50,13 @@ which override a matching `allow`.
 In the web interface a user without execution-log access still sees the **Logs** tab on an execution,
 and the tab reports that the logs are not viewable.
 
+:::warning[Default roles are restored on every deployment]
+Each deployment rewrites `admin`, `basicReadOnly`, and their `initial_*` constraints. Edits to these
+records are undone, and deleted ones, including deletions made from the **Roles** and **Constraints**
+lists, are re-created. The editors show a notice when you open one of them. Put customizations on a
+separate role with its own constraints.
+:::
+
 ### Creating a custom role
 
 1. Navigate to **Roles** from the left navigation menu.
