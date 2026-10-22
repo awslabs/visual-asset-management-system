@@ -1834,6 +1834,21 @@ export const RULES: Rule[] = [
             (isUnset(g(c, "app.useAlb.certificateArn")) || isUnset(g(c, "app.useAlb.domainHost"))),
         message: "ALB deployment requires both a domain hostname and an ACM certificate ARN.",
     },
+    {
+        id: "alb-domain-bucket-name",
+        severity: "error",
+        fieldPaths: ["app.useAlb.domainHost"],
+        appliesWhen: (c) => {
+            const host = g(c, "app.useAlb.domainHost");
+            return (
+                g(c, "app.useAlb.enabled") &&
+                !isUnset(host) &&
+                !/^[a-z0-9][a-z0-9.-]{1,44}[a-z0-9]$/.test(String(host))
+            );
+        },
+        message:
+            "app.useAlb.domainHost names the ALB web app bucket and its '-webappaccesslogs' access-logs bucket, so it must be 3 to 46 characters of lowercase letters, digits, dots and hyphens, beginning and ending with a letter or digit.",
+    },
 
     // ----- Stack name (config.ts: "app.baseStackName is required") -----
     // The builder has no CDK context or STACK_NAME environment to fall back to, so the field itself

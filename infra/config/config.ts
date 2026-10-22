@@ -2277,6 +2277,19 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
+    // The ALB web app bucket is named domainHost and its access-logs bucket domainHost +
+    // "-webappaccesslogs", so domainHost must be a bucket name 17 characters short of the
+    // 63-character limit.
+    if (
+        config.app.useAlb.enabled &&
+        !/^[a-z0-9][a-z0-9.-]{1,44}[a-z0-9]$/.test(config.app.useAlb.domainHost)
+    ) {
+        throw new Error(
+            "Configuration Error: app.useAlb.domainHost names the ALB web app bucket and its '-webappaccesslogs' access-logs bucket, so it must be 3 to 46 characters of lowercase letters, digits, dots and hyphens, beginning and ending with a letter or digit. Provided: " +
+                config.app.useAlb.domainHost
+        );
+    }
+
     if (
         !config.app.adminEmailAddress ||
         config.app.adminEmailAddress == "" ||
