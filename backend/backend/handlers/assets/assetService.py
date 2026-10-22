@@ -394,7 +394,7 @@ def format_asset_response(record):
         return AssetResponseModel(**normalized).dict()
     except ValidationError as v:
         logger.warning(f"Asset {normalized.get('databaseId')}:{normalized.get('assetId')} does not match "
-                       f"the response model, returned as stored: {validation_error_message(v)}")
+                       f"the response model, returned as stored: {v}")
         return normalized
 
 def enhance_asset_with_version_info(asset):
