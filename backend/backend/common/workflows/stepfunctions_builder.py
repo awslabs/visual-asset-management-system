@@ -155,12 +155,15 @@ def create_retry_config(
 # step with a fresh task token.
 CALLBACK_NON_RETRYABLE_ERRORS = ["States.Timeout", "States.HeartbeatTimeout"]
 
-# The only errors a `.waitForTaskToken` task state may retry: transport/service faults raised while
-# the invocation is being delivered, so no pipeline run started. Once the pipeline holds the task
-# token, every failure it reports arrives through SendTaskFailure as an application error, and
-# retrying that re-runs the whole pipeline — hours of GPU work for a run that cannot succeed, into
-# the same execution-scoped output prefix the previous attempt may still be draining.
-CALLBACK_TRANSIENT_RETRYABLE_ERRORS = [
+# The only errors a pipeline task state retries: transport/service faults raised while the invocation
+# is being delivered, so the pipeline did not run. Every other failure of a fire-and-forget state is
+# the pipeline's own -- a synchronous Lambda's function error, an SQS or EventBridge request the
+# service rejected -- and comes back the same on every attempt, so it goes to the Catch at once. On a
+# `.waitForTaskToken` state, once the pipeline holds the task token every failure it reports arrives
+# through SendTaskFailure as an application error, and retrying that re-runs the whole pipeline --
+# hours of GPU work for a run that cannot succeed, into the same execution-scoped output prefix the
+# previous attempt may still be draining.
+TRANSIENT_DELIVERY_RETRYABLE_ERRORS = [
     "Lambda.ServiceException",
     "Lambda.AWSLambdaException",
     "Lambda.SdkClientException",
@@ -173,18 +176,19 @@ CALLBACK_TRANSIENT_RETRYABLE_ERRORS = [
 def create_task_retry_configs(wait_for_callback: bool = False) -> List[Dict[str, Any]]:
     """Retry list for a pipeline task state.
 
-    Fire-and-forget states retry any error, which can only be an invocation failure. Callback
-    states put the timeout errors first with MaxAttempts 0 — Step Functions uses the FIRST
-    matching retrier, so a callback timeout falls through to the Catch instead of re-invoking
-    the pipeline while the original run may still be in flight — and retry only the transient
-    delivery faults, so an application failure the pipeline reported goes to the Catch.
+    Both kinds of state retry only TRANSIENT_DELIVERY_RETRYABLE_ERRORS, so a deterministic pipeline
+    failure (a Lambda function error, States.TaskFailed) goes straight to the Catch. Callback states
+    additionally put the timeout errors first with MaxAttempts 0 — Step Functions uses the FIRST
+    matching retrier, so a callback timeout falls through to the Catch instead of re-invoking the
+    pipeline while the original run may still be in flight.
     """
+    transient = create_retry_config(error_equals=list(TRANSIENT_DELIVERY_RETRYABLE_ERRORS))
     if wait_for_callback:
         return [
             {"ErrorEquals": list(CALLBACK_NON_RETRYABLE_ERRORS), "MaxAttempts": 0},
-            create_retry_config(error_equals=list(CALLBACK_TRANSIENT_RETRYABLE_ERRORS)),
+            transient,
         ]
-    return [create_retry_config()]
+    return [transient]
 
 
 def create_catch_config(
@@ -357,8 +361,9 @@ def update_state_machine(
     state_machine_arn: str,
     definition: Dict[str, Any],
     role_arn: str,
-    log_group_arn: str
-) -> None:
+    log_group_arn: str,
+    publish: bool = False
+) -> Optional[str]:
     """
     Update an existing Step Functions state machine.
     
@@ -368,10 +373,18 @@ def update_state_machine(
         definition: New ASL definition dictionary
         role_arn: ARN of the IAM role for the state machine
         log_group_arn: ARN of the CloudWatch log group
+        publish: also publish the updated revision as a new version, in the same request
+
+    Returns:
+        The published version ARN when publish is True, else None
     """
     definition_json = serialize_definition(definition)
-    
-    sf_client.update_state_machine(
+
+    kwargs = {}
+    if publish:
+        kwargs['publish'] = True
+
+    response = sf_client.update_state_machine(
         stateMachineArn=state_machine_arn,
         definition=definition_json,
         roleArn=role_arn,
@@ -386,8 +399,27 @@ def update_state_machine(
         },
         tracingConfiguration={
             'enabled': True
-        }
+        },
+        **kwargs
     )
+    if not publish:
+        return None
+    return (response or {}).get('stateMachineVersionArn')
+
+
+def publish_state_machine_version(sf_client, state_machine_arn: str) -> str:
+    """
+    Publish the current revision of a state machine as a new version.
+
+    Args:
+        sf_client: boto3 Step Functions client
+        state_machine_arn: ARN of the state machine
+
+    Returns:
+        The published version ARN
+    """
+    response = sf_client.publish_state_machine_version(stateMachineArn=state_machine_arn)
+    return response['stateMachineVersionArn']
 
 
 def format_s3_uri_with_states_format(

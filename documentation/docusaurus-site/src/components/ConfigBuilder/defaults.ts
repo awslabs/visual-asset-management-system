@@ -241,6 +241,11 @@ const COMMERCIAL: ConfigShape = {
                 enabled: false,
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: true,
+                computeTiers: {
+                    standard: { vcpu: 4, memoryGiB: 16 },
+                    large: { vcpu: 16, memoryGiB: 120 },
+                },
+                largeTierThresholdGiB: 2,
             },
             useConversionCadMeshMetadataExtraction: {
                 enabled: false,

@@ -457,6 +457,14 @@ class TestPipelineExecutionIdFromEventPrefix:
 
 @pytest.mark.unit
 class TestOpenPipelineRegistration:
+    @pytest.fixture(autouse=True)
+    def _standard_tier_without_s3(self):
+        """openPipeline sizes the input with HeadObject before it starts the state machine; pinning
+        the standard tier keeps these tests off Amazon S3 (tier selection has its own suite)."""
+        import computeTier
+        with patch.object(computeTier, "select_compute_tier", MagicMock(return_value="standard")):
+            yield
+
     def _load_module(self):
         if "openPipeline" in sys.modules:
             return importlib.reload(sys.modules["openPipeline"])

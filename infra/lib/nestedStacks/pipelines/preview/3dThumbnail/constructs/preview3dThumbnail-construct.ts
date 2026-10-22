@@ -45,6 +45,14 @@ export interface Preview3dThumbnailConstructProps extends cdk.StackProps {
 }
 
 /**
+ * Attempt bounds of the two compute-tier Batch jobs and the state machine that encloses them. The
+ * registered pipeline's `taskTimeout` (vamsSchema/pipeline.json) covers the state machine timeout.
+ */
+export const PREVIEW_3D_THUMBNAIL_STANDARD_TIER_TIMEOUT = Duration.hours(1);
+export const PREVIEW_3D_THUMBNAIL_LARGE_TIER_TIMEOUT = Duration.hours(3);
+export const PREVIEW_3D_THUMBNAIL_STATE_MACHINE_TIMEOUT = Duration.hours(4);
+
+/**
  * Default input properties
  */
 const defaultProps: Partial<Preview3dThumbnailConstructProps> = {
@@ -203,12 +211,16 @@ export class Preview3dThumbnailConstruct extends NestedStack {
         /**
          * AWS Batch Job Definition & Compute Env for Preview 3D Thumbnail Container
          */
+        const computeTiers = props.config.app.pipelines.usePreview3dThumbnail.computeTiers;
         const batchPipeline = new BatchFargatePipelineConstruct(
             this,
             "BatchFargatePipeline_Preview3dThumbnail",
             {
-                // Matches the 1-hour state machine timeout that encloses this job.
-                attemptDuration: cdk.Duration.hours(1),
+                // The longest tier's bound; each tier's Batch state sets its own attempt duration.
+                attemptDuration: PREVIEW_3D_THUMBNAIL_LARGE_TIER_TIMEOUT,
+                // Registered sizing; each tier's Batch state overrides vCPU and memory.
+                cpu: computeTiers.standard.vcpu,
+                memoryMiB: Config.fargateMemoryMiB(computeTiers.standard.memoryGiB),
                 config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
@@ -314,33 +326,62 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             resultPath: "$.error",
         });
 
-        // batch job Preview 3D Thumbnail
-        const preview3dThumbnailBatchJob = new tasks.BatchSubmitJob(
-            this,
-            "Preview3dThumbnailBatchJob",
-            {
+        // batch jobs Preview 3D Thumbnail, one per compute tier: the same job definition with the
+        // tier's vCPU, memory and attempt duration
+        const tierBatchJob = (
+            id: string,
+            tier: "standard" | "large",
+            sizing: { vcpu: number; memoryGiB: number },
+            timeout: Duration
+        ) =>
+            new tasks.BatchSubmitJob(this, id, {
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
                 jobDefinitionArn: batchPipeline.batchJobDefinition.jobDefinitionArn,
                 jobQueueArn: batchPipeline.batchJobQueue.jobQueueArn,
+                taskTimeout: sfn.Timeout.duration(timeout),
                 containerOverrides: {
                     command: [...sfn.JsonPath.listAt("$.definition")],
+                    vcpus: sizing.vcpu,
+                    memory: cdk.Size.mebibytes(Config.fargateMemoryMiB(sizing.memoryGiB)),
                     environment: {
                         TASK_TOKEN: sfn.JsonPath.taskToken,
                         AWS_REGION: region,
+                        VAMS_COMPUTE_TIER: tier,
                     },
                 },
-            }
-        )
-            .addCatch(handleBatchError, {
-                resultPath: "$.error",
             })
-            .next(pipeLineEndTask);
+                .addCatch(handleBatchError, {
+                    resultPath: "$.error",
+                })
+                .next(pipeLineEndTask);
+
+        // Construct ids are the ASL state names openPipeline registers the container log source under.
+        const preview3dThumbnailBatchJob = tierBatchJob(
+            "Preview3dThumbnailBatchJob",
+            "standard",
+            computeTiers.standard,
+            PREVIEW_3D_THUMBNAIL_STANDARD_TIER_TIMEOUT
+        );
+        const preview3dThumbnailLargeBatchJob = tierBatchJob(
+            "Preview3dThumbnailLargeBatchJob",
+            "large",
+            computeTiers.large,
+            PREVIEW_3D_THUMBNAIL_LARGE_TIER_TIMEOUT
+        );
+
+        // routes the job to the compute tier constructPipeline returns
+        const computeTierChoice = new sfn.Choice(this, "ComputeTierChoice")
+            .when(
+                sfn.Condition.stringEquals("$.computeTier", "large"),
+                preview3dThumbnailLargeBatchJob
+            )
+            .otherwise(preview3dThumbnailBatchJob);
 
         /**
          * SFN Definition
          */
         const sfnPipelineDefinition = sfn.Chain.start(
-            constructPipelineTask.next(preview3dThumbnailBatchJob)
+            constructPipelineTask.next(computeTierChoice)
         );
 
         /**
@@ -372,7 +413,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             "Preview3dThumbnailProcessing-StateMachine",
             {
                 definitionBody: sfn.DefinitionBody.fromChainable(sfnPipelineDefinition),
-                timeout: Duration.hours(1),
+                timeout: PREVIEW_3D_THUMBNAIL_STATE_MACHINE_TIMEOUT,
                 logs: {
                     destination: stateMachineLogGroup,
                     includeExecutionData: true,
@@ -422,6 +463,9 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                 jobDefinitionName: batchPipeline.batchJobDefinition.jobDefinitionName,
                 logGroup: containerLogGroup,
             },
+            Math.round(
+                props.config.app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB * 1024 ** 3
+            ),
             props.storageResources.encryption.kmsKey
         );
 
@@ -596,7 +640,9 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
-                        `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                        {
+                            regex: "/^Resource::arn:<AWS::Partition>:batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job-definition\\/\\*$/g",
+                        },
                         { regex: "/^Resource::arn:.*:batch:.*:job/\\*$/g" },
                         {
                             regex: "/^Resource::<.*Function.*.Arn>:.*$/g",

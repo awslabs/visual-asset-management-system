@@ -636,16 +636,17 @@ class TestUnarchiveRegistration:
 
 @pytest.mark.unit
 class TestExecutionConfigChangeWarning:
-    """The pipeline execution target is baked into each referencing workflow's deployed state machine
-    at workflow-save time, so an executionConfig change surfaces a non-blocking warning naming the
-    workflows that must be saved again."""
+    """The pipeline execution target is baked into each referencing workflow's deployed state machine,
+    so an executionConfig change schedules a redeploy of those workflows and returns a non-blocking
+    warning saying how many are being redeployed."""
 
+    @patch(f"{MOD}.lambda_client")
     @patch(f"{MOD}._workflow_table")
     @patch(f"{MOD}._pipeline_table")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
-    def test_execution_config_change_warns_about_referencing_workflows(
-            self, mock_enforcer, mock_claims, mock_table, mock_wf_table):
+    def test_execution_config_change_reports_the_redeploy(
+            self, mock_enforcer, mock_claims, mock_table, mock_wf_table, mock_lambda):
         mock_claims.return_value = {"tokens": ["user1"]}
         mock_enforcer.return_value = _enforcer()
         table = MagicMock()
@@ -660,24 +661,28 @@ class TestExecutionConfigChangeWarning:
             "specifiedPipelines": [{"pipelineDatabaseId:pipelineId": "db1:pipe1"}],
         }]}
         mock_wf_table.return_value = wf_table
-        resp = lambda_handler(
-            _event("PUT", "/database/db1/pipelines/pipe1",
-                   {"databaseId": "db1", "pipelineId": "pipe1"},
-                   {"executionConfig": {"executionType": "Lambda",
-                                        "lambda": {"resourceId": "vams-new"}}}), MagicMock())
+        with patch(f"{MOD}.workflow_service_function", "t-workflow-service"):
+            resp = lambda_handler(
+                _event("PUT", "/database/db1/pipelines/pipe1",
+                       {"databaseId": "db1", "pipelineId": "pipe1"},
+                       {"executionConfig": {"executionType": "Lambda",
+                                            "lambda": {"resourceId": "vams-new"}}}), MagicMock())
         assert resp["statusCode"] == 200
         warnings = json.loads(resp["body"])["warnings"]
-        assert any("db1:wf1" in w for w in warnings)
+        assert any("1 referencing workflow(s) are being redeployed" in w for w in warnings), warnings
+        assert not any("save each workflow again" in w for w in warnings), warnings
+        assert mock_lambda.invoke.call_args.kwargs["InvocationType"] == "Event"
         # The referencing-workflow lookup queries the by-date GSI; it never scans the table.
         wf_table.scan.assert_not_called()
         assert wf_table.query.call_args.kwargs["IndexName"] == "WorkflowsByDateGSI"
 
+    @patch(f"{MOD}.lambda_client")
     @patch(f"{MOD}._workflow_table")
     @patch(f"{MOD}._pipeline_table")
     @patch(f"{MOD}.request_to_claims")
     @patch(f"{MOD}.CasbinEnforcer")
     def test_unchanged_execution_config_does_not_warn(self, mock_enforcer, mock_claims, mock_table,
-                                                      mock_wf_table):
+                                                      mock_wf_table, mock_lambda):
         mock_claims.return_value = {"tokens": ["user1"]}
         mock_enforcer.return_value = _enforcer()
         config = {"executionType": "Lambda", "lambda": {"resourceId": "vams-old"}}
@@ -692,12 +697,14 @@ class TestExecutionConfigChangeWarning:
             "specifiedPipelines": [{"pipelineDatabaseId:pipelineId": "db1:pipe1"}],
         }]}
         mock_wf_table.return_value = wf_table
-        resp = lambda_handler(
-            _event("PUT", "/database/db1/pipelines/pipe1",
-                   {"databaseId": "db1", "pipelineId": "pipe1"},
-                   {"executionConfig": dict(config)}), MagicMock())
+        with patch(f"{MOD}.workflow_service_function", "t-workflow-service"):
+            resp = lambda_handler(
+                _event("PUT", "/database/db1/pipelines/pipe1",
+                       {"databaseId": "db1", "pipelineId": "pipe1"},
+                       {"executionConfig": dict(config)}), MagicMock())
         assert resp["statusCode"] == 200
         assert "warnings" not in json.loads(resp["body"])
+        mock_lambda.invoke.assert_not_called()
 
 
 @pytest.mark.unit

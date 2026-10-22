@@ -127,10 +127,16 @@ infra/
                                  # (/aws/vendedlogs/Pipelines/* container group)
     pipelines/t1LambdaContainerImageArchitecture.test.ts  # T1: every PackageType Image Lambda function
                                  # (3dBasic, CAD/mesh extraction) declares Architectures [x86_64]
+    pipelines/preview3dThumbnailComputeTiers.test.ts  # 3D thumbnail tiers: one job definition, the
+                                 # Choice, per-tier vCPU/memory overrides, VAMS_COMPUTE_TIER, timeouts
+    config/preview3dThumbnailComputeTierValidation.test.ts  # getConfig() Fargate-size + threshold checks
+    pipelines/batchJobDefinitionNagSuppression.test.ts  # cdk-nag on the 3D thumbnail construct with and
+                                 # without an account: SubmitJob on job-definition/* stays suppressed;
+                                 # no pipeline construct interpolates the account into that appliesTo
     support/asl.ts               # parseAsl + lambda-env / job-definition-name / declared-stage-name helpers
                                  # joining a producer's *_STATE_NAME literals to the synthesized ASL
     support/pipelineConstructHarness.ts  # One-pipeline synth harness (stack, VPC, storage stubs, EFS/ECR imports)
-                                 # for per-construct assertions
+                                 # for per-construct assertions; `unresolvedAccount` synthesizes with no account
     support/templateSynth.ts     # T1 harness: synthesizes the whole app from each shipped config
                                  # template with no Docker daemon; exposes every nested template
     t1PartitionPortability.test.ts  # T1 assertions across commercial/govcloud/eusovereign
@@ -280,6 +286,8 @@ suppressCdkNagErrorsByGrantReadWrite(scope); // 5. Only if using grantRead/grant
 -   **`suppressCdkNagLambda`**: Standard per-Lambda IAM4/IAM5 suppressions (AWSLambdaBasicExecutionRole, AWSLambdaVPCAccessExecutionRole, wildcard KMS), scoped to the function.
 -   **`suppressCdkNagErrorsByGrantReadWrite`**: Suppresses AwsSolutions-IAM5 for S3 and resource wildcards.
 -   **`suppressCdkNagLambdaFrameworkResources`**: Called once on the core stack. Applies IAM4/IAM5 suppressions to CDK-generated framework roles (custom-resource providers, bucket deployments, `AwsCustomResource`) and VAMS custom-resource roles that the per-function helper cannot reach.
+
+**Workflow service internal-action invoke.** `grantWorkflowServiceInternalInvoke` (`lambdaBuilder/workflowFunctions.ts`) gives the two callers of the workflow service's internal redeploy actions, `pipelineService` and `executeWorkflow`, `lambda:InvokeFunction` on the workflow service's exact `functionArn` in an explicit `PolicyStatement`, and passes the target's name as env `WORKFLOW_SERVICE_V2_FUNCTION_NAME`. This grant is written out instead of using `grantInvoke()`, which also grants `{functionArn}:*` (every version and alias): the internal actions have no API Gateway authorizer in front of them, so this IAM grant and the handler's `SYSTEM_USER` cross-call check are their whole boundary, and the grant names only the ARN the callers invoke. Neither caller gets a Step Functions or `iam:PassRole` grant, since the workflow service deploys with its own role. `test/security/workflowLambdaGrants.test.ts` pins both, together with the workflow service's `states:PublishStateMachineVersion` / `ListStateMachineVersions` / `DeleteStateMachineVersion` grants. Other Lambda-to-Lambda grants in `infra/lib` use `grantInvoke()`.
 
 ---
 
