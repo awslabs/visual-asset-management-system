@@ -1255,7 +1255,9 @@ is checked against, and it is authored rather than derived from the pipeline:
     receives the selected files plus every file the earlier steps wrote, narrowed by its own filters
     when the run reaches it, so a later step may accept only the type an earlier step produces. A
     single-file later step whose filters admit both the selected type and an earlier step's output type
-    is handed two files and fails at that step; the workflow editor warns about it while saving.
+    is handed two files and fails at that step; the workflow editor warns about it while saving. When
+    two or more selected files already pass a single-file later step's filters, the API rejects the
+    execution at launch.
 
 -   **`outputTarget`** is `{ "locationType": "asset" | "none", "allowOverride": boolean }` and decides
     where a run writes. `asset` (the default) writes the run's output files and metadata to a VAMS asset.

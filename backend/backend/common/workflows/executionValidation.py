@@ -573,7 +573,8 @@ def validate_execution(
 
     - workflow_system_config: WorkflowRecordV2['systemConfig'].
     - pipeline_effective_configs: list in workflow step order (the first entry is step 1, the only one
-      judged on filters and arity — see _evaluate); each {pipelineId, pipelineDatabaseId, enabled,
+      judged on filters and arity, apart from a single-file later step the selection alone overfills;
+      see _evaluate); each {pipelineId, pipelineDatabaseId, enabled,
       archived, systemConfig{...}} with the chosen template's overrides already merged
       (resolve_effective_pipeline_config).
     - selected_inputs: execute-request inputFiles[] ({databaseId, assetId, relativeFileKey, versionId}).

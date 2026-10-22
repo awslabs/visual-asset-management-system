@@ -290,7 +290,8 @@ export interface PipelineInputConstraints {
  * Workflow-level and per-pipeline checks on the selected input files. Returns the human-readable
  * errors the launch would otherwise fail on, plus the incomplete-row check the request model
  * enforces (an asset and a file must both be chosen). `pipelineConstraints` must be in workflow step
- * order: the first entry is the only step whose filters and arity are judged against the selection.
+ * order: the first entry is the only step whose filters and arity are judged against the selection,
+ * apart from a single-file later step the selection alone already gives two or more files.
  */
 export function validateInputSelection(
     workflowSystemConfig: WorkflowSystemConfig | undefined,
