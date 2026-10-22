@@ -1410,8 +1410,9 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         if 'NextContinuationToken' in page:
             result['NextToken'] = page['NextContinuationToken']
         
-        # If include_archived is True, also get objects with delete markers
-        if include_archived:
+        # If include_archived is True, also get objects with delete markers. The archived entries
+        # are not part of the S3 continuation token, so they are listed once, on the first page.
+        if include_archived and not query_params.get('startingToken'):
             logger.info("Including archived files with delete markers")
             # Use list_object_versions to get delete markers
             try:
@@ -1435,6 +1436,11 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                     # Process delete markers
                     for marker in page.get('DeleteMarkers', []):
                         key = marker['Key']
+                        
+                        # Only a delete marker that is the key's current version archives the
+                        # file; an older marker belongs to a file that was restored since
+                        if not marker.get('IsLatest', False):
+                            continue
                         
                         # Skip if we already have this key in our results
                         if key in existing_keys:
