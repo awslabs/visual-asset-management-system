@@ -80,7 +80,9 @@ class TestPreviewOnTheNextPage:
             second = _page(af, 1, first.NextToken)
 
         assert second.items == []  # the page held only a.glb's preview
-        assert not any("orphaned" in str(call) for call in mock_logger.warning.call_args_list)
+        # The listing logs on every page, so a patch that missed the handler cannot pass silently.
+        assert mock_logger.mock_calls
+        assert not any("orphaned" in str(call) for call in mock_logger.mock_calls)
 
     def test_a_preview_without_its_base_file_is_still_reported_orphaned(self, af):
         """NEGATIVE CONTROL: a preview whose base file does not exist is still logged."""
