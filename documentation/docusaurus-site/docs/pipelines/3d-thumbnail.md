@@ -78,6 +78,7 @@ flowchart LR
     subgraph Workflow["AWS Step Functions Workflow"]
         VE[vamsExecute Lambda]
         CP[constructPipeline Lambda]
+        CT{Compute tier<br/>standard or large}
         PE[pipelineEnd Lambda]
     end
 
@@ -93,7 +94,8 @@ flowchart LR
     S3Out[(Asset Bucket<br/>Preview Files)]
 
     VE --> CP
-    CP --> DL
+    CP --> CT
+    CT --> DL
     S3In --> DL
     DL --> Load
     Load --> Render
@@ -150,7 +152,12 @@ Enable this pipeline in `infra/config/config.json`:
             "usePreview3dThumbnail": {
                 "enabled": true,
                 "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true
+                "autoRegisterAutoTriggerOnFileUpload": true,
+                "computeTiers": {
+                    "standard": { "vcpu": 4, "memoryGiB": 16 },
+                    "large": { "vcpu": 16, "memoryGiB": 120 }
+                },
+                "largeTierThresholdGiB": 2
             }
         }
     }
@@ -159,13 +166,18 @@ Enable this pipeline in `infra/config/config.json`:
 
 ### Configuration Options
 
-| Option                                | Default | Description                                                                           |
-| ------------------------------------- | ------- | ------------------------------------------------------------------------------------- |
-| `enabled`                             | `false` | Deploy the 3D thumbnail pipeline infrastructure. Requires `app.useGlobalVpc.enabled`. |
-| `autoRegisterWithVAMS`                | `true`  | Automatically register the pipeline and workflow during CDK deployment.               |
-| `autoRegisterAutoTriggerOnFileUpload` | `true`  | Automatically trigger the pipeline when supported 3D files are uploaded.              |
+| Option                                | Default | Description                                                                                                         |
+| ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                             | `false` | Deploy the 3D thumbnail pipeline infrastructure. Requires `app.useGlobalVpc.enabled`.                               |
+| `autoRegisterWithVAMS`                | `true`  | Automatically register the pipeline and workflow during CDK deployment.                                             |
+| `autoRegisterAutoTriggerOnFileUpload` | `true`  | Automatically trigger the pipeline when supported 3D files are uploaded.                                            |
+| `computeTiers.standard.vcpu`          | `4`     | AWS Fargate vCPU of the standard tier, which runs inputs below the large-tier threshold.                            |
+| `computeTiers.standard.memoryGiB`     | `16`    | Memory (GiB) of the standard tier. Must be a size AWS Fargate supports for the tier's vCPU.                         |
+| `computeTiers.large.vcpu`             | `16`    | AWS Fargate vCPU of the large tier, which runs inputs at or above the large-tier threshold.                         |
+| `computeTiers.large.memoryGiB`        | `120`   | Memory (GiB) of the large tier. Must be a size AWS Fargate supports for the tier's vCPU.                            |
+| `largeTierThresholdGiB`               | `2`     | Input size (GiB) at or above which a run takes the large tier when its `computeTier` parameter is `auto`. Positive. |
 
-The defaults are the values the shipped config templates carry. A pipeline block that omits a flag still registers the pipeline (`autoRegisterWithVAMS` falls back to `true`) but leaves the upload trigger off (`autoRegisterAutoTriggerOnFileUpload` falls back to `false`); see the [Configuration Reference](../deployment/configuration-reference.md).
+The defaults are the values the shipped config templates carry. A pipeline block that omits a flag still registers the pipeline (`autoRegisterWithVAMS` falls back to `true`) but leaves the upload trigger off (`autoRegisterAutoTriggerOnFileUpload` falls back to `false`), and an omitted `computeTiers` or `largeTierThresholdGiB` takes the values in this table; see the [Configuration Reference](../deployment/configuration-reference.md).
 
 :::warning[License Notice]
 This pipeline is disabled by default because it depends on libraries with LGPL licenses: Open CASCADE, which CadQuery uses for STEP file support, and the casadi and nlopt solvers that CadQuery requires. Reading a STEP file also loads the native libraries that the cadquery-ocp wheel bundles with Open CASCADE, among them JBIG-KIT (GPL-2.0-or-later), FreeImage (GPL or the FreeImage Public License) and LibRaw (LGPL-2.1 or CDDL-1.0); `NOTICE.md` lists them all. It also contains MPL-2.0 code: the certifi and tqdm packages and the Eigen library compiled into open3d. Review `requirements.lock` (every Python package, pinned) and `splat-transform/package-lock.json` (the Node.js packages) in the container directory and consult your legal team before enabling this pipeline. Other format handlers use MIT-licensed or Apache-licensed libraries.
@@ -173,40 +185,55 @@ This pipeline is disabled by default because it depends on libraries with LGPL l
 
 ## Input Parameters
 
-Parameters reach the pipeline through the template selected for the run. Deployment registers the `preview-3d-thumbnail-default` template, whose configuration body carries the parameters below and declares the two tags that the execute screen prompts for.
+Parameters reach the pipeline through the template selected for the run. Deployment registers the `preview-3d-thumbnail-default` template, whose configuration body carries the parameters below and declares the three tags that the execute screen prompts for.
 
 | Parameter                       | Template tag                       | Type    | Default | Description                                                                                                                                                                                                |
 | ------------------------------- | ---------------------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `overwriteExistingPreviewFiles` | `OVERWRITE_EXISTING_PREVIEW_FILES` | boolean | `true`  | When `true`, regenerates preview files even if they already exist for the input file. When `false`, the pipeline skips files that already have a preview.                                                  |
 | `outputType`                    | `OUTPUT_TYPE`                      | enum    | `auto`  | The preview file format written for the input file. `auto` writes an animated GIF when the renderer produces several frames and a JPG otherwise; `gif`, `jpg` and `png` write that format for every input. |
+| `computeTier`                   | `COMPUTE_TIER`                     | enum    | `auto`  | The compute tier the job runs on. `auto` chooses by input size (see [Compute and limits](#compute-and-limits)); `standard` and `large` run that tier for every input.                                      |
 
 ### Template configuration body
 
 ```json
 {
     "overwriteExistingPreviewFiles": {{OVERWRITE_EXISTING_PREVIEW_FILES}},
-    "outputType": "{{OUTPUT_TYPE}}"
+    "outputType": "{{OUTPUT_TYPE}}",
+    "computeTier": "{{COMPUTE_TIER}}"
 }
 ```
 
-`{{OVERWRITE_EXISTING_PREVIEW_FILES}}` and `{{OUTPUT_TYPE}}` are template tags: the execute screen presents the first as a checkbox and the second as a list of the supported formats, and substitutes both values before the pipeline receives the configuration. The template also allows per-run edits, so a single run can supply a replacement body without changing the registered template.
+`{{OVERWRITE_EXISTING_PREVIEW_FILES}}`, `{{OUTPUT_TYPE}}` and `{{COMPUTE_TIER}}` are template tags: the execute screen presents the first as a checkbox and the other two as lists of their values, and substitutes all three before the pipeline receives the configuration. The template also allows per-run edits, so a single run can supply a replacement body without changing the registered template. A body without `computeTier` is treated as `auto`.
 
-## Limits and Constraints
+## Compute and limits
 
-| Constraint                  | Value                                                                      |
-| --------------------------- | -------------------------------------------------------------------------- |
-| Maximum input file size     | The free space of the work volume, less 1 GiB kept for the output          |
-| Container ephemeral storage | 200 GiB                                                                    |
-| Point budget                | 5 million per vCPU, at most 20 million (and 35% of the memory limit)       |
-| Triangle budget             | 5 million per vCPU, at most 30 million (and 35% of the memory limit)       |
-| Splat budget                | 1 million per vCPU, at most 5 million (and 35% of the memory limit)        |
-| Task size                   | 16 vCPU and 64 GiB of memory on AWS Fargate                                |
-| Run time                    | 1 hour per job (AWS Batch attempt duration and AWS Step Functions timeout) |
-| Gaussian splat conversion   | 30 minutes                                                                 |
-| Preview file size           | 5 MiB                                                                      |
-| Rendering method            | CPU-based (Mesa llvmpipe, one rasteriser thread per vCPU; no GPU)          |
+Each run executes on one of two AWS Fargate sizes, both submitted from one AWS Batch job definition. Before the state machine starts, the pipeline's `openPipeline` Lambda reads the input file's size with an Amazon S3 `HeadObject` call and picks the tier; a `Choice` state then routes the job to that tier's Batch state, which overrides the job's vCPU and memory and sets the container environment variable `VAMS_COMPUTE_TIER` to `standard` or `large`.
 
-The container reads its memory limit and vCPU count from its cgroup and derives the budgets from them, so it stays within whichever task size runs it. At the shipped task size the budgets are 20 million points, 30 million triangles and 5 million splats. Each budget has a floor (1 million points, 1 million triangles, 250,000 splats) that applies on a task too small to reach it.
+| Tier       | Runs                                                 | vCPU (default) | Memory (default) | Attempt duration |
+| ---------- | ---------------------------------------------------- | -------------- | ---------------- | ---------------- |
+| `standard` | inputs below `largeTierThresholdGiB` (default 2 GiB) | 4              | 16 GiB           | 1 hour           |
+| `large`    | inputs at or above `largeTierThresholdGiB`           | 16             | 120 GiB          | 3 hours          |
+
+-   **Choosing the tier.** A run's `computeTier` parameter forces a tier; `auto` (the default) leaves the choice to the input size. When the input size cannot be read, the run uses the standard tier and logs a warning.
+-   **Sizing.** vCPU and memory are configured per tier (see [Configuration Options](#configuration-options)). Deployment validates each pair against the AWS Fargate Linux task sizes (4 vCPU: 8–30 GiB in 1 GiB steps; 8 vCPU: 16–60 GiB in 4 GiB steps; 16 vCPU: 32–120 GiB in 8 GiB steps), because AWS Batch checks an override only when a job is submitted.
+-   **Time bounds.** The attempt durations are fixed. The pipeline's state machine times out after 4 hours and the registered pipeline's task timeout is 14,400 seconds, so neither gives up on a large-tier job that AWS Batch still allows to run.
+-   **Ephemeral storage.** Both tiers have 200 GiB, the AWS Fargate maximum; ephemeral storage is a property of the job definition and cannot be overridden per job.
+-   **Concurrency.** The Fargate compute environment allows 256 vCPU at a time, so up to 64 standard-tier jobs or 16 large-tier jobs run at once; further jobs wait in the job queue. The account's AWS Fargate vCPU quota in the Region also applies.
+
+| Constraint                  | Value                                                                               |
+| --------------------------- | ----------------------------------------------------------------------------------- |
+| Maximum input file size     | The free space of the work volume, less 1 GiB kept for the output                   |
+| Container ephemeral storage | 200 GiB                                                                             |
+| Point budget                | 5 million per vCPU, at most 20 million (and 35% of the memory limit)                |
+| Triangle budget             | 5 million per vCPU, at most 30 million (and 35% of the memory limit)                |
+| Splat budget                | 1 million per vCPU, at most 5 million (and 35% of the memory limit)                 |
+| Task size                   | The run's tier (default 4 vCPU and 16 GiB, or 16 vCPU and 120 GiB, on AWS Fargate)  |
+| Run time                    | 1 hour on the standard tier, 3 hours on the large tier (AWS Batch attempt duration) |
+| Gaussian splat conversion   | 30 minutes                                                                          |
+| Preview file size           | 5 MiB                                                                               |
+| Rendering method            | CPU-based (Mesa llvmpipe, one rasteriser thread per vCPU; no GPU)                   |
+
+The container reads its memory limit and vCPU count from its cgroup and derives the budgets from them, so it stays within whichever task size runs it. At the default tier sizes the budgets are 20 million points, 20 million triangles and 4 million splats on the standard tier, and 20 million points, 30 million triangles and 5 million splats on the large tier. Each budget has a floor (1 million points, 1 million triangles, 250,000 splats) that applies on a task too small to reach it.
 
 -   **Point clouds** -- A point cloud above the point budget is sampled while it is read (E57 scan by scan, PTX and PTS streamed from Amazon S3 with no local copy).
 -   **Meshes** -- A mesh above the triangle budget is decimated with VTK quadric clustering.

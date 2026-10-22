@@ -660,7 +660,9 @@ export class Metadata3dLabelingConstruct extends NestedStack {
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
-                        `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                        {
+                            regex: "/^Resource::arn:<AWS::Partition>:batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job-definition\\/\\*$/g",
+                        },
                         { regex: "/^Resource::arn:.*:batch:.*:job/\\*$/g" },
                         {
                             regex: "/^Resource::<.*Function.*.Arn>:.*$/g",

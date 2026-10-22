@@ -2715,6 +2715,41 @@ def _enrich_output_files_with_asset_versions(output_files, execution_id, config_
     return output_files
 
 
+def _state_machine_version_number(version_arn):
+    """arn:p:states:r:a:stateMachine:<machine>:<n> -> n; None for an unqualified state machine ARN, an
+    alias ARN, or any value that is not a published version ARN."""
+    parts = version_arn.split(":") if isinstance(version_arn, str) else []
+    if len(parts) != 8 or parts[2] != "states" or parts[5] != "stateMachine":
+        return None
+    number = parts[7]
+    if not (number.isascii() and number.isdigit()):
+        return None
+    return int(number)
+
+
+def _workflow_version_fields(main_item, workflow_def):
+    """The published state machine version the run started on, as the detail view reports it.
+
+    workflowVersion is the number from the execution row's workflowVersionArn: None for a run started
+    on the unqualified state machine ARN, or a stored value that does not parse. workflowVersionCurrent
+    compares that ARN with the workflow record's current workflowVersionArn: True or False when both
+    are recorded, None when either is missing. A False means the workflow's state machine has been
+    redeployed since the run: every save from the workflow builder redeploys it, as does an API or CLI
+    update that supplies the step list, and so does a change to a setting a step's pipeline contributes
+    to the state machine. It says nothing about workflowSystemConfig or the pipeline names and
+    descriptions, which are read live and change without a redeploy; each step's effectiveSystemConfig
+    is the snapshot it ran under. The ARNs themselves are not returned: like every other ARN this view
+    omits, they carry the account id and Region."""
+    run_arn = main_item.get('workflowVersionArn') or ''
+    current_arn = (workflow_def or {}).get('workflowVersionArn') or ''
+    run_arn = run_arn if isinstance(run_arn, str) else ''
+    current_arn = current_arn if isinstance(current_arn, str) else ''
+    return {
+        "workflowVersion": _state_machine_version_number(run_arn),
+        "workflowVersionCurrent": (run_arn == current_arn) if run_arn and current_arn else None,
+    }
+
+
 def assemble_execution_details(execution_id, main_item, config_row=None, include_sub_executions=False):
     """Assemble the full, traceability-focused detail view for an execution.
 
@@ -2761,6 +2796,7 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
     and the execution history; that view pages Step Functions history, so it is opt-in."""
     workflow_def = get_workflow_definition(
         main_item.get('workflowDatabaseId', ''), main_item.get('workflowId', ''))
+    workflow_version = _workflow_version_fields(main_item, workflow_def)
 
     # Per-pipeline rows, with name/description cross-fetched (cache by pipeline key).
     pipeline_rows = get_pipeline_execution_rows(execution_id)
@@ -3067,6 +3103,10 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
         # Human-readable name for UI display (breadcrumbs/headers); falls back to the id downstream.
         "workflowName": workflow_def.get('workflowName', ''),
         "workflowDescription": workflow_def.get('description', ''),
+        # The published state machine version the run started on, and whether it is still the
+        # workflow's current deployment (see _workflow_version_fields).
+        "workflowVersion": workflow_version["workflowVersion"],
+        "workflowVersionCurrent": workflow_version["workflowVersionCurrent"],
         # The workflow's systemConfig as it stands NOW. The workflow-level settings are the outer gate
         # of the workflow -> pipeline -> template chain; each pipeline step's own resolved settings are
         # snapshotted per step (see effectiveSystemConfig on each pipeline entry). This one is read live

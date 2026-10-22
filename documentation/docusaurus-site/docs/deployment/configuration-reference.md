@@ -689,11 +689,18 @@ Generates animated GIF and static PNG or JPEG preview thumbnails from 3D mesh, p
 Nested stack: `infra/lib/nestedStacks/pipelines/preview/3dThumbnail/preview3dThumbnailBuilder-nestedStack.ts` (`Preview3dThumbnailBuilderNestedStack`) — AWS Batch on Fargate.
 :::
 
-| Field                                                                     | Type    | Default | Description                                                                           |
-| ------------------------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------- |
-| `app.pipelines.usePreview3dThumbnail.enabled`                             | boolean | `false` | Enables the 3D preview thumbnail pipeline.                                            |
-| `app.pipelines.usePreview3dThumbnail.autoRegisterWithVAMS`                | boolean | `true`  | Automatically registers the pipeline during deployment.                               |
-| `app.pipelines.usePreview3dThumbnail.autoRegisterAutoTriggerOnFileUpload` | boolean | `true`  | Automatically triggers the pipeline on file uploads matching supported 3D file types. |
+| Field                                                                     | Type    | Default | Description                                                                                                                                                             |
+| ------------------------------------------------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.pipelines.usePreview3dThumbnail.enabled`                             | boolean | `false` | Enables the 3D preview thumbnail pipeline.                                                                                                                              |
+| `app.pipelines.usePreview3dThumbnail.autoRegisterWithVAMS`                | boolean | `true`  | Automatically registers the pipeline during deployment.                                                                                                                 |
+| `app.pipelines.usePreview3dThumbnail.autoRegisterAutoTriggerOnFileUpload` | boolean | `true`  | Automatically triggers the pipeline on file uploads matching supported 3D file types.                                                                                   |
+| `app.pipelines.usePreview3dThumbnail.computeTiers.standard.vcpu`          | number  | `4`     | AWS Fargate vCPU of the standard compute tier, which runs inputs below `largeTierThresholdGiB`. One of 0.25, 0.5, 1, 2, 4, 8 or 16.                                     |
+| `app.pipelines.usePreview3dThumbnail.computeTiers.standard.memoryGiB`     | number  | `16`    | Memory (GiB) of the standard compute tier. Must be a size AWS Fargate supports for the tier's vCPU (4 vCPU: 8–30 GiB in 1 GiB steps).                                   |
+| `app.pipelines.usePreview3dThumbnail.computeTiers.large.vcpu`             | number  | `16`    | AWS Fargate vCPU of the large compute tier, which runs inputs at or above `largeTierThresholdGiB`. One of 0.25, 0.5, 1, 2, 4, 8 or 16.                                  |
+| `app.pipelines.usePreview3dThumbnail.computeTiers.large.memoryGiB`        | number  | `120`   | Memory (GiB) of the large compute tier. Must be a size AWS Fargate supports for the tier's vCPU (8 vCPU: 16–60 GiB in 4 GiB steps; 16 vCPU: 32–120 GiB in 8 GiB steps). |
+| `app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB`               | number  | `2`     | Input size (GiB) at or above which a run takes the large compute tier, unless the run's `computeTier` parameter forces one. Must be positive.                           |
+
+When the pipeline is enabled, deployment rejects a tier whose vCPU and memory are not an AWS Fargate Linux task size, and a non-positive threshold; AWS Batch would otherwise accept the deployment and fail every job routed to that tier at submit time. Absent fields take the defaults above. The tiers' attempt durations (standard 1 hour, large 3 hours) and the 4-hour state machine timeout are fixed. See [3D Preview Thumbnail: Compute and limits](../pipelines/3d-thumbnail.md#compute-and-limits).
 
 ### GenAI metadata labeling (`app.pipelines.useGenAiMetadata3dLabeling`)
 

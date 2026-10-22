@@ -498,7 +498,9 @@ export class CoordinateTransformConstruct extends Construct {
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
-                        `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                        {
+                            regex: "/^Resource::arn:<AWS::Partition>:batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job-definition\\/\\*$/g",
+                        },
                         { regex: "/^Resource::<.*Function.*.Arn>:.*$/g" },
                         { regex: "/^Action::s3:.*$/g" },
                     ],
