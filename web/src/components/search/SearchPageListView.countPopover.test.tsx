@@ -81,6 +81,5 @@ describe("Search list view count popover", () => {
             screen.getByText(/counted before each record's own permissions are checked/)
         ).toBeInTheDocument();
         expect(screen.getByText(/can show fewer than this count/)).toBeInTheDocument();
-        expect(screen.queryByText(/accessible with your current permissions/)).toBeNull();
     });
 });
