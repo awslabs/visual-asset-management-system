@@ -33,6 +33,15 @@ describe("ResizableSplitter", () => {
         expect(separator).toHaveAttribute("tabindex", "0");
     });
 
+    it("names the pane it sizes and announces its width in pixels", () => {
+        const { separator, leftPanel } = mount();
+        expect(leftPanel.id).not.toBe("");
+        expect(separator).toHaveAttribute("aria-controls", leftPanel.id);
+        expect(separator).toHaveAttribute("aria-valuetext", "300 pixels");
+        fireEvent.keyDown(separator, { key: "End" });
+        expect(separator).toHaveAttribute("aria-valuetext", "600 pixels");
+    });
+
     it("widens and narrows the left panel with the arrow keys", () => {
         const { separator, leftPanel, onWidthChange } = mount();
         separator.focus();
