@@ -197,14 +197,6 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
                 viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
             },
 
-            errorResponses: [
-                {
-                    httpStatus: 404,
-                    ttl: cdk.Duration.hours(0),
-                    responseHttpStatus: 200,
-                    responsePagePath: "/index.html",
-                },
-            ],
             defaultRootObject: "index.html",
             webAclId: props.webAcl != "" ? props.webAcl : undefined,
             minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021, // Required by security
