@@ -407,8 +407,8 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                 })
                 .catch((error) => {
                     console.error(error);
-                    // Access is unknown: "/" still renders, and every other route shows the
-                    // could-not-check panel with Retry instead of falling through to "/".
+                    // Access is unknown: "/" renders, and every other route shows the
+                    // could-not-check panel with Retry.
                     setRoutesCheckFailed(true);
                     setLoading(false);
                 });
