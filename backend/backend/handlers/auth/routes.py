@@ -211,9 +211,11 @@ def check_web_routes(event):
         if denial_audit is not None:
             denial_audit.flush()
 
+    user_id = claims_and_roles["tokens"][0] if claims_and_roles["tokens"] else ""
     response_model = CheckWebRoutesResponseModel(
         allowedRoutes=allowed_routes,
-        email=claims_and_roles["tokens"][0] if claims_and_roles["tokens"] else "",
+        email=user_id,
+        userId=user_id,
     )
     return success(body=response_model.dict())
 

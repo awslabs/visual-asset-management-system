@@ -9448,15 +9448,20 @@ components:
             required:
                 - allowedRoutes
                 - email
+                - userId
             properties:
               allowedRoutes:
                 type: array
                 description: "The submitted routes the requesting user is allowed to access."
                 items:
                     $ref: "#/components/schemas/allowedRoute"
+              userId:
+                type: string
+                description: "Requesting user's id; empty when no identity could be resolved."
               email:
                 type: string
-                description: "Requesting user's identity; empty when no identity could be resolved."
+                deprecated: true
+                description: "Deprecated: the same value as userId (the user id, which need not be an email address). Read userId instead."
         auth_routes:
             type: object
             properties:

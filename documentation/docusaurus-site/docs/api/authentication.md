@@ -215,7 +215,7 @@ Each entry in `routes` is an object carrying the HTTP method and the web route p
 
 **Response:**
 
-`allowedRoutes` contains only the submitted routes the user may access; `email` is the requesting user's identity.
+`allowedRoutes` contains only the submitted routes the user may access; `userId` is the requesting user's id. `email` is deprecated: it carries the same user id, which need not be an email address, and is kept for older clients.
 
 ```json
 {
@@ -223,7 +223,8 @@ Each entry in `routes` is an object carrying the HTTP method and the web route p
         { "method": "GET", "route__path": "/databases", "object__type": "web" },
         { "method": "GET", "route__path": "/assets", "object__type": "web" }
     ],
-    "email": "user@example.com"
+    "email": "jdoe",
+    "userId": "jdoe"
 }
 ```
 
