@@ -519,7 +519,7 @@ export default function ModifyAssetsUploadsPage() {
                                         <Alert header="File Upload Restrictions" type="warning">
                                             <SpaceBetween direction="vertical" size="xs">
                                                 <div>
-                                                    {`This ${Synonyms.database} has file upload restrictions in place.`}
+                                                    {`This ${Synonyms.database} has file upload restrictions in place.`}{" "}
                                                     Only files with the following extensions are
                                                     allowed:
                                                 </div>
@@ -602,7 +602,7 @@ export default function ModifyAssetsUploadsPage() {
                                                     <li>
                                                         You cannot upload a preview file for a file
                                                         that is not part of this upload or is
-                                                        already
+                                                        already{" "}
                                                         {`uploaded as part of the ${Synonyms.asset}.`}
                                                     </li>
                                                     <li>
