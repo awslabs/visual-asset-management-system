@@ -5,7 +5,8 @@
 
 import React, { useEffect } from "react";
 import { useState } from "react";
-import { Button, SideNavigation, Spinner } from "@cloudscape-design/components";
+import { SideNavigation, Spinner } from "@cloudscape-design/components";
+import Button from "@cloudscape-design/components/button";
 import { checkWebRoutesAllowed } from "../services/webRoutesCheck";
 import config from "../config";
 import Synonyms from "../synonyms";
