@@ -15,7 +15,7 @@ This document provides comprehensive guidelines for developing and extending the
 | Vite             | ^8.0.0 (upgraded from ^6.0.0)                                  |
 | UI Library       | AWS Cloudscape Design System (`@cloudscape-design/components`) |
 | Auth             | AWS Amplify v6 + `@badgateway/oauth2-client` (dual-mode)       |
-| Routing          | React Router v6 with HashRouter                                |
+| Routing          | React Router v7 with HashRouter                                |
 | State Management | React Context API + useReducer (NO global state libraries)     |
 | API Client       | Custom fetch-based apiClient with auto auth headers            |
 | Package Manager  | npm 11.10.0+ (NEVER yarn)                                      |
@@ -61,7 +61,7 @@ web/
 
     services/               # API and data services (with features/orchestration/api/, the ONLY
                             #   places apiClient is imported)
-      APIService.ts         # Main API service (~900+ lines, 40+ exports)
+      APIService.ts         # Main API service (~3,500 lines, 110+ exports)
       apiClient.ts          # Custom fetch wrapper (internal, never import from components)
       appCache.ts           # localStorage cache (replaces Amplify Cache)
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks
