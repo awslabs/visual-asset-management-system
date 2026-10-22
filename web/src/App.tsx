@@ -85,7 +85,7 @@ function App() {
                 <HeaderPortal>
                     <TopNavigation
                         identity={{
-                            href: "/",
+                            href: "#/",
                             logo: {
                                 src: logoWhite,
                                 alt: config.APP_NAME,

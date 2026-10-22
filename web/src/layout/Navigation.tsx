@@ -11,7 +11,7 @@ import config from "../config";
 import Synonyms from "../synonyms";
 
 const navHeader: { href: string; logo?: { alt: string; src: string } } = {
-    href: "/",
+    href: "#/",
 };
 
 if (config.CUSTOMER_LOGO) {
