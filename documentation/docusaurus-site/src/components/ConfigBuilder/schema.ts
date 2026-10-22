@@ -1692,7 +1692,7 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "api-webui",
         advanced: true,
-        help: "Registers http://localhost:3001 as a Cognito callback and logout URL so a locally run web front can complete a federated sign-in. Read only when Cognito SAML or OIDC federation is enabled. Leave off for a deployment that serves real users.",
+        help: "Registers http://localhost:3001 as a Cognito callback and logout URL so a locally run web front can complete a federated sign-in. The callback URLs are read only when Cognito SAML or OIDC federation is enabled. In every authentication mode it also admits http://localhost:3001 as a referer for the Amazon Location Service map key. Leave off for a deployment that serves real users.",
     },
 
     // ===== Metadata schema auto-load =====

@@ -73,6 +73,11 @@ export class StaticWebBuilderNestedStack extends NestedStack {
     public endpointURL: string;
     public albEndpoint: string;
     public webAppBucket: s3.IBucket;
+    /**
+     * Origins the web app is served from (scheme and host, no trailing slash), plus the local
+     * development origin when `app.webUi.allowLocalhostAuthCallbacks` is on.
+     */
+    public webOrigins: string[] = [];
 
     constructor(parent: Construct, name: string, props: StaticWebBuilderNestedStackProps) {
         super(parent, name);
@@ -243,6 +248,13 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 callbackUrls.push(`https://${customDomainHost}`, `https://${customDomainHost}/`);
             }
 
+            this.webOrigins.push(`https://${website.cloudFrontDistribution.domainName}`);
+            if (props.config.app.useCloudFront.customDomain.enabled) {
+                this.webOrigins.push(
+                    `https://${props.config.app.useCloudFront.customDomain.domainHost}`
+                );
+            }
+
             /**
              * Propagate Base CloudFront URL to Cognito User Pool Callback and Logout URLs
              * when Cognito federation (SAML or OIDC) is enabled.
@@ -348,6 +360,8 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 `${website.endPointURL}/`,
             ];
 
+            this.webOrigins.push(website.endPointURL);
+
             /**
              * Propagate Base CloudFront URL to Cognito User Pool Callback and Logout URLs
              * when Cognito federation (SAML or OIDC) is enabled.
@@ -390,6 +404,10 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
             this.endpointURL = website.endPointURL;
             this.albEndpoint = website.albEndpoint;
+        }
+
+        if (props.config.app.webUi.allowLocalhostAuthCallbacks) {
+            this.webOrigins.push(LOCAL_DEV_WEB_ORIGIN);
         }
 
         //Nag supressions

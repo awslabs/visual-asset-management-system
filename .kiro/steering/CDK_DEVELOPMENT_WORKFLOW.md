@@ -80,7 +80,8 @@ CoreVAMSStack (root)
   |     |                                                       CustomBuilder
   |     +-- StaticWeb (CloudFront or ALB hosting)            -> storage
   |
-  +-- LocationService (conditional: useLocationService.enabled)
+  +-- LocationService (conditional: useLocationService.enabled) -> StaticWeb (when the static
+  |                                                                  web stack is built)
   +-- CustomFeatureEnabledConfig (writes enabled features to DynamoDB)
 ```
 

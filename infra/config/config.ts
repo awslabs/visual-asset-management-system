@@ -1191,8 +1191,9 @@ export function getConfig(app: cdk.App): Config {
     // developer running the web front locally can complete a federated sign-in against a deployed
     // user pool. Defaults off: the URLs are registered on the same user pool that serves real users,
     // and a redirect target on the user's own machine is a code-delivery destination the deployment
-    // does not control. Only read when Cognito SAML or OIDC federation is enabled — without
-    // federation VAMS uses no OAuth redirect at all.
+    // does not control. The callback URLs are only read when Cognito SAML or OIDC federation is
+    // enabled — without federation VAMS uses no OAuth redirect at all. In every auth mode the flag
+    // also admits http://localhost:3001 as a referer for the Location Service map API key.
     if (config.app.webUi.allowLocalhostAuthCallbacks == undefined) {
         config.app.webUi.allowLocalhostAuthCallbacks = false;
     }
