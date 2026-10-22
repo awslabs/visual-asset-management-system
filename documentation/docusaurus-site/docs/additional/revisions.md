@@ -105,7 +105,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
     -   Note: the deployment still starts the build without waiting for it, so a build that starts and then fails does not fail the deployment. If the rollback cannot start the build either, the core stack stops in `UPDATE_ROLLBACK_FAILED`; continue the rollback on the root core stack and skip the trigger as `<nested-stack-name>.<trigger-logical-id>`, as the coordinate transform pipeline's troubleshooting section describes.
 -   **CodeBuild timeouts in the AWS resources page** — The page states the one-hour Coordinate Transform and three-hour Splat Toolbox, NVIDIA Cosmos, NVIDIA GR00T and Isaac Lab training build timeouts. (issue #563)
 -   **Coordinate transform image updates** — The coordinate transform container uses the current `python:3.11-slim` digest and applies the Debian security updates at build time. (issue #564)
--   **CodeBuild build check** — The coordinate transform troubleshooting step and the CodeBuild project stack outputs print the newest build's status instead of looking for a `latest` tag. (issue #565)
+-   **CodeBuild build check** — The coordinate transform troubleshooting step and the CodeBuild project stack outputs print the newest build's status instead of looking for a `latest` tag, and the 2.7.0 upgrade notes' build check no longer fails with `Invalid build ID`. (issues #565, #574)
 
 **Other changes:**
 

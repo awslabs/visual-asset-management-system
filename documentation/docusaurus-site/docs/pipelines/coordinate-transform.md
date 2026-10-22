@@ -287,7 +287,7 @@ If the AWS Batch job fails immediately, check that the CodeBuild project's newes
 ```bash
 aws codebuild batch-get-builds \
     --ids "$(aws codebuild list-builds-for-project --project-name <CodeBuild-project-name> \
-        --max-items 1 --query 'ids[0]' --output text --region <region>)" \
+        --no-paginate --query 'ids[0]' --output text --region <region>)" \
     --query 'builds[0].buildStatus' --output text --region <region>
 ```
 
