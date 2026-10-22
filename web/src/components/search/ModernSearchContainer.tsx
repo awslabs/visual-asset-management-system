@@ -641,6 +641,10 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                                 case "query-criteria-cleared":
                                     handleClearSearch();
                                     break;
+                                case "refresh":
+                                    setAutoRefreshing(true);
+                                    handleSearch();
+                                    break;
                                 default:
                                     console.log("Unhandled dispatch action:", action.type);
                             }
@@ -769,6 +773,10 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                                     break;
                                 case "query-criteria-cleared":
                                     handleClearSearch();
+                                    break;
+                                case "refresh":
+                                    setAutoRefreshing(true);
+                                    handleSearch();
                                     break;
                                 default:
                                     console.log("Unhandled dispatch action:", action.type);

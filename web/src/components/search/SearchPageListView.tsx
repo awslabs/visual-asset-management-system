@@ -22,14 +22,8 @@ import AssetUnarchiveModal from "../modals/AssetUnarchiveModal";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
 import FilePreviewThumbnailCell from "./SearchPreviewThumbnail/FilePreviewThumbnailCell";
 import AssetPreviewModal from "../filemanager/modals/AssetPreviewModal";
-import {
-    changeFilter,
-    changeRectype,
-    paginateSearch,
-    search,
-    sortSearch,
-} from "./SearchPropertyFilter";
-import { INITIAL_STATE, SearchPageViewProps } from "./SearchPageTypes";
+import { changeFilter, changeRectype, paginateSearch, sortSearch } from "./SearchPropertyFilter";
+import { SearchPageViewProps } from "./SearchPageTypes";
 import Synonyms from "../../synonyms";
 import { EmptyState } from "../../common/common-components";
 import { useNavigate } from "react-router-dom";
@@ -1070,9 +1064,6 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                                 <Button
                                     onClick={() => {
                                         dispatch({ type: "query-criteria-cleared" });
-                                        setTimeout(() => {
-                                            search(INITIAL_STATE, { state, dispatch });
-                                        }, 10);
                                     }}
                                 >
                                     Clear filter
@@ -1356,7 +1347,7 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                     }
 
                     // Refresh the search results
-                    search({}, { state, dispatch });
+                    dispatch({ type: "refresh" });
                 }}
             />
 
@@ -1382,7 +1373,7 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                     }
 
                     // Refresh the search results
-                    search({}, { state, dispatch });
+                    dispatch({ type: "refresh" });
                 }}
             />
 
