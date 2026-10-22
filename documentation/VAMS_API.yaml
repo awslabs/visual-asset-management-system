@@ -569,6 +569,12 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+                "503":
+                    description: The existing record count could not be checked, so nothing was written. Retry the request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
             parameters:
               - name: "assetLinkId"
                 in: "path"
@@ -5519,6 +5525,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+                "503":
+                    description: The existing record count could not be checked, so nothing was written. Retry the request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
             parameters:
               - name: "databaseId"
                 in: "path"
@@ -5756,6 +5768,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+                "503":
+                    description: The existing record count could not be checked, so nothing was written. Retry the request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
             parameters:
               - name: "databaseId"
                 in: "path"
@@ -5964,6 +5982,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: The existing record count could not be checked, so nothing was written. Retry the request.
                     content:
                         application/json:
                             schema:
