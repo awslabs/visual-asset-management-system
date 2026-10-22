@@ -1102,23 +1102,10 @@ export const [operationName] = async (
             },
         });
 
-        if (response.message) {
-            if (
-                response.message.indexOf &&
-                (response.message.indexOf("error") !== -1 ||
-                    response.message.indexOf("Error") !== -1)
-            ) {
-                console.log("[Operation] error:", response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else if (response.success !== undefined) {
-            // New API response format
-            return [response.success, response.message || "Operation completed"];
-        } else {
-            return [false, "No response received"];
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log("Error in [operationName]:", error);
         return [false, error?.message || "Failed to [operation]"];

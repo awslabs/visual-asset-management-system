@@ -476,19 +476,10 @@ Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples:
 export const fetchSomething = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/something`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            return false;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];
@@ -499,8 +490,8 @@ export const fetchSomething = async ({ databaseId }) => {
 Key patterns to follow:
 
 1. Use `apiClient` for all API calls (auth headers injected automatically)
-2. Error detection uses `response.message.indexOf("error") !== -1` (legacy pattern, maintain consistency)
-3. Return `[false, errorMessage]` on error, `[true, data]` on success, `false` for unknown failures
+2. Failure is decided by `response.success === false` or a thrown request (non-2xx), never by searching the message for "error": a success message can echo caller-chosen text such as an asset ID
+3. Return `[false, errorMessage]` on error and `[true, data]` on success
 4. Always log errors with `console.log` (NOT `console.error` -- match existing convention)
 5. A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message (`ViewFile.tsx`, `deleteAssetLink`, `deleteComment`)
 
@@ -1573,20 +1564,10 @@ import { apiClient } from "./apiClient";
 export const myServiceFunction = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/myendpoint`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            // For list endpoints, data is typically in a named property
-            return response;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];

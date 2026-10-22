@@ -501,19 +501,10 @@ Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples:
 export const fetchSomething = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/something`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            return false;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];
@@ -750,19 +741,10 @@ import { apiClient } from "./apiClient";
 export const myServiceFunction = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/myendpoint`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            return response;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];
