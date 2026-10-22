@@ -12,8 +12,10 @@ or never resumes, fails with a message rather than hanging.
 """
 
 import pytest
+from unittest.mock import MagicMock
 
 from backend.backend.handlers.addon.edh.common import edhClient as ec
+from backend.backend.handlers.addon.edh.common import edhSessionBootstrap as bootstrap
 from backend.backend.handlers.addon.edh.common.edhClient import EdhUnavailableError
 from backend.backend.handlers.addon.edh.common.edhIdentity import edh_uid_for
 from backend.backend.handlers.addon.edh.common.edhSessionState import EDH_FIELD_INSTANCE_ID, LAST_ERROR_LAUNCH_ERROR
@@ -30,6 +32,7 @@ from backend.tests.handlers.addon.edh.edhServiceTestSupport import (
     own_row,
     response_body,
     state_record,
+    workstation_path,
 )
 from backend.tests.handlers.addon.edh.edhTestSupport import load_fixture
 from backend.tests.pagingStub import Pager
@@ -180,6 +183,87 @@ class TestWorkstationList:
 
         item = _items(response)[0]
         assert (item["state"], item["lastError"]) == ("ORPHANED", LAST_ERROR_LAUNCH_ERROR)
+
+    def test_a_launch_whose_desktop_edh_no_longer_reports_is_shown_as_a_failed_launch(self, monkeypatch):
+        """EDH deactivates a desktop whose placement failed within minutes, after which its session-state
+        read leaves the id out: a CREATING row then reads as the failed launch it is, with its key taken
+        back, instead of "starting" until a sweep records it deleted."""
+        revoke_fn = MagicMock(return_value={"apiKeyId": "", "keyExpiresAt": "", "secretName": ""})
+        monkeypatch.setattr(bootstrap, "revoke_session", revoke_fn)
+        fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_states=[]))
+        fakes.table.query.return_value = {"Items": [
+            own_row(state="CREATING", edhState="placing", connectionAvailable=False,
+                    apiKeyId="key-own", secretName="vams/edh-session/own")]}
+
+        response = fakes.module.lambda_handler(make_event("GET", WORKSTATIONS_PATH), {})
+
+        item = _items(response)[0]
+        assert (item["state"], item["lastError"], item["connectionAvailable"]) == (
+            "ORPHANED", LAST_ERROR_LAUNCH_ERROR, False)
+        written = [set(call[1]["ExpressionAttributeValues"].values())
+                   for call in fakes.table.update_item.call_args_list]
+        # The failed launch is written first; the revoke then clears the credential attributes.
+        assert written, "the failed launch was never written"
+        assert len(written) <= 2
+        assert {"ORPHANED", LAST_ERROR_LAUNCH_ERROR} <= written[0]
+        assert {(c.args[1]["bootstrapId"], c.kwargs["delete_secret"]) for c in revoke_fn.call_args_list} == {
+            (BOOTSTRAP_OWN, True)}
+
+    def test_a_launch_error_code_the_launch_recorded_is_kept_on_the_failed_launch(self, monkeypatch):
+        fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_states=[]))
+        fakes.table.query.return_value = {"Items": [
+            own_row(state="CREATING", edhState="placing", connectionAvailable=False,
+                    lastError="CAPACITY_UNAVAILABLE")]}
+
+        response = fakes.module.lambda_handler(make_event("GET", WORKSTATIONS_PATH), {})
+
+        assert (_items(response)[0]["state"], _items(response)[0]["lastError"]) == (
+            "ORPHANED", "CAPACITY_UNAVAILABLE")
+
+    def test_a_launch_edh_answers_with_a_successor_is_not_failed(self, monkeypatch):
+        # Control: EDH continued the desktop under another session id, which the sweep follows.
+        fakes = install_service_fakes(
+            monkeypatch, edh=FakeEdhClient(get_desktop_states=[], state_successors=[SESSION_OWN]))
+        fakes.table.query.return_value = {"Items": [
+            own_row(state="CREATING", edhState="pending", connectionAvailable=False)]}
+
+        response = fakes.module.lambda_handler(make_event("GET", WORKSTATIONS_PATH), {})
+
+        assert _items(response)[0]["state"] == "CREATING"
+        fakes.table.update_item.assert_not_called()
+
+    def test_an_active_row_edh_no_longer_reports_is_left_to_the_sweep(self, monkeypatch):
+        # Control: a desktop that ran may be held out of EDH's answer by Save and Resume.
+        fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_states=[]))
+        fakes.table.query.return_value = {"Items": [own_row()]}
+
+        response = fakes.module.lambda_handler(make_event("GET", WORKSTATIONS_PATH), {})
+
+        assert _items(response)[0]["state"] == "ACTIVE"
+        fakes.table.update_item.assert_not_called()
+
+    def test_a_failed_read_leaves_a_creating_row_alone(self, monkeypatch):
+        fakes = install_service_fakes(
+            monkeypatch, edh=FakeEdhClient(get_desktop_states=EdhUnavailableError("timeout")))
+        fakes.table.query.return_value = {"Items": [
+            own_row(state="CREATING", edhState="placing", connectionAvailable=False)]}
+
+        response = fakes.module.lambda_handler(make_event("GET", WORKSTATIONS_PATH), {})
+
+        assert response["statusCode"] == 502
+        fakes.table.update_item.assert_not_called()
+
+    def test_a_failed_launch_shows_on_the_single_workstation_read_too(self, monkeypatch):
+        fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_states=[]))
+        row = own_row(state="CREATING", edhState="placing", connectionAvailable=False)
+        fakes.table.query.return_value = {"Items": [row]}
+        fakes.table.get_item.return_value = {"Item": dict(row)}
+
+        response = fakes.module.lambda_handler(make_event("GET", workstation_path(SESSION_OWN)), {})
+
+        assert response["statusCode"] == 200
+        body = response_body(response)
+        assert (body["state"], body["lastError"]) == ("ORPHANED", LAST_ERROR_LAUNCH_ERROR)
 
     def test_deleted_rows_are_not_listed(self, monkeypatch):
         fakes = install_service_fakes(monkeypatch)

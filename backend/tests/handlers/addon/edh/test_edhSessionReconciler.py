@@ -2440,3 +2440,65 @@ class TestADesktopEdhSavedAndResumedKeepsItsRow:
         assert written["sessionId"] == "sess-resumed" and written["state"] == rec.STATE_ACTIVE
         assert written[EXPIRES_AT_FIELD] is None
         assert summary["examined"] == 1
+
+
+@pytest.mark.unit
+class TestALaunchEdhDroppedBeforeItRanIsAFailedLaunch:
+    """EDH records a desktop whose asynchronous placement fails as ``error`` and deactivates it within
+    minutes, after which neither its listing nor its session-state read returns it. A CREATING row whose
+    desktop EDH dropped that way never ran, so EDH's Save and Resume cannot be holding it out of the
+    listing: the row is a failed launch, kept ORPHANED with its launch-error code and its credential
+    taken back, rather than recorded DELETED with the unlisted stamp and lost from the owner's list."""
+
+    def _placing_row(self, **overrides):
+        return _row(BOOTSTRAP, **{"state": rec.STATE_CREATING, "edhState": "placing",
+                                  "connectionAvailable": False, **overrides})
+
+    def test_an_unlisted_creating_row_with_a_session_id_is_orphaned_with_the_launch_error_code(self):
+        updates, revoke, delete_secret = rec.reconcile_row(self._placing_row(), _index(), NOW)
+        assert updates == {"state": rec.STATE_ORPHANED, "lastError": LAST_ERROR_LAUNCH_ERROR}
+        assert rec.EDH_UNLISTED_AT_FIELD not in updates
+        assert (revoke, delete_secret) == (True, True)
+
+    def test_a_launch_error_code_the_row_already_holds_is_kept(self):
+        updates, _, _ = rec.reconcile_row(self._placing_row(lastError="CAPACITY_UNAVAILABLE"), _index(), NOW)
+        assert updates == {"state": rec.STATE_ORPHANED}
+
+    def test_a_connectable_flag_left_on_the_row_is_cleared(self):
+        updates, _, _ = rec.reconcile_row(self._placing_row(connectionAvailable=True), _index(), NOW)
+        assert updates["connectionAvailable"] is False
+        assert updates["state"] == rec.STATE_ORPHANED
+
+    def test_the_sweep_orphans_the_row_once_the_session_state_read_confirms_it_gone(self):
+        summary, revoke_fn, persist, *_rest = _run([self._placing_row()], [], states=[])
+        written = _written_for(persist, BOOTSTRAP)
+        assert (written.get("state"), written.get("lastError")) == (rec.STATE_ORPHANED, LAST_ERROR_LAUNCH_ERROR)
+        assert rec.EDH_UNLISTED_AT_FIELD not in written
+        assert {(c.args[1]["bootstrapId"], c.kwargs["delete_secret"]) for c in revoke_fn.call_args_list} == {
+            (BOOTSTRAP, True)}
+        assert summary["revoked"] == 1
+
+    def test_a_failed_session_state_read_leaves_the_creating_row_for_the_next_sweep(self):
+        summary, revoke_fn, persist, *_rest = _run(
+            [self._placing_row()], [], states=EdhUnavailableError("read timeout"))
+        persist.assert_not_called()
+        revoke_fn.assert_not_called()
+        assert summary["deferred"] == 1
+
+    def test_a_creating_row_the_session_state_read_still_reports_is_not_orphaned(self):
+        # Control: EDH's listing can trail its session-state read, so the read's answer wins.
+        summary, revoke_fn, persist, *_rest = _run(
+            [self._placing_row()], [], states=[_desktop(f"sess-{BOOTSTRAP}", state="placing")])
+        assert _written_for(persist, BOOTSTRAP).get("state") in (None, rec.STATE_CREATING)
+        revoke_fn.assert_not_called()
+
+    def test_an_orphaned_failed_launch_is_left_alone_by_the_next_sweep(self):
+        row = self._placing_row(state=rec.STATE_ORPHANED, lastError=LAST_ERROR_LAUNCH_ERROR, apiKeyId="",
+                                secretName="", keyExpiresAt="")
+        assert rec.reconcile_row(row, _index(), NOW) == ({}, False, False)
+
+    def test_an_unlisted_active_row_still_takes_the_save_and_resume_path(self):
+        # Control: a desktop that ran may be held out of the listing by Save and Resume.
+        updates, _, _ = rec.reconcile_row(_row(BOOTSTRAP), _index(), NOW)
+        assert updates["state"] == rec.STATE_DELETED
+        assert updates[rec.EDH_UNLISTED_AT_FIELD] == UNLISTED_AT

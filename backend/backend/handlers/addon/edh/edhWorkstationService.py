@@ -85,8 +85,9 @@ from .common.edhSessionState import (
     EDH_SESSION_STATE_PENDING,
     EDH_SESSION_STATE_STOPPED,
     EXPIRES_AT_FIELD,
+    LAST_ERROR_LAUNCH_ERROR,
     LAST_ERROR_LEASE_EXPIRED,
-    START_IN_PROGRESS_SECONDS, STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_STOPPED,
+    START_IN_PROGRESS_SECONDS, STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED,
     WORKER_PAYLOAD_KEYS,
     credential_claim_stamp, deleted_row_expiry, observed_row_attributes, session_row_live, start_in_progress,
     start_stamp, start_stamp_cleared, state_for_edh_session_state,
@@ -589,13 +590,31 @@ def _merge_edh_state(rows, desktops):
     return rows
 
 
-def _desktop_states(event, client, rows, edh_uid, operation):
+def _desktop_states(event, client, rows, edh_uid, operation, unanswered=None):
     """EDH's state records for the rows that hold a session id, from the token-free session-state read;
-    [] without a call when none does."""
+    [] without a call when none does. ``unanswered`` collects the session ids EDH's answer left out."""
     session_ids = [row['sessionId'] for row in rows if row.get('sessionId')]
     if not session_ids:
         return []
-    return _call_edh(event, client, "get_desktop_states", operation, edh_uid, edh_uid, session_ids)
+    return _call_edh(event, client, "get_desktop_states", operation, edh_uid, edh_uid, session_ids, unanswered)
+
+
+def _record_failed_launches(event, rows, unanswered):
+    """Record ORPHANED, with its launch-error code, each CREATING row whose session id EDH's session-state
+    read left out, and take its credential back. EDH answers only the desktops it holds active and
+    deactivates a desktop whose placement failed within minutes; a launch that never ran cannot be held
+    out by Save and Resume (a desktop EDH continued under another id is answered, so is not in
+    ``unanswered``). A row deleted since it was read keeps what its deletion wrote; a revoke that fails is
+    left to the session sweep."""
+    for row in rows:
+        if row.get('state') != STATE_CREATING or str(row.get('sessionId') or '') not in unanswered:
+            continue
+        if not _update_live_row(row, state=STATE_ORPHANED, connectionAvailable=False,
+                                lastError=row.get('lastError') or LAST_ERROR_LAUNCH_ERROR):
+            logger.info(f"Bootstrap {row['bootstrapId']} was deleted since it was read; it is not recorded failed")
+            continue
+        logger.warning(f"EDH no longer has the desktop of launch {row['bootstrapId']}; recorded as a failed launch")
+        _revoke_session_credential(event, row, delete_secret=True)
 
 
 def _desktop_after_lost_answer(event, client, row, edh_uid, operation, lost):
@@ -631,8 +650,10 @@ def list_workstations(event):
     if any(row.get('sessionId') for row in rows):
         edh_uid = _caller_edh_uid()
         client = EdhClient(profile="api")
-        desktops = _desktop_states(event, client, rows, edh_uid, "workstationList")
+        unanswered = set()
+        desktops = _desktop_states(event, client, rows, edh_uid, "workstationList", unanswered)
         _merge_edh_state(rows, desktops)
+        _record_failed_launches(event, rows, unanswered)
     enforcer = _enforcer() if len(claims_and_roles["tokens"]) > 0 else None
     items = []
     for row in rows:
@@ -1026,8 +1047,10 @@ def get_workstation(event, path):
         return success(body=_record(row))
     edh_uid = _caller_edh_uid()
     client = EdhClient(profile="api")
-    desktops = _desktop_states(event, client, [row], edh_uid, "workstationGet")
+    unanswered = set()
+    desktops = _desktop_states(event, client, [row], edh_uid, "workstationGet", unanswered)
     _merge_edh_state([row], desktops)
+    _record_failed_launches(event, [row], unanswered)
     return success(body=_record(row))
 
 

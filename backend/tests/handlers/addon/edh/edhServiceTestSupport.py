@@ -197,8 +197,15 @@ class FakeEdhClient:
             raise result
         return result
 
-    def get_desktop_states(self, edh_uid, session_ids):
-        return self._answer("get_desktop_states", edh_uid, list(session_ids))
+    def get_desktop_states(self, edh_uid, session_ids, unanswered=None):
+        records = self._answer("get_desktop_states", edh_uid, list(session_ids))
+        if unanswered is not None:
+            # As EDH does: an id is answered by a record of its own or by a scripted successor
+            # (``state_successors``); every other id asked is unanswered.
+            answered = {str(record.get("session_uuid")) for record in records or [] if isinstance(record, dict)}
+            answered |= {str(session_id) for session_id in self.results.get("state_successors", [])}
+            unanswered.update(str(session_id) for session_id in session_ids if str(session_id) not in answered)
+        return records
 
     def get_desktop_connection(self, edh_uid, session_id):
         return self._answer("get_desktop_connection", edh_uid, session_id)

@@ -41,7 +41,7 @@ import ssl
 import string
 import time
 import urllib.parse
-from typing import Any, Dict, NamedTuple, Optional, Tuple
+from typing import Any, Dict, NamedTuple, Optional, Set, Tuple
 
 import boto3
 import urllib3
@@ -922,13 +922,15 @@ class EdhClient:
                 status=200)
         return _as_list(_payload(parsed), key_field=EDH_SESSION_ID_FIELD)
 
-    def get_desktop_states(self, edh_uid, session_ids) -> list:
+    def get_desktop_states(self, edh_uid, session_ids, unanswered: Optional[Set[str]] = None) -> list:
         """The state EDH reports for each of ``session_ids``: per id EDH answers, in the order asked, a
         record carrying ``session_uuid``, plus ``session_state`` and ``instance_id`` when EDH gives them.
         EDH issues no connection token for this read. The route has no owner filter, so a caller passes
         only the session ids its own rows hold. An id that is not a UUID is never sent, so no comma
         reaches the query; an entry EDH answers with a successor session's values, an id not asked for
-        and every other key are dropped."""
+        and every other key are dropped. When ``unanswered`` is given, every sent id EDH's answer leaves
+        out entirely -- EDH answers only the desktops it holds active -- is added to it once the whole
+        read has succeeded; an id answered with a successor is answered."""
         if not edh_uid:
             raise ValueError("A desktop state read names the caller's EDH uid")
         ids = [str(session_id) for session_id in session_ids]
@@ -937,6 +939,7 @@ class EdhClient:
         if malformed:
             logger.warning(f"{malformed} session id(s) not in UUID form were not sent to EDH")
         records = []
+        silent = set()
         for start in range(0, len(asked), EDH_SESSION_STATE_BATCH_SIZE):
             batch = asked[start:start + EDH_SESSION_STATE_BATCH_SIZE]
             parsed = self.request("GET", EDH_ROUTE_DESKTOPS_SESSION_STATE, edh_uid=edh_uid,
@@ -949,7 +952,10 @@ class EdhClient:
             entries = parsed["message"]
             for session_id in batch:
                 entry = entries.get(session_id)
-                if not isinstance(entry, dict) or EDH_DESKTOP_SUCCESSOR_FIELD in entry:
+                if not isinstance(entry, dict):
+                    silent.add(session_id)
+                    continue
+                if EDH_DESKTOP_SUCCESSOR_FIELD in entry:
                     continue
                 record = {EDH_SESSION_ID_FIELD: session_id}
                 state = entry.get(EDH_DESKTOP_STATE_FIELD)
@@ -959,6 +965,8 @@ class EdhClient:
                 if instance_id:
                     record[EDH_FIELD_INSTANCE_ID] = instance_id
                 records.append(record)
+        if unanswered is not None:
+            unanswered.update(silent)
         return records
 
     def get_desktop_connection(self, edh_uid, session_id) -> Optional[dict]:
