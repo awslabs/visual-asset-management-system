@@ -7755,7 +7755,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "429":
-                    description: Rate limit exceeded. Maximum 5 upload initializations per user per minute.
+                    description: Rate limit exceeded. Maximum 20 upload initializations per user per minute.
                     headers:
                         Retry-After:
                             description: "Number of seconds to wait before retrying"
