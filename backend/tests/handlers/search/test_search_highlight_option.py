@@ -56,8 +56,10 @@ def search_module():
     auth_stub.request_to_claims = MagicMock(return_value={"tokens": ["mock_token"]})
     sys.modules["handlers.auth"] = auth_stub
 
+    # Every name search.py imports from common.dynamodb; the query builder reads no table.
     dynamodb_stub = types.ModuleType("common.dynamodb")
     dynamodb_stub.validate_pagination_info = MagicMock()
+    dynamodb_stub.batch_get_items = MagicMock(return_value=([], []))
     sys.modules["common.dynamodb"] = dynamodb_stub
 
     try:
@@ -89,6 +91,12 @@ def _request(include_highlights, explain_results):
     )
 
 
+def _highlight_config(search_module):
+    """The asset index's highlight block, as the real builder produces it."""
+    builder = search_module.DualIndexQueryBuilder(search_module.DatabaseAccessManager())
+    return builder._build_highlight_config("asset")
+
+
 def _index_query(search_module, request):
     builder = search_module.DualIndexQueryBuilder(search_module.DatabaseAccessManager())
     with patch.object(builder, "_build_query_clause", return_value={"match_all": {}}), patch.object(
@@ -101,18 +109,21 @@ def _index_query(search_module, request):
 class TestIncludeHighlights:
     def test_default_request_asks_for_highlights(self, search_module):
         query = _index_query(search_module, _request(True, False))
-        assert "highlight" in query
+        # The block is the builder's real highlight config, not an empty placeholder.
+        assert query["highlight"] == _highlight_config(search_module)
+        assert "str_*" in query["highlight"]["fields"]
 
     def test_false_leaves_highlights_out(self, search_module):
         query = _index_query(search_module, _request(False, False))
         assert "highlight" not in query
         # Control: the rest of the query is still built.
         assert query["query"] == {"match_all": {}}
+        assert query["from"] == 0 and query["size"] > 0
 
     def test_explain_results_keeps_highlights_when_false(self, search_module):
         query = _index_query(search_module, _request(False, True))
-        assert "highlight" in query
+        assert query["highlight"] == _highlight_config(search_module)
 
     def test_unset_keeps_highlights(self, search_module):
         query = _index_query(search_module, _request(None, False))
-        assert "highlight" in query
+        assert query["highlight"] == _highlight_config(search_module)
