@@ -31,6 +31,11 @@ jest.mock("../../visualizerPlugin/core/useViewerRegistryReady", () => ({
     useViewerRegistryReady: () => true,
 }));
 jest.mock("../../visualizerPlugin/core/PluginRegistry", () => ({}));
+// A renamed Database entity, so the popover is shown to read the deployment's own noun.
+jest.mock("../../synonyms", () => ({
+    __esModule: true,
+    default: { ...jest.requireActual("../../synonyms").default, databases: "libraries" },
+}));
 
 const state = {
     ...INITIAL_STATE,
@@ -69,6 +74,9 @@ describe("Search list view count popover", () => {
         fireEvent.click(screen.getByText("\u24D8"));
 
         expect(screen.getByText("About this count")).toBeInTheDocument();
+        expect(
+            screen.getByText(/every matching record in the libraries you can access/)
+        ).toBeInTheDocument();
         expect(
             screen.getByText(/counted before each record's own permissions are checked/)
         ).toBeInTheDocument();

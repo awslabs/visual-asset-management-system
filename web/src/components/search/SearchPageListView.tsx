@@ -1213,7 +1213,7 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                                 totalResults ? (
                                     <Popover
                                         header="About this count"
-                                        content="This count includes every matching record in the databases you can access, counted before each record's own permissions are checked. The table lists only the records you can open, so it can show fewer than this count."
+                                        content={`This count includes every matching record in the ${Synonyms.databases} you can access, counted before each record's own permissions are checked. The table lists only the records you can open, so it can show fewer than this count.`}
                                         triggerType="custom"
                                     >
                                         <Box
