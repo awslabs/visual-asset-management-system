@@ -5,7 +5,7 @@
 
 import React, { useEffect } from "react";
 import { useState } from "react";
-import { SideNavigation, Spinner } from "@cloudscape-design/components";
+import { Button, SideNavigation, Spinner } from "@cloudscape-design/components";
 import { checkWebRoutesAllowed } from "../services/webRoutesCheck";
 import config from "../config";
 import Synonyms from "../synonyms";
@@ -195,6 +195,8 @@ export function Navigation({
 
     const [navigationItems, setNavigationItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadFailed, setLoadFailed] = useState(false);
+    const [loadAttempt, setLoadAttempt] = useState(0);
 
     useEffect(() => {
         const allRoutes = collectRoutes(filteredNavItems);
@@ -210,14 +212,36 @@ export function Navigation({
                 })
                 .catch((error) => {
                     console.error(error);
-                    setNavigationItems([]);
+                    setLoadFailed(true);
                     setLoading(false);
                 });
         } catch (e) {}
-    }, []);
+    }, [loadAttempt]);
+
+    const retryLoad = () => {
+        setLoadFailed(false);
+        setLoading(true);
+        setLoadAttempt((attempt) => attempt + 1);
+    };
 
     return loading ? (
         <CenterSpinner />
+    ) : loadFailed ? (
+        <div
+            style={{
+                padding: "20px",
+                textAlign: "center",
+                color: "var(--vams-text-secondary)",
+            }}
+        >
+            <div style={{ marginBottom: "10px", fontSize: "16px", fontWeight: "bold" }}>
+                Navigation could not be loaded
+            </div>
+            <div style={{ marginBottom: "10px", fontSize: "14px", lineHeight: "1.5" }}>
+                The check for which pages you can open did not complete.
+            </div>
+            <Button onClick={retryLoad}>Retry</Button>
+        </div>
     ) : navigationItems.length === 0 ? (
         <div
             style={{

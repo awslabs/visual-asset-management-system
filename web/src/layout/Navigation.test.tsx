@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 
@@ -114,12 +114,21 @@ describe("Navigation", () => {
         });
     });
 
-    it("shows the no-access message when the permission check fails", async () => {
-        mockCheckWebRoutesAllowed.mockRejectedValue(new Error("auth/routes failed"));
-        await renderNavigation();
+    it("shows a could-not-load message with Retry when the permission check fails", async () => {
+        mockCheckWebRoutesAllowed.mockRejectedValueOnce(new Error("auth/routes failed"));
+        allowRoutes("/databases");
+        const container = await renderNavigation();
 
         await waitFor(() => {
-            expect(screen.getByText(/don't have access/i)).toBeInTheDocument();
+            expect(screen.getByText("Navigation could not be loaded")).toBeInTheDocument();
         });
+        expect(screen.queryByText(/don't have access/i)).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByText("Retry"));
+
+        await waitFor(() => {
+            expect(findNavLink(container, "#/databases/")).toBeTruthy();
+        });
+        expect(mockCheckWebRoutesAllowed).toHaveBeenCalledTimes(2);
     });
 });

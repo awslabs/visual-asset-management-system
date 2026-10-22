@@ -274,11 +274,49 @@ export function PageErrorPanel({ onHome }: { onHome: () => void }) {
     );
 }
 
+/**
+ * Rendered in place of a page while the web-route permission check has failed, so access to the
+ * page is not known. Retry runs the check again without a reload.
+ */
+export function RoutesCheckFailedPanel({
+    onRetry,
+    onHome,
+}: {
+    onRetry: () => void;
+    onHome: () => void;
+}) {
+    return (
+        <Box padding="l">
+            <Alert
+                type="error"
+                statusIconAriaLabel="Error"
+                header="Page access could not be checked"
+                action={
+                    <SpaceBetween direction="horizontal" size="xs">
+                        <Button onClick={onRetry}>Retry</Button>
+                        <Button onClick={onHome}>Go to Home</Button>
+                    </SpaceBetween>
+                }
+            >
+                The check for which pages you can open did not complete, so this page is not shown.
+            </Alert>
+        </Box>
+    );
+}
+
 export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutesProps) => {
     const location = useLocation();
     const navigate = useNavigate();
 
     const [loading, setLoading] = useState(true);
+    const [checkAttempt, setCheckAttempt] = useState(0);
+    const [routesCheckFailed, setRoutesCheckFailed] = useState(false);
+
+    const retryRoutesCheck = () => {
+        setRoutesCheckFailed(false);
+        setLoading(true);
+        setCheckAttempt((attempt) => attempt + 1);
+    };
 
     //Used to detect duplicate/stacked hash route pathing and correct
     //Note: This will null out any state passing for the naviagation and may break a a state passing page if triggered
@@ -335,15 +373,13 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                 })
                 .catch((error) => {
                     console.error(error);
-                    // Fail open to the landing page only: if the web-routes permission
-                    // API is unavailable, still render the home page (and the catch-all)
-                    // so the app is not a blank screen. Deeper routes stay gated until
-                    // the check succeeds; per-API backend authorization still protects data.
-                    setAllowedRoutes(["/", "*"]);
+                    // Access is unknown: "/" still renders, and every other route shows the
+                    // could-not-check panel with Retry instead of falling through to "/".
+                    setRoutesCheckFailed(true);
                     setLoading(false);
                 });
         } catch (e) {}
-    }, []);
+    }, [checkAttempt]);
 
     const buildRoute = (routeOptions: RouteOption, i = 0) => {
         const { path, active, Page } = routeOptions;
@@ -359,6 +395,11 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                         content={
                             loading ? (
                                 <CenterSpinner />
+                            ) : routesCheckFailed && path !== "/" ? (
+                                <RoutesCheckFailedPanel
+                                    onRetry={retryRoutesCheck}
+                                    onHome={() => navigate("/")}
+                                />
                             ) : (
                                 // Suspense catches the lazy-load promise, not a render error.
                                 // Without a boundary here an uncaught error in any page
@@ -372,7 +413,9 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
                                 </ErrorBoundary>
                             )
                         }
-                        navigation={<Navigation activeHref={active} user={user} />}
+                        navigation={
+                            <Navigation key={checkAttempt} activeHref={active} user={user} />
+                        }
                         navigationOpen={navigationOpen}
                         onNavigationChange={({ detail }) => setNavigationOpen(detail.open)}
                         toolsHide={true}
@@ -388,5 +431,9 @@ export const AppRoutes = ({ navigationOpen, setNavigationOpen, user }: AppRoutes
         return allowedRoutes.includes(routeOptions.path);
     };
 
-    return <Routes>{routeTable.filter(filterRoute).map(buildRoute)}</Routes>;
+    // While the check has failed every route is mounted, so a deep link reaches the
+    // could-not-check panel rather than the catch-all.
+    const mountedRoutes = routesCheckFailed ? routeTable : routeTable.filter(filterRoute);
+
+    return <Routes>{mountedRoutes.map(buildRoute)}</Routes>;
 };

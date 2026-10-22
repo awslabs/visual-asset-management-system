@@ -14,7 +14,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { matchRoutes, MemoryRouter } from "react-router-dom";
 import { routeTable, AppRoutes } from "./routes";
 import { checkWebRoutesAllowed, WebRouteCheck } from "./services/webRoutesCheck";
@@ -190,14 +190,54 @@ describe("AppRoutes", () => {
         mockLandingThrows = false;
     });
 
-    it("falls open to the landing page only when the permission check fails", async () => {
-        mockCheckWebRoutesAllowed.mockRejectedValue(new Error("routes check unavailable"));
+    it("shows the could-not-check panel on a gated route when the permission check fails", async () => {
+        const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+        try {
+            mockCheckWebRoutesAllowed.mockRejectedValue(new Error("routes check unavailable"));
 
-        renderAt("/pipelines");
+            renderAt("/pipelines");
 
-        // "/" and "*" are added back so the app is not a blank screen; the gated route is not.
-        await waitFor(() => expect(screen.getByTestId("landing-page")).toBeInTheDocument());
-        expect(screen.queryByTestId("pipelines-page")).not.toBeInTheDocument();
+            await waitFor(() =>
+                expect(screen.getByText("Page access could not be checked")).toBeInTheDocument()
+            );
+            // Neither the gated page nor a silent fall-through to the landing page.
+            expect(screen.queryByTestId("pipelines-page")).not.toBeInTheDocument();
+            expect(screen.queryByTestId("landing-page")).not.toBeInTheDocument();
+            expect(screen.getByTestId("side-navigation")).toBeInTheDocument();
+        } finally {
+            consoleError.mockRestore();
+        }
+    });
+
+    it("still renders the landing page at / when the permission check fails", async () => {
+        const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+        try {
+            mockCheckWebRoutesAllowed.mockRejectedValue(new Error("routes check unavailable"));
+
+            renderAt("/");
+
+            await waitFor(() => expect(screen.getByTestId("landing-page")).toBeInTheDocument());
+            expect(screen.queryByText("Page access could not be checked")).not.toBeInTheDocument();
+        } finally {
+            consoleError.mockRestore();
+        }
+    });
+
+    it("Retry runs the check again and opens the page once it succeeds", async () => {
+        const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+        try {
+            mockCheckWebRoutesAllowed.mockRejectedValueOnce(new Error("routes check unavailable"));
+            allowRoutes("/pipelines");
+
+            renderAt("/pipelines");
+
+            fireEvent.click(await screen.findByText("Retry"));
+
+            await waitFor(() => expect(screen.getByTestId("pipelines-page")).toBeInTheDocument());
+            expect(screen.queryByText("Page access could not be checked")).not.toBeInTheDocument();
+        } finally {
+            consoleError.mockRestore();
+        }
     });
 
     it("positive control: renders the gated page when the permission check allows it", async () => {
