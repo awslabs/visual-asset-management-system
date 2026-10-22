@@ -2582,7 +2582,7 @@ export function getConfig(app: cdk.App): Config {
             ].some(isPlaceholder)
         ) {
             throw new Error(
-                "Configuration Error: Must specify a external IDP auth URL, external IDP principal domain, external IDP client ID, external IDP client secret, Lambda Authorizer JWT Issuer URL, Lambda Authorizer JWT Identity Source, and Lambda Authorizer JWT Audience when using an external OAUTH provider!"
+                "Configuration Error: External OAuth IdP requires its provider URL, client ID, scope, token and authorization endpoints, JWT issuer URL and audience. The MFA scope, principal domain and discovery endpoint may be left null, but not empty or UNDEFINED."
             );
         }
     }
