@@ -172,3 +172,27 @@ describe("the localhost callbacks can be opted back in", () => {
         expect(urls).toContain("http://localhost:3001/");
     });
 });
+
+describe("the web URL SSM parameter names its distribution", () => {
+    const webUrlParameter = (synth: SynthResult) => {
+        const params = synth
+            .ofType("AWS::SSM::Parameter")
+            .filter((r) => r.logicalId.startsWith("WebUrlDeploymentParamSSM"));
+        expect(params).toHaveLength(1);
+        return params[0];
+    };
+
+    // TEMPORARY-TEST: pins the rewording of the ALB-branch description from "Cloudfront" to "ALB"
+    test("the ALB branch's description does not mention CloudFront", () => {
+        const synth = synthTemplate("commercial", {
+            mutate: (c) => {
+                albBranch(c);
+                oidcFederation(c);
+            },
+            mutateKey: "callbacks-oidc-alb",
+        });
+        const description = String(webUrlParameter(synth).properties.Description);
+        expect(description).not.toMatch(/cloudfront/i);
+        expect(description).toMatch(/ALB/);
+    });
+});

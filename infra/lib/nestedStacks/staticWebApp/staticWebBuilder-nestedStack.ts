@@ -395,7 +395,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
             const webUrlSSMParameter = new ssm.StringParameter(this, "WebUrlDeploymentParamSSM", {
                 parameterName: props.config.webUrlDeploymentSSMParam,
                 stringValue: website.endPointURL,
-                description: "Web URL for Cloudfront Deployment of VAMS",
+                description: "Web URL for ALB Deployment of VAMS",
                 tier: ssm.ParameterTier.STANDARD,
             });
 
