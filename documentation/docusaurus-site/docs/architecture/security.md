@@ -699,15 +699,15 @@ When `addStackCloudTrailLogs = true`, VAMS deploys an AWS CloudTrail trail that 
 
 All Amazon S3 buckets in VAMS are configured with:
 
-| Setting                 | Value                                              |
-| ----------------------- | -------------------------------------------------- |
-| Block Public Access     | `BLOCK_ALL`                                        |
-| Object Ownership        | `OBJECT_WRITER`                                    |
-| Versioning              | Enabled                                            |
-| Server Access Logging   | Enabled (to Access Logs bucket)                    |
-| TLS Enforcement         | Deny policy for non-secure transport               |
-| Lifecycle Rules         | Abort incomplete multipart uploads after 7-14 days |
-| Optional KMS Encryption | SSE-KMS with bucket key enabled                    |
+| Setting                 | Value                                                                                                                                                                                                                                                                                                                   |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Block Public Access     | `BLOCK_ALL`                                                                                                                                                                                                                                                                                                             |
+| Object Ownership        | `OBJECT_WRITER`                                                                                                                                                                                                                                                                                                         |
+| Versioning              | Enabled                                                                                                                                                                                                                                                                                                                 |
+| Server Access Logging   | Enabled (to Access Logs bucket)                                                                                                                                                                                                                                                                                         |
+| TLS Enforcement         | Deny policy for non-secure transport                                                                                                                                                                                                                                                                                    |
+| Lifecycle Rules         | Abort incomplete multipart uploads after 7 days on the VAMS-created asset bucket and after 14 days on the auxiliary bucket. VAMS adds no lifecycle rule to an external asset bucket; see [Step 6](../deployment/external-s3-setup.md#step-6-configure-lifecycle-rules-for-upload-staging) of the external bucket setup. |
+| Optional KMS Encryption | SSE-KMS with bucket key enabled                                                                                                                                                                                                                                                                                         |
 
 ### Additional Bucket Policies
 
