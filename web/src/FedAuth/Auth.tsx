@@ -280,6 +280,8 @@ type AuthProps = { children?: React.ReactNode };
 /** Bounded retry for the secure-config fetch that carries the feature switches. */
 const SECURE_CONFIG_MAX_ATTEMPTS = 3;
 const SECURE_CONFIG_RETRY_DELAY_MILLIS = 1500;
+/** Longest the app shell waits for secure-config when no feature switches are cached. */
+const SECURE_CONFIG_HOLD_MAX_MS = 10000;
 
 //Cognito components
 const CenteredBox: React.FC<PropsWithChildren<{}>> = ({ children }) => {
@@ -478,9 +480,18 @@ const Auth: React.FC<AuthProps> = (props) => {
     // failed attempt actually schedules another effect run.
     const [secureConfigAttempt, setSecureConfigAttempt] = useState(0);
 
-    // Set once the secure-config fetch has applied its feature switches, or has given up after
-    // its last attempt. Until then a session with no cached featuresEnabled holds the app shell.
+    // Set once the secure-config fetch has applied its feature switches, has given up after its
+    // last attempt, or has run past SECURE_CONFIG_HOLD_MAX_MS. Until then a session with no
+    // cached featuresEnabled holds the app shell.
     const [secureConfigSettled, setSecureConfigSettled] = useState(false);
+
+    // The timer that bounds that hold. Started with the first fetch that finds no cached
+    // switches, and cleared when the fetch settles.
+    const secureConfigHoldTimerRef = useRef<ReturnType<typeof setTimeout>>();
+    useEffect(() => {
+        const holdTimer = secureConfigHoldTimerRef;
+        return () => clearTimeout(holdTimer.current);
+    }, []);
 
     // Tracks whether amplify-config has been re-fetched for this page load, so the
     // runtime Amplify/OAuth configuration is refreshed from the backend on every
@@ -750,6 +761,17 @@ const Auth: React.FC<AuthProps> = (props) => {
         //cached in localStorage forever until a full site-data reset).
         if (config && !config._configError && isLoggedIn && !secureConfigFetchedRef.current) {
             secureConfigFetchedRef.current = true;
+            const switchesCached =
+                configRef.current?.featuresEnabled !== undefined &&
+                configRef.current?.featuresEnabled !== null;
+            if (!switchesCached && secureConfigHoldTimerRef.current === undefined) {
+                // A slow or unanswered request ends the hold after the bound; the switches still
+                // apply if a later attempt returns them.
+                secureConfigHoldTimerRef.current = setTimeout(
+                    () => setSecureConfigSettled(true),
+                    SECURE_CONFIG_HOLD_MAX_MS
+                );
+            }
             getSecureConfig()
                 .then((value) => {
                     // A new object, not a mutation of the current one: re-setting the same
@@ -766,6 +788,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                     } as Config;
                     appCache.setItem("config", withSecureConfig);
                     setConfig(withSecureConfig);
+                    clearTimeout(secureConfigHoldTimerRef.current);
                     setSecureConfigSettled(true);
                 })
                 .catch((error: Error) => {
@@ -785,6 +808,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                             SECURE_CONFIG_MAX_ATTEMPTS,
                             "attempts; feature-gated functionality stays disabled until the page is reloaded"
                         );
+                        clearTimeout(secureConfigHoldTimerRef.current);
                         setSecureConfigSettled(true);
                     }
                 });
@@ -1232,11 +1256,17 @@ const Auth: React.FC<AuthProps> = (props) => {
     //Show rest of app, we are all logged in.
     if (isLoggedIn && ampInit) {
         // Pages and the viewer registry read the feature switches once, when they mount. Without
-        // cached switches (every sign-out clears them) the shell waits for secure-config to settle.
+        // cached switches (every sign-out clears them) the shell waits for secure-config to settle,
+        // at most SECURE_CONFIG_HOLD_MAX_MS, below the deployment banner.
         const featureSwitchesCached =
             config?.featuresEnabled !== undefined && config?.featuresEnabled !== null;
         if (!featureSwitchesCached && !secureConfigSettled) {
-            return <LoadingScreen />;
+            return (
+                <>
+                    <GlobalHeader authorizationHeader={false} />
+                    <LoadingScreen />
+                </>
+            );
         }
         return (
             <>

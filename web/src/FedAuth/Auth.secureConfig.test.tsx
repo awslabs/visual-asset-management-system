@@ -18,7 +18,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { appCache } from "../services/appCache";
 import Auth from "./Auth";
 
@@ -91,12 +91,17 @@ jest.mock("../hooks/useThemeSettings", () => ({
     useThemeSettings: () => ({ theme: "dark", setTheme: jest.fn() }),
 }));
 
-jest.mock("../common/GlobalHeader", () => ({ GlobalHeader: () => null }));
+jest.mock("../common/GlobalHeader", () => ({
+    GlobalHeader: () => <div data-testid="global-header" />,
+}));
 jest.mock("../authenticator/Header", () => ({ Header: () => null }));
 jest.mock("../authenticator/Footer", () => ({ Footer: () => null, PageFooter: () => null }));
 jest.mock("../authenticator/SignInHeader", () => ({ SignInHeader: () => null }));
 jest.mock("../authenticator/SignInFooter", () => ({ SignInFooter: () => null }));
-jest.mock("../components/loading/LoadingScreen", () => ({ __esModule: true, default: () => null }));
+jest.mock("../components/loading/LoadingScreen", () => ({
+    __esModule: true,
+    default: () => <div data-testid="loading-screen" />,
+}));
 
 /** A cached config is enough to reach ampInit synchronously on the first render. */
 const COGNITO_CONFIG = {
@@ -232,7 +237,8 @@ describe("Auth secure-config fetch", () => {
 /**
  * Pages and the viewer registry read the feature switches once, when they mount, so the app
  * shell waits for secure-config when no switches are cached (a fresh sign-in), and renders at
- * once when a reload finds them cached.
+ * once when a reload finds them cached. The wait shows the deployment banner above the loading
+ * screen and lasts at most 10 seconds, so a request that never answers does not strand the user.
  */
 describe("Auth holds the app until the feature switches are known", () => {
     beforeEach(() => {
@@ -283,6 +289,45 @@ describe("Auth holds the app until the feature switches are known", () => {
 
         expect(await screen.findByTestId("app-children")).toBeInTheDocument();
         expect(mockGetSecureConfig).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows the deployment banner above the loading screen while it holds", async () => {
+        seedMode(COGNITO_CONFIG);
+        mockGetSecureConfig.mockReturnValue(new Promise(() => {}));
+
+        renderAuth();
+
+        await waitFor(() => expect(mockGetSecureConfig).toHaveBeenCalledTimes(1));
+        const banner = screen.getByTestId("global-header");
+        const loading = screen.getByTestId("loading-screen");
+        expect(
+            banner.compareDocumentPosition(loading) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+        expect(screen.queryByTestId("app-children")).not.toBeInTheDocument();
+    });
+
+    it("renders the app after the hold's 10-second bound when secure-config never answers", async () => {
+        jest.useFakeTimers();
+        try {
+            seedMode(COGNITO_CONFIG);
+            mockGetSecureConfig.mockReturnValue(new Promise(() => {}));
+
+            renderAuth();
+
+            await waitFor(() => expect(mockGetSecureConfig).toHaveBeenCalledTimes(1));
+            act(() => {
+                jest.advanceTimersByTime(9000);
+            });
+            expect(screen.queryByTestId("app-children")).not.toBeInTheDocument();
+
+            act(() => {
+                jest.advanceTimersByTime(1000);
+            });
+            expect(screen.getByTestId("app-children")).toBeInTheDocument();
+            expect(mockGetSecureConfig).toHaveBeenCalledTimes(1);
+        } finally {
+            jest.useRealTimers();
+        }
     });
 });
 
