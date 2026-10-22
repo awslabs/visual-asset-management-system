@@ -2006,17 +2006,17 @@ export function getConfig(app: cdk.App): Config {
             }
         }
     }
-    //Cloudfront + ALB check (not more than 1)
+    //Cloudfront + ALB neither warning check
     if (!config.app.useCloudFront.enabled && !config.app.useAlb.enabled) {
         console.warn(
             "Configuration Warning: YOU HAVE DISABLED DEPLOYING ANY VAMS FRONT-END WITH CLOUDFRONT OR ALB. THIS WILL BE A API-DRIVEN SOLUTION-ONLY DEPLOYMENT."
         );
     }
 
-    //Cloudfront + ALB neither warning check
+    //Cloudfront + ALB check (not more than 1)
     if (config.app.useCloudFront.enabled && config.app.useAlb.enabled) {
         throw new Error(
-            "Configuration Error: Must choose either only Cloufront or ALB for static website deployment use (or neither), cannot have both enabled."
+            "Configuration Error: Must choose either only CloudFront or ALB for static website deployment use (or neither), cannot have both enabled."
         );
     }
 
@@ -2039,7 +2039,7 @@ export function getConfig(app: cdk.App): Config {
         const certArnPattern = /^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[a-f0-9-]+$/;
         if (!certArnPattern.test(config.app.useCloudFront.customDomain.certificateArn)) {
             throw new Error(
-                "Configuration Warning: CloudFront custom domain certificate ARN should be in us-east-1 region. CloudFront requires certificates to be in us-east-1 regardless of deployment region. Provided ARN: " +
+                "Configuration Error: CloudFront custom domain certificate ARN should be in us-east-1 region. CloudFront requires certificates to be in us-east-1 regardless of deployment region. Provided ARN: " +
                     config.app.useCloudFront.customDomain.certificateArn
             );
         }
