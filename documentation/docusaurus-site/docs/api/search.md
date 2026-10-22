@@ -13,7 +13,7 @@ For asset management, see [Assets](assets.md). For file operations, see [Files](
 -   **AND Query Logic**: The `query`, `metadataQuery`, and `filters` parameters are combined using AND logic. Results must match ALL specified criteria. Within a `metadataQuery`, individual field conditions can use AND or OR (e.g., `"color:red AND size:large"` or `"color:red OR color:blue"`).
 -   **Metadata Search**: Metadata is indexed alongside the core fields, enabling search by metadata keys, values, or both. It is stored differently from a core field -- see [Metadata Fields](#metadata-fields).
 -   **Field Prefixes**: The core OpenSearch fields use type prefixes for proper mapping: `str_` (text with a keyword subfield), `num_` (number), `date_` (date), `bool_` (boolean), `list_` (array). Metadata keys do not carry one.
--   **Aggregations**: Search responses can include faceted aggregation data (e.g., counts by asset type, file extension, database).
+-   **Aggregations**: Search responses can include faceted aggregation data (e.g., counts by asset type, file extension, database). Aggregations and `aggregationTotal` count every matching document in the databases the caller can read, before each record is checked individually, so they can be higher than the number of records the caller can open.
 
 ---
 
@@ -600,20 +600,20 @@ Do not carry the dot of the internal query path into a request. `MD_.product` is
 
 All search endpoints return the same response structure.
 
-| Field                     | Type    | Description                                     |
-| ------------------------- | ------- | ----------------------------------------------- |
-| `took`                    | integer | Time in milliseconds for the search to execute. |
-| `timed_out`               | boolean | Whether the search timed out.                   |
-| `_shards`                 | object  | Shard execution statistics.                     |
-| `hits.total.value`        | integer | Total number of matching documents.             |
-| `hits.total.relation`     | string  | `"eq"` (exact count) or `"gte"` (lower bound).  |
-| `hits.max_score`          | float   | Highest relevance score in results.             |
-| `hits.hits`               | array   | Array of matching documents.                    |
-| `hits.hits[]._index`      | string  | OpenSearch index name.                          |
-| `hits.hits[]._id`         | string  | Document identifier.                            |
-| `hits.hits[]._score`      | float   | Relevance score for this document.              |
-| `hits.hits[]._source`     | object  | The indexed document fields.                    |
-| `hits.hits[].highlight`   | object  | Highlighted matching text (if enabled).         |
-| `hits.hits[].explanation` | object  | Match explanation (if requested).               |
-| `aggregations`            | object  | Faceted aggregation buckets (if requested).     |
-| `aggregationTotal`        | integer | True total from aggregation bucket sums.        |
+| Field                     | Type    | Description                                                                                                                                                                                  |
+| ------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `took`                    | integer | Time in milliseconds for the search to execute.                                                                                                                                              |
+| `timed_out`               | boolean | Whether the search timed out.                                                                                                                                                                |
+| `_shards`                 | object  | Shard execution statistics.                                                                                                                                                                  |
+| `hits.total.value`        | integer | Total number of matching documents.                                                                                                                                                          |
+| `hits.total.relation`     | string  | `"eq"` (exact count) or `"gte"` (lower bound).                                                                                                                                               |
+| `hits.max_score`          | float   | Highest relevance score in results.                                                                                                                                                          |
+| `hits.hits`               | array   | Array of matching documents.                                                                                                                                                                 |
+| `hits.hits[]._index`      | string  | OpenSearch index name.                                                                                                                                                                       |
+| `hits.hits[]._id`         | string  | Document identifier.                                                                                                                                                                         |
+| `hits.hits[]._score`      | float   | Relevance score for this document.                                                                                                                                                           |
+| `hits.hits[]._source`     | object  | The indexed document fields.                                                                                                                                                                 |
+| `hits.hits[].highlight`   | object  | Highlighted matching text (if enabled).                                                                                                                                                      |
+| `hits.hits[].explanation` | object  | Match explanation (if requested).                                                                                                                                                            |
+| `aggregations`            | object  | Faceted aggregation buckets (if requested). Bucket counts include every matching document in the databases the caller can read, before each record is checked individually.                  |
+| `aggregationTotal`        | integer | Sum of the `str_databaseid` aggregation buckets (or `str_assetid` when that aggregation is absent), counted the same way as `aggregations`; `null` when no aggregation buckets are returned. |

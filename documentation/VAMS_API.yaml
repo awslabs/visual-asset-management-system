@@ -14663,7 +14663,11 @@ components:
                     type: object
                     additionalProperties:
                         $ref: "#/components/schemas/aggregation"
-                    description: "Search aggregations"
+                    description: "Search aggregations. Bucket counts include every matching document in the databases the caller can read, before each record is checked individually."
+                aggregationTotal:
+                    type: integer
+                    nullable: true
+                    description: "Sum of the str_databaseid aggregation buckets (or str_assetid when that aggregation is absent), counted the same way as aggregations, so it can be higher than the number of records the caller can open. Null when no aggregation buckets are returned."
             required:
                 - took
                 - timed_out
