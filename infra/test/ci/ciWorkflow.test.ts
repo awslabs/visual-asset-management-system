@@ -82,4 +82,39 @@ describe("CI workflow", () => {
             /^concurrency:\n\s+group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}\n\s+cancel-in-progress: true$/m
         );
     });
+
+    describe("automated security helper scan", () => {
+        const ashCheckout = (): string =>
+            /- name: Clone automated security helper\n([\s\S]*?)\n\s*\n/.exec(text)?.[1] ?? "";
+
+        test("the scan is cloned at a pinned commit", () => {
+            expect(ashCheckout()).toContain("repository: aws-samples/automated-security-helper");
+            expect(ashCheckout()).toMatch(/^\s+ref: [0-9a-f]{40}$/m);
+        });
+
+        test("the scan's exit code is captured, not discarded", () => {
+            const ashRuns = runCommands(text).filter((command) => /^ash\s/.test(command));
+            expect(ashRuns.length).toBe(1);
+            expect(ashRuns[0]).not.toMatch(/\|\|\s*true\s*$/);
+            expect(ashRuns[0]).toContain("|| rc=$?");
+        });
+
+        test("results go to a non-hidden directory the report upload reads", () => {
+            const outputDir = /ash .*--output-dir "\$GITHUB_WORKSPACE\/([^"]+)"/.exec(text)?.[1];
+            expect(outputDir).toBeDefined();
+            expect(outputDir?.startsWith(".")).toBe(false);
+            expect(text).toMatch(new RegExp(`^\\s+path: ${outputDir}/?$`, "m"));
+        });
+
+        test("the summary step always ends with exit 0", () => {
+            const summary =
+                /- name: Summarize automated security helper results\n([\s\S]*?)\n\s*\n/.exec(
+                    text
+                )?.[1];
+            expect(summary).toBeDefined();
+            expect(summary).toContain("set +e");
+            expect(summary).toContain("GITHUB_STEP_SUMMARY");
+            expect(summary?.trimEnd().endsWith("exit 0")).toBe(true);
+        });
+    });
 });
