@@ -478,6 +478,10 @@ const Auth: React.FC<AuthProps> = (props) => {
     // failed attempt actually schedules another effect run.
     const [secureConfigAttempt, setSecureConfigAttempt] = useState(0);
 
+    // Set once the secure-config fetch has applied its feature switches, or has given up after
+    // its last attempt. Until then a session with no cached featuresEnabled holds the app shell.
+    const [secureConfigSettled, setSecureConfigSettled] = useState(false);
+
     // Tracks whether amplify-config has been re-fetched for this page load, so the
     // runtime Amplify/OAuth configuration is refreshed from the backend on every
     // reload (parallel to secure-config) instead of being served from the stale
@@ -762,6 +766,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                     } as Config;
                     appCache.setItem("config", withSecureConfig);
                     setConfig(withSecureConfig);
+                    setSecureConfigSettled(true);
                 })
                 .catch((error: Error) => {
                     console.error("Error getting secure-config:", error.message);
@@ -780,6 +785,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                             SECURE_CONFIG_MAX_ATTEMPTS,
                             "attempts; feature-gated functionality stays disabled until the page is reloaded"
                         );
+                        setSecureConfigSettled(true);
                     }
                 });
             console.log("Fetched secure config");
@@ -1225,6 +1231,13 @@ const Auth: React.FC<AuthProps> = (props) => {
 
     //Show rest of app, we are all logged in.
     if (isLoggedIn && ampInit) {
+        // Pages and the viewer registry read the feature switches once, when they mount. Without
+        // cached switches (every sign-out clears them) the shell waits for secure-config to settle.
+        const featureSwitchesCached =
+            config?.featuresEnabled !== undefined && config?.featuresEnabled !== null;
+        if (!featureSwitchesCached && !secureConfigSettled) {
+            return <LoadingScreen />;
+        }
         return (
             <>
                 <GlobalHeader authorizationHeader={false} />

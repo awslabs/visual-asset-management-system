@@ -1142,6 +1142,8 @@ Configuration is loaded at startup in this order:
 2. `GET /api/secure-config` --> Additional config requiring auth
 3. Both are stored in `appCache.setItem("config", ...)` for runtime access
 
+When the cached config has no `featuresEnabled` (every sign-out clears it), `Auth.tsx` renders `<LoadingScreen />` instead of the app until secure-config has applied the feature switches or given up after its last attempt, because pages and the viewer registry read the switches once, when they mount.
+
 **Note:** `appCache` (from `src/services/appCache.ts`) replaces Amplify Cache:
 
 ```typescript

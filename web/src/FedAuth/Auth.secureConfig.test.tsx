@@ -205,11 +205,11 @@ describe("Auth secure-config fetch", () => {
 
         renderAuth();
 
-        expect(await screen.findByTestId("app-children")).toBeInTheDocument();
-        expect((window as any).DISABLE_COGNITO).toBe(true); // the OAuth2 branch really was taken
         await waitFor(() => expect(mockGetSecureConfig).toHaveBeenCalledTimes(2), {
             timeout: 15000,
         });
+        expect(await screen.findByTestId("app-children")).toBeInTheDocument();
+        expect((window as any).DISABLE_COGNITO).toBe(true); // the OAuth2 branch really was taken
         await waitFor(() =>
             expect(appCache.getItem("config").featuresEnabled).toContain("LOCATIONSERVICES")
         );
@@ -227,6 +227,63 @@ describe("Auth secure-config fetch", () => {
         await new Promise((resolve) => setTimeout(resolve, 2500));
         expect(mockGetSecureConfig).toHaveBeenCalledTimes(3);
     }, 30000);
+});
+
+/**
+ * Pages and the viewer registry read the feature switches once, when they mount, so the app
+ * shell waits for secure-config when no switches are cached (a fresh sign-in), and renders at
+ * once when a reload finds them cached.
+ */
+describe("Auth holds the app until the feature switches are known", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
+    it("does not render the app while secure-config is pending with no cached switches", async () => {
+        seedMode(COGNITO_CONFIG);
+        let resolveSecureConfig!: (value: any) => void;
+        mockGetSecureConfig.mockReturnValue(
+            new Promise((resolve) => {
+                resolveSecureConfig = resolve;
+            })
+        );
+
+        renderAuth();
+
+        await waitFor(() => expect(mockGetSecureConfig).toHaveBeenCalledTimes(1));
+        expect(screen.queryByTestId("app-children")).not.toBeInTheDocument();
+
+        resolveSecureConfig(SECURE_CONFIG);
+
+        expect(await screen.findByTestId("app-children")).toBeInTheDocument();
+        expect(appCache.getItem("config").featuresEnabled).toContain("LOCATIONSERVICES");
+    });
+
+    it("renders the app after the last failed attempt", async () => {
+        seedMode(COGNITO_CONFIG);
+        mockGetSecureConfig.mockRejectedValue(new Error("503 Service Unavailable"));
+
+        renderAuth();
+
+        await waitFor(() => expect(mockGetSecureConfig).toHaveBeenCalledTimes(2), {
+            timeout: 15000,
+        });
+        expect(screen.queryByTestId("app-children")).not.toBeInTheDocument();
+        await waitFor(() => expect(mockGetSecureConfig).toHaveBeenCalledTimes(3), {
+            timeout: 15000,
+        });
+        expect(await screen.findByTestId("app-children")).toBeInTheDocument();
+    }, 30000);
+
+    it("renders at once when the switches are already cached", async () => {
+        seedMode({ ...COGNITO_CONFIG, featuresEnabled: ["LOCATIONSERVICES"] });
+        mockGetSecureConfig.mockReturnValue(new Promise(() => {}));
+
+        renderAuth();
+
+        expect(await screen.findByTestId("app-children")).toBeInTheDocument();
+        expect(mockGetSecureConfig).toHaveBeenCalledTimes(1);
+    });
 });
 
 describe("Auth federated Cognito detection", () => {
