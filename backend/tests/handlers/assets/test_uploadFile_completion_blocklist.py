@@ -4,10 +4,11 @@
 """Upload completion applies the blocklist to every object it creates and accepts only the
 files recorded at initialization.
 
-``complete_upload`` has three object-creating branches: a zero-byte file (``uploadIdS3 ==
-"zero-byte"``), an abandoned multipart upload (no parts, written as an empty file), and a
-regular multipart completion. Only the third used to reach the blocklist, and only after the
-object existed; the first two wrote an object under whatever ``relativeKey`` the request
+``complete_upload`` has two object-creating branches: a zero-byte file (``uploadIdS3 ==
+"zero-byte"``) and a regular multipart completion. A multipart upload completed with no parts
+is a cancelled file: it is aborted and creates nothing. Only the multipart branch used to reach
+the blocklist, and only after the object existed; the zero-byte branch (and the no-parts branch,
+which once wrote an empty file) wrote an object under whatever ``relativeKey`` the request
 carried. The request's keys were also never compared with the keys the upload was
 initialized with, so a valid ``uploadId`` could create zero-byte objects under names that
 had passed no check at all.
@@ -313,8 +314,65 @@ class TestZeroByteAndAbandonedBranchesApplyTheBlocklist:
         mock_copy.assert_called_once()
 
 
+CANCELLED_ERROR = "Upload cancelled: no parts were provided; nothing was stored"
+
+
 @pytest.mark.unit
-class TestCompletionIsBoundToTheInitializedFiles:
+class TestCancelledFilesStoreNothing:
+    """A multipart upload completed with no parts is a cancelled file: its multipart upload is
+    aborted and no object reaches the temporary or the final key, so an existing file at that
+    path keeps its content."""
+
+    def test_a_cancelled_file_is_aborted_and_writes_no_object(self):
+        response, mock_s3, mock_copy = _complete(
+            _request(_abandoned("/models/building.ifc")),
+            _upload_record(["/models/building.ifc"]))
+
+        result = _result(response, "/models/building.ifc")
+        assert result.success is False
+        assert result.error == CANCELLED_ERROR
+        assert response.overallSuccess is False
+        mock_s3.abort_multipart_upload.assert_called_once_with(
+            Bucket=BUCKET, Key=_temp_key("/models/building.ifc"), UploadId="s3-upload-1")
+        mock_s3.put_object.assert_not_called()
+        mock_s3.complete_multipart_upload.assert_not_called()
+        mock_copy.assert_not_called()
+
+    def test_a_cancelled_file_beside_a_completed_one_leaves_only_the_completed_one(self):
+        response, mock_s3, mock_copy = _complete(
+            _request(_abandoned("/models/building.ifc", uploadIdS3="s3-upload-1"),
+                     _multipart("/models/site.ifc", uploadIdS3="s3-upload-2")),
+            _upload_record(["/models/building.ifc", "/models/site.ifc"]))
+
+        assert _result(response, "/models/building.ifc").success is False
+        assert _result(response, "/models/building.ifc").error == CANCELLED_ERROR
+        assert _result(response, "/models/site.ifc").success is True
+        assert response.overallSuccess is False
+        mock_s3.put_object.assert_not_called()
+        mock_s3.abort_multipart_upload.assert_called_once_with(
+            Bucket=BUCKET, Key=_temp_key("/models/building.ifc"), UploadId="s3-upload-1")
+        # Only the completed file is moved to its final key.
+        assert mock_copy.call_count == 1
+        copied = [str(arg) for arg in mock_copy.call_args.args] + \
+            [str(v) for v in mock_copy.call_args.kwargs.values()]
+        assert not any("building.ifc" in value for value in copied)
+
+    def test_an_all_cancelled_request_returns_the_no_successful_files_response(self):
+        with _completion_env(_upload_record(["/a.ifc", "/b.ifc"])) as (uf, mock_s3, mock_copy):
+            response = uf.complete_upload(
+                UPLOAD_ID,
+                _request(_abandoned("/a.ifc", uploadIdS3="s3-upload-1"),
+                         _abandoned("/b.ifc", uploadIdS3="s3-upload-2")),
+                _rest_event())
+            record_deleted = uf.delete_upload_details.called
+
+        assert response.overallSuccess is False
+        assert response.message == "No files were successfully uploaded"
+        assert [r.error for r in response.fileResults] == [CANCELLED_ERROR, CANCELLED_ERROR]
+        assert mock_s3.abort_multipart_upload.call_count == 2
+        assert record_deleted
+        mock_s3.put_object.assert_not_called()
+        mock_copy.assert_not_called()
     def test_a_key_the_upload_was_not_initialized_with_is_rejected(self):
         response, mock_s3, mock_copy = _complete(
             _request(_zero_byte("/other.txt")), _upload_record(["/empty.txt"]))

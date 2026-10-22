@@ -12277,6 +12277,10 @@ components:
                     type: string
                 parts:
                     type: array
+                    description: >-
+                        The uploaded parts. An empty array completes a file initialized as
+                        "zero-byte"; for any other file it cancels the file, aborting its
+                        multipart upload and storing nothing.
                     items:
                         $ref: "#/components/schemas/uploadPartCompletion"
             required:

@@ -1956,8 +1956,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 
             temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
             
-            # Every branch below creates an object under final_s3_key -- the zero-byte and abandoned
-            # branches write one directly, the multipart branch completes one -- so the name-level
+            # The branches below can create an object under final_s3_key -- the zero-byte branch
+            # writes one directly, the multipart branch completes one -- so the name-level
             # blocklist and preview-extension rules run here, before any of them, on the submitted
             # name. The multipart branch additionally re-checks the completed object's content type.
             name_check_error = None
@@ -2034,11 +2034,11 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     has_failures = True
                     continue
             
-            # Handle abandoned uploads (no parts provided) - create empty file
+            # Cancelled uploads (a multipart upload completed with no parts): abort the
+            # multipart upload and store nothing, so an existing object at the key is untouched
             if not file.parts or len(file.parts) == 0:
-                logger.info(f"No parts provided for file {file.relativeKey}, creating empty file")
+                logger.info(f"No parts provided for file {file.relativeKey}, cancelling its upload")
                 
-                # Abort the existing multipart upload
                 try:
                     s3.abort_multipart_upload(
                         Bucket=bucket_name,
@@ -2046,34 +2046,16 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                         UploadId=file.uploadIdS3
                     )
                 except Exception as abort_error:
-                    logger.warning(f"Error aborting multipart upload for abandoned file: {abort_error}")
+                    logger.warning(f"Error aborting multipart upload for cancelled file: {abort_error}")
                 
-                # Create empty file in temporary location
-                if create_zero_byte_file(bucket_name, temp_s3_key, uploadId, databaseId, assetId, user_id):
-                    file_detail = {
-                        'relativeKey': file.relativeKey,
-                        'temp_s3_key': temp_s3_key,
-                        'final_s3_key': final_s3_key,
-                        'uploadIdS3': file.uploadIdS3
-                    }
-                    
-                    successful_files.append(file_detail)
-                    file_results.append(FileCompletionResult(
-                        relativeKey=file.relativeKey,
-                        uploadIdS3=file.uploadIdS3,
-                        success=True,
-                        largeFileAsynchronousHandling=False
-                    ))
-                    continue
-                else:
-                    file_results.append(FileCompletionResult(
-                        relativeKey=file.relativeKey,
-                        uploadIdS3=file.uploadIdS3,
-                        success=False,
-                        error="Failed to create empty file for abandoned upload"
-                    ))
-                    has_failures = True
-                    continue
+                file_results.append(FileCompletionResult(
+                    relativeKey=file.relativeKey,
+                    uploadIdS3=file.uploadIdS3,
+                    success=False,
+                    error="Upload cancelled: no parts were provided; nothing was stored"
+                ))
+                has_failures = True
+                continue
             
             # Regular multipart upload - first check file size before completing
             actual_parts = sorted([p.PartNumber for p in file.parts])

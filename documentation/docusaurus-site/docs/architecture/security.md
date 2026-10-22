@@ -664,7 +664,7 @@ VAMS validates all uploaded files against blocked extension and MIME type lists 
 
 A deployment can add entries to both lists in its add-on or fork constants files; it cannot remove one. Added entries are matched the same way as the shipped ones. See [Upload deny lists](../developer/customizing-vams.md#upload-deny-lists).
 
-Upload completion applies the blocked-extension check to every object it creates, including zero-byte and abandoned uploads, before the object is written, and accepts only the files that were declared when the upload was initialized; an upload initialized before this check existed is completed without it until it expires, seven days after it was initialized, and an expired upload is refused.
+Upload completion applies the blocked-extension check to every object it creates, including zero-byte files, before the object is written, and accepts only the files that were declared when the upload was initialized; an upload initialized before this check existed is completed without it until it expires, seven days after it was initialized, and an expired upload is refused. A file completed with no parts is cancelled: its multipart upload is aborted and no object is created.
 
 ## Audit Logging
 
