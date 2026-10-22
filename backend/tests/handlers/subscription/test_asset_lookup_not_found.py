@@ -11,13 +11,18 @@ AttributeError and the handler answers 500 instead of 404.
 
 The 404 is only safe behind Tier-1 authorization. Both handlers therefore complete the
 route check (``enforceAPI``) before the asset lookup, matching the ordering in
-``subscriptionService``; Tier-2 ``enforce`` needs the asset record and necessarily stays
-after it. An unauthorized caller consequently receives the same 403 whether or not the
-asset exists, so the 404 cannot be used to probe the asset namespace.
+``subscriptionService``. An unauthorized caller consequently receives the same 403 whether
+or not the asset exists, so the 404 cannot be used to probe the asset namespace.
+
+For a missing asset, ``checkSubscriptionService`` also runs one Tier-2 check on a
+provisional object built from the assetId (the route carries no databaseId) and answers
+404 only when that check allows, 403 otherwise. ``unsubscribeService`` runs no Tier-2
+check for a missing asset; its Tier-2 ``enforce`` needs the asset record and stays after
+the lookup.
 
 Each not-found case is paired with a positive control that resolves a real asset record,
 so a guard that answers 404 unconditionally fails the pair. The not-found cases also
-assert that Tier-2 enforcement never ran, pinning the guard ahead of the annotation, and
+assert which object-level checks ran, pinning the guard ahead of the annotation, and
 that the response body does not echo the requested id (backend Rule 11).
 """
 
@@ -45,11 +50,13 @@ DOWNSTREAM_RESPONSE = {"statusCode": 200, "body": json.dumps({"message": "succes
 class RecordingEnforcer:
     """Stand-in for CasbinEnforcer recording construction and each enforcement tier."""
 
-    def __init__(self, api_allowed=True):
+    def __init__(self, api_allowed=True, object_allowed=True):
         self.api_allowed = api_allowed
+        self.object_allowed = object_allowed
         self.constructed = 0
         self.api_calls = 0
         self.object_calls = 0
+        self.objects = []
 
     def __call__(self, claims_and_roles):
         self.constructed += 1
@@ -61,7 +68,8 @@ class RecordingEnforcer:
 
     def enforce(self, asset_object, action):
         self.object_calls += 1
-        return True
+        self.objects.append((dict(asset_object), action))
+        return self.object_allowed
 
 
 class RecordingLookup:
@@ -87,13 +95,14 @@ class RecordingCall:
         return DOWNSTREAM_RESPONSE
 
 
-def _patch_handler(monkeypatch, module, downstream_name, asset_object, api_allowed=True):
+def _patch_handler(monkeypatch, module, downstream_name, asset_object, api_allowed=True,
+                   object_allowed=True):
     """Wire a subscription handler to a fixed asset-lookup result and record collaborators."""
     monkeypatch.setattr(
         module, "request_to_claims", lambda event: {"tokens": ["test-user@example.com"]})
     lookup = RecordingLookup(asset_object)
     monkeypatch.setattr(module, "get_asset_object_from_id", lookup)
-    enforcer = RecordingEnforcer(api_allowed=api_allowed)
+    enforcer = RecordingEnforcer(api_allowed=api_allowed, object_allowed=object_allowed)
     monkeypatch.setattr(module, "CasbinEnforcer", enforcer)
     downstream = RecordingCall()
     monkeypatch.setattr(module, downstream_name, downstream)
@@ -147,8 +156,21 @@ class TestCheckSubscriptionServiceAssetLookup:
 
         assert response["statusCode"] == 404
         assert enforcer.api_calls == 1, "route check must run before the asset lookup"
-        assert enforcer.object_calls == 0, "guard must run before object-level enforcement"
+        # One provisional check, built from the assetId rather than the missing record.
+        assert enforcer.objects == [({"assetId": ASSET_ID, "object__type": "asset"}, "GET")]
         assert lookup.calls == [(None, ASSET_ID)]
+        assert downstream.bodies == []
+        assert ASSET_ID not in response["body"], "response must not echo the requested id"
+
+    def test_unresolvable_asset_denied_by_the_provisional_check_returns_403(self, monkeypatch):
+        enforcer, downstream, lookup = _patch_handler(
+            monkeypatch, checkSubscriptionService, "check_subscriptions", None,
+            object_allowed=False)
+
+        response = checkSubscriptionService.lambda_handler(_check_subscription_event(), None)
+
+        assert response["statusCode"] == 403
+        assert enforcer.objects == [({"assetId": ASSET_ID, "object__type": "asset"}, "GET")]
         assert downstream.bodies == []
         assert ASSET_ID not in response["body"], "response must not echo the requested id"
 
