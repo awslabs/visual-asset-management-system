@@ -88,3 +88,16 @@ describe("CommentsTab add-comment result handling", () => {
         );
     });
 });
+
+describe("CommentsTab loading spinner", () => {
+    it("draws the spinner in the theme's text colour", () => {
+        const { container } = render(<CommentsTab assetId="a1" databaseId="db1" isActive={true} />);
+        const spinner = container.querySelector("svg.icon-loading");
+        expect(spinner).not.toBeNull();
+        expect(spinner!.querySelector("g")).toHaveAttribute("fill", "currentColor");
+        expect(container.querySelector('[fill="#000716"]')).toBeNull();
+        expect((spinner!.parentElement as HTMLElement).style.color).toBe(
+            "var(--vams-text-primary)"
+        );
+    });
+});
