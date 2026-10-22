@@ -7,7 +7,8 @@ import React, { useEffect, useState, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { appCache } from "../../services/appCache";
 import { useNavigate } from "react-router-dom";
-import { Grid, SegmentedControl, Box, Alert } from "@cloudscape-design/components";
+import { Grid, SegmentedControl, Box } from "@cloudscape-design/components";
+import Alert from "@cloudscape-design/components/alert";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import {
     SearchContainerProps,
