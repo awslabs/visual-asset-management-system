@@ -238,10 +238,18 @@ const ColumnarViewerComponent: React.FC<ViewerPluginProps> = ({
                     alignItems: "center",
                     height: "100%",
                     fontSize: "16px",
-                    color: "#d13212",
                 }}
             >
-                Error: {error}
+                <div
+                    style={{
+                        background: "var(--vams-bg-primary)",
+                        color: "var(--vams-color-error)",
+                        padding: "12px 16px",
+                        borderRadius: "8px",
+                    }}
+                >
+                    Error: {error}
+                </div>
             </div>
         );
     }

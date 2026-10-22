@@ -120,6 +120,10 @@ describe("ColumnarViewerComponent", () => {
             expect(screen.getByText(/\.rds is not supported/i)).toBeInTheDocument()
         );
         expect(mockReadRemoteFile).not.toHaveBeenCalled();
+        // The message sits on a theme panel over the striped viewer background.
+        const message = screen.getByText(/\.rds is not supported/i);
+        expect(message.style.background).toBe("var(--vams-bg-primary)");
+        expect(message.style.color).toBe("var(--vams-color-error)");
     });
 
     it("dispatches on the real extension, not a substring of the name", async () => {

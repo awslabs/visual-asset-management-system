@@ -167,3 +167,25 @@ describe("Potree viewer load failure", () => {
         expect(screen.queryByText(/^Unable to/)).not.toBeInTheDocument();
     });
 });
+
+describe("Potree viewer messages", () => {
+    it("draws the failure message on a theme panel", async () => {
+        respond(404, { message: "File not found" });
+        mount();
+        const message = await screen.findByText(MISSING);
+        expect(message.style.background).toBe("var(--vams-bg-primary)");
+        expect(message.style.color).toBe("var(--vams-color-error)");
+        expect((screen.getByText(PIPELINE_HINT) as HTMLElement).style.color).toBe(
+            "var(--vams-color-error)"
+        );
+    });
+
+    it("draws the loading message on a theme panel", () => {
+        const { PotreeDependencyManager } = jest.requireMock("./dependencies");
+        PotreeDependencyManager.loadPotree.mockReturnValueOnce(new Promise(() => undefined));
+        mount();
+        const message = screen.getByText("Loading Potree viewer...");
+        expect(message.style.background).toBe("var(--vams-bg-primary)");
+        expect(message.style.color).toBe("var(--vams-text-secondary)");
+    });
+});

@@ -174,7 +174,10 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
             <div style={{ position: "relative", height: "100%" }} id="potree-root">
                 <div
                     style={{
-                        color: "#d13212",
+                        color: "var(--vams-color-error)",
+                        background: "var(--vams-bg-primary)",
+                        borderRadius: "8px",
+                        boxSizing: "border-box",
                         fontSize: "1.4em",
                         lineHeight: "1.5",
                         width: "100%",
@@ -191,7 +194,7 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
                         <>
                             <br />
                             <br />
-                            <span style={{ fontSize: ".9em", color: "#d13212" }}>
+                            <span style={{ fontSize: ".9em", color: "var(--vams-color-error)" }}>
                                 Please run the Point Cloud Potree Viewer Pipeline to enable
                                 visualization for this asset file
                             </span>
@@ -207,7 +210,11 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
             <div style={{ position: "relative", height: "100%" }} id="potree-root">
                 <div
                     style={{
-                        color: "#666",
+                        color: "var(--vams-text-secondary)",
+                        background: "var(--vams-bg-primary)",
+                        borderRadius: "8px",
+                        boxSizing: "border-box",
+                        padding: "12px 16px",
                         fontSize: "1.2em",
                         lineHeight: "1.5",
                         width: "100%",
