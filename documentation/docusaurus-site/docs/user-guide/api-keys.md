@@ -112,7 +112,7 @@ The **API Key Management** page displays all API keys in a table with the follow
 | Created By  | The user who created the API key.                                   |
 | Created At  | The date and time the key was created.                              |
 | Expires At  | The expiration date and time, or **Never** if no expiration is set. |
-| Active      | Whether the key is currently active or inactive.                    |
+| Active      | **Active**, **Inactive**, or **Expired** (expiration has passed).   |
 
 Use the text filter at the top of the table to search by name, user ID, or description.
 
