@@ -119,7 +119,21 @@ interface ViewerProviderProps {
 
 const isAppDarkMode = () => document.body.classList.contains("awsui-dark-mode");
 
-// The viewer starts in the VAMS theme: dark mode uses the colours switchTheme("dark") sets.
+// The viewer colours for each theme, used for the initial state and by switchTheme.
+const THEME_COLORS = {
+    dark: {
+        backgroundColor: { r: 42, g: 42, b: 42 },
+        defaultColor: { r: 200, g: 200, b: 200 },
+        defaultLineColor: { r: 255, g: 255, b: 255 },
+    },
+    light: {
+        backgroundColor: { r: 245, g: 245, b: 245 },
+        defaultColor: { r: 200, g: 200, b: 200 },
+        defaultLineColor: { r: 0, g: 0, b: 0 },
+    },
+};
+
+// The viewer starts in the VAMS theme: dark mode uses the dark THEME_COLORS.
 const initStateFromAppTheme = (base: CombinedState): CombinedState =>
     isAppDarkMode()
         ? {
@@ -127,9 +141,7 @@ const initStateFromAppTheme = (base: CombinedState): CombinedState =>
               settings: {
                   ...base.settings,
                   themeId: "dark",
-                  backgroundColor: { r: 42, g: 42, b: 42 },
-                  defaultColor: { r: 200, g: 200, b: 200 },
-                  defaultLineColor: { r: 255, g: 255, b: 255 },
+                  ...THEME_COLORS.dark,
               },
           }
         : base;
@@ -464,20 +476,8 @@ export const ViewerProvider: React.FC<ViewerProviderProps> = ({ children }) => {
 
     const switchTheme = useCallback(
         (themeId: "light" | "dark") => {
-            const newSettings: Partial<ViewerSettings> = { themeId };
-
-            // Update theme-specific colors
-            if (themeId === "dark") {
-                newSettings.backgroundColor = { r: 42, g: 42, b: 42 };
-                newSettings.defaultColor = { r: 200, g: 200, b: 200 };
-                newSettings.defaultLineColor = { r: 255, g: 255, b: 255 };
-            } else {
-                newSettings.backgroundColor = { r: 245, g: 245, b: 245 };
-                newSettings.defaultColor = { r: 200, g: 200, b: 200 };
-                newSettings.defaultLineColor = { r: 0, g: 0, b: 0 };
-            }
-
-            updateSettings(newSettings);
+            // Theme-specific colours
+            updateSettings({ themeId, ...THEME_COLORS[themeId] });
         },
         [updateSettings]
     );
