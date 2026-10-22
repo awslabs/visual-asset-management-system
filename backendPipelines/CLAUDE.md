@@ -759,6 +759,10 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     the upstream `main.py`'s process (`VAMS_BUCKET_REGIONS`), where the launcher replaces a bare
     `boto3.client('s3')` with `vams_utils.aws.s3.region_routing_client()`; Isaac Lab carries the map in
     its job config and `openPipeline` reads the asset bucket with `manifestHelper.s3_client_for_region`.
+    The 3D thumbnail `openPipeline` does the same when it picks the compute tier: `computeTier.py` maps
+    the event's input and output buckets to their Regions (`bucket_regions`) and sends the input's
+    `HeadObject` and the input-configuration read through `s3_client_for`, which falls back to the
+    default client for a bucket in the deployment Region.
     The five NVIDIA containers (Cosmos 3, Predict v2.5, Reason, Transfer, GR00T) run the AWS CLI rather
     than boto3: their `manifest_io.py` carries the registry (`register_bucket_regions`, `bucket_region`,
     `s3_region_args`), `__main__.py` registers the definition's map right after loading it, and every

@@ -1502,6 +1502,26 @@ Install a container's dependencies so that two builds of one commit ship the sam
 -   A release tarball (Node.js) is downloaded at a fixed version and its SHA-256 is checked in the same `RUN`.
 -   Compilers and build tools stay in a builder stage; the runtime stage copies only the installed results, from the same digest-pinned base image.
 
+#### **Size-Tiered Fargate Compute**
+
+One job definition, one Batch state per tier. The 3D thumbnail pipeline is the worked example
+(`infra/lib/nestedStacks/pipelines/preview/3dThumbnail/constructs/preview3dThumbnail-construct.ts`).
+One `BatchFargatePipelineConstruct` job definition is registered at the standard tier's size with
+`attemptDuration` = the longest tier's bound; each tier is its own `tasks.BatchSubmitJob` with fixed
+`containerOverrides.vcpus` / `memory` (aws-cdk-lib renders them as `ResourceRequirements` `VCPU` /
+`MEMORY` in MiB, the form AWS Batch accepts for Fargate — never the deprecated top-level
+`Vcpus`/`Memory`), a `VAMS_COMPUTE_TIER` env value and its own `timeout`, behind a `sfn.Choice` on
+the tier the lambdas carry in the state. Ephemeral storage is a job-definition property and cannot be
+overridden per job, so size it for the largest tier. AWS Batch checks a vCPU/memory override against
+the Fargate task sizes only at submit, so every configurable tier size is validated in `getConfig()`
+with `isFargateCpuMemory` (`infra/config/config.ts`, mirrored in the ConfigBuilder
+`documentation/docusaurus-site/src/components/ConfigBuilder/validation.ts`). The state machine
+timeout covers the longest tier and the `vamsSchema` `taskTimeout` covers the state machine. Each
+tier's Batch construct id is a module-level `*_STATE_NAME` literal in the registering lambda, which
+registers the container log source of the state its tier routes to. Tests:
+`infra/test/pipelines/preview3dThumbnailComputeTiers.test.ts`,
+`infra/test/config/preview3dThumbnailComputeTierValidation.test.ts`.
+
 #### **Read Bits on COPY'd Source in a Non-Root Container**
 
 A pipeline container that drops to a non-root `USER` runs `RUN chmod -R a+rX <path>` on the line
