@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from "react";
+import React, { useState, useCallback, useEffect, useId, useRef } from "react";
 import "./ResizableSplitter.css";
 
 interface ResizableSplitterProps {
@@ -27,6 +27,8 @@ export const ResizableSplitter: React.FC<ResizableSplitterProps> = ({
     const [isDragging, setIsDragging] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
     const splitterRef = useRef<HTMLDivElement>(null);
+    // Ties the separator to the pane it sizes (aria-controls).
+    const leftPanelId = useId();
 
     const clampWidth = useCallback(
         (width: number) => Math.max(minLeftWidth, Math.min(maxLeftWidth, width)),
@@ -107,7 +109,7 @@ export const ResizableSplitter: React.FC<ResizableSplitterProps> = ({
 
     return (
         <div ref={containerRef} className={`resizable-splitter-container ${className}`}>
-            <div className="resizable-left-panel" style={{ width: leftWidth }}>
+            <div id={leftPanelId} className="resizable-left-panel" style={{ width: leftWidth }}>
                 {leftPanel}
             </div>
 
@@ -117,7 +119,9 @@ export const ResizableSplitter: React.FC<ResizableSplitterProps> = ({
                 role="separator"
                 aria-orientation="vertical"
                 aria-label="Resize panels"
+                aria-controls={leftPanelId}
                 aria-valuenow={leftWidth}
+                aria-valuetext={`${leftWidth} pixels`}
                 aria-valuemin={minLeftWidth}
                 aria-valuemax={maxLeftWidth}
                 tabIndex={0}
