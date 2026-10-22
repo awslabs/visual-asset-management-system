@@ -68,4 +68,14 @@ describe("dark-mode login contrast", () => {
             ).toBeGreaterThanOrEqual(4.5);
         }
     });
+
+    it("input placeholder text contrasts with the input background", () => {
+        const rule = loginCss.match(/input::placeholder\)\s*\{([^}]*)\}/);
+        expect(rule).not.toBeNull();
+        const color = rule![1].match(/color:\s*([^;!]+)/);
+        expect(color).not.toBeNull();
+        expect(
+            contrastRatio(resolve(color![1].trim()), darkToken("--vams-bg-input"))
+        ).toBeGreaterThanOrEqual(4.5);
+    });
 });
