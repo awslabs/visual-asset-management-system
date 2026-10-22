@@ -135,7 +135,7 @@ Only the first step's name reaches the output path, and the generated portion of
 :::
 
 :::note[`jobName` the field versus `{{jobName}}` the tag]
-These are related but not interchangeable. The `jobName` **field** above is a fixed label you set on a pipeline reference and accepts no tags. The `{{jobName}}` **tag** is a system tag available in output path prefixes and template bodies, where it resolves to the generated job name of the step it renders for. Writing `{{jobName}}` into the `jobName` field is rejected.
+These are related but not interchangeable. The `jobName` **field** above is a fixed label you set on a pipeline reference and accepts no tags. The `{{jobName}}` **tag** is a system tag available in output path prefixes and template bodies, where it resolves to a per-run name for the step it renders for: the step's generated job name joined to that step's `pipelineExecutionId`, at most 80 characters of letters, numbers, hyphens, and underscores. The value differs on every execution and for every step of one execution, and is the same everywhere it renders within one step. Writing `{{jobName}}` into the `jobName` field is rejected.
 :::
 
 ### System configuration
