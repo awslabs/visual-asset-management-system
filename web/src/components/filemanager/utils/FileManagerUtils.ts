@@ -693,13 +693,20 @@ export function toggleExpanded(fileTree: FileTree, relativePath: string): FileTr
     };
 }
 
+export interface DownloadFileResult {
+    ok: boolean;
+    message?: string;
+    // HTTP status of a rejected download request, when known
+    status?: number;
+}
+
 export async function downloadFile(
     assetId: string,
     databaseId: string,
     keyPrefix: string,
     versionId = "",
     assetVersionId?: string
-) {
+): Promise<DownloadFileResult> {
     try {
         const response = await downloadAsset({
             assetId: assetId,
@@ -713,18 +720,22 @@ export async function downloadFile(
         if (response !== false && Array.isArray(response)) {
             if (response[0] === false) {
                 console.error("API Error with downloading file");
-                return false;
+                return {
+                    ok: false,
+                    message: response[1] || "Unknown error",
+                    status: response[2],
+                };
             } else {
                 const link = document.createElement("a");
                 link.href = response[1];
                 link.click();
-                return true;
+                return { ok: true };
             }
         }
-        return false;
-    } catch (error) {
+        return { ok: false, message: "No download URL was returned" };
+    } catch (error: any) {
         console.error(error);
-        return false;
+        return { ok: false, message: error?.message || "Unknown error" };
     }
 }
 
