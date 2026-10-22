@@ -25,6 +25,7 @@ graph TD
 | viewerConfig.json | `config/viewerConfig.json`      | JSON configuration for the core plugins        |
 | manifest.ts       | `viewers/manifest.ts`           | Vite static analysis paths for dynamic imports |
 | StylesheetManager | `core/StylesheetManager.ts`     | Per-plugin CSS lifecycle management            |
+| streamFailure     | `core/streamFailure.ts`         | Names why a streamed file failed to load       |
 | DynamicViewer     | `components/DynamicViewer.tsx`  | Main viewer component for rendering            |
 | ViewerSelector    | `components/ViewerSelector.tsx` | UI for choosing between compatible viewers     |
 

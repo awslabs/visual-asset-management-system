@@ -1173,10 +1173,16 @@ def [operation_name](self, [params]) -> Dict[str, Any]:
 
         elif e.response.status_code == 404:
             raise [Domain]NotFoundError(f"[Domain] not found")
-        elif e.response.status_code in [401, 403]:
+        elif e.response.status_code == 401:
+            # _make_request raises a 403 itself as RequestBlockedError, PermissionDeniedError,
+            # TokenExpiredError or, for an unrouted path, APIError, so only a 401 reaches this
+            # handler as an HTTPError
             raise AuthenticationError(f"Authentication failed: {e}")
         else:
             raise APIError(f"[Operation] failed: {e}")
+
+    except GlobalInfrastructureError:
+        raise
 
     except Exception as e:
         raise APIError(f"Failed to [operation]: {e}")
@@ -2634,6 +2640,10 @@ for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
 # IMPORTANT: Only use this pattern when you genuinely need ALL items for internal processing.
 # For API responses that return lists to users, always use the LastEvaluatedKey pattern above.
 ```
+
+### **Choosing a File's `.previewFile.<ext>`**
+
+A file can hold several `<file>.previewFile.<ext>` objects (a pipeline re-run in another format writes a `.png` beside an existing `.gif`; nothing deletes the other). Every path that attaches a file's preview goes through `select_newest_preview_file((key, lastModified, isArchived) …)` (`backend/common/s3PathPatterns.py`): in `handlers/assets/assetFiles.py` the current listing, the version-snapshot listing in basic and detailed mode, and the single-file info that set `previewFile`, and in `handlers/assets/assetExportService.py` the export's per-file preview path. A live preview beats an archived one, then the latest `lastModified` wins, ties keep key order. Do not pick "the first in key order" in a new path. Tests: `tests/handlers/assets/test_assetFiles_newest_preview.py`, `tests/handlers/assets/test_assetExportService_newest_preview.py`.
 
 ## 🔍 **Code Review Checklist**
 

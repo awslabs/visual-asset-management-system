@@ -23,7 +23,7 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { useLocation, useNavigate, useParams } from "react-router";
 
 import FileMetadata from "../metadata/FileMetadata";
-import { fetchAsset, fetchFileInfo } from "../../services/APIService";
+import { fetchAsset, fetchFileInfo, isRequestBlocked } from "../../services/APIService";
 import { FileVersionsTable } from "../filemanager/components/FileVersionsTable";
 // File format constants no longer needed - handled by plugin system
 import DynamicViewer from "../../visualizerPlugin/components/DynamicViewer";
@@ -505,8 +505,9 @@ function ViewFileForAsset() {
                 console.error("Error loading file from direct path:", error);
 
                 // Check for specific error types. The apiClient throws an ApiError
-                // carrying the HTTP status in `.status` and the backend message in `.message`.
-                if (error?.status === 403) {
+                // carrying the HTTP status in `.status` and the backend message in `.message`;
+                // a request the AWS WAF web ACL blocked keeps its message.
+                if (error?.status === 403 && !isRequestBlocked(error)) {
                     setDirectPathError("You don't have permission to access this file.");
                 } else if (error?.status === 404) {
                     setDirectPathError(

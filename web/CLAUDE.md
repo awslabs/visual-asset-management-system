@@ -479,6 +479,7 @@ Key patterns to follow:
 2. Error detection uses `response.message.indexOf("error") !== -1` (legacy pattern, maintain consistency)
 3. Return `[false, errorMessage]` on error, `[true, data]` on success, `false` for unknown failures
 4. Always log errors with `console.log` (NOT `console.error` -- match existing convention)
+5. A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message (`ViewFile.tsx`, `deleteAssetLink`, `deleteComment`)
 
 ### 4.2 Consuming API Results
 
@@ -1250,7 +1251,7 @@ See section 9.4 for the full Synonyms rules.
 
 ### 14.1 Key Service Files
 
--   **`src/services/apiClient.ts`** -- Custom fetch-based API client, injects auth headers automatically via `getDualAuthorizationHeader()`
+-   **`src/services/apiClient.ts`** -- Custom fetch-based API client, injects auth headers automatically via `getDualAuthorizationHeader()`; `isRequestBlocked(error)` recognizes a `403` the deployment's AWS WAF web ACL blocked, whose message `parseErrorResponse` extends with the request ID
 -   **`src/services/appCache.ts`** -- Replaces Amplify Cache for runtime config and preference storage
 
 ---

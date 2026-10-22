@@ -3,13 +3,13 @@ name = "3dBasicLambdaPipeline"
 version = "0.1.0"
 description = ""
 authors = ["Kurt Scheuringer <scheurik@amazon.com>"]
-readme = "README.md"
 package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.12"
 trimesh = "^4.5.2"
 aws-lambda-powertools = "^3.2.0"
+pillow = "^13.0.0"
 
 
 [build-system]

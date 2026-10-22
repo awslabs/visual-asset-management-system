@@ -45,19 +45,33 @@ The complete list of third-party dependencies and their licenses is maintained i
 | Web application  | React, Vite, Cloudscape Design System, Amplify                   | MIT, Apache-2.0               |
 | 3D visualization | Three.js, BabylonJS, CesiumJS, Potree, PlayCanvas, Needle Engine | MIT, Apache-2.0, BSD-2-Clause |
 | Backend          | Pydantic, Casbin, boto3, aws-lambda-powertools                   | MIT, Apache-2.0, MIT-0        |
+| 3D conversion    | trimesh, NumPy, Pillow (3D Basic Conversion pipeline)            | MIT, BSD-3-Clause, MIT-CMU    |
 | Infrastructure   | AWS CDK, cdk-nag, constructs                                     | Apache-2.0                    |
 | CLI              | Click, requests, boto3, pycognito                                | BSD-3-Clause, Apache-2.0      |
 
 ### Optional LGPL-Licensed Components
 
-Certain optional components use LGPL-2.1 licensed libraries:
+Certain optional components use LGPL-licensed libraries:
 
 -   **OpenCascade.js** -- Dynamically loaded for CAD format support in the Three.js Viewer (STEP, IGES, BREP). Disabled by default and loaded on-demand from a CDN only when explicitly enabled.
 -   **CadQuery** -- Used in the CAD/Mesh Metadata Extraction pipeline and the 3D Preview Thumbnail pipeline for STEP/STP file tessellation.
+-   **casadi** (LGPL-3.0-or-later) and **nlopt** (LGPL-2.1-or-later) -- Optimization libraries that CadQuery requires, installed in the 3D Preview Thumbnail pipeline image.
 
 :::note
-LGPL-2.1 license terms apply only when these optional features are enabled. Review the license requirements with your legal team before enabling CAD-related features.
+LGPL license terms apply only when these optional features are enabled. Review the license requirements with your legal team before enabling CAD-related features.
 :::
+
+The 3D Preview Thumbnail pipeline image also contains MPL-2.0 code: the certifi package (required by requests), the tqdm package (required by open3d), and the Eigen library compiled into open3d. `NOTICE.md` lists all three.
+
+When the 3D Preview Thumbnail pipeline reads a STEP file, it also loads the native libraries that the cadquery-ocp wheel bundles with Open CASCADE. They include JBIG-KIT (GPL-2.0-or-later), FreeImage (GPL-2.0, GPL-3.0 or the FreeImage Public License), LibRaw (LGPL-2.1 or CDDL-1.0) and FreeType (FreeType License or GPL-2.0-or-later). `NOTICE.md` lists every bundled library with its version and license.
+
+### 3D Preview Thumbnail Gaussian Splat Conversion Notice
+
+The 3D Preview Thumbnail pipeline converts `.spz`, `.sog`, `.ksplat`, `.lcc`, `.lcc2` and `.compressed.ply` Gaussian splats with the PlayCanvas [splat-transform](https://github.com/playcanvas/splat-transform) CLI (MIT license), installed at an exact version from a committed `package-lock.json`, and runs it on a pinned [Node.js](https://nodejs.org/) 22 release (MIT license) whose tarball is verified by SHA-256 when the image is built. Its dependency tree is permissively licensed (MIT, ISC, BSD-3-Clause, including the Dawn binaries bundled in `webgpu`); the full list is in `NOTICE.md`. Conversion runs on the CPU; no GPU is used.
+
+### XGRIDS LCC and LCC2 Formats
+
+The 3D Preview Thumbnail pipeline reads XGRIDS LCC (`.lcc`) and LCC2 (`.lcc2`) scene descriptions to choose a level of detail and the files to download, and the SuperSplat Editor viewer opens `.lcc` scenes. The LCC and LCC2 data organization formats originated from XGRIDS. Their specifications and terms are the [LCC white paper](https://github.com/xgrids/LCCWhitepaper) and the [LCC2 white paper](https://github.com/xgrids/LCC2Whitepaper).
 
 ### Coordinate Transform Pipeline Library Notice
 

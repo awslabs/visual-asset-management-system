@@ -9,6 +9,7 @@ import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as codebuild from "aws-cdk-lib/aws-codebuild";
 import * as s3assets from "aws-cdk-lib/aws-s3-assets";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as kms from "aws-cdk-lib/aws-kms";
 import * as cr from "aws-cdk-lib/custom-resources";
 import * as path from "path";
 import { Stack, RemovalPolicy, Duration } from "aws-cdk-lib";
@@ -21,6 +22,8 @@ export interface IsaacLabCodeBuildConstructProps extends cdk.StackProps {
     vpc: ec2.IVpc;
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
+    /** `storageResources.encryption.kmsKey`: the shared VAMS key, undefined when the CMK is off. */
+    kmsKey?: kms.IKey;
 }
 
 export interface PipelineEcrRepo {
@@ -57,6 +60,12 @@ export class IsaacLabCodeBuildConstruct extends Construct {
         const account = Stack.of(this).account;
         const isaacLabConfig = props.config.app.pipelines.useIsaacLabTraining;
 
+        // The shared VAMS key, imported by ARN so no derived grant reaches the storage stack's key
+        // policy (infra/CLAUDE.md, encryption trap 2). Undefined when the CMK is off.
+        const encryptionKey = props.kmsKey
+            ? kms.Key.fromKeyArn(this, "IsaacLabEcrKmsKeyRef", props.kmsKey.keyArn)
+            : undefined;
+
         /**
          * Helper: Create ECR repo, CodeBuild project, and trigger for a single pipeline.
          */
@@ -65,8 +74,13 @@ export class IsaacLabCodeBuildConstruct extends Construct {
             containerDir: string
         ): PipelineEcrRepo => {
             // ECR Repository — no explicit repositoryName so CDK auto-generates a unique name
-            // per deployment (avoids collisions across multiple VAMS stacks in the same region)
+            // per deployment (avoids collisions across multiple VAMS stacks in the same region).
+            // KMS-encrypted with the shared key when the CMK is on, AES-256 without.
             const repository = new ecr.Repository(this, `EcrRepo-${pipelineKey}`, {
+                encryption: encryptionKey
+                    ? ecr.RepositoryEncryption.KMS
+                    : ecr.RepositoryEncryption.AES_256,
+                encryptionKey,
                 removalPolicy: RemovalPolicy.DESTROY,
                 emptyOnDelete: true,
                 imageScanOnPush: true,
@@ -190,11 +204,16 @@ def handler(event, context):
                 onEventHandler: triggerFunction,
             });
 
+            // EcrRepositoryUri is a trigger input: AWS CloudFormation invokes the Update handler only
+            // when a property changes, and a CMK flip replaces the repository (its encryption is
+            // immutable) while ProjectName and SourceHash stay the same. The new URI re-fires the build
+            // into the new, empty repository the job definition then points at.
             new cdk.CustomResource(this, `BuildTriggerCR-${pipelineKey}`, {
                 serviceToken: triggerProvider.serviceToken,
                 properties: {
                     ProjectName: project.projectName,
                     SourceHash: sourceAsset.assetHash,
+                    EcrRepositoryUri: repository.repositoryUri,
                 },
             });
 
