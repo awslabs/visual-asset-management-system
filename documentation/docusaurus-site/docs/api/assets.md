@@ -89,11 +89,12 @@ Returns a paginated list of all assets across all databases that the user has pe
 
 **Request Parameters:**
 
-| Parameter       | Location | Type    | Required | Description                                           |
-| --------------- | -------- | ------- | -------- | ----------------------------------------------------- |
-| `maxItems`      | query    | integer | No       | Maximum number of assets to return. Default: `30000`. |
-| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `3000`.            |
-| `startingToken` | query    | string  | No       | Continuation token from a previous response.          |
+| Parameter       | Location | Type    | Required | Description                                                                                     |
+| --------------- | -------- | ------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `maxItems`      | query    | integer | No       | Maximum number of assets to return. Default: `30000`.                                           |
+| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `3000`.                                                      |
+| `startingToken` | query    | string  | No       | Continuation token from a previous response.                                                    |
+| `showArchived`  | query    | boolean | No       | When `true`, returns archived (soft-deleted) assets as well as active assets. Default: `false`. |
 
 **Response:**
 

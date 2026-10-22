@@ -1211,25 +1211,20 @@ def get_all_assets(query_params, showArchived=False):
     """
     deserializer = TypeDeserializer()
     
-    # Set up the filter based on showArchived
-    operator = "NOT_CONTAINS"
-    if showArchived:
-        operator = "CONTAINS"
-    
-    filter_expression = {
-        "databaseId": {
-            "AttributeValueList": [{"S": "#deleted"}],
-            "ComparisonOperator": f"{operator}"
-        }
-    }
-    
     try:
-        # Build scan parameters
+        # Build scan parameters. Archived assets sit under a '#deleted' partition key, so
+        # without showArchived they are filtered out; with it, every asset is returned.
         scan_params = {
             'TableName': asset_database,
-            'ScanFilter': filter_expression,
             'Limit': int(query_params['pageSize'])
         }
+        if not showArchived:
+            scan_params['ScanFilter'] = {
+                "databaseId": {
+                    "AttributeValueList": [{"S": "#deleted"}],
+                    "ComparisonOperator": "NOT_CONTAINS"
+                }
+            }
         
         # Add ExclusiveStartKey if startingToken provided
         if query_params.get('startingToken'):
