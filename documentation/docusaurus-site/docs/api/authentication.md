@@ -95,7 +95,7 @@ None.
     "cognitoAppClientId": "1a2b3c4d5e6f7g8h9i0j",
     "cognitoIdentityPoolId": "us-east-1:12345678-abcd-efgh-ijkl-123456789012",
     "cognitoUserPoolEndpoint": "https://cognito-idp.us-east-1.amazonaws.com",
-    "contentSecurityPolicy": "default-src 'self' ...",
+    "contentSecurityPolicy": "",
     "bannerHtmlMessage": ""
 }
 ```
@@ -110,7 +110,7 @@ None.
 | `cognitoAppClientId`      | string | Amazon Cognito app client identifier; `"undefined"` when Cognito is not the authentication provider.                                            |
 | `cognitoIdentityPoolId`   | string | Amazon Cognito identity pool identifier; `"undefined"` when Cognito is not the authentication provider.                                         |
 | `cognitoUserPoolEndpoint` | string | Partition-aware Amazon Cognito user pool (IDP) endpoint URL; `"undefined"` when Cognito is not the authentication provider. See the note below. |
-| `contentSecurityPolicy`   | string | Content Security Policy header value applied by the web application.                                                                            |
+| `contentSecurityPolicy`   | string | Always empty. The Content Security Policy is set by the Amazon CloudFront response headers or the ALB listener, not by the web application.     |
 | `bannerHtmlMessage`       | string | Optional banner HTML rendered by the web application; empty when not configured.                                                                |
 
 When an external OAuth identity provider is the authentication provider, the response instead carries `externalOAuthIdpURL`, `externalOAuthIdpClientId`, `externalOAuthIdpScope`, `externalOAuthIdpScopeMfa`, `externalOAuthIdpTokenEndpoint`, `externalOAuthIdpAuthorizationEndpoint`, and `externalOAuthIdpDiscoveryEndpoint`.

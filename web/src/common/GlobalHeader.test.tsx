@@ -20,7 +20,12 @@ jest.mock("sanitize-html", () => (html: string) => html);
 jest.mock("../services/appCache", () => ({
     appCache: {
         getItem: (key: string) =>
-            key === "config" ? { bannerHtmlMessage: "<b>Test deployment</b>" } : undefined,
+            key === "config"
+                ? {
+                      bannerHtmlMessage: "<b>Test deployment</b>",
+                      contentSecurityPolicy: "default-src 'self'",
+                  }
+                : undefined,
     },
 }));
 
@@ -63,5 +68,14 @@ describe("GlobalHeader deployment banner", () => {
         const text = rootToken(css, "--vams-banner-text");
 
         expect(contrastRatio(background, text)).toBeGreaterThanOrEqual(4.5);
+    });
+});
+
+describe("GlobalHeader Content Security Policy", () => {
+    it("renders no CSP meta element, even when the config carries a value", () => {
+        const { container } = render(<GlobalHeader authorizationHeader={false} />);
+
+        expect(container.querySelector('meta[http-equiv="Content-Security-Policy"]')).toBeNull();
+        expect(document.querySelector('meta[http-equiv="Content-Security-Policy"]')).toBeNull();
     });
 });

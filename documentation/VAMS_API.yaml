@@ -60,7 +60,7 @@ paths:
                                                 description: "Amazon Cognito hosted UI domain used for the federated redirect"
                                     contentSecurityPolicy:
                                         type: string
-                                        description: "Content Security Policy header value applied by the web application"
+                                        description: "Always empty. The Content Security Policy is set by the Amazon CloudFront response headers or the ALB listener, not by the web application."
                                     bannerHtmlMessage:
                                         type: string
                                         description: "Optional banner HTML rendered by the web application; empty when not configured"

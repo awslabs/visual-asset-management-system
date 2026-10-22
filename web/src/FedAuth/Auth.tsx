@@ -177,7 +177,8 @@ interface Config {
     locationServiceApiUrl?: string;
 
     /**
-     * Content Security Policy to apply (generally for ALB deployment where CSP may not be injected)
+     * Sent by /api/amplify-config and always empty. The web app does not apply it: the Content
+     * Security Policy is set by the CloudFront response headers or the ALB listener.
      */
     contentSecurityPolicy?: string;
 
