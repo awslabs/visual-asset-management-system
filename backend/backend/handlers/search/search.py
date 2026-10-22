@@ -63,6 +63,8 @@ try:
     opensearch_file_index_ssm_param = os.environ["OPENSEARCH_FILE_INDEX_SSM_PARAM"]
     opensearch_endpoint_ssm_param = os.environ["OPENSEARCH_ENDPOINT_SSM_PARAM"]
     opensearch_type = os.environ.get("OPENSEARCH_TYPE", "serverless")
+    # 'true' on a deployment built without OpenSearch, which has no index or endpoint parameters
+    opensearch_disabled = os.environ.get("OPENSEARCH_DISABLED", "false").lower() == "true"
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
@@ -79,9 +81,14 @@ def get_ssm_parameter_value(parameter_name: str) -> str:
         raise VAMSGeneralErrorResponse(f"Error getting configuration parameter: {parameter_name}")
 
 # Load OpenSearch configuration from SSM
-opensearch_asset_index = get_ssm_parameter_value(opensearch_asset_index_ssm_param)
-opensearch_file_index = get_ssm_parameter_value(opensearch_file_index_ssm_param)
-opensearch_endpoint = get_ssm_parameter_value(opensearch_endpoint_ssm_param)
+if opensearch_disabled:
+    opensearch_asset_index = None
+    opensearch_file_index = None
+    opensearch_endpoint = None
+else:
+    opensearch_asset_index = get_ssm_parameter_value(opensearch_asset_index_ssm_param)
+    opensearch_file_index = get_ssm_parameter_value(opensearch_file_index_ssm_param)
+    opensearch_endpoint = get_ssm_parameter_value(opensearch_endpoint_ssm_param)
 
 # Initialize DynamoDB tables
 asset_storage_table = dynamodb.Table(asset_storage_table_name)
@@ -153,7 +160,10 @@ class DualIndexSearchManager:
         self._initialize_client()
     
     def _initialize_client(self):
-        """Initialize OpenSearch client"""
+        """Initialize OpenSearch client; without OpenSearch the client stays None"""
+        if opensearch_disabled:
+            logger.info("OpenSearch is not enabled on this deployment; search is unavailable")
+            return
         try:
             from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
             
