@@ -2074,11 +2074,16 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                                         ].map(({ color, name }) => (
                                             <button
                                                 key={color}
+                                                type="button"
+                                                aria-label={name}
+                                                aria-pressed={backgroundColor === color}
                                                 onClick={() => changeBackgroundColor(color)}
                                                 style={{
                                                     width: "32px",
                                                     height: "24px",
                                                     backgroundColor: color,
+                                                    // Keep the swatch colour in forced-colors mode
+                                                    forcedColorAdjust: "none",
                                                     border:
                                                         backgroundColor === color
                                                             ? "2px solid #4CAF50"
@@ -2091,6 +2096,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                                             >
                                                 {backgroundColor === color && (
                                                     <div
+                                                        aria-hidden="true"
                                                         style={{
                                                             position: "absolute",
                                                             top: "50%",

@@ -8,7 +8,7 @@
  * resolves to another stub, except the members a test replaces.
  */
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import CesiumViewerComponent from "./CesiumViewerComponent";
 
 jest.mock("./dependencies", () => ({
@@ -128,5 +128,28 @@ describe("Cesium tileset authorization", () => {
         await expect(root.retryCallback(untouched, { statusCode: 404 })).resolves.toBe(false);
         await expect(root.retryCallback(untouched, { statusCode: 500 })).resolves.toBe(false);
         expect(untouched.headers.Authorization).toBe("Bearer t3");
+    });
+});
+
+describe("Cesium background swatches", () => {
+    it("name each swatch and mark only the selected one pressed", async () => {
+        render(<CesiumViewerComponent {...props} viewerMode="wide" />);
+        await screen.findByTitle("Hide panel");
+
+        const names = ["Black", "White", "Light Blue"];
+        const swatches = names.map((name) => screen.getByRole("button", { name }));
+        swatches.forEach((swatch) => {
+            expect(swatch).toHaveAttribute("type", "button");
+            expect(swatch).toHaveAttribute("aria-pressed", "false");
+            expect(swatch.style.forcedColorAdjust).toBe("none");
+        });
+
+        fireEvent.click(swatches[1]);
+        expect(swatches.map((swatch) => swatch.getAttribute("aria-pressed"))).toEqual([
+            "false",
+            "true",
+            "false",
+        ]);
+        expect(swatches[1].querySelector('[aria-hidden="true"]')).toHaveTextContent("✓");
     });
 });
