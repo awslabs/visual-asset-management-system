@@ -546,6 +546,12 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
     real stream falls under is what lets the read skip the execution-scope terms; a prefix the stream does
     not start with reads as `scoped`, and the filter drops every container line.
 
+-   **Batch states that submit the same job definition share one stream prefix**, so register only the
+    state the run is routed to. The registration handler dedups log entries by location and keeps the
+    first entry's `stageName`, so registering every such state attributes the run's container lines to
+    whichever state was listed first. The 3D thumbnail pipeline's standard and large tiers are the case
+    in the tree (`preview/3dThumbnail/lambda/openPipeline.py`).
+
 CDK rules for those env values (`infra/lib/nestedStacks/pipelines/**`):
 
 -   The registering lambda's environment spreads one of the two helpers in
@@ -796,7 +802,7 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
    [A Non-Root Container Normalizes Read Bits on the Source It COPYs](#a-non-root-container-normalizes-read-bits-on-the-source-it-copys).
 4. **Register the pipeline's sub-process and log sources** from `openPipeline.py` (or from
    `executeBatchJob.py` when that lambda submits the job itself): the state-machine log entry with
-   `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state naming the
+   `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state (only the state the run is routed to when several states share one job definition) naming the
    group that job definition writes to — the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group
    for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration — (`logStreamPrefix`
    `"<jobDefinitionName>/default/"`, `stageName` = the ASL state name, declared as a

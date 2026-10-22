@@ -338,7 +338,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
                 jobDefinitionArn: batchPipeline.batchJobDefinition.jobDefinitionArn,
                 jobQueueArn: batchPipeline.batchJobQueue.jobQueueArn,
-                timeout: timeout,
+                taskTimeout: sfn.Timeout.duration(timeout),
                 containerOverrides: {
                     command: [...sfn.JsonPath.listAt("$.definition")],
                     vcpus: sizing.vcpu,
