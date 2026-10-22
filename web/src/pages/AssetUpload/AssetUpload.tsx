@@ -1386,7 +1386,7 @@ const AssetUploadReview = ({
                     </SpaceBetween>
                 </ColumnLayout>
             </Container>
-            <Container header={<Header variant="h2">Linked {Synonyms.Asset}s</Header>}>
+            <Container header={<Header variant="h2">Linked {Synonyms.Assets}</Header>}>
                 <ColumnLayout columns={3} variant="text-grid">
                     {assetDetailState.assetLinksFe && (
                         <>
