@@ -14228,8 +14228,11 @@ components:
                     type: string
                     maxLength: 1000
                     description: >-
-                        Separate metadata search query. A `key:value` pair addresses one metadata
-                        field; a bare term is matched according to `metadataSearchMode`. The key may
+                        Separate metadata search query. Terms are joined with ` AND ` or ` OR `. In
+                        `both` mode a `key:value` term addresses one metadata field and a bare term is
+                        matched as a value; in `key` mode every term is a metadata key and in `value`
+                        mode every term is a value, even when it contains `:`. A query that yields no
+                        key, value or `key:value` term is rejected with 400. The key may
                         be given as the bare metadata key (`product`), with the entity prefix
                         (`MD_product`, or `AB_colour` for a file attribute), or with a type prefix
                         (`MD_str_product`) — all three resolve to the same field. Do not include the
