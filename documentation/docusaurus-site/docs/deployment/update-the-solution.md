@@ -119,6 +119,10 @@ created through the web interface, the API, or the CLI are not touched by a depl
 [Permissions model](../concepts/permissions-model.md) for the constraint structure.
 :::
 
+:::info[Default metadata schemas are refreshed only while unedited]
+The default metadata schemas (`app.metadataSchema.autoLoadDefault*`) are not rewritten unconditionally. A deployment refreshes a default schema only while no user has edited it; a default edited or disabled through the web interface, the API, or the CLI keeps its changes. Setting a flag to `false` leaves its schema in place, and a deleted default stays deleted until its seed resource is created again (after a deployment with its flag `false` and the next with it `true`, or after a change to an earlier `autoLoadDefault*` flag, because the seed resources are numbered by position). A replaced metadata schema table starts with no defaults. When a release adds a field to a default schema, its release notes name the schema ID and the field; if you edited that schema, add the field in the **Metadata Schema** page or with `vamscli metadata-schema update`, sending the full field list.
+:::
+
 :::danger[Do not change `app.adminUserId` or `app.adminEmailAddress` after the first deployment]
 The seeded Amazon Cognito administrator is an `AWS::Cognito::UserPoolUser` whose `Username`,
 `UserPoolId`, `UserAttributes` and `DesiredDeliveryMediums` are all **Update-requires-Replacement**.

@@ -605,6 +605,10 @@ Nested stack: `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` (`Api
 | `app.metadataSchema.autoLoadDefaultAssetSchema`      | boolean | `true`  | Creates a GLOBAL schema named `defaultAsset` with a Location field (LLA - Latitude/Longitude/Altitude).                                                                             |
 | `app.metadataSchema.autoLoadDefaultAssetFileSchema`  | boolean | `true`  | Creates a GLOBAL schema named `defaultAssetFile3dModel` with a `Polygon_Count` field and file type restrictions for common 3D formats (.glb, .usd, .obj, .fbx, .gltf, .stl, .usdz). |
 
+:::info[How deployments treat the default schemas]
+A deployment writes each enabled default schema once, and on later deployments refreshes it only while no user has edited it. A default that has been edited or disabled through the web interface, the API, or the CLI is left alone. Setting a flag to `false` leaves its schema in place. A deleted default stays deleted until its seed resource is created again: after one deployment with its flag `false` and the next with it `true`, or after a change to one of the flags listed above it in this table, because the seed resources are numbered by position. A replaced metadata schema table starts with no defaults.
+:::
+
 ## Processing pipelines (`app.pipelines`)
 
 :::note[Implemented by]
