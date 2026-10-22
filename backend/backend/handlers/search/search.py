@@ -1245,6 +1245,8 @@ class DualIndexQueryBuilder:
                 query["min_score"] = 0.01
             
             return query
+        except VAMSGeneralErrorResponse:
+            raise
         except Exception as e:
             logger.exception(f"Error building {index_type} query: {e}")
             raise VAMSGeneralErrorResponse(f"Error building {index_type} search query")
@@ -1363,6 +1365,9 @@ class DualIndexQueryBuilder:
     
     def _build_metadata_search_query(self, metadata_query: str, search_mode: str, index_type: str = "asset") -> Dict[str, Any]:
         """Build dedicated metadata search query with backward compatibility for flat objects
+
+        The query is split on ' AND ' or ' OR ' into terms. In 'both' mode a term holding
+        ':' is a field:value pair; in 'key' and 'value' mode every term is a key or a value.
         
         Args:
             metadata_query: The metadata query string
@@ -1371,126 +1376,99 @@ class DualIndexQueryBuilder:
             
         Returns:
             OpenSearch query dict
+
+        Raises:
+            VAMSGeneralErrorResponse: when a non-empty query yields no search clause
         """
         if not metadata_query:
             return {}
         
-        # Check if query contains AND or OR operator for multiple field:value pairs
+        # Check if query contains AND or OR operator for multiple terms
         operator = None
-        pairs = []
-        
+        terms = [metadata_query]
         if ' AND ' in metadata_query:
             operator = 'AND'
-            pairs = [pair.strip() for pair in metadata_query.split(' AND ') if pair.strip()]
+            terms = metadata_query.split(' AND ')
         elif ' OR ' in metadata_query:
             operator = 'OR'
-            pairs = [pair.strip() for pair in metadata_query.split(' OR ') if pair.strip()]
-        
-        if operator and pairs:
-            # Build individual queries for each pair
-            pair_queries = []
-            for pair in pairs:
-                if ':' in pair:
-                    parts = pair.split(':', 1)
-                    field_part = parts[0].strip()
-                    value_part = parts[1].strip() if len(parts) > 1 else ''
-                    
-                    # Extract field name with backward compatibility
-                    prefix, field_name = self._extract_metadata_field_name(field_part)
+            terms = metadata_query.split(' OR ')
+        terms = [term.strip() for term in terms if term.strip()]
 
-                    # Escape the field name too -- it is user-controlled and interpolated
-                    # into the query_string text, so an unescaped special character could
-                    # otherwise alter the parsed query. Wildcards are never meaningful in a
-                    # field name, so do not preserve them here.
-                    escaped_field_name = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=False)
-
-                    # Check if user provided wildcards
-                    has_wildcards = '*' in value_part or '?' in value_part
-
-                    # Escape the value part (preserve wildcards if user provided them)
-                    escaped_value = self.field_classifier.escape_opensearch_query_string(value_part, preserve_wildcards=has_wildcards)
-
-                    # Build flat object query
-                    if has_wildcards:
-                        query_str = f"{prefix}.{escaped_field_name}:{escaped_value}"
-                    else:
-                        # Exact match - quote the value for phrase matching
-                        query_str = f'{prefix}.{escaped_field_name}:"{escaped_value}"'
-                    
-                    # Build query for this specific field:value pair
-                    pair_queries.append({
-                        "query_string": {
-                            "query": query_str,
-                            "analyze_wildcard": True,
-                            "lenient": True
-                        }
-                    })
-            
-            # Return bool query with appropriate logic
-            if len(pair_queries) == 1:
-                return pair_queries[0]
-            elif len(pair_queries) > 1:
-                if operator == 'AND':
-                    # All must match
-                    return {
-                        "bool": {
-                            "must": pair_queries
-                        }
-                    }
-                else:  # OR
-                    # Any can match
-                    return {
-                        "bool": {
-                            "should": pair_queries,
-                            "minimum_should_match": 1
-                        }
-                    }
+        term_queries = []
+        for term in terms:
+            if search_mode not in ("key", "value") and ':' in term:
+                field_part, value_part = term.split(':', 1)
+                term_query = self._build_metadata_pair_query(field_part.strip(), value_part.strip())
             else:
-                return {}
-        
-        # Single field:value pair
-        if ':' in metadata_query:
-            parts = metadata_query.split(':', 1)
-            field_part = parts[0].strip()
-            value_part = parts[1].strip() if len(parts) > 1 else ''
-            
-            # Extract field name with backward compatibility
-            prefix, field_name = self._extract_metadata_field_name(field_part)
+                term_query = self._build_metadata_term_query(term, search_mode, index_type)
+            if term_query:
+                term_queries.append(term_query)
 
-            # Escape the user-controlled field name so it cannot alter the parsed query.
-            escaped_field_name = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=False)
+        if not term_queries:
+            raise VAMSGeneralErrorResponse("metadataQuery contains no metadata key, value or field:value term to search for")
 
-            # Check if user provided wildcards
-            has_wildcards = '*' in value_part or '?' in value_part
-
-            # Escape the value part for query_string (preserve wildcards if user provided them)
-            escaped_value = self.field_classifier.escape_opensearch_query_string(value_part, preserve_wildcards=has_wildcards)
-
-            # Build flat object query
-            if has_wildcards:
-                query_str = f"{prefix}.{escaped_field_name}:{escaped_value}"
-            else:
-                # Exact match - quote the value for phrase matching
-                query_str = f'{prefix}.{escaped_field_name}:"{escaped_value}"'
-            
-            # Build query for specific field:value pair
+        # Return bool query with appropriate logic
+        if len(term_queries) == 1:
+            return term_queries[0]
+        if operator == 'AND':
+            # All must match
             return {
-                "query_string": {
-                    "query": query_str,
-                    "analyze_wildcard": True,
-                    "lenient": True
+                "bool": {
+                    "must": term_queries
                 }
             }
-        
-        # If no colon, treat as a general metadata search based on mode
+        # OR: any can match
+        return {
+            "bool": {
+                "should": term_queries,
+                "minimum_should_match": 1
+            }
+        }
+
+    def _build_metadata_pair_query(self, field_part: str, value_part: str) -> Dict[str, Any]:
+        """query_string clause matching one metadata field:value pair."""
+        # Extract field name with backward compatibility
+        prefix, field_name = self._extract_metadata_field_name(field_part)
+
+        # Escape the field name too -- it is user-controlled and interpolated
+        # into the query_string text, so an unescaped special character could
+        # otherwise alter the parsed query. Wildcards are never meaningful in a
+        # field name, so do not preserve them here.
+        escaped_field_name = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=False)
+
         # Check if user provided wildcards
-        has_wildcards = '*' in metadata_query or '?' in metadata_query
-        escaped_query = self.field_classifier.escape_opensearch_query_string(metadata_query, preserve_wildcards=has_wildcards)
+        has_wildcards = '*' in value_part or '?' in value_part
+
+        # Escape the value part (preserve wildcards if user provided them)
+        escaped_value = self.field_classifier.escape_opensearch_query_string(value_part, preserve_wildcards=has_wildcards)
+
+        # Build flat object query
+        if has_wildcards:
+            query_str = f"{prefix}.{escaped_field_name}:{escaped_value}"
+        else:
+            # Exact match - quote the value for phrase matching
+            query_str = f'{prefix}.{escaped_field_name}:"{escaped_value}"'
+
+        return {
+            "query_string": {
+                "query": query_str,
+                "analyze_wildcard": True,
+                "lenient": True
+            }
+        }
+
+    def _build_metadata_term_query(self, term: str, search_mode: str, index_type: str) -> Dict[str, Any]:
+        """Clause for one metadata term that is a key ('key' mode) or a value ('value' and 'both')."""
+        # Check if user provided wildcards
+        has_wildcards = '*' in term or '?' in term
+        escaped_query = self.field_classifier.escape_opensearch_query_string(term, preserve_wildcards=has_wildcards)
         
         if search_mode == "key":
             # Search for documents that have metadata fields matching the pattern
             # Extract field name with backward compatibility
-            prefix, field_name = self._extract_metadata_field_name(metadata_query)
+            prefix, field_name = self._extract_metadata_field_name(term)
+            if not field_name:
+                return {}
             
             if has_wildcards:
                 escaped_key = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=True)
