@@ -104,6 +104,10 @@ def format_workflow_output(workflow: Dict[str, Any]) -> str:
     workflow_arn = workflow.get('workflow_arn')
     if workflow_arn:
         lines.append(f"State Machine ARN: {workflow_arn}")
+    # Set when the state machine could not be redeployed after a referenced pipeline changed.
+    if workflow.get('deploymentStale'):
+        reason = workflow.get('deploymentStaleReason') or ''
+        lines.append(f"Deployment: stale ({reason})" if reason else "Deployment: stale")
     warnings = workflow.get('warnings')
     if warnings:
         lines.append("Warnings:")

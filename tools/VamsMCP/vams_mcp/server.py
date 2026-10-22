@@ -1596,9 +1596,14 @@ if CONFIG.enable_writes:
     def update_pipeline(database_id: str, pipeline_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """Update a pipeline. Only the fields present in `body` change.
 
-        Carries the same save `warnings` as create_pipeline. An executionConfig change adds a
-        stale-deployment warning: referencing workflows keep invoking the PREVIOUS execution target
-        until each one is re-saved, so the repoint is not live until then. Always relay it.
+        Carries the same save `warnings` as create_pipeline. A change to a setting compiled into
+        workflow state machines (executionConfig: execution type, target, callback mode, timeouts,
+        Deadline Cloud job settings) adds a warning with how many referencing workflows are being
+        redeployed in the background; nothing has to be re-saved. A launch of a workflow that the
+        background redeploy has not reached yet redeploys it first, or returns a retryable 409 and
+        starts nothing, so no run uses the previous settings. When the warning says the redeploy
+        could not be scheduled, each workflow is redeployed at its next save or launch. Always
+        relay the warnings.
         """
         return _unwrap_message_with_warnings(CLIENT.api.update_pipeline(database_id, pipeline_id, body))
 
