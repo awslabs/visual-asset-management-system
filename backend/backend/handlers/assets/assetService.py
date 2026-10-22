@@ -22,7 +22,7 @@ from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
 from customLogging.logger import safeLogger
-from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items
+from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
@@ -299,11 +299,12 @@ def enhance_assets_with_version_info(assets):
     """Batched counterpart of enhance_asset_with_version_info for one listing page.
 
     Reads every asset's current-version row through the shared common.dynamodb.batch_get_items
-    (which owns the 100-key chunking and the UnprocessedKeys re-requests) instead of one get_item
-    per asset. Each enhanced copy is identical to what enhance_asset_with_version_info would return
-    for that asset: a key the batch could not resolve falls back to the per-item read, and an asset
-    without a currentVersionId (or whose version row does not exist) carries no currentVersion.
-    The batch path never raises -- a failed batch call degrades the page to per-item reads.
+    instead of one get_item per asset, calling it once per BATCH_GET_CHUNK_SIZE slice of the keys;
+    the helper owns the UnprocessedKeys re-requests. Each enhanced copy is identical to what
+    enhance_asset_with_version_info would return for that asset: a key the batch could not resolve
+    falls back to the per-item read, and an asset without a currentVersionId (or whose version row
+    does not exist) carries no currentVersion. The batch path never raises -- a failed call sends
+    only its own chunk's keys to per-item reads, and the other chunks keep their batched rows.
 
     Args:
         assets: Asset dictionaries, in response order
@@ -323,12 +324,18 @@ def enhance_assets_with_version_info(assets):
     if keyed and asset_versions_table_name:
         # (rows, unresolved): a key absent from both is a row that does not exist, a key in
         # `unresolved` is a read that did not complete -- only the latter takes the per-item read
-        try:
-            rows, unresolved = batch_get_items(dynamodb, asset_versions_table_name, list(keyed.values()))
-        except Exception as e:
-            logger.warning(f"Batch read of asset versions failed "
-                           f"(falling back to per-item reads): {e}")
-            rows, unresolved = [], list(keyed.values())
+        all_keys = list(keyed.values())
+        rows, unresolved = [], []
+        for start in range(0, len(all_keys), BATCH_GET_CHUNK_SIZE):
+            chunk = all_keys[start:start + BATCH_GET_CHUNK_SIZE]
+            try:
+                chunk_rows, chunk_unresolved = batch_get_items(dynamodb, asset_versions_table_name, chunk)
+            except Exception as e:
+                logger.warning(f"Batch read of {len(chunk)} asset versions failed "
+                               f"(falling back to per-item reads for that chunk): {e}")
+                chunk_rows, chunk_unresolved = [], chunk
+            rows.extend(chunk_rows)
+            unresolved.extend(chunk_unresolved)
         if unresolved:
             logger.info(f"Batch read of asset versions left {len(unresolved)} keys unprocessed; "
                         f"reading them individually")
