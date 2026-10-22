@@ -2349,6 +2349,8 @@ optional_table = dynamodb.Table(optional_table_name) if optional_table_name else
 
 **Every path that writes an object under a new name checks that name first.** Upload initialize and completion (`uploadFile.py`) and the move, rename and copy destination (`assetFiles.py` `move_file` / `copy_file`) call `validateUnallowedFileExtensionAndContentType` on the key before any S3 write. A new write path gets the same check.
 
+**A multipart file completed with no parts is cancelled.** `complete_upload` (`uploadFile.py`) aborts that file's multipart upload, stores nothing and reports the file with `success=False`; `sqsUploadFileLarge.py` `complete_multipart_upload_for_large_file` does the same and returns `False`. Only a file initialized as `zero-byte` completes with an empty `parts` list.
+
 ### **AWS Client Configuration Pattern**
 
 ```python
