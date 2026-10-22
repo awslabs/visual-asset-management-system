@@ -244,7 +244,7 @@ export function useMultiSequenceUpload() {
                         return {
                             relativeKey: fileResponse.relativeKey,
                             uploadIdS3: fileResponse.uploadIdS3,
-                            parts: [], // Empty parts = backend nulls the file
+                            parts: [], // Empty parts = backend aborts the upload and stores nothing
                         };
                     }
 

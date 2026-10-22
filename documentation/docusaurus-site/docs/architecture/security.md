@@ -638,7 +638,7 @@ VAMS validates all uploaded files against blocked extension and MIME type lists 
 
 `application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/javascript`, `application/x-powershell`, `application/vbscript`, and additional potentially dangerous MIME types.
 
-Upload completion applies the blocked-extension check to every object it creates, including zero-byte and abandoned uploads, before the object is written, and accepts only the files that were declared when the upload was initialized; an upload initialized before this check existed is completed without it until it expires, seven days after it was initialized, and an expired upload is refused.
+Upload completion applies the blocked-extension check to every object it creates, including zero-byte files, before the object is written, and accepts only the files that were declared when the upload was initialized; an upload initialized before this check existed is completed without it until it expires, seven days after it was initialized, and an expired upload is refused. A file completed with no parts is cancelled: its multipart upload is aborted and no object is created.
 
 ## Audit Logging
 

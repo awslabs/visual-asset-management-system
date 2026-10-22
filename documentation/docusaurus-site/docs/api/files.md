@@ -655,7 +655,7 @@ Completes a multipart file upload by signaling that all parts have been uploaded
 | `uploadType` | string | Yes      | Upload target. One of `assetFile` or `assetPreview`. |
 | `files`      | array  | Yes      | Completed files, each with its uploaded parts.       |
 
-Each entry in `files` is an object with `relativeKey`, `uploadIdS3`, and a `parts` array of `{ "PartNumber", "ETag" }` objects.
+Each entry in `files` is an object with `relativeKey`, `uploadIdS3`, and a `parts` array of `{ "PartNumber", "ETag" }` objects. An empty `parts` array completes a file initialized as `zero-byte`. For any other file it cancels the file: the multipart upload is aborted, nothing is stored, and the file's result has `success: false`.
 
 **Response:**
 
