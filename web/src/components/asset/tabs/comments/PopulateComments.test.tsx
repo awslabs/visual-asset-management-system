@@ -86,19 +86,22 @@ beforeEach(() => {
 afterEach(() => jest.restoreAllMocks());
 
 describe("PopulateComments", () => {
-    it("lists comments keyed by any version ID in one section with no version heading", () => {
+    it("lists comments keyed by any version ID in one section", () => {
         mount();
         expect(screen.getByText("from the web")).toBeInTheDocument();
         expect(screen.getByText("from the cli")).toBeInTheDocument();
         expect(screen.getByText(Synonyms.Comments)).toBeInTheDocument();
-        expect(screen.queryByText(/Version 1\.0/)).toBeNull();
+    });
+
+    // TEMPORARY-TEST: pins the removal of the per-version "Version ..." section heading; drop once released.
+    it("shows no version heading above the comments", () => {
+        mount();
         expect(screen.queryByText(/^Version /)).toBeNull();
     });
 
     it("shows asset-level empty text when there are no comments", () => {
         mount([]);
         expect(screen.getByText(`No ${Synonyms.comments} yet`)).toBeInTheDocument();
-        expect(screen.queryByText(/for this version/)).toBeNull();
     });
 
     it("saves an edit to a comment keyed by a real version ID under the comment's assetId", async () => {
