@@ -133,11 +133,13 @@ export function useMultiSequenceUpload() {
                     files,
                 };
 
-                // Use retry logic for init call
+                // Use retry logic for init call. Init is not idempotent: a 504 can follow a request
+                // that created the upload record and its multipart uploads, so a 504 is not retried.
                 const response = await retryWithBackoff(
                     () => AssetUploadService.initializeUpload(uploadRequest),
                     `Initialize sequence ${sequence.sequenceId}`,
-                    onRetry
+                    onRetry,
+                    [429, 500, 502, 503]
                 );
 
                 // Store the uploadId for this sequence
