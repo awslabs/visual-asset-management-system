@@ -244,6 +244,13 @@ paths:
               - $ref: "#/components/parameters/listMaxItemsParam"
               - $ref: "#/components/parameters/listPageSizeParam"
               - $ref: "#/components/parameters/startingTokenParam"
+              - name: showArchived
+                in: query
+                description: "When true, archived assets are returned along with active assets. Defaults to false."
+                required: false
+                schema:
+                    type: boolean
+                    default: false
             security:
               - DefaultCognitoAuthorizer: []
     /asset-links:
