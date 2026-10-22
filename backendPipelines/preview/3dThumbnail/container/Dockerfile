@@ -20,26 +20,33 @@
 #   curl -sI -H "Authorization: Bearer $TOK" -H "Accept: application/vnd.oci.image.index.v1+json" \
 #        https://public.ecr.aws/v2/docker/library/python/manifests/3.12-slim | grep -i docker-content-digest
 #
-# Both stages pin the same digest; move them together.
+# Both stages pin the same digest; move them together. The digest resolves to 3.12.15-slim-trixie.
+#
+# The pin fixes the Debian packages at the day the digest was built, so each stage's package layer runs
+# `apt-get upgrade -y` first: the security updates Debian has published since then are applied when the
+# image is built. AWS Batch on AWS Fargate patches the host, not the packages inside this image.
 
 # ---------------------------------------------------------------------------------------------------
 # Builder stage: compilers, the Python environment, Node.js and splat-transform. Only the installed
 # results are copied into the runtime stage, so gcc/g++/cmake/make and xz never reach the image a job
 # pulls.
 # ---------------------------------------------------------------------------------------------------
-FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea AS builder
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.12-slim@sha256:cb33f7f771ecec2ef1225cf39b159591a040391bd73e4c01f00fdfc4c47611d2 AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Build tools for native extensions without a prebuilt wheel (e.g. pye57, Open3D), and xz to unpack
-# the Node.js release tarball.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Apply the Debian security updates, then install the build tools for native extensions without a
+# prebuilt wheel (e.g. pye57, Open3D) and xz to unpack the Node.js release tarball, in one layer so the
+# package lists never persist.
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     cmake \
     make \
     xz-utils \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies from the hash-locked set into a virtual environment the runtime stage
@@ -81,7 +88,7 @@ RUN chmod -R a+rX /opt/splat-transform && \
 # ---------------------------------------------------------------------------------------------------
 # Runtime stage: the same pinned base, rendering libraries only.
 # ---------------------------------------------------------------------------------------------------
-FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.12-slim@sha256:cb33f7f771ecec2ef1225cf39b159591a040391bd73e4c01f00fdfc4c47611d2
 
 # python environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -94,8 +101,10 @@ ENV PYVISTA_TRAME_SERVER_PROXY_PREFIX=""
 ENV MESA_GL_VERSION_OVERRIDE=4.5
 ENV VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN=1
 
-# System libraries for headless 3D rendering (OSMesa + Xvfb) and OCC/cadquery.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Apply the Debian security updates, then install the system libraries for headless 3D rendering
+# (OSMesa + Xvfb) and OCC/cadquery, in one layer so the package lists never persist.
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
     libgl1-mesa-dev \
     libosmesa6-dev \
     libglu1-mesa-dev \
@@ -110,6 +119,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # OpenMP runtime (Open3D); the builder's gcc used to pull it in
     libgomp1 \
     # Cleanup
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # The Python environment, Node.js and splat-transform from the builder. Their read bits were normalised
