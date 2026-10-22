@@ -141,7 +141,7 @@ describe("Cesium background swatches", () => {
         swatches.forEach((swatch) => {
             expect(swatch).toHaveAttribute("type", "button");
             expect(swatch).toHaveAttribute("aria-pressed", "false");
-            expect(swatch.style.forcedColorAdjust).toBe("none");
+            expect((swatch.style as any).forcedColorAdjust).toBe("none");
         });
 
         fireEvent.click(swatches[1]);
