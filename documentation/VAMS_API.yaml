@@ -12249,7 +12249,7 @@ components:
                     maxItems: 1000
                     items:
                         $ref: "#/components/schemas/uploadFile"
-                    description: "Array of files to upload. Maximum 1000 files per request. Total parts across all files cannot exceed 5000."
+                    description: "Array of files to upload. Maximum 1000 files per request. Total parts across all files cannot exceed 1500."
             required:
                 - assetId
                 - databaseId

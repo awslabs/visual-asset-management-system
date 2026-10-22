@@ -45,9 +45,11 @@ MAX_FILES_PER_UPLOAD_REQUEST = 1000
 # This bounds the init Lambda's time/memory AND keeps the presigned-URL response
 # payload under the AWS Lambda synchronous response limit (6 MB) and the API
 # Gateway payload limit: each part contributes one presigned URL to the response,
-# so this cap directly bounds the response size. Do not raise it without
-# re-checking the worst-case response-size math (parts x URL length).
-MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST = 5000
+# so this cap directly bounds the response size. At 2,048 bytes per URL and
+# MAX_FILES_PER_UPLOAD_REQUEST files with maximum-length keys, the worst-case
+# response is about 4.5 MB; tests/models/test_assetsV3_upload_response_size.py
+# holds it under 5 MB. Do not raise it without re-checking that math.
+MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST = 1500
 
 # Maximum file keys accepted in a single bulk download request. Each key
 # produces one presigned URL in the response, so this cap keeps the response

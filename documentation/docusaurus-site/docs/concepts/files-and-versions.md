@@ -34,7 +34,7 @@ Files are uploaded using a multipart upload process:
 2. **Upload parts** -- Upload file data directly to Amazon S3 using the pre-signed URLs.
 3. **Complete** -- Notify VAMS that all parts have been uploaded. VAMS completes the multipart upload in Amazon S3.
 
-VAMS supports uploading up to 1,000 files per request, with a maximum of 5,000 total parts across all files. Zero-byte files are supported with special handling (no multipart upload needed).
+VAMS supports uploading up to 1,000 files per request, with a maximum of 1,500 total parts across all files. Zero-byte files are supported with special handling (no multipart upload needed).
 
 :::info[Upload types]
 Two upload types are supported: `assetFile` for regular asset files, and `assetPreview` for asset-level preview images. Preview uploads accept exactly one file.

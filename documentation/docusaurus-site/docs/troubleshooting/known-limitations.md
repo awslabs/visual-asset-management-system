@@ -67,10 +67,12 @@ A single upload-initialize request is bounded by three limits, each defined as a
 | -------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | Files per request                      | **1,000**  | Bounds the request body size. Bulk uploads beyond this are split into multiple requests by the web app and VamsCLI.                             |
 | Parts per file                         | **10,000** | Matches the Amazon S3 hard limit on parts per multipart object.                                                                                 |
-| Total parts across all files (request) | **5,000**  | Bounds the upload-initialize Lambda's time and memory **and** keeps the presigned-URL response under the response-size limits (see note below). |
+| Total parts across all files (request) | **1,500**  | Bounds the upload-initialize Lambda's time and memory **and** keeps the presigned-URL response under the response-size limits (see note below). |
 
-:::note[Why the 5,000 total-parts cap is also a response-size guard]
-The upload-initialize response returns one presigned URL per part. The total-parts-per-request cap therefore directly bounds the response payload, keeping it under the **AWS Lambda synchronous response limit (6 MB)** and the **Amazon API Gateway payload limit**. This value is not purely a throttle — raising it requires re-checking the worst-case response size (total parts × presigned-URL length) against those limits.
+:::note[Why the 1,500 total-parts cap is also a response-size guard]
+The upload-initialize response returns one presigned URL per part. The total-parts-per-request cap therefore directly bounds the response payload, keeping it under the **AWS Lambda synchronous response limit (6 MB)** and the **Amazon API Gateway payload limit**. At 2,048 bytes per presigned URL, 1,500 parts and 1,000 files with maximum-length keys give a response of about 4.5 MB. This value is not purely a throttle — raising it requires re-checking the worst-case response size (total parts × presigned-URL length) against those limits.
+
+Because one file is initialized in one request, the cap also bounds a single file's part count: at 1 GiB parts, which the web app uses for files over 15 GB, one file can be up to 1,500 GiB.
 :::
 
 ### Internal Pagination of Large Listings
