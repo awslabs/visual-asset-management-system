@@ -29,7 +29,6 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
     multiFileKeys,
     versionId,
     assetVersionId,
-    viewerMode,
     onViewerModeChange,
     onDeletePreview,
     isPreviewFile,
