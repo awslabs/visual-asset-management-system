@@ -859,7 +859,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                         {/* View Selector */}
                         <Box padding={{ bottom: "m" }}>{renderViewSelector()}</Box>
 
-                        {currentView !== "map" && totalResults > SEARCH_RESULT_WINDOW && (
+                        {totalResults > SEARCH_RESULT_WINDOW && (
                             <Box padding={{ bottom: "m" }}>
                                 <Alert type="info" statusIconAriaLabel="Info">
                                     Showing the first {SEARCH_RESULT_WINDOW.toLocaleString()}{" "}
