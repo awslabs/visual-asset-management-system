@@ -68,9 +68,12 @@ Returns a paginated list of all assets in the specified database. By default, ar
             }
         }
     ],
-    "NextToken": "eyJ..."
+    "NextToken": "eyJ...",
+    "truncated": true
 }
 ```
+
+`NextToken` and `truncated: true` are returned together when more assets remain; `maxItems` caps the assets one response returns.
 
 **Error Responses:**
 
@@ -111,9 +114,12 @@ Returns a paginated list of all assets across all databases that the user has pe
             "tags": ["architecture"]
         }
     ],
-    "NextToken": "eyJ..."
+    "NextToken": "eyJ...",
+    "truncated": true
 }
 ```
+
+`NextToken` and `truncated: true` are returned together when more assets remain; `maxItems` caps the assets one response returns.
 
 **Error Responses:**
 

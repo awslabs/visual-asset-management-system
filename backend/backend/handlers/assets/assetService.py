@@ -1086,7 +1086,8 @@ def get_assets(databaseId, query_params, showArchived=False):
     if showArchived:
         db_ids.append(f"{databaseId}#deleted")
 
-    page_size = int(query_params['pageSize'])
+    # maxItems is the per-response ceiling and pageSize the per-query batch size
+    page_size = _listing_limit(query_params)
 
     # A token is the LastEvaluatedKey of one partition. The listing resumes in that partition,
     # and any partition before it was already read to the end.
@@ -1176,6 +1177,13 @@ def get_assets(databaseId, query_params, showArchived=False):
 
     return result
 
+def _listing_limit(query_params):
+    """Rows one listing response reads: pageSize, capped by maxItems when it is given."""
+    limit = int(query_params['pageSize'])
+    if query_params.get('maxItems'):
+        limit = min(limit, int(query_params['maxItems']))
+    return limit
+
 def get_all_assets(query_params, showArchived=False):
     """Get all assets across all databases
     
@@ -1193,7 +1201,7 @@ def get_all_assets(query_params, showArchived=False):
         # without showArchived they are filtered out; with it, every asset is returned.
         scan_params = {
             'TableName': asset_database,
-            'Limit': int(query_params['pageSize'])
+            'Limit': _listing_limit(query_params)
         }
         if not showArchived:
             scan_params['ScanFilter'] = {
@@ -2093,6 +2101,8 @@ def handle_get_request(event):
             }
             if 'NextToken' in assets_result:
                 response['NextToken'] = assets_result['NextToken']
+            if 'truncated' in assets_result:
+                response['truncated'] = assets_result['truncated']
                 
             return success(body=response)
         
@@ -2148,6 +2158,8 @@ def handle_get_request(event):
             }
             if 'NextToken' in assets_result:
                 response['NextToken'] = assets_result['NextToken']
+            if 'truncated' in assets_result:
+                response['truncated'] = assets_result['truncated']
                 
             return success(body=response)
             

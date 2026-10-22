@@ -155,3 +155,62 @@ class TestStartingTokenPartition:
         assert [item["assetId"] for item in result["Items"]] == ["d2"]
         assert [call["ExpressionAttributeValues"][":dbId"]["S"] for call in query.calls] == [
             f"{DATABASE_ID}#deleted"]
+
+
+def _handler_listing(m, query, path_parameters, query_parameters):
+    """Run handle_get_request over the query double with the page enrichment passed through."""
+    event = {
+        "requestContext": {"http": {"method": "GET", "path": "/assets"}},
+        "pathParameters": path_parameters,
+        "queryStringParameters": query_parameters,
+    }
+    with patch.object(m, "dynamodb_client") as client, \
+            patch.object(m, "enrich_asset_listing_page", side_effect=lambda items: [dict(i) for i in items]):
+        client.query.side_effect = query
+        client.scan.side_effect = lambda **kwargs: query(
+            ExpressionAttributeValues={":dbId": {"S": DATABASE_ID}}, **kwargs)
+        response = m.handle_get_request(event)
+    return response, json.loads(response["body"])
+
+
+@pytest.mark.unit
+class TestMaxItemsAndTruncated:
+    PARTITIONS = {DATABASE_ID: ["a1", "a2", "a3"], f"{DATABASE_ID}#deleted": ["d1", "d2"]}
+
+    @pytest.mark.parametrize("path_parameters", [{"databaseId": DATABASE_ID}, {}], ids=["database", "all"])
+    def test_a_partial_page_reports_truncated_beside_its_next_token(self, m, path_parameters):
+        response, body = _handler_listing(
+            m, _AssetTableQuery(self.PARTITIONS), path_parameters, {"pageSize": "2"})
+
+        assert response["statusCode"] == 200
+        assert len(body["Items"]) == 2
+        assert body["NextToken"]
+        assert body["truncated"] is True
+
+    def test_a_complete_listing_reports_no_truncation(self, m):
+        response, body = _handler_listing(
+            m, _AssetTableQuery(self.PARTITIONS), {"databaseId": DATABASE_ID}, {"pageSize": "10"})
+
+        assert response["statusCode"] == 200
+        assert "NextToken" not in body
+        assert "truncated" not in body
+
+    @pytest.mark.parametrize("path_parameters", [{"databaseId": DATABASE_ID}, {}], ids=["database", "all"])
+    def test_max_items_caps_the_response_below_the_page_size(self, m, path_parameters):
+        response, body = _handler_listing(
+            m, _AssetTableQuery(self.PARTITIONS), path_parameters, {"maxItems": "1", "pageSize": "2"})
+
+        assert response["statusCode"] == 200
+        assert len(body["Items"]) == 1
+        assert body["NextToken"]
+
+    def test_max_items_caps_the_archived_partition_too(self, m):
+        query = _AssetTableQuery({DATABASE_ID: [], f"{DATABASE_ID}#deleted": ["d1", "d2"]})
+        response, body = _handler_listing(
+            m, query, {"databaseId": DATABASE_ID},
+            {"maxItems": "1", "pageSize": "2", "showArchived": "true"})
+
+        assert response["statusCode"] == 200
+        assert [item["assetId"] for item in body["Items"]] == ["d1"]
+        assert body["NextToken"]
+        assert all(call["Limit"] <= 1 for call in query.calls)

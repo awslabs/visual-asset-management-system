@@ -181,7 +181,7 @@ def _per_item_expected_body(m, items):
             formatted.append(m.AssetResponseModel(**enhanced).dict())
         except m.ValidationError:
             formatted.append(enhanced)
-    return m.success(body={"Items": formatted, "NextToken": NEXT_TOKEN})["body"]
+    return m.success(body={"Items": formatted, "NextToken": NEXT_TOKEN, "truncated": True})["body"]
 
 
 def _event(path_parameters):
