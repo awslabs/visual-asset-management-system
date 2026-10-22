@@ -257,6 +257,26 @@ const arityViolation = (arity: string, count: number): string | null => {
     return null;
 };
 
+/**
+ * The selected entries a later step is certain to receive, one per input row the run stores. The run
+ * keeps one row per database, asset and normalized file key (a single leading slash), and a later
+ * step's manifest starts from those rows, so two versions or two spellings of one file reach it as
+ * ONE entry; its filters are applied to the normalized key. Mirrors
+ * executionValidation._later_step_selection_entries.
+ */
+function laterStepSelectionEntries(
+    inputs: ExecuteInputFile[],
+    filters?: InputFileFilters
+): ExecuteInputFile[] {
+    const entries = new Map<string, ExecuteInputFile>();
+    for (const file of inputs) {
+        const key = "/" + (file.relativeFileKey || "").replace(/^\/+/, "");
+        const identity = JSON.stringify([file.databaseId, file.assetId, key]);
+        if (!entries.has(identity)) entries.set(identity, { ...file, relativeFileKey: key });
+    }
+    return applyInputFileFilters(Array.from(entries.values()), filters);
+}
+
 export interface PipelineInputConstraints {
     label: string;
     systemConfig?: PipelineSystemConfig;
@@ -323,7 +343,8 @@ export function validateInputSelection(
     // selection plus every earlier step's output and is checked when the run reaches it, so a step
     // that reads only an earlier step's output type is valid. An arity-'none' first step still counts
     // as the first step — it writes outputs a later step can read. A later step's own assetScope is
-    // still judged against the selected entries that reach it.
+    // still judged against the selected entries that reach it, and a single-file later step is
+    // refused when two or more selected files already pass its filters.
     pipelineConstraints.forEach(({ label, systemConfig, templateOverrides }, position) => {
         const effective = resolveEffectivePipelineConfig(systemConfig, templateOverrides);
         const arity = effective.inputFileArity || "one";
@@ -333,6 +354,22 @@ export function validateInputSelection(
         const pipelineInputs = applyInputFileFilters(workflowInputs, effective.inputFileFilters);
         if (position > 0) {
             errors.push(...scopeErrors(effective.assetScope, pipelineInputs, label, true));
+            // The one later-step arity failure the selection already proves: two or more selected
+            // files passing a single-file step's filters. Earlier steps' outputs only add entries or
+            // replace one at the same path, so the step is certain to receive them all.
+            if (arity === "one") {
+                const reaching = laterStepSelectionEntries(
+                    workflowInputs,
+                    effective.inputFileFilters
+                );
+                if (reaching.length > 1) {
+                    errors.push(
+                        `${label} accepts a single input file, but ${reaching.length} selected ` +
+                            `input files pass its input-file filters, so the selection alone ` +
+                            `already gives it more files than it takes.`
+                    );
+                }
+            }
             return;
         }
         if (workflowInputs.length > 0 && pipelineInputs.length === 0) {
