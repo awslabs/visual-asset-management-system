@@ -57,7 +57,7 @@ describe("ModernSearchContainer refresh", () => {
     it("re-runs the current search through the search API", async () => {
         render(
             <MemoryRouter>
-                <ModernSearchContainer allowedViews={["table"]} />
+                <ModernSearchContainer mode="full" allowedViews={["table"]} />
             </MemoryRouter>
         );
         await waitFor(() => expect(mockListDispatch).toBeDefined());
