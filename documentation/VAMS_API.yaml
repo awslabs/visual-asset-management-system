@@ -14139,7 +14139,7 @@ components:
             properties:
                 query:
                     type: string
-                    maxLength: 1000
+                    maxLength: 5000
                     description: "General keyword search across all fields"
                 entityTypes:
                     type: array
@@ -14187,7 +14187,7 @@ components:
                         the same field. `MD_.product` is not an accepted spelling and matches nothing.
                 metadataValue:
                     type: string
-                    maxLength: 1000
+                    maxLength: 5000
                     description: "Search metadata field values"
                 includeArchived:
                     type: boolean
@@ -14214,13 +14214,13 @@ components:
             properties:
                 query:
                     type: string
-                    maxLength: 1000
+                    maxLength: 5000
                     description: "General text search query"
                 tokens:
                     type: array
                     items:
                         $ref: "#/components/schemas/searchToken"
-                    description: "Structured search tokens"
+                    description: "Accepted for request compatibility but not applied to the query. Use filters or metadataQuery for field-specific queries."
                 filters:
                     type: array
                     items:
@@ -14237,7 +14237,7 @@ components:
                     type: string
                     enum: [AND, OR]
                     default: "AND"
-                    description: "Default operation for tokens"
+                    description: "Accepted for request compatibility but not applied to the query."
                 entityTypes:
                     type: array
                     items:
@@ -14254,7 +14254,7 @@ components:
                     description: "Include aggregations in response"
                 metadataQuery:
                     type: string
-                    maxLength: 1000
+                    maxLength: 5000
                     description: >-
                         Separate metadata search query. Terms are joined with ` AND ` or ` OR `. In
                         `both` mode a `key:value` term addresses one metadata field and a bare term is
@@ -14282,7 +14282,10 @@ components:
                 includeHighlights:
                     type: boolean
                     default: true
-                    description: "Enhanced highlighting"
+                    description: >-
+                        Return highlighted fragments of the matching text in each hit's `highlight`
+                        field. `false` omits them, unless `explainResults` is `true`, because match
+                        explanations are built from the highlights.
                 geoSearch:
                     $ref: "#/components/schemas/geoSearch"
                 from:
