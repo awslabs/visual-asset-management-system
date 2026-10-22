@@ -446,12 +446,26 @@ def workflow_selection_errors(workflow_system_config, selected_inputs, output_ta
 def _evaluate(workflow_system_config, pipeline_effective_configs, selected_inputs, output_target):
     """Core evaluation shared by execute-time and save-time. Returns (errors, warnings, filtered).
 
-    Two-stage by design: the workflow's own inputFileFilters narrow the selection FIRST, and every
+    Two-stage by design: the workflow's own inputFileFilters narrow the selection FIRST, and each
     pipeline is then judged against that narrowed list rather than against the raw selection. The
     workflow gate is the outer boundary of what an execution may carry, so a file it excludes is not
     available to any pipeline and must not count toward one's arity or filters. Judging a pipeline on
     the raw list can both invent errors (a pipeline blamed for a file the workflow already dropped)
-    and hide them (a pipeline's arity satisfied by a file that never reaches it)."""
+    and hide them (a pipeline's arity satisfied by a file that never reaches it).
+
+    Only the FIRST step (first in workflow order, whatever its arity) is judged on filters and arity
+    here, because only its inputs are known at launch: they are the selection itself. From the second
+    step on, a step receives the selection overlaid by every earlier step's output, narrowed by its own
+    filters and arity-checked when the run reaches it (interimPipelineTracking.
+    narrow_next_pipeline_inputs, which fails the run with a named reason). Judging a later step
+    against the selection alone would refuse a valid chain — a step that reads only the type an
+    earlier step writes — while still missing the case that does fail, a single-file step handed both
+    a selected file and an earlier step's output. An arity-'none' first step still counts as the first
+    step: it writes outputs a later step can read, so no later step's inputs are knowable either.
+
+    The checks that do not depend on which files a step ends up with still run for every step: the
+    disabled/archived gate, and the step's own assetScope against the selection entries that reach it
+    (they pass its filters, and the run hands every later step the full selection before narrowing)."""
     errors = []
     warnings = []
     filtered = {}
@@ -461,7 +475,7 @@ def _evaluate(workflow_system_config, pipeline_effective_configs, selected_input
     workflow_inputs = apply_input_file_filters(
         selected_inputs, (workflow_system_config or {}).get("inputFileFilters"))
 
-    for pipeline in pipeline_effective_configs or []:
+    for position, pipeline in enumerate(pipeline_effective_configs or []):
         pid = pipeline.get("pipelineId", "")
         pdb = pipeline.get("pipelineDatabaseId", "")
         label = _pipeline_label(pdb, pid)
@@ -484,6 +498,13 @@ def _evaluate(workflow_system_config, pipeline_effective_configs, selected_input
         # Filter the WORKFLOW-ADMITTED inputs down to what this pipeline accepts.
         pipeline_inputs = apply_input_file_filters(workflow_inputs, psc.get("inputFileFilters"))
         filtered[pid] = pipeline_inputs
+
+        # A later step: only its assetScope is judged here, against the selection entries that reach
+        # it. Its filters and arity are judged at its own transition, against what it actually gets.
+        if position > 0:
+            errors.extend(_scope_errors(
+                psc.get("assetScope"), pipeline_inputs, label, declared_only=True))
+            continue
 
         # A file-requiring pipeline left with nothing is a hard error. Which filter emptied the list
         # decides the message: naming the workflow's filters when they are the cause points at the
@@ -521,7 +542,8 @@ def validate_execution(
     """Execute-time cross-entity validation. Returns (errors, per_pipeline_filtered_inputs).
 
     - workflow_system_config: WorkflowRecordV2['systemConfig'].
-    - pipeline_effective_configs: ordered list; each {pipelineId, pipelineDatabaseId, enabled,
+    - pipeline_effective_configs: list in workflow step order (the first entry is step 1, the only one
+      judged on filters and arity — see _evaluate); each {pipelineId, pipelineDatabaseId, enabled,
       archived, systemConfig{...}} with the chosen template's overrides already merged
       (resolve_effective_pipeline_config).
     - selected_inputs: execute-request inputFiles[] ({databaseId, assetId, relativeFileKey, versionId}).

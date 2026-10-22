@@ -428,18 +428,19 @@ class TestValidateExecution:
         assert any("workflow's input-file filters" in e for e in errs)
         assert filt["p1"] == []
 
-    def test_any_single_unmet_pipeline_fails_the_whole_execution(self):
-        # Every pipeline's needs must be met by the filtered list; one unmet pipeline is fatal even
-        # when its siblings are satisfied.
+    def test_an_unmet_first_step_fails_the_whole_execution(self):
+        # The first step's needs must be met by the filtered list; an unmet first step is fatal even
+        # when a later step would be satisfied by the selection. (A later step is judged when the run
+        # reaches it — see TestLaterStepsJudgedAtTheirTransition.)
         wf = self._wf(inputFileArity="multi",
                       assetScope={"crossAssetAllowed": False, "singleAssetOnly": True,
                                   "wholeAssetAllowed": False, "folderAllowed": False})
         errs, _ = ev.validate_execution(
             wf,
-            [self._pipe(pid="ok", arity="multi",
-                        inputFileFilters={"allow": ["*.glb"], "exclude": []}),
-             self._pipe(pid="unmet", arity="multi",
-                        inputFileFilters={"allow": ["*.e57"], "exclude": []})],
+            [self._pipe(pid="unmet", arity="multi",
+                        inputFileFilters={"allow": ["*.e57"], "exclude": []}),
+             self._pipe(pid="ok", arity="multi",
+                        inputFileFilters={"allow": ["*.glb"], "exclude": []})],
             [{"assetId": "a", "relativeFileKey": "/x.glb"}])
         assert any("db:unmet" in e for e in errs)
         assert not any("db:ok" in e for e in errs)
@@ -453,6 +454,152 @@ class TestValidateExecution:
             {"relativeFileKey": "/models/"}]
         assert ev.apply_input_file_filters(inputs, {"allow": [], "exclude": ["*models*"]}) == [
             {"relativeFileKey": "/textures/"}]
+
+
+@pytest.mark.unit
+class TestLaterStepsJudgedAtTheirTransition:
+    """Launch judges only the FIRST step's filters and arity against the run's selection (#715).
+
+    From the second step on, a step receives the selection overlaid by every earlier step's output,
+    narrowed by its own filters and arity-checked when the run reaches it
+    (interimPipelineTracking.narrow_next_pipeline_inputs, which fails the run with a named reason).
+    Its inputs are therefore not knowable at launch, so judging it against the selection alone both
+    refuses valid chains (a step that reads only an earlier step's output type) and cannot catch
+    the runtime failures it was meant to.
+
+    The checks that do not depend on which files a step ends up with — disabled/archived, and the
+    step's own assetScope against the selection entries that reach it — still run for every step."""
+
+    OBJ = [{"assetId": "a", "relativeFileKey": "/model.obj"}]
+
+    @staticmethod
+    def _wf(**over):
+        cfg = {"inputFileArity": "one",
+               "assetScope": {"crossAssetAllowed": False, "singleAssetOnly": True,
+                              "wholeAssetAllowed": False, "folderAllowed": False},
+               "inputFileFilters": {"allow": [], "exclude": []}}
+        cfg.update(over)
+        return cfg
+
+    @staticmethod
+    def _step(pid, allow=None, arity="one", exclude=None, **sc):
+        system_config = {"inputFileArity": arity,
+                         "inputFileFilters": {"allow": allow or [], "exclude": exclude or []}}
+        system_config.update(sc)
+        return {"pipelineId": pid, "pipelineDatabaseId": "db", "enabled": True, "archived": False,
+                "systemConfig": system_config}
+
+    def test_later_step_limited_to_an_earlier_steps_output_type_is_accepted(self):
+        # The #715 chain: obj -> glb conversion, then a step that reads only the glb it produced.
+        errs, filt = ev.validate_execution(
+            self._wf(),
+            [self._step("convert", allow=["*.obj"]), self._step("consume", allow=["*.glb"])],
+            self.OBJ)
+        assert errs == []
+        assert filt["convert"] == self.OBJ
+        # The later step's share of the SELECTION is empty; its glb arrives from step 1 at runtime.
+        assert filt["consume"] == []
+
+    def test_later_step_excluding_the_selected_type_is_accepted(self):
+        # The same chain spelled with an exclude list instead of an allow list.
+        errs, _ = ev.validate_execution(
+            self._wf(),
+            [self._step("convert", allow=["*.obj"]), self._step("consume", exclude=["*.obj"])],
+            self.OBJ)
+        assert errs == []
+
+    def test_later_step_arity_is_left_to_its_transition(self):
+        # Two selected objs reach an arity-one later step. The transition check fails the run there
+        # with a named reason; launch does not pre-judge it from the selection.
+        wf = self._wf(inputFileArity="multi")
+        two_objs = [{"assetId": "a", "relativeFileKey": "/a.obj"},
+                    {"assetId": "a", "relativeFileKey": "/b.obj"}]
+        errs, _ = ev.validate_execution(
+            wf,
+            [self._step("convert", allow=["*.obj"], arity="multi"),
+             self._step("consume", allow=["*.obj", "*.glb"], arity="one")],
+            two_objs)
+        assert errs == []
+
+    def test_an_arity_none_first_step_is_still_the_first_step(self):
+        # Step 1 consumes no files but still writes outputs a later step can read, so no later step's
+        # inputs are knowable at launch — "first step" means first in workflow order, not the first
+        # file-consuming step.
+        errs, filt = ev.validate_execution(
+            self._wf(),
+            [self._step("generate", arity="none"), self._step("consume", allow=["*.glb"])],
+            self.OBJ)
+        assert errs == []
+        assert filt["generate"] == []
+
+    def test_first_step_filter_mismatch_is_still_refused(self):
+        errs, _ = ev.validate_execution(
+            self._wf(),
+            [self._step("convert", allow=["*.glb"]), self._step("consume", allow=["*.glb"])],
+            self.OBJ)
+        assert any("db:convert" in e and "exclude all selected inputs" in e for e in errs)
+        assert not any("db:consume" in e for e in errs)
+
+    def test_first_step_arity_is_still_refused(self):
+        wf = self._wf(inputFileArity="multi")
+        two_objs = [{"assetId": "a", "relativeFileKey": "/a.obj"},
+                    {"assetId": "a", "relativeFileKey": "/b.obj"}]
+        errs, _ = ev.validate_execution(
+            wf, [self._step("convert", allow=["*.obj"], arity="one"),
+                 self._step("consume", allow=["*.glb"])],
+            two_objs)
+        assert any("db:convert" in e and "single input file" in e for e in errs)
+
+    def test_step_order_decides_which_step_is_judged(self):
+        # The same two pipelines in the other order: the glb-only step is now first, and the obj
+        # selection is refused against it.
+        errs, _ = ev.validate_execution(
+            self._wf(),
+            [self._step("consume", allow=["*.glb"]), self._step("convert", allow=["*.obj"])],
+            self.OBJ)
+        assert any("db:consume" in e and "exclude all selected inputs" in e for e in errs)
+        assert not any("db:convert" in e for e in errs)
+
+    def test_later_step_whole_asset_scope_is_still_refused(self):
+        # A whole-asset selection reaches the later step (an extension allow list cannot describe a
+        # container), and that step declines whole-asset input.
+        wf = self._wf(assetScope={"crossAssetAllowed": False, "singleAssetOnly": True,
+                                  "wholeAssetAllowed": True, "folderAllowed": False})
+        errs, _ = ev.validate_execution(
+            wf,
+            [self._step("convert", allow=["*.obj"], arity="multi",
+                        assetScope={"wholeAssetAllowed": True}),
+             self._step("consume", allow=["*.glb"], arity="multi",
+                        assetScope={"wholeAssetAllowed": False})],
+            [{"assetId": "a", "relativeFileKey": "/"}])
+        assert any("db:consume" in e and "whole-asset" in e for e in errs)
+        assert not any("db:convert" in e for e in errs)
+
+    def test_later_step_asset_span_is_still_refused(self):
+        # Selected files from two assets pass the later step's filters, so they reach it; the step
+        # allows a single asset only.
+        wf = self._wf(inputFileArity="multi",
+                      assetScope={"crossAssetAllowed": True, "singleAssetOnly": False,
+                                  "wholeAssetAllowed": False, "folderAllowed": False})
+        errs, _ = ev.validate_execution(
+            wf,
+            [self._step("convert", allow=["*.obj"], arity="multi"),
+             self._step("consume", arity="multi", assetScope={"singleAssetOnly": True})],
+            [{"assetId": "a", "relativeFileKey": "/a.obj"},
+             {"assetId": "b", "relativeFileKey": "/b.obj"}])
+        assert any("db:consume" in e and "single asset" in e for e in errs)
+
+    def test_disabled_or_archived_later_step_is_still_refused(self):
+        disabled = self._step("consume", allow=["*.glb"])
+        disabled["enabled"] = False
+        archived = self._step("render", allow=["*.glb"])
+        archived["archived"] = True
+        errs, _ = ev.validate_execution(
+            self._wf(), [self._step("convert", allow=["*.obj"]), disabled, archived], self.OBJ)
+        assert any("db:consume" in e and "disabled" in e for e in errs)
+        assert any("db:render" in e and "archived" in e for e in errs)
+        # Neither is additionally blamed for its filters.
+        assert not any("exclude all selected inputs" in e for e in errs)
 
 
 # ==================== executionValidation: open-include semantics + aggregates ====================
