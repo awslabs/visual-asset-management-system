@@ -13,7 +13,29 @@ import { MemoryRouter } from "react-router-dom";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import { getPageCount, SEARCH_RESULT_WINDOW } from "./types";
 import SearchPageListView from "./SearchPageListView";
+import SearchPageMapView from "./SearchPageMapView";
 import { INITIAL_STATE } from "./SearchPageTypes";
+
+jest.mock("react-map-gl/maplibre", () => {
+    const ReactActual = jest.requireActual("react");
+    return {
+        __esModule: true,
+        default: ReactActual.forwardRef((props: any, _ref: any) => <div>{props.children}</div>),
+        Marker: () => null,
+        Popup: () => null,
+        NavigationControl: () => null,
+        Source: () => null,
+        Layer: () => null,
+    };
+});
+jest.mock("../../common/utils/maplibreWorker", () => ({}));
+jest.mock("../../services/appCache", () => ({
+    appCache: { getItem: () => ({ locationServiceApiUrl: "https://maps.example.com/style" }) },
+}));
+jest.mock("./SearchPreviewThumbnail/PreviewThumbnailCell", () => ({
+    __esModule: true,
+    default: () => null,
+}));
 
 jest.mock("../../services/APIService", () => ({
     fetchtagTypes: jest.fn(() => Promise.resolve([])),
@@ -72,6 +94,38 @@ describe("Search list view pagination", () => {
         render(
             <MemoryRouter>
                 <SearchPageListView state={state} dispatch={jest.fn()} />
+            </MemoryRouter>
+        );
+        const pagination = createWrapper(document.body).findPagination();
+        expect(pagination).not.toBeNull();
+        const pageNumbers = pagination!
+            .findPageNumbers()
+            .map((p) => Number(p.getElement().textContent))
+            .filter((n) => !Number.isNaN(n));
+        expect(Math.max(...pageNumbers)).toBe(200);
+    });
+});
+
+describe("Search map view pagination", () => {
+    beforeEach(() => {
+        jest.spyOn(console, "log").mockImplementation(() => undefined);
+    });
+    afterEach(() => jest.restoreAllMocks());
+
+    it("offers no page past the result window", () => {
+        const state = {
+            ...INITIAL_STATE,
+            initialResult: true,
+            recordType: "asset",
+            result: {
+                hits: { hits: [], total: { value: 50, relation: "eq" } },
+                aggregationTotal: 25000,
+            },
+            tablePreferences: { pageSize: 50, visibleContent: [] },
+        };
+        render(
+            <MemoryRouter>
+                <SearchPageMapView state={state} dispatch={jest.fn()} />
             </MemoryRouter>
         );
         const pagination = createWrapper(document.body).findPagination();
