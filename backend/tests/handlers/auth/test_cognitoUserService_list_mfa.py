@@ -105,5 +105,9 @@ class TestCognitoUserListMfa:
 
         response = svc.lambda_handler(_list_event(), None)
 
-        assert response['statusCode'] != 200
-        assert 'users' not in json.loads(response['body'])
+        # list_cognito_users answers a Cognito error other than a missing pool or a bad parameter
+        # with the generic listing error.
+        assert response['statusCode'] == 400
+        assert json.loads(response['body']) == {'message': 'VAMS General Error: Error listing users'}
+        cognito.admin_get_user.assert_called_once_with(
+            UserPoolId=svc.user_pool_id, Username='totp@example.com')
