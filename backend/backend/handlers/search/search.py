@@ -1238,7 +1238,7 @@ class DualIndexQueryBuilder:
             
             # Add aggregations if requested
             if request.aggregations:
-                query["aggs"] = self._build_aggregations(index_type)
+                query["aggs"] = self._build_aggregations(index_type, bool(request.includeArchived))
             
             # Add minimum score for text searches
             if request.query or request.metadataQuery:
@@ -1619,15 +1619,18 @@ class DualIndexQueryBuilder:
             "fragment_size": 2147483647
         }
     
-    def _build_aggregations(self, index_type: str) -> Dict[str, Any]:
-        """Build aggregations for specific index"""
-        base_filter = {
-            "bool": {
-                "must_not": [
-                    {"term": {"bool_archived": True}}
-                ]
+    def _build_aggregations(self, index_type: str, include_archived: bool = False) -> Dict[str, Any]:
+        """Build aggregations for specific index, over the same archived scope as the hits"""
+        if include_archived:
+            base_filter = {"match_all": {}}
+        else:
+            base_filter = {
+                "bool": {
+                    "must_not": [
+                        {"term": {"bool_archived": True}}
+                    ]
+                }
             }
-        }
         
         if index_type == "asset":
             return {

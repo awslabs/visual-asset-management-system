@@ -181,3 +181,30 @@ class TestMetadataSearchModes:
             "Project\tCode:A1", "both", "asset"
         )
         assert clause["query_string"]["query"] == 'MD_.Project\\\tCode:"A1"'
+
+
+def _aggregation_filters(query):
+    return [aggregation["filter"] for aggregation in query["aggs"].values()]
+
+
+@pytest.mark.unit
+class TestAggregationArchivedScope:
+    """Facet aggregations cover the same archived scope as the hits."""
+
+    @pytest.mark.parametrize("index_type", ["asset", "file"])
+    def test_include_archived_aggregations_do_not_exclude_archived(self, search_module, index_type):
+        request = _search_request(search_module, includeArchived=True, aggregations=True)
+        query = _query_builder(search_module)._build_index_query(request, ["db1"], index_type)
+        filters = _aggregation_filters(query)
+        assert filters
+        assert all("bool_archived" not in str(entry) for entry in filters)
+
+    @pytest.mark.parametrize("index_type", ["asset", "file"])
+    def test_default_aggregations_exclude_archived(self, search_module, index_type):
+        request = _search_request(search_module, includeArchived=False, aggregations=True)
+        query = _query_builder(search_module)._build_index_query(request, ["db1"], index_type)
+        filters = _aggregation_filters(query)
+        assert filters
+        assert all(
+            entry == {"bool": {"must_not": [{"term": {"bool_archived": True}}]}} for entry in filters
+        )
