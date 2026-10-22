@@ -83,16 +83,18 @@ class TestShowArchivedPaging:
         query = _AssetTableQuery(self.PARTITIONS)
         _list_all(m, query, page_size=2)
 
+        # Five assets at two per page take at least three queries
+        assert len(query.calls) >= 3
         assert all(call["Limit"] <= 2 for call in query.calls)
 
     def test_a_start_key_is_only_sent_to_its_own_partition(self, m):
         query = _AssetTableQuery(self.PARTITIONS)
         _list_all(m, query, page_size=2)
 
-        for call in query.calls:
-            if "ExclusiveStartKey" in call:
-                assert call["ExclusiveStartKey"]["databaseId"]["S"] == \
-                    call["ExpressionAttributeValues"][":dbId"]["S"]
+        resumed = [call for call in query.calls if "ExclusiveStartKey" in call]
+        assert len(resumed) >= 2  # both partitions were resumed at least once
+        assert all(call["ExclusiveStartKey"]["databaseId"]["S"] ==
+                   call["ExpressionAttributeValues"][":dbId"]["S"] for call in resumed)
 
     def test_the_archived_partition_fills_the_rest_of_a_page(self, m):
         query = _AssetTableQuery({DATABASE_ID: ["a1"], f"{DATABASE_ID}#deleted": ["d1", "d2", "d3"]})
@@ -101,7 +103,10 @@ class TestShowArchivedPaging:
             first = m.get_assets(DATABASE_ID, {"pageSize": 3, "maxItems": 1000}, True)
 
         assert [item["assetId"] for item in first["Items"]] == ["a1", "d1", "d2"]
-        assert [call["Limit"] for call in query.calls] == [3, 2]
+        # The active partition is read for the whole page, the archived one only for the rest
+        reads = {(call["ExpressionAttributeValues"][":dbId"]["S"], call["Limit"]) for call in query.calls}
+        assert {(DATABASE_ID, 3), (f"{DATABASE_ID}#deleted", 2)} <= reads
+        assert (f"{DATABASE_ID}#deleted", 3) not in reads
         token = json.loads(base64.b64decode(first["NextToken"]))
         assert token["databaseId"]["S"] == f"{DATABASE_ID}#deleted"
 
@@ -153,5 +158,5 @@ class TestStartingTokenPartition:
                 {"pageSize": 2, "startingToken": self._token(f"{DATABASE_ID}#deleted")}, True)
 
         assert [item["assetId"] for item in result["Items"]] == ["d2"]
-        assert [call["ExpressionAttributeValues"][":dbId"]["S"] for call in query.calls] == [
-            f"{DATABASE_ID}#deleted"]
+        assert {call["ExpressionAttributeValues"][":dbId"]["S"] for call in query.calls} == {
+            f"{DATABASE_ID}#deleted"}
