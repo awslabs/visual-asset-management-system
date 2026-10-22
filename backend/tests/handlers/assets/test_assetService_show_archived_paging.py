@@ -218,4 +218,5 @@ class TestMaxItemsAndTruncated:
         assert response["statusCode"] == 200
         assert [item["assetId"] for item in body["Items"]] == ["d1"]
         assert body["NextToken"]
+        assert len(query.calls) >= 1
         assert all(call["Limit"] <= 1 for call in query.calls)
