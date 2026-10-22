@@ -1249,9 +1249,13 @@ is checked against, and it is authored rather than derived from the pipeline:
     selection a template would have accepted.
 
 -   **The workflow's `inputFileFilters` are applied before the pipelines'.** The selected files are
-    narrowed by the workflow first, and each pipeline is then judged against what survived. A workflow
-    whose filters exclude a type its own pipeline requires produces a workflow that can never satisfy
-    that pipeline — the API rejects such an execution, and the workflow editor warns while saving.
+    narrowed by the workflow first, and the first step is then judged against what survived. A workflow
+    whose filters exclude a type its first step requires can never satisfy that step — the API rejects
+    such an execution, and the workflow editor warns while saving. From the second step on, a step
+    receives the selected files plus every file the earlier steps wrote, narrowed by its own filters
+    when the run reaches it, so a later step may accept only the type an earlier step produces. A
+    single-file later step whose filters admit both the selected type and an earlier step's output type
+    is handed two files and fails at that step; the workflow editor warns about it while saving.
 
 -   **`outputTarget`** is `{ "locationType": "asset" | "none", "allowOverride": boolean }` and decides
     where a run writes. `asset` (the default) writes the run's output files and metadata to a VAMS asset.

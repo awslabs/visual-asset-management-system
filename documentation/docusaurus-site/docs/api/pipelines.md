@@ -1069,8 +1069,8 @@ A key a pipeline sets to `false` suppresses that metadata for the pipeline even 
 
 -   **Asset span is one intent.** `crossAssetAllowed` and `singleAssetOnly` are opposite intents. Both `true` is contradictory (`singleAssetOnly` wins and cross-asset input is rejected). Set `singleAssetOnly: true` (with `crossAssetAllowed: false`) for single-asset pipelines, or `crossAssetAllowed: true` (with `singleAssetOnly: false`) to allow multiple assets.
 -   **`wholeAssetAllowed` / `folderAllowed`** gate `/` (whole-asset) and `/folder/` selections respectively.
--   **`inputFileArity`** at execute time: `none` rejects any input file; `one` requires exactly one; `multi` requires at least one.
--   **Input-file filters** — a non-empty `allow` list restricts eligibility to matching files; a pipeline whose filters exclude every selected input fails the execution.
+-   **`inputFileArity`** at execute time: `none` receives no input files; `one` requires exactly one; `multi` requires at least one. The first step of a workflow is checked at launch, against the selected files its filters admit. A later step is checked when the run reaches it, against the files it receives — the selection plus every file the earlier steps wrote, narrowed by its filters.
+-   **Input-file filters** — a non-empty `allow` list restricts eligibility to matching files. A first step whose filters exclude every selected input rejects the execution at launch; a later step whose filters leave it nothing fails the execution at that step. Because a later step also receives earlier steps' output, it may accept only the type an earlier step writes — see [Input-file filters](workflows.md#input-file-filters) in the Workflows API.
 -   **Templates** — a chosen template's `overrides` may replace only `inputFileArity`, `metadataInputs`, `assetScope`, and `inputFileFilters` (never `requireTemplate` / `allowCustomTemplateOverride`).
 
 ---
