@@ -135,6 +135,22 @@ Standard mesh formats in the Three.js Viewer (.gltf, .glb, .obj, .fbx, .stl) wor
 
 The Needle USD WASM Viewer has difficulty loading dependencies from compressed USD files (USDC format). Compressed files cannot be reliably parsed ahead of time for dependency resolution. Uncompressed USD or USDA files are recommended for the best viewing experience.
 
+### SuperSplat Editor File URLs in Web Logs
+
+The SuperSplat Editor receives the file it opens as a presigned Amazon S3 GET URL in the `?load=` query string of its page. VAMS offers the editor only when `app.webUi.allowUnsafeEvalFeatures` is `true`, so turning that setting on for any of the viewers that need it also offers SuperSplat. Each SuperSplat view records the working URL, as the page's query string and in the `Referer` header of the editor's later requests for its own files, in two places:
+
+-   **The web access-logs bucket.** On a CloudFront deployment, the CloudFront standard logs. On an ALB deployment, the ALB access logs (query string only) and the web bucket's Amazon S3 server access logs. Log objects expire after 30 days, and their noncurrent versions 30 days later.
+-   **The AWS WAF log group**, when `app.useWaf` is `true`: the `aws-waf-logs-vams-*` log group of the web ACL in front of the site, which is in `us-east-1` for the CloudFront web ACL. It keeps events for one year and redacts only the `Authorization` header.
+
+The URL can be used to read that one file until `app.authProvider.presignedUrlTimeoutSeconds` (default 86,400 seconds) passes or the credentials that signed it expire, whichever comes first.
+
+To limit the exposure:
+
+-   Restrict read access to the web access-logs bucket and to the WAF log groups.
+-   Lower `app.authProvider.presignedUrlTimeoutSeconds`.
+-   Set `app.assetBuckets.presignedUrlNetworkRestrictions`, which applies to the VAMS-created asset bucket and the auxiliary bucket only.
+-   Set `enabled` to `false` on the `supersplat-viewer` entry in `web/src/visualizerPlugin/config/viewerConfig.json`. This removes the editor and also skips its build.
+
 ### File Extension Upload Restrictions
 
 File extension and MIME type restrictions are enforced only on files written through the VAMS API: uploads, and the destination file name of a move, rename or copy, which gets the extension check. Files added directly to the Amazon S3 asset bucket bypass these checks. The following file extensions are blocked on upload:
