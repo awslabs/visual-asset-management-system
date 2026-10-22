@@ -160,7 +160,7 @@ describe("navigation lanes", () => {
     }
 
     it("places the add-on section after the core sections and before the fork's", async () => {
-        allowRoutes("/databases/", "/addon-probe/", "/custom/probe/");
+        allowRoutes("/databases", "/addon-probe", "/custom/probe");
         const container = await renderNavigation();
         const nav = createWrapper(container).findSideNavigation();
 
@@ -171,7 +171,7 @@ describe("navigation lanes", () => {
     });
 
     it("filters the add-on section by the same web-route check", async () => {
-        allowRoutes("/databases/");
+        allowRoutes("/databases");
         const container = await renderNavigation();
         const nav = createWrapper(container).findSideNavigation();
 
