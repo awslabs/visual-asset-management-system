@@ -61,6 +61,12 @@ AUDIT_BATCH_MAX_EVENTS = 10000
 AUDIT_BATCH_MAX_BYTES = 1048576
 AUDIT_EVENT_OVERHEAD_BYTES = 26
 
+# The endpoints whose bulk checks _DenialAuditBatch records. Each denial record carries its
+# endpoint as a fixed '[probe: ...]' segment straight after the record prefix; the server sets
+# it and no request field can set or clear it.
+PROBE_ENDPOINT_WEB_ROUTES = "POST /auth/routes"
+PROBE_ENDPOINT_ALLOWED_API_ROUTES = "GET /auth/routes/api/allowed"
+
 
 def _use_local_mocks() -> bool:
     """True when local-mock mode is enabled (all route checks auto-approve).
@@ -104,14 +110,15 @@ class _DenialAuditBatch:
     every route/method pair costs one synchronous write per denied pair. Checks run here
     against the enforcer's service object and each denial is kept; :meth:`flush` writes them
     through ``_write_batch_to_cloudwatch`` -- the same records, in the same authorization log
-    group, one event per denial.
+    group, one event per denial, each marked with the probe endpoint that made the check.
     """
 
-    def __init__(self, claims, casbin_enforcer):
+    def __init__(self, claims, casbin_enforcer, probe_endpoint):
         tokens = claims.get("tokens") or []
         self._claims = claims
         self._user = tokens[0] if tokens else "UNKNOWN"
         self._casbin_enforcer = casbin_enforcer
+        self._probe_endpoint = probe_endpoint
         self._denials = []
 
     def enforce(self, obj, act):
@@ -122,9 +129,10 @@ class _DenialAuditBatch:
         return allowed
 
     def _denial_record(self, obj, act):
-        """One denial record, in the format ``log_authorization`` writes."""
+        """One denial record, in the format ``log_authorization`` writes plus the probe marker."""
         return " ".join([
             "[AUTHORIZATION][authorized: False]",
+            f"[probe: {self._probe_endpoint}]",
             f"[user: {self._user}]",
             f"[roles: {json.dumps(self._claims.get('roles', []))}]",
             f"[mfaEnabled: {self._claims.get('mfaEnabled', False)}]",
@@ -184,7 +192,9 @@ def check_web_routes(event):
     use_local_mocks = _use_local_mocks()
     denial_audit = None
     if not use_local_mocks and len(claims_and_roles["tokens"]) > 0:
-        denial_audit = _DenialAuditBatch(claims_and_roles, CasbinEnforcer(claims_and_roles))
+        denial_audit = _DenialAuditBatch(
+            claims_and_roles, CasbinEnforcer(claims_and_roles), PROBE_ENDPOINT_WEB_ROUTES
+        )
 
     try:
         for route in request_model.routes:
@@ -233,7 +243,9 @@ def get_allowed_api_routes(event):
     authorizer (``unauthenticated=True``) are always included. Routes with no
     allowed methods are omitted. The ``path`` returned is the route template.
     """
-    denial_audit = _DenialAuditBatch(claims_and_roles, CasbinEnforcer(claims_and_roles))
+    denial_audit = _DenialAuditBatch(
+        claims_and_roles, CasbinEnforcer(claims_and_roles), PROBE_ENDPOINT_ALLOWED_API_ROUTES
+    )
     allowed_routes = []
 
     try:
