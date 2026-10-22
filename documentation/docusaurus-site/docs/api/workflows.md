@@ -169,6 +169,8 @@ Archived workflows are hidden by default. Set `includeArchived=true` to retrieve
 
 Returns a single workflow object, in the same shape as an item of [List all workflows](#list-all-workflows) plus a `triggers` array describing the workflow's configured triggers (each entry carrying `triggerType`, `triggerConfig`, and `enabled`). `executionCount`, `triggerCount`, and `triggersEnabledCount` are computed for list responses and are `null` here. See [System configuration](#system-configuration) for the shape of `systemConfig`.
 
+A workflow's AWS Step Functions definition is regenerated whenever a referenced pipeline's execution settings change. When that redeploy fails, the workflow carries `deploymentStale: true` and a `deploymentStaleReason`; both are `null` otherwise. A stale workflow is redeployed on its next save or launch, and a launch never runs the stale definition (see [Execute a workflow](#execute-a-workflow)).
+
 ### Error responses
 
 | Status | Description             |
@@ -324,7 +326,7 @@ Set `enabled` to `true` or `false` to enable or disable a workflow without chang
 :::
 
 :::warning[`specifiedPipelines` and `systemConfig` replace the stored value]
-Both are stored whole. A request that supplies either one persists exactly what it sends, and anything it omits is gone rather than retained — send the complete list or block, not the part being changed. Supplying `specifiedPipelines` also regenerates the workflow's AWS Step Functions definition, which is how a change to a referenced pipeline's execution binding is picked up.
+Both are stored whole. A request that supplies either one persists exactly what it sends, and anything it omits is gone rather than retained — send the complete list or block, not the part being changed. Supplying `specifiedPipelines` regenerates the workflow's AWS Step Functions definition. An update without it regenerates the definition too when a referenced pipeline's execution settings have changed since the workflow was last deployed; if that redeploy fails, the edit is still saved and the response carries the reason in `warnings` and `deploymentStaleReason`.
 :::
 
 ### Request body example
@@ -671,7 +673,7 @@ A `jobName` names the step in the workflow's AWS Step Functions state machine, a
 {baseAssetsPrefix}pipelines/{firstStepName}/{generatedJobName}/output/{executionId}/files/
 ```
 
-`firstStepName` is the first step's `jobName`, or its `pipelineId` when the `jobName` is empty. `generatedJobName` is that same name carrying a short generated prefix, assigned when the workflow's state machine is built. `baseAssetsPrefix` is the prefix the deployment's default asset bucket is registered under, and is empty for the bucket VAMS creates. Every step of a run writes beneath these prefixes; the steps do not each get a folder of their own. Omitting `jobName` is the normal choice — the pipeline id already labels the step.
+`firstStepName` is the first step's `jobName`, or its `pipelineId` when the `jobName` is empty. `generatedJobName` is that same name carrying a short generated prefix, assigned when the workflow's state machine is built and kept when it is rebuilt with the same steps. `baseAssetsPrefix` is the prefix the deployment's default asset bucket is registered under, and is empty for the bucket VAMS creates. Every step of a run writes beneath these prefixes; the steps do not each get a folder of their own. Omitting `jobName` is the normal choice — the pipeline id already labels the step.
 
 The value is 3–63 characters of letters, numbers, hyphens, and underscores, and each step in a workflow needs its own: two steps sharing a job name collapse into one state-machine state, leaving one of the two pipelines unrun. It is a fixed label rather than a template — `{{tag}}` placeholders are not substituted in a `jobName` and are rejected, because the name is written into the state machine when the workflow is deployed rather than resolved per execution.
 
@@ -875,7 +877,11 @@ file name.
 
 A workflow may declare a default in `systemConfig.defaultOutputFileBaseExecutionPathExtension`. The
 default is stored **unresolved**, so its template tags are substituted per execution — a single stored
-`/{{jobName}}/` gives every run its own output folder. Resolution follows the request:
+`/{{jobName}}/` gives every run its own output folder. `{{jobName}}` resolves to the first step's
+generated job name joined to that step's `pipelineExecutionId` (for example
+`fb522-convert-3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a`), at most 80 characters, so its value differs on
+every run. A re-run reuses the prefix its original execution resolved, so it writes into that
+execution's folder. Resolution follows the request:
 
 | `outputFileBaseExecutionPathExtension` on the request | Prefix used                  |
 | ----------------------------------------------------- | ---------------------------- |
@@ -1001,14 +1007,19 @@ Executing requires access to this route plus `GET` permission on the workflow, `
 
 The execution starts in every case.
 
+:::note[An execution always runs its pipelines' current settings]
+A workflow's AWS Step Functions definition encodes each referenced pipeline's execution type, target, callback mode, timeouts, and AWS Deadline Cloud job settings. Before starting, the launch checks that the workflow's deployed definition was built from those pipelines' current settings, and redeploys the workflow first when it was not — a pipeline changed and its background redeploy has not reached this workflow yet, or the workflow was deployed by an earlier release. The execution then starts on the published state machine version built from those settings. When the workflow cannot be brought up to date, nothing is started and the request returns `409`.
+:::
+
 ### Error responses
 
-| Status | Description                                                                                                                                       |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Validation, template-resolution, or cross-entity validation error, including `metadataSourceAssets` spanning more assets than `assetScope` allows |
-| `403`  | Not authorized (API, input asset, metadata-source asset or database, output asset, workflow, or pipeline level)                                   |
-| `429`  | Throttling -- too many requests                                                                                                                   |
-| `500`  | Internal server error or execution limit exceeded                                                                                                 |
+| Status | Description                                                                                                                                                                |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation, template-resolution, or cross-entity validation error, including `metadataSourceAssets` spanning more assets than `assetScope` allows                          |
+| `403`  | Not authorized (API, input asset, metadata-source asset or database, output asset, workflow, or pipeline level)                                                            |
+| `409`  | The workflow's state machine could not be brought up to date with its pipelines' current settings, so no execution was started. Retryable; the message carries any reason. |
+| `429`  | Throttling -- too many requests                                                                                                                                            |
+| `500`  | Internal server error or execution limit exceeded                                                                                                                          |
 
 ---
 
@@ -1410,6 +1421,8 @@ The route is keyed on the execution identifier because an execution may span inp
         "workflowDatabaseId": "GLOBAL",
         "workflowName": "Convert and preview",
         "workflowDescription": "Convert 3D files and generate preview thumbnails",
+        "workflowVersion": 3,
+        "workflowVersionCurrent": true,
         "workflowSystemConfig": {
             "inputFileArity": "one",
             "outputTarget": { "locationType": "asset", "allowOverride": false }
@@ -1588,6 +1601,8 @@ Two settings blocks in the response describe different points in time, so a view
 `pipelines[].effectiveSystemConfig` is the resolved `systemConfig` **that step ran under** — the pipeline's own block with the chosen template's `overrides` applied — captured when the execution launched. `pipelines[].templateOverrides` reports those overrides alone, so a reader can see what the template changed. Both are empty objects when a step's settings were not captured.
 
 `workflowSystemConfig` is the workflow's `systemConfig` **as it stands now**, read from the workflow definition rather than snapshotted, so it reflects any edit made since the run. It is the outer gate of the workflow → pipeline → template chain.
+
+`workflowVersion` is the published workflow state machine version the execution started on, and `workflowVersionCurrent` is `true` while the workflow still runs that version and `false` once its state machine has been redeployed since the run. A save from the workflow builder always redeploys it, as does an API or CLI update that supplies the step list (`specifiedPipelines`); a change to a setting one of its pipelines contributes to the state machine (execution type, target, callback mode, timeouts, Deadline Cloud job settings) redeploys it too. Running the workflow again then runs the newer definition. The flag does not track `workflowSystemConfig` or the pipeline names and descriptions: they are read live and can change without a redeploy, so they may differ from what the run used whatever the flag says. Each step's `effectiveSystemConfig` is the snapshot it ran under. Both fields are `null` for an execution started before versions were recorded, and `workflowVersionCurrent` is also `null` when the workflow no longer records a current version (for example, the workflow was deleted).
 :::
 
 :::note[Traceability, not internals]

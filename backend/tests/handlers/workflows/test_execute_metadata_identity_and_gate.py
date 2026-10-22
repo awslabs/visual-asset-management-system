@@ -435,7 +435,8 @@ class TestPerStepInputNarrowingInTheSfnInput:
         return tew, workflow, pipelines
 
     def _launch(self, tew, workflow, pipelines, template_overrides=None):
-        p = tew.TestExecuteOrchestration()._patches(workflow=workflow)
+        p = tew.TestExecuteOrchestration()._patches(
+            workflow=workflow, deployed_from=list(pipelines.values()))
         body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"},
                                {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.ply"}]}
         resolve = ew._resolve_pipeline_configs

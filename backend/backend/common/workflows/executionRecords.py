@@ -175,6 +175,29 @@ def pipeline_output_prefixes(first_pipeline_name: str, first_job_name: str, exec
     }
 
 
+# Ceiling on the {{jobName}} tag value: the stored step job name's own cap, which is also the Step
+# Functions execution-name limit, so a template can name a sub-execution or an AWS Batch job with it.
+RUN_JOB_NAME_MAX_LENGTH = 80
+
+
+def run_job_name(step_job_name: str, pipeline_execution_id: str) -> str:
+    """The value the {{jobName}} template tag renders for one step of one execution:
+    '{stepJobName}-{pipelineExecutionId}', at most RUN_JOB_NAME_MAX_LENGTH characters.
+
+    step_job_name is the uuid-prefixed name the workflow's deploy stored in its jobNames. It is fixed
+    across runs, and two steps that share a pipeline or a job name usually carry the same one (one
+    deploy generates every step's uuid fragment within the same instant), so the pipeline execution
+    id, minted per step per run, is what makes the value distinct for every step of every execution.
+    The step job name is trimmed to fit, never the id. Both parts carry only the id character set
+    (letters, digits, '-', '_'), so the value is a single path segment with no '/', ':' or
+    whitespace.
+
+    The run-bucket output prefixes keep the stored step job name (pipeline_output_prefixes), because
+    the deployed state machine bakes that name into them."""
+    suffix = f"-{pipeline_execution_id}"
+    return step_job_name[:max(RUN_JOB_NAME_MAX_LENGTH - len(suffix), 0)] + suffix
+
+
 def aux_pipeline_prefix(pipeline_name: str, execution_id: str) -> str:
     """Auxiliary-bucket temporary working prefix for a pipeline execution, relative to the aux
     bucket (no scheme, no bucket): 'pipelines/{pipelineName}/{executionId}/'. Scoped to the
@@ -663,7 +686,7 @@ def build_workflow_execution_record(
     execution_id, workflow_database_id, workflow_id, workflow_arn,
     workflow_execution_arn, execution_start_date, execution_status,
     triggered_by_user_id, trigger_type, execution_log_group_arn,
-    last_sfn_sync_check_date="", execution_group_id="",
+    last_sfn_sync_check_date="", execution_group_id="", workflow_version_arn="",
 ):
     """Main WorkflowExecutionsStorageTableV2 row (workflow-keyed; no asset coupling).
 
@@ -706,6 +729,10 @@ def build_workflow_execution_record(
     # ungrouped executions do not populate the WorkflowExecutionsByGroupGSI.
     if execution_group_id:
         record["executionGroupId"] = execution_group_id
+    # The published state machine version the execution was started on: the exact definition it ran.
+    # Absent for an execution started on the unqualified state machine ARN.
+    if workflow_version_arn:
+        record["workflowVersionArn"] = workflow_version_arn
     return record
 
 

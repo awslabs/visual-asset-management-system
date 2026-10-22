@@ -3,6 +3,7 @@
 
 import json
 import os
+import computeTier
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service="ConstructPipeline3dThumbnail")
@@ -22,6 +23,8 @@ def lambda_handler(event, context):
 
     return {
         "jobName": event.get("jobName"),
+        # The Batch state the state machine's Choice routes the job to
+        "computeTier": computeTier.submitted_tier(event.get("computeTier")),
         "currentStageType": definition["stages"][0]["type"],
         "definition": [json.dumps(definition)],
         # Forward the metadata + input-configuration S3 locations, not their content
