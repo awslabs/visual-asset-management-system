@@ -83,6 +83,8 @@ Pipeline access is controlled through the VAMS [permissions model](permissions-m
 
 A workflow defines an ordered sequence of pipeline steps. When created, VAMS generates an AWS Step Functions state machine that runs each pipeline in order. A workflow is scoped to a database (or `GLOBAL`) and references pipelines by identity.
 
+The state machine encodes each referenced pipeline's execution type, target, callback mode, timeouts, and AWS Deadline Cloud job settings. The rest of a pipeline's configuration — its `systemConfig`, templates, and enabled state — is read when each execution starts. When a pipeline update changes an encoded setting, through the API, the CLI, or a deployment that re-registers a built-in pipeline, VAMS redeploys every workflow that references it in the background. An execution also checks that its workflow's state machine was built from the pipelines' current settings and redeploys it first when it was not, so no execution runs a pipeline's previous settings. A workflow whose redeploy fails is marked with `deploymentStale` and the reason.
+
 For the full workflow, trigger, and execution API, see the [Workflows API](../api/workflows.md) reference.
 
 ### Specified pipelines
@@ -114,7 +116,7 @@ An execution writes to one shared set of output prefixes, derived from the first
 {baseAssetsPrefix}pipelines/{firstStepName}/{generatedJobName}/output/{executionId}/files/
 ```
 
-`firstStepName` is the first step's `jobName`, or its `pipelineId` when the `jobName` is empty. `generatedJobName` is that same name with a short generated prefix, assigned when the workflow's state machine is built. `baseAssetsPrefix` is the prefix the deployment's default asset bucket is registered under — empty for the bucket VAMS creates, so the run area sits at that bucket's root. Every step of the run writes beneath these prefixes; the steps do not each get a folder of their own.
+`firstStepName` is the first step's `jobName`, or its `pipelineId` when the `jobName` is empty. `generatedJobName` is that same name with a short generated prefix, assigned when the workflow's state machine is built and kept when it is rebuilt with the same steps. `baseAssetsPrefix` is the prefix the deployment's default asset bucket is registered under — empty for the bucket VAMS creates, so the run area sits at that bucket's root. Every step of the run writes beneath these prefixes; the steps do not each get a folder of their own.
 
 The value is 3–63 characters of letters, numbers, hyphens, and underscores, and each step in a workflow is expected to carry its own: a job name repeated across two steps names both of them identically in the state machine and in the run's logs, leaving no way to tell the two apart. The web workflow editor refuses a repeat, comparing case-insensitively.
 

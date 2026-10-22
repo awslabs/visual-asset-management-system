@@ -57,6 +57,7 @@ from common.workflows import pipelineRecords as pr
 from common.workflows import workflowRecords as wr
 from common.workflows import templateBodyStorage as tbs
 from common.workflows import outputPathExtension as ope
+from common.workflows import workflowAsl
 from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.workflows.defaultBucket import (
     resolve_default_bucket,
@@ -208,6 +209,10 @@ try:
     workflow_execution_log_group_arn = os.environ.get("WORKFLOW_EXECUTION_LOG_GROUP_ARN", "")
     orchestration_bus_arn = os.environ.get("ORCHESTRATION_BUS_ARN", "")
     orchestration_event_source_prefix = os.environ.get("ORCHESTRATION_EVENT_SOURCE_PREFIX", "")
+    # The workflow service, invoked synchronously to redeploy a workflow whose deployed definition no
+    # longer matches its pipelines before that workflow is launched. When unset, such a launch is
+    # refused instead.
+    workflow_service_function = os.environ.get("WORKFLOW_SERVICE_V2_FUNCTION_NAME", "")
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
@@ -314,14 +319,19 @@ def _asset_bucket_details(bucket_id):
 # Record fetch
 #######################
 
+# The workflow and pipeline rows are read strongly consistent: the launch-time deployment check
+# compares the workflow's stored fingerprints with these pipeline records, so both must reflect a
+# pipeline save or a background redeploy that completed before this request.
 def _get_workflow(workflow_database_id, workflow_id):
     return _workflow_table().get_item(
-        Key={"databaseId": workflow_database_id, "workflowId": workflow_id}).get("Item")
+        Key={"databaseId": workflow_database_id, "workflowId": workflow_id},
+        ConsistentRead=True).get("Item")
 
 
 def _get_pipeline(pipeline_database_id, pipeline_id):
     return _pipeline_table().get_item(
-        Key={"databaseId": pipeline_database_id, "pipelineId": pipeline_id}).get("Item")
+        Key={"databaseId": pipeline_database_id, "pipelineId": pipeline_id},
+        ConsistentRead=True).get("Item")
 
 
 def _get_asset(database_id, asset_id):
@@ -1770,6 +1780,76 @@ def _stored_job_names_error(workflow, pipeline_records):
     return ""
 
 
+# Returned (409, retryable) when a launch cannot be pinned to a definition built from the pipelines'
+# current settings. The run is refused rather than started on a definition that may invoke a previous
+# target, callback mode or timeout.
+STALE_DEPLOYMENT_MESSAGE = (
+    "The workflow's state machine could not be brought up to date with its pipelines' current "
+    "settings, so the execution was not started. Try again; if it keeps failing, save the workflow "
+    "to redeploy it.")
+
+# Deployment attributes a redeploy returns and the launch reads back onto the workflow.
+_DEPLOYMENT_FIELDS = ("workflow_arn", "workflowVersionArn", "jobNames", "pipelineFingerprints")
+
+
+def _request_redeploy(workflow_database_id, workflow_id):
+    """Ask the workflow service, synchronously, to redeploy this workflow from its stored steps and
+    its pipelines' current records. Returns the action's result dict, or None when the call failed."""
+    if not workflow_service_function:
+        logger.error("WORKFLOW_SERVICE_V2_FUNCTION_NAME is not set; cannot redeploy a stale workflow")
+        return None
+    event = wr.build_internal_action_event(
+        wr.INTERNAL_ACTION_REDEPLOY_WORKFLOW,
+        {"workflowDatabaseId": workflow_database_id, "workflowId": workflow_id})
+    try:
+        response = lambda_client.invoke(
+            FunctionName=workflow_service_function, InvocationType="RequestResponse",
+            Payload=json.dumps(event).encode("utf-8"))
+        payload = response.get("Payload")
+        parsed = json.loads(payload.read().decode("utf-8")) if payload else {}
+        if parsed.get("statusCode") != 200:
+            logger.error(f"Redeploy of {workflow_database_id}:{workflow_id} returned "
+                         f"{parsed.get('statusCode')}")
+            return None
+        return (json.loads(parsed.get("body") or "{}") or {}).get("message") or None
+    except Exception as e:
+        logger.exception(f"Redeploy request for {workflow_database_id}:{workflow_id} failed: {e}")
+        return None
+
+
+def _ensure_current_deployment(workflow, pipeline_records, event):
+    """Make sure this launch starts on a state machine version built from the pipeline records it
+    just read. Returns an error response, or None after updating `workflow` in place with the
+    deployment to start on.
+
+    The workflow record stores the published version together with a fingerprint of each pipeline's
+    definition-relevant settings. When they match the live records the stored version is used as is.
+    Otherwise — a pipeline changed and the background refresh has not reached this workflow yet, a
+    record was edited directly, or the workflow was deployed before versions were published — the
+    workflow is redeployed first. A version is immutable, so starting on its ARN runs exactly that
+    definition, which an execution started on the state machine's own ARN right after an update is
+    not guaranteed to do."""
+    if workflowAsl.deployment_matches(workflow, pipeline_records):
+        return None
+    workflow_database_id = workflow.get("databaseId", "")
+    workflow_id = workflow.get("workflowId", "")
+    logger.info(f"Workflow {workflow_database_id}:{workflow_id} deployment does not match its "
+                "pipelines; redeploying before launch")
+    result = _request_redeploy(workflow_database_id, workflow_id) or {}
+    if result.get("outcome") in ("redeployed", "current"):
+        refreshed = {field: result.get(field) for field in _DEPLOYMENT_FIELDS}
+        if workflowAsl.deployment_matches(refreshed, pipeline_records):
+            workflow.update(refreshed)
+            return None
+        # The redeploy read different pipeline records than this launch did: one changed in between.
+        logger.warning(f"Workflow {workflow_database_id}:{workflow_id} pipelines changed during the "
+                       "launch-time redeploy")
+    message = STALE_DEPLOYMENT_MESSAGE
+    if result.get("outcome") == "failed" and result.get("reason"):
+        message = f"{STALE_DEPLOYMENT_MESSAGE} {result['reason']}"
+    return general_error(status_code=409, body={"message": message}, event=event)
+
+
 #######################
 # Launch + persist
 #######################
@@ -1967,8 +2047,11 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
         pipeline_config_bodies, step_metadata_gates=step_metadata_gates, run_prefix=run_prefix)
 
     # SFN input: identity, run bucket, output target, per-pipeline execution ids, user context.
+    # Started on the published version _ensure_current_deployment verified against the pipeline
+    # records this launch read, so the definition that runs is the one those records describe.
+    workflow_version_arn = workflow.get("workflowVersionArn", "") or ""
     response = sfn_client.start_execution(
-        stateMachineArn=workflow_arn,
+        stateMachineArn=workflow_version_arn or workflow_arn,
         name=execution_id,
         input=json.dumps({
             "workflowExecutionId": execution_id,
@@ -2114,7 +2197,8 @@ def _persist_execution_records(execution_id, workflow_arn, workflow_execution_ar
         execution_start_date=start_date, execution_status="RUNNING",
         triggered_by_user_id=executing_user, trigger_type=trigger_type_stored,
         execution_log_group_arn=workflow_execution_log_group_arn,
-        execution_group_id=execution_group_id or "")
+        execution_group_id=execution_group_id or "",
+        workflow_version_arn=workflow.get("workflowVersionArn", "") or "")
     main_table.put_item(Item=main_row)
 
     # 2) One workflow-input row per selected input (asset-scoped GET source of truth).
@@ -2306,6 +2390,14 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
 
     # 2) Resolve + authorize referenced pipelines; gate enabled + not archived (also in the validator).
     err, pipeline_records = _resolve_and_authorize_pipelines(workflow, workflow_database_id)
+    if err:
+        return err
+
+    # 2b) The run starts on a state machine version built from the pipeline records just read, never
+    #     on a definition that still carries a pipeline's previous execution settings. The version is
+    #     immutable, so a pipeline edit landing later in this request cannot change what this run
+    #     executes, and the pipeline-execution rows below are derived from these same records.
+    err = _ensure_current_deployment(workflow, pipeline_records, event)
     if err:
         return err
 
@@ -2682,6 +2774,12 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 status_code=err.response["ResponseMetadata"]["HTTPStatusCode"],
                 body={"message": "ExecutionLimitExceeded: Reached the maximum state machine execution limit."},
                 event=event)
+        # The version this launch read was removed before the start reached Step Functions (a burst of
+        # redeploys pruned it). Nothing started, and a retry reads the current version.
+        if code == "StateMachineDoesNotExist":
+            logger.exception("State machine version no longer exists")
+            return general_error(status_code=409, body={"message": STALE_DEPLOYMENT_MESSAGE},
+                                 event=event)
         # A record the request made too large for one DynamoDB item is the caller's to shrink (fewer
         # or shorter template tag values, fewer metadata-source entities), so it answers with what to
         # change rather than an internal error. The started execution has already been stopped by the
