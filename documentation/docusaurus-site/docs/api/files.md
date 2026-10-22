@@ -577,6 +577,8 @@ Each entry in `files` is an object:
 | `file_size`   | integer | No       | File size in bytes. Either `file_size` or `num_parts` must be provided.               |
 | `num_parts`   | integer | No       | Number of multipart upload parts. Either `file_size` or `num_parts` must be provided. |
 
+A request accepts at most 1,000 files and 1,500 total parts across all files, and at most 10,000 parts per file; a request over any of these is refused with `400`. Because every part's presigned URL carries the file's key, a request whose estimated response is over 5 MiB is also refused with `400` ("Upload request too large; split the files across several requests") even inside those limits; this can happen when keys are long and use non-ASCII characters. Split such a request, or send fewer, larger parts. See [Upload request size limits](../troubleshooting/known-limitations.md#upload-request-size-limits).
+
 **Response:**
 
 ```json
@@ -603,7 +605,7 @@ Each entry in `files` is an object:
 
 | Status | Description                                                                                                                          |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, blocked file extension, or blocked MIME type.                                                                    |
+| `400`  | Invalid parameters, blocked file extension or MIME type, or a request over a per-request limit described above.                      |
 | `403`  | Not authorized to upload files to this asset.                                                                                        |
 | `429`  | Rate limit exceeded: at most 20 upload initializations per user per minute. The `Retry-After` header gives the seconds to wait (60). |
 | `500`  | Internal server error.                                                                                                               |
