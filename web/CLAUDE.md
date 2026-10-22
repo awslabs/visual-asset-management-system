@@ -79,7 +79,7 @@ web/
     authenticator/          # Cognito Authenticator UI components (Header, Footer, SignIn*)
 
     services/               # API and data services (ONLY files that may import apiClient)
-      APIService.ts         # Main API service (~900+ lines, 40+ exports)
+      APIService.ts         # Main API service (~3,500 lines, 110+ exports)
       AssetUploadService.ts # S3 multipart upload logic
       AssetVersionService.ts  # updateAssetVersion, archiveAssetVersion, unarchiveAssetVersion
       FileOperationsService.ts
@@ -610,7 +610,7 @@ This codebase uses NO global state library. State is managed through:
 2. **Component-local useState/useReducer** for component state
 3. **localStorage** for persistence across sessions
 4. **appCache** (`src/services/appCache.ts`) for runtime config and preferences
-5. **URL params** via React Router v6 `useParams()`
+5. **URL params** via React Router v7 `useParams()`
 6. **TanStack Query** for server state in the orchestration module (`features/orchestration/`) — caching, background refetch, smart polling (`computeRefetchInterval` keeps polling active only while non-terminal executions are visible)
 
 ### 6.2 Context Pattern
@@ -941,8 +941,7 @@ setError(`${Synonyms.Asset} not found`);
 1. **Cloudscape component props** -- Use Cloudscape's built-in styling props first
 2. **SCSS** -- Global styles in `src/styles/`, uses 7-1 SCSS architecture
 3. **CSS Modules** -- Scoped styles (e.g., `loginbox.module.css`)
-4. **styled-components** -- Used in some components
-5. **Inline styles** -- Acceptable for simple one-off styles
+4. **Inline styles** -- Acceptable for simple one-off styles
 
 ### 10.2 SCSS Structure
 
@@ -1132,7 +1131,7 @@ npm install           # Install dependencies + runs postinstall (viewer installs
 npm run start         # Start dev server (port 3001)
 ```
 
-The dev server proxies API calls via Vite's proxy config. Set `DEV_API_ENDPOINT` in `config.ts` to point to a remote API or local backend.
+The dev server has no API proxy: `web/vite.config.ts` sets only port 3001 and the COOP/COEP headers. Set `DEV_API_ENDPOINT` in `src/config.ts` to point the dev server at a remote API or a local backend.
 
 ### 12.2 Build
 
@@ -1239,8 +1238,7 @@ See section 9.4 for the full Synonyms rules.
 | `zod`                           | latest               | Schema validation                    |
 | `reactflow`                     | v11                  | DAG preview (replaced v9 EOL)        |
 | `@badgateway/oauth2-client`     | 2.4.2                | External OAuth2 PKCE flow            |
-| `react-router-dom`              | ^6.0.0               | Client-side routing                  |
-| `styled-components`             | ^5.3.3               | CSS-in-JS (legacy usage)             |
+| `react-router-dom`              | ^7.18.2              | Client-side routing                  |
 | `three`                         | (via customInstalls) | 3D rendering engine                  |
 | `maplibre-gl`                   | ^6.9.0               | Map rendering                        |
 | `react-pdf`                     | ^10.1.0              | PDF viewing                          |
@@ -1375,7 +1373,7 @@ Environment variables use the `VITE_*` prefix instead of `REACT_APP_*`. Access t
 
 ### 18.3 Proxy
 
-Vite's `server.proxy` in `vite.config.ts` configures the development proxy. API calls to `/api/*` are proxied to the backend.
+`vite.config.ts` defines no `server.proxy`. In local development the web app calls the API at `DEV_API_ENDPOINT` (`src/config.ts`) directly.
 
 ### 18.4 COI Service Worker
 
