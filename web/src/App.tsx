@@ -34,7 +34,7 @@ const HeaderPortal = ({ children }: { children: any }) => {
 };
 
 function App() {
-    const { theme, setTheme, density, setDensity } = useThemeSettings() as any;
+    const { theme, setTheme } = useThemeSettings();
     const [navigationOpen, setNavigationOpen] = useState(true);
 
     const user = localStorage.getItem("user")

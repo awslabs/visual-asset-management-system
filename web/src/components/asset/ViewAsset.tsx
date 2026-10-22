@@ -14,7 +14,6 @@ import {
     AlertProps,
 } from "@cloudscape-design/components";
 import { useNavigate, useParams, useLocation } from "react-router";
-import { appCache } from "../../services/appCache";
 import { AssetDetailContext, assetDetailReducer } from "../../context/AssetDetailContext";
 import { AssetDetail } from "../../pages/AssetUpload/AssetUpload";
 import { fetchAsset, fetchAssetLinks, fetchtagTypes } from "../../services/APIService";
@@ -27,7 +26,6 @@ import AssetDeleteModal from "../modals/AssetDeleteModal";
 import { UpdateAsset } from "../createupdate/UpdateAsset";
 import { MetadataContainer } from "../metadataV2";
 import Synonyms from "../../synonyms";
-import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import { usePageTitle } from "../../hooks/usePageTitle";
 
 // Fetch tag types and store in localStorage
@@ -83,12 +81,6 @@ export default function ViewAsset() {
     const [versionsLoading, setVersionsLoading] = useState(false);
 
     usePageTitle(databaseId, asset?.assetName);
-
-    // Config
-    const config = appCache.getItem("config");
-    const [useNoOpenSearch] = useState(
-        config?.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH)
-    );
 
     // Fetch asset data
     useEffect(() => {
