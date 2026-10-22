@@ -6,7 +6,8 @@
 /**
  * External OAuth sign-in sends one redirect_uri, without the hash route, on both the authorize
  * request and the token request. An IdP compares the two (and against its registered value), so
- * a deep link such as #/databases/<id>/assets/<id> must not change what is sent.
+ * a deep link such as #/databases/<id>/assets/<id> must not change what is sent. A code exchange
+ * that fails signs the browser out, which also clears the browser asset store.
  */
 
 import React from "react";
@@ -70,12 +71,13 @@ jest.mock("../services/APIService", () => ({
 }));
 
 const mockEnsureValidSession = jest.fn();
+const mockClearLocalStore = jest.fn();
 jest.mock("../utils/sessionManager", () => ({
     ensureValidSession: (...args: any[]) => mockEnsureValidSession(...args),
     scheduleExpiryTimer: jest.fn().mockResolvedValue(undefined),
     clearExpiryTimer: jest.fn(),
     registerFocusRevalidation: jest.fn(() => () => {}),
-    clearLocalStore: jest.fn().mockResolvedValue(undefined),
+    clearLocalStore: (...args: any[]) => mockClearLocalStore(...args),
     clearStoredSession: jest.fn(),
     SESSION_EXPIRED_KEY: "session_expired",
     SESSION_RETURN_TO_KEY: "session_return_to",
@@ -127,6 +129,7 @@ describe("Auth external OAuth redirect_uri", () => {
         mockGetAmplifyConfig.mockResolvedValue({ ...OAUTH2_CONFIG });
         // Signed out: no stored token validates, so the login screen renders.
         mockEnsureValidSession.mockResolvedValue(false);
+        mockClearLocalStore.mockResolvedValue(undefined);
         // jsdom reports document.location assignments as unimplemented navigation.
         consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
     });
@@ -160,5 +163,49 @@ describe("Auth external OAuth redirect_uri", () => {
 
         await waitFor(() => expect(mockGetTokenFromCodeRedirect).toHaveBeenCalledTimes(1));
         expect(mockGetTokenFromCodeRedirect.mock.calls[0][1].redirectUri).toBe("http://localhost/");
+    });
+});
+
+describe("Auth sign-out after a failed code exchange", () => {
+    let consoleError: jest.SpyInstance;
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        localStorage.clear();
+        appCache.setItem("config", OAUTH2_CONFIG);
+        mockGetAmplifyConfig.mockResolvedValue({ ...OAUTH2_CONFIG });
+        mockEnsureValidSession.mockResolvedValue(false);
+        mockClearLocalStore.mockResolvedValue(undefined);
+        // jsdom reports document.location assignments as unimplemented navigation.
+        consoleError = jest.spyOn(console, "error").mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+        consoleError.mockRestore();
+        window.history.replaceState(null, "", "/");
+    });
+
+    it("clears the browser asset store and records the error", async () => {
+        localStorage.setItem("auth_state", `http://localhost${DEEP_LINK}`);
+        localStorage.setItem("code_verifier", "verifier-1");
+        window.history.replaceState(null, "", "/?code=abc&state=xyz");
+        let rejectExchange!: (error: Error) => void;
+        mockGetTokenFromCodeRedirect.mockReturnValue(
+            new Promise((_resolve, reject) => {
+                rejectExchange = reject;
+            })
+        );
+
+        renderAuth();
+
+        await waitFor(() => expect(mockGetTokenFromCodeRedirect).toHaveBeenCalledTimes(1));
+        const clearsBefore = mockClearLocalStore.mock.calls.length;
+
+        rejectExchange(new Error("bad code"));
+
+        await waitFor(() => expect(mockClearLocalStore).toHaveBeenCalledTimes(clearsBefore + 1));
+        await waitFor(() =>
+            expect(localStorage.getItem("auth_error")).toBe("Failed to get access token")
+        );
     });
 });
