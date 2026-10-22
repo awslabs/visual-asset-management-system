@@ -19,7 +19,7 @@ the base; a chosen template's `overrides` replaces, per key, only `inputFileArit
 
 import fnmatch
 
-from common.workflows.executionRecords import metadata_input_enabled
+from common.workflows.executionRecords import metadata_input_enabled, normalize_file_key
 
 # Keys a template may override on the pipeline systemConfig.
 TEMPLATE_OVERRIDABLE_KEYS = ("inputFileArity", "metadataInputs", "assetScope", "inputFileFilters")
@@ -443,6 +443,22 @@ def workflow_selection_errors(workflow_system_config, selected_inputs, output_ta
     return errors
 
 
+def _later_step_selection_entries(inputs, input_file_filters):
+    """The selected entries a later step is certain to receive, one per input row the run stores.
+
+    The run writes one WorkflowExecutionInputs row per database, asset and normalized file key, and a
+    later step's manifest starts from those rows with each file's asset-relative path normalized to a
+    single leading slash. So two versions of one file, or two spellings of its key, reach the step as
+    ONE entry: they are collapsed here, and the step's filters are applied to the normalized key, so
+    the count never exceeds what the transition will see."""
+    entries = {}
+    for item in inputs or []:
+        key = normalize_file_key(item.get("relativeFileKey", ""))
+        identity = (item.get("databaseId", ""), item.get("assetId", ""), key)
+        entries.setdefault(identity, {**item, "relativeFileKey": key})
+    return apply_input_file_filters(list(entries.values()), input_file_filters)
+
+
 def _evaluate(workflow_system_config, pipeline_effective_configs, selected_inputs, output_target):
     """Core evaluation shared by execute-time and save-time. Returns (errors, warnings, filtered).
 
@@ -459,9 +475,15 @@ def _evaluate(workflow_system_config, pipeline_effective_configs, selected_input
     filters and arity-checked when the run reaches it (interimPipelineTracking.
     narrow_next_pipeline_inputs, which fails the run with a named reason). Judging a later step
     against the selection alone would refuse a valid chain — a step that reads only the type an
-    earlier step writes — while still missing the case that does fail, a single-file step handed both
-    a selected file and an earlier step's output. An arity-'none' first step still counts as the first
-    step: it writes outputs a later step can read, so no later step's inputs are knowable either.
+    earlier step writes. An arity-'none' first step still counts as the first step: it writes outputs
+    a later step can read, so no later step's inputs are knowable either.
+
+    One later-step failure is certain at launch and is refused here: two or more selected files
+    passing a single-file ('one') step's filters. The overlay only adds entries or replaces one at the
+    same path, so that step receives at least those files whatever the earlier steps write. The step
+    is judged on the same effective config the transition reads (executeWorkflow sends each step's
+    merged filters and arity as stepInputFilters / stepInputArity), and the selection is counted the
+    way the run stores it (_later_step_selection_entries).
 
     The checks that do not depend on which files a step ends up with still run for every step: the
     disabled/archived gate, and the step's own assetScope against the selection entries that reach it
@@ -500,10 +522,18 @@ def _evaluate(workflow_system_config, pipeline_effective_configs, selected_input
         filtered[pid] = pipeline_inputs
 
         # A later step: only its assetScope is judged here, against the selection entries that reach
-        # it. Its filters and arity are judged at its own transition, against what it actually gets.
+        # it. Its filters and arity are judged at its own transition, against what it actually gets —
+        # except the one arity failure the selection already proves (below).
         if position > 0:
             errors.extend(_scope_errors(
                 psc.get("assetScope"), pipeline_inputs, label, declared_only=True))
+            if arity == "one":
+                reaching = _later_step_selection_entries(workflow_inputs, psc.get("inputFileFilters"))
+                if len(reaching) > 1:
+                    errors.append(
+                        f"{label} accepts a single input file, but {len(reaching)} selected input "
+                        "files pass its input-file filters, so the selection alone already gives it "
+                        "more files than it takes.")
             continue
 
         # A file-requiring pipeline left with nothing is a hard error. Which filter emptied the list

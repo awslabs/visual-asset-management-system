@@ -467,6 +467,10 @@ class TestLaterStepsJudgedAtTheirTransition:
     refuses valid chains (a step that reads only an earlier step's output type) and cannot catch
     the runtime failures it was meant to.
 
+    One later-step failure IS knowable at launch: two or more selected files passing a single-file
+    step's filters. The overlay only adds entries or replaces one at the same path, so that step is
+    certain to receive more than one file, and launch refuses it.
+
     The checks that do not depend on which files a step ends up with — disabled/archived, and the
     step's own assetScope against the selection entries that reach it — still run for every step."""
 
@@ -508,9 +512,10 @@ class TestLaterStepsJudgedAtTheirTransition:
             self.OBJ)
         assert errs == []
 
-    def test_later_step_arity_is_left_to_its_transition(self):
-        # Two selected objs reach an arity-one later step. The transition check fails the run there
-        # with a named reason; launch does not pre-judge it from the selection.
+    def test_two_selected_files_reaching_a_single_file_later_step_are_refused(self):
+        # Two selected objs pass an arity-one later step's filters. The run hands that step the
+        # selection overlaid by earlier outputs, and an overlay only adds entries or replaces one at
+        # the same path, so the step is certain to receive two or more: refused at launch.
         wf = self._wf(inputFileArity="multi")
         two_objs = [{"assetId": "a", "relativeFileKey": "/a.obj"},
                     {"assetId": "a", "relativeFileKey": "/b.obj"}]
@@ -519,6 +524,66 @@ class TestLaterStepsJudgedAtTheirTransition:
             [self._step("convert", allow=["*.obj"], arity="multi"),
              self._step("consume", allow=["*.obj", "*.glb"], arity="one")],
             two_objs)
+        assert errs == [
+            "pipeline 'db:consume' accepts a single input file, but 2 selected input files pass "
+            "its input-file filters, so the selection alone already gives it more files than it "
+            "takes."]
+
+    def test_one_selected_file_reaching_a_single_file_later_step_launches(self):
+        # One selected obj reaches the arity-one later step. Whether step 1 then writes a second file
+        # the step admits is known only at the transition, which fails the run there if it does.
+        errs, _ = ev.validate_execution(
+            self._wf(),
+            [self._step("convert", allow=["*.obj"]),
+             self._step("consume", allow=["*.obj", "*.glb"], arity="one")],
+            self.OBJ)
+        assert errs == []
+
+    def test_selected_files_a_single_file_later_step_filters_out_do_not_count(self):
+        # Two files are selected but only the glb passes the later step's filters.
+        wf = self._wf(inputFileArity="multi")
+        errs, _ = ev.validate_execution(
+            wf,
+            [self._step("convert", arity="multi"),
+             self._step("consume", allow=["*.glb"], arity="one")],
+            [{"assetId": "a", "relativeFileKey": "/a.obj"},
+             {"assetId": "a", "relativeFileKey": "/b.glb"}])
+        assert errs == []
+
+    def test_a_multi_file_later_step_is_not_counted(self):
+        wf = self._wf(inputFileArity="multi")
+        errs, _ = ev.validate_execution(
+            wf,
+            [self._step("convert", allow=["*.obj"], arity="multi"),
+             self._step("consume", allow=["*.obj", "*.glb"], arity="multi")],
+            [{"assetId": "a", "relativeFileKey": "/a.obj"},
+             {"assetId": "a", "relativeFileKey": "/b.obj"}])
+        assert errs == []
+
+    def test_two_selected_files_after_an_arity_none_first_step_are_refused(self):
+        # The run hands every later step the whole selection, whatever the first step consumed.
+        wf = self._wf(inputFileArity="multi")
+        errs, _ = ev.validate_execution(
+            wf,
+            [self._step("generate", arity="none"),
+             self._step("consume", allow=["*.obj"], arity="one")],
+            [{"assetId": "a", "relativeFileKey": "/a.obj"},
+             {"assetId": "a", "relativeFileKey": "/b.obj"}])
+        assert len(errs) == 1 and "db:consume" in errs[0] and "selection alone" in errs[0]
+
+    @pytest.mark.parametrize("second", [
+        {"assetId": "a", "relativeFileKey": "/a.obj", "versionId": "v2"},
+        {"assetId": "a", "relativeFileKey": "//a.obj"},
+    ])
+    def test_one_file_selected_twice_counts_once(self, second):
+        # The run writes one input row per database, asset and normalized file key, so two
+        # versions (or two spellings) of one file reach a later step as a single entry.
+        wf = self._wf(inputFileArity="multi")
+        errs, _ = ev.validate_execution(
+            wf,
+            [self._step("convert", allow=["*.obj"], arity="multi"),
+             self._step("consume", allow=["*.obj"], arity="one")],
+            [{"assetId": "a", "relativeFileKey": "/a.obj", "versionId": "v1"}, second])
         assert errs == []
 
     def test_an_arity_none_first_step_is_still_the_first_step(self):

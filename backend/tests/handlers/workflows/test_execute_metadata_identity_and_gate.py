@@ -435,6 +435,12 @@ class TestPerStepInputNarrowingInTheSfnInput:
         return tew, workflow, pipelines
 
     def _launch(self, tew, workflow, pipelines, template_overrides=None):
+        resp, sent = self._launch_response(tew, workflow, pipelines, template_overrides)
+        assert resp["statusCode"] == 200, resp["body"]
+        return sent
+
+    def _launch_response(self, tew, workflow, pipelines, template_overrides=None):
+        """The handler's response and, when it started the run, the SFN input it sent."""
         p = tew.TestExecuteOrchestration()._patches(
             workflow=workflow, deployed_from=list(pipelines.values()))
         body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"},
@@ -457,8 +463,47 @@ class TestPerStepInputNarrowingInTheSfnInput:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
             m_dynamo.Table.return_value = MagicMock()
             resp = ew.lambda_handler(tew._event(body=body), MagicMock())
+        call = m_sfn.start_execution.call_args
+        return resp, (json.loads(call.kwargs["input"]) if call else None)
+
+    # -- launch and the interim check judge a later step on the same config (#715) ------------------
+    # Launch refuses two or more selected files reaching a single-file later step. The interim
+    # lambda's check for that step reads the stepInputFilters / stepInputArity entries this handler
+    # sends, so launch must judge the step on exactly that effective config (template overrides
+    # merged), not on the pipeline's declaration.
+
+    _BOTH = {"allow": ["*.glb", "*.ply"], "exclude": []}
+
+    def test_launch_refuses_a_later_step_the_override_makes_single_file(self):
+        tew, workflow, pipelines = self._two_step()
+        pipelines["p2"]["systemConfig"]["inputFileArity"] = "multi"
+        pipelines["p2"]["systemConfig"]["inputFileFilters"] = self._BOTH
+        resp, sent = self._launch_response(tew, workflow, pipelines, template_overrides={
+            "db1:p2": {"inputFileArity": "one"}})
+        assert resp["statusCode"] == 400, resp["body"]
+        assert sent is None
+        errors = json.loads(resp["body"])["message"]["executionValidationErrors"]
+        assert errors == [
+            "pipeline 'db1:p2' accepts a single input file, but 2 selected input files pass its "
+            "input-file filters, so the selection alone already gives it more files than it takes."]
+
+    def test_launch_refuses_a_later_step_the_override_widens_the_filters_of(self):
+        tew, workflow, pipelines = self._two_step()
+        resp, sent = self._launch_response(tew, workflow, pipelines, template_overrides={
+            "db1:p2": {"inputFileFilters": self._BOTH}})
+        assert resp["statusCode"] == 400, resp["body"]
+        assert sent is None
+
+    def test_launch_follows_an_override_that_makes_the_later_step_multi_file(self):
+        # The declaration alone (arity one, both selected files admitted) would be refused; the
+        # override the interim lambda applies takes several files, so the run starts.
+        tew, workflow, pipelines = self._two_step()
+        pipelines["p2"]["systemConfig"]["inputFileFilters"] = self._BOTH
+        resp, sent = self._launch_response(tew, workflow, pipelines, template_overrides={
+            "db1:p2": {"inputFileArity": "multi"}})
         assert resp["statusCode"] == 200, resp["body"]
-        return json.loads(m_sfn.start_execution.call_args.kwargs["input"])
+        assert sent["stepInputArity"] == ["multi", "multi"]
+        assert sent["stepInputFilters"] == [self._FILTERS_P1, self._BOTH]
 
     def test_each_step_contributes_its_own_filters_and_arity_in_workflow_order(self):
         tew, workflow, pipelines = self._two_step()
