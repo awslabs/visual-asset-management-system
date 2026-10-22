@@ -220,10 +220,6 @@ Each run executes on one of two AWS Fargate sizes, both submitted from one AWS B
 -   **Ephemeral storage.** Both tiers have 200 GiB, the AWS Fargate maximum; ephemeral storage is a property of the job definition and cannot be overridden per job.
 -   **Concurrency.** The Fargate compute environment allows 256 vCPU at a time, so up to 64 standard-tier jobs or 16 large-tier jobs run at once; further jobs wait in the job queue. The account's AWS Fargate vCPU quota in the Region also applies.
 
-:::note[Existing workflows]
-A workflow bakes each pipeline's task timeout into its state machine when the workflow is saved. Deployment re-registers the built-in 3D thumbnail workflow with the new 14,400-second timeout; a workflow you created that includes this pipeline keeps the previous one-hour timeout until you save it again, and a large-tier job that runs past one hour fails that workflow's step.
-:::
-
 | Constraint                  | Value                                                                               |
 | --------------------------- | ----------------------------------------------------------------------------------- |
 | Maximum input file size     | The free space of the work volume, less 1 GiB kept for the output                   |
