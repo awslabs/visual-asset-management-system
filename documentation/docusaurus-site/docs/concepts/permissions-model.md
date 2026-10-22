@@ -259,7 +259,6 @@ The following web routes can be checked via the `web` object type with the `rout
 | `/`                                                                  | Default landing page (always allowed) |
 | `/assetIngestion`                                                    | Asset ingestion                       |
 | `/assets`                                                            | Assets listing                        |
-| `/assets/:assetId`                                                   | Asset detail                          |
 | `/auth/api-keys`                                                     | API key management                    |
 | `/auth/cognitousers`                                                 | Amazon Cognito user management        |
 | `/auth/constraints`                                                  | Constraint management                 |

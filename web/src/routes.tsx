@@ -87,7 +87,6 @@ const coreRouteTable: RouteOption[] = [
         Page: ViewFile,
         active: "#/assets/",
     },
-    { path: "/assets/:assetId", Page: ViewAsset, active: "#/assets/" },
     {
         path: "/upload/:databaseId",
         Page: AssetUploadPage,

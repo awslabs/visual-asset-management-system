@@ -133,6 +133,12 @@ describe("routeTable", () => {
         expect(leaf.params).toEqual(expected);
     });
 
+    it("serves the asset page only under a database", () => {
+        // The asset page reads databaseId from the path; without it the page has no asset to load.
+        expect(routeTable.map((route) => route.path)).not.toContain("/assets/:assetId");
+        expect(pageFor("/databases/:databaseId/assets/:assetId")).toBeDefined();
+    });
+
     it("routes /executions/:executionId to the execution detail page, not the board", () => {
         const matched = matchRoutes(routeTable as any, "/executions/exec-1");
         const leaf = matched![matched!.length - 1];
