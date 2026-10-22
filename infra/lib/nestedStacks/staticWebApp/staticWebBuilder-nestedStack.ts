@@ -60,7 +60,7 @@ const LOCAL_DEV_WEB_ORIGIN = "http://localhost:3001";
  * is a destination on an end user's own machine that the deployment does not control — which is why
  * `app.webUi.allowLocalhostAuthCallbacks` defaults to false and this returns nothing.
  *
- * Both spellings are needed when enabled: `VAMSAuth.tsx` derives the redirect from
+ * Both spellings are needed when enabled: `web/src/FedAuth/Auth.tsx` derives the redirect from
  * `window.location.origin`, and Cognito matches a registered URL exactly, trailing slash included.
  */
 function localhostAuthCallbackUrls(config: Config.Config): string[] {
@@ -233,7 +233,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
             /**
              * When using federated identities, this list of callback urls must include
-             * the set of names that VAMSAuth.tsx will resolve when it calls
+             * the set of names that web/src/FedAuth/Auth.tsx will resolve when it calls
              * window.location.origin for the redirectSignIn and redirectSignout callback urls.
              * With a custom domain enabled, users browse at the custom domain host, so it
              * must be registered alongside the raw distribution name.
@@ -351,7 +351,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
             /**
              * When using federated identities, this list of callback urls must include
-             * the set of names that VAMSAuth.tsx will resolve when it calls
+             * the set of names that web/src/FedAuth/Auth.tsx will resolve when it calls
              * window.location.origin for the redirectSignIn and redirectSignout callback urls.
              */
             const callbackUrls = [

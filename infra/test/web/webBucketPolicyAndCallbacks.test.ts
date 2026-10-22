@@ -166,7 +166,7 @@ describe("the localhost callbacks can be opted back in", () => {
             mutateKey: "callbacks-oidc-localhost-allowed",
         });
         const urls = callbackUrlsOf(synth);
-        // Cognito matches a registered URL exactly, trailing slash included, and VAMSAuth.tsx derives
+        // Cognito matches a registered URL exactly, trailing slash included, and web/src/FedAuth/Auth.tsx derives
         // the value from window.location.origin — so both forms are required for the workflow to work.
         expect(urls).toContain("http://localhost:3001");
         expect(urls).toContain("http://localhost:3001/");
