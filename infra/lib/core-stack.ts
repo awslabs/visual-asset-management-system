@@ -371,6 +371,8 @@ export class CoreVAMSStack extends cdk.Stack {
                     authResources: authBuilderNestedStack.authResources,
                 });
                 staticWebBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
+                staticWebBuilderNestedStack.addStackDependency(apiNestedStack);
+                staticWebBuilderNestedStack.addStackDependency(authBuilderNestedStack);
 
                 //Set features
                 if (props.config.app.useCloudFront.enabled) {

@@ -170,7 +170,7 @@ CoreVAMSStack (root)
   |     +-- RestApi (ApiNestedStack: API Gateway + authorizer)   -> storage, AuthBuilder, ApiBuilder,
   |     |                                                           ApiBuilder2, SearchBuilder, AddonBuilder,
   |     |                                                           CustomBuilder
-  |     +-- StaticWeb (CloudFront or ALB hosting)                -> storage
+  |     +-- StaticWeb (CloudFront or ALB hosting)                -> storage, RestApi, AuthBuilder
   +-- LocationService (conditional: useLocationService.enabled) -> StaticWeb (when the static
   |                                                                  web stack is built)
   +-- CustomFeatureEnabledConfig (writes enabled features to DynamoDB)
