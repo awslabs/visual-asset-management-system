@@ -168,11 +168,15 @@ logs anything and never logs the event, as both handlers do
 `.dockerignore` keeps `tests/`, the Poetry files and caches out of its `COPY . .`.
 
 VAMS reads a Lambda step's log group only for lines that contain the workflow execution id, so a line
-that names no run path (a referenced-file warning, for one) is missing from the run's log in VAMS. The
-3dBasic handler therefore puts the body's `workflowExecutionId` on every line with `logger.append_keys`
-after the task-token check, and removes it with `remove_keys` first thing in each invocation, because a
-reused execution environment keeps the logger's keys (`tests/test_3dbasic_execution_id_logging.py`).
-The CAD/mesh handler does not yet; its extractors log through loggers of their own.
+that names no run path (a referenced-file warning, for one) is missing from the run's log in VAMS. Both
+Lambda-container handlers therefore put the body's `workflowExecutionId` on every line with
+`logger.append_keys` after the task-token check, and remove it with `remove_keys` first thing in each
+invocation, because a reused execution environment keeps the logger's keys
+(`tests/test_3dbasic_execution_id_logging.py`, `tests/test_cadmesh_execution_id_logging.py`). A module
+that logs on the handler's behalf creates its logger as a Powertools child of the handler's service
+(`safeLogger(service=<handler's service>, child=True)`, as the CAD/mesh `metadata_extractors` do), so its
+lines go through the handler's formatter and carry the same keys; a logger with a service of its own
+does not.
 
 ## Reporting Failure on a Task-Token Pipeline
 
