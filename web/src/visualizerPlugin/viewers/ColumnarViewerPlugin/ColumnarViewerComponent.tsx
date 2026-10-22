@@ -149,6 +149,16 @@ const ColumnarViewerComponent: React.FC<ViewerPluginProps> = ({
     const [rows, setRows] = useState<Row[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [eventCounts, setEventCounts] = useState<{ read: number; total: number } | null>(null);
+    // The grid follows the VAMS theme (the body class), not the OS colour scheme
+    const [isDark, setIsDark] = useState(() => document.body.classList.contains("awsui-dark-mode"));
+
+    useEffect(() => {
+        const observer = new MutationObserver(() => {
+            setIsDark(document.body.classList.contains("awsui-dark-mode"));
+        });
+        observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+        return () => observer.disconnect();
+    }, []);
 
     useEffect(() => {
         const loadAsset = async () => {
@@ -265,7 +275,7 @@ const ColumnarViewerComponent: React.FC<ViewerPluginProps> = ({
                     {`Showing ${eventCounts.read.toLocaleString()} of ${eventCounts.total.toLocaleString()} events`}
                 </div>
             )}
-            <DataGrid columns={columns} rows={rows} />
+            <DataGrid className={isDark ? "rdg-dark" : "rdg-light"} columns={columns} rows={rows} />
         </div>
     );
 };

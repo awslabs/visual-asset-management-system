@@ -27,8 +27,8 @@ jest.mock("react-papaparse", () => ({
 
 jest.mock("react-data-grid", () => ({
     __esModule: true,
-    default: ({ columns, rows }: any) => (
-        <div>
+    default: ({ columns, rows, className }: any) => (
+        <div data-testid="data-grid" className={className}>
             <span>{`grid:${columns.length}`}</span>
             <span>{`rows:${rows.length}`}</span>
         </div>
@@ -124,6 +124,25 @@ describe("ColumnarViewerComponent", () => {
         const message = screen.getByText(/\.rds is not supported/i);
         expect(message.style.background).toBe("var(--vams-bg-primary)");
         expect(message.style.color).toBe("var(--vams-color-error)");
+    });
+
+    it("styles the grid for the VAMS theme and follows a theme switch", async () => {
+        mockReadRemoteFile.mockImplementation((_url: string, options: any) =>
+            options.complete({ data: [["a"], ["1"]] })
+        );
+        document.body.classList.remove("awsui-dark-mode");
+        try {
+            render(<ColumnarViewerComponent {...props("tables/data.csv")} />);
+            const grid = await screen.findByTestId("data-grid");
+            expect(grid).toHaveClass("rdg-light");
+
+            act(() => {
+                document.body.classList.add("awsui-dark-mode");
+            });
+            await waitFor(() => expect(screen.getByTestId("data-grid")).toHaveClass("rdg-dark"));
+        } finally {
+            document.body.classList.remove("awsui-dark-mode");
+        }
     });
 
     it("dispatches on the real extension, not a substring of the name", async () => {
