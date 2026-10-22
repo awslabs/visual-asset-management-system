@@ -704,7 +704,7 @@ GET /user/cognito
 
 #### Response
 
-`NextToken` is present only when more users remain; page until it is absent.
+`NextToken` is present only when more users remain; page until it is absent. `mfaEnabled` is `true` when the user has an MFA method set up in Cognito. It is read with one Cognito `AdminGetUser` call per listed user, so a page costs up to 60 extra lookups, and a failed lookup fails the request.
 
 ```json
 {

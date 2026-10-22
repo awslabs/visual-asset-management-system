@@ -1117,7 +1117,7 @@ paths:
     /user/cognito:
         get:
             summary: "List all Cognito users."
-            description: "Retrieve a paginated list of all users in the Cognito user pool. Returns user details including email, phone, status, and MFA settings. Only available when Cognito is enabled."
+            description: "Retrieve a paginated list of all users in the Cognito user pool. Returns user details including email, phone, status, and MFA settings. mfaEnabled is read with one Cognito AdminGetUser lookup per listed user (at most 60 per page); a failed lookup fails the request. Only available when Cognito is enabled."
             responses:
                 "200":
                     description: Users retrieved successfully.
