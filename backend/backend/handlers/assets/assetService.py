@@ -1108,14 +1108,37 @@ def get_assets(databaseId, query_params, showArchived=False):
     db_ids = [databaseId]
     if showArchived:
         db_ids.append(f"{databaseId}#deleted")
+
+    page_size = int(query_params['pageSize'])
+
+    # A token is the LastEvaluatedKey of one partition. The listing resumes in that partition,
+    # and any partition before it was already read to the end.
+    exclusive_start_key = None
+    if query_params.get('startingToken'):
+        try:
+            decoded_token = base64.b64decode(query_params['startingToken']).decode('utf-8')
+            exclusive_start_key = json.loads(decoded_token)
+        except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
+            logger.exception(f"Invalid startingToken format: {e}")
+            raise VAMSGeneralErrorResponse("Invalid pagination token")
+        token_db_id = None
+        if isinstance(exclusive_start_key, dict) and isinstance(exclusive_start_key.get('databaseId'), dict):
+            token_db_id = exclusive_start_key['databaseId'].get('S')
+        if token_db_id not in db_ids:
+            logger.warning("startingToken does not belong to the listed database partitions")
+            raise VAMSGeneralErrorResponse("Invalid pagination token")
+        db_ids = db_ids[db_ids.index(token_db_id):]
     
     all_items = []
     next_token = None
+    rows_read = 0
     
-    # Query for each database ID (active and possibly archived)
+    # Query each partition in order (active, then archived), filling one page across them
     for db_id in db_ids:
         try:
-            # Build query parameters
+            # Build query parameters. A later partition reads only what is left of the page;
+            # DynamoDB reports a LastEvaluatedKey whenever it stops at the Limit, so at least
+            # one row is left whenever the loop gets here.
             query_params_dict = {
                 'TableName': asset_database,
                 'KeyConditionExpression': 'databaseId = :dbId',
@@ -1123,20 +1146,17 @@ def get_assets(databaseId, query_params, showArchived=False):
                     ':dbId': {'S': db_id}
                 },
                 'ScanIndexForward': False,
-                'Limit': int(query_params['pageSize'])
+                'Limit': max(page_size - rows_read, 1)
             }
             
-            # Add ExclusiveStartKey if startingToken provided
-            if query_params.get('startingToken'):
-                try:
-                    decoded_token = base64.b64decode(query_params['startingToken']).decode('utf-8')
-                    query_params_dict['ExclusiveStartKey'] = json.loads(decoded_token)
-                except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
-                    logger.exception(f"Invalid startingToken format: {e}")
-                    raise VAMSGeneralErrorResponse("Invalid pagination token")
+            # Resume the partition the token was read from
+            if exclusive_start_key is not None:
+                query_params_dict['ExclusiveStartKey'] = exclusive_start_key
+                exclusive_start_key = None
             
             # Single query call with pagination
             response = dynamodb_client.query(**query_params_dict)
+            rows_read += len(response.get('Items', []))
             
             # Process items and check permissions
             # Create enforcer once outside the loop to avoid per-item instantiation overhead
@@ -1158,10 +1178,11 @@ def get_assets(databaseId, query_params, showArchived=False):
                 if casbin_enforcer and casbin_enforcer.enforce(deserialized_item, "GET"):
                     all_items.append(deserialized_item)
             
-            # Keep track of the next token from the last query (base64 encoded)
+            # A partition that stopped at the Limit ends the page; its key is the next token
             if 'LastEvaluatedKey' in response:
                 json_str = json.dumps(response['LastEvaluatedKey'])
                 next_token = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+                break
                 
         except Exception as e:
             logger.exception(f"Error querying assets for database {db_id}: {e}")
