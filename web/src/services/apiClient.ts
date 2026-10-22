@@ -85,11 +85,12 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Parse a Retry-After header (delta-seconds or HTTP-date) into milliseconds, clamped to a
- * sane range. Defaults to 2s when absent/unparseable so a single 429 retries promptly.
+ * sane range. Defaults to 2s when absent/unparseable so a single 429 retries promptly. The
+ * 60s ceiling covers the upload limiter's 60s window.
  */
 function parseRetryAfterMs(headerValue: string | null): number {
     const DEFAULT_MS = 2000;
-    const MAX_MS = 30000;
+    const MAX_MS = 60000;
     if (!headerValue) return DEFAULT_MS;
     const seconds = Number(headerValue);
     if (Number.isFinite(seconds)) {
