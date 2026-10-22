@@ -50,12 +50,20 @@ from models.executions import (
     ListExecutionsRequestModel,
     RerunExecutionRequestModel,
     PermanentDeleteRequestModel,
+    TRIGGER_TYPE_TO_STORED,
 )
 
 logger = safeLogger(service="ExecutionService")
 
 # Claims/roles for the current request (set per-invocation in lambda_handler).
 claims_and_roles = {}
+
+
+def _stored_trigger_type(value) -> str:
+    """The triggerType filter in its stored spelling: 'manual' and 'fileUpload' map to 'Manual'
+    and 'File-Upload'; any other value is compared as given."""
+    value = (value or "").strip()
+    return TRIGGER_TYPE_TO_STORED.get(value, value)
 
 # Partition-key suffix an archived asset's row is moved under (assetService.archive_asset). Archiving
 # is reversible, so an archived asset is still authorized on its own row rather than on its database.
@@ -1200,7 +1208,7 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             "workflowId": (query_params.get("workflowId") or "").strip(),
             "workflowDatabaseId": (query_params.get("workflowDatabaseId") or "").strip(),
             "status": (query_params.get("status") or "").strip(),
-            "triggerType": (query_params.get("triggerType") or "").strip(),
+            "triggerType": _stored_trigger_type(query_params.get("triggerType")),
             "groupId": (query_params.get("groupId") or "").strip(),
             "triggeredByUserId": (query_params.get("triggeredByUserId") or "").strip(),
         }
@@ -4943,7 +4951,7 @@ def get_global_executions(event, query_params):
         "workflowId": (query_params.get("workflowId") or "").strip(),
         "workflowDatabaseId": (query_params.get("workflowDatabaseId") or "").strip(),
         "status": (query_params.get("status") or "").strip(),
-        "triggerType": (query_params.get("triggerType") or "").strip(),
+        "triggerType": _stored_trigger_type(query_params.get("triggerType")),
         "groupId": (query_params.get("groupId") or "").strip(),
         "triggeredByUserId": (query_params.get("triggeredByUserId") or "").strip(),
     }

@@ -668,7 +668,8 @@ def list_workflow_executions(
     form "YYYY-MM-DDTHH:MM:SSZ" and any other spelling is rejected with a 400.
 
     The remaining filters each match for equality: status (e.g. RUNNING, SUCCEEDED, FAILED, ABORTED),
-    trigger_type, group_id, and triggered_by_user_id.
+    trigger_type, group_id, and triggered_by_user_id. trigger_type is 'manual' or 'fileUpload' (the
+    stored spellings 'Manual' and 'File-Upload' are accepted too).
 
     A `warnings` entry means the page WITHHELD rows, for either of two reasons: it reached the cap on
     executions inspected for this asset, or it spent its budget re-checking runs an earlier page
@@ -1043,8 +1044,9 @@ def list_executions(
 
     Distinct from list_workflow_executions(), which is scoped to ONE asset's history. The filters
     each match for equality: status (e.g. RUNNING, SUCCEEDED, FAILED, ABORTED), workflow_id,
-    workflow_database_id, trigger_type, group_id, and triggered_by_user_id. group_id is how a group's
-    members are enumerated — rerun_execution re-runs one execution at a time, so a group re-run means
+    workflow_database_id, trigger_type, group_id, and triggered_by_user_id. trigger_type is 'manual' or
+    'fileUpload' (the stored spellings 'Manual' and 'File-Upload' are accepted too). group_id is how a
+    group's members are enumerated — rerun_execution re-runs one execution at a time, so a group re-run means
     listing the group here first.
 
     An execution is listed only when the user can read its workflow, every asset the run read, and
