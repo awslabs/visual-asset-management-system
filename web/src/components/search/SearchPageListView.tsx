@@ -16,7 +16,7 @@ import {
     Icon,
 } from "@cloudscape-design/components";
 import Popover from "@cloudscape-design/components/popover";
-import { SearchExplanation, getTotalResultCount, FIELD_MAPPINGS } from "./types";
+import { SearchExplanation, getTotalResultCount, getPageCount, FIELD_MAPPINGS } from "./types";
 import AssetDeleteModal from "../modals/AssetDeleteModal";
 import AssetUnarchiveModal from "../modals/AssetUnarchiveModal";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
@@ -1044,7 +1044,7 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
 
     const totalResults = getTotalResultCount(state?.result);
     const currentPage = 1 + Math.floor(state?.pagination?.from / state?.tablePreferences?.pageSize);
-    const pageCount = Math.ceil(totalResults / state?.tablePreferences?.pageSize);
+    const pageCount = getPageCount(totalResults, state?.tablePreferences?.pageSize);
 
     console.log("[SearchPageListView] Pagination calculation:", {
         from: state?.pagination?.from,
