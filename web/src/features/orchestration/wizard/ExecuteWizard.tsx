@@ -269,7 +269,8 @@ export interface PipelineInputConstraints {
 /**
  * Workflow-level and per-pipeline checks on the selected input files. Returns the human-readable
  * errors the launch would otherwise fail on, plus the incomplete-row check the request model
- * enforces (an asset and a file must both be chosen).
+ * enforces (an asset and a file must both be chosen). `pipelineConstraints` must be in workflow step
+ * order: the first entry is the only step whose filters and arity are judged against the selection.
  */
 export function validateInputSelection(
     workflowSystemConfig: WorkflowSystemConfig | undefined,
@@ -317,13 +318,23 @@ export function validateInputSelection(
     const workflowInputs = applyInputFileFilters(inputs, wfFilters);
 
     // Per-pipeline effective config (the chosen template's overrides merged over the pipeline's).
-    pipelineConstraints.forEach(({ label, systemConfig, templateOverrides }) => {
+    // `pipelineConstraints` is in workflow step order. Only the FIRST step's filters and arity are
+    // judged against the selection, as _evaluate does: from the second step on, a step receives the
+    // selection plus every earlier step's output and is checked when the run reaches it, so a step
+    // that reads only an earlier step's output type is valid. An arity-'none' first step still counts
+    // as the first step — it writes outputs a later step can read. A later step's own assetScope is
+    // still judged against the selected entries that reach it.
+    pipelineConstraints.forEach(({ label, systemConfig, templateOverrides }, position) => {
         const effective = resolveEffectivePipelineConfig(systemConfig, templateOverrides);
         const arity = effective.inputFileArity || "one";
         // A 'none' pipeline never consumes files, whatever the workflow selected.
         if (arity === "none") return;
 
         const pipelineInputs = applyInputFileFilters(workflowInputs, effective.inputFileFilters);
+        if (position > 0) {
+            errors.push(...scopeErrors(effective.assetScope, pipelineInputs, label, true));
+            return;
+        }
         if (workflowInputs.length > 0 && pipelineInputs.length === 0) {
             errors.push(
                 `${label} requires input files but its input-file filters exclude all selected inputs.`

@@ -1237,6 +1237,108 @@ describe("validateInputSelection", () => {
             )
         ).toEqual([]);
     });
+
+    // #715: only the FIRST step's filters and arity are judged against the selection, mirroring
+    // executionValidation._evaluate. From the second step on, a step receives the selection plus every
+    // earlier step's output and is checked when the run reaches it.
+    describe("later steps (judged when the run reaches them)", () => {
+        const objFile = [{ databaseId: "db1", assetId: "a1", relativeFileKey: "/model.obj" }];
+        const convert = {
+            label: 'Pipeline "convert"',
+            systemConfig: { inputFileFilters: { allow: ["*.obj"] } },
+        };
+        const glbOnly = {
+            label: 'Pipeline "consume"',
+            systemConfig: { inputFileFilters: { allow: ["*.glb"] } },
+        };
+
+        it("accepts a later step that reads only an earlier step's output type", () => {
+            expect(
+                validateInputSelection({ inputFileArity: "one" }, [convert, glbOnly], objFile)
+            ).toEqual([]);
+        });
+
+        it("accepts a later step whose exclude list removes the selected type", () => {
+            const excludesObj = {
+                label: 'Pipeline "consume"',
+                systemConfig: { inputFileFilters: { exclude: ["*.obj"] } },
+            };
+            expect(
+                validateInputSelection({ inputFileArity: "one" }, [convert, excludesObj], objFile)
+            ).toEqual([]);
+        });
+
+        it("leaves a later step's arity to its own transition", () => {
+            const errors = validateInputSelection(
+                { inputFileArity: "multi" },
+                [
+                    {
+                        label: 'Pipeline "convert"',
+                        systemConfig: {
+                            inputFileArity: "multi",
+                            inputFileFilters: { allow: ["*.obj"] },
+                        },
+                    },
+                    {
+                        label: 'Pipeline "consume"',
+                        systemConfig: {
+                            inputFileArity: "one",
+                            inputFileFilters: { allow: ["*.obj", "*.glb"] },
+                        },
+                    },
+                ],
+                [
+                    { databaseId: "db1", assetId: "a1", relativeFileKey: "/a.obj" },
+                    { databaseId: "db1", assetId: "a1", relativeFileKey: "/b.obj" },
+                ]
+            );
+            expect(errors).toEqual([]);
+        });
+
+        it("treats an arity-'none' first step as the first step", () => {
+            expect(
+                validateInputSelection(
+                    { inputFileArity: "one" },
+                    [
+                        { label: 'Pipeline "generate"', systemConfig: { inputFileArity: "none" } },
+                        glbOnly,
+                    ],
+                    objFile
+                )
+            ).toEqual([]);
+        });
+
+        it("still refuses a selection the first step's filters exclude", () => {
+            const errors = validateInputSelection(
+                { inputFileArity: "one" },
+                [glbOnly, convert],
+                objFile
+            );
+            expect(errors).toEqual([
+                'Pipeline "consume" requires input files but its input-file filters exclude all selected inputs.',
+            ]);
+        });
+
+        it("still refuses a whole-asset selection a later step's assetScope declines", () => {
+            const errors = validateInputSelection(
+                { inputFileArity: "one", assetScope: { wholeAssetAllowed: true } },
+                [
+                    convert,
+                    {
+                        label: 'Pipeline "consume"',
+                        systemConfig: {
+                            inputFileFilters: { allow: ["*.glb"] },
+                            assetScope: { wholeAssetAllowed: false },
+                        },
+                    },
+                ],
+                [{ databaseId: "db1", assetId: "a1", relativeFileKey: "/" }]
+            );
+            expect(errors).toEqual([
+                "Pipeline \"consume\" does not allow whole-asset ('/') selection.",
+            ]);
+        });
+    });
 });
 
 /**
