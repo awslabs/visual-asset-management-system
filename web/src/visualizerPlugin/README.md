@@ -905,7 +905,7 @@ const MyViewerComponent: React.FC<ViewerPluginProps> = (props) => {
 | `canFullscreen`              | boolean           | ✅       | Fullscreen support               |
 | `priority`                   | number            | ✅       | Selection priority (1 = highest) |
 | `dependencies`               | string[]          | ✅       | Required libraries               |
-| `loadStrategy`               | "lazy" \| "eager" | ✅       | Loading strategy                 |
+| `loadStrategy`               | "lazy" \| "eager" | ✅       | Not read; loads on first use     |
 | `category`                   | string            | ✅       | Plugin category                  |
 | `requiresPreprocessing`      | boolean           | ❌       | Needs preprocessing              |
 | `isPreviewViewer`            | boolean           | ❌       | Is preview viewer                |
