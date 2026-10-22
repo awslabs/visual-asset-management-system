@@ -2740,39 +2740,34 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
-    if (
-        config.app.authProvider.useExternalOAuthIdp.enabled &&
-        (!config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl == "" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl ==
-                "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl == "" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience ==
-                "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint ==
-                "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint ==
-                "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint ==
-                "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint ==
-                "UNDEFINED")
-    ) {
-        throw new Error(
-            "Configuration Error: Must specify a external IDP auth URL, external IDP principal domain, external IDP client ID, external IDP client secret, Lambda Authorizer JWT Issuer URL, Lambda Authorizer JWT Identity Source, and Lambda Authorizer JWT Audience when using an external OAUTH provider!"
-        );
+    // Fields VAMS passes to the authorizer and the web client must be set: null, "" and "UNDEFINED"
+    // all count as unset. The MFA scope, principal domain and discovery endpoint are optional, so
+    // only "" and the "UNDEFINED" placeholder are rejected for them and their template null passes.
+    if (config.app.authProvider.useExternalOAuthIdp.enabled) {
+        const externalIdp = config.app.authProvider.useExternalOAuthIdp;
+        const isUnsetValue = (value: unknown) =>
+            value == null || value === "" || value === "UNDEFINED";
+        const isPlaceholder = (value: unknown) => value === "" || value === "UNDEFINED";
+        if (
+            [
+                externalIdp.idpAuthProviderUrl,
+                externalIdp.idpAuthClientId,
+                externalIdp.idpAuthProviderScope,
+                externalIdp.idpAuthProviderTokenEndpoint,
+                externalIdp.idpAuthProviderAuthorizationEndpoint,
+                externalIdp.lambdaAuthorizorJWTIssuerUrl,
+                externalIdp.lambdaAuthorizorJWTAudience,
+            ].some(isUnsetValue) ||
+            [
+                externalIdp.idpAuthProviderScopeMfa,
+                externalIdp.idpAuthPrincipalDomain,
+                externalIdp.idpAuthProviderDiscoveryEndpoint,
+            ].some(isPlaceholder)
+        ) {
+            throw new Error(
+                "Configuration Error: Must specify a external IDP auth URL, external IDP principal domain, external IDP client ID, external IDP client secret, Lambda Authorizer JWT Issuer URL, Lambda Authorizer JWT Identity Source, and Lambda Authorizer JWT Audience when using an external OAUTH provider!"
+            );
+        }
     }
 
     //API Configuration Error Checks
