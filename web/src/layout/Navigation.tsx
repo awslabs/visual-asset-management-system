@@ -38,6 +38,15 @@ function CenterSpinner() {
 }
 
 /**
+ * A nav href as the route path the router checks: "#/databases/" becomes "/databases".
+ * The root "/" keeps its slash.
+ */
+function normaliseHref(href: string): string {
+    const path = href.replace("#", "");
+    return path.length > 1 ? path.replace(/\/+$/, "") : path;
+}
+
+/**
  * Recursively collects all link hrefs from navigation items,
  * supporting both flat items arrays and nested expandable-link-group items.
  */
@@ -47,7 +56,7 @@ function collectRoutes(items: any[]): any[] {
         if (item.type === "link" && item.href) {
             routes.push({
                 method: "GET",
-                route__path: item.href.replace("#", ""),
+                route__path: normaliseHref(item.href),
             });
         }
         if (item.type === "expandable-link-group" && item.items) {
@@ -74,7 +83,7 @@ function filterNavItems(items: any[], allowedRoutes: any[]): any[] {
         }
         if (item.type === "section" || item.type === "expandable-link-group") {
             const filteredChildren = (item.items || []).filter((child: any) =>
-                allowedRoutes.includes(child.href)
+                allowedRoutes.includes(normaliseHref(child.href))
             );
             if (filteredChildren.length > 0) {
                 result.push({ ...item, items: filteredChildren });
@@ -82,7 +91,7 @@ function filterNavItems(items: any[], allowedRoutes: any[]): any[] {
             continue;
         }
         if (item.type === "link" && item.href) {
-            if (allowedRoutes.includes(item.href)) {
+            if (allowedRoutes.includes(normaliseHref(item.href))) {
                 result.push(item);
             }
             continue;
@@ -187,7 +196,7 @@ export function Navigation({
         try {
             checkWebRoutesAllowed(allRoutes)
                 .then((allowed) => {
-                    const allowedRoutes = allowed.map((r) => "#" + r.route__path);
+                    const allowedRoutes = allowed.map((r) => r.route__path);
 
                     const filtered = filterNavItems(filteredNavItems, allowedRoutes);
                     setNavigationItems(filtered);
