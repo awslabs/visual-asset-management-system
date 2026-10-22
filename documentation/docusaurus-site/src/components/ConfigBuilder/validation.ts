@@ -58,6 +58,12 @@ function g(cfg: ConfigShape, path: string): any {
 
 // Regexes copied verbatim from config.ts.
 const CERT_ARN_PATTERN = /^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[a-f0-9-]+$/;
+const ACM_CERTIFICATE_ARN_PATTERN =
+    /^arn:(aws[a-z-]*):acm:([a-z0-9-]+):\d{12}:certificate\/[a-f0-9-]+$/;
+const API_CUSTOM_DOMAIN_HOST_PATTERN =
+    /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+// config.ts API_CUSTOM_DOMAIN_PARTITIONS.
+const API_CUSTOM_DOMAIN_PARTITIONS = ["aws", "aws-us-gov"];
 /**
  * Region-name prefix to partition name and DNS suffix, matching what
  * `region_info.RegionInfo.get(region)` resolves at synth time (config.ts: "garnetIngestionQueueSqsUrl
@@ -2217,6 +2223,82 @@ export const RULES: Rule[] = [
         appliesWhen: (c) => Number(g(c, "app.api.apiGatewayRest.apiGatewayTimeoutTime")) > 29,
         message:
             "An integration timeout above 29 seconds requires an approved account-level increase to the Amazon API Gateway 'Integration timeout' quota (L-E5AE38E3) in the deployment Region. Request the increase before deploying, otherwise the deployment fails.",
+    },
+
+    // ----- REST API custom domain (config.ts: "REST API custom domain. A Regional custom domain name") -----
+    {
+        id: "api-custom-domain-fields",
+        severity: "error",
+        fieldPaths: [
+            "app.api.apiGatewayRest.customDomain.domainHost",
+            "app.api.apiGatewayRest.customDomain.certificateArn",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.api.apiGatewayRest.customDomain.enabled") &&
+            (isUnset(g(c, "app.api.apiGatewayRest.customDomain.domainHost")) ||
+                isUnset(g(c, "app.api.apiGatewayRest.customDomain.certificateArn"))),
+        message:
+            "app.api.apiGatewayRest.customDomain.enabled requires app.api.apiGatewayRest.customDomain.domainHost and app.api.apiGatewayRest.customDomain.certificateArn.",
+    },
+    {
+        id: "api-custom-domain-host-format",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.customDomain.domainHost"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.api.apiGatewayRest.customDomain.enabled")) return false;
+            const host = g(c, "app.api.apiGatewayRest.customDomain.domainHost");
+            const cert = g(c, "app.api.apiGatewayRest.customDomain.certificateArn");
+            // Checked once both required fields are present (config.ts checks them first).
+            if (isUnset(host) || isUnset(cert)) return false;
+            return typeof host !== "string" || !API_CUSTOM_DOMAIN_HOST_PATTERN.test(host);
+        },
+        message:
+            "app.api.apiGatewayRest.customDomain.domainHost must be a lowercase host name with no scheme, port or path (for example api.example.com).",
+    },
+    {
+        id: "api-custom-domain-private-endpoint",
+        severity: "error",
+        fieldPaths: [
+            "app.api.apiGatewayRest.customDomain.enabled",
+            "app.api.apiGatewayRest.endpointType",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.api.apiGatewayRest.customDomain.enabled") &&
+            g(c, "app.api.apiGatewayRest.endpointType") === "PRIVATE",
+        message:
+            "app.api.apiGatewayRest.customDomain.enabled is not supported with app.api.apiGatewayRest.endpointType 'PRIVATE'. The custom domain is a Regional (public) domain name; a private API is reached through its VPC endpoint.",
+    },
+    {
+        id: "api-custom-domain-partition",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.customDomain.enabled", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.api.apiGatewayRest.customDomain.enabled")) return false;
+            const partition = partitionForRegionName(g(c, "env.region"));
+            return partition !== undefined && !API_CUSTOM_DOMAIN_PARTITIONS.includes(partition);
+        },
+        message:
+            "app.api.apiGatewayRest.customDomain.enabled is supported in the aws and aws-us-gov partitions only. Set app.api.apiGatewayRest.customDomain.enabled to false for this Region.",
+    },
+    {
+        id: "api-custom-domain-cert-region",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.customDomain.certificateArn", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.api.apiGatewayRest.customDomain.enabled")) return false;
+            const host = g(c, "app.api.apiGatewayRest.customDomain.domainHost");
+            const cert = g(c, "app.api.apiGatewayRest.customDomain.certificateArn");
+            if (isUnset(host) || isUnset(cert)) return false;
+            const match = typeof cert === "string" ? ACM_CERTIFICATE_ARN_PATTERN.exec(cert) : null;
+            if (!match) return true;
+            // The Region comparison needs env.region, which can also come from CDK context or the
+            // environment at deploy time; with it unset only the ARN format is checked here.
+            const region = g(c, "env.region");
+            if (isUnset(region) || typeof region !== "string") return false;
+            return match[1] !== partitionForRegionName(region) || match[2] !== region;
+        },
+        message:
+            "app.api.apiGatewayRest.customDomain.certificateArn must be an ACM certificate ARN in the deployment Region. A Regional custom domain name uses a certificate from its own Region.",
     },
 
     // ----- Presigned URL timeout

@@ -213,12 +213,13 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 cognitoDomain: cognitoHostedUiUrl,
             });
 
-            // Bind API Gateway to /api route of cloudfront
+            // Bind API Gateway to the /api/* routes of cloudfront
             addBehaviorToCloudFrontDistribution(
                 this,
                 website.cloudFrontDistribution,
                 props.apiUrl,
-                Config.API_GATEWAY_STAGE_NAME
+                Config.API_GATEWAY_STAGE_NAME,
+                props.config.app.api.apiGatewayRest.apiGatewayTimeoutTime
             );
 
             // CloudFront's read access to the web bucket is granted by the origin itself. The

@@ -533,6 +533,13 @@ export function generateContentSecurityPolicy(
         `https://${Service("S3", false).Endpoint}/`,
     ];
 
+    // The REST API custom domain, which amplify-config hands the clients when it is enabled. The
+    // execute-api host above stays allowed for a browser still holding the earlier base URL.
+    const customDomainHost = Config.apiCustomDomainHost(config);
+    if (customDomainHost) {
+        connectSrc.push(`https://${customDomainHost}`);
+    }
+
     // Inline scripts in index.html are allowed by SHA-256 hash rather than by
     // `'unsafe-inline'`, so an injected inline script is still blocked. The
     // hashes cover the exact bytes of each block's text content, including

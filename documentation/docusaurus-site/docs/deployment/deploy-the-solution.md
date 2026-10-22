@@ -224,6 +224,10 @@ If you configured a custom domain, also look for `CloudFrontCustomDomainUrl`.
 
 Look for the output key `webDistributionUrl` in the deployment output. This is the ALB domain you configured in `app.useAlb.domainHost`.
 
+### Point DNS at the API custom domain (optional)
+
+When `app.api.apiGatewayRest.customDomain` is enabled, the core stack outputs `ApiCustomDomainUrl` (the API base URL, `https://{api-domain}/api/`) and `ApiCustomDomainTarget` (the Regional domain name of the API Gateway custom domain). With `optionalHostedZoneId` set, VAMS creates Amazon Route 53 A and AAAA alias records for the host in that hosted zone. Otherwise, create a DNS record for `domainHost` that points at `ApiCustomDomainTarget` (a `CNAME`, or an alias record in Amazon Route 53) in the DNS service that hosts the domain. The web application uses the custom domain after its users sign out and sign in again, and each VamsCLI profile after `vamscli setup` is run again for it.
+
 ### Sign in
 
 1. Navigate to the application URL in a web browser.

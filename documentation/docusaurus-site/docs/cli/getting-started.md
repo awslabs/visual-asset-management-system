@@ -47,7 +47,7 @@ Before using VamsCLI, you must configure it to connect to your VAMS deployment. 
 vamscli setup https://your-vams-url.example.com
 ```
 
-The `setup` command accepts any HTTP or HTTPS URL that points to your VAMS deployment, including Amazon CloudFront distributions, Application Load Balancers (ALB), Amazon API Gateway endpoints, or custom domains. When you point it directly at an Amazon API Gateway `execute-api` endpoint, pass the bare endpoint URL — VamsCLI appends the REST API stage path (`/api`) automatically.
+The `setup` command accepts any HTTP or HTTPS URL that points to your VAMS deployment, including Amazon CloudFront distributions, Application Load Balancers (ALB), Amazon API Gateway endpoints, or custom domains. When you point it directly at an Amazon API Gateway `execute-api` endpoint, pass the bare endpoint URL — VamsCLI appends the REST API stage path (`/api`) automatically. When you point it at the API custom domain (`app.api.apiGatewayRest.customDomain`), include the stage path, for example `https://api.vams.example.com/api`. After a deployment enables the API custom domain, run `vamscli setup <BASE_URL> --force` again for each profile so it stores the custom domain's base URL (see [Setup and Authentication](commands/setup-and-auth.md)).
 
 :::tip[Multiple Environments]
 Use the `--profile` flag to configure separate profiles for different environments:

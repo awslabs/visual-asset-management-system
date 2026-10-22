@@ -431,6 +431,19 @@ export class CoreVAMSStack extends cdk.Stack {
                 description: "API Gateway endpoint (stage-inclusive invoke URL)",
             });
 
+            const apiCustomDomainHost = Config.apiCustomDomainHost(props.config);
+            if (apiCustomDomainHost && apiNestedStack.customDomainTarget) {
+                new cdk.CfnOutput(this, "ApiCustomDomainUrl", {
+                    value: `https://${apiCustomDomainHost}/${apiNestedStack.stageName}/`,
+                    description: "API custom domain base URL (stage-inclusive)",
+                });
+                new cdk.CfnOutput(this, "ApiCustomDomainTarget", {
+                    value: apiNestedStack.customDomainTarget,
+                    description:
+                        "Regional domain name to point the API custom domain host's DNS record at",
+                });
+            }
+
             const importGlobalPipelineWorkflowFunctionNameOutput = new cdk.CfnOutput(
                 this,
                 "ImportGlobalPipelineWorkflowFunctionNameOutput",

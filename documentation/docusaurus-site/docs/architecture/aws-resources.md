@@ -185,18 +185,19 @@ VAMS deploys Lambda functions across builder files. All functions use Python 3.1
 
 ## Amazon API Gateway
 
-| Resource                    | Configuration                                                                                                                                                                                                        |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **API Type**                | REST API (API Gateway v1). Selected by `app.api.apiType` (`"APIGATEWAY_REST"`).                                                                                                                                      |
-| **Endpoint Type**           | `REGIONAL` (public, no VPC endpoint) or `PRIVATE` (VPC interface endpoint only). Configurable via `app.api.apiGatewayRest.endpointType`.                                                                             |
-| **Stage Name**              | Fixed internal value `api` (not configurable; shared with the VamsCLI endpoint constants). The CloudFront originPath or ALB redirect maps the web URL's `/api/*` paths onto it; other routes use the invoke URL.     |
-| **Authorizer**              | Custom Lambda authorizer (REQUEST type, returns IAM policy with wildcard resource for cache correctness). Validates JWT (Cognito/external OAuth), API keys, and optional IP allowlist.                               |
-| **Identity Source**         | `method.request.header.Authorization`                                                                                                                                                                                |
-| **CORS**                    | All origins (`*`), all standard HTTP methods, credentials disabled                                                                                                                                                   |
-| **Rate Limiting**           | Default 50 requests/second rate, 100 burst (configurable via `app.api.apiGatewayRest.globalRateLimit` and `app.api.apiGatewayRest.globalBurstLimit`)                                                                 |
-| **Access Logging**          | CloudWatch Logs with structured JSON format (CloudFormation-auto-named log group)                                                                                                                                    |
-| **Unauthenticated Paths**   | `/api/amplify-config`, `/api/version`                                                                                                                                                                                |
-| **Account CloudWatch Role** | `AWS::ApiGateway::Account` plus the IAM role it points at, granting API Gateway permission to deliver stage execution and access logs. Retained on teardown; explicitly named, so it is redeploy-collision relevant. |
+| Resource                    | Configuration                                                                                                                                                                                                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **API Type**                | REST API (API Gateway v1). Selected by `app.api.apiType` (`"APIGATEWAY_REST"`).                                                                                                                                                                                                 |
+| **Endpoint Type**           | `REGIONAL` (public, no VPC endpoint) or `PRIVATE` (VPC interface endpoint only). Configurable via `app.api.apiGatewayRest.endpointType`.                                                                                                                                        |
+| **Stage Name**              | Fixed internal value `api` (not configurable; shared with the VamsCLI endpoint constants). CloudFront forwards the web URL's `/api/*` paths onto it (the two unauthenticated routes with an `/api` origin path, every other path without one); the ALB redirects `/api*` to it. |
+| **Custom Domain Name**      | Optional (`app.api.apiGatewayRest.customDomain`). An `AWS::ApiGateway::DomainName` (Regional, ACM certificate from the deployment Region) and an `AWS::ApiGateway::BasePathMapping` from base path `api` to the `api` stage; optional Amazon Route 53 A and AAAA alias records. |
+| **Authorizer**              | Custom Lambda authorizer (REQUEST type, returns IAM policy with wildcard resource for cache correctness). Validates JWT (Cognito/external OAuth), API keys, and optional IP allowlist.                                                                                          |
+| **Identity Source**         | `method.request.header.Authorization`                                                                                                                                                                                                                                           |
+| **CORS**                    | All origins (`*`), all standard HTTP methods, credentials disabled                                                                                                                                                                                                              |
+| **Rate Limiting**           | Default 50 requests/second rate, 100 burst (configurable via `app.api.apiGatewayRest.globalRateLimit` and `app.api.apiGatewayRest.globalBurstLimit`)                                                                                                                            |
+| **Access Logging**          | CloudWatch Logs with structured JSON format (CloudFormation-auto-named log group)                                                                                                                                                                                               |
+| **Unauthenticated Paths**   | `/api/amplify-config`, `/api/version`                                                                                                                                                                                                                                           |
+| **Account CloudWatch Role** | `AWS::ApiGateway::Account` plus the IAM role it points at, granting API Gateway permission to deliver stage execution and access logs. Retained on teardown; explicitly named, so it is redeploy-collision relevant.                                                            |
 
 :::warning[The account CloudWatch role is retained and blocks a redeploy]
 `AWS::ApiGateway::Account` holds a single CloudWatch role ARN per AWS account and Region, and every REST API in that account and Region delivers its stage logs through it. Both that resource and its IAM role use a `RETAIN` removal policy, so tearing down one VAMS deployment leaves API Gateway logging in place for any other deployment sharing the account and Region.
@@ -592,11 +593,12 @@ Deployed when `addStackCloudTrailLogs = true`:
 
 ### Amazon CloudFront (Commercial)
 
-| Resource         | Purpose                                      |
-| ---------------- | -------------------------------------------- |
-| **Distribution** | Global CDN for web application and API proxy |
-| **S3 Origin**    | Web app bucket as origin                     |
-| **API Origin**   | API Gateway endpoint as origin               |
+| Resource                                  | Purpose                                                                                                                                                                                           |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Distribution**                          | Global CDN for web application and API proxy                                                                                                                                                      |
+| **S3 Origin**                             | Web app bucket as origin                                                                                                                                                                          |
+| **API Origin**                            | API Gateway endpoint as origin, twice: with the `/api` stage as origin path for `/api/amplify-config` and `/api/version`, and without an origin path for every other `/api/*` path                |
+| **API Cache and Origin Request Policies** | One custom cache policy and one custom origin request policy for the two unauthenticated paths; the `/api/*` behavior uses the managed `CachingDisabled` and `AllViewerExceptHostHeader` policies |
 
 ### Application Load Balancer (GovCloud / ALB Mode)
 

@@ -39,6 +39,8 @@ export class ApiNestedStack extends NestedStack {
     public apiEndpoint: string;
     public stageName: string;
     public invokeUrlWithStage: string;
+    /** Regional domain name of the API custom domain, when one is configured. */
+    public customDomainTarget?: string;
     /** The selected API implementation (today always the REST API Gateway construct). */
     public readonly apiImplementation: IApiImplementation;
 
@@ -70,5 +72,6 @@ export class ApiNestedStack extends NestedStack {
         this.apiEndpoint = impl.apiEndpoint;
         this.invokeUrlWithStage = impl.invokeUrlWithStage;
         this.stageName = impl.stageName;
+        this.customDomainTarget = impl.customDomainTarget;
     }
 }
