@@ -82,3 +82,12 @@ describe("TableList delete failure flash", () => {
         );
     });
 });
+
+describe("TableList delete dialog", () => {
+    it("lists the selected database IDs when the database synonym is renamed", () => {
+        mount(listDefinition({ pluralName: "projects", pluralNameTitleCase: "Projects" }));
+        openDelete();
+        const modal = createWrapper(document.body).findModal()!;
+        expect(modal.findContent().getElement().textContent).toContain("db-one");
+    });
+});

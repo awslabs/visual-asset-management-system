@@ -244,7 +244,9 @@ export default function TableList(props: any) {
                 itemNames[i] = selectedItems[i]?.roleName || "unknown";
             }
         }
-        if (pluralName === "databases") {
+        // Keyed on the element ID, not the display name: the database list takes its plural
+        // name from Synonyms.
+        if (listDefinition.elementId === "databaseId") {
             for (let i = 0; i < length; i++) {
                 itemNames[i] = selectedItems[i]?.databaseId || "unknown";
             }
