@@ -2959,7 +2959,7 @@ paths:
                     $ref: '#/components/schemas/asset_id_regex'
               - name: includeArchived
                 in: query
-                description: Whether to include archived files
+                description: Whether to include archived files. Archived files are returned on the first page only, beside that page's current files.
                 required: false
                 schema:
                     type: boolean
