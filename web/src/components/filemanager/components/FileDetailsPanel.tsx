@@ -71,9 +71,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const isMultiSelect = state.multiSelectMode && selectedItems.length > 1;
     // A non-distributable asset is refused by the download, stream, and preview APIs, so the
     // affordances that call them (Export, View File, the viewer popup) are hidden rather than left to
-    // fail. Compared against false so the pre-fetch null asset and a record predating the field both
-    // keep the distributable behavior.
-    const isNotDistributable = asset?.isDistributable === false;
+    // fail. A fetched record without the flag is not distributable, as the API treats it; the null
+    // held before the fetch resolves is not.
+    const isNotDistributable = !!asset?.assetId && asset.isDistributable !== true;
     // The viewer registry is initialized lazily. Without this the eye icons below would never
     // appear on this page: nothing else initializes the registry before they render, so every
     // viewability check reported "no viewer" (only the search page's container initializes it).
