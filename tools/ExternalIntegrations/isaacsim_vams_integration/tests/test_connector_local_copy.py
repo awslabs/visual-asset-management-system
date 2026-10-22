@@ -15,6 +15,7 @@ stage's defaultPrim as it was, and a failed MJCF import leaves nothing behind at
 
 import logging
 import os
+import stat
 import sys
 import tempfile
 import types
@@ -239,6 +240,9 @@ class _Stage:
             def GetName(self):
                 return path.rsplit("/", 1)[-1]
 
+            def GetPath(self):
+                return path
+
             def GetChildren(self):
                 return [stage.GetPrimAtPath(p) for p in sorted(stage.prims)
                         if p.rsplit("/", 1)[0] == path]
@@ -251,8 +255,15 @@ class _Stage:
         return _Prim()
 
     def DefinePrim(self, path, _type_name=""):
-        self.prims.add(path)
+        """Defines the prim, and any ancestor not there, as ``Usd.Stage.DefinePrim`` does."""
+        parts = str(path).split("/")
+        self.prims.update("/".join(parts[:i]) for i in range(2, len(parts) + 1))
         return self.GetPrimAtPath(path)
+
+    def GetDefaultPrim(self):
+        """The prim the root layer's defaultPrim names; not valid when it names none, or none that
+        is there."""
+        return self.GetPrimAtPath(f"/{self.layer.defaultPrim}" if self.layer.defaultPrim else "")
 
 
 @pytest.fixture
@@ -931,3 +942,361 @@ class TestTheExportAction:
         assert export(_Exporter(list_error=refusal)) == (
             "Uploaded export.usd to Asset One, but the file list did not refresh: "
             f"{_SIGN_IN_PENDING} (Permission Denied: Access forbidden.)")
+
+
+# The fields of Isaac Sim 6.2's importer configs, from the API reference of
+# isaacsim.asset.importer.urdf 3.11.12 and isaacsim.asset.importer.mjcf 3.13.0. Neither has
+# import_inertia_tensor, and the MJCF config has no merge_fixed_joints.
+_URDF6_FIELDS = frozenset({
+    "urdf_path", "usd_path", "merge_fixed_joints", "merge_mesh", "debug_mode",
+    "collision_from_visuals", "collision_type", "allow_self_collision", "ros_package_paths",
+    "robot_type", "fix_base", "link_density", "joint_drive_type", "joint_target_type",
+    "override_joint_stiffness", "override_joint_damping", "run_asset_transformer",
+    "run_multi_physics_conversion"})
+_MJCF6_FIELDS = frozenset({
+    "mjcf_path", "usd_path", "import_scene", "merge_mesh", "debug_mode", "collision_from_visuals",
+    "collision_type", "allow_self_collision", "robot_type", "fix_base", "link_density",
+    "joint_drive_type", "joint_target_type", "override_gain_type", "override_bias_type",
+    "override_gain_prm", "override_bias_prm", "run_asset_transformer",
+    "run_multi_physics_conversion"})
+URDF = '<robot name="bot"><link name="base_link"/></robot>'
+
+
+class _Imports6(list):
+    """The Isaac Sim 6.x imports run, as (kind, config fields), and the Kit commands run, as
+    (command, arguments), on ``commands``. ``fails`` maps a source file name to the error its
+    import raises; ``output_layer`` replaces the (default prim, root prims, sublayers) of the file
+    an import writes; ``clobbers_default_prim`` makes an import set the open stage's defaultPrim."""
+
+
+class _LegacyImportConfig:
+    """Isaac Sim 6.x still ships ``_urdf.ImportConfig`` and ``_mjcf.ImportConfig``; their setters do
+    nothing here."""
+
+    def __getattr__(self, name):
+        return lambda value: None
+
+
+@pytest.fixture
+def importers6(monkeypatch, usd, pxr, tmp_path):
+    """Stub URDF and MJCF importers with Isaac Sim 6.x's API. ``URDFImporter(config).import_urdf()``
+    and ``MJCFImporter(config).import_mjcf()`` refuse a file without the ``.urdf`` or ``.xml``
+    extension with ValueError, and write ``<usd_path>/<name>/<name>.usda`` for a file ``<name>.*``,
+    or ``<name>_1``, ... when that directory holds files, ``usd_path`` defaulting to the source's
+    own directory, and return its path. The configs take only the documented fields. The legacy
+    ``_urdf`` and ``_mjcf`` modules are still there, the ``URDFParseAndImportFile`` command is gone,
+    and the deprecated ``MJCFCreateAsset`` command reports success and puts nothing at its prim
+    path. ``tempfile`` makes its directories under ``tmp_path/tmp``."""
+    calls = _Imports6()
+    calls.commands, calls.fails, calls.outputs = [], {}, []
+    calls.output_layer, calls.clobbers_default_prim = None, False
+    (tmp_path / "tmp").mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))
+
+    def _config_class(fields):
+        class _Config:
+            def __init__(self, **kwargs):
+                unknown = sorted(set(kwargs) - fields)
+                if unknown:
+                    raise TypeError(f"unexpected keyword argument(s): {', '.join(unknown)}")
+                self.fields = dict(kwargs)
+
+        return _Config
+
+    def _importer_class(kind, extension):
+        class _Importer:
+            def __init__(self, config=None):
+                self.config = config
+
+            def _import(self, config=None):
+                fields = (config or self.config).fields
+                calls.append((kind, dict(fields)))
+                source = fields[f"{kind}_path"]
+                name = os.path.basename(source)
+                if not name.lower().endswith(extension):
+                    raise ValueError(f"{name} does not have a {extension} extension")
+                if name in calls.fails:
+                    raise calls.fails[name]
+                robot = os.path.splitext(name)[0].lstrip(".")
+                root = fields.get("usd_path") or os.path.dirname(source)
+                output_dir, suffix = os.path.join(root, robot), 0
+                while os.path.isdir(output_dir) and os.listdir(output_dir):
+                    suffix += 1
+                    output_dir = os.path.join(root, f"{robot}_{suffix}")
+                os.makedirs(output_dir, exist_ok=True)
+                output = os.path.join(output_dir, f"{robot}.usda")
+                with open(output, "w") as f:
+                    f.write("#usda 1.0")
+                pxr.layers[f"{robot}.usda"] = calls.output_layer or (robot, [robot], [])
+                if calls.clobbers_default_prim:
+                    usd.stage.layer.defaultPrim = robot
+                calls.outputs.append(output)
+                return output
+
+        setattr(_Importer, f"import_{kind}", _Importer._import)
+        return _Importer
+
+    def _execute(command, **kwargs):
+        calls.commands.append((command, kwargs))
+        return (command == "MJCFCreateAsset"), None
+
+    commands = types.ModuleType("omni.kit.commands")
+    commands.execute = _execute
+    monkeypatch.setitem(sys.modules, "omni.kit.commands", commands)
+    monkeypatch.setattr(omni.kit, "commands", commands, raising=False)
+    for parent in ("isaacsim", "isaacsim.asset", "isaacsim.asset.importer"):
+        monkeypatch.setitem(sys.modules, parent, types.ModuleType(parent))
+    for kind, fields, extension in (("urdf", _URDF6_FIELDS, ".urdf"),
+                                    ("mjcf", _MJCF6_FIELDS, ".xml")):
+        module = types.ModuleType(f"isaacsim.asset.importer.{kind}")
+        setattr(module, f"{kind.upper()}Importer", _importer_class(kind, extension))
+        setattr(module, f"{kind.upper()}ImporterConfig", _config_class(fields))
+        setattr(module, f"_{kind}", types.SimpleNamespace(ImportConfig=_LegacyImportConfig))
+        monkeypatch.setitem(sys.modules, module.__name__, module)
+    return calls
+
+
+def _local(tmp_path, name, text=MJ):
+    """Writes ``name`` into ``tmp_path/download``, as a download would, and returns its path."""
+    path = tmp_path / "download" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return str(path)
+
+
+SOURCES = [("urdf", "bot.urdf", URDF), ("mjcf", "mj.xml", MJ)]
+
+
+def _import_file(kind, local_file, **options):
+    return getattr(_connector(_FakeCli()), f"import_{kind}_file")(local_file, **options)
+
+
+class _ComposingReferences(list):
+    """A stage's references, where each reference also brings in ``children`` under its prim, as a
+    referenced robot's layout composes there."""
+
+    def __init__(self, stage, children):
+        super().__init__()
+        self.stage, self.children = stage, children
+
+    def append(self, reference):
+        super().append(reference)
+        self.stage.prims.update(f"{reference[0]}/{child}" for child in self.children)
+
+
+class TestTheIsaacSim6Importers:
+    """Isaac Sim 6.0 removed the URDFParseAndImportFile command and deprecated MJCFCreateAsset; its
+    URDFImporter and MJCFImporter write the robot to a USD file of their own and return its path.
+    The connector has them write into a private directory, and references the file in the open
+    stage at the prim the 5.1 importers put the robot at."""
+
+    @pytest.fixture
+    def world(self, usd):
+        usd.stage = _Stage(prims=("/World",), default_prim="World")
+        return usd.stage
+
+    def test_a_urdf_is_imported_with_the_importer_api_not_the_removed_command(self, tmp_path,
+                                                                              world, importers6):
+        local = _local(tmp_path, "bot.urdf", URDF)
+        assert _import_file("urdf", local) == "/World/bot"
+        assert importers6.commands == []
+        assert [(kind, fields["urdf_path"]) for kind, fields in importers6] == [("urdf", local)]
+
+    def test_an_mjcf_is_imported_with_the_importer_api_not_the_deprecated_command(
+            self, tmp_path, world, importers6):
+        local = _local(tmp_path, "mj.xml")
+        assert _import_file("mjcf", local) == "/World/mj"
+        assert importers6.commands == []
+        assert [(kind, fields["mjcf_path"]) for kind, fields in importers6] == [("mjcf", local)]
+
+    def test_the_urdf_options_are_passed_as_config_fields(self, tmp_path, world, importers6):
+        local = _local(tmp_path, "bot.urdf", URDF)
+        _import_file("urdf", local, fix_base=False, merge_fixed_joints=True)
+        fields = importers6[0][1]
+        assert fields == {"urdf_path": local, "usd_path": fields["usd_path"], "fix_base": False,
+                          "merge_fixed_joints": True}
+
+    def test_the_mjcf_options_are_passed_as_config_fields(self, tmp_path, world, importers6):
+        local = _local(tmp_path, "mj.xml")
+        _import_file("mjcf", local, fix_base=False)
+        fields = importers6[0][1]
+        assert fields == {"mjcf_path": local, "usd_path": fields["usd_path"], "fix_base": False}
+
+    @pytest.mark.parametrize("fix_base", [True, False])
+    @pytest.mark.parametrize("kind, name, text", SOURCES)
+    def test_fix_base_is_passed_as_fixed_or_mobile_never_as_source(self, tmp_path, world,
+                                                                   importers6, kind, name, text,
+                                                                   fix_base):
+        """6.x reads None as 'keep what the file says'; the connector's bool always decides."""
+        _import_file(kind, _local(tmp_path, name, text), fix_base=fix_base)
+        assert importers6[0][1]["fix_base"] is fix_base
+
+    @pytest.mark.parametrize("kind, name, text", SOURCES)
+    def test_fix_base_defaults_to_fixed(self, tmp_path, world, importers6, kind, name, text):
+        _import_file(kind, _local(tmp_path, name, text))
+        assert importers6[0][1]["fix_base"] is True
+
+    @pytest.mark.parametrize("kind, name, text, options", [
+        ("urdf", "bot.urdf", URDF, {"import_inertia_tensor": False}),
+        ("mjcf", "mj.xml", MJ, {"merge_fixed_joints": True, "import_inertia_tensor": False}),
+    ])
+    def test_an_option_6x_has_no_field_for_is_named_in_a_warning(self, tmp_path, world, importers6,
+                                                                 caplog, kind, name, text, options):
+        with caplog.at_level(logging.WARNING):
+            assert _import_file(kind, _local(tmp_path, name, text), **options)
+        for option in options:
+            assert f"{option}={options[option]} has no effect on Isaac Sim 6.x" in caplog.text
+
+    @pytest.mark.parametrize("kind, name, text", SOURCES)
+    def test_the_usd_is_written_to_a_private_directory_not_next_to_the_download(
+            self, tmp_path, world, importers6, kind, name, text):
+        local = _local(tmp_path, name, text)
+        _import_file(kind, local)
+        usd_path = importers6[0][1]["usd_path"]
+        assert os.path.dirname(usd_path) == str(tmp_path / "tmp")
+        assert stat.S_IMODE(os.stat(usd_path).st_mode) == 0o700
+        assert importers6.outputs[0].startswith(usd_path + os.sep)
+        assert os.listdir(tmp_path / "download") == [name]
+
+    def test_each_import_gets_a_private_directory_of_its_own(self, tmp_path, world, importers6):
+        local = _local(tmp_path, "bot.urdf", URDF)
+        _import_file("urdf", local)
+        _import_file("urdf", local)
+        first, second = (fields["usd_path"] for _kind, fields in importers6)
+        assert first != second
+
+    def test_a_urdf_is_referenced_under_the_prim_the_default_prim_names(self, tmp_path, world,
+                                                                        importers6):
+        local = _local(tmp_path, "bot.urdf", URDF)
+        assert [_import_file("urdf", local) for _ in range(2)] == ["/World/bot", "/World/bot_0"]
+        assert world.references == [("/World/bot", importers6.outputs[0], None),
+                                    ("/World/bot_0", importers6.outputs[1], None)]
+
+    def test_a_urdf_goes_to_the_stage_root_without_a_default_prim(self, tmp_path, usd,
+                                                                  importers6):
+        assert _import_file("urdf", _local(tmp_path, "bot.urdf", URDF)) == "/bot"
+        assert usd.stage.references == [("/bot", importers6.outputs[0], None)]
+
+    def test_an_mjcf_is_referenced_under_world_at_a_prim_of_its_own(self, tmp_path, world,
+                                                                    importers6):
+        local = _local(tmp_path, "mj.xml")
+        assert [_import_file("mjcf", local) for _ in range(2)] == ["/World/mj", "/World/mj_1"]
+        assert world.references == [("/World/mj", importers6.outputs[0], None),
+                                    ("/World/mj_1", importers6.outputs[1], None)]
+
+    def test_an_mjcf_on_a_stage_without_world_gets_one(self, tmp_path, usd, importers6):
+        assert _import_file("mjcf", _local(tmp_path, "mj.xml")) == "/World/mj"
+        assert usd.stage.prims == {"/World", "/World/mj"}
+
+    def test_an_output_with_one_root_prim_and_no_default_is_referenced_at_that_prim(
+            self, tmp_path, world, importers6):
+        importers6.output_layer = ("", ["bot"], [])
+        assert _import_file("urdf", _local(tmp_path, "bot.urdf", URDF)) == "/World/bot"
+        assert world.references == [("/World/bot", importers6.outputs[0], "/bot")]
+
+    @pytest.mark.parametrize("kind, name, text", SOURCES)
+    def test_the_stages_default_prim_is_left_as_it_was(self, tmp_path, world, importers6, kind,
+                                                       name, text):
+        importers6.clobbers_default_prim = True
+        assert _import_file(kind, _local(tmp_path, name, text))
+        assert world.layer.defaultPrim == "World"
+
+    def test_a_stage_with_no_default_prim_is_left_with_none(self, tmp_path, usd, importers6):
+        importers6.clobbers_default_prim = True
+        assert _import_file("urdf", _local(tmp_path, "bot.urdf", URDF)) == "/bot"
+        assert _import_file("mjcf", _local(tmp_path, "mj.xml")) == "/World/mj"
+        assert not usd.stage.layer.HasDefaultPrim()
+
+    @pytest.mark.parametrize("kind, name, text", SOURCES)
+    def test_a_failed_import_returns_none_logs_the_reason_and_changes_nothing(
+            self, tmp_path, world, importers6, caplog, kind, name, text):
+        importers6.fails[name] = RuntimeError("converter could not read the file")
+        importers6.clobbers_default_prim = True
+        with caplog.at_level(logging.ERROR):
+            assert _import_file(kind, _local(tmp_path, name, text)) is None
+        assert "converter could not read the file" in caplog.text
+        assert (world.prims, world.references, world.layer.defaultPrim) == ({"/World"}, [], "World")
+        assert os.listdir(tmp_path / "tmp") == []
+
+    def test_an_mjcf_file_is_imported_from_an_xml_copy_beside_it(self, tmp_path, world,
+                                                                 importers6):
+        """6.x's MJCF importer reads only .xml files; the copy sits beside the file so the meshes it
+        names relative to itself resolve, and is removed again."""
+        local = _local(tmp_path, "mj.mjcf")
+        assert _import_file("mjcf", local) == "/World/mj"
+        source = importers6[0][1]["mjcf_path"]
+        assert (os.path.dirname(source), os.path.basename(source)) == (str(tmp_path / "download"),
+                                                                       "mj.xml")
+        assert os.listdir(tmp_path / "download") == ["mj.mjcf"]
+
+    def test_an_mjcf_copy_does_not_take_the_name_of_a_file_already_there(self, tmp_path, world,
+                                                                         importers6):
+        local = _local(tmp_path, "mj.mjcf")
+        _local(tmp_path, "mj.xml", "<mujoco model='other'/>")
+        assert _import_file("mjcf", local) == "/World/mj"
+        source = os.path.basename(importers6[0][1]["mjcf_path"])
+        assert source.startswith("mj_") and source.endswith(".xml")
+        assert sorted(os.listdir(tmp_path / "download")) == ["mj.mjcf", "mj.xml"]
+        assert (tmp_path / "download" / "mj.xml").read_text() == "<mujoco model='other'/>"
+
+    def test_an_mjcf_copy_is_removed_after_a_failed_import(self, tmp_path, world, importers6):
+        importers6.fails["mj.xml"] = RuntimeError("converter could not read the file")
+        assert _import_file("mjcf", _local(tmp_path, "mj.mjcf")) is None
+        assert [os.path.basename(fields["mjcf_path"]) for _kind, fields in importers6] == ["mj.xml"]
+        assert os.listdir(tmp_path / "download") == ["mj.mjcf"]
+
+    @pytest.mark.parametrize("kind, name, text", SOURCES)
+    def test_the_default_options_log_no_warning(self, tmp_path, world, importers6, caplog, kind,
+                                                name, text):
+        with caplog.at_level(logging.WARNING):
+            assert _import_file(kind, _local(tmp_path, name, text))
+        assert "has no effect" not in caplog.text
+
+    def test_an_importer_that_returns_no_path_is_a_failed_import(self, tmp_path, world, importers6,
+                                                                 caplog, monkeypatch):
+        module = sys.modules["isaacsim.asset.importer.urdf"]
+        monkeypatch.setattr(module.URDFImporter, "import_urdf", lambda self, config=None: "")
+        with caplog.at_level(logging.ERROR):
+            assert _import_file("urdf", _local(tmp_path, "bot.urdf", URDF)) is None
+        assert "the importer returned no USD file" in caplog.text
+        assert (world.prims, os.listdir(tmp_path / "tmp")) == ({"/World"}, [])
+
+    def test_an_output_with_nothing_to_reference_returns_none(self, tmp_path, world, importers6,
+                                                              caplog):
+        importers6.output_layer = ("", [], [])
+        with caplog.at_level(logging.ERROR):
+            assert _import_file("mjcf", _local(tmp_path, "mj.xml")) is None
+        assert "mj.usda has no default prim (0 root prims)" in caplog.text
+        assert (world.prims, world.references) == ({"/World"}, [])
+
+    def test_an_mjcf_import_is_not_judged_by_the_51_layout(self, tmp_path, world, importers6):
+        """A reference composes whatever the robot's own layout holds, which may include prims named
+        like 5.1's empty Looks, joints and worldBody."""
+        world.references = _ComposingReferences(world, ("Looks", "joints", "worldBody"))
+        assert _import_file("mjcf", _local(tmp_path, "mj.xml")) == "/World/mj"
+
+    def test_the_scripting_api_downloads_and_imports_a_urdf(self, tmp_path, world, importers6):
+        prim = _connector(_FakeCli(files=("/robots/arm.urdf",))).download_and_import_urdf(
+            "db", "a1", "/robots/arm.urdf", str(tmp_path / "dl"), fix_base=False,
+            merge_fixed_joints=True)
+        assert prim == "/World/arm"
+        fields = importers6[0][1]
+        assert (fields["fix_base"], fields["merge_fixed_joints"]) == (False, True)
+
+    def test_the_scripting_api_downloads_and_imports_an_mjcf(self, tmp_path, world, importers6):
+        connector = _connector(_FakeCli(files=("/mjcf/mj.xml",), contents={"/mjcf/mj.xml": MJ}))
+        assert connector.download_and_import_mjcf("db", "a1", "/mjcf/mj.xml",
+                                                  str(tmp_path / "dl")) == "/World/mj"
+
+    def test_the_import_urdf_action_reports_the_prim(self, extension, world, importers6):
+        assert _import(extension, "_on_import_urdf", "/urdf/bot.urdf", URDF) == (
+            "Imported URDF as /World/bot")
+
+    def test_the_import_mjcf_action_reports_the_prim(self, extension, world, importers6):
+        assert _import(extension, "_on_import_mjcf", "/mjcf/mj.xml") == (
+            "Imported MJCF /mjcf/mj.xml as /World/mj")
+
+    def test_a_failed_import_action_reports_the_failure(self, extension, world, importers6):
+        importers6.fails["bot.urdf"] = RuntimeError("converter could not read the file")
+        assert _import(extension, "_on_import_urdf", "/urdf/bot.urdf", URDF) == "URDF import failed"
+        assert ([kind for kind, _fields in importers6], importers6.commands) == (["urdf"], [])

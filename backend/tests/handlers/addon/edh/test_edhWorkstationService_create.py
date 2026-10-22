@@ -55,6 +55,12 @@ ARCHITECTURE_ALLOW_LIST = (
 # A captured stack's nested profile and its allowed-types value, as EDH's list response names them.
 CAPTURED_PROFILE_FIELD = "profile"
 CAPTURED_PROFILE_INSTANCE_TYPES_FIELD = "allowed_instance_types"
+# The refusal of a type the image's recipe does not offer.
+NOT_OFFERED_MESSAGE = "instanceType is not offered for this image"
+# The types the recipe of CATALOG_STACK's image offers, in the recipe's order; g5.xlarge is not among them.
+# Each is on the allow-list of the architecture cases and runs the image's architecture, so a refusal of
+# another type is the recipe check's own.
+RECIPE_LAUNCH_TYPES = ["g5.2xlarge", "c6i.large"]
 
 
 def _body(**overrides):
@@ -394,6 +400,132 @@ class TestLaunchArchitecture:
 
         assert response["statusCode"] == 202
         fakes.lambda_client.invoke.assert_called_once()
+
+
+def _recipe_build(launch_types=None, stack_id="42"):
+    """The store's answer naming one AVAILABLE desktop recipe build of the image; ``launch_types`` None
+    leaves the recipe without a list."""
+    recipe = {"recipeId": "isaacsim", "displayName": "Isaac Sim workstation", "kind": "vdi"}
+    if launch_types is not None:
+        recipe["launchInstanceTypes"] = launch_types
+    build = {"recipeId": "isaacsim", "version": 3, "status": "AVAILABLE", "edhStackId": stack_id,
+             "edhKind": "vdi"}
+    return {stack_id: (recipe, build)}
+
+
+def _launch_recipe(monkeypatch, *, answer=None, raises=None, enforce=None, builds_enabled=True):
+    """The launch route over CATALOG_STACK, its recipe builds answered by a stub store, and a stub logger."""
+    fakes = _launch_arch(monkeypatch, enforce=enforce)
+    monkeypatch.setattr(service, "ami_builds_enabled", builds_enabled)
+    fakes.logger = MagicMock()
+    monkeypatch.setattr(service, "logger", fakes.logger)
+    lookup = fakes.recipe_store.available_builds_by_stack_id
+    if raises is not None:
+        lookup.side_effect = raises
+    else:
+        lookup.return_value = _recipe_build(RECIPE_LAUNCH_TYPES) if answer is None else answer
+    return fakes
+
+
+@pytest.mark.unit
+class TestLaunchRecipeInstanceTypes:
+    """An image a recipe build registered launches only on the types its recipe lists, when it lists
+    any; the recipe builds are the catalog's own read, and a read that fails refuses nothing."""
+
+    def test_a_type_outside_the_recipes_list_is_a_400_before_any_write(self, monkeypatch):
+        fakes = _launch_recipe(monkeypatch)
+
+        response = _post(fakes, _body(instanceType="g5.xlarge"))
+
+        assert response["statusCode"] == 400
+        assert response_body(response)["message"] == NOT_OFFERED_MESSAGE
+        fakes.recipe_store.available_builds_by_stack_id.assert_called_once_with("vdi")
+        fakes.table.put_item.assert_not_called()
+        fakes.mint.assert_not_called()
+        fakes.lambda_client.invoke.assert_not_called()
+
+    @pytest.mark.parametrize("instance_type", RECIPE_LAUNCH_TYPES)
+    def test_a_type_the_recipe_lists_launches(self, monkeypatch, instance_type):
+        fakes = _launch_recipe(monkeypatch)
+
+        response = _post(fakes, _body(instanceType=instance_type))
+
+        assert response["statusCode"] == 202
+        assert _payload(fakes)["instanceType"] == instance_type
+
+    @pytest.mark.parametrize("answer", [
+        _recipe_build(None), _recipe_build([]), _recipe_build(RECIPE_LAUNCH_TYPES, stack_id="77"), {},
+    ], ids=["recipe-without-a-list", "recipe-with-an-empty-list", "another-images-recipe", "baseline-image"])
+    def test_no_list_for_the_image_refuses_nothing(self, monkeypatch, answer):
+        fakes = _launch_recipe(monkeypatch, answer=answer)
+
+        response = _post(fakes, _body(instanceType="g5.xlarge"))
+
+        assert response["statusCode"] == 202
+        fakes.lambda_client.invoke.assert_called_once()
+
+    @pytest.mark.parametrize("raises, named", [
+        (ClientError({"Error": {"Code": "AccessDeniedException", "Message": "not authorized"}}, "Scan"),
+         "AccessDeniedException"),
+        (KeyError("Resource name parameter not found in SSM"), "KeyError"),
+    ], ids=["table-unreadable", "table-name-unpublished"])
+    def test_a_recipe_lookup_that_fails_refuses_nothing_and_warns(self, monkeypatch, raises, named):
+        fakes = _launch_recipe(monkeypatch, raises=raises)
+
+        response = _post(fakes, _body(instanceType="g5.xlarge"))
+
+        assert response["statusCode"] == 202
+        fakes.lambda_client.invoke.assert_called_once()
+        fakes.logger.warning.assert_called_once()
+        assert named in fakes.logger.warning.call_args.args[0]
+
+    def test_with_ami_builds_off_the_recipe_table_is_not_read(self, monkeypatch):
+        fakes = _launch_recipe(monkeypatch, builds_enabled=False)
+
+        response = _post(fakes, _body(instanceType="g5.xlarge"))
+
+        assert response["statusCode"] == 202
+        fakes.recipe_store.available_builds_by_stack_id.assert_not_called()
+
+    def test_tier2_is_answered_before_the_recipes_list(self, monkeypatch):
+        fakes = _launch_recipe(monkeypatch, enforce=lambda obj, act: False)
+
+        response = _post(fakes, _body(instanceType="g5.xlarge"))
+
+        assert response["statusCode"] == 403
+        fakes.enforcer.enforce.assert_called_once_with(
+            {"object__type": "edhWorkstation", "edhImageId": "42", "edhOsFamily": "linux",
+             "edhInstanceType": "g5.xlarge"},
+            "POST",
+        )
+        fakes.recipe_store.available_builds_by_stack_id.assert_not_called()
+        fakes.table.put_item.assert_not_called()
+
+    def test_the_architecture_is_answered_before_the_recipes_list(self, monkeypatch):
+        fakes = _launch_recipe(monkeypatch)
+
+        response = _post(fakes, _body(instanceType=GRAVITON_TYPE))
+
+        assert response["statusCode"] == 400
+        assert response_body(response)["message"] == ARCHITECTURE_MISMATCH_MESSAGE
+
+    def test_the_recipes_list_is_answered_before_the_root_size_floor(self, monkeypatch):
+        fakes = _launch_recipe(monkeypatch)
+
+        response = _post(fakes, _body(instanceType="g5.xlarge", rootSizeGb=50))
+
+        assert response["statusCode"] == 400
+        assert response_body(response)["message"] == NOT_OFFERED_MESSAGE
+
+    def test_the_refusal_names_neither_the_type_nor_the_image_nor_the_list(self, monkeypatch):
+        fakes = _launch_recipe(monkeypatch)
+
+        response = _post(fakes, _body(instanceType="g5.xlarge"))
+
+        assert response["statusCode"] == 400
+        assert "g5.xlarge" not in response["body"] and "42" not in response["body"]
+        assert not any(instance_type in response["body"] for instance_type in RECIPE_LAUNCH_TYPES)
+        assert "isaacsim" not in response["body"]
 
 
 @pytest.mark.unit

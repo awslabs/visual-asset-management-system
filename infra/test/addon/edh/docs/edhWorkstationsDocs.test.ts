@@ -1459,6 +1459,162 @@ describe("EDH Workstations documentation matches the code it describes", () => {
         });
     });
 
+    describe("per-recipe launch instance types", () => {
+        const FIELD = "launchInstanceTypes";
+        const CLI_CLIENT = "tools/VamsCLI/vamscli/utils/addon/edh_api_client.py";
+        const RECIPE_STORE = "backend/backend/handlers/addon/edh/common/edhAmiRecipeStore.py";
+        /** The launch refusal of a type the image's recipe does not offer. */
+        const refusal = (): string =>
+            capture(read(EDH_SERVICE), /'(instanceType is not offered for this image)'/);
+        /** The request fields a duplicate copies from its source, from the CLI client. */
+        const copiedFields = (): string[] =>
+            Array.from(
+                capture(
+                    read(CLI_CLIENT),
+                    /_EDH_AMI_RECIPE_COPIED_FIELDS = \(([\s\S]*?)\)/
+                ).matchAll(/"(\w+)"/g),
+                (m) => m[1]
+            );
+        /** The recipe fields the content hash covers, from the recipe store. */
+        const hashedFields = (): string[] =>
+            Array.from(
+                capture(read(RECIPE_STORE), /^HASHED_FIELDS = \(([^)]*)\)/m).matchAll(/"(\w+)"/g),
+                (m) => m[1]
+            );
+        /** The launch instance types the shipped Isaac Sim recipe offers. */
+        const isaacSimTypes = (): string[] =>
+            JSON.parse(read(`${RECIPES}/isaacsim/recipe.json`))[FIELD] ?? [];
+        /** The paragraph of the overview's Isaac Sim section that states its requirements. */
+        const isaacSimRequirements = (): string =>
+            sectionOf(page(OVERVIEW), "### Isaac Sim recipe")
+                .split("\n")
+                .find((l) => l.startsWith("**Requirements for this recipe.**")) ?? "";
+
+        test("the sources declare the field, the refusal, the copied fields and the hash fields (control)", () => {
+            expect(refusal()).toBe("instanceType is not offered for this image");
+            expect(copiedFields()).toEqual(expect.arrayContaining(["buildInstanceType", FIELD]));
+            expect(hashedFields()).toEqual(expect.arrayContaining(["parentImage"]));
+            expect(hashedFields()).not.toContain(FIELD);
+            expect(isaacSimTypes().length).toBeGreaterThan(0);
+            expect(isaacSimRequirements()).not.toBe("");
+        });
+
+        test.each([
+            OPENAPI,
+            `documentation/docusaurus-site/docs/${API_ADDON}`,
+            `documentation/docusaurus-site/docs/${OVERVIEW}`,
+            `documentation/docusaurus-site/docs/${CLI_TROUBLESHOOTING}`,
+        ])("%s names the launch refusal", (rel) => {
+            expect(read(rel)).toContain(refusal());
+        });
+
+        test("the overview's duplicate paragraph names every field a duplicate copies", () => {
+            const paragraph =
+                sectionOf(page(OVERVIEW), "### Duplicating a recipe")
+                    .split("\n")
+                    .find((l) => l.includes("send the source's request fields")) ?? "";
+            expect(paragraph).not.toBe("");
+            expect(copiedFields().filter((f) => !paragraph.includes(`\`${f}\``))).toEqual([]);
+        });
+
+        test("the CLI commands page's duplicate paragraph names every field a duplicate copies", () => {
+            const paragraph =
+                page(CLI_COMMANDS)
+                    .split("\n")
+                    .find((l) => l.includes("creates the copy from its definition")) ?? "";
+            expect(paragraph).not.toBe("");
+            expect(copiedFields().filter((f) => !paragraph.includes(`\`${f}\``))).toEqual([]);
+        });
+
+        test("the overview names the field among those outside the content hash", () => {
+            const bullet =
+                sectionOf(page(OVERVIEW), "### Content hash and versions")
+                    .split("\n")
+                    .find((l) => l.includes("sits outside the hash")) ?? "";
+            const outside = bullet.slice(bullet.indexOf("Everything else"));
+            expect(outside).toContain(`\`${FIELD}\``);
+            expect(hashedFields().filter((f) => outside.includes(`\`${f}\``))).toEqual([]);
+        });
+
+        test.each([
+            [OVERVIEW, "### Recipes"],
+            [OVERVIEW, "### Launch catalog"],
+            [OVERVIEW, "### Launch sequence"],
+            [RESOURCES, ""],
+            [CLI_COMMANDS, ""],
+            [USER_GUIDE, ""],
+            [API_ADDON, "### GET `/addon/edh/catalog/images`"],
+            [API_ADDON, "### POST `/addon/edh/admin/ami-recipes`"],
+        ])("%s %s names the field", (rel, heading) => {
+            const text = heading ? sectionOf(page(rel), heading) : page(rel);
+            expect(text).not.toBe("");
+            expect(text).toContain(FIELD);
+        });
+
+        test("VAMS_API.yaml declares the field on the catalog image, the recipe request and the recipe", () => {
+            const yaml = read(OPENAPI);
+            const imageItem = [
+                "components",
+                "schemas",
+                "edhCatalogImageList",
+                "properties",
+                "Items",
+                "items",
+                "properties",
+            ];
+            expect(yamlKeys(yaml, imageItem)).toContain(FIELD);
+            for (const schema of ["edhAmiRecipeRequest", "edhAmiRecipe"]) {
+                expect(yamlKeys(yaml, ["components", "schemas", schema, "properties"])).toContain(
+                    FIELD
+                );
+            }
+            const request = yamlEntries(yaml, [
+                "components",
+                "schemas",
+                "edhAmiRecipeRequest",
+                "properties",
+                FIELD,
+            ]);
+            expect(request.maxItems).toBe("64");
+        });
+
+        test("the overview's Isaac Sim requirements name every type the recipe offers and the families it leaves out", () => {
+            const text = isaacSimRequirements();
+            expect(isaacSimTypes().filter((t) => !text.includes(`\`${t}\``))).toEqual([]);
+            for (const excluded of [
+                "`g4dn`",
+                "`g6f`",
+                "`gr6f`",
+                "`g5g`",
+                "`g5.xlarge`",
+                "`g6.xlarge`",
+            ]) {
+                expect(text).toContain(excluded);
+            }
+            expect(text).toContain("at least 32 GiB of instance memory");
+        });
+
+        test("the user guide and the CLI commands page quote the message for an image whose recipe offers no allowed type", () => {
+            const web = capture(
+                read(WIZARD),
+                /"(No instance type this deployment allows is offered for this image\.)/
+            );
+            const cli = capture(
+                read(CLI_EDH),
+                /\("(No instance type this deployment allows is offered for this image\.) "/
+            );
+            expect(web).not.toBe("");
+            expect(cli).toBe(web);
+            expect(page(USER_GUIDE)).toContain(web);
+            expect(page(CLI_COMMANDS)).toContain(cli);
+        });
+
+        test("the CLI commands page names the recipe list's LAUNCH TYPES column", () => {
+            expect(read(CLI_EDH)).toContain("'LAUNCH TYPES':<13");
+            expect(page(CLI_COMMANDS)).toContain("`LAUNCH TYPES`");
+        });
+    });
+
     describe("admin images architecture", () => {
         /** The keys of the admin image item the admin service builds. */
         const adminImageKeys = (): string[] =>

@@ -63,6 +63,8 @@ AMI_RECIPE_MAX_COMPONENTS = 20
 # A recipe names one build instance type, or a list Image Builder chooses among by availability.
 AMI_RECIPE_MAX_BUILD_INSTANCE_TYPES = 8
 AMI_RECIPE_BUILD_INSTANCE_TYPE_MAX_LENGTH = 64
+# The instance types a desktop of a recipe's image may launch on; each is spelled as a build type is.
+AMI_RECIPE_MAX_LAUNCH_INSTANCE_TYPES = 64
 # Image Builder's CreateComponent carries the document inline and takes at most this many characters.
 AMI_RECIPE_COMPONENT_DATA_MAX_BYTES = 16000
 KEEP_VERSIONS_MIN = 1
@@ -351,6 +353,9 @@ class AmiRecipeRequestModel(BaseModel, extra='ignore'):
     architecture: str = Field(min_length=5, max_length=8)
     parentImage: str = Field(min_length=12, max_length=1300, regex=edh_parent_image_pattern)
     buildInstanceType: Union[str, List[str]]
+    # The instance types a desktop of the recipe's image may launch on; None (absent, null or empty) is no
+    # restriction of the recipe's own. Metadata: it is outside the content hash and never forces a build.
+    launchInstanceTypes: Optional[List[str]] = None
     rootSizeGb: int = Field(ge=ROOT_SIZE_GB_MIN, le=ROOT_SIZE_GB_MAX)
     stackName: str = Field(min_length=1, max_length=200, regex=object_name_pattern)
     profileId: int = Field(ge=0)
@@ -378,6 +383,20 @@ class AmiRecipeRequestModel(BaseModel, extra='ignore'):
             raise ValueError(
                 "buildInstanceType must be an EC2 instance type such as m7i.large, or a list of "
                 f"1-{AMI_RECIPE_MAX_BUILD_INSTANCE_TYPES} distinct instance types")
+        return value
+
+    @validator('launchInstanceTypes')
+    def validate_launch_instance_types(cls, value):
+        """1-64 distinct instance types, kept in the order given; an empty list is None."""
+        if not value:
+            return None
+        if (len(value) > AMI_RECIPE_MAX_LAUNCH_INSTANCE_TYPES
+                or len(set(value)) != len(value)
+                or any(len(t) > AMI_RECIPE_BUILD_INSTANCE_TYPE_MAX_LENGTH or not re.match(edh_instance_type_pattern, t)
+                       for t in value)):
+            raise ValueError(
+                "launchInstanceTypes must be a list of "
+                f"1-{AMI_RECIPE_MAX_LAUNCH_INSTANCE_TYPES} distinct EC2 instance types such as g5.2xlarge")
         return value
 
     @root_validator(pre=True)

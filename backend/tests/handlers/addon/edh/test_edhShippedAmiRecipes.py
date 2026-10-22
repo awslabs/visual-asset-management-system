@@ -23,6 +23,21 @@ _RECIPES = os.path.join(_REPO_ROOT, "backendAddons", "edh", "amiRecipes")
 _EDH_CONFIG = os.path.join(_REPO_ROOT, "infra", "config", "addon", "edhWorkstationsConfig.ts")
 _SHIPPED = sorted(entry.name for entry in os.scandir(_RECIPES) if entry.is_dir())
 _BUCKET = "artefacts-bucket"
+# The instance types an Isaac Sim desktop is offered: x86_64 NVIDIA RTX GPUs with ray-tracing cores, at
+# least 16 GB of video memory per GPU, at least 32 GiB of instance memory, and GRID driver support for the
+# Amazon DCV desktop. The order is the recipe's own.
+ISAAC_SIM_LAUNCH_TYPES = [
+    "g5.2xlarge", "g5.4xlarge", "g5.8xlarge", "g5.12xlarge", "g5.16xlarge", "g5.24xlarge", "g5.48xlarge",
+    "g6.2xlarge", "g6.4xlarge", "g6.8xlarge", "g6.12xlarge", "g6.16xlarge", "g6.24xlarge", "g6.48xlarge",
+    "gr6.4xlarge", "gr6.8xlarge",
+    "g6e.xlarge", "g6e.2xlarge", "g6e.4xlarge", "g6e.8xlarge", "g6e.12xlarge", "g6e.16xlarge", "g6e.24xlarge",
+    "g6e.48xlarge",
+    "g7e.2xlarge", "g7e.4xlarge", "g7e.8xlarge", "g7e.12xlarge", "g7e.24xlarge", "g7e.48xlarge",
+]
+# Families and sizes the rule leaves out: g4dn (T4, the oldest generation, at the 16 GB floor), g6f and
+# gr6f (fractional L4), g5g (arm64), and the 16 GiB g5.xlarge and g6.xlarge.
+ISAAC_SIM_EXCLUDED_FAMILIES = ("g4dn", "g6f", "gr6f", "g5g")
+ISAAC_SIM_EXCLUDED_TYPES = ("g5.xlarge", "g6.xlarge")
 
 
 def _longest_secret_prefix():
@@ -55,6 +70,22 @@ def test_the_walk_finds_the_shipped_recipes():
 def test_the_seeded_manifest_passes_the_recipe_model(recipe_id):
     model = AmiRecipeRequestModel(**_seeded_manifest(recipe_id))
     assert model.recipeId == recipe_id
+
+
+def test_the_isaac_sim_recipe_offers_exactly_its_gpu_types():
+    model = AmiRecipeRequestModel(**_seeded_manifest("isaacsim"))
+    assert model.launchInstanceTypes == ISAAC_SIM_LAUNCH_TYPES
+    families = {instance_type.split(".")[0] for instance_type in model.launchInstanceTypes}
+    assert families == {"g5", "g6", "gr6", "g6e", "g7e"}
+    assert not families & set(ISAAC_SIM_EXCLUDED_FAMILIES)
+    assert not set(model.launchInstanceTypes) & set(ISAAC_SIM_EXCLUDED_TYPES)
+
+
+@pytest.mark.parametrize("recipe_id", ["al2023-desktop", "windows2022-desktop"])
+def test_the_general_desktop_recipes_restrict_no_launch_type(recipe_id):
+    manifest = _seeded_manifest(recipe_id)
+    assert "launchInstanceTypes" not in manifest
+    assert AmiRecipeRequestModel(**manifest).launchInstanceTypes is None
 
 
 @pytest.mark.parametrize("recipe_id", _SHIPPED)

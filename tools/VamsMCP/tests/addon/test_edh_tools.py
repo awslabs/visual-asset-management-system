@@ -901,6 +901,70 @@ def test_the_recipe_save_docstrings_name_the_architecture_refusals(tool, fragmen
     assert fragment in _docstring_of(tool)
 
 
+# --- Per-recipe launch instance types ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    ["`launchInstanceTypes`",
+     "the instance types the image's recipe offers its desktops, in the recipe's order",
+     "absent for every other image"])
+def test_the_catalog_images_docstring_names_the_launch_instance_types(fragment):
+    """An agent choosing an instance type learns from the image which types its recipe offers."""
+    assert fragment in _docstring_of("list_edh_catalog_images")
+
+
+def test_the_instance_types_docstring_states_the_recipe_rule():
+    assert ("an image that carries `launchInstanceTypes` is offered only the types it lists"
+            in _docstring_of("list_edh_catalog_instance_types"))
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    ["`instanceType is not offered for this image`",
+     "the image's recipe lists `launchInstanceTypes` that leave the type out"])
+def test_the_create_docstring_names_the_recipe_refusal(fragment):
+    assert fragment in _docstring_of("create_edh_workstation")
+
+
+@pytest.mark.parametrize("fragment", [
+    "`launchInstanceTypes` (1-64 distinct instance types a desktop of the recipe's image may "
+    "launch on; absent, null or empty offers every type the deployment allows; outside the content hash, "
+    "so changing it starts no build)"])
+def test_the_create_recipe_docstring_names_the_launch_instance_types(fragment):
+    assert fragment in _docstring_of("create_edh_ami_recipe")
+
+
+def test_the_duplicate_docstring_says_the_launch_list_is_copied():
+    assert "its `launchInstanceTypes`" in _docstring_of("duplicate_edh_ami_recipe")
+
+
+def test_create_edh_ami_recipe_forwards_the_launch_list_unaltered(client, gated):
+    recipe = {"recipeId": "isaacsim-lab", "launchInstanceTypes": ["g6e.xlarge", "g5.2xlarge"]}
+    gated["create_edh_ami_recipe"](dict(recipe))
+    client.api.create_edh_ami_recipe.assert_called_once_with(recipe)
+
+
+def test_update_edh_ami_recipe_forwards_the_launch_list_unaltered(client, gated):
+    recipe = {"recipeId": "isaacsim-lab", "launchInstanceTypes": ["g5.2xlarge"]}
+    gated["update_edh_ami_recipe"]("isaacsim-lab", dict(recipe))
+    client.api.update_edh_ami_recipe.assert_called_once_with("isaacsim-lab", recipe)
+
+
+def test_the_duplicate_tool_copies_the_fields_the_cli_client_copies():
+    """The tool delegates to the CLI client's duplicate, whose copied fields carry the launch list."""
+    from vamscli.utils.addon import edh_api_client
+    assert "launchInstanceTypes" in edh_api_client._EDH_AMI_RECIPE_COPIED_FIELDS
+    assert "client.api.duplicate_edh_ami_recipe(" in inspect.getsource(edh)
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    ["`launchInstanceTypes`", "`instanceType is not offered for this image`"])
+def test_the_readme_states_the_launch_instance_types(fragment):
+    assert fragment in " ".join(_edh_section().split())
+
+
 @pytest.mark.parametrize(
     "fragment",
     ["`the parent image could not be found`",

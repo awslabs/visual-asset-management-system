@@ -90,6 +90,8 @@ const EDH_AMI_RECIPE_PARAMETER_VALUE_MAX = 1024;
 // A recipe names one build instance type, or a list Image Builder chooses among by availability.
 const EDH_AMI_RECIPE_MAX_BUILD_INSTANCE_TYPES = 8;
 const EDH_AMI_RECIPE_BUILD_INSTANCE_TYPE_MAX_LENGTH = 64;
+// The instance types a desktop of a recipe's image may launch on, each spelled as a build type is.
+const EDH_AMI_RECIPE_MAX_LAUNCH_INSTANCE_TYPES = 64;
 // Repository subtrees a recipe may bundle as a build asset. Only source a build legitimately
 // installs belongs here; widening this widens what a recipe uploads to the artefacts bucket.
 const EDH_ASSET_REPO_PATH_PREFIXES = ["tools/"];
@@ -165,6 +167,9 @@ export interface EdhAmiRecipeManifest {
     parentImage: string;
     // One instance type, or a list Image Builder chooses among by availability.
     buildInstanceType: string | string[];
+    // The instance types a desktop of the recipe's image may launch on; absent, null or empty is no
+    // restriction of the recipe's own. Outside the content hash, so it never provokes a build.
+    launchInstanceTypes?: string[] | null;
     rootSizeGb: number;
     stackName: string;
     profileId: number;
@@ -1241,6 +1246,25 @@ export function loadEdhAmiRecipe(
     ) {
         throw new Error(
             `Configuration Error: ${context}: buildInstanceType must be family.size, or a list of 1-${EDH_AMI_RECIPE_MAX_BUILD_INSTANCE_TYPES} distinct family.size instance types.`
+        );
+    }
+    // Absent, null or empty is no restriction; a list is spelled as the build instance types are.
+    const launchInstanceTypes: unknown = manifest.launchInstanceTypes;
+    if (
+        launchInstanceTypes !== undefined &&
+        launchInstanceTypes !== null &&
+        (!Array.isArray(launchInstanceTypes) ||
+            launchInstanceTypes.length > EDH_AMI_RECIPE_MAX_LAUNCH_INSTANCE_TYPES ||
+            new Set(launchInstanceTypes).size !== launchInstanceTypes.length ||
+            !launchInstanceTypes.every(
+                (type: unknown) =>
+                    typeof type === "string" &&
+                    type.length <= EDH_AMI_RECIPE_BUILD_INSTANCE_TYPE_MAX_LENGTH &&
+                    EDH_INSTANCE_TYPE_PATTERN.test(type)
+            ))
+    ) {
+        throw new Error(
+            `Configuration Error: ${context}: launchInstanceTypes must be a list of 1-${EDH_AMI_RECIPE_MAX_LAUNCH_INSTANCE_TYPES} distinct family.size instance types, or be left out.`
         );
     }
     if (

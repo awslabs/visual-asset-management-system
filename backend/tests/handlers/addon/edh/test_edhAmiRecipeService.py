@@ -388,6 +388,53 @@ class TestArchitectureRefusals:
 
 
 @pytest.mark.unit
+class TestLaunchInstanceTypesThroughTheApi:
+    """A create, a duplicate and an update carry the recipe's launch instance types through to the row
+    and the view; a malformed list is a 400 naming the field, and nothing is written."""
+    GPU_TYPES = ["g5.2xlarge", "g6e.xlarge"]
+
+    def test_a_create_and_a_get_carry_the_list(self, real_lifecycle):
+        created = service.lambda_handler(
+            make_event("POST", RECIPES_PATH, body={**RECIPE_BODY, "launchInstanceTypes": self.GPU_TYPES}), {})
+        assert created["statusCode"] == 201
+        assert response_body(created)["launchInstanceTypes"] == self.GPU_TYPES
+
+        read = service.lambda_handler(
+            make_event("GET", recipe_path(), path_params={"recipeId": "al2023-desktop"}), {})
+        assert response_body(read)["launchInstanceTypes"] == self.GPU_TYPES
+
+    def test_a_duplicate_stores_the_list_it_sends(self, real_lifecycle):
+        assert service.lambda_handler(make_event("POST", RECIPES_PATH, body=RECIPE_BODY), {})["statusCode"] == 201
+
+        response = service.lambda_handler(
+            make_event("POST", RECIPES_PATH, body={**COPY_BODY, "launchInstanceTypes": self.GPU_TYPES}), {})
+
+        assert response["statusCode"] == 201
+        assert store_mod.get_recipe("al2023-copy")["launchInstanceTypes"] == self.GPU_TYPES
+
+    def test_an_update_without_the_list_clears_it(self, real_lifecycle):
+        service.lambda_handler(
+            make_event("POST", RECIPES_PATH, body={**RECIPE_BODY, "launchInstanceTypes": self.GPU_TYPES}), {})
+
+        response = service.lambda_handler(
+            make_event("PUT", recipe_path(), body=RECIPE_BODY, path_params={"recipeId": "al2023-desktop"}), {})
+
+        assert response["statusCode"] == 200
+        assert "launchInstanceTypes" not in response_body(response)
+        assert "launchInstanceTypes" not in store_mod.get_recipe("al2023-desktop")
+
+    def test_a_malformed_list_is_400_and_writes_nothing(self, real_lifecycle):
+        response = service.lambda_handler(
+            make_event("POST", RECIPES_PATH, body={**RECIPE_BODY, "launchInstanceTypes": ["g5.2xlarge", "large"]}),
+            {})
+
+        assert response["statusCode"] == 400
+        assert "launchInstanceTypes" in response_body(response)["message"]
+        assert store_mod.get_recipe("al2023-desktop") is None
+        service.log_actions.assert_not_called()
+
+
+@pytest.mark.unit
 class TestDeleteRefusals:
     """A delete the lifecycle refuses reaches the caller as 409 with its own message, and the recipe and
     its builds stay."""

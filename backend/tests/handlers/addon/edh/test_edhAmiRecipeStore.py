@@ -59,7 +59,8 @@ class TestContentHash:
     def test_metadata_does_not_change_the_hash(self):
         a = store.content_hash(RECIPE)
         b = store.content_hash({**RECIPE, "displayName": "other", "stackName": "x", "keepVersions": 5,
-                                "buildInstanceType": "m7i.xlarge", "description": "d", "profileId": 9})
+                                "buildInstanceType": "m7i.xlarge", "description": "d", "profileId": 9,
+                                "launchInstanceTypes": ["g5.2xlarge", "g6e.xlarge"]})
         assert a == b
 
     @pytest.mark.parametrize("field,value", [

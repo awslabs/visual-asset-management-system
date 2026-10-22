@@ -158,6 +158,7 @@ SOURCE_RECIPE = {
     "architecture": "x86_64",
     "parentImage": "ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64",
     "buildInstanceType": ["m7i.large", "m6i.large"],
+    "launchInstanceTypes": ["g6e.xlarge", "g5.2xlarge"],
     "rootSizeGb": 100,
     "stackName": "Amazon Linux 2023 Desktop",
     "profileId": 0,
@@ -189,6 +190,7 @@ DUPLICATE_BODY = {
     "architecture": "x86_64",
     "parentImage": "ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64",
     "buildInstanceType": ["m7i.large", "m6i.large"],
+    "launchInstanceTypes": ["g6e.xlarge", "g5.2xlarge"],
     "rootSizeGb": 100,
     "stackName": "Amazon Linux 2023 Desktop Copy",
     "profileId": 0,
@@ -1044,13 +1046,19 @@ class TestAmiRecipeDuplicate:
 
     def test_a_field_the_source_does_not_carry_is_not_sent(self, monkeypatch):
         source = {key: value for key, value in SOURCE_RECIPE.items()
-                  if key not in ("baseOs", "parameters", "description")}
+                  if key not in ("baseOs", "parameters", "description", "launchInstanceTypes")}
         source.update(kind="simulation", buildInstanceType="g5.xlarge")
         client, _, created = _duplicating_client(monkeypatch, source=source)
         client.duplicate_edh_ami_recipe("al2023-desktop", "sim-node")
         body = created["kwargs"]["data"]
         assert "baseOs" not in body and "parameters" not in body and "description" not in body
+        assert "launchInstanceTypes" not in body
         assert body["kind"] == "simulation" and body["buildInstanceType"] == "g5.xlarge"
+
+    def test_a_duplicate_carries_the_source_s_launch_instance_types_in_order(self, monkeypatch):
+        client, _, created = _duplicating_client(monkeypatch)
+        client.duplicate_edh_ami_recipe("al2023-desktop", "team-desktop")
+        assert created["kwargs"]["data"]["launchInstanceTypes"] == ["g6e.xlarge", "g5.2xlarge"]
 
     def test_a_missing_source_creates_nothing(self, monkeypatch):
         client, _, created = _duplicating_client(

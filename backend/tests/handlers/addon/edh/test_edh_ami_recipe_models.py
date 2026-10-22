@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from backend.backend.models.addon.edh import (
     AMI_RECIPE_COMPONENT_DATA_MAX_BYTES,
+    AMI_RECIPE_MAX_LAUNCH_INSTANCE_TYPES,
     ARCHITECTURE_FAMILIES,
     EDH_ARCHITECTURES,
     AmiRecipeAssetModel,
@@ -220,6 +221,49 @@ class TestAmiRecipeRequestModel:
         })
         assert [asset.id for asset in model.assets] == ["a" + "b" * 31]
         assert list(model.parameters) == ["k" * 64]
+
+
+@pytest.mark.unit
+class TestLaunchInstanceTypes:
+    """The instance types a desktop of the recipe's image may launch on: absent, null or empty is no
+    restriction of the recipe's own, and a list is 1-64 distinct types of the build types' own form."""
+
+    def test_the_bound_is_the_documented_one(self):
+        assert AMI_RECIPE_MAX_LAUNCH_INSTANCE_TYPES == 64
+
+    @pytest.mark.parametrize("value", [None, []], ids=["null", "empty"])
+    def test_absent_null_or_empty_is_no_restriction(self, value):
+        assert AmiRecipeRequestModel(**VALID).launchInstanceTypes is None
+        model = AmiRecipeRequestModel(**{**VALID, "launchInstanceTypes": value})
+        assert model.launchInstanceTypes is None
+        assert "launchInstanceTypes" not in model.dict(exclude_none=True)
+
+    @pytest.mark.parametrize("value", [
+        ["g5.2xlarge"],
+        ["g6e.xlarge", "g5.2xlarge", "gr6.4xlarge"],
+        [f"g{n}.xlarge" for n in range(64)],
+        ["g5.2xlarge", "m" * 62 + ".x"],
+    ], ids=["one", "kept-in-order", "at-the-bound", "longest-type"])
+    def test_a_list_is_kept_as_given(self, value):
+        model = AmiRecipeRequestModel(**{**VALID, "launchInstanceTypes": value})
+        assert model.launchInstanceTypes == value
+        assert model.dict(exclude_none=True)["launchInstanceTypes"] == value
+
+    @pytest.mark.parametrize("value", [
+        [f"g{n}.xlarge" for n in range(65)],
+        ["g5.2xlarge", "g5.2xlarge"],
+        ["g5.2xlarge", "large"],
+        ["G5.2xlarge"],
+        ["g5.2xlarge", "m" * 63 + ".x"],
+        ["g5.2xlarge\n"],
+        "g5.2xlarge",
+        [17],
+    ], ids=["over-the-bound", "duplicate", "no-size", "upper-case", "too-long", "trailing-newline", "a-string",
+            "not-text"])
+    def test_a_list_is_bounded_distinct_and_well_formed(self, value):
+        with pytest.raises(ValidationError) as err:
+            AmiRecipeRequestModel(**{**VALID, "launchInstanceTypes": value})
+        assert ("launchInstanceTypes",) == err.value.errors()[0]["loc"][:1]
 
 
 @pytest.mark.unit

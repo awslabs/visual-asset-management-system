@@ -228,7 +228,8 @@ def workstation_list(ctx: click.Context, json_output: bool):
 @workstation.command(name='create')
 @click.option('--image-id', required=True, help='Catalog image ID (see `edh catalog images`)')
 @click.option('--instance-type', required=True,
-              help="EC2 instance type; it must run the image's architecture "
+              help="EC2 instance type; it must run the image's architecture, and a recipe image "
+                   "that lists launch instance types takes one of them "
                    "(see 'vamscli edh catalog instance-types --image-id')")
 @click.option('--name', required=True, help='Workstation name')
 @click.option('--root-size-gb', required=True, type=click.IntRange(ROOT_SIZE_GB_MIN, ROOT_SIZE_GB_MAX),
@@ -524,24 +525,31 @@ def renew(ctx: click.Context, session_id: str, json_output: bool):
 
 def format_catalog_images(result: Dict[str, Any]) -> str:
     """One row per image in the API's order, recipe images first; ARCH is the image's CPU
-    architecture ('-' when EDH reports none), and RECIPE names the recipe and build version a Custom
-    AMI Recipe image was built from."""
+    architecture ('-' when EDH reports none), LAUNCH TYPES counts the instance types the image's recipe
+    offers ('any' when it lists none; `catalog instance-types --image-id` names them), and RECIPE names
+    the recipe and build version a Custom AMI Recipe image was built from."""
     items = result.get('Items', []) if isinstance(result, dict) else []
     if not items:
         return "No images found."
-    rows = [['CATEGORY', 'IMAGE', 'NAME', 'OS', 'ARCH', 'BASE OS', 'ROOT GIB', 'RECIPE']]
+    rows = [['CATEGORY', 'IMAGE', 'NAME', 'OS', 'ARCH', 'BASE OS', 'ROOT GIB', 'LAUNCH TYPES', 'RECIPE']]
     for item in items:
         category = item.get('category')
         recipe = f"{item['recipeId']} v{item.get('recipeVersion', '?')}" if item.get('recipeId') else '-'
         rows.append([CATALOG_CATEGORY_LABELS.get(category, category or '-'), str(item.get('imageId', '')),
                      str(item.get('name') or ''), str(item.get('osFamily') or ''),
                      str(item.get('architecture') or '-'), str(item.get('baseOs') or ''),
-                     str(item.get('rootSize') or '-'), recipe])
+                     str(item.get('rootSize') or '-'), launch_types_summary(item.get('launchInstanceTypes')),
+                     recipe])
     # Each column but the last is at least as wide as its longest value, so a long name stays aligned.
     widths = [max(minimum, *(len(row[i]) for row in rows))
-              for i, minimum in enumerate((18, 6, 34, 8, 7, 16, 9))]
+              for i, minimum in enumerate((18, 6, 34, 8, 7, 16, 9, 13))]
     return '\n'.join(' '.join(cell.ljust(width) for cell, width in zip(row, widths)) + ' ' + row[-1]
                      for row in rows)
+
+
+def launch_types_summary(launch_types: Any) -> str:
+    """'<n> listed' for a recipe's list of launch instance types, 'any' for none."""
+    return f"{len(launch_types)} listed" if isinstance(launch_types, list) and launch_types else 'any'
 
 
 def format_instance_types(result: Dict[str, Any]) -> str:
@@ -568,6 +576,15 @@ def instance_type_runs_image(item: Any, image: Dict[str, Any]) -> bool:
     architecture = image.get('architecture') if isinstance(image, dict) else None
     architectures = (item.get('architectures') if isinstance(item, dict) else None) or []
     return not architecture or not architectures or architecture in architectures
+
+
+def instance_type_offered_for_image(item: Any, image: Dict[str, Any]) -> bool:
+    """Whether a catalog image's recipe offers a catalog instance type, by the web launch wizard's rule:
+    the image carries no launchInstanceTypes (a baseline image, or a recipe that lists none), or the list
+    names the type. The launch holds the type to the same list."""
+    offered = image.get('launchInstanceTypes') if isinstance(image, dict) else None
+    instance_type = item.get('instanceType') if isinstance(item, dict) else item
+    return not offered or instance_type in offered
 
 
 @edh.group()
@@ -621,7 +638,8 @@ def catalog_instance_types(ctx: click.Context, image_id: Optional[str], json_out
     numbers in numeric order (g5.2xlarge before g5.12xlarge). ARCH names the architecture groups of
     the deployment's desktop profile that list the type. With --image-id, only the types that run
     that catalog image are listed: a type runs an image when the image's architecture is unknown, the
-    type names no architecture, or the type's architectures include the image's.
+    type names no architecture, or the type's architectures include the image's; and an image whose
+    recipe lists launch instance types offers only those.
 
     Examples:
         vamscli edh catalog instance-types
@@ -648,12 +666,17 @@ def catalog_instance_types(ctx: click.Context, image_id: Optional[str], json_out
         items = result.get('Items', []) if isinstance(result, dict) else []
         empty_message = None
         if image is not None:
-            matching = [item for item in items if instance_type_runs_image(item, image)]
+            matching = [item for item in items
+                        if instance_type_runs_image(item, image) and instance_type_offered_for_image(item, image)]
             if items and not matching:
-                # Only a known image architecture excludes a type, so the message can name it.
-                empty_message = ("No instance type in this deployment runs this image's architecture "
-                                 f"({image.get('architecture')}). Choose another image or ask an "
-                                 "administrator.")
+                if image.get('launchInstanceTypes'):
+                    empty_message = ("No instance type this deployment allows is offered for this image. "
+                                     "Choose another image or ask an administrator.")
+                else:
+                    # Only a known image architecture excludes a type, so the message can name it.
+                    empty_message = ("No instance type in this deployment runs this image's architecture "
+                                     f"({image.get('architecture')}). Choose another image or ask an "
+                                     "administrator.")
             items = matching
             result = {**(result if isinstance(result, dict) else {}), 'Items': items}
         output_result(
@@ -1226,15 +1249,20 @@ def load_ami_recipe_file(path: str) -> Dict[str, Any]:
 
 
 def format_ami_recipe_list(result: Dict[str, Any]) -> str:
+    """One row per recipe; LAUNCH TYPES counts the instance types its desktops launch on ('any' when it
+    lists none; `ami-recipe get` names them)."""
     items = result.get("Items", []) if isinstance(result, dict) else []
     if not items:
         return "No AMI recipes."
-    lines = [f"{'RECIPE':<28} {'KIND':<11} {'OS':<8} {'ARCH':<7} {'SOURCE':<7} {'LATEST':<26} STACK"]
+    lines = [f"{'RECIPE':<28} {'KIND':<11} {'OS':<8} {'ARCH':<7} {'SOURCE':<7} {'LATEST':<26} "
+             f"{'LAUNCH TYPES':<13} STACK"]
     for r in items:
         latest = r.get("latestBuild") or {}
         latest_text = f"v{latest['version']} {latest.get('status', '')}" if latest else "-"
+        launch_text = launch_types_summary(r.get("launchInstanceTypes"))
         lines.append(f"{r.get('recipeId', ''):<28} {r.get('kind', ''):<11} {r.get('osFamily', ''):<8} "
-                     f"{r.get('architecture', ''):<7} {r.get('source', ''):<7} {latest_text:<26} {r.get('stackName', '')}")
+                     f"{r.get('architecture', ''):<7} {r.get('source', ''):<7} {latest_text:<26} "
+                     f"{launch_text:<13} {r.get('stackName', '')}")
     return "\n".join(lines)
 
 

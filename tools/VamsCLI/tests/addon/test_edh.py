@@ -95,6 +95,29 @@ X86_64_ONLY_INSTANCE_TYPES = {'Items': [
     {'instanceType': 'u-24tb1.112xlarge', 'architectures': ['x86_64']},
 ]}
 
+# A catalog with an Isaac Sim recipe image whose recipe lists the types its desktops launch on, out of
+# order and naming one the deployment does not allow and one of another architecture; a recipe image
+# whose recipe lists none; and a baseline image.
+LAUNCH_CATALOG_IMAGES = {'Items': [
+    {'imageId': '36', 'name': 'NVIDIA Isaac Sim desktop v3', 'baseOs': 'ubuntu2404', 'osFamily': 'linux',
+     'architecture': 'x86_64', 'rootSize': 150, 'category': 'amiRecipe', 'recipeId': 'isaacsim',
+     'recipeDisplayName': 'NVIDIA Isaac Sim desktop', 'recipeVersion': 3,
+     'launchInstanceTypes': ['g6e.xlarge', 'g5.2xlarge', 'p5.48xlarge', 'm7g.large']},
+    {'imageId': '35', 'name': 'Amazon Linux 2023 Desktop v5', 'baseOs': 'amazonlinux2023',
+     'osFamily': 'linux', 'architecture': 'x86_64', 'rootSize': 100, 'category': 'amiRecipe',
+     'recipeId': 'al2023-desktop', 'recipeDisplayName': 'Amazon Linux 2023 Desktop', 'recipeVersion': 5},
+    {'imageId': '12', 'name': 'Ubuntu 22 DCV', 'baseOs': 'ubuntu2204', 'osFamily': 'linux',
+     'architecture': None, 'rootSize': 50, 'category': 'baseline'},
+]}
+
+LAUNCH_INSTANCE_TYPES = {'Items': [
+    {'instanceType': 'g5.2xlarge', 'architectures': ['x86_64']},
+    {'instanceType': 'g5.xlarge', 'architectures': ['x86_64']},
+    {'instanceType': 'g6e.xlarge', 'architectures': ['x86_64']},
+    {'instanceType': 'm7g.large', 'architectures': ['arm64']},
+    {'instanceType': 'm7i.large', 'architectures': ['x86_64']},
+]}
+
 # An admin images body in the API's item shape: a desktop image whose architecture EDH reports and a
 # simulation image for which it reports none.
 ADMIN_IMAGES = {'Items': [
@@ -347,7 +370,8 @@ class TestWorkstationCreate:
         assert "it must run the image's architecture" in ' '.join(result.output.split())
         create = cli.commands['edh'].commands['workstation'].commands['create']
         option = next(param for param in create.params if param.name == 'instance_type')
-        assert option.help == ("EC2 instance type; it must run the image's architecture "
+        assert option.help == ("EC2 instance type; it must run the image's architecture, and a recipe image "
+                               "that lists launch instance types takes one of them "
                                "(see 'vamscli edh catalog instance-types --image-id')")
 
 
@@ -773,7 +797,7 @@ class TestCatalog:
             assert result.exit_code == 0
             header = next(line for line in result.output.splitlines() if line.startswith('CATEGORY'))
             assert header.split() == ['CATEGORY', 'IMAGE', 'NAME', 'OS', 'ARCH', 'BASE', 'OS', 'ROOT', 'GIB',
-                                      'RECIPE']
+                                      'LAUNCH', 'TYPES', 'RECIPE']
 
     def test_an_image_row_shows_its_architecture_or_a_dash(self, cli_runner, generic_command_mocks):
         # A null architecture and an absent one both read as unknown.
@@ -1762,3 +1786,127 @@ class TestAmiRecipeDuplicate:
             assert EDH_AMI_RECIPES_DISABLED_MESSAGE in result.output
             mocks["profile_manager"].has_feature_switch.assert_called_with("EDH_AMI_RECIPES")
             assert not mocks["api_client"].duplicate_edh_ami_recipe.called
+
+
+class TestLaunchInstanceTypes:
+    """A recipe's launch instance types: sent as the recipe file holds them, counted in the recipe and
+    catalog image tables, shown in full by `ami-recipe get`, and applied by `catalog instance-types
+    --image-id` as the web launch wizard applies them."""
+
+    RECIPES = {"Items": [
+        {"recipeId": "isaacsim", "kind": "vdi", "osFamily": "linux", "architecture": "x86_64", "source": "config",
+         "stackName": "VAMS Isaac Sim Desktop", "launchInstanceTypes": ["g5.2xlarge", "g6e.xlarge", "gr6.4xlarge"],
+         "latestBuild": {"version": 3, "status": "AVAILABLE"}},
+        {"recipeId": "al2023-desktop", "kind": "vdi", "osFamily": "linux", "architecture": "x86_64",
+         "source": "config", "stackName": "VAMS AL2023 Desktop", "latestBuild": None},
+    ]}
+
+    @pytest.mark.parametrize("command", ["create", "update"])
+    def test_a_recipe_file_s_list_is_sent_as_it_stands(self, cli_runner, generic_command_mocks, tmp_path, command):
+        launch_types = ["g6e.xlarge", "g5.2xlarge"]
+        (tmp_path / "recipe.json").write_text(json.dumps(
+            {"recipeId": "team-desktop", "components": [{"arn": "arn:x"}], "launchInstanceTypes": launch_types}))
+        method = "create_edh_ami_recipe" if command == "create" else "update_edh_ami_recipe"
+        argv = ["edh", "admin", "ami-recipe", command]
+        if command == "update":
+            argv.append("team-desktop")
+        with generic_command_mocks("addon.edh") as mocks:
+            getattr(mocks["api_client"], method).return_value = {"recipeId": "team-desktop"}
+            result = cli_runner.invoke(cli, [*argv, "--file", str(tmp_path / "recipe.json"), "--json-output"])
+            assert result.exit_code == 0, result.output
+            body = getattr(mocks["api_client"], method).call_args.args[-1]
+            assert body["launchInstanceTypes"] == launch_types
+
+    def test_the_recipe_list_counts_the_launch_types_or_says_any(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks("addon.edh") as mocks:
+            mocks["api_client"].list_edh_ami_recipes.return_value = self.RECIPES
+            result = cli_runner.invoke(cli, ["edh", "admin", "ami-recipe", "list"])
+            assert result.exit_code == 0, result.output
+            lines = result.output.splitlines()
+            header = next(line for line in lines if line.startswith("RECIPE"))
+            column = header.index("LAUNCH TYPES")
+            assert header.index("LATEST") < column < header.index("STACK")
+            isaac = next(line for line in lines if line.startswith("isaacsim"))
+            al2023 = next(line for line in lines if line.startswith("al2023-desktop"))
+            assert isaac[column:].split()[:2] == ["3", "listed"]
+            assert al2023[column:].split()[0] == "any"
+            assert isaac.rstrip().endswith("VAMS Isaac Sim Desktop")
+
+    def test_get_shows_the_whole_list(self, cli_runner, generic_command_mocks):
+        recipe = self.RECIPES["Items"][0]
+        with generic_command_mocks("addon.edh") as mocks:
+            mocks["api_client"].get_edh_ami_recipe.return_value = dict(recipe)
+            result = cli_runner.invoke(cli, ["edh", "admin", "ami-recipe", "get", "isaacsim"])
+            assert result.exit_code == 0, result.output
+            assert '"launchInstanceTypes"' in result.output
+            for instance_type in recipe["launchInstanceTypes"]:
+                assert f'"{instance_type}"' in result.output
+
+    def test_the_catalog_images_table_counts_an_image_s_launch_types(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks("addon.edh") as mocks:
+            mocks["api_client"].list_edh_catalog_images.return_value = LAUNCH_CATALOG_IMAGES
+            result = cli_runner.invoke(cli, ["edh", "catalog", "images"])
+            assert result.exit_code == 0, result.output
+            lines = result.output.splitlines()
+            header = next(line for line in lines if line.startswith("CATEGORY"))
+            column = header.index("LAUNCH TYPES")
+            assert header.index("ROOT GIB") < column < header.index("RECIPE")
+            rows = {row.split()[2] if row.startswith("Baseline") else row.split()[3]: row
+                    for row in lines[lines.index(header) + 1:] if row.strip()}
+            assert rows["36"][column:].split()[:2] == ["4", "listed"]
+            assert rows["36"].rstrip().endswith("isaacsim v3")
+            assert rows["35"][column:].split()[0] == "any"
+            assert rows["12"][column:].split()[0] == "any"
+
+    @pytest.mark.parametrize("image_id,expected", [
+        ("36", ["g5.2xlarge", "g6e.xlarge"]),
+        ("35", ["g5.2xlarge", "g5.xlarge", "g6e.xlarge", "m7i.large"]),
+        ("12", ["g5.2xlarge", "g5.xlarge", "g6e.xlarge", "m7g.large", "m7i.large"]),
+    ], ids=["recipe-with-a-list", "recipe-without-a-list", "baseline-image"])
+    def test_image_id_lists_only_the_types_the_image_s_recipe_offers(
+            self, cli_runner, generic_command_mocks, image_id, expected):
+        with generic_command_mocks("addon.edh") as mocks:
+            mocks["api_client"].list_edh_catalog_images.return_value = LAUNCH_CATALOG_IMAGES
+            mocks["api_client"].list_edh_catalog_instance_types.return_value = LAUNCH_INSTANCE_TYPES
+            result = cli_runner.invoke(cli, ["edh", "catalog", "instance-types", "--image-id", image_id])
+            assert result.exit_code == 0, result.output
+            lines = result.output.splitlines()
+            header = next(line for line in lines if line.startswith("INSTANCE TYPE"))
+            assert [row.split()[0] for row in lines[lines.index(header) + 1:] if row.strip()] == expected
+            assert f"Found {len(expected)} instance type(s)" in result.output
+
+    def test_image_id_whose_recipe_offers_nothing_allowed_says_so(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks("addon.edh") as mocks:
+            mocks["api_client"].list_edh_catalog_images.return_value = LAUNCH_CATALOG_IMAGES
+            mocks["api_client"].list_edh_catalog_instance_types.return_value = {"Items": [
+                {"instanceType": "m7i.large", "architectures": ["x86_64"]}]}
+            result = cli_runner.invoke(cli, ["edh", "catalog", "instance-types", "--image-id", "36"])
+            assert result.exit_code == 0, result.output
+            assert "Found 0 instance type(s)" in result.output
+            assert ("No instance type this deployment allows is offered for this image. Choose another "
+                    "image or ask an administrator.") in result.output
+            assert "runs this image's architecture" not in result.output
+
+            result = cli_runner.invoke(
+                cli, ["edh", "catalog", "instance-types", "--image-id", "36", "--json-output"])
+            assert result.exit_code == 0, result.output
+            assert json.loads(result.output) == {"Items": []}
+
+    @pytest.mark.parametrize("item,image,offered", [
+        ({"instanceType": "g5.2xlarge"}, {"launchInstanceTypes": ["g6e.xlarge", "g5.2xlarge"]}, True),
+        ({"instanceType": "g5.xlarge"}, {"launchInstanceTypes": ["g6e.xlarge", "g5.2xlarge"]}, False),
+        ({"instanceType": "g5.xlarge"}, {"launchInstanceTypes": []}, True),
+        ({"instanceType": "g5.xlarge"}, {"launchInstanceTypes": None}, True),
+        ({"instanceType": "g5.xlarge"}, {}, True),
+        ("g5.2xlarge", {"launchInstanceTypes": ["g5.2xlarge"]}, True),
+        ("g5.xlarge", {"launchInstanceTypes": ["g5.2xlarge"]}, False),
+    ], ids=["listed", "not-listed", "empty-list", "null-list", "no-list", "bare-name-listed",
+            "bare-name-not-listed"])
+    def test_the_offering_rule_is_the_web_wizards(self, item, image, offered):
+        assert edh_commands.instance_type_offered_for_image(item, image) is offered
+
+    def test_create_help_names_the_recipe_s_list(self, cli_runner):
+        result = cli_runner.invoke(cli, ["edh", "workstation", "create", "--help"])
+        assert result.exit_code == 0
+        help_text = " ".join(result.output.split())
+        assert "a recipe image that lists launch instance types takes one of them" in help_text

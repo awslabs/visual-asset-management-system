@@ -9157,7 +9157,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/edhWorkstationRecord"
                 "400":
-                    description: "Validation failed (`Request body is not valid JSON`), the instance type is outside the deployment allow-list, the image is not a registered desktop image with a determinable OS family equal to `osFamily` (`imageId is not a registered VDI image`, `The image's OS family cannot be determined`, `osFamily does not match the image`), the image's EDH profile lists the instance type only under architectures of another family than the image's, with `x86_64` and `i386` one family (`instanceType does not match the image's architecture`), or `leaseHours` is outside what the lease policy allows (`leaseHours must be 1-<cap>`, `Leases are disabled for this deployment`), or `rootSizeGb` is below the image's registered root size (`Root disk size must be at least <n> GB for this image`)."
+                    description: "Validation failed (`Request body is not valid JSON`), the instance type is outside the deployment allow-list, the image is not a registered desktop image with a determinable OS family equal to `osFamily` (`imageId is not a registered VDI image`, `The image's OS family cannot be determined`, `osFamily does not match the image`), the image's EDH profile lists the instance type only under architectures of another family than the image's, with `x86_64` and `i386` one family (`instanceType does not match the image's architecture`), an AMI recipe whose `AVAILABLE` build registered the image lists `launchInstanceTypes` that leave the instance type out (`instanceType is not offered for this image`; a recipe read that fails refuses nothing), or `leaseHours` is outside what the lease policy allows (`leaseHours must be 1-<cap>`, `Leases are disabled for this deployment`), or `rootSizeGb` is below the image's registered root size (`Root disk size must be at least <n> GB for this image`)."
                     content:
                         application/json:
                             schema:
@@ -11618,7 +11618,7 @@ components:
                     minLength: 3
                     maxLength: 64
                     pattern: '^[a-z0-9-]+\.[a-z0-9-]+$'
-                    description: "`family.size`, hyphens allowed in either part (`c7i.metal-24xl`); must be in the deployment allow-list when that list is non-empty. A type the image's EDH profile lists only under architectures of another family than the image's (`x86_64` and `i386` are one family) is refused with 400 `instanceType does not match the image's architecture`."
+                    description: "`family.size`, hyphens allowed in either part (`c7i.metal-24xl`); must be in the deployment allow-list when that list is non-empty. A type the image's EDH profile lists only under architectures of another family than the image's (`x86_64` and `i386` are one family) is refused with 400 `instanceType does not match the image's architecture`, and a type outside the `launchInstanceTypes` the image carries in the catalog with 400 `instanceType is not offered for this image`."
                 name:
                     $ref: "#/components/schemas/object_name_pattern_regex"
                 rootSizeGb:
@@ -11753,6 +11753,11 @@ components:
                             recipeVersion:
                                 type: integer
                                 description: "The version of the build that registered the image; `amiRecipe` images only."
+                            launchInstanceTypes:
+                                type: array
+                                description: "The instance types the image's recipe offers its desktops, in the recipe's order; present on an `amiRecipe` image whose recipe lists any, and the only types a launch of the image accepts."
+                                items:
+                                    type: string
         edhInstanceTypeList:
             type: object
             required:
@@ -12451,6 +12456,17 @@ components:
                               minLength: 3
                               maxLength: 64
                               pattern: '^[a-z0-9-]+\.[a-z0-9-]+$'
+                launchInstanceTypes:
+                    type: array
+                    nullable: true
+                    description: "The instance types a desktop of the recipe's image may launch on: 1-64 distinct instance types, kept in the order given. Absent, null or empty restricts nothing. Outside the content hash, so setting it starts no build."
+                    maxItems: 64
+                    uniqueItems: true
+                    items:
+                        type: string
+                        minLength: 3
+                        maxLength: 64
+                        pattern: '^[a-z0-9-]+\.[a-z0-9-]+$'
                 rootSizeGb:
                     type: integer
                     minimum: 10
@@ -12606,6 +12622,11 @@ components:
                         - type: array
                           items:
                               type: string
+                launchInstanceTypes:
+                    type: array
+                    description: "The instance types a desktop of the recipe's image may launch on, in the recipe's order; present when the recipe lists any."
+                    items:
+                        type: string
                 rootSizeGb:
                     type: integer
                 stackName:

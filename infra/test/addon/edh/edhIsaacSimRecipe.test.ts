@@ -114,6 +114,56 @@ describe("the shipped Isaac Sim recipe", () => {
         expect(loaded.manifest.profileId).toBe(1);
     });
 
+    test("offers its desktops only the G instance types that run Isaac Sim", () => {
+        // x86_64 NVIDIA RTX GPUs with ray-tracing cores, at least 16 GB of video memory per GPU, at
+        // least 32 GiB of instance memory, and GRID driver support for the Amazon DCV desktop.
+        expect(loaded.manifest.launchInstanceTypes).toEqual([
+            ...[
+                "2xlarge",
+                "4xlarge",
+                "8xlarge",
+                "12xlarge",
+                "16xlarge",
+                "24xlarge",
+                "48xlarge",
+            ].map((size) => `g5.${size}`),
+            ...[
+                "2xlarge",
+                "4xlarge",
+                "8xlarge",
+                "12xlarge",
+                "16xlarge",
+                "24xlarge",
+                "48xlarge",
+            ].map((size) => `g6.${size}`),
+            "gr6.4xlarge",
+            "gr6.8xlarge",
+            ...[
+                "xlarge",
+                "2xlarge",
+                "4xlarge",
+                "8xlarge",
+                "12xlarge",
+                "16xlarge",
+                "24xlarge",
+                "48xlarge",
+            ].map((size) => `g6e.${size}`),
+            ...["2xlarge", "4xlarge", "8xlarge", "12xlarge", "24xlarge", "48xlarge"].map(
+                (size) => `g7e.${size}`
+            ),
+        ]);
+        const families = new Set(
+            (loaded.manifest.launchInstanceTypes ?? []).map((type) => type.split(".")[0])
+        );
+        // g4dn (T4, the oldest generation), g6f and gr6f (fractional L4) and g5g (arm64) are left out,
+        // as are g5.xlarge and g6.xlarge (16 GiB of memory).
+        for (const excluded of ["g4dn", "g6f", "gr6f", "g5g"]) {
+            expect(families.has(excluded)).toBe(false);
+        }
+        expect(loaded.manifest.launchInstanceTypes).not.toContain("g5.xlarge");
+        expect(loaded.manifest.launchInstanceTypes).not.toContain("g6.xlarge");
+    });
+
     test("declares the two repository assets it installs from", () => {
         expect(loaded.assets).toEqual([
             { id: "vamscli", repoPath: "tools/VamsCLI" },

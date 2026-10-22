@@ -559,7 +559,9 @@ policy's `leaseHours`, see `get_edh_catalog_lease`) stamps a lease on the launch
 refused (400) when leases are disabled and ignored when the policy is `forced`. An
 `instance_type` the image's profile lists only under architectures of another family
 than the image's (`x86_64` and `i386` are one family) is refused (400,
-`instanceType does not match the image's architecture`). A launch
+`instanceType does not match the image's architecture`), and one outside the
+`launchInstanceTypes` a recipe image carries in `list_edh_catalog_images` is
+refused (400, `instanceType is not offered for this image`). A launch
 is refused (403) for a session authenticated with a VAMS API key.
 `start_edh_workstation` returns the updated record plus `sessionBootstrap`, as for
 a launch; while EDH still lists the desktop stopped, a start is refused (409,
@@ -603,12 +605,17 @@ that EC2 reports as running another architecture family than the recipe's
 `buildInstanceType does not match the recipe's architecture` or
 `parentImage does not match the recipe's architecture`; a lookup that fails
 refuses nothing.
+A recipe's optional `launchInstanceTypes` (1-64 distinct instance types) is the
+list a desktop of its image may launch on; absent, null or empty offers every
+type the deployment allows, and it is outside the content hash, so changing it
+starts no build.
 `duplicate_edh_ami_recipe` takes `source_recipe_id` (a `config` or `admin`
 recipe) and the new `recipe_id`, plus an optional `display_name` (default: the
 source's plus ` (copy)`), `stack_name` (default: the source's plus ` Copy`) and
 `keep_versions` (the number of AMIs pruning keeps for the copy, 1-20; default:
 the source's `keepVersions`).
-It reads the source and creates an `admin` recipe with its definition and
+It reads the source and creates an `admin` recipe with its definition, its
+`launchInstanceTypes` included, and
 `duplicateOf`; the service copies the source's bundled files (`assets`), which
 an update of the copy keeps and cannot change, and records `duplicatedFrom`. It
 starts no build.

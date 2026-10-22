@@ -273,6 +273,31 @@ class TestImageCategories:
             "isaacsim", "Isaac Sim workstation", 10)
         assert all(not {"recipeId", "recipeDisplayName", "recipeVersion"} & set(item) for item in items[2:])
 
+    def test_a_recipe_image_carries_its_recipes_launch_instance_types(self, monkeypatch, recipe_table):
+        """The list is the recipe's, in its order; a recipe without one and a baseline image carry none."""
+        stacks = _recipe_world()
+        recipe_store.update_recipe("isaacsim", launchInstanceTypes=["g6e.xlarge", "g5.2xlarge"])
+        fakes = _with_real_store(monkeypatch, stacks)
+
+        items = response_body(fakes.module.lambda_handler(make_event("GET", IMAGES_PATH), {}))["Items"]
+
+        by_id = {item["imageId"]: item for item in items}
+        assert by_id["36"]["launchInstanceTypes"] == ["g6e.xlarge", "g5.2xlarge"]
+        assert by_id["35"]["category"] == "amiRecipe" and "launchInstanceTypes" not in by_id["35"]
+        assert by_id["30"]["category"] == "baseline" and "launchInstanceTypes" not in by_id["30"]
+        assert all("launchInstanceTypes" not in item for item in items if item["category"] == "baseline")
+
+    @pytest.mark.parametrize("value", [[], None], ids=["empty", "null"])
+    def test_an_empty_or_null_stored_list_is_no_list(self, monkeypatch, recipe_table, value):
+        stacks = _recipe_world()
+        recipe_store.update_recipe("isaacsim", launchInstanceTypes=value)
+        fakes = _with_real_store(monkeypatch, stacks)
+
+        items = response_body(fakes.module.lambda_handler(make_event("GET", IMAGES_PATH), {}))["Items"]
+
+        recipe_image = next(item for item in items if item["imageId"] == "36")
+        assert recipe_image["recipeId"] == "isaacsim" and "launchInstanceTypes" not in recipe_image
+
     def test_a_recipe_image_keeps_its_architecture_once_categorised(self, monkeypatch, recipe_table):
         fakes = _with_real_store(monkeypatch, _recipe_world())
 

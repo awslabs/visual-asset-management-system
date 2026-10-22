@@ -274,6 +274,23 @@ describe("the shipped Linux desktop recipes", () => {
             }).toEqual({ recipe: recipe.recipeId, signIn: [], assets: [] });
         }
     });
+
+    test("only the Isaac Sim recipe restricts the instance types its desktops launch on", () => {
+        const restricting = recipes
+            .filter((r) => r.manifest.launchInstanceTypes !== undefined)
+            .map((r) => r.recipeId);
+        expect(restricting).toEqual(["isaacsim"]);
+        const general = recipes.filter((r) =>
+            ["al2023-desktop", "windows2022-desktop"].includes(r.recipeId)
+        );
+        expect(general.map((r) => r.recipeId).sort()).toEqual([
+            "al2023-desktop",
+            "windows2022-desktop",
+        ]);
+        for (const recipe of general) {
+            expect(recipe.manifest.launchInstanceTypes).toBeUndefined();
+        }
+    });
 });
 
 describe("the sign-in components the Linux desktop recipes share", () => {

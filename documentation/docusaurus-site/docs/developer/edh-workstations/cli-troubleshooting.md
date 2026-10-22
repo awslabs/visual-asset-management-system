@@ -278,15 +278,16 @@ Pick the image and its `osFamily` from `edh catalog images` and launch again; an
 
 -   `edh workstation create` fails with HTTP 400 and `instanceType is not permitted in this deployment`
 -   `edh workstation create` fails with HTTP 400 and `instanceType does not match the image's architecture`
+-   `edh workstation create` fails with HTTP 400 and `instanceType is not offered for this image`
 -   `edh workstation create --lease-hours` fails with HTTP 400 and `Leases are disabled for this deployment` or `leaseHours must be 1-<hours>`
 
 **Cause:**
 
-The deployment restricts desktops to an allow-list of Amazon EC2 instance types (`app.addons.useEdhWorkstations.edhAllowedInstanceTypes`), and `--instance-type` is not on it. For the architecture, the image's own EDH profile lists `--instance-type` only under architectures of another family than the image's (`x86_64` and `i386` are one family, `arm64` another), so the type cannot run the image. For a lease, `--lease-hours` was given while the lease policy is off, or exceeds the policy's `leaseHours`. Nothing was recorded and no desktop was requested.
+The deployment restricts desktops to an allow-list of Amazon EC2 instance types (`app.addons.useEdhWorkstations.edhAllowedInstanceTypes`), and `--instance-type` is not on it. For the architecture, the image's own EDH profile lists `--instance-type` only under architectures of another family than the image's (`x86_64` and `i386` are one family, `arm64` another), so the type cannot run the image. For an image an AMI recipe built, the recipe lists launch instance types (`launchInstanceTypes` on the image in `edh catalog images --json-output`) and `--instance-type` is not among them. For a lease, `--lease-hours` was given while the lease policy is off, or exceeds the policy's `leaseHours`. Nothing was recorded and no desktop was requested.
 
 **Resolution:**
 
-Pick an instance type from `edh catalog instance-types --image-id <ID>`, which lists only the types the deployment permits that run the image's architecture (its `ARCH` column, or `architectures` in `--json-output`, against the image's `ARCH` in `edh catalog images`). Check the lease policy with `vamscli edh catalog lease`: omit `--lease-hours` while leases are off, or pass a value from 1 up to the policy's `leaseHours`.
+Pick an instance type from `edh catalog instance-types --image-id <ID>`, which lists only the types the deployment permits that run the image's architecture (its `ARCH` column, or `architectures` in `--json-output`, against the image's `ARCH` in `edh catalog images`) and that the image's recipe offers. An administrator changes a recipe's list with `edh admin ami-recipe update`, or in a seeded recipe's `recipe.json`; that starts no build. Check the lease policy with `vamscli edh catalog lease`: omit `--lease-hours` while leases are off, or pass a value from 1 up to the policy's `leaseHours`.
 
 ### Launch Refused for the Root Disk Size
 

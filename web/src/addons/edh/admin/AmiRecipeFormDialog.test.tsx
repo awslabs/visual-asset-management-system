@@ -32,6 +32,7 @@ const VALID = {
     architecture: "x86_64",
     parentImage: "ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64",
     buildInstanceType: "m7i.large",
+    launchInstanceTypes: "",
     rootSizeGb: "60",
     stackName: "VAMS AL2023 Desktop",
     profileId: "1",
@@ -190,6 +191,34 @@ describe("validateAmiRecipe", () => {
         ]) {
             expect(validateAmiRecipe({ ...VALID, buildInstanceType }).buildInstanceType).toBe(
                 "Enter an EC2 instance type, e.g. m7i.large, or up to 8 different ones separated by commas."
+            );
+        }
+    });
+
+    it("accepts no launch instance types, or up to 64 different ones separated by commas", () => {
+        const sixtyFour = Array.from({ length: 64 }, (_, n) => `g${n}.xlarge`);
+        for (const launchInstanceTypes of [
+            "",
+            "   ",
+            "g5.2xlarge",
+            "g6e.xlarge, g5.2xlarge,gr6.4xlarge",
+            sixtyFour.join(", "),
+            `g5.2xlarge, ${"m".repeat(62)}.x`,
+        ]) {
+            expect(
+                validateAmiRecipe({ ...VALID, launchInstanceTypes }).launchInstanceTypes
+            ).toBeUndefined();
+        }
+        for (const launchInstanceTypes of [
+            "g5.2xlarge, large",
+            "g5.2xlarge, g5.2xlarge",
+            "g5.2xlarge,",
+            "G5.2xlarge",
+            [...sixtyFour, "g64.xlarge"].join(", "),
+            `g5.2xlarge, ${"m".repeat(63)}.x`,
+        ]) {
+            expect(validateAmiRecipe({ ...VALID, launchInstanceTypes }).launchInstanceTypes).toBe(
+                "Enter up to 64 different EC2 instance types separated by commas, e.g. g5.2xlarge, g6e.xlarge, or leave it empty."
             );
         }
     });
@@ -383,6 +412,99 @@ describe("AmiRecipeFormDialog", () => {
         await user.click(screen.getByRole("button", { name: "Save recipe" }));
         await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
         expect(onSubmit.mock.calls[0][0].buildInstanceType).toEqual(["c7g.large", "c6g.large"]);
+    });
+
+    it("leaves the launch instance types out of the body until some are typed, then sends a list", async () => {
+        const onSubmit = renderDialog({ initial: RECIPE });
+        const user = userEvent.setup();
+        const field = screen.getByLabelText("Launch instance types");
+        expect(field).toHaveValue("");
+        expect(field).toHaveAccessibleDescription(
+            "The instance types a desktop of this recipe's image may launch on, separated by commas. Leave it empty to offer every type the deployment allows."
+        );
+        await user.click(screen.getByRole("button", { name: "Save recipe" }));
+        await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+        expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("launchInstanceTypes");
+
+        await user.type(field, "g6e.xlarge , g5.2xlarge");
+        await user.click(screen.getByRole("button", { name: "Save recipe" }));
+        await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+        expect(onSubmit.mock.calls[1][0].launchInstanceTypes).toEqual(["g6e.xlarge", "g5.2xlarge"]);
+
+        // One type is still a list.
+        await user.clear(field);
+        await user.type(field, "g5.2xlarge");
+        await user.click(screen.getByRole("button", { name: "Save recipe" }));
+        await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(3));
+        expect(onSubmit.mock.calls[2][0].launchInstanceTypes).toEqual(["g5.2xlarge"]);
+    });
+
+    it("loads a stored list separated by commas, and clearing it sends none", async () => {
+        const listed = {
+            ...RECIPE,
+            launchInstanceTypes: ["g5.2xlarge", "g6e.xlarge"],
+        } as EdhAmiRecipe;
+        const onSubmit = renderDialog({ initial: listed });
+        const field = screen.getByLabelText("Launch instance types");
+        expect(field).toHaveValue("g5.2xlarge, g6e.xlarge");
+        const user = userEvent.setup();
+        await user.click(screen.getByRole("button", { name: "Save recipe" }));
+        await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+        expect(onSubmit.mock.calls[0][0].launchInstanceTypes).toEqual(["g5.2xlarge", "g6e.xlarge"]);
+
+        await user.clear(field);
+        await user.click(screen.getByRole("button", { name: "Save recipe" }));
+        await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+        expect(onSubmit.mock.calls[1][0]).not.toHaveProperty("launchInstanceTypes");
+    });
+
+    it("flags a malformed launch list under its field and submits nothing", async () => {
+        const onSubmit = renderDialog({ initial: RECIPE, onSubmit: jest.fn() });
+        const user = userEvent.setup();
+        await user.type(screen.getByLabelText("Launch instance types"), "g5.2xlarge, g5.2xlarge");
+        await user.click(screen.getByRole("button", { name: "Save recipe" }));
+
+        expect(onSubmit).not.toHaveBeenCalled();
+        expect(screen.getByLabelText("Launch instance types")).toHaveAttribute(
+            "aria-invalid",
+            "true"
+        );
+        expect(
+            screen.getByText(
+                "Enter up to 64 different EC2 instance types separated by commas, e.g. g5.2xlarge, g6e.xlarge, or leave it empty."
+            )
+        ).toBeInTheDocument();
+    });
+
+    it("shows a config recipe's launch list read-only", () => {
+        renderDialog({
+            initial: { ...SHIPPED, launchInstanceTypes: ["g5.2xlarge", "g6e.xlarge"] },
+        });
+        expect(screen.getByLabelText("Launch instance types")).toHaveValue(
+            "g5.2xlarge, g6e.xlarge"
+        );
+        expect(screen.getByLabelText("Launch instance types")).toBeDisabled();
+    });
+
+    it("copies the source's launch list into a duplicate and sends it", async () => {
+        const source = {
+            ...SHIPPED,
+            launchInstanceTypes: ["g5.2xlarge", "g6e.xlarge"],
+        } as EdhAmiRecipe;
+        const onSubmit = renderDialog({ duplicateSource: source });
+        expect(screen.getByLabelText("Launch instance types")).toHaveValue(
+            "g5.2xlarge, g6e.xlarge"
+        );
+        expect(screen.getByLabelText("Launch instance types")).toBeEnabled();
+        const user = userEvent.setup();
+        await user.type(screen.getByLabelText("Recipe id"), "isaacsim-lab");
+        await user.click(screen.getByRole("button", { name: "Create recipe" }));
+        await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+        expect(onSubmit.mock.calls[0][0]).toMatchObject({
+            recipeId: "isaacsim-lab",
+            duplicateOf: "isaacsim",
+            launchInstanceTypes: ["g5.2xlarge", "g6e.xlarge"],
+        });
     });
 
     it("opens a config recipe with several build instance types read-only", () => {

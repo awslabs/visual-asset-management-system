@@ -78,11 +78,13 @@ def register(
         `architecture` (the image's CPU architecture as EDH reports it, such as `x86_64` or `arm64`, or
         null when EDH reports none), `rootSize`, `description` and `category`: `amiRecipe` for an image
         an AMI recipe build registered, which also carries `recipeId`, `recipeDisplayName` and
-        `recipeVersion` (the build version), and `baseline` for every other image. Recipe images are
-        listed first, then the baseline images, each group sorted by name. Use an item's `imageId` as
-        `image_id` and its `osFamily` as `os_family` for create_edh_workstation, and choose its
-        `instance_type` by the image's `architecture` (see list_edh_catalog_instance_types). Not
-        paginated."""
+        `recipeVersion` (the build version), and `baseline` for every other image. A recipe image whose
+        recipe lists them also carries `launchInstanceTypes`: the instance types the image's recipe
+        offers its desktops, in the recipe's order; the field is absent for every other image. Recipe
+        images are listed first, then the baseline images, each group sorted by name. Use an item's
+        `imageId` as `image_id` and its `osFamily` as `os_family` for create_edh_workstation, and
+        choose its `instance_type` by the image's `architecture` and `launchInstanceTypes` (see
+        list_edh_catalog_instance_types). Not paginated."""
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
         return client.api.list_edh_catalog_images()
 
@@ -95,7 +97,8 @@ def register(
         when one is configured. `architectures` names the profile's architecture groups that list the
         type, in EDH's order, and is `[]` when the profile does not group its types. A type runs an
         image when the image's `architecture` is null, the type's `architectures` is empty, or it
-        contains the image's architecture; pass only such a type to `create_edh_workstation`, as
+        contains the image's architecture, and an image that carries `launchInstanceTypes` is offered
+        only the types it lists; pass only such a type to `create_edh_workstation`, as
         `instance_type`. Answers 502 `EDH virtual desktop profile is unavailable` when EDH lists no
         desktop profile with the deployment's configured id. Not paginated."""
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
@@ -301,8 +304,9 @@ def register(
             only when the admin lease policy is enabled and not forced, and is refused (400) while
             leases are disabled. Refused (400) `instanceType does not match the image's architecture`
             when the image's profile lists the type only under architectures of another family than the
-            image's (`x86_64` and `i386` are one family), and refused (403) for a session authenticated
-            with a VAMS API key.
+            image's (`x86_64` and `i386` are one family), refused (400) `instanceType is not offered for
+            this image` when the image's recipe lists `launchInstanceTypes` that leave the type out, and
+            refused (403) for a session authenticated with a VAMS API key.
 
             This starts real GPU compute and incurs cost until the workstation is stopped or deleted.
             Confirm with the user before calling it, and keep it out of `autoApprove`.
@@ -404,8 +408,11 @@ def register(
             CLI's recipe file: `recipeId`, `displayName`, `kind` (vdi|simulation), `osFamily`, `baseOs`
             (vdi only), `architecture`, `parentImage`, `buildInstanceType` (one instance type, or a list
             Image Builder chooses among by availability), `rootSizeGb`, `stackName`, `profileId`,
-            `components`, and optional `parameters`, `keepVersions`, `recipeRevision`, `description` and
-            `enabled`. Components are inline only — each `{arn}` or `{name, data}`; the CLI's `{file}`
+            `components`, and optional `launchInstanceTypes` (1-64 distinct instance types a
+            desktop of the recipe's image may launch on; absent, null or empty offers every type the
+            deployment allows; outside the content hash, so changing it starts no build), `parameters`,
+            `keepVersions`, `recipeRevision`, `description` and `enabled`. Components are inline only —
+            each `{arn}` or `{name, data}`; the CLI's `{file}`
             form is not read here. A recipe declaring `assets`, a `recipeId` already in use, a
             `stackName` another recipe uses, or a component document naming an undeclared placeholder
             or longer than 16000 characters once its placeholders are resolved is refused (409). A
@@ -445,7 +452,8 @@ def register(
         ) -> Dict[str, Any]:
             """ADMIN: duplicate an EDH AMI recipe, `config` (shipped) or `admin`, into a new `admin`
             recipe `recipe_id` that update_edh_ami_recipe can then change. Reads `source_recipe_id` and
-            creates the copy with its definition and `duplicateOf`; the service copies the source's
+            creates the copy with its definition, its `launchInstanceTypes` included, and `duplicateOf`;
+            the service copies the source's
             bundled files (`assets` and `assetPrefix`), which the copy cannot change, and records
             `duplicatedFrom`. `display_name` defaults to the source's `displayName` plus ` (copy)`,
             `stack_name` to its `stackName` plus ` Copy`, and `keep_versions`, the number of AMIs

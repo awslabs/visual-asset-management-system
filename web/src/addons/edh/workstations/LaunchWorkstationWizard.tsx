@@ -76,14 +76,16 @@ const STEP_FIELDS: Record<LaunchStep, LaunchField[]> = {
 
 /**
  * Every failing field of the form; the lease policy bounds an expiry the user may choose,
- * `rootSizeMin` is the chosen image's root disk floor (see `rootSizeFloor`), and
- * `instanceTypeRunsImage` is false when the chosen type does not run the chosen image.
+ * `rootSizeMin` is the chosen image's root disk floor (see `rootSizeFloor`),
+ * `instanceTypeRunsImage` is false when the chosen type does not run the chosen image, and
+ * `instanceTypeOfferedForImage` is false when the chosen image's recipe does not offer it.
  */
 export function validateLaunchForm(
     form: LaunchForm,
     policy?: CatalogLeasePolicy,
     rootSizeMin = ROOT_SIZE_GB_MIN,
-    instanceTypeRunsImage?: boolean
+    instanceTypeRunsImage?: boolean,
+    instanceTypeOfferedForImage?: boolean
 ): LaunchFieldErrors {
     const errors: LaunchFieldErrors = {};
     if (!form.imageId) {
@@ -97,6 +99,8 @@ export function validateLaunchForm(
         errors.instanceType = "Choose an instance type.";
     } else if (instanceTypeRunsImage === false) {
         errors.instanceType = "Choose an instance type that runs this image's architecture.";
+    } else if (instanceTypeOfferedForImage === false) {
+        errors.instanceType = "Choose an instance type that this image's recipe offers.";
     }
     if (
         !Number.isInteger(form.rootSizeGb) ||
@@ -125,9 +129,16 @@ export function validateLaunchStep(
     form: LaunchForm,
     policy?: CatalogLeasePolicy,
     rootSizeMin = ROOT_SIZE_GB_MIN,
-    instanceTypeRunsImage?: boolean
+    instanceTypeRunsImage?: boolean,
+    instanceTypeOfferedForImage?: boolean
 ): string[] {
-    const errors = validateLaunchForm(form, policy, rootSizeMin, instanceTypeRunsImage);
+    const errors = validateLaunchForm(
+        form,
+        policy,
+        rootSizeMin,
+        instanceTypeRunsImage,
+        instanceTypeOfferedForImage
+    );
     return STEP_FIELDS[step].flatMap((field) => (errors[field] ? [errors[field] as string] : []));
 }
 
@@ -169,6 +180,19 @@ export function instanceTypeRunsImage(
     const architecture = image?.architecture;
     const architectures = type.architectures ?? [];
     return !architecture || architectures.length === 0 || architectures.includes(architecture);
+}
+
+/**
+ * Whether the image's recipe offers an instance type: the image's `launchInstanceTypes` name it. An
+ * image that carries no list (a baseline image, or a recipe that lists none) offers every type, and
+ * the deployment's list and the architecture rule decide. The launch holds the type to the same list.
+ */
+export function instanceTypeOfferedForImage(
+    type: Pick<EdhInstanceType, "instanceType">,
+    image?: EdhCatalogImage | null
+): boolean {
+    const offered = image?.launchInstanceTypes;
+    return !offered || offered.length === 0 || offered.includes(type.instanceType);
 }
 
 const defaultGenerateBootstrapId = () => crypto.randomUUID();
@@ -316,17 +340,36 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
     const policy = leasePolicy.data;
     const selectedImage = imageList.find((image) => image.imageId === form.imageId);
     const imageArchitecture = selectedImage?.architecture || null;
-    const offeredInstanceTypes = instanceTypeList.filter((t) =>
-        instanceTypeRunsImage(t, selectedImage)
+    const recipeNarrowsTypes = (selectedImage?.launchInstanceTypes?.length ?? 0) > 0;
+    const offeredInstanceTypes = instanceTypeList.filter(
+        (t) =>
+            instanceTypeRunsImage(t, selectedImage) && instanceTypeOfferedForImage(t, selectedImage)
     );
-    // A type the loaded list does not hold is left to the launch to decide.
+    // A type the loaded list does not hold is left to the launch to decide on the architecture; the
+    // recipe's list names types by name, so it is checked whatever the loaded list holds.
     const chosenInstanceType = instanceTypeList.find((t) => t.instanceType === form.instanceType);
     const chosenTypeRunsImage =
         !chosenInstanceType || instanceTypeRunsImage(chosenInstanceType, selectedImage);
+    const chosenTypeOffered =
+        !form.instanceType ||
+        instanceTypeOfferedForImage({ instanceType: form.instanceType }, selectedImage);
     const rootSizeMin = rootSizeFloor(selectedImage);
     const stepIndex = STEPS.findIndex((s) => s.id === step);
-    const fieldErrors = validateLaunchForm(form, policy, rootSizeMin, chosenTypeRunsImage);
-    const stepErrors = validateLaunchStep(step, form, policy, rootSizeMin, chosenTypeRunsImage);
+    const fieldErrors = validateLaunchForm(
+        form,
+        policy,
+        rootSizeMin,
+        chosenTypeRunsImage,
+        chosenTypeOffered
+    );
+    const stepErrors = validateLaunchStep(
+        step,
+        form,
+        policy,
+        rootSizeMin,
+        chosenTypeRunsImage,
+        chosenTypeOffered
+    );
     const shownError = (field: LaunchField) => (touched[field] ? fieldErrors[field] : undefined);
     const touch = (field: LaunchField) => setTouched((prev) => ({ ...prev, [field]: true }));
 
@@ -337,13 +380,16 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
             const ownName =
                 prev.name.trim() !== "" &&
                 (!previous || prev.name !== defaultWorkstationName(previous));
-            // A chosen type the new image does not run is cleared; one it runs is kept.
+            // A chosen type the new image does not run, or whose recipe does not offer it, is
+            // cleared; one it runs and offers is kept.
             const chosen = instanceTypeList.find((t) => t.instanceType === prev.instanceType);
+            const keep =
+                !(chosen && !instanceTypeRunsImage(chosen, image)) &&
+                instanceTypeOfferedForImage({ instanceType: prev.instanceType }, image);
             return {
                 ...prev,
                 imageId: image.imageId,
-                instanceType:
-                    chosen && !instanceTypeRunsImage(chosen, image) ? "" : prev.instanceType,
+                instanceType: keep ? prev.instanceType : "",
                 rootSizeGb: initialRootSize(image),
                 name: ownName ? prev.name : defaultWorkstationName(image),
             };
@@ -551,8 +597,12 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
                         ))}
                     </select>
                     <p id={instanceTypeHintId} className="mt-1 text-sm text-text-secondary">
-                        {imageArchitecture
+                        {imageArchitecture && recipeNarrowsTypes
+                            ? `The instance types this deployment allows that run the image's architecture (${imageArchitecture}) and that its recipe offers.`
+                            : imageArchitecture
                             ? `The instance types this deployment allows that run the image's architecture (${imageArchitecture}).`
+                            : recipeNarrowsTypes
+                            ? "The instance types this deployment allows that the image's recipe offers."
                             : "The instance types this deployment allows for the desktop profile."}{" "}
                         Larger types carry more vCPUs and GPU memory and cost more while the
                         workstation runs.
@@ -576,7 +626,9 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
                         )}
                     {instanceTypeList.length > 0 && offeredInstanceTypes.length === 0 && (
                         <p className="mt-1 text-sm text-text-secondary">
-                            {`No instance type in this deployment runs this image's architecture (${imageArchitecture}). Choose another image or ask an administrator.`}
+                            {recipeNarrowsTypes
+                                ? "No instance type this deployment allows is offered for this image. Choose another image or ask an administrator."
+                                : `No instance type in this deployment runs this image's architecture (${imageArchitecture}). Choose another image or ask an administrator.`}
                         </p>
                     )}
                 </div>

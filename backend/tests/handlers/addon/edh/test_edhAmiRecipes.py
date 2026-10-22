@@ -179,6 +179,50 @@ class TestSeeding:
 
 
 @pytest.mark.unit
+class TestLaunchInstanceTypes:
+    """A recipe's launch instance types are stored on its row, seeded from recipe.json and written by an
+    admin create or update, and sit outside the content hash: changing them never provokes a build."""
+    GPU_TYPES = ["g5.2xlarge", "g6e.xlarge"]
+
+    def test_a_seeded_manifest_stores_the_list_and_a_changed_list_is_saved_unchanged(self, world):
+        row, outcome = recipes.upsert_config_recipe({**RECIPE_BODY, "launchInstanceTypes": self.GPU_TYPES},
+                                                    build_on_deploy=False)
+        assert outcome == "changed" and row["launchInstanceTypes"] == self.GPU_TYPES
+        plain_hash = recipes.recipe_item(AmiRecipeRequestModel(**RECIPE_BODY), source=store.SOURCE_CONFIG,
+                                         user_id="deploy")["contentHash"]
+        assert row["contentHash"] == plain_hash
+
+        narrowed, narrowed_outcome = recipes.upsert_config_recipe(
+            {**RECIPE_BODY, "launchInstanceTypes": ["g6e.xlarge"]}, build_on_deploy=False)
+        assert narrowed_outcome == "unchanged" and narrowed["contentHash"] == plain_hash
+        assert store.get_recipe("al2023-desktop")["launchInstanceTypes"] == ["g6e.xlarge"]
+
+    @pytest.mark.parametrize("cleared", [{}, {"launchInstanceTypes": None}, {"launchInstanceTypes": []}],
+                             ids=["absent", "null", "empty"])
+    def test_a_manifest_without_a_list_leaves_none_on_the_row(self, world, cleared):
+        recipes.upsert_config_recipe({**RECIPE_BODY, "launchInstanceTypes": self.GPU_TYPES}, build_on_deploy=False)
+
+        row, outcome = recipes.upsert_config_recipe({**RECIPE_BODY, **cleared}, build_on_deploy=False)
+
+        assert outcome == "unchanged" and "launchInstanceTypes" not in row
+        assert "launchInstanceTypes" not in store.get_recipe("al2023-desktop")
+
+    def test_an_admin_create_stores_the_list_and_an_update_replaces_or_clears_it(self, world):
+        created = admin_recipe(launchInstanceTypes=self.GPU_TYPES)
+        assert created["launchInstanceTypes"] == self.GPU_TYPES
+
+        replaced = recipes.update_admin_recipe(
+            created, AmiRecipeRequestModel(**{**RECIPE_BODY, "launchInstanceTypes": ["g6e.xlarge"]}), "dave")
+        assert replaced["launchInstanceTypes"] == ["g6e.xlarge"]
+        assert replaced["contentHash"] == created["contentHash"]
+
+        cleared = recipes.update_admin_recipe(replaced, AmiRecipeRequestModel(**RECIPE_BODY), "dave")
+        assert "launchInstanceTypes" not in cleared
+        assert "launchInstanceTypes" not in store.get_recipe("al2023-desktop")
+        assert cleared["contentHash"] == created["contentHash"]
+
+
+@pytest.mark.unit
 class TestRecipeAssets:
     ASSET_MANIFEST = {**RECIPE_BODY, "recipeId": "isaacsim-test",
                       "assets": [{"id": "vamscli", "repoPath": "tools/VamsCLI"}],

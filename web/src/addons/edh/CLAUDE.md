@@ -27,8 +27,9 @@ web/src/addons/edh/
                   #   path; Remaining column and Renew lease action driven by useEdhCatalogLease and labels.ts leaseRemaining)
                   #   simulationsTab.ts (the page's route and the Simulations route beneath it)
                   #   LaunchWorkstationWizard.tsx (optional `Expires in (hours)` field while the lease policy is enabled and not
-                  #   forced; offers only the instance types that run the chosen image's `architecture` by the catalog rule, clears
-                  #   an incompatible type when the image changes, and shows the architecture on the image card and in Review)
+                  #   forced; offers only the instance types that run the chosen image's `architecture` by the catalog rule and that
+                  #   its `launchInstanceTypes` names when it carries one, clears a type the image chosen next does not run or
+                  #   offer, and shows the architecture on the image card and in Review)
                   #   ConnectLink.tsx (click-driven: opens the tab, then requests the URL) WindowsSignInDialog.tsx (the owner's
                   #   Windows user name and masked password, fetched on open through a non-cached mutation and reset on close;
                   #   opened from the row's Show Windows password action)

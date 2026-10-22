@@ -99,6 +99,11 @@ export interface EdhCatalogImage {
     recipeId?: string;
     recipeDisplayName?: string;
     recipeVersion?: number;
+    /**
+     * The instance types the image's recipe offers its desktops, in the recipe's order; present only on
+     * an `amiRecipe` image whose recipe lists any. Absent means no restriction of the recipe's own.
+     */
+    launchInstanceTypes?: string[];
 }
 
 export interface EdhInstanceType {
@@ -213,6 +218,11 @@ export interface EdhAmiRecipeRequest {
     parentImage: string;
     /** One EC2 instance type, or a list Image Builder chooses among by availability. */
     buildInstanceType: string | string[];
+    /**
+     * The instance types a desktop of the recipe's image may launch on; absent, null or empty is no
+     * restriction of the recipe's own. Outside the content hash, so it never provokes a build.
+     */
+    launchInstanceTypes?: string[] | null;
     rootSizeGb: number;
     stackName: string;
     profileId: number;

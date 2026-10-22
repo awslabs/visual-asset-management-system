@@ -1,6 +1,6 @@
 # VAMS Connector for Isaac Sim (EXPERIMENTAL)
 
-[![Isaac Sim](https://img.shields.io/badge/Isaac%20Sim-5.1+-green.svg)](https://developer.nvidia.com/isaac-sim)
+[![Isaac Sim](https://img.shields.io/badge/Isaac%20Sim-5.1%20%7C%206.x-green.svg)](https://developer.nvidia.com/isaac-sim)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/Status-Experimental-orange.svg)]()
@@ -29,6 +29,13 @@ An [Omniverse Kit](https://docs.omniverse.nvidia.com/kit/docs/kit-manual/latest/
 
 A `.usd`, `.usda` or `.usdc` layer, a URDF file and a MJCF file name other files of the asset by relative path (sublayers, references, textures, meshes), so opening or importing one downloads the whole asset, laid out as it is in VAMS, into a new private temporary directory. The status line reports how many of the asset's other files did not download, and a requested file that did not download with the reason the download gave, for example `Reference error: /robot.usd did not download: <error>`. A `.usdz` package carries its dependencies and is downloaded alone.
 
+URDF and MJCF import work on Isaac Sim 5.1 and on Isaac Sim 6.x (6.0, 6.1 and 6.2; the EDH Workstations Isaac Sim desktop ships 6.2.0). The connector uses whichever importer API the running Isaac Sim provides. On 6.x the importers convert a file into a USD file of their own instead of writing into the open stage: the connector has them write it to a new private temporary directory (`vams_urdf_usd_*` or `vams_mjcf_usd_*`), never next to the downloaded file, and adds that file to the current stage as a reference, at the same prim as on 5.1. The prims under it follow the 6.x importers' own layout. The directory is kept, since the stage refers to it, so a stage saved with the robot resolves only while it is there; **Export & Upload** flattens the robot into the export, and counts a file path the robot names in that directory among the paths that resolve only on this machine. On 6.x:
+
+-   `fix_base` is passed as fixed or mobile, never left to the file, and `fix_base=False` also removes a fixed joint to the world that the file itself declares
+-   The importers have no `import_inertia_tensor` option, and the MJCF importer has no `merge_fixed_joints`; a call that sets one to other than its default imports without it and logs a warning
+-   The MJCF importer reads only `.xml` files, so a `.mjcf` file is imported from a temporary `.xml` copy beside it, removed again afterwards
+-   An import that fails leaves the stage as it was, and Isaac Sim's log carries the importer's reason
+
 ### Scene Export & Upload
 
 -   **Scene Export**: Export the current Isaac Sim USD stage to a local file
@@ -51,7 +58,7 @@ The Execute view offers **Run** only for the files that pass the input-file filt
 
 ### Prerequisites
 
--   **NVIDIA Isaac Sim 5.1+**
+-   **NVIDIA Isaac Sim 5.1 or 6.x** (6.0, 6.1, 6.2; the EDH Workstations Isaac Sim desktop ships 6.2.0)
 -   **Python 3.10+** (included with Isaac Sim)
 -   **VAMS CLI** installed and configured (see below)
 
@@ -239,7 +246,7 @@ Once enabled, the extension opens a **VAMS Connector** window with:
 3.  **Assets** - Lists assets in the selected database, click to select
 4.  **Files** - Lists files in the selected asset; select a file to show the actions for its type:
     -   **USD files** (`.usd`, `.usda`, `.usdc`, `.usdz`): **Open Stage (replace entire scene)** downloads the file and opens it as a new stage. **Add USD Reference (add to current scene)** adds it as a reference under `/World/<name>`, the file name without its extension and with each character other than a letter, digit or underscore replaced by `_`, or under `<name>_1`, `<name>_2`, ... when that prim exists, so each add gets a prim of its own; the status line names the prim used. The reference brings in the file's default prim, or its one root prim when it has none, counting the root prims of the layers it sublayers; a file with neither is refused, the stage is left as it was, and the status line gives the reason (`Reference error: <file> has no default prim (<n> root prims), so a reference would bring in nothing. Open it with Open Stage, or set a default prim on the file.`)
-    -   **URDF files** (`.urdf`): **Import URDF (add to current scene)** downloads the robot description and imports it into the current stage, under the prim the stage's default prim names, or at the stage root when it names none, and under `<name>_0` when `<name>` is taken there; the stage's default prim is left as it was, and the status line names the prim used (`Imported URDF as <prim>`) or reads `URDF import failed`
+    -   **URDF files** (`.urdf`): **Import URDF (add to current scene)** downloads the robot description and imports it into the current stage, under the prim the stage's default prim names, or at the stage root when it names none, and under `<name>_0` when `<name>` is taken there (on Isaac Sim 6.x `<name>` is made from the file name as for a USD reference, followed by `<name>_1`, `<name>_2`, ...); the stage's default prim is left as it was, and the status line names the prim used (`Imported URDF as <prim>`) or reads `URDF import failed`
     -   **MJCF files** (`.mjcf`, `.xml`): **Import MJCF (add to current scene)** downloads the MuJoCo model and imports it into the current stage under `/World/<name>`, with `<name>` made from the file name as for a USD reference, or under `<name>_1`, `<name>_2`, ... when that prim exists; the stage's default prim is left as it was, and the status line names the prim used (`Imported MJCF <file> as <prim>`). A file that is not well-formed XML is refused before the importer runs (`MJCF error: <file> is not well-formed XML: <parser message>`), and an import that brings in nothing from the file is removed again, together with a `/World` it created, and the status line reads `MJCF import failed: <file>`
     -   **Any file**: **Download Only (save to disk)** saves it to `~/vams_downloads`, under its path within the asset
 5.  **Workflows** - Lists the enabled workflows of `GLOBAL` and the selected database, and the asset's execution history, where each execution's input file is shown by its path within the asset and a value too long for its column is shortened, with the workflow ID and the file's full key in tooltips. Choosing a workflow opens its Execute view: **Run on Entire Asset** where the workflow takes a whole asset, **Run** for each file the workflow and its pipelines accept, and a template choice for a pipeline that requires one (see [Workflow Execution](#workflow-execution))
@@ -366,7 +373,7 @@ connector.add_reference_to_stage(omni.usd.get_context().get_stage(), "/World/Rob
 
 #### URDF & MJCF Import
 
-Requires the `isaacsim.asset.importer.urdf` and/or `isaacsim.asset.importer.mjcf` extensions to be enabled in Isaac Sim.
+Requires the `isaacsim.asset.importer.urdf` and/or `isaacsim.asset.importer.mjcf` extensions to be enabled in Isaac Sim. The same calls work on Isaac Sim 5.1 and 6.x; see [Asset Download & Import](#asset-download--import) for what differs on 6.x.
 
 ```python
 # Import a URDF robot description into the current stage
@@ -384,7 +391,8 @@ prim_path = connector.download_and_import_mjcf(
 
 # Import a URDF or MJCF file already on disk; both return the prim path, or None. import_mjcf_file
 # raises MalformedXmlError (a VamsCliError, imported from vams.connector.isaacsim.connector) for a
-# file that is not well-formed XML
+# file that is not well-formed XML. On Isaac Sim 6.x, import_inertia_tensor (and, for MJCF,
+# merge_fixed_joints) have no effect, and fix_base=False makes the robot mobile
 prim_path = connector.import_urdf_file("/tmp/robot/robot.urdf", fix_base=True)
 prim_path = connector.import_mjcf_file("/tmp/ant/ant.xml")
 ```
@@ -475,9 +483,9 @@ UI button handlers are deferred via `omni.kit.app`'s update event stream to avoi
 | **omni.usd import errors**          | Stage operations (`export_and_upload_scene`, etc.) must be called from within Isaac Sim                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | **SSL/S3 download errors**          | See [SSL Certificate Bundle](#ssl-certificate-bundle-optional) in the Ubuntu setup section                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | **Viewport empty after load**       | Add a light (Create > Light > Dome Light) and press F to frame the camera                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| **URDF/MJCF import fails**          | Ensure `isaacsim.asset.importer.urdf` or `isaacsim.asset.importer.mjcf` is enabled in Isaac Sim                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **URDF/MJCF import fails**          | Ensure `isaacsim.asset.importer.urdf` or `isaacsim.asset.importer.mjcf` is enabled in Isaac Sim. On Isaac Sim 6.x, Isaac Sim's log names the importer's reason (`URDF import of <file> failed: <reason>`, and likewise for MJCF)                                                                                                                                                                                                                                                                                                      |
 | **"is not well-formed XML" status** | The MJCF file cannot be parsed as XML, so the importer did not run and the stage is unchanged. Correct the file at the line and column the parser message gives, and upload it again                                                                                                                                                                                                                                                                                                                                                  |
-| **"MJCF import failed" status**     | The MJCF importer brought in nothing from the file, for example from an `.xml` file that is not a MuJoCo model, and the prim the import created was removed again. Isaac Sim's log carries the importer's own messages                                                                                                                                                                                                                                                                                                                |
+| **"MJCF import failed" status**     | The MJCF importer brought in nothing from the file, for example from an `.xml` file that is not a MuJoCo model, and the prim the import created was removed again; on Isaac Sim 6.x, the importer failed or wrote nothing a reference could bring in, and the stage is unchanged. Isaac Sim's log carries the importer's own messages                                                                                                                                                                                                 |
 | **UI freezes on button click**      | This should not happen with the deferred execution pattern; if it does, file an issue                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 ---

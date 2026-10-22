@@ -136,6 +136,8 @@ EDH_FIELD_PROFILE_INSTANCE_TYPES = "allowed_instance_types"
 CATEGORY_AMI_RECIPE = "amiRecipe"
 CATEGORY_BASELINE = "baseline"
 CATEGORY_ORDER = (CATEGORY_AMI_RECIPE, CATEGORY_BASELINE)
+# The recipe field, and the catalog item field, naming the instance types a recipe image is offered on.
+RECIPE_FIELD_LAUNCH_INSTANCE_TYPES = "launchInstanceTypes"
 
 # The Windows sign-in of a desktop as EDH lists it: the account's password, a credential this handler alone
 # reads, and the query field of the connection string that names the account.
@@ -482,27 +484,40 @@ def _image_item(stack):
     }
 
 
-def _recipe_builds_by_stack():
+def _recipe_builds_by_stack(consequence):
     """The AVAILABLE desktop AMI recipe builds keyed by the EDH dcv stack id they registered; none when
-    the recipe table is absent or cannot be read, so the catalog is still served, every image as a
-    baseline. While AMI builds are off the Lambda holds no grant on the table, which is not read."""
+    the recipe table is absent or cannot be read, which is logged with ``consequence`` -- what the caller
+    goes on to do without them -- so the catalog is still served, every image as a baseline, and a launch
+    is not refused on a recipe it could not read. While AMI builds are off the Lambda holds no grant on the
+    table, which is not read."""
     if not ami_builds_enabled:
         return {}
     try:
         return recipe_store.available_builds_by_stack_id(IMAGE_KIND_VDI)
     except Exception as err:
         code = err.response.get("Error", {}).get("Code") if isinstance(err, ClientError) else None
-        logger.warning(f"AMI recipe builds not read; catalog images listed as baseline ({code or type(err).__name__})")
+        logger.warning(f"AMI recipe builds not read; {consequence} ({code or type(err).__name__})")
         return {}
 
 
+def _recipe_launch_types(recipe):
+    """The instance types a recipe offers its desktops, in its order; None when it lists none."""
+    launch_types = recipe.get(RECIPE_FIELD_LAUNCH_INSTANCE_TYPES)
+    return list(launch_types) if isinstance(launch_types, list) and launch_types else None
+
+
 def _categorized(item, recipe_build):
-    """The catalog item with its category; a recipe image also names its recipe and build version."""
+    """The catalog item with its category; a recipe image also names its recipe and build version, and the
+    instance types its recipe offers when the recipe lists any."""
     if recipe_build is None:
         return {**item, "category": CATEGORY_BASELINE}
     recipe, build = recipe_build
-    return {**item, "category": CATEGORY_AMI_RECIPE, "recipeId": recipe["recipeId"],
-            "recipeDisplayName": recipe.get("displayName"), "recipeVersion": int(build["version"])}
+    categorized = {**item, "category": CATEGORY_AMI_RECIPE, "recipeId": recipe["recipeId"],
+                   "recipeDisplayName": recipe.get("displayName"), "recipeVersion": int(build["version"])}
+    launch_types = _recipe_launch_types(recipe)
+    if launch_types is not None:
+        categorized[RECIPE_FIELD_LAUNCH_INSTANCE_TYPES] = launch_types
+    return categorized
 
 
 def list_catalog_images(event):
@@ -520,7 +535,7 @@ def list_catalog_images(event):
         # Appends only on an allow, so an absent enforcer yields an empty catalog, never an open one.
         if enforcer and enforcer.enforce(_image_auth_object(item["imageId"], item["osFamily"]), "GET"):
             items.append(item)
-    recipe_builds = _recipe_builds_by_stack() if items else {}
+    recipe_builds = _recipe_builds_by_stack("catalog images listed as baseline") if items else {}
     items = [_categorized(item, recipe_builds.get(item["imageId"])) for item in items]
     # Recipe images first, then the baseline images, each group by name.
     items.sort(key=lambda item: (CATEGORY_ORDER.index(item["category"]), _natural_key(item["name"])))
@@ -736,6 +751,18 @@ def _instance_type_runs_image(stack, instance_type):
     return any(ARCHITECTURE_FAMILIES.get(group, group) == family for group in groups)
 
 
+def _instance_type_offered_for_image(image_id, instance_type):
+    """False only when the AVAILABLE recipe build that registered the image belongs to a recipe whose
+    launch instance types leave ``instance_type`` out. True for an image no recipe build registered, a
+    recipe that lists none, and a recipe read that fails, which is logged: the catalog lists the image as
+    a baseline on the same failure, and the deployment's own checks and EDH's still apply."""
+    recipe_build = _recipe_builds_by_stack("launch instance type not checked against the image's recipe").get(image_id)
+    if recipe_build is None:
+        return True
+    launch_types = _recipe_launch_types(recipe_build[0])
+    return launch_types is None or instance_type in launch_types
+
+
 def create_workstation(event):
     if claims_and_roles.get('authMethod') == AUTH_METHOD_API_KEY:
         return authorization_error(
@@ -768,6 +795,9 @@ def create_workstation(event):
     if not _instance_type_runs_image(stack, request.instanceType):
         return validation_error(
             body={'message': "instanceType does not match the image's architecture"}, event=event)
+    # An image a recipe build registered launches only on the types its recipe offers, when it lists any.
+    if not _instance_type_offered_for_image(request.imageId, request.instanceType):
+        return validation_error(body={'message': 'instanceType is not offered for this image'}, event=event)
     # EDH raises an image's registered root size to its AMI's root volume, and a smaller disk cannot launch it.
     root_floor = _stack_root_size(stack)
     if root_floor is not None and request.rootSizeGb < root_floor:

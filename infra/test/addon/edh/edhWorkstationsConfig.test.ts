@@ -1848,6 +1848,36 @@ describe("amiBuilds and amiRecipes", () => {
         }
     });
 
+    test("launchInstanceTypes is absent, null, empty, or a list of up to 64 distinct types", () => {
+        for (const unrestricted of [undefined, null, []]) {
+            expect(loadWithManifest({ launchInstanceTypes: unrestricted }).manifest.recipeId).toBe(
+                "al2023-desktop"
+            );
+        }
+        const gpuTypes = ["g6e.xlarge", "g5.2xlarge", `${"m".repeat(62)}.x`];
+        expect(
+            loadWithManifest({ launchInstanceTypes: gpuTypes }).manifest.launchInstanceTypes
+        ).toEqual(gpuTypes);
+        const atTheBound = Array.from({ length: 64 }, (_, n) => `g${n}.xlarge`);
+        expect(
+            loadWithManifest({ launchInstanceTypes: atTheBound }).manifest.launchInstanceTypes
+        ).toEqual(atTheBound);
+        for (const refused of [
+            "g5.2xlarge",
+            ["g5.2xlarge", "large"],
+            ["g5.2xlarge", "g5.2xlarge"],
+            Array.from({ length: 65 }, (_, n) => `g${n}.xlarge`),
+            ["g5.2xlarge", 5],
+            ["G5.2xlarge"],
+            ["g5.2xlarge", `${"m".repeat(63)}.x`],
+            { x86_64: ["g5.2xlarge"] },
+        ]) {
+            expect(() => loadWithManifest({ launchInstanceTypes: refused })).toThrow(
+                /launchInstanceTypes must be a list of 1-64 distinct family\.size instance types/
+            );
+        }
+    });
+
     test("a declared asset must be an existing directory under tools/", () => {
         expect(
             loadWithManifest({ assets: [{ id: "vamscli", repoPath: "tools/VamsCLI" }] }).assets

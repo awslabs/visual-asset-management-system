@@ -66,6 +66,7 @@ const PARENT =
 const INSTANCE_TYPE = /^[a-z0-9-]+\.[a-z0-9-]+$/;
 const INSTANCE_TYPE_MAX_LENGTH = 64;
 const MAX_BUILD_INSTANCE_TYPES = 8;
+const MAX_LAUNCH_INSTANCE_TYPES = 64;
 const ROOT_SIZE_GB_MIN = 10;
 const ROOT_SIZE_GB_MAX = 2048;
 const KEEP_VERSIONS_MIN = 1;
@@ -92,6 +93,8 @@ interface FormValues {
     architecture: string;
     parentImage: string;
     buildInstanceType: string;
+    /** The launch instance types as typed, separated by commas; empty restricts nothing. */
+    launchInstanceTypes: string;
     rootSizeGb: string;
     stackName: string;
     profileId: string;
@@ -113,6 +116,10 @@ const wholeNumberIn = (value: string, min: number, max: number) => {
 
 /** The build instance types the field holds: one, or several separated by commas. */
 const splitInstanceTypes = (text: string) => text.split(",").map((type) => type.trim());
+
+/** The launch instance types the field holds; an empty field holds none. */
+const splitLaunchInstanceTypes = (text: string) =>
+    text.trim() === "" ? [] : splitInstanceTypes(text);
 
 /** One message per failing field, in the wording shown under it. */
 export function validateAmiRecipe(values: FormValues): FieldErrors {
@@ -152,6 +159,16 @@ export function validateAmiRecipe(values: FormValues): FieldErrors {
         )
     ) {
         errors.buildInstanceType = `Enter an EC2 instance type, e.g. m7i.large, or up to ${MAX_BUILD_INSTANCE_TYPES} different ones separated by commas.`;
+    }
+    const launchTypes = splitLaunchInstanceTypes(values.launchInstanceTypes);
+    if (
+        launchTypes.length > MAX_LAUNCH_INSTANCE_TYPES ||
+        new Set(launchTypes).size !== launchTypes.length ||
+        !launchTypes.every(
+            (type) => type.length <= INSTANCE_TYPE_MAX_LENGTH && INSTANCE_TYPE.test(type)
+        )
+    ) {
+        errors.launchInstanceTypes = `Enter up to ${MAX_LAUNCH_INSTANCE_TYPES} different EC2 instance types separated by commas, e.g. g5.2xlarge, g6e.xlarge, or leave it empty.`;
     }
     if (!wholeNumberIn(values.rootSizeGb, ROOT_SIZE_GB_MIN, ROOT_SIZE_GB_MAX)) {
         errors.rootSizeGb = `Enter a whole number of GB between ${ROOT_SIZE_GB_MIN} and ${ROOT_SIZE_GB_MAX}.`;
@@ -249,6 +266,9 @@ const AmiRecipeFormDialog: React.FC<AmiRecipeFormDialogProps> = ({
         const stored = seed?.buildInstanceType ?? "";
         return Array.isArray(stored) ? stored.join(", ") : stored;
     });
+    const [launchInstanceTypes, setLaunchInstanceTypes] = useState(() =>
+        (seed?.launchInstanceTypes ?? []).join(", ")
+    );
     const [rootSizeGb, setRootSizeGb] = useState(String(seed?.rootSizeGb ?? 100));
     const [stackName, setStackName] = useState(
         source ? `${source.stackName} Copy` : initial?.stackName ?? ""
@@ -273,6 +293,7 @@ const AmiRecipeFormDialog: React.FC<AmiRecipeFormDialogProps> = ({
         architecture,
         parentImage,
         buildInstanceType,
+        launchInstanceTypes,
         rootSizeGb,
         stackName,
         profileId,
@@ -312,6 +333,7 @@ const AmiRecipeFormDialog: React.FC<AmiRecipeFormDialogProps> = ({
         setSubmitted(true);
         if (!valid || readOnly) return;
         const instanceTypes = splitInstanceTypes(buildInstanceType);
+        const launchTypes = splitLaunchInstanceTypes(launchInstanceTypes);
         const body: EdhAmiRecipeRequest = {
             recipeId: recipeId.trim(),
             displayName: displayName.trim(),
@@ -321,6 +343,8 @@ const AmiRecipeFormDialog: React.FC<AmiRecipeFormDialogProps> = ({
             architecture: architecture as EdhArchitecture,
             parentImage: parentImage.trim(),
             buildInstanceType: instanceTypes.length === 1 ? instanceTypes[0] : instanceTypes,
+            // Always a list; an empty field sends none, which the service stores as no restriction.
+            ...(launchTypes.length > 0 ? { launchInstanceTypes: launchTypes } : {}),
             rootSizeGb: Number(rootSizeGb),
             stackName: stackName.trim(),
             profileId: Number(profileId),
@@ -542,6 +566,25 @@ const AmiRecipeFormDialog: React.FC<AmiRecipeFormDialogProps> = ({
                                 placeholder="m7i.large"
                                 disabled={readOnly}
                                 aria-invalid={!!shown.buildInstanceType}
+                                aria-describedby={describedBy}
+                            />
+                        )}
+                    </Field>
+                    <Field
+                        id={id("launchInstanceTypes")}
+                        label="Launch instance types"
+                        hint="The instance types a desktop of this recipe's image may launch on, separated by commas. Leave it empty to offer every type the deployment allows."
+                        error={shown.launchInstanceTypes}
+                    >
+                        {(describedBy) => (
+                            <input
+                                id={id("launchInstanceTypes")}
+                                className={`${control} w-full`}
+                                value={launchInstanceTypes}
+                                onChange={(e) => setLaunchInstanceTypes(e.target.value)}
+                                placeholder="g5.2xlarge, g6e.xlarge"
+                                disabled={readOnly}
+                                aria-invalid={!!shown.launchInstanceTypes}
                                 aria-describedby={describedBy}
                             />
                         )}

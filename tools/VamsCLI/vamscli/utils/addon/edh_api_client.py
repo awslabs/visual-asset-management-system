@@ -57,8 +57,8 @@ _EDH_SESSION_ID = re.compile(r"[-_a-zA-Z0-9]{3,63}")
 # displayName and stackName, the service copies the source's bundled files (assets), and a copy starts
 # enabled.
 _EDH_AMI_RECIPE_COPIED_FIELDS = (
-    "kind", "osFamily", "baseOs", "architecture", "parentImage", "buildInstanceType", "rootSizeGb",
-    "profileId", "components", "parameters", "keepVersions", "recipeRevision", "description",
+    "kind", "osFamily", "baseOs", "architecture", "parentImage", "buildInstanceType", "launchInstanceTypes",
+    "rootSizeGb", "profileId", "components", "parameters", "keepVersions", "recipeRevision", "description",
 )
 
 

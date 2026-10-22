@@ -11,6 +11,7 @@ import LaunchWorkstationWizard, {
     ROOT_SIZE_GB_MAX,
     ROOT_SIZE_GB_MIN,
     defaultWorkstationName,
+    instanceTypeOfferedForImage,
     instanceTypeRunsImage,
     rootSizeFloor,
     validateLaunchForm,
@@ -40,6 +41,8 @@ const LEASE_BOUND_MESSAGE = "Expires in must be a whole number of hours from 1 t
 
 const ARCHITECTURE_MISMATCH_MESSAGE =
     "Choose an instance type that runs this image's architecture.";
+
+const NOT_OFFERED_MESSAGE = "Choose an instance type that this image's recipe offers.";
 
 const LARGER_TYPES_HINT =
     "Larger types carry more vCPUs and GPU memory and cost more while the workstation runs.";
@@ -206,6 +209,60 @@ describe("validateLaunchStep", () => {
             ARCHITECTURE_MISMATCH_MESSAGE,
         ]);
         expect(validateLaunchStep("image", form, undefined, undefined, false)).toEqual([]);
+    });
+
+    it("refuses a chosen instance type the image's recipe does not offer, after the architecture", () => {
+        expect(validateLaunchForm(form, undefined, undefined, true, false)).toEqual({
+            instanceType: NOT_OFFERED_MESSAGE,
+        });
+        expect(validateLaunchForm(form, undefined, undefined, true, true)).toEqual({});
+        expect(validateLaunchForm(form, undefined, undefined, undefined, undefined)).toEqual({});
+        // The architecture is named first, and asking for a type comes before either.
+        expect(validateLaunchForm(form, undefined, undefined, false, false)).toEqual({
+            instanceType: ARCHITECTURE_MISMATCH_MESSAGE,
+        });
+        expect(
+            validateLaunchForm({ ...form, instanceType: "" }, undefined, undefined, true, false)
+        ).toEqual({ instanceType: "Choose an instance type." });
+        expect(validateLaunchStep("size", form, undefined, undefined, true, false)).toEqual([
+            NOT_OFFERED_MESSAGE,
+        ]);
+        expect(validateLaunchStep("review", form, undefined, undefined, true, false)).toEqual([
+            NOT_OFFERED_MESSAGE,
+        ]);
+        expect(validateLaunchStep("image", form, undefined, undefined, true, false)).toEqual([]);
+    });
+});
+
+describe("instanceTypeOfferedForImage", () => {
+    const image = (fields: Partial<EdhCatalogImage> = {}): EdhCatalogImage => ({
+        imageId: "81",
+        name: "Isaac Sim desktop",
+        baseOs: "ubuntu2404",
+        osFamily: "linux",
+        rootSize: null,
+        description: null,
+        category: "amiRecipe",
+        ...fields,
+    });
+    const type = (instanceType: string): EdhInstanceType => ({ instanceType });
+
+    it("is true only for a type the image's recipe lists, when it lists any", () => {
+        const recipeImage = image({ launchInstanceTypes: ["g6e.xlarge", "g5.2xlarge"] });
+        expect(instanceTypeOfferedForImage(type("g5.2xlarge"), recipeImage)).toBe(true);
+        expect(instanceTypeOfferedForImage(type("g6e.xlarge"), recipeImage)).toBe(true);
+        expect(instanceTypeOfferedForImage(type("g5.xlarge"), recipeImage)).toBe(false);
+        expect(instanceTypeOfferedForImage(type("m7i.large"), recipeImage)).toBe(false);
+    });
+
+    it.each<[string, EdhCatalogImage | null | undefined]>([
+        ["an image without a list", image()],
+        ["an empty list", image({ launchInstanceTypes: [] })],
+        ["a baseline image", image({ category: "baseline" })],
+        ["no image", undefined],
+        ["a null image", null],
+    ])("is true for %s", (_case, chosen) => {
+        expect(instanceTypeOfferedForImage(type("m7i.large"), chosen)).toBe(true);
     });
 });
 
@@ -1188,5 +1245,233 @@ describe("LaunchWorkstationWizard by architecture", () => {
         });
         expect(Object.keys(mutateAsync.mock.calls[0][0])).not.toContain("architecture");
         expect(Object.keys(mutateAsync.mock.calls[0][0])).not.toContain("architectures");
+    });
+});
+
+describe("LaunchWorkstationWizard by recipe instance types", () => {
+    const RECIPE_IMAGES = [
+        {
+            imageId: "90",
+            name: "Isaac Sim desktop v3",
+            baseOs: "ubuntu2404",
+            osFamily: "linux",
+            rootSize: 150,
+            description: null,
+            category: "amiRecipe",
+            recipeId: "isaacsim",
+            recipeDisplayName: "NVIDIA Isaac Sim desktop",
+            recipeVersion: 3,
+            architecture: "x86_64",
+            // Out of order on purpose, and naming a type the deployment does not allow and an arm64 one.
+            launchInstanceTypes: [
+                "g6e.xlarge",
+                "g5.12xlarge",
+                "g5.2xlarge",
+                "p5.48xlarge",
+                "m7g.large",
+            ],
+        },
+        {
+            imageId: "91",
+            name: "AL2023 desktop v5",
+            baseOs: "amazonlinux2023",
+            osFamily: "linux",
+            rootSize: 60,
+            description: null,
+            category: "amiRecipe",
+            recipeId: "al2023-desktop",
+            recipeDisplayName: "Amazon Linux 2023 desktop",
+            recipeVersion: 5,
+            architecture: "x86_64",
+        },
+        {
+            imageId: "92",
+            name: "Legacy desktop",
+            baseOs: "ubuntu2204",
+            osFamily: "linux",
+            rootSize: 100,
+            description: null,
+            category: "baseline",
+            architecture: null,
+        },
+    ];
+
+    const DEPLOYMENT_TYPES = [
+        { instanceType: "m7i.xlarge", architectures: ["x86_64"] },
+        { instanceType: "g5.12xlarge", architectures: ["x86_64"] },
+        { instanceType: "m7g.large", architectures: ["arm64"] },
+        { instanceType: "g6e.xlarge", architectures: ["x86_64"] },
+        { instanceType: "g5.2xlarge", architectures: ["x86_64"] },
+    ];
+
+    const ISAAC_OFFERED = ["", "g5.2xlarge", "g5.12xlarge", "g6e.xlarge"];
+    const RECIPE_HINT = `The instance types this deployment allows that run the image's architecture (x86_64) and that its recipe offers. ${LARGER_TYPES_HINT}`;
+    const RECIPE_EMPTY_MESSAGE =
+        "No instance type this deployment allows is offered for this image. Choose another image or ask an administrator.";
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        (queries.useEdhCatalogLease as jest.Mock).mockReturnValue(lease());
+    });
+
+    const wizard = () => (
+        <LaunchWorkstationWizard
+            open={true}
+            onClose={jest.fn()}
+            generateBootstrapId={() => BOOTSTRAP_ID}
+        />
+    );
+
+    const mountRecipes = (
+        images: any[] = RECIPE_IMAGES,
+        instanceTypes: any[] = DEPLOYMENT_TYPES,
+        mutateAsync: jest.Mock = jest.fn()
+    ) => {
+        (queries.useEdhCatalogImages as jest.Mock).mockReturnValue(loaded(images));
+        (queries.useEdhInstanceTypes as jest.Mock).mockReturnValue(loaded(instanceTypes));
+        (queries.useWorkstationMutations as jest.Mock).mockReturnValue({
+            createWorkstation: { mutateAsync, isPending: false },
+        });
+        return render(wizard());
+    };
+
+    const sizeStepFor = async (user: ReturnType<typeof userEvent.setup>, name: string) => {
+        await user.click(screen.getByRole("radio", { name: new RegExp(`^${name}`) }));
+        await user.click(screen.getByRole("button", { name: "Next" }));
+    };
+
+    const back = (user: ReturnType<typeof userEvent.setup>) =>
+        user.click(screen.getByRole("button", { name: "Back" }));
+
+    const instanceTypeSelect = () => screen.getByLabelText("Instance type") as HTMLSelectElement;
+
+    const offeredTypes = () => Array.from(instanceTypeSelect().options).map((o) => o.value);
+
+    it("offers only the deployment's types the recipe lists and the architecture runs, in natural order", async () => {
+        const user = userEvent.setup();
+        mountRecipes();
+
+        await sizeStepFor(user, "Isaac Sim desktop");
+        expect(offeredTypes()).toEqual(ISAAC_OFFERED);
+
+        // A recipe without a list, and a baseline image, are offered what the architecture allows.
+        await back(user);
+        await sizeStepFor(user, "AL2023 desktop");
+        expect(offeredTypes()).toEqual([
+            "",
+            "g5.2xlarge",
+            "g5.12xlarge",
+            "g6e.xlarge",
+            "m7i.xlarge",
+        ]);
+        await back(user);
+        await sizeStepFor(user, "Legacy desktop");
+        expect(offeredTypes()).toEqual([
+            "",
+            "g5.2xlarge",
+            "g5.12xlarge",
+            "g6e.xlarge",
+            "m7g.large",
+            "m7i.xlarge",
+        ]);
+    });
+
+    it("clears a chosen type the newly chosen image's recipe does not offer, and keeps one it does", async () => {
+        const user = userEvent.setup();
+        mountRecipes();
+        await sizeStepFor(user, "AL2023 desktop");
+        await user.selectOptions(instanceTypeSelect(), "m7i.xlarge");
+        expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
+
+        await back(user);
+        await sizeStepFor(user, "Isaac Sim desktop");
+        expect(instanceTypeSelect()).toHaveValue("");
+        expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+        instanceTypeSelect().focus();
+        await user.tab();
+        expect(screen.getByText("Choose an instance type.")).toHaveClass("text-vams-error");
+        expect(screen.queryByText(NOT_OFFERED_MESSAGE)).not.toBeInTheDocument();
+
+        await user.selectOptions(instanceTypeSelect(), "g5.2xlarge");
+        await back(user);
+        await sizeStepFor(user, "AL2023 desktop");
+        expect(instanceTypeSelect()).toHaveValue("g5.2xlarge");
+        expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
+    });
+
+    it("clears a chosen type the recipe does not offer even when the loaded list no longer holds it", async () => {
+        const user = userEvent.setup();
+        const { rerender } = mountRecipes();
+        await sizeStepFor(user, "Legacy desktop");
+        await user.selectOptions(instanceTypeSelect(), "m7i.xlarge");
+        (queries.useEdhInstanceTypes as jest.Mock).mockReturnValue(
+            loaded(DEPLOYMENT_TYPES.filter((t) => t.instanceType !== "m7i.xlarge"))
+        );
+        rerender(wizard());
+
+        await back(user);
+        await sizeStepFor(user, "Isaac Sim desktop");
+        expect(instanceTypeSelect()).toHaveValue("");
+        expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+    });
+
+    it("refuses a chosen type once a catalog refresh shows the recipe no longer offers it", async () => {
+        const user = userEvent.setup();
+        const { rerender } = mountRecipes();
+        await sizeStepFor(user, "Isaac Sim desktop");
+        await user.selectOptions(instanceTypeSelect(), "g5.12xlarge");
+        expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
+
+        (queries.useEdhCatalogImages as jest.Mock).mockReturnValue(
+            loaded(
+                RECIPE_IMAGES.map((image) =>
+                    image.imageId === "90"
+                        ? { ...image, launchInstanceTypes: ["g6e.xlarge", "g5.2xlarge"] }
+                        : image
+                )
+            )
+        );
+        rerender(wizard());
+
+        expect(offeredTypes()).toEqual(["", "g5.2xlarge", "g6e.xlarge"]);
+        expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+        instanceTypeSelect().focus();
+        await user.tab();
+        expect(screen.getByText(NOT_OFFERED_MESSAGE)).toHaveClass("text-vams-error");
+    });
+
+    it("says the recipe narrows the list in the hint, and when nothing it offers is allowed", async () => {
+        const user = userEvent.setup();
+        const { unmount } = mountRecipes();
+        await sizeStepFor(user, "Isaac Sim desktop");
+        expect(instanceTypeSelect()).toHaveAccessibleDescription(RECIPE_HINT);
+        unmount();
+
+        mountRecipes(RECIPE_IMAGES, [{ instanceType: "m7i.xlarge", architectures: ["x86_64"] }]);
+        await sizeStepFor(user, "Isaac Sim desktop");
+        expect(offeredTypes()).toEqual([""]);
+        expect(screen.getByText(RECIPE_EMPTY_MESSAGE)).toBeInTheDocument();
+    });
+
+    it("launches on a type the recipe offers with the body it always sent", async () => {
+        const user = userEvent.setup();
+        const mutateAsync = jest
+            .fn()
+            .mockResolvedValue({ bootstrapId: BOOTSTRAP_ID, state: "CREATING" });
+        mountRecipes(RECIPE_IMAGES, DEPLOYMENT_TYPES, mutateAsync);
+        await sizeStepFor(user, "Isaac Sim desktop");
+        await user.selectOptions(instanceTypeSelect(), "g6e.xlarge");
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        await user.click(screen.getByRole("button", { name: "Launch" }));
+
+        await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+        expect(mutateAsync).toHaveBeenCalledWith({
+            bootstrapId: BOOTSTRAP_ID,
+            imageId: "90",
+            instanceType: "g6e.xlarge",
+            name: "Isaac Sim desktop v3",
+            rootSizeGb: 150,
+            osFamily: "linux",
+        });
     });
 });
