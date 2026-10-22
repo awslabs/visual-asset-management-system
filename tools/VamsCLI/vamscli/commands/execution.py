@@ -316,6 +316,14 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
 def details(ctx: click.Context, execution_id: str, include_sub_executions: bool, json_output: bool):
     """Get an execution's full detail and traceability (pipelines, inputs, outputs, metadata).
 
+    Workflow version is the published workflow state machine version the run started on: latest while
+    the workflow still runs that version, superseded once its state machine has been redeployed
+    (every workflow builder save redeploys it, as do an update that supplies the step list and a
+    pipeline change to a setting the state machine encodes), a bare number when the workflow no
+    longer records a current version, and not recorded for a run started before versions were
+    recorded. Workflow settings and pipeline names are read live and can change without a redeploy,
+    so they may differ from what the run used whatever the version shows.
+
     Asset/file metadata (inputMetadata) and database metadata (inputDatabaseMetadata) are separate
     collections, and each is reported as a row count here — use --json-output for the rows themselves.
     The metadata sources the run read from are listed alongside them.
@@ -364,6 +372,17 @@ def details(ctx: click.Context, execution_id: str, include_sub_executions: bool,
             out = [
                 f"Execution ID: {message.get('workflowExecutionId', 'N/A')}",
                 f"Workflow: {message.get('workflowDatabaseId', 'N/A')}:{message.get('workflowId', 'N/A')}",
+            ]
+            # The published state machine version the run started on. Null for a run started before
+            # versions were recorded; the key is absent only from a service that does not report it.
+            if 'workflowVersion' in message:
+                version = message.get('workflowVersion')
+                state = {True: 'latest', False: 'superseded'}.get(message.get('workflowVersionCurrent'))
+                if version is None:
+                    out.append("Workflow version: not recorded")
+                else:
+                    out.append(f"Workflow version: {version}" + (f" ({state})" if state else ""))
+            out += [
                 f"Status: {message.get('executionStatus', 'N/A')}",
                 f"Started: {message.get('executionStartDate', 'N/A')}",
                 f"Stopped: {message.get('executionStopDate', 'N/A')}",

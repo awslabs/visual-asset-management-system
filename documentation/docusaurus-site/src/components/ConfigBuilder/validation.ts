@@ -162,6 +162,42 @@ const COGNITO_USERNAME_MAX_LENGTH = 128;
 // this long for the pipeline's task-token callback, so the Kubernetes job must not outlive it.
 const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 14400;
 
+// The 3D preview thumbnail compute tiers getConfig() fills in when a tier names none, mirroring
+// PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS in infra/config/config.ts.
+const PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS = {
+    standard: { vcpu: 4, memoryGiB: 16 },
+    large: { vcpu: 16, memoryGiB: 120 },
+} as const;
+
+/** `minGiB`..`maxGiB` in `stepGiB` increments, as MiB. */
+function mibRange(minGiB: number, maxGiB: number, stepGiB: number): number[] {
+    const values: number[] = [];
+    for (let gib = minGiB; gib <= maxGiB; gib += stepGiB) values.push(gib * 1024);
+    return values;
+}
+
+// The memory sizes (MiB) AWS Fargate accepts for each Linux task vCPU size, mirroring
+// FARGATE_MEMORY_MIB_BY_VCPU in infra/config/config.ts.
+const FARGATE_MEMORY_MIB_BY_VCPU: ReadonlyMap<number, readonly number[]> = new Map([
+    [0.25, [512, 1024, 2048]],
+    [0.5, mibRange(1, 4, 1)],
+    [1, mibRange(2, 8, 1)],
+    [2, mibRange(4, 16, 1)],
+    [4, mibRange(8, 30, 1)],
+    [8, mibRange(16, 60, 4)],
+    [16, mibRange(32, 120, 8)],
+]);
+
+/** True when AWS Fargate runs a Linux task of `vcpu` vCPU with `memoryGiB` (config.ts: `isFargateCpuMemory`). */
+function isFargateCpuMemory(vcpu: unknown, memoryGiB: unknown): boolean {
+    if (typeof vcpu !== "number" || typeof memoryGiB !== "number") return false;
+    const memoryMiB = memoryGiB * 1024;
+    return (
+        Number.isInteger(memoryMiB) &&
+        (FARGATE_MEMORY_MIB_BY_VCPU.get(vcpu) ?? []).includes(memoryMiB)
+    );
+}
+
 // The API implementation types the deployment accepts, mirroring SUPPORTED_API_TYPES in
 // infra/config/config.ts.
 const SUPPORTED_API_TYPES = ["APIGATEWAY_REST"];
@@ -1034,6 +1070,55 @@ export const RULES: Rule[] = [
             `declares, so the parent workflow would stop waiting while the Kubernetes job is still ` +
             `allowed to run. Lower jobTimeout, or raise taskTimeout in ` +
             `backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json to match.`,
+    },
+
+    // ----- 3D preview thumbnail compute tiers
+    // (config.ts: "3D preview thumbnail compute tiers. Each tier's vCPU and memory are the resource
+    // overrides") -----
+    //
+    // AWS Batch checks a tier's vCPU/memory override against the Fargate task sizes only when a job is
+    // submitted, so an unsupported large-tier pair deploys and then fails every run routed to it. An
+    // absent value takes the getConfig() default, which is valid.
+    ...(["standard", "large"] as const).map(
+        (tier): Rule => ({
+            id: `preview3dthumbnail-${tier}-tier-fargate-size`,
+            severity: "error",
+            fieldPaths: [
+                `app.pipelines.usePreview3dThumbnail.computeTiers.${tier}.vcpu`,
+                `app.pipelines.usePreview3dThumbnail.computeTiers.${tier}.memoryGiB`,
+            ],
+            appliesWhen: (c) => {
+                if (!g(c, "app.pipelines.usePreview3dThumbnail.enabled")) return false;
+                const base = `app.pipelines.usePreview3dThumbnail.computeTiers.${tier}`;
+                const vcpu = g(c, `${base}.vcpu`);
+                const memoryGiB = g(c, `${base}.memoryGiB`);
+                return !isFargateCpuMemory(
+                    vcpu === undefined
+                        ? PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS[tier].vcpu
+                        : vcpu,
+                    memoryGiB === undefined
+                        ? PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS[tier].memoryGiB
+                        : memoryGiB
+                );
+            },
+            message:
+                `usePreview3dThumbnail.computeTiers.${tier} is not an AWS Fargate task size: vcpu ` +
+                `must be 0.25, 0.5, 1, 2, 4, 8 or 16 with a memoryGiB that vCPU supports (4 vCPU: ` +
+                `8–30 GiB in 1 GiB steps; 8 vCPU: 16–60 GiB in 4 GiB steps; 16 vCPU: 32–120 GiB in ` +
+                `8 GiB steps).`,
+        })
+    ),
+    {
+        id: "preview3dthumbnail-large-tier-threshold",
+        severity: "error",
+        fieldPaths: ["app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.usePreview3dThumbnail.enabled")) return false;
+            const threshold = g(c, "app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB");
+            if (isAbsent(threshold)) return false;
+            return typeof threshold !== "number" || !Number.isFinite(threshold) || threshold <= 0;
+        },
+        message: "usePreview3dThumbnail.largeTierThresholdGiB must be a positive number of GiB.",
     },
 
     // ----- NVIDIA Cosmos 3
