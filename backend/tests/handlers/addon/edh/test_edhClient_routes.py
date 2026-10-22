@@ -303,6 +303,32 @@ class TestDesktopRoutes:
         assert ec.EdhClient().get_desktop_states("vabc", [SESSION_A, SESSION_B]) == [
             {"session_uuid": SESSION_A, "session_state": "running", "instance_id": "i-1"}]
 
+    def test_get_desktop_states_reports_the_sent_ids_edh_did_not_answer_at_all(self, monkeypatch):
+        """EDH answers only its active desktops, so a sent id it leaves out is a desktop it no longer has; an
+        id it answers with a successor is a desktop it continued under another id, and is answered."""
+        session_c = "0f1e2d3c-4b5a-4968-8776-5a4b3c2d1e0f"
+        answer = {
+            SESSION_A: {"state": "running", "instance_id": "i-1"},
+            SESSION_B: {"state": "running", "instance_id": "i-2",
+                        "current_session_uuid": "5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a"},
+        }
+        ec, _ = install_client_fakes(monkeypatch, root_keys=["k1"], results=[_ok(answer)])
+        unanswered = set()
+
+        result = ec.EdhClient().get_desktop_states("vabc", [SESSION_A, SESSION_B, session_c, "not-a-uuid"],
+                                                   unanswered)
+
+        assert result == [{"session_uuid": SESSION_A, "session_state": "running", "instance_id": "i-1"}]
+        # The id that is not a UUID was never sent, so EDH's silence says nothing about it.
+        assert unanswered == {session_c}
+
+    def test_get_desktop_states_leaves_the_unanswered_set_alone_when_the_read_fails(self, monkeypatch):
+        ec, _ = install_client_fakes(monkeypatch, root_keys=["k1"], results=[_ok([])])
+        unanswered = set()
+        with pytest.raises(ec.EdhContractError):
+            ec.EdhClient().get_desktop_states("vabc", [SESSION_A], unanswered)
+        assert unanswered == set()
+
     @pytest.mark.parametrize("response", [_ok([]), _ok("text"), FakeResponse(200, {"message": {}})],
                              ids=["list", "text", "no success key"])
     def test_get_desktop_states_refuses_an_answer_that_is_not_a_mapping(self, monkeypatch, response):

@@ -12,7 +12,9 @@ shared session-state mapping, matching a row that never received its session id 
 stores for it. A desktop EDH lists running is recorded connectable. A row whose secret is not bound to
 the EC2 instance EDH places its desktop on -- never bound, or bound to an instance the desktop no longer
 runs on -- has the binding applied. A desktop EDH no longer lists was deactivated outside VAMS and is
-recorded DELETED; a launch still CREATING past the worker's grace window -- or, with the worker's
+recorded DELETED, save that a launch still CREATING whose desktop EDH no longer has is recorded ORPHANED
+with its launch-error code: EDH deactivates a desktop whose placement failed, and a desktop that never ran
+is no Save and Resume. A launch still CREATING past the worker's grace window -- or, with the worker's
 attempts spent, past its last attempt's timeout -- is recorded ORPHANED. A launch its owner deleted
 before EDH listed its desktop re-adopts that desktop when EDH lists it within the reclaim window: the
 row's state follows EDH again, its session id is completed, and it carries no credential until its owner
@@ -73,7 +75,7 @@ from .common.edhIdentity import SYSTEM_USER_ID
 from .common.edhLeasePolicy import lease_action, parse_iso, read_lease_policy
 from .common.edhSessionState import (
     CREDENTIAL_CLAIM_SECONDS, EDH_FIELD_INSTANCE_ID, EDH_SCHEDULE_FIELD,
-    EDH_SESSION_STATE_FIELD, EXPIRES_AT_FIELD, LAST_ERROR_CREATE_TIMED_OUT,
+    EDH_SESSION_STATE_FIELD, EXPIRES_AT_FIELD, LAST_ERROR_CREATE_TIMED_OUT, LAST_ERROR_LAUNCH_ERROR,
     LAST_ERROR_LEASE_EXPIRED, MAX_LAUNCH_ATTEMPTS, START_IN_PROGRESS_SECONDS,
     STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED, credential_claim_fresh,
     credential_claim_stamp, deleted_row_expiry, never_auto_start_schedule, observed_row_attributes,
@@ -95,8 +97,9 @@ session_table = dynamodb.Table(session_table_name)
 # Rows whose desktop may still be running. DELETED rows are terminal and are examined only while they
 # still carry a credential, or a start or credential claim inside its window.
 SWEPT_STATES = (STATE_CREATING, STATE_ACTIVE, STATE_STOPPED, STATE_ORPHANED)
-# States whose row is recorded DELETED when EDH's listing leaves its desktop out; that absence is confirmed
-# with EDH's session-state read before any such row is written.
+# States whose row is recorded DELETED -- or, for a launch whose desktop never ran, ORPHANED -- when EDH's
+# listing leaves its desktop out; that absence is confirmed with EDH's session-state read before any such
+# row is written.
 UNLISTED_CONFIRMED_STATES = frozenset({STATE_CREATING, STATE_ACTIVE, STATE_STOPPED})
 # Stamped on a row the sweep records DELETED because EDH stopped listing its desktop, and only then: a row
 # deleted through VAMS never carries it. EDH's Save and Resume takes a desktop out of the listing while its
@@ -300,7 +303,8 @@ def _resumed_rows(scanned_rows: List[Dict[str, Any]], index: DesktopIndex) -> Li
 
 def _confirm_unlisted(rows: List[Dict[str, Any]], index: DesktopIndex, summary: Dict[str, int]) -> Set[str]:
     """Confirm with EDH's token-free session-state read that the desktops of rows EDH's listing left out are
-    gone, before any such row is recorded DELETED: a desktop the read still reports active joins the index
+    gone, before any such row is recorded DELETED, or ORPHANED as a failed launch: a desktop the read still
+    reports active joins the index
     under its session id. When the read fails, the session ids it was asked about are returned and their
     rows sit this pass out, so one empty or truncated listing never detaches every workstation."""
     missing = list(dict.fromkeys(
@@ -476,7 +480,14 @@ def _reconcile_decision(row: Dict[str, Any], index: DesktopIndex, now: datetime,
         if _inside_creating_grace(row, now):
             return {}, False, False
         updates = {"state": STATE_ORPHANED, "lastError": LAST_ERROR_CREATE_TIMED_OUT}
-    elif state in (STATE_CREATING, STATE_ACTIVE, STATE_STOPPED):
+    elif state == STATE_CREATING:
+        # EDH records a desktop whose placement failed as ``error`` and deactivates it within minutes; a
+        # desktop that never ran cannot be held out of the listing by Save and Resume, so a launch EDH no
+        # longer has is a failed launch, kept for its owner to see, not a removed desktop.
+        updates = {"state": STATE_ORPHANED}
+        if not row.get("lastError"):
+            updates["lastError"] = LAST_ERROR_LAUNCH_ERROR
+    elif state in (STATE_ACTIVE, STATE_STOPPED):
         # EDH lists every desktop that is not deleted; one it no longer lists was removed outside VAMS, or is
         # held out of the listing by EDH's Save and Resume, which the stamp lets a later sweep re-adopt.
         updates = {"state": STATE_DELETED, EDH_UNLISTED_AT_FIELD: now.isoformat()}
