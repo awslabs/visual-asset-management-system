@@ -182,13 +182,18 @@ export default function TableList(props: any) {
             const result = await deleteFunction(selected[i]);
             if (result !== false && Array.isArray(result)) {
                 if (result[0] === false) {
+                    // Some delete functions repeat the message as the detail, or leave it empty.
+                    const detail = result[2];
                     setDeleteResult({
                         result: "Error",
                         items: [
                             {
                                 header: "Failed to Delete",
                                 type: "error",
-                                content: result[1] + ". " + result[2],
+                                content:
+                                    detail && detail !== result[1]
+                                        ? `${result[1]}. ${detail}`
+                                        : result[1],
                                 dismissible: true,
                                 dismissLabel: "Dismiss message",
                                 onDismiss: () =>
