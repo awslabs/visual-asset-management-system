@@ -95,6 +95,7 @@ function App() {
                             {
                                 type: "menu-dropdown",
                                 text: "Settings",
+                                disableUtilityCollapse: true,
                                 iconName: "settings",
                                 onItemClick: (e) => {
                                     const id = e?.detail?.id;
@@ -104,11 +105,15 @@ function App() {
                                 items: [
                                     {
                                         id: "theme-light",
-                                        text: theme === "light" ? "✓ Light Theme" : "Light Theme",
+                                        text: "Light Theme",
+                                        itemType: "checkbox",
+                                        checked: theme === "light",
                                     },
                                     {
                                         id: "theme-dark",
-                                        text: theme === "dark" ? "✓ Dark Theme" : "Dark Theme",
+                                        text: "Dark Theme",
+                                        itemType: "checkbox",
+                                        checked: theme === "dark",
                                     },
                                 ],
                             },

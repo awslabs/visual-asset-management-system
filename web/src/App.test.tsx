@@ -83,6 +83,17 @@ describe("App shell", () => {
         }
     });
 
+    it("marks the active theme as a checked menu item in a Settings menu that never collapses", () => {
+        render(<App />);
+
+        const settings = mockUtilities.find((utility) => utility.text === "Settings");
+        expect(settings.disableUtilityCollapse).toBe(true);
+        expect(settings.items).toEqual([
+            { id: "theme-light", text: "Light Theme", itemType: "checkbox", checked: false },
+            { id: "theme-dark", text: "Dark Theme", itemType: "checkbox", checked: true },
+        ]);
+    });
+
     it("links the header logo to the hash route for Home", () => {
         render(<App />);
 
