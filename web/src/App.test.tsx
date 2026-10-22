@@ -14,9 +14,11 @@ import { render, screen, waitFor } from "@testing-library/react";
 import App from "./App";
 
 let mockUtilities: any[] = [];
+let mockIdentity: any;
 jest.mock("@cloudscape-design/components", () => ({
-    TopNavigation: ({ utilities }: any) => {
+    TopNavigation: ({ utilities, identity }: any) => {
         mockUtilities = utilities || [];
+        mockIdentity = identity;
         return (
             <div data-testid="top-navigation">
                 {(utilities || []).map((utility: any) => utility.text).join(",")}
@@ -79,6 +81,12 @@ describe("App shell", () => {
         } finally {
             log.mockRestore();
         }
+    });
+
+    it("links the header logo to the hash route for Home", () => {
+        render(<App />);
+
+        expect(mockIdentity.href).toBe("#/");
     });
 
     it("keeps the theme preference and removes the session keys on header sign-out", async () => {

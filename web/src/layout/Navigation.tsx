@@ -13,7 +13,7 @@ import { addonNavSections } from "../addons/addonNavigation";
 import { customNavSections } from "../custom/customNavigation";
 
 const navHeader: { href: string; logo?: { alt: string; src: string } } = {
-    href: "/",
+    href: "#/",
 };
 
 if (config.CUSTOMER_LOGO) {
