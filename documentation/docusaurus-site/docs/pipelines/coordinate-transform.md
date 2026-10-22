@@ -301,6 +301,36 @@ aws ecr describe-images --repository-name <repository-name> \
     --image-ids imageTag=<tag-from-the-image-above> --region <region>
 ```
 
+### Build Trigger Fails During Deployment
+
+When the deployment cannot start the CodeBuild build, for example because access is denied or the project's concurrent build quota stays reached, the build trigger fails the stack update with a reason that names the CodeBuild project, and AWS CloudFormation rolls the update back. The rollback sends the trigger its previous properties, so the trigger starts a build again. If that build cannot start either, the core stack stops in `UPDATE_ROLLBACK_FAILED` and accepts no deployment until its rollback completes.
+
+Fix the cause and continue the rollback on the root core stack (for example, `vams-core-prod-us-east-1`). If the cause cannot be fixed, skip the trigger when you continue the rollback. A resource in a nested stack is skipped as `<nested-stack-name>.<logical-id>`, where `<nested-stack-name>` is the name of the nested stack that holds the trigger (the stack name in its ARN), not the logical ID of that stack in its parent. To find both values:
+
+1. List the stacks whose rollback failed. The coordinate transform pipeline's nested stack is the one whose name contains `CoordinateTransformBuilder`:
+
+    ```bash
+    aws cloudformation list-stacks --stack-status-filter UPDATE_ROLLBACK_FAILED \
+        --query 'StackSummaries[].StackName' --output text --region <region>
+    ```
+
+2. List the resources of that nested stack that failed to roll back. The build trigger is the `AWS::CloudFormation::CustomResource` whose logical ID contains `BuildTriggerCR`:
+
+    ```bash
+    aws cloudformation describe-stack-resources --stack-name <nested-stack-name> \
+        --query "StackResources[?ResourceStatus=='UPDATE_FAILED'].[LogicalResourceId,ResourceType,ResourceStatusReason]" \
+        --output text --region <region>
+    ```
+
+3. Continue the rollback on the root core stack, not on the nested stack, and skip the trigger:
+
+    ```bash
+    aws cloudformation continue-update-rollback --stack-name <core-stack-name> \
+        --resources-to-skip <nested-stack-name>.<trigger-logical-id> --region <region>
+    ```
+
+The skipped trigger starts no build. Fix the cause before you deploy again; the next deployment of a changed container source updates the trigger, and the trigger starts the build.
+
 ### Missing sourceCrs or targetCrs
 
 The container requires both `sourceCrs` and `targetCrs` to be present in the final merged parameters. If neither the selected template body nor the asset metadata provide these values, the pipeline fails with:

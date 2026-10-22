@@ -18,10 +18,18 @@ import importlib.util
 import pathlib
 
 import pytest
-from botocore.exceptions import ClientError, EndpointConnectionError
+from botocore.exceptions import (ClientError, ConnectTimeoutError, EndpointConnectionError, NoCredentialsError,
+                                 NoRegionError, ParamValidationError, ReadTimeoutError)
 
 HANDLER = (pathlib.Path(__file__).resolve().parents[2]
            / "infra" / "lib" / "nestedStacks" / "pipelines" / "constructs" / "codeBuildTrigger" / "index.py")
+
+# `timeout: Duration.minutes(1)` on the trigger function in every *CodeBuild construct.
+FUNCTION_TIMEOUT_SECONDS = 60
+# What the worst case leaves for creating the client and returning the error.
+FUNCTION_TIMEOUT_MARGIN_SECONDS = 5
+# botocore standard mode sleeps rand(0, 1) x min(2 ** i, 20) s before retry i + 1 (i = 0, 1, ...).
+BOTOCORE_MAX_BACKOFF_SECONDS = 20
 
 
 def _client_error(code):
@@ -34,6 +42,7 @@ class _CodeBuild:
     def __init__(self, *outcomes):
         self.outcomes = list(outcomes)
         self.calls = []
+        self.created_with = None
 
     def start_build(self, projectName):
         self.calls.append(projectName)
@@ -55,7 +64,12 @@ def trigger(monkeypatch):
         monkeypatch.setattr(module.time, "sleep", sleeps.append)
 
     def install(client):
-        monkeypatch.setattr(module.boto3, "client", lambda service: client if service == "codebuild" else None)
+        def create(service, **kwargs):
+            assert service == "codebuild"
+            client.created_with = kwargs
+            return client
+
+        monkeypatch.setattr(module.boto3, "client", create)
         return client
 
     return module, install, sleeps
@@ -80,7 +94,10 @@ class TestCreateAndUpdate:
         _client_error("AccountLimitExceededException"),
         _client_error("ServiceUnavailableException"),
         EndpointConnectionError(endpoint_url="https://codebuild.example.invalid"),
-    ], ids=["throttling", "concurrent-build-limit", "service-unavailable", "connection"])
+        ConnectTimeoutError(endpoint_url="https://codebuild.example.invalid"),
+        ReadTimeoutError(endpoint_url="https://codebuild.example.invalid"),
+    ], ids=["throttling", "concurrent-build-limit", "service-unavailable", "connection", "connect-timeout",
+            "read-timeout"])
     def test_a_transient_failure_is_retried_with_backoff(self, trigger, transient):
         module, install, sleeps = trigger
         client = install(_CodeBuild(transient, transient, "proj:build-3"))
@@ -97,6 +114,35 @@ class TestCreateAndUpdate:
         assert "AccessDeniedException" in str(raised.value)
         assert len(client.calls) == 1
         assert sleeps == []
+
+    @pytest.mark.parametrize("permanent", [
+        ParamValidationError(report="Invalid type for parameter projectName"),
+        NoCredentialsError(),
+        NoRegionError(),
+    ], ids=["param-validation", "no-credentials", "no-region"])
+    def test_a_permanent_client_side_error_is_not_retried(self, trigger, permanent):
+        module, install, sleeps = trigger
+        # Enough failures for every attempt, so a handler that retried would run them all.
+        client = install(_CodeBuild(*[permanent] * module.ATTEMPTS))
+        with pytest.raises(RuntimeError) as raised:
+            module.handler(_event("Update"), None)
+        assert len(client.calls) == 1
+        assert sleeps == []
+        assert f"vams-coordtransform-build (attempt 1 of {module.ATTEMPTS})" in str(raised.value)
+
+    def test_the_client_retries_once_and_the_worst_case_fits_the_function_timeout(self, trigger):
+        module, install, _sleeps = trigger
+        client = install(_CodeBuild("proj:build-1"))
+        module.handler(_event("Create"), None)
+        config = client.created_with.get("config")
+        assert config is not None, "the CodeBuild client uses botocore's default 60 s timeouts and retries"
+        assert config.retries == {"mode": "standard", "max_attempts": 2}
+        http_attempts = config.retries["max_attempts"]
+        botocore_backoff = sum(min(2 ** i, BOTOCORE_MAX_BACKOFF_SECONDS) for i in range(http_attempts - 1))
+        per_call = http_attempts * (config.connect_timeout + config.read_timeout) + botocore_backoff
+        handler_backoff = sum(module.BASE_DELAY_SECONDS * 2 ** i for i in range(module.ATTEMPTS - 1))
+        worst_case = module.ATTEMPTS * per_call + handler_backoff
+        assert worst_case <= FUNCTION_TIMEOUT_SECONDS - FUNCTION_TIMEOUT_MARGIN_SECONDS
 
     def test_a_transient_failure_that_persists_raises_after_the_last_attempt(self, trigger):
         module, install, sleeps = trigger
