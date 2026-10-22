@@ -4,9 +4,8 @@
 """The per-entity metadata record limit fails closed when its count query fails.
 
 Each of the four metadata create paths counts the entity's existing records before writing, to
-hold MAX_METADATA_RECORDS_PER_ENTITY. That count used to log a failure and write anyway, so a
-throttled or failed count skipped the limit. Now the create writes nothing and answers 503, for
-every caller, and the POST handlers carry that status to the client.
+hold MAX_METADATA_RECORDS_PER_ENTITY. When that count fails or is throttled, the create writes
+nothing and answers 503, for every caller, and the POST handlers carry that status to the client.
 """
 
 import contextlib
