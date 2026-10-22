@@ -96,6 +96,7 @@
         "start": "vite",
         "build": "vite build",
         "build.lowmem": "node --max-old-space-size=4096 node_modules/vite/bin/vite.js build --sourcemap false",
+        "typecheck": "tsc --noEmit",
         "preview": "vite preview",
         "test": "jest --coverage",
         "e2e": "playwright test",

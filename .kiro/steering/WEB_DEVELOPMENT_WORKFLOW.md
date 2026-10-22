@@ -186,7 +186,7 @@ web/
 
 #### **Step 4: Verification**
 
--   [ ] **No TypeScript errors**: Run `npm run build` or check IDE
+-   [ ] **No TypeScript errors**: Run `npm run typecheck` or check IDE (`npm run build` does not type-check)
 -   [ ] **No broken imports**: Verify relative paths (no path aliases in this project)
 -   [ ] **Cloudscape subpath imports**: Not barrel exports
 -   [ ] **Service layer compliance**: No direct `apiClient` imports in components/pages
@@ -821,6 +821,7 @@ cd web
 npm install           # Install dependencies + runs postinstall (viewer installs)
 npm run start         # Dev server (port 3001)
 npm run build         # Production build (output: web/dist/)
+npm run typecheck     # Type-check only (tsc --noEmit); the Vite build does not type-check
 npm test              # Run tests with coverage (Jest 30 + @testing-library/react)
 npx jest              # Run tests without coverage (faster)
 ```

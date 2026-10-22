@@ -1350,6 +1350,7 @@ The dev server proxies API calls via Vite's proxy config. Set `DEV_API_ENDPOINT`
 
 ```bash
 npm run build         # Production build (output: web/dist/)
+npm run typecheck     # Type-check only (tsc --noEmit); the Vite build does not type-check
 ```
 
 ### 12.3 Important: Postinstall Script
@@ -1374,7 +1375,7 @@ Before modifying any code:
 
 After modifying code:
 
--   [ ] No new TypeScript errors (`npm run build` or check IDE)
+-   [ ] No new TypeScript errors (`npm run typecheck`, or check IDE; `npm run build` does not type-check)
 -   [ ] No broken imports (check relative paths carefully)
 -   [ ] Cloudscape components imported from subpaths (not barrel exports)
 -   [ ] API calls go through service-layer files (`src/services/`), NOT direct `apiClient` imports in components
