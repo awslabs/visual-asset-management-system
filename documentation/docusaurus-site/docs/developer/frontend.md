@@ -183,25 +183,16 @@ Under an ALB deployment the front does **not** proxy `/api/*` — it issues an H
 
 ### The Return Tuple Pattern
 
-Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples:
+Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples. Failure is decided by the backend's `success` flag or by the request throwing (a non-2xx status), never by searching the response message for words such as "error": a success message can echo caller-chosen text, such as an asset ID.
 
 ```typescript
 export const fetchSomething = async ({ databaseId }: { databaseId: string }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/something`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            return response;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error: any) {
         console.log(error);
         return [false, error?.message];
