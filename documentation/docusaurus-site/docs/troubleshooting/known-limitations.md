@@ -137,7 +137,7 @@ The Needle USD WASM Viewer has difficulty loading dependencies from compressed U
 
 ### File Extension Upload Restrictions
 
-File extension and MIME type restrictions are enforced only on uploads through the VAMS API. Files added directly to the Amazon S3 asset bucket bypass these checks. The following file extensions are blocked on upload:
+File extension and MIME type restrictions are enforced only on files written through the VAMS API: uploads, and the destination file name of a move, rename or copy, which gets the extension check. Files added directly to the Amazon S3 asset bucket bypass these checks. The following file extensions are blocked on upload:
 
 | Extension              | Description                  |
 | ---------------------- | ---------------------------- |
