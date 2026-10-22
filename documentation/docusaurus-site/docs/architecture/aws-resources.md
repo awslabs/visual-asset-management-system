@@ -548,13 +548,13 @@ container image from the source in the repository and pushes it to a private Ama
 the pipeline's AWS Batch job definition then references. Pipelines that do not set `useCodeBuild` build
 their image locally at synthesis time and use the CDK asset repository instead.
 
-| Resource              | Configuration                                                                                                         |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| **Repository**        | One per CodeBuild-built pipeline, image scanning on push, last 10 images retained                                     |
-| **CodeBuild project** | One per repository, privileged mode for container builds, one-hour timeout                                            |
-| **Image tag**         | The first 32 hexadecimal characters of the source asset hash, so the tag is content-addressed                         |
-| **Encryption**        | The VAMS KMS key when `useKmsCmkEncryption.enabled` is `true`, Amazon ECR's default AES-256 otherwise                 |
-| **Build log group**   | `/aws/codebuild/<project name>`, created by AWS CodeBuild and left behind on teardown (see Pipeline Log Groups above) |
+| Resource              | Configuration                                                                                                                                                                                                              |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Repository**        | One per CodeBuild-built pipeline, image scanning on push, last 10 images retained                                                                                                                                          |
+| **CodeBuild project** | One per repository, privileged mode for container builds; a one-hour timeout for Coordinate Transform and a three-hour timeout for Splat Toolbox, NVIDIA Cosmos (including Cosmos 3), NVIDIA GR00T, and Isaac Lab training |
+| **Image tag**         | The first 32 hexadecimal characters of the source asset hash, so the tag is content-addressed                                                                                                                              |
+| **Encryption**        | The VAMS KMS key when `useKmsCmkEncryption.enabled` is `true`, Amazon ECR's default AES-256 otherwise                                                                                                                      |
+| **Build log group**   | `/aws/codebuild/<project name>`, created by AWS CodeBuild and left behind on teardown (see Pipeline Log Groups above)                                                                                                      |
 
 All repositories use the `DESTROY` removal policy with `emptyOnDelete`, so both the repository and its
 images are removed when the stack is destroyed cleanly.

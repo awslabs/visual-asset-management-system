@@ -493,7 +493,7 @@ Pipeline step timeouts and overall workflow timeouts are configured separately. 
 
 **Resolution:**
 
-Adjust the timeout values in the pipeline or workflow configuration. Large files may need more than the 1-hour job limit of the 3D Preview Thumbnail pipeline. Monitor the AWS Batch job logs and AWS Step Functions execution history to determine appropriate timeout values.
+Adjust the timeout values in the pipeline or workflow configuration. Large files may need more than the 3D Preview Thumbnail pipeline's job limits of 1 hour on the standard tier and 3 hours on the large tier; set the run's `computeTier` parameter to `large` for a file that runs out of time on the standard tier. Monitor the AWS Batch job logs and AWS Step Functions execution history to determine appropriate timeout values.
 
 :::tip
 For long-running pipeline operations, check the AWS Batch job logs in Amazon CloudWatch rather than relying solely on the API response or web UI status.

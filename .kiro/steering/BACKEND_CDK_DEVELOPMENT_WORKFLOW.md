@@ -107,6 +107,17 @@ Custom routes go through `attachFunctionToApi` with the shared `RouteRegistry` (
 
 Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed as the Step Functions execution name, so `$$.Execution.Name == executionId`. Asset/database linkage is not on the main row — it lives in `WorkflowExecutionInputsStorageTable`, queried via the `WorkflowExecInputsByAssetGSI` GSI for the asset-scoped execution listing. `executeWorkflow` writes the V2 main execution row plus the workflow inputs/configuration rows, one `PipelineExecutions` row per pipeline in the workflow, and the first-pipeline input rows (files/metadata/configuration). `processWorkflowExecutionOutput` writes the end-state pipeline's output/metadata/log rows and the completion status back to the main row. The pure record-building logic (key construction, S3 prefix derivation, record-dict builders, text truncation) lives in `common/workflows/executionRecords.py` and is unit-tested in isolation. The execution details/logs read side keeps its pure logic in the same package: `common/workflows/subExecutionStages.py` folds a sub-state-machine's ASL definition and execution history into per-stage status, and `common/workflows/availableLogs.py` identifies a pipeline execution's log sources by location (`logId`), plans each read and classifies its outcome; `executionService.py` holds only the memoised `DescribeStateMachine`, `DescribeExecution`/`DescribeJobs`/SageMaker `Describe*`, paged `GetExecutionHistory` and `FilterLogEvents` calls around them. The sub-process stop helper and `ABORTABLE_RESOURCE_TYPES` (Step Functions executions, Batch jobs, Deadline Cloud jobs, SageMaker training jobs and pipeline executions) live in `common/workflows/executionOutputs.py` and are shared by the abort API and the failure path (`sfn/handleExecutionError.py`); a registered type outside the set is displayed with `abortable: false` and listed under `notAbortable` on the abort response rather than stopped.
 
+#### **Workflow State Machine Deployment**
+
+A workflow's Step Functions definition encodes each referenced pipeline's execution settings, so it is rebuilt whenever one changes (mirrors `backend/CLAUDE.md` "Workflow State Machine Deployment" and "Internal Actions"):
+
+-   **One deploy routine.** Create, update, the pipeline-change refresh and the launch-time check all deploy through `workflowService._deploy_fields`, which writes `workflow_arn`, `workflowVersionArn` (every deploy publishes a version; older ones past `MAX_RETAINED_STATE_MACHINE_VERSIONS` are deleted), `jobNames` (reused while the steps are unchanged), `pipelineFingerprints` (sha256 of `workflowAsl.to_asl_pipeline_dict` minus `name`, keyed `pipelineDatabaseId:pipelineId`) and `deploymentRevision` together. The refresh writes conditionally on the revision it read.
+-   **Everything the ASL builders read from a pipeline record goes through `to_asl_pipeline_dict`**, because that dict is what is fingerprinted.
+-   **A pipeline change refreshes its workflows.** `pipelineService.update_pipeline` invokes the workflow service's `refreshPipelineReferences` internal action asynchronously when the fingerprint changes; the service walks every non-archived referencing workflow to exhaustion and records a failed redeploy as `deploymentStale` + `deploymentStaleReason`.
+-   **The redeploy path reads strongly consistent.** `workflowService.redeploy_workflow` (behind both internal actions) reads the workflow and each pipeline with `ConsistentRead=True` via the `consistent_read` parameter of `get_workflow_item`, `_get_pipeline_record` and `_resolve_snapshot_pipeline_records`: the refresh runs right after the pipeline write, and the re-read after a lost conditional write must see the other writer's deployment. API reads keep the default.
+-   **A launch never runs a stale definition.** `executeWorkflow._ensure_current_deployment` compares stored and live fingerprints, invokes `redeployWorkflow` synchronously on a mismatch, starts on `workflowVersionArn`, and returns `409` without starting when the deployment cannot be made current.
+-   **Internal actions are not API-reachable.** They dispatch on a top-level `vamsInternalAction` key only for a `SYSTEM_USER` `lambdaCrossCall` with no `requestContext`; callers hold `lambda:InvokeFunction` on the workflow service ARN only (`grantWorkflowServiceInternalInvoke`).
+
 ## 📋 **Development Workflow Checklist**
 
 ### **Phase 1: Pre-Implementation**
@@ -314,6 +325,12 @@ authorization, as a denial — and decide what to do with the leftover: read it 
 (`executionService`, `assetExportService`, `assetService` listings), report it as unresolved
 (`assetLinksService`), or log and degrade with `max_retries=0` where the data is a display-only
 hint (`workflowService`). A `ClientError` propagates; the caller owns its fallback.
+
+**Targeted updates.** `common.dynamodb.to_update_expr(record)` returns the names map, values map and
+`SET` expression for an `update_item`. The helper names its placeholders `#u<i>` / `:u<i>`, so a boto3
+condition object (`ConditionExpression=Attr("rev").eq(n)`) is safe in the same call: boto3 renders it with
+`#n<i>` / `:v<i>` and merges those into the maps, replacing any entry of the same name. A hand-built update
+expression combined with a condition object must avoid `#n<i>` / `:v<i>` for the same reason.
 
 ### **Rule 3: Paginate large GET responses; never return an unbounded in-memory set**
 

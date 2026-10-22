@@ -176,14 +176,17 @@ def batch_get_items(dynamodb_resource, table_name, keys, *,
 
 
 def to_update_expr(record, op="SET") -> Tuple[Dict[str, str], Dict[str, Any], str]:
-    """
-    :param record:
-    :param op:
-    :return:
+    """Build (ExpressionAttributeNames, ExpressionAttributeValues, UpdateExpression) that `op`s
+    every attribute in `record`.
+
+    The placeholders are `#u<i>` / `:u<i>`. A caller may pass a boto3 condition object
+    (`Attr(...).eq(...)`) as the ConditionExpression of the same call; boto3 renders it with its own
+    `#n<i>` / `:v<i>` placeholders and merges them into these maps, replacing any entry of the same
+    name. Sharing its prefix would let the condition's value overwrite a SET value.
     """
     keys = record.keys()
-    keys_attr_names = ["#f{n}".format(n=x) for x in range(len(keys))]
-    values_attr_names = [":v{n}".format(n=x) for x in range(len(keys))]
+    keys_attr_names = ["#u{n}".format(n=x) for x in range(len(keys))]
+    values_attr_names = [":u{n}".format(n=x) for x in range(len(keys))]
 
     keys_map = {
         k: key

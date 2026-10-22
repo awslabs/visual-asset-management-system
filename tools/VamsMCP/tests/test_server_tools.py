@@ -799,6 +799,17 @@ def test_get_execution_details_forwards_the_sub_execution_flag(mock_client):
     assert params == {"includeSubExecutions": "true"}
 
 
+def test_get_execution_details_passes_the_workflow_version_fields_through(mock_client):
+    mock_client.unwrap_message.side_effect = lambda page: page
+    mock_client.api.get_execution_details.return_value = {
+        "pipelines": [], "workflowVersion": 3, "workflowVersionCurrent": False}
+
+    result = server.get_execution_details("e1")
+
+    assert result["workflowVersion"] == 3
+    assert result["workflowVersionCurrent"] is False
+
+
 def test_get_execution_logs_forwards_log_id_and_stage_name_in_full_mode(mock_client):
     mock_client.unwrap_message.side_effect = lambda page: page
     mock_client.api.get_execution_logs.return_value = {"events": []}

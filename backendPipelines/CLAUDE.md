@@ -168,11 +168,15 @@ logs anything and never logs the event, as both handlers do
 `.dockerignore` keeps `tests/`, the Poetry files and caches out of its `COPY . .`.
 
 VAMS reads a Lambda step's log group only for lines that contain the workflow execution id, so a line
-that names no run path (a referenced-file warning, for one) is missing from the run's log in VAMS. The
-3dBasic handler therefore puts the body's `workflowExecutionId` on every line with `logger.append_keys`
-after the task-token check, and removes it with `remove_keys` first thing in each invocation, because a
-reused execution environment keeps the logger's keys (`tests/test_3dbasic_execution_id_logging.py`).
-The CAD/mesh handler does not yet; its extractors log through loggers of their own.
+that names no run path (a referenced-file warning, for one) is missing from the run's log in VAMS. Both
+Lambda-container handlers therefore put the body's `workflowExecutionId` on every line with
+`logger.append_keys` after the task-token check, and remove it with `remove_keys` first thing in each
+invocation, because a reused execution environment keeps the logger's keys
+(`tests/test_3dbasic_execution_id_logging.py`, `tests/test_cadmesh_execution_id_logging.py`). A module
+that logs on the handler's behalf creates its logger as a Powertools child of the handler's service
+(`safeLogger(service=<handler's service>, child=True)`, as the CAD/mesh `metadata_extractors` do), so its
+lines go through the handler's formatter and carry the same keys; a logger with a service of its own
+does not.
 
 ## Reporting Failure on a Task-Token Pipeline
 
@@ -432,7 +436,8 @@ partition. Author it with the block for your execution type present but empty:
    preview thumbnail, and GenAI 3D metadata labeling bundles enable it.
 7. **A workflow's `defaultOutputFileBaseExecutionPathExtension` supplies the output path prefix when
    an execution names none.** It is stored UNRESOLVED, so its `{{tag}}` placeholders resolve per run --
-   one stored `/{{jobName}}/` gives every execution its own output folder. The prefix is inserted
+   one stored `/{{jobName}}/` gives every execution its own output folder, because the `{{jobName}}`
+   tag renders a value unique to each run and step (rule 9). The prefix is inserted
    immediately before each output file's own name, so a container's own output folders are preserved.
    **A container must therefore not create its own per-job folder** -- the workflow prefix is what
    separates runs, and a container-side folder shows up as a stray level inside every asset. The
@@ -471,7 +476,10 @@ partition. Author it with the block for your execution type present but empty:
    the step — blank already falls back to the pipeline id, keeping each step's output distinct. It
    takes the id charset only (3-63 chars), so **`{{tag}}` placeholders are rejected**: use the
    workflow's `defaultOutputFileBaseExecutionPathExtension` (rule 7) to vary the path per run. Do not
-   confuse the FIELD with the `{{jobName}}` TAG, which resolves to the run's generated job name.
+   confuse the FIELD with the `{{jobName}}` TAG, which renders `executionRecords.run_job_name()`: the
+   step's stored `jobNames[]` entry joined to that step's `pipelineExecutionId`, at most 80 characters,
+   so it differs on every run and for every step of one run. The run-bucket prefix above keeps the
+   stored name, which the deployed state machine bakes in.
 10. **A workflow may not list the same pipeline twice.** Per-step execute params, resolved template
     configs, and filtered inputs are all keyed by `pipelineDatabaseId:pipelineId`, so a repeated
     pipeline silently overwrites the earlier step's resolved config and both steps run identically —
@@ -545,6 +553,12 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
     resolves to. Container output does not print the VAMS execution ids, so a registered prefix that the
     real stream falls under is what lets the read skip the execution-scope terms; a prefix the stream does
     not start with reads as `scoped`, and the filter drops every container line.
+
+-   **Batch states that submit the same job definition share one stream prefix**, so register only the
+    state the run is routed to. The registration handler dedups log entries by location and keeps the
+    first entry's `stageName`, so registering every such state attributes the run's container lines to
+    whichever state was listed first. The 3D thumbnail pipeline's standard and large tiers are the case
+    in the tree (`preview/3dThumbnail/lambda/openPipeline.py`).
 
 CDK rules for those env values (`infra/lib/nestedStacks/pipelines/**`):
 
@@ -759,6 +773,10 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     the upstream `main.py`'s process (`VAMS_BUCKET_REGIONS`), where the launcher replaces a bare
     `boto3.client('s3')` with `vams_utils.aws.s3.region_routing_client()`; Isaac Lab carries the map in
     its job config and `openPipeline` reads the asset bucket with `manifestHelper.s3_client_for_region`.
+    The 3D thumbnail `openPipeline` does the same when it picks the compute tier: `computeTier.py` maps
+    the event's input and output buckets to their Regions (`bucket_regions`) and sends the input's
+    `HeadObject` and the input-configuration read through `s3_client_for`, which falls back to the
+    default client for a bucket in the deployment Region.
     The five NVIDIA containers (Cosmos 3, Predict v2.5, Reason, Transfer, GR00T) run the AWS CLI rather
     than boto3: their `manifest_io.py` carries the registry (`register_bucket_regions`, `bucket_region`,
     `s3_region_args`), `__main__.py` registers the definition's map right after loading it, and every
@@ -792,7 +810,7 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
    [A Non-Root Container Normalizes Read Bits on the Source It COPYs](#a-non-root-container-normalizes-read-bits-on-the-source-it-copys).
 4. **Register the pipeline's sub-process and log sources** from `openPipeline.py` (or from
    `executeBatchJob.py` when that lambda submits the job itself): the state-machine log entry with
-   `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state naming the
+   `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state (only the state the run is routed to when several states share one job definition) naming the
    group that job definition writes to — the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group
    for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration — (`logStreamPrefix`
    `"<jobDefinitionName>/default/"`, `stageName` = the ASL state name, declared as a

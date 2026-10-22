@@ -1350,3 +1350,81 @@ describe("ExecutionDetailPage sub-processes", () => {
         ).not.toBeInTheDocument();
     });
 });
+
+/**
+ * The header names the published workflow version a run started on, and badges a version the workflow
+ * no longer runs because its state machine has been redeployed since the run.
+ */
+describe("ExecutionDetailPage workflow version", () => {
+    let queryClient: QueryClient;
+
+    const renderVersion = (fields: Partial<ExecutionDetail>) => {
+        const { useExecutionDetails, useExecutionDetailMetadata } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useExecutionDetailMetadata.mockReturnValue(IDLE_PAGED_METADATA);
+        useExecutionDetails.mockReturnValue({
+            data: {
+                workflowExecutionId: "e-ver",
+                workflowId: "wf-1",
+                workflowDatabaseId: "db-1",
+                executionStatus: "SUCCEEDED",
+                ...fields,
+            },
+            isLoading: false,
+            error: null,
+        });
+        useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => true) });
+        return render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <ExecutionDetailPage executionId="e-ver" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+    };
+
+    const versionField = () => screen.getByText("Workflow Version:").parentElement as HTMLElement;
+
+    beforeEach(() => {
+        queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        jest.clearAllMocks();
+    });
+
+    it("shows the version a run started on as the latest", () => {
+        renderVersion({ workflowVersion: 3, workflowVersionCurrent: true });
+        const field = versionField();
+        expect(within(field).getByText("3")).toBeInTheDocument();
+        expect(within(field).getByText("(latest)")).toBeInTheDocument();
+        expect(within(field).queryByText("Superseded")).not.toBeInTheDocument();
+    });
+
+    it("badges a superseded version and explains it", async () => {
+        renderVersion({ workflowVersion: 3, workflowVersionCurrent: false });
+        const field = versionField();
+        expect(within(field).getByText("3")).toBeInTheDocument();
+        expect(within(field).getByText("Superseded")).toBeInTheDocument();
+        expect(within(field).queryByText("(latest)")).not.toBeInTheDocument();
+
+        await userEvent.hover(
+            within(field).getByRole("button", { name: "About superseded versions" })
+        );
+        expect(
+            (await screen.findAllByText(/has been redeployed since this run started/)).length
+        ).toBeGreaterThan(0);
+        // Every builder save redeploys, so the tooltip must not present step or pipeline changes as
+        // the only causes.
+        expect(screen.getAllByText(/saved in the workflow builder/).length).toBeGreaterThan(0);
+    });
+
+    it("says a run started before versions were recorded has none", () => {
+        renderVersion({ workflowVersion: null, workflowVersionCurrent: null });
+        const field = versionField();
+        expect(within(field).getByText("Not recorded")).toBeInTheDocument();
+        expect(within(field).queryByText("Superseded")).not.toBeInTheDocument();
+    });
+
+    it("shows no version field when the service does not report one", () => {
+        renderVersion({});
+        expect(screen.queryByText("Workflow Version:")).not.toBeInTheDocument();
+    });
+});

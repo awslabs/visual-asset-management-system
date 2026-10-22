@@ -523,6 +523,21 @@ return success(body=item)
 
 Handlers compare against this exact string, so a mismatched variant silently fails the comparison (or attributes records to a user ID with no admin role). IAM permissions on direct Lambda invocation are the security boundary for who can inject a `lambdaCrossCall` event.
 
+### Internal Actions (Direct Invokes No API Route Reaches)
+
+A handler that serves another VAMS Lambda an operation with no API route dispatches it from a top-level event key before any API handling: `workflowService` serves `vamsInternalAction` (`refreshPipelineReferences`, `redeployWorkflow`; names and the event builder in `common/workflows/workflowRecords.py`). The action runs only when the event is a `SYSTEM_USER` `lambdaCrossCall` with **no** `requestContext` — API Gateway builds every proxy event with a `requestContext` and cannot add top-level keys, so no route reaches it — and its payload ids pass the `ID` validator. Derive the targets server-side from the payload's own entity (the refresh takes a pipeline and finds its workflows) rather than accepting a target list, and grant callers `lambda:InvokeFunction` on the handler's function ARN only.
+
+### Workflow State Machine Deployment
+
+A workflow's AWS Step Functions definition encodes each referenced pipeline's execution settings, so it must be rebuilt when any of them changes. The contract:
+
+-   **One deploy routine.** Create, update, the pipeline-change refresh and the launch-time check all deploy through `workflowService._deploy_fields`, which calls `workflowAsl.deploy_state_machine` and returns the attributes written together: `workflow_arn`, `workflowVersionArn` (every deploy publishes a version; older ones past `MAX_RETAINED_STATE_MACHINE_VERSIONS` are deleted), `jobNames` (reused while the steps are unchanged, so output prefixes do not move), `pipelineFingerprints` (`{"pipelineDatabaseId:pipelineId": sha256}` of `workflowAsl.to_asl_pipeline_dict` minus `name`) and `deploymentRevision`. The refresh writes conditionally on the revision it read.
+-   **Everything the ASL builders read from a pipeline record goes through `to_asl_pipeline_dict`.** That dict is what is fingerprinted; a setting read around it would change the definition without changing the fingerprint, and no workflow would be redeployed for it.
+-   **A pipeline change refreshes its workflows.** `pipelineService.update_pipeline` compares fingerprints before and after the save and, on a difference, invokes `refreshPipelineReferences` asynchronously; the workflow service walks every non-archived referencing workflow to exhaustion. A failed redeploy sets `deploymentStale` + `deploymentStaleReason` on the workflow.
+-   **The redeploy path reads strongly consistent.** `workflowService.redeploy_workflow` (behind both `refreshPipelineReferences` and `redeployWorkflow`) reads the workflow and each pipeline with `ConsistentRead=True` (the `consistent_read` parameter of `get_workflow_item`, `_get_pipeline_record` and `_resolve_snapshot_pipeline_records`). The refresh is invoked right after the pipeline write, and the re-read after a lost conditional write must see the other writer's deployment; an eventually consistent read can return the previous row in either place, so the walk finds every workflow "current" and redeploys nothing. API reads keep the default.
+-   **A launch never runs a stale definition.** `executeWorkflow._ensure_current_deployment` compares the stored fingerprints with the live pipeline records (a record without a version or fingerprints never matches), invokes `redeployWorkflow` synchronously on a mismatch, and starts on `workflowVersionArn`; when the deployment cannot be made current it returns `409` and starts nothing. The main execution row records `workflowVersionArn`.
+-   **Settings read at launch need no redeploy.** `systemConfig` (filters, arity, metadata gates, viewer suffix), templates, and enabled/archived state reach each run through the Step Functions input or the execute handler's own reads; keep it that way rather than baking them into the ASL.
+
 ### Casbin Policy Model
 
 Defined in `common/constants.py`. Request: `(sub, obj, act)`; policy line: `(sub, obj_rule, act, eft)`; role mapping: `g = _, _`; effect: `some(allow) && !some(deny)`; matcher: `g(r.sub, p.sub) && eval(p.obj_rule) && r.act == p.act`.
@@ -689,6 +704,12 @@ your_table.update_item(
     ExpressionAttributeValues=values_map,
 )
 ```
+
+The helper names its placeholders `#u<i>` / `:u<i>`, so a boto3 condition object
+(`ConditionExpression=Attr("rev").eq(n)`) is safe in the same call: boto3 renders it with
+`#n<i>` / `:v<i>` and merges those into the maps, replacing any entry of the same name. A
+hand-built update expression combined with a condition object must avoid `#n<i>` / `:v<i>`
+for the same reason.
 
 ### Pagination Patterns
 
@@ -867,7 +888,7 @@ asset_table = dynamodb.Table(asset_table_name)
 
 ### Common Environment Variables
 
-`VAMS_RESOURCE_PARAM_PREFIX` (required, non-pipeline handlers): SSM parameter prefix for resource-name resolution. `AWS_REGION` (auto, set by Lambda runtime). `COGNITO_AUTH_ENABLED` (authorizer Lambda only): whether the Cognito MFA-preference check is reachable. Handler-specific vars like `SEND_EMAIL_FUNCTION_NAME` are read directly from `os.environ`.
+`VAMS_RESOURCE_PARAM_PREFIX` (required, non-pipeline handlers): SSM parameter prefix for resource-name resolution. `AWS_REGION` (auto, set by Lambda runtime). `COGNITO_AUTH_ENABLED` (authorizer Lambda only): whether the Cognito MFA-preference check is reachable. Handler-specific vars like `SEND_EMAIL_FUNCTION_NAME` are read directly from `os.environ`. `WORKFLOW_SERVICE_V2_FUNCTION_NAME` is set on `pipelineService`, `executeWorkflow` and `importGlobalPipelineWorkflow`; the first two read it with `os.environ.get` and degrade (the refresh is not scheduled; a stale launch returns `409`) when it is absent.
 
 `PRESIGNED_URL_TIMEOUT_SECONDS` (S3 presigned URL TTL) is **not** set for every handler — only `infra/lib/lambdaBuilder/assetFunctions.ts` sets it, covering the five asset handlers that mint presigned URLs (`downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, `uploadFile`, `assetExportService`). All five index it (`os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]`) at module level, so a handler built by any other lambda builder that copies that idiom raises `KeyError` during module import and returns `500` on every request from cold start. Add the variable to the handler's own builder before reading it.
 

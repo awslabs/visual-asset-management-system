@@ -193,6 +193,18 @@ sub-process (a nested state machine or a container job) with per-stage status
 derived from its own execution history. The flag is off by default because that
 derivation reads Step Functions history.
 
+`get_execution_details` also reports `workflowVersion`, the published workflow
+state machine version the run started on, and `workflowVersionCurrent`, false
+once the workflow's state machine has been redeployed since the run. A save
+from the workflow builder always redeploys it, as does an API or CLI update that
+supplies the step list; a change to a setting one of its pipelines contributes
+to the state machine (execution type, target, callback mode, timeouts, Deadline
+Cloud job settings) redeploys it too. The flag does not track
+`workflowSystemConfig` or the pipeline names and descriptions, which are read
+live and can change without a redeploy; each step's `effectiveSystemConfig` is
+the snapshot it ran under. Both are null for a run started before versions were
+recorded.
+
 `get_execution_logs` full mode takes `limit` (default 100, server cap 1000),
 `next_token`, `filter_pattern`, `start_time`, and `end_time` (epoch
 milliseconds), plus — with `pipeline_execution_id` — `log_id` and `stage_name`.
@@ -300,8 +312,10 @@ its member's execution id and each `notAbortable` entry carries its member's
 
 `create_pipeline` and `update_pipeline` can return a `warnings` array on a
 successful save (for example a `requireTemplate` pipeline with no default template
-chosen, or the stale-deployment notice after an `executionConfig` change).
-The save succeeded; the warnings still need relaying.
+chosen, or, after an `executionConfig` change, how many referencing workflows are
+being redeployed in the background). The save succeeded; the warnings still need
+relaying. A workflow launch that the background redeploy has not reached yet
+redeploys the workflow first, or returns a retryable `409` and starts nothing.
 
 `create_pipeline_template`, `update_pipeline_template`, and
 `set_pipeline_template_tag_schema` reject an unrecognized key in a tag definition

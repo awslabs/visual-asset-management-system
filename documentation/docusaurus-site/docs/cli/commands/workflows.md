@@ -122,7 +122,8 @@ state machine.
 ## workflow update
 
 Update a workflow. Only supplied fields change; at least one is required. Changing the pipeline set
-(`--pipeline` / `--specified-pipelines`) redeploys the state machine.
+(`--pipeline` / `--specified-pipelines`) redeploys the state machine. An update without them also
+redeploys it when a referenced pipeline's execution settings changed since the last deploy.
 
 ```bash
 vamscli workflow update -d my-db -w my-workflow --description "Updated"
@@ -269,8 +270,9 @@ response warnings.
 
 A workflow may define a default output path prefix, which is used when `--output-path-prefix` is
 omitted. Because the stored default keeps its template tags unresolved, one setting such as
-`/{{jobName}}/` gives every run its own output folder. Pass an empty prefix to write at the asset root
-instead:
+`/{{jobName}}/` gives every run its own output folder: `{{jobName}}` resolves to the first step's
+generated job name joined to that step's pipeline execution id. Pass an empty prefix to write at the
+asset root instead:
 
 ```bash
 vamscli workflow execute --workflow-database-id global -w my-workflow     --input-file my-db:asset1:/model.glb --output-path-prefix ""

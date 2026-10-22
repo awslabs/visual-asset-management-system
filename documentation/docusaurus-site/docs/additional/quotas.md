@@ -125,7 +125,7 @@ The AWS Deadline Cloud execution type is available when the deployment sets
 | 3D Preview Thumbnail   | XGRIDS LCC / LCC2 scene description      | 64 MiB; 1,000,000 octree nodes                               |
 | 3D Preview Thumbnail   | Gaussian splat conversion time           | 30 minutes                                                   |
 | 3D Preview Thumbnail   | Preview file size                        | 5 MiB                                                        |
-| 3D Preview Thumbnail   | Job run time                             | 1 hour                                                       |
+| 3D Preview Thumbnail   | Job run time                             | 1 hour (standard tier), 3 hours (large tier)                 |
 | All ECS pipelines      | Metadata JSON input                      | 8,000 characters                                             |
 | Gaussian Splat Toolbox | GPU instance required                    | `g6e.2xlarge` or `g5.xlarge`                                 |
 | Isaac Lab Training     | GPU instance required                    | `g6e.2xlarge` or `g5.xlarge`                                 |
