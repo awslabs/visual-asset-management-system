@@ -105,11 +105,14 @@ export function extractStatusCode(error: any): number | null {
 /**
  * Check if error is retryable
  */
-export function isRetryableError(error: any): boolean {
+export function isRetryableError(
+    error: any,
+    retryableStatusCodes: number[] = RETRY_CONFIG.RETRYABLE_STATUS_CODES
+): boolean {
     const statusCode = extractStatusCode(error);
     if (statusCode === null) return false;
 
-    return RETRY_CONFIG.RETRYABLE_STATUS_CODES.includes(statusCode);
+    return retryableStatusCodes.includes(statusCode);
 }
 
 /**
@@ -149,12 +152,14 @@ export function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Retry an async operation with backoff
+ * Retry an async operation with backoff. `retryableStatusCodes` defaults to
+ * RETRY_CONFIG.RETRYABLE_STATUS_CODES.
  */
 export async function retryWithBackoff<T>(
     operation: () => Promise<T>,
     operationName: string,
-    onRetry?: (retryCount: number, error: any, backoffMs: number) => void
+    onRetry?: (retryCount: number, error: any, backoffMs: number) => void,
+    retryableStatusCodes: number[] = RETRY_CONFIG.RETRYABLE_STATUS_CODES
 ): Promise<T> {
     let lastError: any;
 
@@ -175,7 +180,10 @@ export async function retryWithBackoff<T>(
             );
 
             // Check if we should retry
-            if (attempt <= RETRY_CONFIG.MAX_RETRIES && isRetryableError(error)) {
+            if (
+                attempt <= RETRY_CONFIG.MAX_RETRIES &&
+                isRetryableError(error, retryableStatusCodes)
+            ) {
                 const backoffMs = getBackoffTime(error, attempt);
                 const backoffSeconds = Math.round(backoffMs / 1000);
 

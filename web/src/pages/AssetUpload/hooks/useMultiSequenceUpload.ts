@@ -16,7 +16,6 @@ import {
     retryWithBackoff,
     extractErrorMessage,
     extractStatusCode,
-    is503Error,
     formatRetryMessage,
 } from "../uploadRetry";
 
@@ -271,11 +270,13 @@ export function useMultiSequenceUpload() {
                     files: completionFiles,
                 };
 
-                // Use retry logic for complete call
+                // Use retry logic for complete call. Completion retries transient server errors only;
+                // a 504 is not retried because the completion may still be running.
                 const response = await retryWithBackoff(
                     () => AssetUploadService.completeUpload(uploadId, completionRequest),
                     `Complete sequence ${sequence.sequenceId}`,
-                    onRetry
+                    onRetry,
+                    [429, 500, 502, 503]
                 );
 
                 // Record anything the server refused. Only an EXPLICIT false counts: a result
@@ -320,18 +321,22 @@ export function useMultiSequenceUpload() {
                     `Status: ${statusCode}, Message: ${errorMessage}`
                 );
 
-                // Check for 503 - treat as success with warning
-                if (is503Error(error)) {
+                // A 504 means the gateway stopped waiting while completion may still be running, so
+                // the outcome is unverified: mark the sequence completed and return a warning.
+                if (statusCode === 504) {
                     console.log(
-                        `Sequence ${sequence.sequenceId} got 503 - treating as potential success`
+                        `Sequence ${sequence.sequenceId} got 504 - completion outcome unverified`
                     );
-                    // Mark as completed but note the 503
                     setSequenceCompleteStatuses((prev) => {
                         const newMap = new Map(prev);
                         newMap.set(sequence.sequenceId, "completed");
                         return newMap;
                     });
-                    return { is503: true, sequenceId: sequence.sequenceId, message: errorMessage };
+                    return {
+                        outcomeUnverified: true,
+                        sequenceId: sequence.sequenceId,
+                        message: errorMessage,
+                    };
                 }
 
                 // Mark sequence as failed
