@@ -257,7 +257,7 @@ endpoint rather than the detail response.
 | Parameter                 | Value                                                                                                                    |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | Blocked file extensions   | `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat` |
-| Upload stage 1 rate limit | 10 initializations per user per minute                                                                                   |
+| Upload stage 1 rate limit | 20 initializations per user per minute                                                                                   |
 | File validation           | Extension and MIME type checks on API upload; extension check on the destination of a move, rename or copy               |
 
 ### Blocked MIME Types

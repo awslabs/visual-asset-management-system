@@ -137,7 +137,8 @@ def calculate_num_parts(file_size=None, num_parts=None, max_part_size=MAX_PART_S
 
 def check_user_rate_limit(user_id: str) -> bool:
     """
-    Check if user has exceeded rate limit of 5 upload initializations per minute.
+    Check if user has exceeded rate limit of MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE upload
+    initializations per minute.
     Uses UserIdGSI with STRING type for both UserId and createdAt fields.
     
     Args:
