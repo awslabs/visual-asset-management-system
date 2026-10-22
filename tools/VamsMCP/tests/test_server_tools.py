@@ -121,6 +121,30 @@ def test_search_files_entity_type(mock_client):
     assert request["entityTypes"] == ["file"]
 
 
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: server.search_assets(query="bridge"),
+        lambda: server.search_files(query="texture"),
+        lambda: server.get_search_fields(),
+        lambda: server.find_and_summarize("bridge"),
+    ],
+    ids=["search_assets", "search_files", "get_search_fields", "find_and_summarize"],
+)
+def test_search_tools_refuse_without_opensearch(mock_client, call):
+    """Under NOOPENSEARCH every search tool returns the not-enabled error and sends no request."""
+    mock_client.search_enabled.return_value = False
+
+    result = call()
+
+    assert result == {
+        "error": server.SEARCH_DISABLED_MESSAGE,
+        "error_type": "SearchDisabledError",
+    }
+    mock_client.api.search_query.assert_not_called()
+    mock_client.api.get_search_mapping.assert_not_called()
+
+
 # --- Database-scoped search must not over-match sibling databases ------------
 #
 # S6-TOOLS-003. The filter was `str_databaseid:"{database_id}"` on the ANALYZED field, so the standard

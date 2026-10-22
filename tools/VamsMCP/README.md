@@ -252,7 +252,10 @@ ordering by an indexed field instead of relevance (relevance order cannot answer
 "the newest N"). `database_id` is matched on `str_databaseid.keyword`, so a
 database whose id is a hyphen-token prefix of another (`proj` vs `proj-archive`)
 does not leak into the results; `GLOBAL` is not an asset database and is treated
-as unscoped.
+as unscoped. On a deployment without OpenSearch (the `NOOPENSEARCH` feature
+switch in the vamscli profile), `search_assets`, `search_files`,
+`get_search_fields` and `find_and_summarize` return a "search is not enabled"
+error without calling the API; use `list_assets` to browse a database instead.
 
 `list_api_routes` and `list_constraint_permission_objects` are the two
 vocabularies a permission constraint is written in, and neither is scoped to the

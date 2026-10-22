@@ -36,6 +36,7 @@ from .client import (  # noqa: E402
     API_DATABASE_ASSETS,
     SUBSCRIPTION_ENTITY_ASSET,
     SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
+    SearchDisabledError,
 )
 from .config import Config, ConfigError  # noqa: E402
 from .custom_tools import register_custom_tools  # noqa: E402
@@ -80,6 +81,12 @@ EXECUTION_DETAIL_METADATA_COLLECTIONS = ("input", "inputDatabase", "output")
 # (common.dynamodb.validate_pagination_info). Named here because those routes return no
 # continuation token, so it is the ceiling on what is reachable rather than a page size.
 COMMENT_LIST_DEFAULT_BOUND = 10000
+
+# The search tools' error on a deployment without OpenSearch, mirroring the CLI's search commands.
+SEARCH_DISABLED_MESSAGE = (
+    "Search is not enabled on this deployment (NOOPENSEARCH feature). "
+    "Use list_assets to browse a database's assets instead."
+)
 
 # check_subscription answers 200 either way and carries the verdict in the message string, so these
 # are the two values that decide it. Anything else is reported rather than read as "not subscribed".
@@ -505,6 +512,12 @@ def _build_search_request(
     return request
 
 
+def _require_search() -> None:
+    """Refuse a search tool on a deployment without OpenSearch, as the CLI's search commands do."""
+    if not CLIENT.search_enabled():
+        raise SearchDisabledError(SEARCH_DISABLED_MESSAGE)
+
+
 @mcp.tool()
 @tool_result
 def search_assets(
@@ -549,7 +562,9 @@ def search_assets(
       sort_field="dateCreated" for the most recent first. Call get_search_fields() for the field
       names. Ordering by relevance (the default) cannot answer "the newest N".
 
-    Returns a compact list of hits (id, score, source fields)."""
+    Returns a compact list of hits (id, score, source fields). On a deployment without OpenSearch
+    (NOOPENSEARCH) it returns an error and sends no request."""
+    _require_search()
     request = _build_search_request(
         ["asset"], query, database_id, metadata_query, size, include_archived, geo_search,
         from_offset=from_offset, sort_field=sort_field, sort_desc=sort_desc,
@@ -576,7 +591,8 @@ def search_files(
     """Full-text / metadata / geospatial search across asset files (OpenSearch).
 
     Takes the same database_id, metadata_query, geo_search, paging (size / from_offset) and ordering
-    (sort_field / sort_desc) semantics as search_assets."""
+    (sort_field / sort_desc) semantics as search_assets, and the same NOOPENSEARCH error."""
+    _require_search()
     request = _build_search_request(
         ["file"], query, database_id, metadata_query, size, include_archived, geo_search,
         from_offset=from_offset, sort_field=sort_field, sort_desc=sort_desc,
@@ -588,7 +604,9 @@ def search_files(
 @mcp.tool()
 @tool_result
 def get_search_fields() -> Dict[str, Any]:
-    """List available search fields/types (the OpenSearch index mapping)."""
+    """List available search fields/types (the OpenSearch index mapping). Returns an error on a
+    deployment without OpenSearch (NOOPENSEARCH)."""
+    _require_search()
     return CLIENT.api.get_search_mapping()
 
 
@@ -842,7 +860,9 @@ def find_and_summarize(query: str, database_id: Optional[str] = None, size: int 
 
     Each entry's `version_count` is therefore the count on the FIRST page of versions;
     `version_count_truncated` marks an asset with more versions than one page holds, and its count
-    must not be reported as a total."""
+    must not be reported as a total. Returns an error on a deployment without OpenSearch
+    (NOOPENSEARCH)."""
+    _require_search()
     # Clamped rather than passed through: `size` fans out one paginated version walk per hit, and an
     # unclamped value turns one auto-approved tool call into thousands of API Gateway requests and
     # minutes of wall clock. It also bounds the `_source` documents this returns into the transcript.
