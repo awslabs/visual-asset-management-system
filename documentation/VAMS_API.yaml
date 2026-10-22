@@ -3061,7 +3061,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters, file already exists at destination, or source file is archived.
+                    description: Invalid parameters, file already exists at destination, source file is archived, or the destination file name has a blocked extension.
                     content:
                         application/json:
                             schema:
@@ -3117,7 +3117,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters or file already exists at destination.
+                    description: Invalid parameters, file already exists at destination, or the destination file name has a blocked extension.
                     content:
                         application/json:
                             schema:

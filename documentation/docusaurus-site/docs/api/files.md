@@ -182,11 +182,11 @@ Moves or renames a file within the asset. This copies the file to the new locati
 
 **Error Responses:**
 
-| Status | Description                                                               |
-| ------ | ------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, source file not found, or destination already exists. |
-| `403`  | Not authorized to modify files in this asset.                             |
-| `500`  | Internal server error.                                                    |
+| Status | Description                                                                                                                  |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, source file not found, destination already exists, or the destination file name has a blocked extension. |
+| `403`  | Not authorized to modify files in this asset.                                                                                |
+| `500`  | Internal server error.                                                                                                       |
 
 ---
 
@@ -233,11 +233,11 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 
 **Error Responses:**
 
-| Status | Description                                  |
-| ------ | -------------------------------------------- |
-| `400`  | Invalid parameters or source file not found. |
-| `403`  | Not authorized to copy files.                |
-| `500`  | Internal server error.                       |
+| Status | Description                                                                                      |
+| ------ | ------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters, source file not found, or the destination file name has a blocked extension. |
+| `403`  | Not authorized to copy files.                                                                    |
+| `500`  | Internal server error.                                                                           |
 
 ---
 
@@ -605,7 +605,7 @@ Each entry in `files` is an object:
 | `500`  | Internal server error.                                            |
 
 :::info[Blocked File Types]
-For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. Corresponding MIME types are also blocked.
+For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. Corresponding MIME types are also blocked. The destination file name of a move, rename or copy gets the same extension check.
 :::
 
 :::info[Preview File Extensions]

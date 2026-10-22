@@ -50,6 +50,7 @@ from common.apiRoutes import (
     API_REVERT_FILE_VERSION, API_SET_PRIMARY_FILE, API_CREATE_FOLDER,
 )
 from common.validators import validate, exceeds_s3_object_key_limit
+from common.s3 import validateUnallowedFileExtensionAndContentType
 from common.dynamodb import validate_pagination_info, query_all_items
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -2606,6 +2607,10 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     # over-long destination is a plain 400 rather than a misleading "Error accessing destination path".
     if exceeds_s3_object_key_limit(dest_key):
         raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
+
+    # The destination name gets the same blocked-extension check as an uploaded file name.
+    if not validateUnallowedFileExtensionAndContentType(dest_key, ""):
+        raise VAMSGeneralErrorResponse("File type not allowed for the destination file name.")
     
     # Check if source exists
     try:
@@ -2721,6 +2726,10 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     # destination is a plain 400 rather than a misleading "Error checking destination file".
     if exceeds_s3_object_key_limit(dest_key):
         raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
+
+    # The destination name gets the same blocked-extension check as an uploaded file name.
+    if not validateUnallowedFileExtensionAndContentType(dest_key, ""):
+        raise VAMSGeneralErrorResponse("File type not allowed for the destination file name.")
     
     # Check if source exists and is not archived
     try:
