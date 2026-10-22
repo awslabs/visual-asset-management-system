@@ -5369,6 +5369,24 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+                "404":
+                    description: The upload step reported its target as not found; the upload service's response is returned unchanged.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "429":
+                    description: Rate limit exceeded. Maximum 20 upload initializations per user per minute; the upload service's response is returned unchanged.
+                    headers:
+                        Retry-After:
+                            description: "Number of seconds to wait before retrying"
+                            schema:
+                                type: integer
+                                example: 60
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
