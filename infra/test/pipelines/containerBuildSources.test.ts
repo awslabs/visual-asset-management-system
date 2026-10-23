@@ -278,6 +278,11 @@ const NON_ROOT_IMAGES: { label: string; file: string; scratchDir?: string }[] = 
         file: path.join(PIPELINES_DIR, "preview", "3dThumbnail", "container", "Dockerfile"),
         scratchDir: "/app/tmp",
     },
+    {
+        label: "videoSopBom",
+        file: path.join(PIPELINES_DIR, "genAi", "videoSopBom", "container", "Dockerfile"),
+        scratchDir: "/app/tmp",
+    },
 ];
 
 /**
@@ -304,7 +309,7 @@ describe("base images are not pulled from a floating tag", () => {
 
     it("examines every Dockerfile it names", () => {
         // Control: a typo'd path would otherwise make the rule below pass over an empty set.
-        expect(ALL_DOCKERFILES.length).toBeGreaterThanOrEqual(4);
+        expect(ALL_DOCKERFILES.length).toBeGreaterThanOrEqual(5);
         for (const f of ALL_DOCKERFILES) expect(fs.existsSync(f)).toBe(true);
     });
 

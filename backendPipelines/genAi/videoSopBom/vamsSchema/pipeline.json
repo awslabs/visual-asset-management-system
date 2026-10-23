@@ -1,0 +1,30 @@
+{
+    "pipelineName": "Video SOP/BOM Extraction",
+    "category": "GenAI",
+    "description": "Transcribes 1-4 narrated teardown videos (MP4, MOV, M4V, WebM, MKV) with Amazon Transcribe and derives a step-by-step SOP, an LCA bill of materials and a lab summary with Amazon Bedrock; key frames are extracted for visual verification.",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "30600",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "multi",
+        "assetScope": {
+            "wholeAsset": false,
+            "folderAllowed": false
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "requireTemplate": true,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": ["*.mp4", "*.mov", "*.m4v", "*.webm", "*.mkv"],
+            "exclude": []
+        }
+    }
+}

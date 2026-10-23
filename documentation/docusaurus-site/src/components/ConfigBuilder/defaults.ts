@@ -270,6 +270,16 @@ const COMMERCIAL: ConfigShape = {
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: false,
             },
+            useGenAiVideoSopBom: {
+                enabled: false,
+                useCodeBuild: false,
+                autoRegisterWithVAMS: true,
+                bedrockModelId: "global.anthropic.claude-sonnet-5-5",
+                limits: {
+                    maxVideoFiles: 4,
+                    maxTotalDurationMinutes: 240,
+                },
+            },
             useSplatToolbox: {
                 enabled: false,
                 useCodeBuild: false,
@@ -389,6 +399,10 @@ const COMMERCIAL: ConfigShape = {
             autoLoadDefaultAssetSchema: true,
             autoLoadDefaultAssetFileSchema: true,
         },
+        compliance: {
+            autoLoadDefaultSchema: true,
+            quarantineBlocksDownload: false,
+        },
     },
 };
 
@@ -420,6 +434,9 @@ function buildGovCloud(): ConfigShape {
     // partition when they enable the pipeline (it ships disabled).
     cfg.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId = "";
     cfg.app.pipelines.useGenAiMetadata3dLabeling.autoRegisterAutoTriggerOnFileUpload = true;
+    // The same reason: one model id serves this pipeline's text and vision calls, and the commercial
+    // default is a "global." inference profile.
+    cfg.app.pipelines.useGenAiVideoSopBom.bedrockModelId = "";
     return cfg;
 }
 

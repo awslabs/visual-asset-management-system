@@ -14,6 +14,15 @@
  * green. Removing the override is what makes every one of those Dockerfiles take effect, and the
  * assertion below is what stops it coming back.
  *
+ * The construct is shared by six job definitions — conversion/coordinateTransform,
+ * genAi/metadata3dLabeling (whose image declares no `USER`, so it keeps running as root either way),
+ * genAi/videoSopBom, preview/3dThumbnail, and both preview/pcPotreeViewer images — so the assertion is
+ * written over all of them rather than over a named subset.
+ *
+ * Asserted on the emitted `AWS::Batch::JobDefinition`, because the user AWS Batch applies is the one it
+ * receives. `ContainerProperties.User` is absent (rather than `"root"`) when no override is set, which is
+ * what makes the absence assertion below meaningful.
+ *
  * **EC2 GPU jobs (issue #327):** GPU pipeline containers now run as uid/gid 10000:10000, enforced
  * via the image's `USER` directive (ContainerProperties.User stays absent, or it would replace the
  * image's USER). Two things are guarded below, both as real assertions: the seven GPU Dockerfiles
@@ -45,7 +54,7 @@ import { newTestApp } from "../support/testApp";
 const PIPELINES_DIR = path.join(__dirname, "..", "..", "..", "backendPipelines");
 
 /**
- * Enable the four pipelines that build Fargate Batch jobs.
+ * Enable the five pipelines that build Fargate Batch jobs.
  *
  * Duplicated from `fargateBatchAttemptDuration.test.ts` rather than shared: each suite owns its own
  * mutation and `mutateKey`, and a shared mutator would couple the two synth caches together.
@@ -58,6 +67,7 @@ function fargatePipelines(c: any) {
         "useGenAiMetadata3dLabeling",
         "usePreview3dThumbnail",
         "usePreviewPcPotreeViewer",
+        "useGenAiVideoSopBom",
     ]) {
         if (c.app.pipelines[flag]) {
             c.app.pipelines[flag].enabled = true;
@@ -87,10 +97,11 @@ describe("Fargate Batch container user", () => {
     });
 
     test("[control] Fargate job definitions ARE emitted in this synth", () => {
-        // All four pipelines ship disabled, so the absence assertion below is otherwise satisfied by a
-        // template that emitted nothing to inspect. Five are expected: coordinate transform, metadata
-        // labeling, the 3D thumbnail, and PDAL plus Potree from the point-cloud viewer.
-        expect(fargateJobDefinitions(synth).length).toBeGreaterThanOrEqual(5);
+        // All five pipelines ship disabled, so the absence assertion below is otherwise satisfied by a
+        // template that emitted nothing to inspect. Six are expected: coordinate transform, metadata
+        // labeling, the 3D thumbnail, the video SOP/BOM job, and PDAL plus Potree from the point-cloud
+        // viewer.
+        expect(fargateJobDefinitions(synth).length).toBeGreaterThanOrEqual(6);
     });
 
     test("[control] the emitted job definitions carry ContainerProperties at all", () => {

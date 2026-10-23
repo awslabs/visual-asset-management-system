@@ -30,7 +30,7 @@
  * Where getConfig() rejects a feature combination rather than adjusting the config,
  * the ConfigBuilder mirrors the rejection as a validation.ts error rule. The VPC
  * requirement is the worked example: getConfig() collects the VPC-requiring
- * features (15 core ones plus those of the add-on lane) and throws when
+ * features (16 core ones plus those of the add-on lane) and throws when
  * app.useGlobalVpc.enabled is false, and validation.ts carries one error rule per
  * feature. Where getConfig() does normalize a field, derived.ts carries that
  * assignment. Neither file is checked here — a feature added to the getConfig()

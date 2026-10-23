@@ -221,18 +221,19 @@ Each pipeline step in a workflow receives designated Amazon S3 output paths from
 
 ### Available Pipelines
 
-| Pipeline                           | Compute                      | Description                                                              |
-| ---------------------------------- | ---------------------------- | ------------------------------------------------------------------------ |
-| 3D Basic Conversion                | AWS Lambda (container image) | Convert 3D file formats                                                  |
-| CAD/Mesh Metadata Extraction       | AWS Lambda (container image) | Extract metadata from CAD and mesh files                                 |
-| Point Cloud Potree Viewer          | AWS Batch (Fargate)          | Generate Potree octree data for point cloud visualization                |
-| 3D Preview Thumbnail               | AWS Batch (Fargate)          | Generate GIF/JPG/PNG preview thumbnails for 3D files                     |
-| Gaussian Splatting (Splat Toolbox) | AWS Batch (Fargate)          | Generate Gaussian splat reconstructions                                  |
-| GenAI Metadata 3D Labeling         | AWS Batch (Fargate)          | AI-powered metadata labeling using Amazon Bedrock and Amazon Rekognition |
-| Model Optimization (ModelOps)      | AWS Batch (Fargate)          | Optimize 3D models for web delivery                                      |
-| RapidPipeline (ECS)                | AWS Batch (Fargate)          | RapidPipeline integration via Amazon ECS                                 |
-| RapidPipeline (EKS)                | Amazon EKS                   | RapidPipeline integration via Amazon EKS                                 |
-| Isaac Lab Training                 | AWS Batch (GPU)              | NVIDIA Isaac Lab simulation training                                     |
+| Pipeline                           | Compute                      | Description                                                                                    |
+| ---------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------- |
+| 3D Basic Conversion                | AWS Lambda (container image) | Convert 3D file formats                                                                        |
+| CAD/Mesh Metadata Extraction       | AWS Lambda (container image) | Extract metadata from CAD and mesh files                                                       |
+| Point Cloud Potree Viewer          | AWS Batch (Fargate)          | Generate Potree octree data for point cloud visualization                                      |
+| 3D Preview Thumbnail               | AWS Batch (Fargate)          | Generate GIF/JPG/PNG preview thumbnails for 3D files                                           |
+| Gaussian Splatting (Splat Toolbox) | AWS Batch (Fargate)          | Generate Gaussian splat reconstructions                                                        |
+| GenAI Metadata 3D Labeling         | AWS Batch (Fargate)          | AI-powered metadata labeling using Amazon Bedrock and Amazon Rekognition                       |
+| Video SOP/BOM Extraction           | AWS Batch (Fargate)          | Teardown-video transcription and SOP/BOM extraction using Amazon Transcribe and Amazon Bedrock |
+| Model Optimization (ModelOps)      | AWS Batch (Fargate)          | Optimize 3D models for web delivery                                                            |
+| RapidPipeline (ECS)                | AWS Batch (Fargate)          | RapidPipeline integration via Amazon ECS                                                       |
+| RapidPipeline (EKS)                | Amazon EKS                   | RapidPipeline integration via Amazon EKS                                                       |
+| Isaac Lab Training                 | AWS Batch (GPU)              | NVIDIA Isaac Lab simulation training                                                           |
 
 ## Configuration Flow
 
@@ -340,7 +341,7 @@ graph TD
 
 ## Resource Name Resolution
 
-VAMS Lambda functions resolve AWS resource names (Amazon DynamoDB tables, Amazon S3 buckets, Amazon CloudWatch log groups) from AWS Systems Manager Parameter Store at cold start. The CDK deployment publishes one SSM String parameter per registered resource name under `/{config.name}-{baseStackName}/resourceNames/` — 69 in the shipped configuration (53 DynamoDB tables, of which 7 are deprecated tables retained for migration under `dynamoTables/legacy/`; 9 audit log groups; 2 S3 buckets; 3 integration values for externally owned pipeline bridges; 2 Lambda function names). The set is derived from the `resourceNameRegistry`, so it grows with each registered resource. The Resource Names nested stack materializes 66 of them; the Amazon OpenSearch Service stack publishes the reindexer function name, and the secondary API stack publishes the workflow role ARN and the `vamsSchema` import function name, because those resources are created there. Non-pipeline handlers receive a single `VAMS_RESOURCE_PARAM_PREFIX` environment variable pointing to this SSM prefix, plus AWS IAM permissions for `ssm:GetParameter`, `ssm:GetParameters`, and `ssm:GetParametersByPath`.
+VAMS Lambda functions resolve AWS resource names (Amazon DynamoDB tables, Amazon S3 buckets, Amazon CloudWatch log groups) from AWS Systems Manager Parameter Store at cold start. The CDK deployment publishes one SSM String parameter per registered resource name under `/{config.name}-{baseStackName}/resourceNames/` — 74 in the shipped configuration (58 DynamoDB tables, of which 7 are deprecated tables retained for migration under `dynamoTables/legacy/`; 9 audit log groups; 2 S3 buckets; 3 integration values for externally owned pipeline bridges; 2 Lambda function names). The set is derived from the `resourceNameRegistry`, so it grows with each registered resource. The Resource Names nested stack materializes 71 of them; the Amazon OpenSearch Service stack publishes the reindexer function name, and the secondary API stack publishes the workflow role ARN and the `vamsSchema` import function name, because those resources are created there. Non-pipeline handlers receive a single `VAMS_RESOURCE_PARAM_PREFIX` environment variable pointing to this SSM prefix, plus AWS IAM permissions for `ssm:GetParameter`, `ssm:GetParameters`, and `ssm:GetParametersByPath`.
 
 At cold start, each handler calls `get_table_name(ResourceKeys.*)`, `get_bucket_name(ResourceKeys.*)`, or `get_log_group_name(ResourceKeys.*)` from `backend/backend/common/resourceNames.py`, which caches the parameter fetch for 60 minutes. This centralizes name management, enables environment variable overrides for testing, and reduces CDK template size by removing per-handler table/bucket/log-group environment variables (pipelines in `backendPipelines/` retain their direct environment variables).
 

@@ -259,7 +259,10 @@ CORE_ALLOWED_CONSTRAINT_OBJECT_TYPES = [
     'userRole',
     'pipeline',
     'workflow',
-    'metadataSchema'
+    'metadataSchema',
+    'complianceSchema',
+    'complianceEvaluation',
+    'complianceCascade',
 ]
 
 ALLOWED_CONSTRAINT_OPERATORS = [
@@ -297,6 +300,10 @@ CORE_PERMISSION_CONSTRAINT_FIELDS = {
             "metadataSchemaName": "",
             "metadataSchemaEntityType": "",
             #"field": "", //deprecated, old metadata schema
+
+            "complianceSchemaName": "",
+            "complianceState": "",
+            "cascadeId": "",
 
             "object__type": "",
             "route__path": "",
@@ -362,6 +369,13 @@ CORE_CONSTRAINT_OBJECT_TYPE_FIELDS = {
         {"label": "Database ID", "value": "databaseId"},
         {"label": "Metadata Schema Name", "value": "metadataSchemaName"},
         {"label": "Metadata Schema Entity Type", "value": "metadataSchemaEntityType"}]},
+    "complianceSchema": {"label": "Compliance Schema", "fields": [
+        {"label": "Schema Name", "value": "complianceSchemaName"}]},
+    "complianceEvaluation": {"label": "Compliance Evaluation", "fields": [
+        {"label": "Database ID", "value": "databaseId"},
+        {"label": "Compliance State", "value": "complianceState"}]},
+    "complianceCascade": {"label": "Compliance Cascade", "fields": [
+        {"label": "Cascade ID", "value": "cascadeId"}]},
 }
 
 _MERGED_CONSTRAINT_CONSTANTS = merge_constraint_extensions(

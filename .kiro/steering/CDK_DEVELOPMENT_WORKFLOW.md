@@ -70,11 +70,12 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 66 SSM resource-name parameters)
+  |     +-- ResourceNamesBuilder (publishes 71 SSM resource-name parameters)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
-  |     |    and the pipeline / pipeline template / workflow / workflow trigger / execution routes)
+  |     |    the pipeline / pipeline template / workflow / workflow trigger / execution routes,
+  |     |    and the compliance routes + trigger / workflow-callback Lambdas)
   |     |                                                    -> storage, resourceNames, ApiBuilder
   |     +-- SearchBuilder (OpenSearch)                       -> storage, resourceNames
   |     +-- PipelineBuilder (all use-case pipelines)         -> storage, ApiBuilder2
@@ -156,7 +157,7 @@ interface storageResources {
         errors: logs.LogGroup;
     };
     dynamo: {
-        // 48 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
+        // 53 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
@@ -208,11 +209,18 @@ interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table; // PK tagSchemaId, SK pipelineDatabaseId:pipelineId:templateId; GSI TagSchemaByTemplateGSI
         workflowStorageTableV2: dynamodb.Table; // PK databaseId, SK workflowId; GSIs WorkflowsByDatabaseGSI / WorkflowsByCategoryGSI / WorkflowsByDateGSI
         workflowTriggersStorageTable: dynamodb.Table; // PK workflowDatabaseId:workflowId, SK triggerType; GSI TriggersByBaseTypeGSI (PK triggerBaseType — the BARE type)
+
+        // Compliance tables
+        complianceSchemaStorageTable: dynamodb.Table; // PK schemaName, SK internalVersion; GSI DatabaseIdIndex
+        complianceAssetStateStorageTable: dynamodb.Table; // PK databaseId, SK assetId; GSIs SchemaNameIndex, ComplianceStateIndex (PK complianceState, SK databaseId — paged quarantine list)
+        complianceEvaluationStorageTable: dynamodb.Table; // PK evaluationId; GSIs AssetIndex, ExecutionIdIndex (PK executionId — pipeline-rule workflow callback)
+        complianceCascadeStorageTable: dynamodb.Table; // PK cascadeId; GSI StateIndex
+        complianceAuditStorageTable: dynamodb.Table; // PK entryId; GSIs AssetIndex, EventTypeIndex, AuditByDateGSI (PK allListPartition — unfiltered newest-first listing)
     };
 }
 ```
 
-The `*ByDateGSI` indexes on the pipeline, workflow, and workflow-execution V2 tables are partitioned on a constant `allListPartition` attribute, which is what makes the global (all-databases) list endpoints a query rather than a table scan. Every write path — including the data-migration transforms — must set that attribute, or the row is invisible to those lists.
+The `*ByDateGSI` indexes on the pipeline, workflow, and workflow-execution V2 tables and on the compliance audit table are partitioned on a constant `allListPartition` attribute, which is what makes the global (all-databases) list endpoints a query rather than a table scan. Every write path — including the data-migration transforms — must set that attribute, or the row is invisible to those lists. For the audit table every row is built by `common/compliance/auditRecord.py::build_audit_item`, which sets it; a guard test fails any `put_item` into that table that bypasses the builder.
 
 **`authResources`** (defined in `authBuilder-nestedStack.ts`):
 
@@ -357,8 +365,10 @@ Six rules for writing one:
    `Template.fromStack(root)` sees ~17 resources out of ~600.
 4. **Flatten `Fn::Join` before matching a property value.** A raw substring search finds the literal prefix
    and then a token boundary, so the assertion passes while checking nothing. Use `SynthResult.flatten()`.
-5. **Enabling `useSplatToolbox` requires `useCodeBuild: true`.** Splat is the only one of the fifteen
-   pipeline Dockerfiles that is **not in the repository** —
+5. **Enabling `useSplatToolbox` requires `useCodeBuild: true`.** Splat is the only one of the sixteen
+   pipeline Dockerfiles that is **not in the repository** (recompute as
+   `git ls-files backendPipelines | grep -c Dockerfile` tracked files plus the one gitignored splat file;
+   an on-disk `find` over-counts whenever a sync has left the splat file behind) —
    `backendPipelines/3dRecon/splatToolbox/container/.gitignore` ignores `Dockerfile` under "Pipeline Source
    Download Ignore", because it arrives from an upstream sync. With the flag false,
    `batch-gpu-pipeline.ts:179` takes the `AssetImage.fromAsset(..., {file: dockerfileName})` branch, which
@@ -445,6 +455,8 @@ const featureEnabled = true; // BAD - should be configurable
 ```
 
 #### **Rule 2: Feature Switches Must Be Defined**
+
+New features get a switch in `vamsAppFeatures.ts` and are gated by config in the core stack. The one accepted carve-out (root `CLAUDE.md` Rule 6): a feature that is inert until an operator configures it at runtime — none of its behavior applies until a record is written through its own API (an event-driven Lambda of the feature may run per event and no-op without that record), nothing beyond idle storage and those no-op invocations is billed, and access is governed by Casbin like every other route — may deploy without a switch. Compliance is the example: its tables, Lambdas and `/compliance/*` routes always deploy; the trigger and the workflow callback run per event and no-op without a binding, so no compliance behavior applies until a schema is bound. A feature that does work on its own (a poller, a scheduled job, an event consumer that acts on every event) does not qualify.
 
 ```typescript
 // ✅ CORRECT - Add to vamsAppFeatures.ts
@@ -662,6 +674,8 @@ Verify before deploying: a cycle is invisible to `cdk synth` and appears only at
 and confirm the storage nested stack takes no parameter fed from another nested stack's output. Regression
 coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`, and `infra/test/pipelines/codeBuildEcrEncryption.test.ts`
 for the CodeBuild repositories and their CMK flip.
+
+A Lambda's DynamoDB grants follow the tables its handler (and the shared modules it imports) resolves through `ResourceKeys`; `infra/test/security/complianceLambdaTableGrants.test.ts` derives those needs from the compliance handler source and asserts the synthesized role policy covers each table (read, plus write where the module writes), so a missing grant fails the suite instead of surfacing as an `AccessDeniedException` 500 in production. The three compliance Lambdas that run evaluations (`complianceEvaluateService`, `complianceTrigger`, `complianceCascadeExecutor`) share `grantEvaluationEngineReads` in `complianceFunctions.ts`: read on the asset, asset-links, asset-file-metadata, file-attribute, asset-links-metadata, asset-file-versions, metadata-schema, workflow, pipeline, pipeline-template and asset-buckets tables, plus every asset bucket. The metadata service and the two asset-link Lambdas (`createAssetLink`, `assetLinksService`) hold `dynamodb:UpdateItem` alone on the asset table (`table.grant(fun, "dynamodb:UpdateItem")`, not `grantWriteData`) for the change stamp a metadata write or link change records on the asset row; `infra/test/security/handlerGrantScopingWave.test.ts` pins that no other write action reaches the asset table from them.
 
 ### **Dependency Management Standards**
 
@@ -985,7 +999,7 @@ four does not reach it.
 
 ### **Pipeline Test Conventions**
 
-**A rule that must hold for EVERY pipeline goes in `backendPipelines/tests/`.** Pipelines are near-copies of one another, so a loose check spreads by copying — and a per-pipeline test structurally cannot catch that. `test_open_pipeline_extension_gates.py` is the worked example: it loads all seven `openPipeline.py` handlers by path and asserts each tests EXACT membership of its parsed `ALLOWED_INPUT_FILEEXTENSIONS` list, rather than `in` against the joined env string (which is substring containment — `.us` passes for `.usd,.usda`). Two of seven pipelines had been fixed and five had not, with every per-pipeline suite green.
+**A rule that must hold for EVERY pipeline goes in `backendPipelines/tests/`.** Pipelines are near-copies of one another, so a loose check spreads by copying — and a per-pipeline test structurally cannot catch that. `test_open_pipeline_extension_gates.py` is the worked example: it loads all eight `openPipeline.py` handlers by path and asserts each tests EXACT membership of its parsed `ALLOWED_INPUT_FILEEXTENSIONS` list, rather than `in` against the joined env string (which is substring containment — `.us` passes for `.usd,.usda`). When the test was written it covered seven pipelines: two had been fixed and five had not, with every per-pipeline suite green. The handler count is the `PIPELINES` tuple in that file (`grep -c '^    ("[A-Za-z0-9]*", "backendPipelines/' backendPipelines/tests/test_open_pipeline_extension_gates.py`).
 
 **Give every test module a suite-private basename.** `test_extension_gate.py`, `test_manifest_refactor.py`, `test_construct_pipeline_failure_reporting.py`, `test_open_pipeline_function_error.py`, `test_pipeline_end_token_routes.py`, `test_output_relative_subdir.py`, and both `pcPotreeViewer` `conftest.py` files each exist in two or more pipelines. No tests directory carries an `__init__.py`, so one pytest process collecting two same-named modules errors with `import file mismatch` — `pytest backendPipelines/` therefore cannot run as a single command, and under a different invocation order a suite can import another pipeline's same-named module and assert against the wrong file while passing. Prefix a new file with its pipeline (`test_splat_extension_gate.py`).
 
@@ -1007,6 +1021,10 @@ backendPipelines/
 │   │   ├── lambda/
 │   │   ├── container/
 │   │   └── blender/            # Pipeline-specific tools
+│   ├── videoSopBom/            # Video SOP/BOM extraction (Amazon Transcribe + Amazon Bedrock)
+│   │   ├── lambda/
+│   │   ├── container/
+│   │   └── vamsSchema/
 │   └── nvidia/cosmos/          # NVIDIA Cosmos pipelines
 │       ├── 3/                  # Cosmos 3 (omni generation)
 │       │   ├── lambda/
@@ -1223,9 +1241,10 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
      "sourceType": "batch", "label": "<Batch state name> container"}
     ```
 
-    Which group that is depends on the compute family. The five **Fargate** job definitions (coordinate
-    transform, Blender renderer, 3D thumbnail, PDAL, Potree) write through the `awslogs` driver to a
-    VAMS-owned, KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and register **that** group;
+    Which group that is depends on the compute family. The six **Fargate** job definitions (coordinate
+    transform, Blender renderer, 3D thumbnail, PDAL, Potree, video SOP/BOM extraction) write through the
+    `awslogs` driver to a VAMS-owned, KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and
+    register **that** group;
     the **GPU** Batch pipelines (NVIDIA Cosmos, GR00T, Isaac Lab, Splat Toolbox) set no log configuration,
     so theirs is AWS Batch's default `/aws/batch/job`. In both families the stream is
     `<jobDefinitionName>/default/<ecs-task-id>` — the Fargate construct sets `awslogs-stream-prefix` to the
@@ -1693,9 +1712,9 @@ The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, gran
     - **Pipeline-only endpoints** (~line 651): creates Batch, ECR API, ECR Docker endpoints in the isolated subnets. **Required for every pipeline, either placement** — without it Batch cannot pull the container image.
     - **ECS endpoint** (~line 736): the `needsEcsPrivate` variable. **Private-subnet pipelines only** — this is the ECS control-plane endpoint an EC2-launch-type container instance's agent needs; Fargate tasks do not use it. One ENI per AZ, ~$15/month.
 
-    Four Batch pipelines run in isolated subnets (Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; seven run in private subnets (Splat Toolbox, ModelOps, RapidPipeline ECS and EKS, NVIDIA Cosmos, NVIDIA Cosmos 3, NVIDIA GR00T) and appear in all three. Isaac Lab training runs its compute in private subnets and appears in the subnet-creation and endpoint conditions, with its ECS endpoint gated separately by `needsEcsIsolated`. The Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) use no Batch and appear in none. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
+    Which blocks a flag belongs in is derived from the source, not from a list kept here. Read the placement off `pipelineBuilder-nestedStack.ts`: a stack given `pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline` is an isolated-subnet pipeline (endpoint block only); one given `privateSubnets.pipeline`, or both `pipelineSubnetsPrivate` and `pipelineSubnetsIsolated`, is a private-subnet pipeline (all three). A containerized Lambda pipeline (3dBasic, CAD/mesh metadata extraction) is placed in isolated subnets but runs no Batch job, so it appears in no block. A pipeline whose container calls a service that has no interface endpoint yet also gets a service-endpoint gate beside the Bedrock Runtime / Rekognition `if` — the Bedrock Runtime endpoint is created when `bedrockRuntimeFromLambda` (`useForAllLambdas && useGenAiMetadata3dLabeling.enabled`) **or** `bedrockRuntimeFromContainer` (`useGenAiVideoSopBom.enabled`) holds, and the Transcribe endpoint when `bedrockRuntimeFromContainer` holds. Isaac Lab training is the one placement the derivation does not predict: its EC2 Batch compute is placed in `privateSubnets.pipeline` (its EFS in isolated subnets) and the flag appears in the subnet-creation and endpoint blocks, while its ECS endpoint is gated separately by `needsEcsIsolated` rather than `needsEcsPrivate`. Recompute the membership with `grep -n "pipelineSubnets" infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts` against `grep -n "subnetConfigurations.push(subnetPublicConfig)\|Pipeline-Only Required Endpoints\|const needsEcsPrivate\|bedrockRuntimeFromContainer" infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts` (no NAT for an isolated-subnet pipeline, NAT present for a private-subnet one) and `infra/test/pipelines/videoSopBomVpcPlacement.test.ts` (the service-endpoint gate widened for the container without widening the Lambda gate). `infra/test/security/vpcEndpointsAndAuthGrants.test.ts` asserts each flag's block membership from its `privateSubnetBatchFlags` / `isolatedSubnetBatchFlags` lists — add a new pipeline's flag to the matching list.
 
-    **Placement also decides how the pipeline treats an asset bucket in another Region.** The manifest names every input file's `bucketRegion` and the output bucket's; `vamsExecute` passes `inputBucketRegion` / `outputBucketRegion` to `openPipeline`, `constructPipeline` writes the definition's `bucketRegions` map, and the container signs each bucket's requests for its Region. An isolated-subnet pipeline additionally calls `manifestHelper.enforce_inputs_in_region(resolved)` right after `enforce_single_input_file`: its compute reaches Amazon S3 in the deployment Region and in the Regions the VPC builder created a cross-Region S3 interface endpoint for (`app.useGlobalVpc.addCrossRegionS3Endpoints`), so its lambda builder sets `CROSS_REGION_S3_ENDPOINT_REGIONS` on the `vamsExecute` function from `Config.crossRegionS3EndpointRegions(config)` — the helper the VPC builder iterates — and the gate rejects any other Region before the job is submitted. `infra/test/pipelines/isolatedPipelinesCrossRegionEndpointEnv.test.ts` holds the env value to the endpoint list. A pipeline that hands `s3://` locations to a third-party container image (ModelOps, RapidPipeline ECS/EKS) is same-Region only and calls `manifestHelper.enforce_same_region_io(resolved)` there instead, rejecting a cross-Region input or output bucket. `backendPipelines/tests/test_pipeline_cross_region_inputs.py` requires every `vamsExecute*.py` to be in exactly one class (isolated-subnet gate, Region-consuming, same-Region-only). Full rule: `backendPipelines/CLAUDE.md` step 2.
+    **Placement also decides how the pipeline treats an asset bucket in another Region.** The manifest names every input file's `bucketRegion` and the output bucket's; `vamsExecute` passes `inputBucketRegion` / `outputBucketRegion` to `openPipeline`, `constructPipeline` writes the definition's `bucketRegions` map, and the container signs each bucket's requests for its Region. An isolated-subnet pipeline additionally calls `manifestHelper.enforce_inputs_in_region(resolved)` right after `enforce_single_input_file` (a multi-file pipeline such as Video SOP/BOM calls it right after the manifest resolves, before its own count and HeadObject gates): its compute reaches Amazon S3 in the deployment Region and in the Regions the VPC builder created a cross-Region S3 interface endpoint for (`app.useGlobalVpc.addCrossRegionS3Endpoints`), so its lambda builder sets `CROSS_REGION_S3_ENDPOINT_REGIONS` on the `vamsExecute` function from `Config.crossRegionS3EndpointRegions(config)` — the helper the VPC builder iterates — and the gate rejects any other Region before the job is submitted. `infra/test/pipelines/isolatedPipelinesCrossRegionEndpointEnv.test.ts` holds the env value to the endpoint list. A pipeline that hands `s3://` locations to a third-party container image (ModelOps, RapidPipeline ECS/EKS) is same-Region only and calls `manifestHelper.enforce_same_region_io(resolved)` there instead, rejecting a cross-Region input or output bucket. `backendPipelines/tests/test_pipeline_cross_region_inputs.py` requires every `vamsExecute*.py` to be in exactly one class (isolated-subnet gate, Region-consuming, same-Region-only). Full rule: `backendPipelines/CLAUDE.md` step 2.
 
 9. **A directory containing `.synced-commit` is overwritten from upstream on every `cdk synth` — and on every `cdk list`.** `SplatToolboxConstruct.syncContainerSources` clones the pinned commit and copies every upstream file over `backendPipelines/3dRecon/splatToolbox/container/`. An edit to one of those files survives until the next CDK invocation and is then gone, with `git status` clean afterwards because the restored copy matches `HEAD`.
 

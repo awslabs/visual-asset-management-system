@@ -708,109 +708,79 @@ export class RapidPipelineEKSConstruct extends Construct {
             error: sfn.JsonPath.stringAt("$.error.Error || 'PipelineExecutionFailed'"),
         });
 
-        // Error handler passthrough - from Kubernetes job execution
-        const handleErrorTask = new sfn.Pass(this, "HandleError", {
-            parameters: {
-                "jobName.$": "$.jobName",
-                k8sJobName: "timeout-before-creation", // Job name placeholder for early-stage errors
-                "externalSfnTaskToken.$": "$.externalSfnTaskToken",
-                "error.$": "$.error",
-                errorContext: {
-                    "timestamp.$": "$$.State.EnteredTime",
-                    "stateName.$": "$$.State.Name",
-                    "executionName.$": "$$.Execution.Name",
-                },
-            },
-            resultPath: "$",
-        }).next(pipelineEndTask);
+        // Error handlers for the three Lambda tasks. Each task gets its own pair, named
+        // Handle<Task>Timeout and Handle<Task>InvokeError, because the Kubernetes job that exists when a
+        // task fails, and the field holding its name, depend on the task.
+        //
+        // PipelineEnd deletes the job named in k8sJobName, so a placeholder there leaves a created job
+        // running until activeDeadlineSeconds. A handler also reads only paths its input carries: a
+        // missing path in a Pass state raises States.Runtime, which no Catch routes, so the run would
+        // not reach PipelineEnd. A handler's input is the failed task's input plus $.error, and every
+        // path the task's payload reads is in it, because the task cannot be invoked otherwise.
+        //
+        //   * ConstructPipeline: no job has been created, and the literal says so.
+        //   * RunJob: the job may have been created before the failure. Its name is metadata.name in
+        //     the jobManifest RunJob's payload reads. PipelineEnd reports a job that was never
+        //     created as already deleted.
+        //   * CheckJob: the job exists, and its payload reads $.k8sJobName.
+        //
+        // States.ALL is evaluated after States.Timeout, so the InvokeError handler receives every
+        // other caught error, task failures included.
+        const addTaskErrorHandlers = (
+            task: tasks.LambdaInvoke,
+            jobNameField: { k8sJobName: string } | { "k8sJobName.$": string }
+        ): void => {
+            const errorContext = {
+                "timestamp.$": "$$.State.EnteredTime",
+                "stateName.$": "$$.State.Name",
+                "executionName.$": "$$.Execution.Name",
+            };
 
-        // Error handler for timeout scenarios
-        const handleTimeoutError = new sfn.Pass(this, "HandleTimeoutError", {
-            parameters: {
-                "jobName.$": "$.jobName",
-                k8sJobName: "timeout-before-creation",
-                "externalSfnTaskToken.$": "$.externalSfnTaskToken",
-                error: {
-                    Error: "States.Timeout",
-                    Cause: "Lambda function execution timed out",
+            const timeoutHandler = new sfn.Pass(this, `Handle${task.node.id}Timeout`, {
+                parameters: {
+                    "jobName.$": "$.jobName",
+                    ...jobNameField,
+                    "externalSfnTaskToken.$": "$.externalSfnTaskToken",
+                    error: {
+                        Error: "States.Timeout",
+                        Cause: "Lambda function execution timed out",
+                    },
+                    errorContext,
                 },
-                errorContext: {
-                    "timestamp.$": "$$.State.EnteredTime",
-                    "stateName.$": "$$.State.Name",
-                    "executionName.$": "$$.Execution.Name",
-                },
-            },
-            resultPath: "$",
-        }).next(pipelineEndTask);
+                resultPath: "$",
+            }).next(pipelineEndTask);
 
-        // Error handler for task failures
-        const handleTaskFailureError = new sfn.Pass(this, "HandleTaskFailureError", {
-            parameters: {
-                "jobName.$": "$.jobName",
-                "k8sJobName.$": "$.k8sJobName",
-                "externalSfnTaskToken.$": "$.externalSfnTaskToken",
-                "error.$": "$.error",
-                errorContext: {
-                    "timestamp.$": "$$.State.EnteredTime",
-                    "stateName.$": "$$.State.Name",
-                    "executionName.$": "$$.Execution.Name",
+            const invokeErrorHandler = new sfn.Pass(this, `Handle${task.node.id}InvokeError`, {
+                parameters: {
+                    "jobName.$": "$.jobName",
+                    ...jobNameField,
+                    "externalSfnTaskToken.$": "$.externalSfnTaskToken",
+                    "error.$": "$.error",
+                    errorContext,
                 },
-            },
-            resultPath: "$",
-        }).next(pipelineEndTask);
+                resultPath: "$",
+            }).next(pipelineEndTask);
+
+            task.addCatch(timeoutHandler, {
+                errors: ["States.Timeout"],
+                resultPath: "$.error",
+            });
+            task.addCatch(invokeErrorHandler, {
+                errors: ["States.ALL"],
+                resultPath: "$.error",
+            });
+        };
+
+        addTaskErrorHandlers(constructPipelineTask, { k8sJobName: "failure-before-creation" });
+        addTaskErrorHandlers(runJobTask, {
+            "k8sJobName.$": "$.ConstructPipelineResult.Payload.jobManifest.metadata.name",
+        });
+        addTaskErrorHandlers(checkJobTask, { "k8sJobName.$": "$.k8sJobName" });
 
         // End state evaluation: success or failure
         const endChoice = new sfn.Choice(this, "EndChoice")
             .when(sfn.Condition.isPresent("$.error"), failState)
             .otherwise(successState);
-
-        // Add comprehensive error handling to all Lambda tasks
-        constructPipelineTask.addCatch(handleErrorTask, {
-            errors: ["States.ALL"],
-            resultPath: "$.error",
-        });
-
-        runJobTask.addCatch(handleErrorTask, {
-            errors: ["States.ALL"],
-            resultPath: "$.error",
-        });
-
-        checkJobTask.addCatch(handleErrorTask, {
-            errors: ["States.ALL"],
-            resultPath: "$.error",
-        });
-
-        // Add timeout-specific error handling
-        constructPipelineTask.addCatch(handleTimeoutError, {
-            errors: ["States.Timeout"],
-            resultPath: "$.error",
-        });
-
-        runJobTask.addCatch(handleTimeoutError, {
-            errors: ["States.Timeout"],
-            resultPath: "$.error",
-        });
-
-        checkJobTask.addCatch(handleTimeoutError, {
-            errors: ["States.Timeout"],
-            resultPath: "$.error",
-        });
-
-        // Add task failure specific error handling
-        constructPipelineTask.addCatch(handleTaskFailureError, {
-            errors: ["States.TaskFailed"],
-            resultPath: "$.error",
-        });
-
-        runJobTask.addCatch(handleTaskFailureError, {
-            errors: ["States.TaskFailed"],
-            resultPath: "$.error",
-        });
-
-        checkJobTask.addCatch(handleTaskFailureError, {
-            errors: ["States.TaskFailed"],
-            resultPath: "$.error",
-        });
 
         pipelineEndTask.next(endChoice);
 

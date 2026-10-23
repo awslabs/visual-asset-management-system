@@ -32,6 +32,10 @@ jest.mock("../../services/APIService", () => ({
 jest.mock("../../components/metadataV2", () => ({ MetadataContainer: () => null }));
 jest.mock("../../components/asset/tabs/AssetLinksTab", () => ({ AssetLinksTab: () => null }));
 jest.mock("./AssetUploadWorkflow", () => ({ __esModule: true, default: () => null }));
+// The compliance schema field gates on this hook; a deny keeps these tag-fetch tests focused.
+jest.mock("../../features/orchestration/permissions/useAllowedRoutes", () => ({
+    useAllowedRoutes: () => ({ loading: false, can: () => false }),
+}));
 jest.mock("./onSubmit", () => ({
     __esModule: true,
     default: () => () => undefined,

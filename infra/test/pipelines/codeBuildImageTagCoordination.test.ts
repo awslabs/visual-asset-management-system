@@ -232,10 +232,10 @@ describe("every CodeBuild image construct supplies IMAGE_TAG", () => {
     const builders = files.filter((f) => codeLines(f).some((l) => /ECR_REPO_URI:/.test(l)));
 
     it("[control] finds the CodeBuild constructs to scan", () => {
-        // There are six: coordinateTransform, splatToolbox, cosmos (four repos from one construct),
-        // gr00t, isaacLab, and the add-on image builds under addon/. A lower number means the scan
-        // stopped seeing them, which would make the assertions below pass vacuously.
-        expect(builders.length).toBeGreaterThanOrEqual(6);
+        // There are seven: coordinateTransform, splatToolbox, cosmos (four repos from one construct),
+        // gr00t, isaacLab, videoSopBom, and the add-on image build under addon/. A lower number means
+        // the scan stopped seeing them, which would make the assertions below pass vacuously.
+        expect(builders.length).toBeGreaterThanOrEqual(7);
     });
 
     it("supplies IMAGE_TAG beside ECR_REPO_URI, from the source asset hash", () => {
