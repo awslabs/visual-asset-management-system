@@ -1056,7 +1056,8 @@ def create_job(job_manifest, namespace="default"):
         namespace (str): The Kubernetes namespace to create the job in
 
     Returns:
-        str: The name of the created job
+        str: The name of the created job, or of the job with the same name and job-id label that an
+        earlier create attempt made
 
     Raises:
         ValueError: If the job manifest is invalid
@@ -1194,6 +1195,38 @@ def create_job(job_manifest, namespace="default"):
         # Create the job with enhanced retry logic
         logger.info(f"Creating Kubernetes job: {job_name}")
 
+        # The job name is generated per run and the job carries the run's job-id label, so an existing
+        # job with this name and label is this run's job. A create the API server applied can still fail
+        # on the client (a 504, or the read timeout after the request was sent), and its resend is then
+        # answered 409.
+        manifest_job_id = (metadata.get('labels') or {}).get('job-id')
+
+        def job_from_earlier_create_attempt():
+            """The existing job named job_name when it carries this manifest's job-id label, else None."""
+            if not manifest_job_id:
+                logger.error(f"Job {job_name} already exists and the manifest has no job-id label to match it by")
+                return None
+
+            try:
+                def read_conflicting_job():
+                    return batch_v1.read_namespaced_job(name=job_name, namespace=namespace)
+
+                existing_job = with_retries(read_conflicting_job, max_retries=2, operation_name="read_conflicting_job")
+            except Exception as e:
+                logger.error(f"Job {job_name} already exists and could not be read to compare its job-id: {str(e)}")
+                return None
+
+            existing_job_id = (getattr(existing_job.metadata, 'labels', None) or {}).get('job-id')
+            if existing_job_id != manifest_job_id:
+                logger.error(
+                    f"Job {job_name} already exists with job-id {existing_job_id}, not this run's {manifest_job_id}")
+                return None
+
+            logger.warning(
+                f"Job {job_name} with job-id {manifest_job_id} already exists: an earlier create attempt "
+                "for this run created it, adopting it")
+            return existing_job
+
         def create_k8s_job():
             try:
                 result = batch_v1.create_namespaced_job(
@@ -1208,6 +1241,9 @@ def create_job(job_manifest, namespace="default"):
                 # Add specific error handling for common issues
                 if ApiException is not None and isinstance(e, ApiException):
                     if e.status == 409:
+                        existing_job = job_from_earlier_create_attempt()
+                        if existing_job is not None:
+                            return existing_job
                         raise ValueError(f"Job {job_name} already exists (conflict)")
                     elif e.status == 422:
                         raise ValueError(f"Job manifest validation failed: {e.body}")
