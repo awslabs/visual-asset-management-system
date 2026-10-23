@@ -748,6 +748,11 @@ Archived assets live under a `databaseId + "#deleted"` partition-key suffix. Arc
 rewrite items with the suffixed partition key; query archived items with
 `KeyConditionExpression=Key('databaseId').eq(f"{database_id}#deleted")`.
 
+Authorization evaluates an archived record (asset or deleted database) on the database it
+belongs to: `CasbinEnforcerService.enforce` removes the suffix from the evaluated
+`databaseId`, so constraints match it exactly as they match the live record. Pass the stored
+record to `enforce()` unchanged; do not strip or add the suffix in a handler for authorization.
+
 ### TypeDeserializer for Low-Level Responses
 
 Low-level client responses use DynamoDB's typed dict shape. Convert with

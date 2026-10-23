@@ -59,6 +59,11 @@ DEFAULT_ROLE_NAME = os.environ.get("DEFAULT_ROLE_NAME", "").strip()
 #
 POLICY_TEXT_DENY_ALL = "g,,\0,*,deny\np,,,*,deny"
 
+# Archived assets and deleted databases are stored under "<databaseId>#deleted". Authorization
+# evaluates the database id without it (CasbinEnforcerService._evaluated_database_id).
+#
+ARCHIVED_DATABASE_ID_SUFFIX = "#deleted"
+
 # Tracks users and their policy_text (which could span multiple roles)
 #
 casbin_user_policy_map = {} if CASBIN_NO_DICTIONARY_LOCKING else locked_dict.LockedDict()
@@ -881,6 +886,25 @@ class CasbinEnforcerService:
         allowed = set(valid_fields) | ALWAYS_ALLOWED_OBJECT_KEYS
         return {k: v for k, v in obj.items() if k in allowed}
 
+    @staticmethod
+    def _evaluated_database_id(obj):
+        """The object with an archived record's databaseId replaced by the database it belongs to.
+
+        Archiving an asset and deleting a database both rewrite the record under the partition key
+        ``<databaseId>#deleted``, and the listings and single-record reads that include archived
+        records hand that stored id to ``enforce()``. Constraint values name the database itself, and
+        the anchored operators (``equals`` -> ``^value\\Z``, ``ends_with``) never match the suffixed
+        id, so an archived record escaped every rule written that way: a deny on its database did not
+        apply to it, and an allow scoped to its database did not reach it. Removing the suffix here,
+        where every object-level decision is evaluated, authorizes an archived record exactly like a
+        live record of the same database. Database ids cannot contain ``#`` (``id_pattern``), so the
+        suffix is unambiguous. A copy is returned; the caller's object is not modified.
+        """
+        database_id = obj.get("databaseId")
+        if isinstance(database_id, str) and database_id.endswith(ARCHIVED_DATABASE_ID_SUFFIX):
+            return {**obj, "databaseId": database_id[: -len(ARCHIVED_DATABASE_ID_SUFFIX)]}
+        return obj
+
     def enforce(self, obj, act):
         """
         Enforce authorization (audit logging handled by wrapper).
@@ -905,6 +929,8 @@ class CasbinEnforcerService:
         # Ignore fields out of scope for this object's type so deprecated or foreign
         # fields cannot influence a match. Unknown/absent types are left unchanged.
         obj = self._scrub_object_fields(obj)
+        # An archived record is decided on the database it belongs to, not on its storage key.
+        obj = self._evaluated_database_id(obj)
 
         enhanced_object = PERMISSION_CONSTRAINT_FIELDS.copy()
         # Update with obj, but convert any None values to empty strings to prevent regex errors
