@@ -38,7 +38,7 @@ const STRING_INTRINSICS = [
     "States.UUID(",
 ];
 
-/** The producers on `development`, so the generic checks below cannot pass over an empty set. */
+/** The producers this state machine has, so the generic checks below cannot pass over an empty set. */
 const KNOWN_PRODUCERS = [
     "HandleConstructPipelineTimeout",
     "HandleConstructPipelineInvokeError",
@@ -158,6 +158,9 @@ describe("EKS Failure state reports the run's error and cause", () => {
         const rules = states.EndChoice.Choices.filter((rule: any) => rule.Next === "Failure");
         expect(rules).toEqual([{ Variable: "$.error", IsPresent: true, Next: "Failure" }]);
         expect(states.EndChoice.Default).toBe("Success");
+        // Failure reads $.error from EndChoice's output, so EndChoice must pass its input through whole.
+        expect(states.EndChoice.InputPath).toBeUndefined();
+        expect(states.EndChoice.OutputPath).toBeUndefined();
     });
 
     test("PipelineEnd passes $.error through to EndChoice unchanged", () => {
