@@ -38,6 +38,9 @@ const BUILD_ENV = {
     // binary the web build never uses.
     ELECTRON_SKIP_BINARY_DOWNLOAD: "1",
     NODE_OPTIONS: "--max-old-space-size=4096",
+    // Upstream bakes both into APP_CONFIG; a host value adds remote extension and layout calls.
+    API_URL: "",
+    DEV_WORKSPACE: "",
 };
 
 /** The overlay files copied into <clone>/web/src-vams/, the webpack context of the VAMS build. */
@@ -53,8 +56,20 @@ const OVERLAY_WEBPACK_CONFIG = "vams.webpack.config.ts";
 /** A data: URI carrying a font, which the VAMS CSP (font-src 'self') blocks. */
 const FONT_DATA_URI = /data:(?:font\/|application\/(?:x-)?font)/i;
 
+/**
+ * overlay/entrypoint.tsx renders the app with no extension loaders, so no Lichtblick extension
+ * (code that would run on the VAMS origin) can be installed or loaded. Minified, that is the one
+ * `extensionLoaders` property of the entry bundle.
+ */
+const NO_EXTENSION_LOADERS = "extensionLoaders:[]";
+const EXTENSION_LOADERS_PROP = /extensionLoaders:[^,}]+/g;
+const ENTRY_SCRIPT = /<script\b[^>]*\bsrc="(?:[^"]*\/)?(main\.[^"/]+\.js)"/i;
+
+/** The environment of the build commands: the host's, with BUILD_ENV taking precedence. */
+const buildEnv = (hostEnv = process.env) => ({ ...hostEnv, ...BUILD_ENV });
+
 const run = (command, options = {}) =>
-    execSync(command, { stdio: "inherit", ...options, env: { ...process.env, ...BUILD_ENV } });
+    execSync(command, { stdio: "inherit", ...options, env: buildEnv() });
 
 const elapsed = (start) => `${Math.round((Date.now() - start) / 1000)}s`;
 
@@ -87,8 +102,9 @@ function listFiles(dir) {
 /**
  * Checks a built viewer directory against what the VAMS CSP and the deployment allow: the
  * post-processed page and its init script exist, the page has no inline script and opens its
- * <head> with the referrer policy, no source map is shipped, and no font is embedded as a data:
- * URI. Returns the problems found (empty when the build is acceptable).
+ * <head> with the referrer policy, its entry bundle renders the app with no extension loaders, no
+ * source map is shipped, and no font is embedded as a data: URI. Returns the problems found (empty
+ * when the build is acceptable).
  * @param {string} dir - The built viewer directory
  * @returns {string[]}
  */
@@ -111,6 +127,18 @@ function verifyBuild(dir) {
     }
     if (!fs.existsSync(path.join(dir, INIT_SCRIPT_NAME))) {
         problems.push(`${INIT_SCRIPT_NAME} is missing`);
+    }
+    const entry = html.match(ENTRY_SCRIPT);
+    const entryPath = entry ? path.join(dir, entry[1]) : undefined;
+    if (!entryPath || !fs.existsSync(entryPath)) {
+        problems.push("index.html loads no main.<hash>.js entry bundle");
+    } else {
+        const loaders = fs.readFileSync(entryPath, "utf8").match(EXTENSION_LOADERS_PROP) ?? [];
+        if (loaders.length !== 1 || loaders[0] !== NO_EXTENSION_LOADERS) {
+            problems.push(
+                `${entry[1]} does not render the app with an empty extension loader list`
+            );
+        }
     }
     for (const file of listFiles(dir)) {
         if (file.endsWith(".map")) {
@@ -290,7 +318,14 @@ const main = () => {
     }
 };
 
-module.exports = { verifyCommit, verifyBuild, sourceNotice, LICHTBLICK_COMMIT, PUBLIC_PATH };
+module.exports = {
+    verifyCommit,
+    verifyBuild,
+    sourceNotice,
+    buildEnv,
+    LICHTBLICK_COMMIT,
+    PUBLIC_PATH,
+};
 
 if (require.main === module) {
     main();

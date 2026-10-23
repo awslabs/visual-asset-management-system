@@ -21,9 +21,13 @@ import path from "path";
 const { postprocess, postprocessDirectory, REFERRER_META } = jest.requireActual(
     "../../../../customInstalls/robotics/postprocessIndexHtml"
 );
-const { verifyBuild, verifyCommit, LICHTBLICK_COMMIT, PUBLIC_PATH } = jest.requireActual(
+const { verifyBuild, verifyCommit, buildEnv, LICHTBLICK_COMMIT, PUBLIC_PATH } = jest.requireActual(
     "../../../../customInstalls/robotics/roboticsViewerInstall"
 );
+
+// What the entry bundle carries when overlay/entrypoint.tsx renders the app (minified).
+const ENTRY_BUNDLE =
+    "rootElement:(0,S.jsx)(P1,{appParameters:{},extensionLoaders:[],enableGlobalCss:!0})";
 
 // The shape of the upstream template (packages/suite-web/src/webpackConfigs.ts at v1.29.1, as
 // minified by html-webpack-plugin): charset first, an inline <style>, one inline <script> between
@@ -98,10 +102,29 @@ describe("the install's build checks", () => {
     afterAll(() => dirs.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })));
 
     it("accepts a post-processed build", () => {
-        const dir = builtDir({ "index.html": UPSTREAM_INDEX, "main.0123abcd.js": "run();" });
+        const dir = builtDir({ "index.html": UPSTREAM_INDEX, "main.0123abcd.js": ENTRY_BUNDLE });
         postprocessDirectory(dir);
         expect(verifyBuild(dir)).toEqual([]);
         expect(fs.readFileSync(path.join(dir, "vams-init.js"), "utf8")).toContain("globalThis");
+    });
+
+    it.each([
+        // Upstream WebRoot: the IndexedDB extension loaders (installed extensions run on the origin).
+        ["WebRoot's loaders", "(0,S.jsx)(P1,{extensionLoaders:n,enableGlobalCss:!0})"],
+        ["no loader list", "run();"],
+        ["a second loader list", `${ENTRY_BUNDLE};x({extensionLoaders:m})`],
+    ])("rejects an entry bundle with %s", (_case, bundle) => {
+        const dir = builtDir({ "index.html": UPSTREAM_INDEX, "main.0123abcd.js": bundle });
+        postprocessDirectory(dir);
+        expect(verifyBuild(dir)).toEqual([
+            "main.0123abcd.js does not render the app with an empty extension loader list",
+        ]);
+    });
+
+    it("rejects a page that loads no entry bundle", () => {
+        const dir = builtDir({ "index.html": UPSTREAM_INDEX });
+        postprocessDirectory(dir);
+        expect(verifyBuild(dir)).toEqual(["index.html loads no main.<hash>.js entry bundle"]);
     });
 
     it("[control] rejects the build before post-processing", () => {
@@ -145,5 +168,44 @@ describe("the install's build checks", () => {
             "utf8"
         );
         expect(wrapper).toContain(`const PUBLIC_PATH = "${PUBLIC_PATH}";`);
+    });
+
+    it("builds without the host's API_URL and DEV_WORKSPACE, which upstream bakes into the bundle", () => {
+        const env = buildEnv({
+            API_URL: "https://example.invalid",
+            DEV_WORKSPACE: "ws",
+            PATH: "/bin",
+        });
+        expect(env.API_URL).toBe("");
+        expect(env.DEV_WORKSPACE).toBe("");
+        expect(env.PATH).toBe("/bin");
+    });
+});
+
+/**
+ * A Lichtblick extension is code the app runs in the framed document, which is same-origin with
+ * VAMS and can read the signed-in user's tokens. Upstream's WebRoot always adds IndexedDB extension
+ * loaders, so the VAMS entrypoint renders upstream's SharedRoot itself with none.
+ */
+describe("the overlay entrypoint loads no Lichtblick extension", () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, "../../../../customInstalls/robotics/overlay/entrypoint.tsx"),
+        "utf8"
+    );
+    // The code only: the header comment names the upstream classes the entrypoint avoids.
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+    it("renders its own root, with an empty extension loader list", () => {
+        expect(code).toMatch(/rootElement:\s*\(\s*<SharedRoot\b/);
+        expect(code.match(/extensionLoaders=\{[^}]*\}/g)).toEqual(["extensionLoaders={[]}"]);
+    });
+
+    it("neither renders upstream's WebRoot nor names an extension loader", () => {
+        expect(code).not.toMatch(/\bWebRoot\b/);
+        expect(code).not.toMatch(/ExtensionLoader/);
+    });
+
+    it("replaces the Extensions settings with a notice", () => {
+        expect(code).toMatch(/extensionSettings:\s*<ExtensionsUnavailable\s*\/>/);
     });
 });
