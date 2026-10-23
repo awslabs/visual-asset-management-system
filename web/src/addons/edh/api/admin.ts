@@ -11,7 +11,9 @@ import type {
     EdhFailure,
     LeasePolicy,
     RegisterCapacityReservationRequest,
+    StartFailure,
     UpdateCapacityReservationRequest,
+    WorkstationActivity,
 } from "../types";
 
 export type EdhImageKind = "vdi" | "simulation";
@@ -47,9 +49,13 @@ export interface EdhAdminInstance {
     bootstrapId: string | null;
     /** The VAMS state derived from EDH's session_state, or the row's when EDH lists no desktop. */
     state: string | null;
+    /** What the session is doing, derived as on a workstation record; null when neither. */
+    activity?: WorkstationActivity | null;
     lastError: string | null;
     /** The launch failure VAMS captured from EDH, from the joined VAMS row; null when there is none. */
     edhFailure?: EdhFailure | null;
+    /** Why the last start left the desktop STOPPED, from the joined VAMS row; null when it did not. */
+    startFailure?: StartFailure | null;
     imageId: string | null;
     osFamily: string | null;
     instanceType: string | null;

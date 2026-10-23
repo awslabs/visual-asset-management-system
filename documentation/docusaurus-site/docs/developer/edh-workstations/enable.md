@@ -129,6 +129,21 @@ The installer refuses a cluster name that an AWS CloudFormation stack in the Reg
 
 EDH installs its high-scale Amazon DCV layout by default (`Config.dcv.high_scale` is `true` in the installer's `default_config.yml`). In that layout a Network Load Balancer in front of the Amazon DCV Connection Gateway is the DCV entry point, and the EDH controller creates each desktop's session through the Amazon DCV Session Manager broker, which issues the connection token; in the standard layout the Application Load Balancer is the DCV entry point. VAMS works with either layout: it reads the connection URL from EDH and hands it to the browser unchanged. [How EDH deploys a desktop](overview.md#how-edh-deploys-a-desktop) lists the services the cluster uses for each desktop.
 
+### What EDH deploys
+
+EDH is a platform of its own, and its installer can deploy far more than the add-on uses. The diagram shows EDH's own architecture, independent of VAMS:
+
+-   the entry points (Application and Network Load Balancers in public or private subnets);
+-   the controller host (HPC scheduler, provisioning automation, web interface and HTTP APIs), which provisions everything else through AWS CloudFormation;
+-   the compute it launches: virtual desktops, login nodes, virtual targets, and HPC compute on Amazon EC2, Amazon EKS, AWS Batch or AWS Parallel Computing Service;
+-   the DCV session manager and broker, and the database and caching tier (Amazon ElastiCache, Amazon DynamoDB, Amazon RDS);
+-   storage options: Amazon S3, Amazon EFS, and Amazon FSx for OpenZFS, Lustre and NetApp ONTAP;
+-   the security, identity, AI, analytics, backup, configuration and serverless services around them.
+
+Which of these a cluster holds depends on the installation options chosen. The add-on uses the controller's HTTP APIs, the virtual desktops and the DCV components, and, with containers enabled, AWS Batch; [How VAMS integrates with EDH](overview.md#how-vams-integrates-with-edh) shows that part. Plan for the cost and service quotas of the whole cluster, not just the add-on: they come with the EDH installation.
+
+![EDH platform architecture: entry points, the controller host, CloudFormation-provisioned compute, DCV, databases, storage and the supporting AWS services](/img/edh_platformArchitecture.png)
+
 ### What the cluster provides
 
 The cluster's AWS CloudFormation stack, named after the cluster, and its AWS Systems Manager Parameter Store entries under `/edh/<cluster name>/configuration/` hold the values the rest of this page uses:
@@ -234,6 +249,10 @@ When you set an allow list on one of these flags, include in it the uids of the 
 ### Desktop schedule updates
 
 VAMS sets every desktop it launches to a schedule under which EDH never starts it (see [Desktop schedule](overview.md#desktop-schedule)), sending EDH's schedule update under the owner's uid. EDH accepts that update only while its `DCV_ALLOW_DEFAULT_SCHEDULE_UPDATE` setting keeps its default, `True`. With the setting `False`, EDH refuses every update and the desktops keep EDH's default schedule, under which EDH starts a stopped desktop again on weekdays between 08:00 and 19:00 in EDH's configured time zone (its `TIMEZONE` setting, UTC by default). Both settings are constants in `/opt/edh/<cluster name>/cluster_manager/web_interface/config.py` on the controller, not Parameter Store entries.
+
+### Resume capacity fallback
+
+EDH's start of a stopped desktop first reserves a fresh short-lived capacity reservation for the instance type in the instance's own Availability Zone, waiting up to `/configuration/FeatureFlags/CapacityReservation/ActivationTimeoutSeconds` (120 seconds by default) for it to become active; when the zone has no reserved capacity it starts the instance on-demand while `/configuration/FeatureFlags/VirtualDesktops/ResumeODCRFallback` is `true`, EDH's default, and refuses the start otherwise. Leave the setting on: with it off, a start that finds no reservation is refused even when on-demand capacity exists. Either way a stopped desktop starts only in its own zone, and VAMS records a start EDH refuses for capacity on the workstation (`CAPACITY_UNAVAILABLE`) and keeps the desktop stopped with its disk (see [Starting a stopped workstation](./overview.md#starting-a-stopped-workstation)). VAMS's launch worker reads EDH's answer to a start for up to 240 seconds, which covers the default activation wait; raising `ActivationTimeoutSeconds` above about 200 seconds leaves a start whose answer comes later for the worker's reads of the desktop's state, and then for the session sweep.
 
 ### Load balancer security group
 

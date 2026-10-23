@@ -287,7 +287,8 @@ class TestStopAndDeactivate:
         assert fakes.table.update_item.call_args.kwargs["Key"] == {"bootstrapId": "b-1"}
         assert _state_written(fakes) == "STOPPED"
         # The row a user had connected to is not left reading connectable once it is stopped.
-        assert update_attribute_sets(fakes) == [{"state", "connectionAvailable"}]
+        # The stop's stamp lets a read that still finds the desktop running report it stopping (in-dev D10).
+        assert update_attribute_sets(fakes) == [{"state", "connectionAvailable", "stopRequestedAt"}]
         assert written_values(fakes, "connectionAvailable") == [False]
         body = response_body(response)
         assert (body["sessionId"], body["state"], body["userId"]) == ("s-1", "STOPPED", "alice")
@@ -474,7 +475,7 @@ class TestStopAndDeactivateRevokeTheCredential:
         # attribute, so a key the revoke could not take back stays on the row for the sweep to find.
         assert revoke.rows_seen[-1]["apiKeyId"] == "key-b-1"
         # The state lands first, then the cleared key attributes; the container's name stays.
-        assert update_attribute_sets(fakes) == [{"state", "connectionAvailable"}, set(CLEARED_KEY)]
+        assert update_attribute_sets(fakes) == [{"state", "connectionAvailable", "stopRequestedAt"}, set(CLEARED_KEY)]
         assert written_values(fakes, "state") == ["STOPPED"]
         assert written_values(fakes, "apiKeyId") == [""]
         assert written_values(fakes, "secretName") == []

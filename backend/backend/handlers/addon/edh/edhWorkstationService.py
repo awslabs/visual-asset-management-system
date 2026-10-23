@@ -60,14 +60,13 @@ from .common.edhClient import (
     EDH_ROUTE_DESKTOPS_DELETE,
     EDH_ROUTE_DESKTOPS_LIST,
     EDH_ROUTE_DESKTOPS_SESSION_STATE,
-    EDH_ROUTE_DESKTOPS_START,
     EDH_ROUTE_DESKTOPS_STOP,
     EDH_SESSION_ID_FIELD,
     EDH_SESSION_OWNER_FIELD,
     EDH_SOFTWARE_STACK_ID_FIELD,
     EDH_SOFTWARE_STACK_ROUTES,
     START_IN_PROGRESS_FIELD,
-    EdhApiError, EdhCapacityError, EdhClient, EdhError, EdhNotFoundError, EdhOutcomeUnknownError, EdhQuotaError,
+    EdhClient, EdhError, EdhNotFoundError, EdhOutcomeUnknownError,
     map_edh_error_to_response,
 )
 from .common.edhCatalogFields import (
@@ -85,17 +84,18 @@ from .common.edhSessionState import (
     CREDENTIAL_CLAIM_SECONDS,
     EDH_CONNECTION_STRING_FIELD,
     EDH_SESSION_STATE_FIELD,
-    EDH_SESSION_STATE_PENDING,
     EDH_SESSION_STATE_STOPPED,
     EXPIRES_AT_FIELD,
+    ACTIVITY_FIELD,
+    ACTIVITY_STARTING,
     LAST_ERROR_LAUNCH_ERROR,
     LAST_ERROR_LEASE_EXPIRED,
     LAST_ERROR_RESERVATION_FULL,
     START_IN_PROGRESS_SECONDS, STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED,
-    WORKER_PAYLOAD_KEYS,
+    STOP_REQUESTED_FIELD, WORKER_ACTION_START, WORKER_PAYLOAD_KEYS,
     credential_claim_stamp, deleted_row_expiry, edh_failure_attributes, edh_failure_read_due,
-    observed_row_attributes, reservation_refusal_last_error, session_row_live, start_in_progress, start_stamp,
-    start_stamp_cleared, state_for_edh_session_state,
+    observed_row_attributes, session_row_live, start_in_progress, start_stamp,
+    start_stamp_cleared, state_for_edh_session_state, workstation_activity,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -112,17 +112,13 @@ WORKSTATION_OBJECT_TYPE = "edhWorkstation"
 IMAGE_OBJECT_TYPE = "edhImage"
 CAPACITY_RESERVATION_OBJECT_TYPE = "edhCapacityReservation"
 
-# The answers of a launch that names a capacity reservation, in the order its checks run, and of a start EDH
-# refused while the desktop's reservation is full.
+# The answers of a launch that names a capacity reservation, in the order its checks run.
 RESERVATION_NOT_REGISTERED_MESSAGE = "capacityReservationId is not registered"
 RESERVATION_READ_FAILED_MESSAGE = "The capacity reservation could not be read; try again"
 RESERVATION_NOT_ACTIVE_MESSAGE = "The capacity reservation is not active"
 RESERVATION_INSTANCE_TYPE_MESSAGE = "instanceType does not match the capacity reservation"
 RESERVATION_PLATFORM_MESSAGE = "The capacity reservation's platform does not match the image"
 RESERVATION_FULL_MESSAGE = "The capacity reservation has no free capacity"
-RESERVATION_FULL_START_MESSAGE = "The capacity reservation has no free capacity; the workstation stays stopped"
-# The EDH errors that are a definite refusal: EDH answered, and did not act.
-EDH_REFUSALS = (EdhApiError, EdhCapacityError, EdhNotFoundError, EdhQuotaError)
 INSTANCE_TYPE_QUERY_PATTERN = re.compile(edh_instance_type_pattern)
 
 # Session table indexes.
@@ -172,7 +168,6 @@ EDH_AUDIT_ROUTES = {
     "get_desktop_connection": ("GET", EDH_ROUTE_DESKTOPS_LIST),
     "get_desktop_failure": ("GET", EDH_ROUTE_DESKTOPS_LIST),
     "stop_desktop": ("PUT", EDH_ROUTE_DESKTOPS_STOP),
-    "start_desktop": ("PUT", EDH_ROUTE_DESKTOPS_START),
     "delete_desktop": ("DELETE", EDH_ROUTE_DESKTOPS_DELETE),
     "list_software_stacks": ("GET", EDH_SOFTWARE_STACK_ROUTES["dcv"]),
     "list_profiles": ("GET", EDH_PROFILE_ROUTES["dcv"]),
@@ -184,17 +179,13 @@ LAUNCH_FAILURE_OPERATION = "workstationLaunchFailure"
 RESPONSE_FIELD_SESSION_BOOTSTRAP = "sessionBootstrap"
 
 # What a mint-carrying route still does once the session mint returns, and so what the mint may not spend
-# of the Lambda's remaining time: the launch hand-over, the row write and the response (create); the EDH
-# start -- at least the api profile's connect and read pair, and at most what the EDH request budget
-# leaves, which the read of the desktop's state after a lost answer shares -- the secret binding, the row
-# write and the response (start; the key cleanup ahead of the response takes only what is left); the row
-# settle, the secret write, the claim release and the response (renew).
+# of the Lambda's remaining time: the launch hand-over, the row write and the response (create); the row
+# write, the hand-over of the start to the launch worker and the response (start; EDH's start, the secret
+# binding and the key cleanup run in the worker); the row settle, the secret write, the claim release and the
+# response (renew).
 MINT_RESERVE_SECONDS_CREATE = 3.0
-MINT_RESERVE_SECONDS_START = 14.0
+MINT_RESERVE_SECONDS_START = 3.0
 MINT_RESERVE_SECONDS_RENEW = 3.0
-# What a start still does once its key cleanup returns, the response, and a cold start's init, which API
-# Gateway's timeout counts and the Lambda's deadline does not.
-KEY_CLEANUP_RESERVE_SECONDS_START = 5.0
 
 
 def _parse_allowed_instance_types(raw):
@@ -435,15 +426,16 @@ def _update_live_row(row, **attributes):
 
 def _record(row, labels=None):
     """The API shape of a session row, with the registry label of its capacity reservation joined in: from
-    ``labels`` (id -> label) when the caller read them, else read for the row's own reservation. A row without
-    a reservation reads nothing."""
+    ``labels`` (id -> label) when the caller read them, else read for the row's own reservation (a row without
+    a reservation reads nothing), and ``activity`` derived from the row as it is now, never the stored mark."""
     capacity_reservation_id = row.get('capacityReservationId')
     label = None
     if capacity_reservation_id:
         if labels is None:
             labels = reservations.labels_for([capacity_reservation_id])
         label = labels.get(capacity_reservation_id)
-    return WorkstationRecordModel(**{**row, 'capacityReservationLabel': label}).dict()
+    return WorkstationRecordModel(**{**row, 'capacityReservationLabel': label,
+                                     ACTIVITY_FIELD: workstation_activity(row)}).dict()
 
 
 def _natural_key(text):
@@ -795,21 +787,6 @@ def _revoke_session_credential(event, row, *, delete_secret, every_key=True):
     if delete_secret and row.get('state') == STATE_DELETED:
         cleared = {**cleared, EXPIRES_AT_FIELD: deleted_row_expiry()}
     _update_row(row, **cleared)
-
-
-def _delete_other_session_keys(event, row, keep):
-    """Delete every key of the row's bootstrap but ``keep``, within the Lambda's deadline less the start's
-    cleanup floor: an apiKeyService invoke that no longer fits is not started. Skipped with session
-    bootstrap off, where this Lambda holds no path to the API key service; a listing or delete that fails
-    or is not started is logged and those keys are left to the next revoke and to their own expiry, and
-    it never changes the start's own result."""
-    if not bootstrap.is_enabled():
-        return
-    try:
-        bootstrap.delete_other_session_keys(event, row, keep=keep, actor=_requesting_user_id(),
-                                            deadline=_bootstrap_deadline(KEY_CLEANUP_RESERVE_SECONDS_START))
-    except Exception:
-        logger.exception(f"Session key cleanup deferred for bootstrap {row['bootstrapId']}")
 
 
 def _record_deleted(event, row, **attributes):
@@ -1171,10 +1148,10 @@ def _deleted_since_read(row):
 
 
 def _release_start_claim(row):
-    """Clear the row's start stamp after a start that did not happen. A failure is logged and the stamp
-    left to age out of the window; it never changes the start's own result."""
+    """Clear the row's start stamp, and the start's mark, after a start that did not happen. A failure is logged
+    and the stamp left to age out of the window; it never changes the start's own result."""
     try:
-        _update_row(row, startRequestedAt=None)
+        _update_row(row, startRequestedAt=None, **({ACTIVITY_FIELD: None} if row.get(ACTIVITY_FIELD) else {}))
     except Exception:
         logger.exception(f"Start claim release deferred for bootstrap {row['bootstrapId']}")
 
@@ -1210,8 +1187,11 @@ def stop_workstation(event, path):
         # A stop EDH carried out reports the desktop stopping or stopped.
         if _listed_state(desktop) != STATE_STOPPED:
             raise
-    # The revoke follows the row as the write left it: a key a renew named since the read goes too.
-    _update_row_from_image(row, state=STATE_STOPPED, connectionAvailable=False, **start_stamp_cleared(row))
+    # The revoke follows the row as the write left it: a key a renew named since the read goes too. The stop's
+    # stamp lets a read that still finds the desktop running report it stopping.
+    _update_row_from_image(row, state=STATE_STOPPED, connectionAvailable=False, **start_stamp_cleared(row),
+                           **{STOP_REQUESTED_FIELD: _utc_now()},
+                           **({ACTIVITY_FIELD: None} if row.get(ACTIVITY_FIELD) else {}))
     _revoke_session_credential(event, row, delete_secret=False)
     return success(body=_record(row))
 
@@ -1238,20 +1218,16 @@ def _lease_cleared(row, **attributes):
     return cleared
 
 
-def _start_refused_for_full_reservation(row, err):
-    """Whether ``err``, raised by a start, is EDH's definite refusal of a desktop launched into a capacity
-    reservation that is full when read again. A stopped instance holds no slot of its reservation, and EDH keeps
-    the reservation it was launched into, so the start cannot succeed until a slot frees; VAMS does not move the
-    instance to another reservation. A reservation that cannot be read leaves the refusal as EDH answered it."""
-    capacity_reservation_id = row.get('capacityReservationId')
-    if not capacity_reservation_id or not isinstance(err, EDH_REFUSALS):
-        return False
-    try:
-        facts = reservations.read_live([capacity_reservation_id])[capacity_reservation_id]
-    except reservations.CapacityReservationReadError as read_err:
-        logger.warning(f"The capacity reservation was not read after EDH refused a start ({read_err})")
-        return False
-    return reservation_refusal_last_error(facts) == LAST_ERROR_RESERVATION_FULL
+def _dispatch_start(row):
+    """Hand the start of the stopped desktop to the launch worker asynchronously: the start's stamp is its
+    identity, so the worker sends EDH the start of one stamp at most once."""
+    payload = {'action': WORKER_ACTION_START, 'bootstrapId': row['bootstrapId'],
+               'startRequestedAt': row['startRequestedAt']}
+    lambda_client.invoke(
+        FunctionName=launch_worker_function_name,
+        InvocationType='Event',
+        Payload=json.dumps(payload).encode('utf-8'),
+    )
 
 
 def start_workstation(event, path):
@@ -1287,8 +1263,8 @@ def start_workstation(event, path):
     if edh_state and edh_state.lower() != EDH_SESSION_STATE_STOPPED:
         return _not_stopped_in_edh_response(event, edh_state)
     if start_in_progress(row):
-        # Another start of the desktop -- one still running, or one whose outcome EDH did not confirm -- may
-        # yet start it; nothing is minted or started.
+        # Another start of the desktop -- one the launch worker may still be running, or one whose outcome EDH
+        # did not confirm -- may yet start it; nothing is minted or started.
         return _start_in_progress_response(event)
     if not _claim_start(row):
         # Another start claimed the row first, or a delete reached it after the read: a row now DELETED or
@@ -1305,46 +1281,23 @@ def start_workstation(event, path):
         outcome, credential = bootstrap.bootstrap_session(
             event, row, claims_and_roles.get('mfaEnabled', False),
             deadline=_bootstrap_deadline(MINT_RESERVE_SECONDS_START))
+        # The credential and the start's mark are on the row before the worker is handed the start, which it
+        # sends EDH only for a row that carries both the mark and this start's stamp. A stop's stamp goes with it:
+        # the desktop is no longer stopping.
+        _update_row(row, **credential, **{ACTIVITY_FIELD: ACTIVITY_STARTING},
+                    **({STOP_REQUESTED_FIELD: None} if row.get(STOP_REQUESTED_FIELD) else {}))
+        _dispatch_start(row)
+    except Exception:
+        # Nothing reached EDH: the key minted for this start is taken back, and only that key, and the start
+        # gives its claim up, so a retry is not held off.
+        logger.exception("The start could not be handed to the launch worker; releasing the claim")
         if credential:
-            _update_row(row, **credential)
-        _call_edh(event, client, "start_desktop", "workstationStart", edh_uid, edh_uid, session_id)
-    except EdhOutcomeUnknownError as lost:
-        # EDH records a start only once any capacity reservation it makes has settled and the instance is
-        # starting, so a desktop still reported stopped, or one the read of the desktop's state did not
-        # report, may yet start: the credential stays, for the reconciler to revoke if the desktop stays
-        # stopped, and the start keeps its claim on the row so that another start does not follow it into EDH.
-        desktop = _desktop_after_lost_answer(event, client, row, edh_uid, "workstationStart", lost)
-        if _listed_state(desktop) in (None, STATE_STOPPED):
-            raise
-        # The read of the desktop's state bound the fresh secret to the instance it shows, as every
-        # observation does.
-    except Exception as err:
-        if credential and isinstance(err, EdhError):
-            # The desktop did not start; the key minted for it is taken back, and only that key: the row
-            # stays stopped, so the bootstrap's other keys are the reconciler's orphan sweep's.
             _revoke_session_credential(event, row, delete_secret=False, every_key=False)
-        # A start that did not happen gives its claim up, so a retry is not held off.
         _release_start_claim(row)
-        if _start_refused_for_full_reservation(row, err):
-            return general_error(status_code=409, event=event, body={
-                'message': RESERVATION_FULL_START_MESSAGE, 'code': LAST_ERROR_RESERVATION_FULL})
         raise
-    else:
-        if credential:
-            # The desktop keeps its instance across a stop and start; the fresh key's secret is bound to
-            # the instance the row last observed.
-            _bind_session_credential(row)
-    # EDH moves an accepted start to `pending`; the row follows the shared mapping until a read observes
-    # `running`, so a restarted desktop is never reported ACTIVE ahead of EDH. A started desktop is no
-    # longer lease-stopped, so the stamp that ages a stopped one toward deletion and the expiry code go
-    # with it, as does the start's claim.
-    _update_row(row, **_lease_cleared(row, state=STATE_CREATING, edhState=EDH_SESSION_STATE_PENDING,
-                                      connectionAvailable=False, **start_stamp_cleared(row)))
-    # The desktop was stopped until EDH took the start, so none of its keys but the one just minted is in
-    # use. Their cleanup runs last, on what the request has left, so it never spends the mint's time or
-    # EDH's window.
-    _delete_other_session_keys(event, row, credential.get('apiKeyId'))
-    return success(body={**_record(row), RESPONSE_FIELD_SESSION_BOOTSTRAP: outcome})
+    # EDH's start runs in the launch worker: the record reads STOPPED with ``activity`` starting until the worker
+    # records EDH's answer, or a read observes the desktop past stopped.
+    return success(status_code=202, body={**_record(row), RESPONSE_FIELD_SESSION_BOOTSTRAP: outcome})
 
 
 def _claim_credential(row, claim):

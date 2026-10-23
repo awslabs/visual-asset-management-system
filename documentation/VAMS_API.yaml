@@ -9309,7 +9309,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   type: string
         post:
             summary: "Stop an EDH workstation."
-            description: "Stops the caller's desktop and marks the record `STOPPED`; with session bootstrap enabled every session key of the desktop is revoked and the secret value overwritten. A stop EDH does not answer is followed by a read of the desktop's state: a desktop EDH reports `stopping` or `stopped` is recorded `STOPPED`, and any other outcome answers 502 and keeps the keys. Enforces VAMS two-tier Casbin authorization. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            description: "Stops the caller's desktop and marks the record `STOPPED`, with `activity` `stopping` until EDH reports the desktop stopped; with session bootstrap enabled every session key of the desktop is revoked and the secret value overwritten. A stop EDH does not answer is followed by a read of the desktop's state: a desktop EDH reports `stopping` or `stopped` is recorded `STOPPED`, and any other outcome answers 502 and keeps the keys. Enforces VAMS two-tier Casbin authorization. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
             responses:
                 "200":
                     description: "The updated workstation record."
@@ -9360,16 +9360,16 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   type: string
         post:
             summary: "Start a stopped EDH workstation."
-            description: "Starts the caller's stopped workstation: the record returns to `CREATING` with `edhState` `pending` until EDH reports the desktop running, when the next read reports it `ACTIVE`; with session bootstrap enabled a fresh session key is minted first and its outcome is reported in `sessionBootstrap`. A start EDH does not answer is followed by a read of the desktop's state: a desktop EDH reports `pending`, `placing`, `running` or `error` counts as started and answers 200, and any other outcome answers 502 with the fresh key kept. Callers authenticated with an API key are refused with `403`. Enforces VAMS two-tier Casbin authorization. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            description: "Starts the caller's stopped workstation asynchronously, as a launch is: the request runs every check below, claims the record, mints a fresh session key when session bootstrap is enabled (its outcome is reported in `sessionBootstrap`), marks the record starting and hands the start to a background function, then answers `202` with the record -- `state` `STOPPED` with `activity` `starting`. The request itself never calls EDH's start. The background function sends EDH's start once, waits for EDH's answer (EDH answers only once its own capacity work is done, which can take minutes) and records the outcome: a start EDH accepts moves the record to `CREATING` with `edhState` `pending`, and to `ACTIVE` once EDH reports the desktop running; a start EDH refuses leaves the record `STOPPED`, with its disk, with `lastError` `CAPACITY_UNAVAILABLE` (AWS had no capacity for the instance type in the workstation's Availability Zone), `RESERVATION_FULL` (the capacity reservation the workstation was launched into is full) or `START_FAILED` (any other reason) and the detail in `startFailure`, and takes the fresh key back -- a refused start never deletes, terminates or orphans the desktop; a start whose answer is lost is followed by reads of the desktop's state, and one EDH still reports stopped 10 minutes after the start is recorded `START_FAILED` by the session sweep. Poll `GET /addon/edh/workstations/{sessionId}` until `activity` is null. Callers authenticated with an API key are refused with `403`. Enforces VAMS two-tier Casbin authorization. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
             responses:
-                "200":
-                    description: "The updated workstation record (`state` CREATING, `edhState` pending) plus `sessionBootstrap`, the outcome of placing a session key, as for a launch."
+                "202":
+                    description: "The start was handed over: the workstation record (`state` STOPPED, `activity` starting) plus `sessionBootstrap`, the outcome of placing a session key, as for a launch. A `lastError` and `startFailure` an earlier start left stay until this start is accepted."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/edhLaunchResponse"
                 "400":
-                    description: "`sessionId` is malformed (`sessionId is invalid. Must follow the regexp ^[-_a-zA-Z0-9]{3,63}$`), or EDH refused the start because it found no available AWS capacity for the workstation's instance type (`EDH found no available AWS capacity for this instance type. Try again later.`); the workstation stays `STOPPED` and any session key minted for the start is revoked."
+                    description: "`sessionId` is malformed (`sessionId is invalid. Must follow the regexp ^[-_a-zA-Z0-9]{3,63}$`)."
                     content:
                         application/json:
                             schema:
@@ -9387,13 +9387,19 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The launch has not received a session id, the workstation is deleted (`A deleted workstation cannot be started`, also for a record deleted or removed after the start read it, which is answered after EDH's state read), its lease has expired and has not been renewed (`The lease on this workstation has expired; renew it before starting`), it is already running, it is not stopped, EDH still reports the stopped workstation in a state other than stopped, such as `stopping` or `interrupted` (`The workstation is still <state> in EDH; start it again once it has stopped.`, answered after EDH's state read; nothing is minted or claimed and EDH is sent no start), or EDH still reports it stopped while another start of it is being processed, less than 3 minutes after a start EDH did not confirm, while the reconciler revokes the stopped desktop's key, or while a lease renewal re-issues the desktop's key, for up to 5 minutes (`A start of this workstation is already in progress`, with `startInProgress` true, answered after EDH's state read; nothing is minted and EDH is sent no start); or EDH refused the start of a workstation launched into a capacity reservation that is full when VAMS reads it again (`The capacity reservation has no free capacity; the workstation stays stopped`, with `code` `RESERVATION_FULL`): a stopped workstation holds no slot of its reservation, EDH keeps the reservation it was launched into, and VAMS does not move it to another, so the workstation stays `STOPPED` and any session key minted for the start is revoked."
+                    description: "The launch has not received a session id, the workstation is deleted (`A deleted workstation cannot be started`, also for a record deleted or removed after the start read it, which is answered after EDH's state read), its lease has expired and has not been renewed (`The lease on this workstation has expired; renew it before starting`), it is already running, it is not stopped, EDH still reports the stopped workstation in a state other than stopped, such as `stopping` or `interrupted` (`The workstation is still <state> in EDH; start it again once it has stopped.`, answered after EDH's state read; nothing is minted or claimed and nothing is handed over), or another start of it may still happen -- one handed over less than 7 minutes earlier -- or the reconciler revokes the stopped desktop's key, or a lease renewal re-issues the desktop's key, for up to 5 minutes (`A start of this workstation is already in progress`, with `startInProgress` true, answered after EDH's state read; nothing is minted or handed over)."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/edhError"
+                "500":
+                    description: "The start could not be handed to the background function; the fresh session key is taken back and the claim released, so the start can be sent again."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
                 "502":
-                    description: "EDH is unreachable, rejected the configured credential, or answered with an unreadable body (`EDH accepted the request but returned an unreadable answer.`); or EDH did not answer the start and the read after it shows the desktop stopped, does not report it, or could not be made (`EDH did not confirm the request in time; it may still be in progress. Refresh before trying again.`, with `outcomeUnknown` true). The desktop may still be starting and keeps the fresh session key; a start sent again within 3 minutes answers 409."
+                    description: "EDH is unreachable, rejected the configured credential, or answered with an unreadable body when the request read the desktop's state; nothing was minted or handed over."
                     content:
                         application/json:
                             schema:
@@ -11717,6 +11723,8 @@ components:
                 - capacityReservationId
                 - capacityReservationLabel
                 - capacityReservationFallback
+                - activity
+                - startFailure
             properties:
                 bootstrapId:
                     type: string
@@ -11763,7 +11771,7 @@ components:
                 lastError:
                     type: string
                     nullable: true
-                    description: "Why a launch ended ORPHANED, or why a running workstation was stopped; null otherwise."
+                    description: "Why a launch ended ORPHANED, why a running workstation was stopped (`LEASE_EXPIRED`), or why the last start of a `STOPPED` workstation did not happen: `CAPACITY_UNAVAILABLE` (AWS had no capacity for the instance type in the workstation's Availability Zone, the one zone a stopped workstation starts in), `RESERVATION_FULL` (the capacity reservation it was launched into is full) or `START_FAILED` (EDH refused the start for another reason, or still reported the workstation stopped 10 minutes after the start). A start code stays while the workstation stays stopped and is cleared once a start is accepted; null otherwise."
                     enum:
                         - USER_NOT_PROVISIONED
                         - QUOTA_EXCEEDED
@@ -11774,6 +11782,7 @@ components:
                         - CREATE_TIMED_OUT
                         - LEASE_EXPIRED
                         - RESERVATION_FULL
+                        - START_FAILED
                         - null
                 launchAttempts:
                     type: integer
@@ -11809,6 +11818,36 @@ components:
                 capacityReservationFallback:
                     type: boolean
                     description: "True when the launch named a capacity reservation that was full and whose registration allows a fallback, so it was launched on-demand instead."
+                activity:
+                    type: string
+                    nullable: true
+                    enum:
+                        - starting
+                        - stopping
+                        - null
+                    description: "What the workstation is doing between two states, derived when the record is read so every client shows the same: `starting` while a start handed over less than 7 minutes ago is unresolved (`state` STOPPED), while EDH boots a desktop it has accepted (`state` CREATING), or while a running desktop is not yet connectable (`state` ACTIVE); `stopping` while EDH reports the desktop stopping, or for 5 minutes after a stop through VAMS while EDH still reports it running; null otherwise. Clients show it in place of `state`."
+                startFailure:
+                    allOf:
+                        - $ref: "#/components/schemas/edhStartFailure"
+                    nullable: true
+                    description: "What the last start that did not happen recorded, beside its `lastError`, while the workstation stays `STOPPED`; null otherwise."
+        edhStartFailure:
+            type: object
+            description: "What VAMS recorded when a start of a stopped workstation did not happen. EDH's text is never returned."
+            required:
+                - observedAt
+            properties:
+                errorCode:
+                    type: string
+                    pattern: "^[A-Za-z][A-Za-z0-9.]{0,63}$"
+                    description: "The AWS error code EDH's answer names, such as `InsufficientInstanceCapacity` or `ReservationCapacityExceeded`; absent when it names none."
+                availabilityZone:
+                    type: string
+                    description: "The Availability Zone of the workstation's instance, the one zone a stopped workstation starts in, such as `us-west-2b`; absent when it could not be read."
+                observedAt:
+                    type: string
+                    format: date-time
+                    description: "When VAMS recorded the failure (UTC)."
         edhLaunchFailure:
             type: object
             description: "The reason EDH recorded for a failed launch, parsed from EDH's own events; EDH's text is never returned. A capacity or account-limit errorCode makes a generic LAUNCH_ERROR read CAPACITY_UNAVAILABLE or QUOTA_EXCEEDED; on a record launched into a capacity reservation, `ReservationCapacityExceeded` and the capacity codes read RESERVATION_FULL."
@@ -11927,7 +11966,7 @@ components:
                               - disabled
         edhError:
             type: object
-            description: "An EDH add-on error body. `outcomeUnknown` is present, and true, only on a 502 whose outcome EDH did not confirm: a request VAMS sends to EDH once that lost its answer after it may have reached EDH (`EDH did not confirm the request in time; it may still be in progress. Refresh before trying again.`), or a container job submit EDH accepted without naming the job; list the resource before sending the request again. `startInProgress` is present, and true, only on the 409 that refuses a workstation start while another start of it may still be under way, one being processed or one EDH did not confirm less than 3 minutes earlier, or while the workstation's key is being changed: revoked by the reconciler, or re-issued by a lease renewal, for up to 5 minutes."
+            description: "An EDH add-on error body. `outcomeUnknown` is present, and true, only on a 502 whose outcome EDH did not confirm: a request VAMS sends to EDH once that lost its answer after it may have reached EDH (`EDH did not confirm the request in time; it may still be in progress. Refresh before trying again.`), or a container job submit EDH accepted without naming the job; list the resource before sending the request again. `startInProgress` is present, and true, only on the 409 that refuses a workstation start while another start of it may still happen, one handed over less than 7 minutes earlier, or while the workstation's key is being changed: revoked by the reconciler, or re-issued by a lease renewal, for up to 5 minutes."
             required:
                 - message
             properties:
@@ -11943,7 +11982,7 @@ components:
                     type: string
                     enum:
                         - RESERVATION_FULL
-                    description: "`RESERVATION_FULL` on the 409 that refuses a launch into a full capacity reservation whose registration allows no fallback, and on the 409 that answers a start EDH refused while the workstation's capacity reservation is full; absent on every other answer."
+                    description: "`RESERVATION_FULL` on the 409 that refuses a launch into a full capacity reservation whose registration allows no fallback; absent on every other answer. A start refused because the workstation's reservation is full is recorded on the workstation (`lastError` `RESERVATION_FULL`), not answered."
         edhConnectResponse:
             type: object
             required:
@@ -12210,6 +12249,14 @@ components:
                 state:
                     type: string
                     nullable: true
+                activity:
+                    type: string
+                    nullable: true
+                    enum:
+                        - starting
+                        - stopping
+                        - null
+                    description: "What the session is doing between two states, derived as the workstation record's `activity` is, from the joined VAMS record with EDH's live state laid over it."
                 lastError:
                     type: string
                     nullable: true
@@ -12218,6 +12265,11 @@ components:
                         - $ref: "#/components/schemas/edhLaunchFailure"
                     nullable: true
                     description: "The launch-failure reason of the joined VAMS record; null when it holds none or no record joins."
+                startFailure:
+                    allOf:
+                        - $ref: "#/components/schemas/edhStartFailure"
+                    nullable: true
+                    description: "What the last start of the joined VAMS record that did not happen recorded; null when it holds none or no record joins."
                 imageId:
                     type: string
                     nullable: true

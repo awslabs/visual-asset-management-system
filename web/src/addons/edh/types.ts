@@ -7,8 +7,8 @@ export type WorkstationState = "CREATING" | "ACTIVE" | "STOPPED" | "DELETED" | "
 export type EdhOsFamily = "linux" | "windows";
 
 /**
- * Why a launch ended ORPHANED, or why the lease sweep stopped the desktop. The service stores
- * these codes and never EDH's own wording.
+ * Why a launch ended ORPHANED, why the lease sweep stopped the desktop, or why a start of a stopped
+ * desktop left it STOPPED. The service stores these codes and never EDH's own wording.
  */
 export type WorkstationLastError =
     | "USER_NOT_PROVISIONED"
@@ -19,7 +19,27 @@ export type WorkstationLastError =
     | "LAUNCH_ERROR"
     | "CREATE_TIMED_OUT"
     | "LEASE_EXPIRED"
-    | "RESERVATION_FULL";
+    | "RESERVATION_FULL"
+    | "START_FAILED";
+
+/**
+ * What a workstation is doing, as the service derives it on every read, whatever `state` says:
+ * `starting` from the start request until EDH reports the desktop connectable, `stopping` while EDH
+ * still stops it. Null when neither.
+ */
+export type WorkstationActivity = "starting" | "stopping";
+
+/**
+ * Why a start of a stopped desktop left it STOPPED: the AWS error code EDH's refusal named (e.g.
+ * `InsufficientInstanceCapacity`) and the Availability Zone the desktop's instance, and so its disk,
+ * is in. Each is absent when it was not read. Kept until the next start is accepted.
+ */
+export interface StartFailure {
+    errorCode?: string | null;
+    availabilityZone?: string | null;
+    /** When VAMS recorded it (ISO-8601 UTC). */
+    observedAt: string;
+}
 
 /** What became of the per-session VAMS credential a launch places on the desktop. */
 export type SessionBootstrapOutcome = "provisioned" | "skipped" | "unavailable" | "disabled";
@@ -52,10 +72,14 @@ export interface WorkstationRecord {
     state: WorkstationState;
     /** The raw EDH session state string, once EDH has reported one. */
     edhState: string | null;
+    /** What the workstation is doing, whatever `state` says; null or absent when neither. */
+    activity?: WorkstationActivity | null;
     /** The failure code the row carries; null or absent when there is none. */
     lastError?: string | null;
     /** The launch failure VAMS captured from EDH; null or absent when it captured none. */
     edhFailure?: EdhFailure | null;
+    /** Why the last start left the desktop STOPPED; null or absent when it did not. */
+    startFailure?: StartFailure | null;
     /** How many times the launch worker has started on this row. */
     launchAttempts?: number;
     name: string;
@@ -79,7 +103,8 @@ export interface WorkstationRecord {
     capacityReservationFallback?: boolean | null;
     /**
      * Present on the launch and start responses, and on a renew response when the renew re-issued,
-     * or tried to re-issue, the desktop's VAMS sign-in.
+     * or tried to re-issue, the desktop's VAMS sign-in. A start is accepted (202) with `activity`
+     * `starting` and runs in the background; the list then shows its progress.
      */
     sessionBootstrap?: SessionBootstrapOutcome;
 }

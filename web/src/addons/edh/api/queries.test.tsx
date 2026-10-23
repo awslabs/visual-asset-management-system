@@ -120,9 +120,49 @@ describe("computeWorkstationRefetchInterval", () => {
             ])
         ).toBe(5000);
     });
+
+    it.each(["starting", "stopping"] as const)(
+        "polls every 5 s while a stopped row reports the activity %s, and every 20 s once it is cleared",
+        (activity) => {
+            const stopped = row({
+                state: "STOPPED",
+                edhState: "stopped",
+                connectionAvailable: false,
+            });
+            expect(computeWorkstationRefetchInterval([{ ...stopped, activity }])).toBe(
+                WORKSTATION_POLL_TRANSITIONAL_MS
+            );
+            expect(computeWorkstationRefetchInterval([{ ...stopped, activity: null }])).toBe(
+                WORKSTATION_POLL_STABLE_MS
+            );
+            // A start that ended stopped with its reason is settled: nothing moves until the user acts.
+            expect(
+                computeWorkstationRefetchInterval([
+                    {
+                        ...stopped,
+                        activity: null,
+                        lastError: "CAPACITY_UNAVAILABLE",
+                        startFailure: { observedAt: "2026-10-23T15:19:30Z" },
+                    },
+                ])
+            ).toBe(WORKSTATION_POLL_STABLE_MS);
+        }
+    );
 });
 
 describe("isTransitionalWorkstation", () => {
+    it.each([
+        ["STOPPED", "starting", true],
+        ["STOPPED", "stopping", true],
+        ["STOPPED", null, false],
+        ["ACTIVE", "starting", true],
+        ["CREATING", "starting", true],
+    ] as const)("%s with activity=%s -> %s", (state, activity, expected) => {
+        expect(
+            isTransitionalWorkstation({ state, connectionAvailable: state === "ACTIVE", activity })
+        ).toBe(expected);
+    });
+
     it.each([
         ["CREATING", false, true],
         ["ACTIVE", false, true],
@@ -525,6 +565,32 @@ describe("useWorkstationMutations", () => {
             result.current.startWorkstation.mutateAsync({ sessionId: "s-1" })
         ).rejects.toMatchObject({ status: 504 });
 
+        await waitFor(() =>
+            expect(invalidate).toHaveBeenCalledWith({ queryKey: qk.workstations() })
+        );
+    });
+
+    it("puts the record a start answers (202) into the cached list at once, then re-reads it", async () => {
+        const client = newClient();
+        const stopped = row({ state: "STOPPED", edhState: "stopped", connectionAvailable: false });
+        const other = row({ bootstrapId: "b-2", sessionId: "s-2", name: "Other box" });
+        client.setQueryData(qk.workstations(), [stopped, other]);
+        const invalidate = jest.spyOn(client, "invalidateQueries");
+        (workstationService.startWorkstation as jest.Mock).mockResolvedValue([
+            true,
+            { ...stopped, activity: "starting", sessionBootstrap: "provisioned" },
+        ]);
+        const { result } = renderHook(() => useWorkstationMutations(), {
+            wrapper: wrapperFor(client),
+        });
+
+        await result.current.startWorkstation.mutateAsync({ sessionId: "s-1" });
+
+        // The badge reads Starting before the next poll answers; the other row is untouched.
+        const cached = client.getQueryData<WorkstationRecord[]>(qk.workstations());
+        expect(cached?.[0].activity).toBe("starting");
+        expect(cached?.[0]).not.toHaveProperty("sessionBootstrap");
+        expect(cached?.[1]).toBe(other);
         await waitFor(() =>
             expect(invalidate).toHaveBeenCalledWith({ queryKey: qk.workstations() })
         );

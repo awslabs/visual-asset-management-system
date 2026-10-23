@@ -42,10 +42,22 @@ def register(
         (the launch's id, always present), `sessionId` (null until the launch worker, or else the
         reconciler's next sweep, reads it back from EDH), `userId`, `edhUid` (the EDH identity the
         desktop runs as), `name`, `state`
-        (CREATING|ACTIVE|STOPPED|DELETED|ORPHANED), `edhState`, `lastError` (why a launch ended
+        (CREATING|ACTIVE|STOPPED|DELETED|ORPHANED), `activity` (what the workstation is doing whatever
+        `state` says, derived on every read: `starting` from a start request until EDH reports the
+        desktop connectable, so also on a STOPPED row whose start is in progress, a CREATING row with
+        a `sessionId` and an ACTIVE row that is not connectable yet; `stopping` while EDH still stops
+        the desktop; null otherwise), `edhState`, `lastError` (why a launch ended
         ORPHANED: USER_NOT_PROVISIONED, QUOTA_EXCEEDED, IMAGE_UNAVAILABLE, CAPACITY_UNAVAILABLE,
         EDH_REFUSED, LAUNCH_ERROR or CREATE_TIMED_OUT; LEASE_EXPIRED on a desktop the lease sweep stopped;
-        null otherwise), `edhFailure` (the launch failure VAMS captured from EDH's own record of a
+        on a STOPPED row, why its last start left it stopped: CAPACITY_UNAVAILABLE (AWS had no
+        capacity for the instance type in the desktop's Availability Zone), RESERVATION_FULL (its
+        capacity reservation was full) or START_FAILED (any other refusal, or a start that never
+        took effect), kept until the next start is accepted; null otherwise), `startFailure` (for
+        those three, a map of `errorCode` (the AWS error code EDH's refusal named, e.g.
+        `InsufficientInstanceCapacity`), `availabilityZone` (the Availability Zone the desktop and
+        its disk are in) and `observedAt` (when VAMS recorded it), the first two absent when not
+        read; null otherwise),
+        `edhFailure` (the launch failure VAMS captured from EDH's own record of a
         desktop that never ran, as `{event, errorCode, operation, checkpoint, observedAt}`: `event`
         (`placement_failed` or `session-failed`), `errorCode` and `operation` the AWS error code and
         the AWS operation EDH's status named, e.g. `InsufficientInstanceCapacity` from
@@ -72,7 +84,9 @@ def register(
         `bootstrapId` is accepted only while the row has no `sessionId`: once EDH assigns one, the
         `bootstrapId` is reported as not found, so follow a launch with list_edh_workstations. A
         workstation owned by another user is reported as not found, not as forbidden. The record carries
-        the fields of a list_edh_workstations row, `lastError` and `edhFailure` (the AWS error code and
+        the fields of a list_edh_workstations row, `activity` (`starting`, `stopping` or null),
+        `lastError`, `startFailure` (why the last start left a STOPPED row stopped; null when it did
+        not) and `edhFailure` (the AWS error code and
         operation, or the setup checkpoint, VAMS captured from EDH for a failed launch; null when none
         was captured) among them. Reading it makes
         EDH issue no connection token; `connectionAvailable` is true while EDH reports the desktop
@@ -173,7 +187,10 @@ def register(
     @tool_result
     def list_edh_admin_instances() -> Dict[str, Any]:
         """ADMIN: list EVERY user's EDH workstation sessions on the cluster, as `Items`. Each item joins
-        the EDH session with its VAMS row and carries that row's `lastError` and `edhFailure` (the AWS
+        the EDH session with its VAMS row and carries `activity` (`starting`, `stopping` or null,
+        derived as on a list_edh_workstations row) and that row's `lastError`, `startFailure` (why
+        the last start left the desktop stopped, shaped as on a list_edh_workstations row; null when
+        it did not) and `edhFailure` (the AWS
         error code and operation, or the setup checkpoint, VAMS captured from EDH for a failed launch,
         shaped as on a list_edh_workstations row; null for a session VAMS did not launch or captured
         no failure for). Rows name the
@@ -386,10 +403,18 @@ def register(
         @mcp.tool()
         @tool_result
         def start_edh_workstation(session_id: str) -> Dict[str, Any]:
-            """Start one of the authenticated user's STOPPED EDH workstations; returns the updated
-            record (`state` CREATING) plus `sessionBootstrap` (provisioned|skipped|unavailable|disabled,
-            the outcome of placing a fresh session key). An error whose `error_type` is
-            `EdhOutcomeUnknownError` means EDH did not confirm the start, which may still be under way:
+            """Start one of the authenticated user's STOPPED EDH workstations. The start is accepted
+            (HTTP 202) and runs in the background: the tool returns the record at once, still
+            STOPPED with `activity` `starting`, plus `sessionBootstrap`
+            (provisioned|skipped|unavailable|disabled, the outcome of placing a fresh session key).
+            Follow it with list_edh_workstations (or get_edh_workstation): the row reads `activity`
+            `starting` until it is ACTIVE with `activity` null. A start EDH refuses leaves the row
+            STOPPED with `activity` null, `lastError` CAPACITY_UNAVAILABLE (AWS had no capacity for
+            the instance type in the desktop's Availability Zone; the desktop keeps its disk there,
+            so start it again later), RESERVATION_FULL (its capacity reservation is full) or
+            START_FAILED, and `startFailure` `{errorCode, availabilityZone, observedAt}`; the
+            desktop is never deleted for a refused start. An error whose `error_type` is
+            `EdhOutcomeUnknownError` means the start was not confirmed and may still be under way:
             call list_edh_workstations before retrying. While EDH still lists the desktop stopped, a
             start is refused (409, `error_type` `EdhStartInProgressError`) when another start of it is
             being processed, within 3 minutes of one EDH did not confirm, while the reconciler revokes
@@ -406,7 +431,8 @@ def register(
         def renew_edh_workstation(session_id: str) -> Dict[str, Any]:
             """Renew one of the authenticated user's leased workstations: reset `leaseExpiresAt` to the
             full lease window from now and clear `leaseStoppedAt`. Returned record carries
-            `leaseExpiresAt`, `leaseHoursAtLaunch`, and `leaseStoppedAt` (null after a renewal). A renew
+            `leaseExpiresAt`, `leaseHoursAtLaunch`, `leaseStoppedAt` (null after a renewal), and
+            `activity` and `startFailure` as a list_edh_workstations row does. A renew
             of an ACTIVE workstation with no start in progress also tries to re-issue the desktop's
             session key and reports the outcome in `sessionBootstrap`
             (provisioned|skipped|unavailable|disabled, as for a start); the field is absent when no
@@ -420,11 +446,12 @@ def register(
         @mcp.tool()
         @tool_result
         def stop_edh_workstation(session_id: str) -> Dict[str, Any]:
-            """Stop one of the authenticated user's ACTIVE EDH workstations; returns the updated record.
-            Stopping interrupts whatever is running on the desktop's compute, and is reversible with
-            start_edh_workstation. An `EdhOutcomeUnknownError` error means EDH did not confirm the stop;
-            call list_edh_workstations before retrying. Confirm with the user before calling it, and
-            keep it out of `autoApprove`."""
+            """Stop one of the authenticated user's ACTIVE EDH workstations; returns the updated record,
+            whose `activity` reads `stopping` while EDH still stops the desktop (and whose
+            `startFailure` is null). Stopping interrupts whatever is running on the desktop's compute,
+            and is reversible with start_edh_workstation. An `EdhOutcomeUnknownError` error means EDH
+            did not confirm the stop; call list_edh_workstations before retrying. Confirm with the user
+            before calling it, and keep it out of `autoApprove`."""
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
             return client.api.stop_edh_workstation(session_id)
 
@@ -750,8 +777,9 @@ def register(
             session are removed. Irreversible. Consider stop_edh_workstation first — it releases the GPU
             and can be undone with start_edh_workstation. `session_id` may be the `bootstrapId` of a
             launch that never received a session id: an ORPHANED launch is deleted at once, a CREATING
-            one only after 15 minutes without progress (younger → 409, returned as the error). An
-            `EdhOutcomeUnknownError` error means EDH did not confirm the delete; call
+            one only after 15 minutes without progress (younger → 409, returned as the error). The
+            returned record carries `activity` and `startFailure` as a list_edh_workstations row does.
+            An `EdhOutcomeUnknownError` error means EDH did not confirm the delete; call
             list_edh_workstations before retrying."""
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
             return client.api.delete_edh_workstation(session_id)

@@ -1286,7 +1286,8 @@ class TestARenewRacingARequestThatTakesTheKeyBack:
         response = _send(monkeypatch, run, writer,
                          inside=lambda: seen.setdefault("renew", response_body(run.call("renew"))))
 
-        assert response["statusCode"] == 200
+        # A start is handed to the launch worker and answered 202 (in-dev D10).
+        assert response["statusCode"] == (202 if writer == "start" else 200)
         assert seen["renew"]["sessionBootstrap"] == "provisioned"
         run.assert_every_minted_key_accounted_for()
 
@@ -1316,7 +1317,7 @@ class TestARenewRacingARequestThatTakesTheKeyBack:
 
         response = _send(monkeypatch, run, writer, inside=renew_then_refuse_the_listing)
 
-        assert response["statusCode"] == 200
+        assert response["statusCode"] == (202 if writer == "start" else 200)
         assert seen["renew"]["sessionBootstrap"] == "provisioned"
         reissued = run.keys.created[0]
         assert reissued in run.keys.deleted
@@ -1418,7 +1419,7 @@ class TestAStartWaitsOutACredentialClaim:
 
         response = run.call("start")
 
-        assert response["statusCode"] == 200
+        assert response["statusCode"] == 202
         assert run.keys.created, "the start minted no key"
 
     def test_a_start_takes_over_a_claim_dated_more_than_a_window_ahead(self, monkeypatch):
@@ -1426,7 +1427,7 @@ class TestAStartWaitsOutACredentialClaim:
 
         response = run.call("start")
 
-        assert response["statusCode"] == 200
+        assert response["statusCode"] == 202
         assert run.keys.created, "the start minted no key"
 
 
@@ -1472,5 +1473,5 @@ class TestASweepWhoseRevokeDoesNotFinishGivesItsClaimUp:
         run.fakes.edh.results["get_desktop_states"] = STOPPED_IN_EDH
         response = run.call("start")
 
-        assert response["statusCode"] == 200
+        assert response["statusCode"] == 202
         assert response_body(response)["sessionBootstrap"] == "provisioned"

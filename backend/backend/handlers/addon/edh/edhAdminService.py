@@ -53,7 +53,7 @@ from models.common import (
 from models.addon.edh import (
     CapacityReservationViewModel, LeaseSettingsRequestModel, RegisterCapacityReservationRequestModel,
     RegisterSimulationImageRequestModel, RegisterVdiImageRequestModel, UpdateCapacityReservationRequestModel,
-    edh_failure_projection,
+    edh_failure_projection, start_failure_projection,
 )
 from .common.edhCatalogFields import (
     IMAGE_KIND_SIMULATION, IMAGE_KIND_VDI, KIND_BY_IMAGE_KIND, KIND_DCV, KIND_TARGET_NODES,
@@ -72,8 +72,9 @@ from .common import edhCapacityReservations as reservations
 from .common import edhSessionBootstrap as bootstrap
 from .common.edhLeasePolicy import LeaseValidationError, read_lease_policy, write_lease_policy
 from .common.edhSessionState import (
-    EDH_SESSION_STATE_FIELD, EXPIRES_AT_FIELD, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED,
-    deleted_row_expiry, start_stamp_cleared, state_for_edh_session_state,
+    ACTIVITY_FIELD, EDH_CONNECTION_STRING_FIELD, EDH_SESSION_STATE_FIELD, EDH_SESSION_STATE_RUNNING,
+    EXPIRES_AT_FIELD, START_FAILURE_FIELD, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED,
+    STOP_REQUESTED_FIELD, deleted_row_expiry, start_stamp_cleared, state_for_edh_session_state, workstation_activity,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -733,7 +734,9 @@ def _stack_id_from_label(label):
 
 def _instance_item(record, row):
     """One admin instance view: EDH's list_all record joined with the VAMS session row, carrying the row's
-    captured launch-failure reason (``edhFailure``) or None."""
+    captured launch-failure reason (``edhFailure``) or None, what its last start that did not happen recorded
+    (``startFailure``) or None, and ``activity``, derived as the workstation record derives it from the row with
+    EDH's live state and connectability laid over it."""
     record = record if isinstance(record, dict) else {}
     row = row or {}
 
@@ -743,6 +746,15 @@ def _instance_item(record, row):
 
     edh_state = record_str(EDH_FIELD_SESSION_STATE)
     image_id = row.get('imageId') or _stack_id_from_label(record.get(EDH_FIELD_SESSION_SOFTWARE_STACK))
+    state = state_for_edh_session_state(edh_state, row.get('state'))
+    connectable = row.get('connectionAvailable')
+    if edh_state is not None:
+        # EDH's listing carries the desktop's connection string: running with one that is not empty connects.
+        connectable = (edh_state.lower() == EDH_SESSION_STATE_RUNNING
+                       and (EDH_CONNECTION_STRING_FIELD not in record or bool(record.get(EDH_CONNECTION_STRING_FIELD))))
+    activity = workstation_activity({**row, 'state': state, 'edhState': edh_state if edh_state is not None
+                                     else row.get('edhState'), 'connectionAvailable': connectable,
+                                     'sessionId': record_str(EDH_FIELD_SESSION_UUID) or row.get('sessionId')})
     return {
         "sessionId": record_str(EDH_FIELD_SESSION_UUID) or row.get('sessionId'),
         "edhState": edh_state,
@@ -752,9 +764,11 @@ def _instance_item(record, row):
         "updatedAt": row.get('updatedAt'),
         "userId": row.get('userId'),
         "bootstrapId": row.get('bootstrapId'),
-        "state": state_for_edh_session_state(edh_state, row.get('state')),
+        "state": state,
+        "activity": activity,
         "lastError": row.get('lastError'),
         "edhFailure": edh_failure_projection(row.get('edhFailure')),
+        "startFailure": start_failure_projection(row.get(START_FAILURE_FIELD)),
         "imageId": str(image_id) if image_id is not None else None,
         "osFamily": row.get('osFamily') or record_str(EDH_FIELD_SESSION_OS_FAMILY),
         "instanceType": row.get('instanceType') or record_str(EDH_FIELD_SESSION_INSTANCE_TYPE),
@@ -939,6 +953,11 @@ def act_on_instance(event, action):
         # A desktop that is stopped or gone cannot be connected to; the flag moves with the state. A start
         # the row holds in progress is over: EDH stops a started desktop, and a deleted one cannot start.
         written = {'state': new_state, 'connectionAvailable': False, **start_stamp_cleared(row)}
+        if row.get(ACTIVITY_FIELD):
+            written[ACTIVITY_FIELD] = None
+        if new_state == STATE_STOPPED:
+            # A read that still finds the desktop running inside the settle window reports it stopping.
+            written[STOP_REQUESTED_FIELD] = datetime.now(timezone.utc).isoformat()
         if new_state == STATE_DELETED and not (row.get('apiKeyId') or row.get('secretName')):
             # No credential to take back: the row is left to the table's TTL at once.
             written[EXPIRES_AT_FIELD] = deleted_row_expiry()

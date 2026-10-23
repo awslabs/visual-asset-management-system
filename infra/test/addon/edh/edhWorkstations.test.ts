@@ -230,14 +230,63 @@ describe("EDH add-on Lambdas", () => {
     );
 
     test.each(EDH_TEMPLATES)(
-        "%s: the service runs inside the gateway timeout and the launch worker for five minutes",
+        "%s: the service runs inside the gateway timeout and the launch worker for six minutes",
         (name) => {
             const fns = edhFunctions(edhSynth(name));
             const timeoutOf = (module: string) =>
                 fns.find((r) => handlerOf(r) === `handlers.addon.edh.${module}.lambda_handler`)
                     ?.properties.Timeout;
             expect(timeoutOf("edhWorkstationService")).toBe(API_GATEWAY_DEFAULT_TIMEOUT_SECONDS);
-            expect(timeoutOf("edhLaunchWorker")).toBe(300);
+            // The worker's start of a stopped desktop reads EDH's answer for up to 240 s, then the
+            // desktop's state every 15 s for what is left of the start's window.
+            expect(timeoutOf("edhLaunchWorker")).toBe(360);
+        }
+    );
+
+    test.each(EDH_TEMPLATES)(
+        "%s: the launch worker reads instances on every resource with a reasoned suppression, and may stop, start or terminate none",
+        (name) => {
+            const s = edhSynth(name);
+            const fns = edhFunctions(s);
+            const [worker] = fns.filter(
+                (r) => handlerOf(r) === "handlers.addon.edh.edhLaunchWorker.lambda_handler"
+            );
+            expect(worker).toBeDefined();
+            const allowedOn = (fn: Resource) =>
+                statementsOf(s, fn).filter((st) => st.Effect === "Allow");
+            // A refused start names the Availability Zone of the stopped desktop's instance.
+            const describe = allowedOn(worker).filter((st) =>
+                actionsOf(st).includes("ec2:DescribeInstances")
+            );
+            expect(describe.length).toBeGreaterThan(0);
+            expect([...new Set(describe.flatMap(resourcesOf))]).toEqual(["*"]);
+            const covers = (pattern: string, action: string) =>
+                new RegExp(`^${pattern.replace(/\*/g, ".*").replace(/\?/g, ".")}$`, "i").test(
+                    action
+                );
+            const lifecycle = allowedOn(worker)
+                .flatMap(actionsOf)
+                .filter((a) =>
+                    ["ec2:StartInstances", "ec2:StopInstances", "ec2:TerminateInstances"].some(
+                        (x) => covers(a, x)
+                    )
+                );
+            expect(lifecycle).toEqual([]);
+            // Neither API-facing workstation role reads instances: the start runs in the worker.
+            for (const module of ["edhWorkstationService", "edhAdminService"]) {
+                const [fn] = fns.filter(
+                    (r) => handlerOf(r) === `handlers.addon.edh.${module}.lambda_handler`
+                );
+                expect(
+                    allowedOn(fn).some((st) => actionsOf(st).includes("ec2:DescribeInstances"))
+                ).toBe(false);
+            }
+            const reasons = (
+                (worker.raw.Metadata?.cdk_nag?.rules_to_suppress ?? []) as Array<{ reason: string }>
+            ).map((r) => r.reason);
+            expect(
+                reasons.some((r) => r.startsWith("ec2:DescribeInstances accepts no resource ARN"))
+            ).toBe(true);
         }
     );
 
@@ -262,7 +311,7 @@ describe("EDH add-on Lambdas", () => {
     });
 
     test.each(EDH_TEMPLATES)(
-        "%s: the launch worker is retried twice and its events expire after twenty minutes",
+        "%s: the launch worker is retried twice and its events expire after twenty-three minutes",
         (name) => {
             const s = edhSynth(name);
             const [worker] = edhFunctions(s).filter(
@@ -277,9 +326,9 @@ describe("EDH add-on Lambdas", () => {
             );
             expect(configs).toHaveLength(1);
             expect(configs[0].properties.MaximumRetryAttempts).toBe(2);
-            // Three attempts that each run to the five-minute worker timeout, plus Lambda's one- and
+            // Three attempts that each run to the six-minute worker timeout, plus Lambda's one- and
             // two-minute retry pauses, fit inside the age with margin.
-            expect(configs[0].properties.MaximumEventAgeInSeconds).toBe(1200);
+            expect(configs[0].properties.MaximumEventAgeInSeconds).toBe(1380);
             expect(configs[0].properties.Qualifier).toBe("$LATEST");
         }
     );

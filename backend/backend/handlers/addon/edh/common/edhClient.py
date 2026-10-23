@@ -16,11 +16,13 @@ and classified by the wording of its message, never by the status alone. Write r
 fields: a body goes out ``application/x-www-form-urlencoded`` (multipart only when a thumbnail file
 part is attached), never as JSON.
 
-Two timing profiles exist because two kinds of caller exist. API-facing handlers run behind an
+Three timing profiles exist because three kinds of caller exist. API-facing handlers run behind an
 API Gateway integration timeout whose floor is 29 s, so the ``api`` profile bounds ALL EDH calls of
 one request inside a shared ``time.monotonic()`` deadline of ``EDH_REQUEST_BUDGET_SECONDS`` and
 retries only GET; the deploy-time registration custom resource and scheduled workers use the
-``batch`` profile with the longer connect/read budget. Each attempt's connect and read timeouts are
+``batch`` profile with the longer connect/read budget, and the launch worker's start of a stopped desktop
+the ``start`` profile, whose start reads for most of ``EDH_START_BUDGET_SECONDS``. Each attempt's connect and
+read timeouts are
 clamped so their sum never exceeds what remains of the deadline, which is what bounds a request:
 the ``api`` pair alone, twice, plus its backoff would run past the budget. No profile retries a
 mutation: a POST/PUT/DELETE that timed out may have been executed, and a second desktop is worse than
@@ -95,6 +97,8 @@ EDH_FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
 API_GATEWAY_TIMEOUT_FLOOR_SECONDS = 29
 REQUEST_OVERHEAD_RESERVE_SECONDS = 4.7
 EDH_REQUEST_BUDGET_SECONDS = 20
+# The overall budget of the launch worker's start of a stopped desktop (the ``start`` profile below).
+EDH_START_BUDGET_SECONDS = 240.0
 
 # How long a root key read from Secrets Manager is reused before it is fetched again.
 _SECRET_CACHE_TTL_SECONDS = 3600
@@ -312,13 +316,19 @@ class _Profile(NamedTuple):
 # so it reads for whatever the budget leaves after its connect phase: EDH's start can outlast 8 s (it
 # waits for a capacity reservation to settle before it starts the instance), and an answer given up on
 # is an outcome the caller must then go and look for. batch: for callers that CloudFormation or a
-# schedule waits on.
+# schedule waits on. start: the launch worker's start of a stopped desktop, which EDH answers only once its
+# own capacity work is done -- a fresh capacity reservation in the instance's Availability Zone, whose
+# activation EDH waits up to 120 s for plus a settle of 10-20 s, then the on-demand fallback and EC2's start
+# with its own retries -- so the start, sent once, reads for the whole budget less its connect phase. A GET
+# on this profile is retried as on batch.
 _PROFILES = {
     "api": _Profile(connect_timeout=3.0, read_timeout=8.0, attempts=2, backoff_cap=1.0,
                     budget=float(EDH_REQUEST_BUDGET_SECONDS),
                     single_attempt_read_timeout=float(EDH_REQUEST_BUDGET_SECONDS)),
     "batch": _Profile(connect_timeout=10.0, read_timeout=60.0, attempts=3, backoff_cap=10.0,
                       budget=240.0, single_attempt_read_timeout=60.0),
+    "start": _Profile(connect_timeout=10.0, read_timeout=60.0, attempts=3, backoff_cap=10.0,
+                      budget=EDH_START_BUDGET_SECONDS, single_attempt_read_timeout=EDH_START_BUDGET_SECONDS - 10.0),
 }
 
 

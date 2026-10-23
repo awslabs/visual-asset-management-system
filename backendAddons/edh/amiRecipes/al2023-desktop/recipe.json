@@ -17,7 +17,8 @@
         { "file": "components/010-baseline.yml" },
         { "file": "components/040-vamscli.yml" },
         { "file": "components/060-session-bootstrap.yml" },
-        { "file": "components/065-profile-cleanup.yml" }
+        { "file": "components/065-profile-cleanup.yml" },
+        { "file": "components/066-no-screen-lock.yml" }
     ],
     "assets": [{ "id": "vamscli", "repoPath": "tools/VamsCLI" }],
     "keepVersions": 3,

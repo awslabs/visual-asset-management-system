@@ -51,11 +51,47 @@ class EdhStartInProgressError(EdhOperationError):
 
 
 class EdhReservationFullError(EdhOperationError):
-    """Raised when a launch or start is refused because its capacity reservation has no free slot
-    and does not fall back to on-demand (a launch), or the stopped desktop's reservation is full (a
-    start)."""
+    """Raised when a launch is refused because its capacity reservation has no free slot and does
+    not fall back to on-demand. A start answers 202 and runs in the background, so a start refused
+    for a full reservation is recorded on the workstation (`lastError` RESERVATION_FULL) instead."""
     # Carried into --json-output beside the error, as the API's own error body carries it.
     json_fields = {"code": "RESERVATION_FULL"}
+
+
+# The record fields a `start --wait` error carries into --json-output beside its outcome.
+_START_WAIT_RECORD_FIELDS = ("state", "activity", "lastError", "startFailure")
+
+
+def _start_wait_fields(outcome: str, record) -> dict:
+    fields = {"waitOutcome": outcome}
+    if isinstance(record, dict):
+        fields.update({key: record.get(key) for key in _START_WAIT_RECORD_FIELDS})
+    return fields
+
+
+class EdhStartFailedError(EdhOperationError):
+    """Raised by `edh workstation start --wait` when the start ended without the workstation
+    running: EDH refused it, leaving it STOPPED with the reason under lastError and startFailure, or
+    it ended in another settled state."""
+    # Carried into --json-output beside the error; an instance adds the record's state, activity,
+    # lastError and startFailure.
+    json_fields = {"waitOutcome": "failed"}
+
+    def __init__(self, message: str, record=None):
+        super().__init__(message)
+        self.json_fields = _start_wait_fields("failed", record)
+
+
+class EdhStartWaitTimeoutError(EdhError):
+    """Raised by `edh workstation start --wait` when the workstation was still starting when the
+    wait ran out; the start may still complete."""
+    # Carried into --json-output beside the error; an instance adds the record's state, activity,
+    # lastError and startFailure.
+    json_fields = {"waitOutcome": "timedOut"}
+
+    def __init__(self, message: str, record=None):
+        super().__init__(message)
+        self.json_fields = _start_wait_fields("timedOut", record)
 
 
 class EdhCapacityReservationNotFoundError(EdhError):

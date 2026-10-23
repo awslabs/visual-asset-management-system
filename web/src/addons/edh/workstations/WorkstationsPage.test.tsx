@@ -324,7 +324,7 @@ describe("WorkstationsPage", () => {
         expect(screen.queryByText("linux")).not.toBeInTheDocument();
         expect(
             screen.getByText(
-                "Refreshes every 20 seconds, and every 5 seconds while a workstation is being created or started."
+                "Refreshes every 20 seconds, and every 5 seconds while a workstation is being created, started or stopped."
             )
         ).toBeInTheDocument();
 

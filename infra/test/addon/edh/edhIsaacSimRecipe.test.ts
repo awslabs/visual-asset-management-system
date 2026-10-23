@@ -185,7 +185,7 @@ describe("the shipped Isaac Sim recipe", () => {
         });
     });
 
-    test("holds the kernel, then runs the AWS update component and the seven others in order", () => {
+    test("holds the kernel, then runs the AWS update component and the eight others in order", () => {
         // The hold has to precede the OS update, which would otherwise take the running kernel to a
         // series with no extra modules to install.
         expect(loaded.manifest.components[0].file).toBe("components/010-kernel.yml");
@@ -200,6 +200,7 @@ describe("the shipped Isaac Sim recipe", () => {
             "050-connector.yml",
             "060-session-bootstrap.yml",
             "065-profile-cleanup.yml",
+            "066-no-screen-lock.yml",
             "070-autolaunch.yml",
         ]);
     });

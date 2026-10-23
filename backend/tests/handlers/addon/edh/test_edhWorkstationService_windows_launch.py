@@ -13,12 +13,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from backend.backend.handlers.addon.edh.common.edhIdentity import edh_uid_for
 from backend.tests.handlers.addon.edh.edhServiceTestSupport import (
     BOOTSTRAP_OWN,
     CATALOG_STACK,
     SESSION_OWN,
-    USER,
     WORKSTATIONS_PATH,
     FakeEdhClient,
     install_service_fakes,
@@ -152,8 +150,9 @@ class TestRootDiskFloor:
 
 @pytest.mark.unit
 class TestWindowsStart:
-    def test_a_windows_start_mints_nothing_and_still_clears_earlier_keys(self, monkeypatch):
-        """The start answers disabled and mints nothing, and the keys a bootstrap left before still go."""
+    def test_a_windows_start_mints_nothing_and_hands_the_start_over(self, monkeypatch):
+        """The start answers disabled and mints nothing; the launch worker, once EDH takes the start, clears the
+        keys a bootstrap left before (test_edhLaunchWorker_start.py)."""
         fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_states=[
             {service.EDH_FIELD_SESSION_UUID: SESSION_OWN, service.EDH_FIELD_SESSION_STATE: "stopped"}]))
         row = own_row(state="STOPPED", edhState="stopped", connectionAvailable=False, osFamily="windows")
@@ -165,9 +164,9 @@ class TestWindowsStart:
 
         response = service.lambda_handler(event, MagicMock())
 
-        assert response["statusCode"] == 200
+        assert response["statusCode"] == 202
         assert response_body(response)["sessionBootstrap"] == "disabled"
         mint.assert_not_called()
-        others.assert_called_once()
-        assert others.call_args.kwargs["keep"] is None
-        assert fakes.edh.calls_to("start_desktop") == [(edh_uid_for(USER), SESSION_OWN)]
+        others.assert_not_called()
+        assert fakes.edh.calls_to("start_desktop") == []
+        fakes.lambda_client.invoke.assert_called_once()

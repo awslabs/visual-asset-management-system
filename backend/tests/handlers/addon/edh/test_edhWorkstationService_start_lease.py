@@ -77,37 +77,38 @@ class TestStartUnderALease:
         mint.assert_not_called()
         fakes.table.update_item.assert_not_called()
 
-    def test_a_lease_that_holds_starts_the_desktop_and_clears_the_lease_stop(self, monkeypatch):
+    def test_a_lease_that_holds_hands_the_start_over_and_leaves_the_lease_stop_to_the_accepted_start(
+            self, monkeypatch):
+        # The launch worker clears the lease-stop stamp and the expiry code once EDH accepts the start
+        # (test_edhLaunchWorker_start.py); a start that does not happen leaves the desktop lease-stopped.
         response, fakes, mint = _start(monkeypatch, _lease_stopped_row(leaseExpiresAt=_hours_from_now(3)))
 
-        assert response["statusCode"] == 200
-        assert fakes.edh.calls_to("start_desktop") == [(fakes.edh.calls[0][1][0], SESSION_OWN)]
+        assert response["statusCode"] == 202
+        assert fakes.edh.calls_to("start_desktop") == []
+        fakes.lambda_client.invoke.assert_called_once()
         mint.assert_called_once()
-        assert _written(fakes, "leaseStoppedAt") == (True, None)
-        assert _written(fakes, "state") == (True, "CREATING")
-        assert not response_body(response).get("leaseStoppedAt")
+        assert _written(fakes, "leaseStoppedAt")[0] is False
 
-    def test_start_clears_the_expiry_code_on_its_final_update(self, monkeypatch):
+    def test_the_expiry_code_stays_until_the_start_is_accepted(self, monkeypatch):
         row = _lease_stopped_row(leaseExpiresAt=_hours_from_now(3), lastError=LAST_ERROR_LEASE_EXPIRED)
 
         response, fakes, _ = _start(monkeypatch, row)
 
-        assert response["statusCode"] == 200
-        assert _written(fakes, "state") == (True, "CREATING")
-        assert _written(fakes, "lastError") == (True, None)
-        assert response_body(response)["lastError"] is None
+        assert response["statusCode"] == 202
+        assert _written(fakes, "lastError")[0] is False
+        assert response_body(response)["lastError"] == LAST_ERROR_LEASE_EXPIRED
 
     def test_a_policy_that_does_not_enforce_leases_starts_an_expired_one(self, monkeypatch):
         response, fakes, _ = _start(monkeypatch, _lease_stopped_row(), policy=DISABLED)
 
-        assert response["statusCode"] == 200
-        assert len(fakes.edh.calls_to("start_desktop")) == 1
+        assert response["statusCode"] == 202
+        fakes.lambda_client.invoke.assert_called_once()
 
     def test_an_unreadable_expiry_is_no_lease(self, monkeypatch):
         response, fakes, _ = _start(monkeypatch, _lease_stopped_row(leaseExpiresAt="not-a-date"))
 
-        assert response["statusCode"] == 200
-        assert len(fakes.edh.calls_to("start_desktop")) == 1
+        assert response["statusCode"] == 202
+        fakes.lambda_client.invoke.assert_called_once()
 
     @pytest.mark.parametrize("rest", [False, True], ids=["http", "rest"])
     def test_a_deleted_row_is_refused_before_edh_is_reached(self, monkeypatch, rest):

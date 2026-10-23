@@ -33,13 +33,18 @@ export const WORKSTATION_POLL_TRANSITIONAL_MS = 5000;
 export const WORKSTATION_POLL_STABLE_MS = 20000;
 
 /**
- * A row still moving towards a steady state: a launch EDH has not reported back on, or an active
- * desktop EDH does not yet report connectable (a fresh start looks like this too).
+ * A row still moving towards a steady state: one the service reports `starting` or `stopping`
+ * (`activity`), a launch EDH has not reported back on, or an active desktop EDH does not yet report
+ * connectable.
  */
 export function isTransitionalWorkstation(
-    row: Pick<WorkstationRecord, "state" | "connectionAvailable">
+    row: Pick<WorkstationRecord, "state" | "connectionAvailable" | "activity">
 ): boolean {
-    return row.state === "CREATING" || (row.state === "ACTIVE" && !row.connectionAvailable);
+    return (
+        !!row.activity ||
+        row.state === "CREATING" ||
+        (row.state === "ACTIVE" && !row.connectionAvailable)
+    );
 }
 
 // Pure helper: 5000 while any row is transitional, 20000 when every row is settled, false when empty.
@@ -129,6 +134,17 @@ export function useWorkstationMutations() {
     const startWorkstation = useMutation({
         mutationFn: ({ sessionId }: { sessionId: string }) =>
             callService<WorkstationRecord>(() => workstationService.startWorkstation(sessionId)),
+        // The start is accepted (202) and runs in the background: the answered record, `activity`
+        // `starting`, replaces its row at once, so the badge reads Starting before the next poll.
+        onSuccess: (record) => {
+            if (!record?.bootstrapId) return;
+            // The credential outcome belongs to this answer, not to the listed row.
+            const row: WorkstationRecord = { ...record };
+            delete row.sessionBootstrap;
+            queryClient.setQueryData<WorkstationRecord[]>(qk.workstations(), (rows) =>
+                rows?.map((r) => (r.bootstrapId === row.bootstrapId ? { ...r, ...row } : r))
+            );
+        },
         onSettled: invalidateUnlessFailed,
     });
 

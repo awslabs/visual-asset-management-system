@@ -28,13 +28,10 @@ import {
     useWorkstations,
     useWorkstationMutations,
 } from "../api/queries";
-import {
-    RESERVATION_FULL_START_MESSAGE,
-    isReservationFull,
-    unconfirmedNotice,
-} from "../api/outcome";
+import { unconfirmedNotice } from "../api/outcome";
 import WorkstationStatusBadge, {
     EdhFailureDetail,
+    StartFailureNotice,
     describeLastError,
 } from "../components/WorkstationStatusBadge";
 import CapacityDetail from "../components/CapacityDetail";
@@ -81,7 +78,7 @@ const CREATING_DELETE_HINT = `Available once the launch has been creating for ${
 // The poll cadence as the page states it; the numbers are the query module's own.
 const REFRESH_CAPTION = `Refreshes every ${WORKSTATION_POLL_STABLE_MS / 1000} seconds, and every ${
     WORKSTATION_POLL_TRANSITIONAL_MS / 1000
-} seconds while a workstation is being created or started.`;
+} seconds while a workstation is being created, started or stopped.`;
 
 // The rows shown before the first answer; one instance, so the search memo's dependency holds.
 const NO_WORKSTATIONS: WorkstationRecord[] = [];
@@ -199,6 +196,11 @@ const RowActions: React.FC<RowActionsProps> = ({
     // its key, so every action waits for the workstation's request.
     const inFlight = useContext(SessionActionsInFlight).get(workstationKey(row));
     const inFlightHint = inFlight && `A ${inFlight} of this workstation is in progress.`;
+    // A start the service accepted runs in the background until EDH reports the desktop connectable
+    // (`activity` `starting`, whatever the state reads): a stop or delete then would race the worker
+    // that binds the desktop's key, and a second start is refused, so all three wait for it.
+    const startingHint =
+        row.activity === "starting" ? "A start of this workstation is in progress." : undefined;
     // A desktop EDH reports stopping or interrupted reads STOPPED, but EDH starts it only once it
     // reports it stopped; a row without EDH's state leaves the start to EDH.
     const edhNotStoppedHint =
@@ -210,21 +212,24 @@ const RowActions: React.FC<RowActionsProps> = ({
             label: "Stop",
             onSelect: () => onStop(row),
             hidden: !canStop || !hasSession,
-            disabled: row.state !== "ACTIVE" || !!inFlight,
+            disabled: row.state !== "ACTIVE" || !!startingHint || !!inFlight,
             hint:
-                row.state !== "ACTIVE"
+                startingHint ??
+                (row.state !== "ACTIVE"
                     ? "Only an active workstation can be stopped."
-                    : inFlightHint,
+                    : inFlightHint),
         },
         {
             label: "Start",
             onSelect: () => onStart(row),
             hidden: !canStart || !hasSession,
-            disabled: row.state !== "STOPPED" || !!edhNotStoppedHint || !!inFlight,
+            disabled:
+                row.state !== "STOPPED" || !!startingHint || !!edhNotStoppedHint || !!inFlight,
             hint:
-                row.state !== "STOPPED"
+                startingHint ??
+                (row.state !== "STOPPED"
                     ? "Only a stopped workstation can be started."
-                    : edhNotStoppedHint ?? inFlightHint,
+                    : edhNotStoppedHint ?? inFlightHint),
         },
         // Renew addresses the lease, so only a leased row under a live policy offers it.
         {
@@ -248,8 +253,8 @@ const RowActions: React.FC<RowActionsProps> = ({
             onSelect: () => onDelete(row),
             danger: true,
             hidden: !canDelete,
-            disabled: !isDeletable(row) || !!inFlight,
-            hint: isDeletable(row) ? inFlightHint : CREATING_DELETE_HINT,
+            disabled: !isDeletable(row) || !!startingHint || !!inFlight,
+            hint: startingHint ?? (isDeletable(row) ? inFlightHint : CREATING_DELETE_HINT),
         },
     ];
     if (items.every((item) => item.hidden)) {
@@ -360,6 +365,8 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
         if (!row.sessionId || !claimSession(row.sessionId, "start")) return;
         setActionError(null);
         try {
+            // Accepted (202): the start runs in the background, and the list shows its progress
+            // (Starting) and, should EDH refuse it, the reason beneath the Stopped badge.
             const record = await startWorkstation.mutateAsync({ sessionId: row.sessionId });
             toast.success("Workstation start requested", { description: row.name });
             warnIfSignInMissing(record, "start");
@@ -371,10 +378,7 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                 });
                 return;
             }
-            // VAMS does not move a stopped desktop off its reservation, so the start waits for a slot.
-            const message = isReservationFull(err)
-                ? RESERVATION_FULL_START_MESSAGE
-                : toastErrorMessage(err);
+            const message = toastErrorMessage(err);
             toast.error("Start failed", { description: `${row.name}: ${message}` });
             setActionError(`Failed to start ${row.name}: ${message}`);
         } finally {
@@ -450,8 +454,11 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                             state={row.original.state}
                             edhState={row.original.edhState}
                             lastError={row.original.lastError}
+                            activity={row.original.activity}
                             connectionAvailable={row.original.connectionAvailable}
                             sessionId={row.original.sessionId}
+                            instanceType={row.original.instanceType}
+                            startFailure={row.original.startFailure}
                         />
                         {(row.original.state === "ORPHANED" ||
                             row.original.lastError === "LEASE_EXPIRED") && (
@@ -459,6 +466,7 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                                 {describeLastError(row.original.lastError)}
                             </span>
                         )}
+                        <StartFailureNotice row={row.original} />
                         <EdhFailureDetail failure={row.original.edhFailure} />
                     </div>
                 ),

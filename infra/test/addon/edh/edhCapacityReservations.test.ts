@@ -275,7 +275,7 @@ describe("EDH capacity reservation IAM", () => {
         expect(writes).toEqual([]);
     });
 
-    test("the three reader roles' own policies hold no EC2 action but the reservation read", () => {
+    test("the three reader roles' own policies hold no EC2 action but the reservation read, and the worker's instance read", () => {
         const s = allFeaturesSynth();
         const ec2Actions = Object.fromEntries(
             edhFunctions(s)
@@ -291,9 +291,16 @@ describe("EDH capacity reservation IAM", () => {
                     ],
                 ])
         );
+        // The launch worker also reads a stopped desktop's instance, for the Availability Zone a
+        // refused start names; neither read is a write.
         expect(ec2Actions).toEqual(
             Object.fromEntries(
-                RESERVATION_READERS.map((module) => [module, [DESCRIBE_CAPACITY_RESERVATIONS]])
+                RESERVATION_READERS.map((module) => [
+                    module,
+                    module === "edhLaunchWorker"
+                        ? [DESCRIBE_CAPACITY_RESERVATIONS, "ec2:DescribeInstances"]
+                        : [DESCRIBE_CAPACITY_RESERVATIONS],
+                ])
             )
         );
     });

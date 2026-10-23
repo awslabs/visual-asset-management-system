@@ -53,6 +53,7 @@
         { "file": "components/050-connector.yml" },
         { "file": "components/060-session-bootstrap.yml" },
         { "file": "components/065-profile-cleanup.yml" },
+        { "file": "components/066-no-screen-lock.yml" },
         { "file": "components/070-autolaunch.yml" }
     ],
     "assets": [

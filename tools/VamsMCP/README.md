@@ -515,6 +515,14 @@ EDH's status named, such as `InsufficientInstanceCapacity` from
 captured; it is null when VAMS captured none, and EDH's own wording is never
 returned. The items of `list_edh_admin_instances` and `list_edh_stale_instances`
 carry it from the joined VAMS row, null for a session VAMS did not launch.
+Every workstation record, and every `list_edh_admin_instances` item, also carries
+`activity`, what the workstation is doing whatever `state` says, derived on each
+read: `starting` from a start request until EDH reports the desktop connectable
+(a STOPPED row whose start is in progress, a CREATING row with a `sessionId`, an
+ACTIVE row not yet connectable), `stopping` while EDH still stops the desktop, and
+null otherwise; and `startFailure`, why the last start left a STOPPED row stopped
+(`lastError` `CAPACITY_UNAVAILABLE`, `RESERVATION_FULL` or `START_FAILED`), as
+`{errorCode, availabilityZone, observedAt}`, null when it did not.
 The `admin` reads require the EDH admin routes;
 `get_edh_capacity` and `get_edh_health` are in the `autoApprove` addition below, while
 `list_edh_admin_instances` and `list_edh_stale_instances` name other users,
@@ -614,14 +622,21 @@ on-demand, and the record carries `capacityReservationFallback: true`; one whose
 `EdhReservationFullError`, `code` `RESERVATION_FULL`). A record names the
 reservation it launched into in `capacityReservationId` and
 `capacityReservationLabel`. A start of a stopped desktop whose reservation is full
-is refused the same way and leaves it stopped.
+leaves it stopped with `lastError` `RESERVATION_FULL` (see below).
 `register_edh_capacity_reservation` (`capacity_reservation_id`, `label`, and the
 optional `fallback_to_on_demand` and `enabled`, both server default true) and
 `update_edh_capacity_reservation` (a partial patch of `label`,
 `fallback_to_on_demand` and `enabled`) maintain VAMS's registry of reservations and
 require the EDH admin routes; neither changes the reservation in EC2.
-`start_edh_workstation` returns the updated record plus `sessionBootstrap`, as for
-a launch; while EDH still lists the desktop stopped, a start is refused (409,
+`start_edh_workstation` is accepted (HTTP 202) and returns at once with the record,
+still STOPPED with `activity` `starting`, plus `sessionBootstrap`, as for a launch;
+the start runs in the background, so follow it with `list_edh_workstations` until
+the row is ACTIVE with `activity` null. A start EDH refuses leaves the row STOPPED
+with `activity` null, `lastError` `CAPACITY_UNAVAILABLE` (AWS had no capacity for
+the instance type in the desktop's Availability Zone; the desktop keeps its disk
+there, so start it again later), `RESERVATION_FULL` or `START_FAILED`, and
+`startFailure` `{errorCode, availabilityZone, observedAt}`; the desktop is never
+deleted for a refused start. While EDH still lists the desktop stopped, a start is refused (409,
 `error_type` `EdhStartInProgressError`, `startInProgress: true`) when another start
 of it is being processed,
 within 3 minutes of one EDH did not confirm, while the reconciler revokes the stopped

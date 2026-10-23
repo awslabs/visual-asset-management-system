@@ -407,7 +407,7 @@ class TestReconcileRow:
         assert rec.reconcile_row(row, _index(), NOW) == ({}, False, False)
         # EDH_LAUNCH_WORKER_TIMEOUT in
         # infra/lib/nestedStacks/addon/edhWorkstations/lambdaBuilder/edhWorkstationsFunctions.ts
-        assert rec.WORKER_ATTEMPT_SETTLE_SECONDS == 300
+        assert rec.WORKER_ATTEMPT_SETTLE_SECONDS == 360
 
     def test_a_creating_row_with_an_attempt_left_waits_out_the_grace_window(self):
         row = _creating_row("a", 5, launchAttempts=rec.MAX_LAUNCH_ATTEMPTS - 1)
@@ -547,7 +547,7 @@ class TestReconcileRow:
         assert result == ({}, False, False)
         assert summary == _summary(deferred=1)
 
-    @pytest.mark.parametrize("seconds_ago", [180, 600])
+    @pytest.mark.parametrize("seconds_ago", [420, 600])
     def test_a_stopped_row_under_a_claim_past_the_window_is_revoked(self, seconds_ago):
         summary = _summary()
         result = rec.reconcile_row(self._claimed(seconds_ago), _index(_desktop("sess-a", "stopped")), NOW, summary)

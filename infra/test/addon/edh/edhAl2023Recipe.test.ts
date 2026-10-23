@@ -4,16 +4,19 @@
  */
 
 /**
- * The shape of the shipped Amazon Linux 2023 desktop recipe, and the sign-in every shipped Linux
- * desktop recipe installs, decided from the files on disk without a build.
+ * The shape of the shipped Amazon Linux 2023 desktop recipe, and the sign-in and screen-lock
+ * defaults every shipped Linux desktop recipe installs, decided from the files on disk without a
+ * build.
  *
- * The session sign-in and the profile cleanup are byte-identical copies of the Isaac Sim recipe's
- * components, so the runtime suites in edhIsaacSimRecipe.test.ts exercise the scripts both recipes
- * install.
+ * The session sign-in, the profile cleanup and the screen-lock defaults are byte-identical copies
+ * of the Isaac Sim recipe's components, so the runtime suites in edhIsaacSimRecipe.test.ts exercise
+ * the scripts both recipes install, and the screen-lock suite here runs the one component's build.
  */
 
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
+import { spawnSync } from "child_process";
 import {
     EDH_SESSION_SECRET_PREFIX_MAX_LENGTH,
     EDH_SHIPPED_AMI_RECIPE_DIRS,
@@ -30,8 +33,14 @@ const SIGN_IN_COMPONENTS = [
     "060-session-bootstrap.yml",
     "065-profile-cleanup.yml",
 ];
+/** The component that turns the GNOME screen lock and idle blanking off. */
+const SCREEN_LOCK_COMPONENT = "066-no-screen-lock.yml";
 /** The ones every shipped Linux desktop recipe carries byte for byte. */
-const SHARED_COMPONENTS = ["060-session-bootstrap.yml", "065-profile-cleanup.yml"];
+const SHARED_COMPONENTS = [
+    "060-session-bootstrap.yml",
+    "065-profile-cleanup.yml",
+    SCREEN_LOCK_COMPONENT,
+];
 
 const loaded = loadEdhAmiRecipe(REPO, DIR, false);
 const componentBodies = loaded.componentFiles.map((relative) => ({
@@ -102,13 +111,14 @@ describe("the shipped Amazon Linux 2023 desktop recipe", () => {
         expect(loaded.manifest.profileId).toBe(1);
     });
 
-    test("runs the AWS update component, then the baseline, the CLI, the sign-in and the cleanup", () => {
+    test("runs the AWS update component, then the baseline, the CLI, the sign-in, the cleanup and the screen-lock defaults", () => {
         expect(loaded.manifest.components[0].arn).toBe(
             "arn:${AWS::Partition}:imagebuilder:${AWS::Region}:aws:component/update-linux/x.x.x"
         );
         expect(loaded.componentFiles.map((f) => path.basename(f))).toEqual([
             "010-baseline.yml",
             ...SIGN_IN_COMPONENTS,
+            SCREEN_LOCK_COMPONENT,
         ]);
     });
 
@@ -293,7 +303,7 @@ describe("the shipped Linux desktop recipes", () => {
     });
 });
 
-describe("the sign-in components the Linux desktop recipes share", () => {
+describe("the components the Linux desktop recipes share", () => {
     const read = (recipeId: string, name: string) =>
         fs.readFileSync(path.join(REPO, RECIPES, recipeId, "components", name));
 
@@ -325,5 +335,380 @@ describe("the sign-in components the Linux desktop recipes share", () => {
         expect(
             read("al2023-desktop", "040-vamscli.yml").equals(read("isaacsim", "040-vamscli.yml"))
         ).toBe(false);
+    });
+});
+
+/** A line's leading spaces. */
+function indentOf(line: string): number {
+    return line.length - line.trimStart().length;
+}
+
+/**
+ * The commands of one phase of a component document, in order, each as bash receives it: a plain
+ * list item as written, and a literal block (`- |`) with the indentation YAML strips from it
+ * removed, so a heredoc terminator written one column off is no longer a terminator. YAML comments
+ * between the items are dropped.
+ */
+function phaseCommands(body: string, phase: string): string[] {
+    const lines = body.split("\n");
+    const start = lines.findIndex((line) => line.trim() === `- name: ${phase}`);
+    if (start < 0) {
+        throw new Error(`the component has no ${phase} phase`);
+    }
+    const phaseIndent = indentOf(lines[start]);
+    const next = lines.findIndex(
+        (line, i) =>
+            i > start && line.trim().startsWith("- name: ") && indentOf(line) === phaseIndent
+    );
+    const end = next < 0 ? lines.length : next;
+    const commands: string[] = [];
+    // -1 outside a commands list, 0 at its first item, else the indentation of its items.
+    let listIndent = -1;
+    for (let i = start + 1; i < end; i++) {
+        const line = lines[i];
+        if (line.trim() === "commands:") {
+            listIndent = 0;
+            continue;
+        }
+        if (listIndent < 0 || !line.trim() || line.trim().startsWith("#")) {
+            continue;
+        }
+        if (listIndent === 0) {
+            listIndent = indentOf(line);
+        }
+        if (indentOf(line) < listIndent) {
+            listIndent = -1;
+            continue;
+        }
+        if (line.trim() === "- |") {
+            const block: string[] = [];
+            let blockIndent = -1;
+            let j = i + 1;
+            for (; j < end; j++) {
+                if (!lines[j].trim()) {
+                    block.push("");
+                    continue;
+                }
+                if (blockIndent < 0) {
+                    blockIndent = indentOf(lines[j]);
+                }
+                if (indentOf(lines[j]) < blockIndent) {
+                    break;
+                }
+                block.push(lines[j].slice(blockIndent));
+            }
+            while (block.length && block[block.length - 1] === "") {
+                block.pop();
+            }
+            commands.push(block.join("\n"));
+            i = j - 1;
+        } else if (line.trim().startsWith("- ")) {
+            commands.push(line.trim().slice(2));
+        }
+    }
+    return commands;
+}
+
+/** The body of the quoted heredoc `cat > <file> <<'<tag>'` in a script, or undefined without one. */
+function heredoc(script: string, file: string, tag: string): string | undefined {
+    const lines = script.split("\n");
+    const start = lines.indexOf(`cat > ${file} <<'${tag}'`);
+    const end = lines.findIndex((line, i) => i > start && line === tag);
+    return start < 0 || end < 0 ? undefined : lines.slice(start + 1, end).join("\n") + "\n";
+}
+
+/** A dconf keyfile's groups, each with its keys and their values as written. */
+function keyfileGroups(text: string): Record<string, Record<string, string>> {
+    const groups: Record<string, Record<string, string>> = {};
+    let group = "";
+    for (const line of text.split("\n")) {
+        const header = /^\[([^\]]+)\]$/.exec(line);
+        if (header) {
+            group = header[1];
+            groups[group] = {};
+        } else if (line.trim() && !line.startsWith("#")) {
+            const at = line.indexOf("=");
+            groups[group][line.slice(0, at)] = line.slice(at + 1);
+        }
+    }
+    return groups;
+}
+
+describe("the screen-lock defaults the Linux desktop recipes install", () => {
+    // EDH creates the desktop user with a local password nobody holds, and Amazon DCV signs the
+    // connection in, so a GNOME screen lock locks the user out of their own desktop.
+    const PROFILE = "/etc/dconf/profile/user";
+    const DEFAULTS = "/etc/dconf/db/local.d/00-vams-no-screen-lock";
+    const LOCKS = "/etc/dconf/db/local.d/locks/00-vams-no-screen-lock";
+    /** The user profile the dconf package of Amazon Linux 2023 ships (dconf-0.40.0-3.amzn2023). */
+    const DISTRIBUTION_PROFILE =
+        "user-db:user\nsystem-db:local\nsystem-db:site\nsystem-db:distro\n";
+    const body = fs.readFileSync(
+        path.join(REPO, RECIPES, "isaacsim", "components", SCREEN_LOCK_COMPONENT),
+        "utf8"
+    );
+    const build = phaseCommands(body, "build");
+    const validate = phaseCommands(body, "validate");
+    const buildScript = build.join("\n") + "\n";
+
+    /** Runs `fn` with a scratch directory, removed afterwards, as a forward-slash path. */
+    function inScratch<T>(fn: (root: string) => T): T {
+        const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vams-dconf-"));
+        try {
+            // Forward slashes, so the same paths work under Git Bash on a Windows checkout.
+            return fn(scratch.split(path.sep).join("/"));
+        } finally {
+            fs.rmSync(scratch, { recursive: true, force: true });
+        }
+    }
+
+    /** A phase's script with /etc/dconf moved under `root`, behind the given stub functions. */
+    function rooted(root: string, commands: string[], stubs: string[]): string {
+        return [...stubs, commands.join("\n").split("/etc/dconf").join(`${root}/etc/dconf`)].join(
+            "\n"
+        );
+    }
+
+    /** dconf, apt-get and dnf stubs that record their calls in `${root}/calls`. */
+    function recordingStubs(root: string): string[] {
+        return [
+            `dconf() { printf '%s\\n' "dconf $*" >> '${root}/calls'; }`,
+            `apt-get() { printf '%s\\n' "apt-get $*" >> '${root}/calls'; return 1; }`,
+            `dnf() { printf '%s\\n' "dnf $*" >> '${root}/calls'; return 1; }`,
+        ];
+    }
+
+    /**
+     * Runs the build phase `times` times in real bash against a scratch /etc/dconf, holding `seed` as
+     * the user profile beforehand when given. dconf, apt-get and dnf only record their calls. Returns
+     * the exit status and stderr of the last run, the profile after each run, the files written and
+     * the calls.
+     */
+    function runBuild(seed?: string, times = 1) {
+        return inScratch((root) => {
+            if (seed !== undefined) {
+                fs.mkdirSync(`${root}/etc/dconf/profile`, { recursive: true });
+                fs.writeFileSync(`${root}${PROFILE}`, seed);
+            }
+            const script = rooted(root, build, recordingStubs(root));
+            const profiles: string[] = [];
+            let run = spawnSync("bash", ["-c", script], { encoding: "utf8" });
+            for (let i = 0; i < times; i++) {
+                if (i > 0) {
+                    run = spawnSync("bash", ["-c", script], { encoding: "utf8" });
+                }
+                profiles.push(fs.readFileSync(`${root}${PROFILE}`, "utf8"));
+            }
+            return {
+                status: run.status,
+                stderr: run.stderr,
+                profiles,
+                defaults: fs.readFileSync(`${root}${DEFAULTS}`, "utf8"),
+                locks: fs.readFileSync(`${root}${LOCKS}`, "utf8"),
+                calls: fs.readFileSync(`${root}/calls`, "utf8").split("\n").filter(Boolean),
+            };
+        });
+    }
+
+    /**
+     * Runs the build phase, then the validate phase, in real bash against a scratch /etc/dconf. A
+     * placeholder stands in for the compiled database, `change` edits the tree between the phases,
+     * and the validate phase's dconf answers each read with `answers[key]`, recording the profile
+     * it was given. Returns the validate phase's exit status and dconf's calls.
+     */
+    function runValidate(answers: Record<string, string>, change?: (root: string) => void) {
+        return inScratch((root) => {
+            const built = spawnSync("bash", ["-c", rooted(root, build, recordingStubs(root))], {
+                encoding: "utf8",
+            });
+            expect(built.status).toBe(0);
+            fs.writeFileSync(`${root}/etc/dconf/db/local`, "compiled");
+            fs.writeFileSync(`${root}/calls`, "");
+            change?.(root);
+            const answer = Object.entries(answers)
+                .map(([key, value]) => `${key}) echo '${value}' ;;`)
+                .join(" ");
+            const stub =
+                `dconf() { printf '%s with %s\\n' "dconf $*" "$(tr '\\n' ' ' < "\${DCONF_PROFILE}")" >> '${root}/calls'; ` +
+                `case "$2" in ${answer} esac; }`;
+            const run = spawnSync("bash", ["-c", rooted(root, validate, [stub])], {
+                encoding: "utf8",
+            });
+            return {
+                status: run.status,
+                calls: fs.readFileSync(`${root}/calls`, "utf8").split("\n").filter(Boolean),
+            };
+        });
+    }
+
+    const COMPILED = {
+        "/org/gnome/desktop/screensaver/lock-enabled": "false",
+        "/org/gnome/desktop/lockdown/disable-lock-screen": "true",
+    };
+
+    test("each Linux desktop recipe installs them after the profile cleanup, and Windows does not", () => {
+        const recipes = EDH_SHIPPED_AMI_RECIPE_DIRS.map((dir) =>
+            loadEdhAmiRecipe(REPO, dir, false)
+        );
+        for (const recipe of recipes) {
+            const names = recipe.componentFiles.map((f) => path.basename(f));
+            const linux = recipe.manifest.osFamily === "linux";
+            expect({
+                recipe: recipe.recipeId,
+                installs: names.includes(SCREEN_LOCK_COMPONENT),
+                afterCleanup:
+                    !linux ||
+                    names.indexOf(SCREEN_LOCK_COMPONENT) ===
+                        names.indexOf("065-profile-cleanup.yml") + 1,
+            }).toEqual({ recipe: recipe.recipeId, installs: linux, afterCleanup: true });
+        }
+    });
+
+    test("the defaults turn the lock, the idle blanking and the lock command off, in GNOME's types", () => {
+        const defaults = heredoc(buildScript, DEFAULTS, "DCONF");
+        expect(defaults).toBeDefined();
+        expect(keyfileGroups(defaults ?? "")).toEqual({
+            "org/gnome/desktop/screensaver": {
+                "lock-enabled": "false",
+                "idle-activation-enabled": "false",
+                "lock-delay": "uint32 0",
+            },
+            "org/gnome/desktop/session": { "idle-delay": "uint32 0" },
+            // GNOME Shell refuses every lock while this is set: idle, keyboard shortcut, system menu
+            // and a logind lock request alike.
+            "org/gnome/desktop/lockdown": { "disable-lock-screen": "true" },
+            "org/gnome/settings-daemon/plugins/power": {
+                "idle-dim": "false",
+                "sleep-inactive-ac-type": "'nothing'",
+                "sleep-inactive-battery-type": "'nothing'",
+            },
+        });
+    });
+
+    test("the locks keep a user's own settings from turning the lock or the idle delay back on", () => {
+        const locks = heredoc(buildScript, LOCKS, "LOCKS");
+        expect(locks).toBeDefined();
+        const paths = (locks ?? "").split("\n").filter(Boolean);
+        expect(paths).toEqual([
+            "/org/gnome/desktop/screensaver/lock-enabled",
+            "/org/gnome/desktop/screensaver/idle-activation-enabled",
+            "/org/gnome/desktop/session/idle-delay",
+            "/org/gnome/desktop/lockdown/disable-lock-screen",
+        ]);
+        // Each lock names a key the defaults set, so a locked key is never left at GNOME's default.
+        const groups = keyfileGroups(heredoc(buildScript, DEFAULTS, "DCONF") ?? "");
+        for (const locked of paths) {
+            const at = locked.lastIndexOf("/");
+            expect({
+                locked,
+                set: locked.slice(at + 1) in (groups[locked.slice(1, at)] ?? {}),
+            }).toEqual({ locked, set: true });
+        }
+    });
+
+    test("the build writes both files, then compiles them with dconf update", () => {
+        const defaultsAt = build.findIndex((c) => c.includes(`cat > ${DEFAULTS} <<'DCONF'`));
+        const locksAt = build.findIndex((c) => c.includes(`cat > ${LOCKS} <<'LOCKS'`));
+        const updateAt = build.indexOf("dconf update");
+        expect(build[0]).toBe("set -euo pipefail");
+        expect(defaultsAt).toBeGreaterThan(0);
+        expect(locksAt).toBeGreaterThan(0);
+        expect(updateAt).toBeGreaterThan(Math.max(defaultsAt, locksAt));
+        // dconf is installed when the parent image lacks it, under the package name of each family.
+        expect(buildScript).toContain("install -y --no-install-recommends dconf-cli");
+        expect(buildScript).toContain("dnf install -y dconf\n");
+    });
+
+    test.each([
+        ["no user profile", undefined, "user-db:user\nsystem-db:local\n"],
+        [
+            "the distribution's profile, which reads the local database",
+            DISTRIBUTION_PROFILE,
+            DISTRIBUTION_PROFILE,
+        ],
+        [
+            "a profile without the local database",
+            "user-db:user\nsystem-db:site\n",
+            "user-db:user\nsystem-db:site\nsystem-db:local\n",
+        ],
+    ])(
+        "a build run on %s leaves a user profile that reads the local database, unchanged by a second run",
+        (_, seed, expected) => {
+            const run = runBuild(seed, 2);
+            expect({ status: run.status, stderr: run.stderr }).toEqual({ status: 0, stderr: "" });
+            expect(run.profiles).toEqual([expected, expected]);
+            expect(run.defaults).toBe(heredoc(buildScript, DEFAULTS, "DCONF"));
+            expect(run.locks).toBe(heredoc(buildScript, LOCKS, "LOCKS"));
+            // dconf was found, so nothing was installed, and each run compiled the database once.
+            expect(run.calls).toEqual(["dconf update", "dconf update"]);
+        }
+    );
+
+    test("the validate phase checks the profile, the default, the locks and the compiled database", () => {
+        const script = validate.join("\n");
+        expect(validate[0]).toBe("set -euo pipefail");
+        expect(validate).toEqual(
+            expect.arrayContaining([
+                `grep -qx 'system-db:local' ${PROFILE}`,
+                `grep -qx 'lock-enabled=false' ${DEFAULTS}`,
+                `grep -qx 'disable-lock-screen=true' ${DEFAULTS}`,
+                `grep -qx '/org/gnome/desktop/screensaver/lock-enabled' ${LOCKS}`,
+                `grep -qx '/org/gnome/desktop/lockdown/disable-lock-screen' ${LOCKS}`,
+                "test -s /etc/dconf/db/local",
+            ])
+        );
+        // The compiled database is read on its own, through a profile naming only it, so the check
+        // proves dconf update compiled the defaults rather than that the source file exists.
+        expect(script).toContain("printf 'system-db:local\\n' > \"${probe}\"");
+        expect(script).toContain(
+            'DCONF_PROFILE="${probe}" dconf read /org/gnome/desktop/screensaver/lock-enabled'
+        );
+        expect(script).toContain('test "${lock}" = false');
+        expect(script).toContain('test "${lockdown}" = true');
+    });
+
+    test("the validate phase passes on what the build wrote and a database holding the defaults", () => {
+        const run = runValidate(COMPILED);
+        expect(run.status).toBe(0);
+        expect(run.calls).toEqual([
+            "dconf read /org/gnome/desktop/screensaver/lock-enabled with system-db:local ",
+            "dconf read /org/gnome/desktop/lockdown/disable-lock-screen with system-db:local ",
+        ]);
+    });
+
+    test.each([
+        [
+            "the profile does not read the local database",
+            COMPILED,
+            (root: string) => fs.writeFileSync(`${root}${PROFILE}`, "user-db:user\n"),
+        ],
+        [
+            "the locks leave lock-enabled to the user",
+            COMPILED,
+            (root: string) =>
+                fs.writeFileSync(
+                    `${root}${LOCKS}`,
+                    fs
+                        .readFileSync(`${root}${LOCKS}`, "utf8")
+                        .replace("/org/gnome/desktop/screensaver/lock-enabled\n", "")
+                ),
+        ],
+        [
+            "nothing was compiled",
+            COMPILED,
+            (root: string) => fs.rmSync(`${root}/etc/dconf/db/local`),
+        ],
+        [
+            "the compiled database still turns the lock on",
+            { ...COMPILED, "/org/gnome/desktop/screensaver/lock-enabled": "true" },
+            undefined,
+        ],
+        [
+            "the compiled database leaves the lock command on",
+            { ...COMPILED, "/org/gnome/desktop/lockdown/disable-lock-screen": "" },
+            undefined,
+        ],
+    ])("the validate phase fails the build when %s", (_, answers, change) => {
+        expect(runValidate(answers, change).status).not.toBe(0);
     });
 });

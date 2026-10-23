@@ -90,6 +90,7 @@ class TestVocabulary:
             "EDH_REFUSED",
             "LAUNCH_ERROR",
             "CREATE_TIMED_OUT",
+            "START_FAILED",
             "LEASE_EXPIRED",
             "RESERVATION_FULL",
         }
@@ -259,7 +260,7 @@ class TestStartInProgress:
     def test_a_stamp_younger_than_the_window_is_in_progress(self, seconds_ago):
         assert state.start_in_progress(self._stamped(seconds_ago), self.NOW) is True
 
-    @pytest.mark.parametrize("seconds_ago", [180, 181, 3600])
+    @pytest.mark.parametrize("seconds_ago", [420, 421, 3600])
     def test_a_stamp_the_window_has_passed_holds_nothing(self, seconds_ago):
         assert state.start_in_progress(self._stamped(seconds_ago), self.NOW) is False
 
@@ -279,8 +280,9 @@ class TestStartInProgress:
     def test_without_a_reference_instant_the_window_is_measured_from_now(self):
         assert state.start_in_progress({"startRequestedAt": datetime.now(timezone.utc).isoformat()}) is True
 
-    def test_the_window_is_three_minutes(self):
-        assert state.START_IN_PROGRESS_SECONDS == 180
+    def test_the_window_is_seven_minutes(self):
+        # The launch worker's six-minute run and a minute for the hand-over (in-dev D10).
+        assert state.START_IN_PROGRESS_SECONDS == 420
 
 
 @pytest.mark.unit

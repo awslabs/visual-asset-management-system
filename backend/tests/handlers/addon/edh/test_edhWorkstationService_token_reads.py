@@ -55,7 +55,6 @@ from backend.tests.handlers.addon.edh.edhServiceTestSupport import (
     USER,
     WORKSTATIONS_PATH,
     FakeEdhClient,
-    Sequence,
     install_service_fakes,
     make_event,
     own_row,
@@ -180,15 +179,10 @@ SCENARIOS = {
         lambda mp: _lifecycle(mp, "GET", None, _session_less(), session_less=True), 200, False),
     "start_stopped": (
         API_EDH_WORKSTATION_START.path, POST,
-        lambda mp: _lifecycle(mp, "POST", "start", _stopped_row(), desktop_states=[_listed("stopped")]), 200, True),
+        lambda mp: _lifecycle(mp, "POST", "start", _stopped_row(), desktop_states=[_listed("stopped")]), 202, True),
     "start_running_refused": (
         API_EDH_WORKSTATION_START.path, POST,
         lambda mp: _lifecycle(mp, "POST", "start", _stopped_row(), desktop_states=[_listed("running")]), 409, True),
-    "start_lost_answer": (
-        API_EDH_WORKSTATION_START.path, POST,
-        lambda mp: _lifecycle(mp, "POST", "start", _stopped_row(), start_error=_lost("start"),
-                              desktop_states=Sequence([_listed("stopped")], [_listed("pending")])),
-        200, True),
     "stop": (
         API_EDH_WORKSTATION_STOP.path, POST, lambda mp: _lifecycle(mp, "POST", "stop", own_row()), 200, False),
     "stop_lost_answer": (

@@ -14,7 +14,8 @@
         {
             "arn": "arn:${AWS::Partition}:imagebuilder:${AWS::Region}:aws:component/update-windows/x.x.x"
         },
-        { "file": "components/010-baseline.yml" }
+        { "file": "components/010-baseline.yml" },
+        { "file": "components/020-no-screen-lock.yml" }
     ],
     "keepVersions": 3,
     "recipeRevision": 1,

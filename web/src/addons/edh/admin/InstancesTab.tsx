@@ -25,6 +25,7 @@ import type { EdhAdminInstance } from "../api/admin";
 import { unconfirmedNotice } from "../api/outcome";
 import WorkstationStatusBadge, {
     EdhFailureDetail,
+    StartFailureNotice,
     describeLastError,
 } from "../components/WorkstationStatusBadge";
 import CapacityDetail from "../components/CapacityDetail";
@@ -186,13 +187,17 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                                 state={row.original.state as WorkstationState}
                                 edhState={row.original.edhState}
                                 lastError={row.original.lastError}
+                                activity={row.original.activity}
                                 sessionId={row.original.sessionId}
+                                instanceType={row.original.instanceType}
+                                startFailure={row.original.startFailure}
                             />
                             {row.original.state === "ORPHANED" && (
                                 <span className="block text-xs text-text-secondary">
                                     {describeLastError(row.original.lastError)}
                                 </span>
                             )}
+                            <StartFailureNotice row={row.original} />
                             <EdhFailureDetail failure={row.original.edhFailure} />
                         </div>
                     ) : (

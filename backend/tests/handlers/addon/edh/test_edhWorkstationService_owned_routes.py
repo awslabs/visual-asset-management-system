@@ -110,9 +110,17 @@ class TestOwnership:
 
         response = _call(fakes, action, SESSION_OWN)
 
+        body = response_body(response)
+        if action == "start":
+            # A start is handed to the launch worker and answered 202; EDH's start is the worker's (in-dev D10).
+            assert response["statusCode"] == 202
+            assert fakes.edh.calls_to(wrapper) == []
+            fakes.lambda_client.invoke.assert_called_once()
+            assert (body["sessionId"], body["state"], body["activity"]) == (SESSION_OWN, "STOPPED", "starting")
+            fakes.log_authorization.assert_not_called()
+            return
         assert response["statusCode"] == 200
         assert fakes.edh.calls_to(wrapper) == [(edh_uid_for(USER), SESSION_OWN)]
-        body = response_body(response)
         assert (body["sessionId"], body["state"], body["connectionAvailable"]) == (SESSION_OWN, state, False)
         update = fakes.table.update_item.call_args[1]
         assert update["Key"] == {"bootstrapId": body["bootstrapId"]}

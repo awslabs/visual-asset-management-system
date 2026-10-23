@@ -215,8 +215,11 @@ export function buildEdhWorkstationServiceFunction(
 
 // The launch worker runs the EDH calls of one launch (the directory user, the desktop create, the
 // read-back of the session id) after the API request has been answered, under the client's batch
-// profile. Its timeout is the batch budget plus the client's own retry allowance.
-export const EDH_LAUNCH_WORKER_TIMEOUT = Duration.minutes(5);
+// profile, and the start of a stopped desktop under its start profile: EDH answers a start only once its
+// own capacity work is done, so the start reads for up to 240 s, and a start whose answer is lost is
+// followed by reads of the desktop's state every 15 s for what is left of the start's window. Its
+// timeout covers the start budget, those reads and the row and credential work around them.
+export const EDH_LAUNCH_WORKER_TIMEOUT = Duration.minutes(6);
 
 // Lambda's asynchronous retries wait one minute, then two, between attempts; the event must outlive
 // three attempts that each run to the worker's timeout, plus a margin for the time an event waits
@@ -260,7 +263,36 @@ export function buildEdhLaunchWorkerFunction(
     // A create EDH refuses for a reservation-bound launch is retried once as an on-demand launch,
     // and only when the reservation, read again, is full and its registry row allows the fallback.
     grantDescribeCapacityReservations(fun);
+    // A start EDH refuses names the Availability Zone of the stopped desktop's instance, the one zone it can
+    // start in, read from EC2.
+    grantDescribeInstances(fun);
     return fun;
+}
+
+/**
+ * Lets the launch worker read a stopped desktop's instance for the Availability Zone a refused start
+ * names. `ec2:DescribeInstances` accepts no resource ARN or resource-level condition, so the grant
+ * names `*`; it is read-only, and the role holds no EC2 write.
+ */
+export function grantDescribeInstances(fun: lambda.Function): void {
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["ec2:DescribeInstances"],
+            resources: ["*"],
+        })
+    );
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "ec2:DescribeInstances accepts no resource ARN or resource-level condition, so the read of a stopped workstation's instance, for the Availability Zone a refused start names, names every resource; it is read-only, and the role holds no EC2 write.",
+                appliesTo: [{ regex: "/^Resource::\\*$/g" }],
+            },
+        ],
+        true
+    );
 }
 
 export interface EdhSessionBootstrapResources {

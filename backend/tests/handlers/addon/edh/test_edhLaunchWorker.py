@@ -87,6 +87,8 @@ CAPTURES = {
     "find_desktop_by_name": "virtual_desktops_list_all.json",
     "create_desktop": "virtual_desktops_create.json",
     "update_desktop_schedule": "virtual_desktops_schedule.json",
+    "start_desktop": "virtual_desktops_start.json",
+    "get_desktop_states": "virtual_desktops_session_state.json",
 }
 
 # (wrapper, the error it raises, the code the row keeps): refusals EDH would repeat.
@@ -223,7 +225,7 @@ class TestWorkerModuleLoad:
         assert module.edh_session_table_name == os.environ["EDH_SESSION_STORAGE_TABLE_NAME"]
         assert module.vdi_default_project == "default"
         assert set(module.WORKER_AUDIT_ROUTES) == {"ensure_user", "find_desktop_by_name", "create_desktop",
-                                                   "update_desktop_schedule"}
+                                                   "update_desktop_schedule", "start_desktop", "get_desktop_states"}
 
 
 @pytest.mark.unit

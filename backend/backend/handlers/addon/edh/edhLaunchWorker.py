@@ -16,6 +16,16 @@ with a write conditioned on the row being as it read it, so of two deliveries of
 asks EDH for a desktop. A row launched into a capacity reservation is created in it; when EDH refuses that
 create and the reservation, read again, is full, the worker creates once more on-demand if the reservation's
 registration allows a fallback, and orphans the row RESERVATION_FULL if it does not.
+
+The worker also runs the start of a stopped desktop (payload ``action`` ``start``), which the workstation
+service hands it once it has claimed the row and minted the desktop's key, because EDH answers a start only
+once its own capacity work is done, which can take minutes. The worker sends EDH's start at most once per
+start (the payload's ``startRequestedAt`` stamp, claimed on the row), under the ``start`` profile. A start EDH
+accepts moves the row to CREATING and finishes the credential as the service used to; a start EDH refuses
+leaves the row STOPPED -- the desktop and its disk are never deleted, terminated or orphaned for it -- with a
+``lastError`` (CAPACITY_UNAVAILABLE, RESERVATION_FULL or START_FAILED) and a ``startFailure``, and takes back
+the key; a start whose answer is lost is followed by reads of the desktop's state every 15 seconds, inside the
+start's window, and one EDH still reports stopped at the end is left to the session sweep.
 """
 
 import os
@@ -36,21 +46,31 @@ from .common.edhClient import (
     EDH_ROUTE_DESKTOPS_CREATE,
     EDH_ROUTE_DESKTOPS_LIST_ALL,
     EDH_ROUTE_DESKTOPS_SCHEDULE,
+    EDH_ROUTE_DESKTOPS_SESSION_STATE,
+    EDH_ROUTE_DESKTOPS_START,
     EDH_ROUTE_LDAP_USER,
-    EdhApiError, EdhCapacityError, EdhClient, EdhError, EdhNotFoundError, EdhQuotaError, edh_session_name,
+    EDH_START_BUDGET_SECONDS,
+    EdhApiError, EdhCapacityError, EdhClient, EdhContractError, EdhError, EdhNotFoundError, EdhOutcomeUnknownError,
+    EdhQuotaError, EdhUnavailableError, edh_session_name,
 )
 from .common.edhCatalogFields import OS_FAMILY_WINDOWS
 from .common.edhIdentity import display_name_for
 from .common.edhSessionState import (
-    EDH_FIELD_INSTANCE_ID, EDH_SCHEDULE_FIELD,
+    ACTIVITY_FIELD, ACTIVITY_STARTING, EDH_FIELD_INSTANCE_ID, EDH_SCHEDULE_FIELD, EDH_SESSION_ID_FIELD,
+    EDH_SESSION_STATE_FIELD, EDH_SESSION_STATE_PENDING,
     LAST_ERROR_CAPACITY_UNAVAILABLE, LAST_ERROR_EDH_REFUSED, LAST_ERROR_IMAGE_UNAVAILABLE, LAST_ERROR_LAUNCH_ERROR,
-    LAST_ERROR_QUOTA_EXCEEDED, LAST_ERROR_RESERVATION_FULL, LAST_ERROR_USER_NOT_PROVISIONED, MAX_LAUNCH_ATTEMPTS,
-    STATE_CREATING, STATE_ORPHANED, WORKER_PAYLOAD_KEYS,
+    LAST_ERROR_QUOTA_EXCEEDED, LAST_ERROR_RESERVATION_FULL, LAST_ERROR_START_FAILED, LAST_ERROR_USER_NOT_PROVISIONED,
+    MAX_LAUNCH_ATTEMPTS, START_FAILURE_FIELD, START_IN_PROGRESS_SECONDS, START_PAYLOAD_KEYS, START_SENT_FIELD,
+    STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED, STOP_REQUESTED_FIELD, WORKER_ACTION_START,
+    WORKER_PAYLOAD_KEYS,
     never_auto_start_schedule, observed_row_attributes, reservation_refusal_last_error, schedule_never_auto_starts,
+    start_failure, state_for_edh_session_state,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
+# The read of a stopped desktop's instance, for the Availability Zone a refused start names.
+ec2 = boto3.client('ec2', config=retry_config)
 logger = safeLogger(service_name="EdhLaunchWorker")
 
 # EDH desktop create form fields (a subset of the client's EDH_DESKTOP_CREATE_FIELDS).
@@ -87,7 +107,28 @@ WORKER_AUDIT_ROUTES = {
     "find_desktop_by_name": ("GET", EDH_ROUTE_DESKTOPS_LIST_ALL),
     "create_desktop": ("POST", EDH_ROUTE_DESKTOPS_CREATE),
     "update_desktop_schedule": ("PUT", EDH_ROUTE_DESKTOPS_SCHEDULE),
+    "start_desktop": ("PUT", EDH_ROUTE_DESKTOPS_START),
+    "get_desktop_states": ("GET", EDH_ROUTE_DESKTOPS_SESSION_STATE),
 }
+
+# The start of a stopped desktop: its edhProxy operation; the pause between two reads of the desktop's state
+# after a start whose answer was lost, and each read's own budget (the api profile's); what the worker still
+# does once its last EDH read returns -- the instance read, the key take-back or the secret binding and key
+# cleanup, the row write -- and the share of it the key cleanup may take.
+START_OPERATION = "workstationStart"
+START_POLL_INTERVAL_SECONDS = 15.0
+START_STATE_READ_SECONDS = 20.0
+START_FINISH_RESERVE_SECONDS = 30.0
+START_KEY_CLEANUP_SECONDS = 20.0
+# Answers of the tier in front of EDH that gave up waiting on EDH's own answer (bad gateway, gateway timeout):
+# the start reached EDH, which may still be carrying it out.
+GATEWAY_LOST_ANSWER_STATUSES = frozenset({502, 504})
+# The row attributes a start's conditional writes read, by the token their conditions name each with, and the
+# condition that the row is still the stopped desktop the start stamped: neither another start, a stop, a
+# delete nor an observation of the desktop past stopped has written it since.
+_START_CONDITION_ATTRIBUTES = {'state': 'state', 'stamp': 'startRequestedAt', 'activity': ACTIVITY_FIELD,
+                               'sent': START_SENT_FIELD}
+_STILL_THIS_START = "attribute_exists(bootstrapId) AND {state} = :stopped AND {stamp} = :stamp"
 
 try:
     edh_session_table_name = get_table_name(AddonResourceKeys.EDH_SESSION_STORAGE_TABLE)
@@ -106,6 +147,10 @@ class ReservationFullError(Exception):
 
 def _sleep(seconds):
     time.sleep(seconds)
+
+
+def _monotonic():
+    return time.monotonic()
 
 
 def _utc_now():
@@ -365,7 +410,278 @@ def launch(row):
     return _update_row(row, **changed) if changed else row
 
 
+# ---------------------------------------------------------------------------
+# The start of a stopped desktop
+# ---------------------------------------------------------------------------
+def _stamp_instant(stamp):
+    """The start stamp as an aware datetime (one without an offset read as UTC); None when unreadable."""
+    try:
+        instant = datetime.fromisoformat(str(stamp))
+    except ValueError:
+        return None
+    return instant if instant.tzinfo is not None else instant.replace(tzinfo=timezone.utc)
+
+
+def _start_deadline(stamp, context):
+    """The monotonic instant this start's EDH calls must be done by: the end of the start's own window
+    (``START_IN_PROGRESS_SECONDS`` from its stamp, inside which no other start of the desktop is claimed), or the
+    Lambda's own deadline when that comes first, less what the worker still does after its last EDH read."""
+    now = _monotonic()
+    instant = _stamp_instant(stamp)
+    elapsed = (datetime.now(timezone.utc) - instant).total_seconds() if instant else START_IN_PROGRESS_SECONDS
+    ends = [now + START_IN_PROGRESS_SECONDS - elapsed]
+    remaining = getattr(context, "get_remaining_time_in_millis", None)
+    if callable(remaining):
+        try:
+            millis = remaining()
+        except Exception:
+            millis = None
+        if isinstance(millis, (int, float)) and not isinstance(millis, bool):
+            ends.append(now + millis / 1000.0)
+    return min(ends) - START_FINISH_RESERVE_SECONDS
+
+
+def _write_start_row(row, attributes, condition, values):
+    """Persist ``attributes`` (plus updatedAt) onto the row under ``condition``, whether the write landed; ``row``
+    follows a write that landed. The condition names the row's attributes as ``{state}``, ``{stamp}``
+    (``startRequestedAt``), ``{activity}`` and ``{sent}`` (``startSentFor``), each under the placeholder the write
+    sets it by when it sets it, and ``values`` are the condition's own values."""
+    attributes = {**attributes, 'updatedAt': _utc_now()}
+    keys = list(attributes)
+    names = {f"#a{i}": key for i, key in enumerate(keys)}
+    placeholder = {key: name for name, key in names.items()}
+    fields = {}
+    for token, attribute in _START_CONDITION_ATTRIBUTES.items():
+        if "{" + token + "}" in condition:
+            if attribute not in placeholder:
+                placeholder[attribute] = f"#c{len(names)}"
+                names[placeholder[attribute]] = attribute
+            fields[token] = placeholder[attribute]
+    try:
+        edh_session_table.update_item(
+            Key={'bootstrapId': row['bootstrapId']},
+            UpdateExpression="SET " + ", ".join(f"#a{i} = :v{i}" for i in range(len(keys))),
+            ConditionExpression=condition.format(**fields),
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues={**{f":v{i}": attributes[key] for i, key in enumerate(keys)}, **values},
+        )
+    except ClientError as err:
+        if err.response.get('Error', {}).get('Code') != 'ConditionalCheckFailedException':
+            raise
+        return False
+    row.update(attributes)
+    return True
+
+
+def _claim_start_send(row, stamp):
+    """Record on the row that the worker sends EDH the start of ``stamp``, provided the row is still that start's
+    stopped desktop, marked starting, and no delivery has sent it; False when another delivery of the same
+    start, or a write since, came first. The one EDH start per start request rests on this write."""
+    return _write_start_row(
+        row, {START_SENT_FIELD: stamp},
+        f"{_STILL_THIS_START} AND {{activity}} = :starting AND (attribute_not_exists({{sent}}) OR {{sent}} <> :stamp)",
+        {':stamp': stamp, ':stopped': STATE_STOPPED, ':starting': ACTIVITY_STARTING})
+
+
+def _start_answer_lost(err):
+    """Whether ``err``, raised by the start, leaves EDH's outcome unknown: the answer was lost after the request
+    may have reached EDH, a gateway in front of EDH gave up waiting for it, EDH answered success unreadably, or
+    the failure is not EDH's at all. A definite refusal, a request that never left, and a rejected credential
+    are known outcomes: EDH did not start the desktop."""
+    if isinstance(err, (EdhOutcomeUnknownError, EdhContractError)):
+        return True
+    if isinstance(err, EdhUnavailableError):
+        return err.status in GATEWAY_LOST_ANSWER_STATUSES
+    return not isinstance(err, EdhError)
+
+
+def _instance_zone(row):
+    """The Availability Zone of the row's instance as EC2 reads it now; None without an instance or when the read
+    fails (logged). A stopped instance starts only in its own zone."""
+    instance_id = row.get('instanceId')
+    if not instance_id:
+        return None
+    try:
+        found = ec2.describe_instances(InstanceIds=[str(instance_id)]).get('Reservations') or []
+        instances = (found[0].get('Instances') or []) if found else []
+        zone = ((instances[0].get('Placement') or {}).get('AvailabilityZone')) if instances else None
+    except Exception as err:
+        logger.warning(f"The instance of bootstrap {row['bootstrapId']} was not read ({type(err).__name__}); the start "
+                       f"failure names no Availability Zone")
+        return None
+    return str(zone) if zone else None
+
+
+def _start_refusal_code(row, err):
+    """The ``lastError`` a start EDH did not carry out leaves on the STOPPED row: RESERVATION_FULL for a definite
+    refusal of a row launched into a capacity reservation that is full when read again (EDH keeps the
+    reservation a stopped desktop was launched into, and VAMS does not move it to another), CAPACITY_UNAVAILABLE
+    for EDH finding no on-demand capacity, START_FAILED for anything else."""
+    capacity_reservation_id = row.get('capacityReservationId')
+    if capacity_reservation_id and isinstance(err, EDH_REFUSALS):
+        try:
+            facts = reservations.read_live([capacity_reservation_id])[capacity_reservation_id]
+        except reservations.CapacityReservationReadError as read_err:
+            logger.warning(f"The capacity reservation was not read after EDH refused a start ({read_err})")
+            facts = None
+        if reservation_refusal_last_error(facts) == LAST_ERROR_RESERVATION_FULL:
+            return LAST_ERROR_RESERVATION_FULL
+    if isinstance(err, EdhCapacityError):
+        return LAST_ERROR_CAPACITY_UNAVAILABLE
+    return LAST_ERROR_START_FAILED
+
+
+def _take_back_start_key(audit_event, row):
+    """Revoke the key the start minted -- the one the row names, and only that one: the desktop stays stopped, so
+    the bootstrap's other keys are the sweep's -- and answer the row attributes that clear it; nothing when the row
+    names no key, or when the revoke fails (logged; the sweep revokes the key of a stopped desktop)."""
+    if not row.get('apiKeyId'):
+        return {}
+    try:
+        return bootstrap.revoke_session(audit_event, row, delete_secret=False, actor=row['userId'], every_key=False)
+    except Exception:
+        logger.exception(f"The key of the start of bootstrap {row['bootstrapId']} was not taken back; the sweep "
+                         f"revokes it")
+        return {}
+
+
+def _record_start_refused(audit_event, row, stamp, last_error, failure):
+    """Leave the row STOPPED after a start EDH did not carry out: the key the start minted is taken back, the row
+    records ``last_error`` and ``failure`` and loses the start's mark and stamp, so another start may follow.
+    The desktop is not touched: a stopped desktop keeps its disk, and nothing here deletes or orphans it."""
+    cleared = _take_back_start_key(audit_event, row)
+    attributes = {**cleared, 'lastError': last_error, START_FAILURE_FIELD: failure, ACTIVITY_FIELD: None,
+                  'startRequestedAt': None, 'connectionAvailable': False}
+    if not _write_start_row(row, attributes, _STILL_THIS_START, {':stamp': stamp, ':stopped': STATE_STOPPED}):
+        logger.warning(f"The row of bootstrap {row['bootstrapId']} changed since the start; its failure is not "
+                       f"recorded")
+    return {"bootstrapId": row['bootstrapId'], "outcome": "refused", "state": row.get('state'),
+            "lastError": last_error}
+
+
+def _record_start_accepted(audit_event, row, stamp, desktop=None):
+    """Record the start EDH took -- on its answer, or as ``desktop``, a read of its state after a lost answer,
+    shows it -- and finish the credential: the row is CREATING with ``edhState`` pending (or follows ``desktop``),
+    loses the start's stamp, the code and failure of an earlier start and the lease-stop stamp, the fresh secret
+    is bound to the instance the row last observed, and every other key of the bootstrap is deleted. A row
+    deleted, or stopped again, since the start keeps what was written to it."""
+    attributes = {'state': STATE_CREATING, 'edhState': EDH_SESSION_STATE_PENDING, 'connectionAvailable': False,
+                  ACTIVITY_FIELD: ACTIVITY_STARTING, 'startRequestedAt': None, 'lastError': None,
+                  START_FAILURE_FIELD: None, 'leaseStoppedAt': None, STOP_REQUESTED_FIELD: None}
+    if desktop is not None:
+        attributes.update(observed_row_attributes({**row, **attributes}, desktop))
+    # A read of the desktop's state may already have moved the row to CREATING, clearing the stamp.
+    if not _write_start_row(row, attributes, f"({_STILL_THIS_START}) OR {{state}} = :creating",
+                            {':stamp': stamp, ':stopped': STATE_STOPPED, ':creating': STATE_CREATING}):
+        current = edh_session_table.get_item(Key={'bootstrapId': row['bootstrapId']}, ConsistentRead=True).get('Item')
+        if not current or current.get('state') in (STATE_DELETED, STATE_STOPPED):
+            logger.warning(f"The row of bootstrap {row['bootstrapId']} was deleted or stopped since EDH took the "
+                           f"start; the start is not recorded")
+            return {"bootstrapId": row['bootstrapId'], "outcome": "started", "state": (current or {}).get('state')}
+        row.clear()
+        row.update(current)
+    instance_id = row.get('instanceId')
+    if row.get('secretName') and instance_id and row.get('secretBoundInstanceId') != instance_id:
+        bound = _bind_session_secret(row, {EDH_FIELD_INSTANCE_ID: instance_id})
+        if bound:
+            _update_row(row, **bound)
+    if bootstrap.is_enabled():
+        try:
+            bootstrap.delete_other_session_keys(audit_event, row, keep=row.get('apiKeyId'), actor=row['userId'],
+                                                deadline=_monotonic() + START_KEY_CLEANUP_SECONDS)
+        except Exception:
+            logger.exception(f"Session key cleanup deferred for bootstrap {row['bootstrapId']}")
+    return {"bootstrapId": row['bootstrapId'], "outcome": "started", "state": row.get('state')}
+
+
+def _desktop_taken_start(audit_event, row, deadline):
+    """After a start whose answer was lost: EDH's state record of the desktop once it reports the desktop past
+    stopped (EDH has taken the start), read now and then every ``START_POLL_INTERVAL_SECONDS`` until ``deadline``;
+    None when EDH still reports it stopped then, or no longer has it. A read that fails is logged and the next one
+    made. The start is never sent again."""
+    edh_uid, session_id = row['edhUid'], str(row['sessionId'])
+    while True:
+        budget = min(_monotonic() + START_STATE_READ_SECONDS, deadline)
+        if budget - _monotonic() >= 1.0:
+            unanswered = set()
+            try:
+                records = _call_edh(audit_event, EdhClient(profile="api", deadline=budget), "get_desktop_states",
+                                    START_OPERATION, edh_uid, edh_uid, [session_id], unanswered)
+            except EdhError as err:
+                logger.warning(f"The desktop's state was not read after a lost start answer ({type(err).__name__})")
+                records = []
+            desktop = next((record for record in records or [] if isinstance(record, dict)
+                            and str(record.get(EDH_SESSION_ID_FIELD)) == session_id), None)
+            if desktop is not None and state_for_edh_session_state(
+                    desktop.get(EDH_SESSION_STATE_FIELD), None) not in (None, STATE_STOPPED):
+                return desktop
+            if session_id in unanswered:
+                logger.warning(f"EDH no longer has the desktop of bootstrap {row['bootstrapId']}; the sweep reconciles "
+                               f"it")
+                return None
+        if _monotonic() + START_POLL_INTERVAL_SECONDS >= deadline:
+            return None
+        _sleep(START_POLL_INTERVAL_SECONDS)
+
+
+def start(row, stamp, context=None):
+    """Run the start of ``stamp`` for the row, a stopped desktop the workstation service claimed and marked
+    starting, and return its outcome. EDH's start is sent once, and only while the start's window still holds the
+    whole start budget; a start that no longer fits is recorded START_FAILED unsent."""
+    audit_event = _audit_event(row)
+    deadline = _start_deadline(stamp, context)
+    if deadline - _monotonic() < EDH_START_BUDGET_SECONDS:
+        logger.warning(f"The start of bootstrap {row['bootstrapId']} reached the worker too late for EDH's start "
+                       f"to fit its window; it is not sent")
+        return _record_start_refused(audit_event, row, stamp, LAST_ERROR_START_FAILED,
+                                     start_failure(None, None, datetime.now(timezone.utc)))
+    if not _claim_start_send(row, stamp):
+        return {"bootstrapId": row['bootstrapId'], "outcome": "settled", "state": row.get('state')}
+    edh_uid = row['edhUid']
+    client = EdhClient(profile="start", deadline=min(_monotonic() + EDH_START_BUDGET_SECONDS, deadline))
+    try:
+        _call_edh(audit_event, client, "start_desktop", START_OPERATION, edh_uid, edh_uid, str(row['sessionId']))
+    except Exception as err:
+        if not _start_answer_lost(err):
+            last_error = _start_refusal_code(row, err)
+            logger.info(f"EDH did not start the desktop of bootstrap {row['bootstrapId']} ({type(err).__name__}); it "
+                        f"stays stopped with {last_error}")
+            failure = start_failure(getattr(err, 'body_text', None), _instance_zone(row), datetime.now(timezone.utc))
+            return _record_start_refused(audit_event, row, stamp, last_error, failure)
+        logger.warning(f"EDH did not confirm the start of bootstrap {row['bootstrapId']} ({type(err).__name__}); "
+                       f"reading the desktop's state")
+        desktop = _desktop_taken_start(audit_event, row, deadline)
+        if desktop is None:
+            # The stamp and the mark stay: no other start is claimed inside the window, the key is held, and the
+            # sweep records the start failed once it is old enough and EDH still reports the desktop stopped.
+            logger.warning(f"EDH still reports the desktop of bootstrap {row['bootstrapId']} stopped; the start is "
+                           f"left to the session sweep")
+            return {"bootstrapId": row['bootstrapId'], "outcome": "unresolved", "state": row.get('state')}
+        return _record_start_accepted(audit_event, row, stamp, desktop)
+    return _record_start_accepted(audit_event, row, stamp)
+
+
+def _handle_start(event, context):
+    """The start payload: the row's start of ``startRequestedAt``, run unless the row has left it -- it is gone,
+    no longer the stopped desktop of that stamp and mark, or another delivery sent it already."""
+    bootstrap_id, stamp = event.get('bootstrapId'), event.get('startRequestedAt')
+    if not bootstrap_id or not stamp:
+        raise ValueError("The start payload names no bootstrapId or startRequestedAt")
+    logger.info("Launch worker invoked for a start",
+                extra={"start": {key: event.get(key) for key in START_PAYLOAD_KEYS}})
+    row = edh_session_table.get_item(Key={'bootstrapId': bootstrap_id}, ConsistentRead=True).get('Item')
+    if row is None:
+        logger.warning("Launch worker invoked for the start of a row that no longer exists")
+        return {"bootstrapId": bootstrap_id, "outcome": "missing"}
+    if (row.get('state') != STATE_STOPPED or row.get('startRequestedAt') != stamp or not row.get('sessionId')
+            or row.get(ACTIVITY_FIELD) != ACTIVITY_STARTING or row.get(START_SENT_FIELD) == stamp):
+        return {"bootstrapId": bootstrap_id, "outcome": "settled", "state": row.get('state')}
+    return start(row, stamp, context)
+
+
 def lambda_handler(event, context: LambdaContext):
+    if (event or {}).get('action') == WORKER_ACTION_START:
+        return _handle_start(event, context)
     bootstrap_id = (event or {}).get('bootstrapId')
     if not bootstrap_id:
         raise ValueError("The launch worker payload names no bootstrapId")

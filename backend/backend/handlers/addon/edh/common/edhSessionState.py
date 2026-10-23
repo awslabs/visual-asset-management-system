@@ -68,11 +68,37 @@ LAST_ERROR_CREATE_TIMED_OUT = "CREATE_TIMED_OUT"
 LAST_ERROR_LEASE_EXPIRED = "LEASE_EXPIRED"
 # A launch into a capacity reservation the user named that failed because the reservation had no free slot.
 LAST_ERROR_RESERVATION_FULL = "RESERVATION_FULL"
+# A start of a stopped desktop that did not happen for a reason other than capacity: EDH refused it, it could
+# not be sent, or EDH still reported the desktop stopped once the start's window had passed.
+LAST_ERROR_START_FAILED = "START_FAILED"
 LAST_ERROR_CODES = frozenset({
     LAST_ERROR_USER_NOT_PROVISIONED, LAST_ERROR_QUOTA_EXCEEDED, LAST_ERROR_IMAGE_UNAVAILABLE,
     LAST_ERROR_CAPACITY_UNAVAILABLE, LAST_ERROR_EDH_REFUSED, LAST_ERROR_LAUNCH_ERROR,
-    LAST_ERROR_CREATE_TIMED_OUT, LAST_ERROR_LEASE_EXPIRED, LAST_ERROR_RESERVATION_FULL,
+    LAST_ERROR_CREATE_TIMED_OUT, LAST_ERROR_LEASE_EXPIRED, LAST_ERROR_RESERVATION_FULL, LAST_ERROR_START_FAILED,
 })
+# The codes a STOPPED row keeps for as long as it stays stopped: the lease expiry, and why the last start of
+# the desktop did not happen. The next start EDH accepts, or EDH reporting the desktop past stopped, clears them.
+STOPPED_ROW_LAST_ERRORS = frozenset({
+    LAST_ERROR_LEASE_EXPIRED, LAST_ERROR_CAPACITY_UNAVAILABLE, LAST_ERROR_RESERVATION_FULL, LAST_ERROR_START_FAILED,
+})
+# What a start that did not happen recorded beside its code (``startFailure``): the AWS error code EDH's answer
+# names, the Availability Zone of the desktop's instance, and when VAMS recorded it. Kept and cleared with the
+# code.
+START_FAILURE_FIELD = "startFailure"
+
+# What a workstation is doing between two states, derived from the row whenever a record is read
+# (``workstation_activity``), so every client shows the same thing. The row itself stores ``activity`` only as
+# the mark of a start the owner asked for that is not yet resolved.
+ACTIVITY_FIELD = "activity"
+ACTIVITY_STARTING = "starting"
+ACTIVITY_STOPPING = "stopping"
+WORKSTATION_ACTIVITIES = (ACTIVITY_STARTING, ACTIVITY_STOPPING)
+EDH_SESSION_STATE_STOPPING = "stopping"
+# The stamp a stop through VAMS writes, and how long after it a desktop EDH still reports running reads as
+# stopping: EDH moves a stopped desktop to `stopping` at once, so a read inside this window that still sees
+# `running` predates EDH's own update.
+STOP_REQUESTED_FIELD = "stopRequestedAt"
+STOP_SETTLE_SECONDS = 300
 # The AWS error codes, parsed from the reason EDH recorded for a failed launch, that turn a generic
 # LAUNCH_ERROR on an ORPHANED row into CAPACITY_UNAVAILABLE or QUOTA_EXCEEDED; any other code leaves it.
 CAPACITY_ERROR_CODES = frozenset({
@@ -113,17 +139,27 @@ EDH_FAILURE_CHECKPOINT_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
 # The launch worker's invocation payload: the row's identity, echoed so the worker's log names it.
 WORKER_PAYLOAD_KEYS = ("bootstrapId", "userId", "edhUid", "imageId", "instanceType", "osFamily", "rootSizeGb", "name")
+# The payload of a start the workstation service hands the worker: the action, the row, and the stamp of the
+# start, which is that start's identity -- the worker sends EDH the start of one stamp at most once.
+WORKER_ACTION_START = "start"
+START_PAYLOAD_KEYS = ("action", "bootstrapId", "startRequestedAt")
+# The row attribute naming the stamp of the start the worker has sent to EDH.
+START_SENT_FIELD = "startSentFor"
 
 # How many times the launch worker starts a launch for one row. The asynchronous invocation is retried
 # twice, so the third start is the last: a transient failure there orphans the row instead of leaving
 # it CREATING for a retry that will not come.
 MAX_LAUNCH_ATTEMPTS = 3
 
-# How long a start's stamp on its row is taken to mean the start is under way: EDH's wait for a capacity
-# reservation to settle (up to 20 s by default) and its own work, several times over. EDH starts a desktop
-# its record still shows stopped a second time, so a start of such a desktop is refused meanwhile, and
-# the key the start minted is not revoked while EDH still lists the desktop stopped.
-START_IN_PROGRESS_SECONDS = 180
+# How long a start's stamp on its row is taken to mean the start is under way: the launch worker's whole run
+# (its six-minute timeout, inside which it sends EDH's start and reads the desktop's state after a lost
+# answer) and a minute for the asynchronous hand-over, and the worker acts on EDH only inside it. EDH starts
+# a desktop its record still shows stopped a second time, so a start of such a desktop is refused meanwhile,
+# and the key the start minted is not revoked while EDH still lists the desktop stopped.
+START_IN_PROGRESS_SECONDS = 420
+# How old the stamp of an unresolved start (a STOPPED row still marked ``activity`` starting) is when the
+# session sweep records it START_FAILED, provided EDH still reports the desktop stopped.
+START_RESOLVE_SECONDS = 600
 
 # How long a credential claim on a row holds: a renew's key re-issue -- the mint, the row settle and the
 # secret write, each bounded by its client's timeouts -- several times over. While a claim is fresh the
@@ -237,11 +273,13 @@ def observed_row_attributes(row, desktop):
     the session id a row lacks, the raw and mapped state, connectability (running, unless the record
     carries an empty connection string), the EC2 instance the desktop is placed on (left as stored
     while EDH reports none), the launch-error code an ``error`` state carries when the row holds none (a
-    code the launch recorded is kept, as is a lease-expiry code while the state stays stopped; either is
-    cleared again when the state moves on), the clearing of the lease-stop stamp from a desktop seen
-    running or starting, since a desktop EDH reports in either state is not lease-stopped and the stamp
-    is what ages a stopped one toward deletion, and the clearing of the start-in-progress stamp from a
-    desktop seen past stopped, which has taken the start that stamp holds a second one off for."""
+    code the launch recorded is kept, as is, while the state stays stopped, a code of
+    ``STOPPED_ROW_LAST_ERRORS`` with the ``startFailure`` beside it; either is cleared again when the state
+    moves on), the clearing of the lease-stop stamp from a desktop seen running or starting, since a desktop
+    EDH reports in either state is not lease-stopped and the stamp is what ages a stopped one toward deletion,
+    the clearing of the start-in-progress stamp from a desktop seen past stopped, which has taken the start
+    that stamp holds a second one off for, and the clearing of the start mark (``activity``) from a desktop
+    seen running or failed, whose start is over."""
     edh_state = desktop.get(EDH_SESSION_STATE_FIELD)
     attributes = {}
     if not row.get('sessionId') and desktop.get(EDH_SESSION_ID_FIELD) is not None:
@@ -254,17 +292,88 @@ def observed_row_attributes(row, desktop):
         if attributes['state'] == STATE_ORPHANED:
             attributes['lastError'] = row.get('lastError') or LAST_ERROR_LAUNCH_ERROR
         elif row.get('lastError') is not None and not (
-                attributes['state'] == STATE_STOPPED and row.get('lastError') == LAST_ERROR_LEASE_EXPIRED):
+                attributes['state'] == STATE_STOPPED and row.get('lastError') in STOPPED_ROW_LAST_ERRORS):
             attributes['lastError'] = None
+        if attributes['state'] != STATE_STOPPED and row.get(START_FAILURE_FIELD) is not None:
+            attributes[START_FAILURE_FIELD] = None
         if attributes['state'] in (STATE_ACTIVE, STATE_CREATING) and row.get('leaseStoppedAt'):
             attributes['leaseStoppedAt'] = None
         if state_for_edh_session_state(edh_state, None) not in (None, STATE_STOPPED):
             attributes['startRequestedAt'] = None
+        if attributes['state'] in (STATE_ACTIVE, STATE_ORPHANED) and row.get(ACTIVITY_FIELD) is not None:
+            attributes[ACTIVITY_FIELD] = None
     connection_string = desktop.get(EDH_CONNECTION_STRING_FIELD)
     attributes['connectionAvailable'] = (
         str(edh_state).lower() == EDH_SESSION_STATE_RUNNING
         and (EDH_CONNECTION_STRING_FIELD not in desktop or bool(connection_string)))
     return {key: value for key, value in attributes.items() if row.get(key) != value}
+
+
+def _stamp_age(value, now):
+    """How long before ``now`` an ISO stamp was written, or None when it is absent or unreadable; a stamp
+    without an offset is read as UTC."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        instant = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=timezone.utc)
+    return now - instant
+
+
+def workstation_activity(row, now=None) -> Optional[str]:
+    """What the workstation is doing between two states, as every record reports it: ``stopping`` while EDH
+    reports the desktop stopping, or while a stop through VAMS is younger than ``STOP_SETTLE_SECONDS`` and EDH
+    still reports it running; ``starting`` for a STOPPED row marked with a start the owner asked for whose stamp
+    is still inside ``START_IN_PROGRESS_SECONDS``, for a CREATING row with a session id (a stopped desktop EDH
+    has taken a start of, or a new one EDH has placed), and for an ACTIVE row whose desktop is not connectable
+    yet; None otherwise, and always for a DELETED or ORPHANED row. Pure: it reads only the row and ``now``."""
+    now = now or datetime.now(timezone.utc)
+    state = row.get('state')
+    if state in (STATE_DELETED, STATE_ORPHANED):
+        return None
+    edh_state = str(row.get('edhState') or '').lower()
+    if edh_state == EDH_SESSION_STATE_STOPPING:
+        return ACTIVITY_STOPPING
+    stopped_for = _stamp_age(row.get(STOP_REQUESTED_FIELD), now)
+    if (edh_state == EDH_SESSION_STATE_RUNNING and stopped_for is not None
+            and stopped_for < timedelta(seconds=STOP_SETTLE_SECONDS)):
+        return ACTIVITY_STOPPING
+    if state == STATE_STOPPED:
+        if row.get(ACTIVITY_FIELD) == ACTIVITY_STARTING and start_in_progress(row, now):
+            return ACTIVITY_STARTING
+        return None
+    if state == STATE_CREATING and row.get('sessionId'):
+        return ACTIVITY_STARTING
+    if state == STATE_ACTIVE and not row.get('connectionAvailable'):
+        return ACTIVITY_STARTING
+    return None
+
+
+def start_resolve_due(row, now=None) -> bool:
+    """True when the row is a STOPPED desktop still marked with a start the owner asked for whose stamp is at
+    least ``START_RESOLVE_SECONDS`` old: the launch worker has long given up on it, and EDH still reporting the
+    desktop stopped means the start did not happen. A row without the mark, or whose stamp is gone or
+    unreadable (a start some write has already settled), is never due."""
+    if row.get('state') != STATE_STOPPED or row.get(ACTIVITY_FIELD) != ACTIVITY_STARTING:
+        return False
+    age = _stamp_age(row.get('startRequestedAt'), now or datetime.now(timezone.utc))
+    return age is not None and age >= timedelta(seconds=START_RESOLVE_SECONDS)
+
+
+def start_failure(error_text, availability_zone, now) -> Dict[str, str]:
+    """The ``startFailure`` a start that did not happen records at ``now``: the AWS error code EDH's answer
+    names in botocore's words (``EDH_FAILURE_AWS_ERROR_PATTERN``, absent when it names none), the desktop's
+    Availability Zone (absent when it was not read) and ``observedAt``. EDH's text itself is never kept."""
+    failure = {"observedAt": now.isoformat()}
+    match = EDH_FAILURE_AWS_ERROR_PATTERN.search(error_text) if isinstance(error_text, str) else None
+    if match:
+        failure["errorCode"] = match.group(1)
+    if isinstance(availability_zone, str) and availability_zone:
+        failure["availabilityZone"] = availability_zone
+    return failure
 
 
 def _event_instant(event):

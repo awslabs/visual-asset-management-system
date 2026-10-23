@@ -87,9 +87,8 @@ def _edh_body_flag(response, field: str) -> bool:
 
 
 def _edh_body_code(response) -> Optional[str]:
-    """The `code` an /addon/edh error body carries (`RESERVATION_FULL` on a launch or start refused
-    for a full capacity reservation), or None. Never raises, for the reason `_api_error_message`
-    gives."""
+    """The `code` an /addon/edh error body carries (`RESERVATION_FULL` on a launch refused for a full
+    capacity reservation), or None. Never raises, for the reason `_api_error_message` gives."""
     try:
         data = response.json() if getattr(response, "content", None) else None
     except Exception:
@@ -314,14 +313,18 @@ class EdhAPIClientMixin:
                 not received one
 
         Returns:
-            API response data: the updated workstation record plus sessionBootstrap (provisioned,
-                skipped, unavailable or disabled), the outcome of placing a fresh session key
+            API response data (HTTP 202): the workstation record as accepted -- still STOPPED, with
+                activity `starting` -- plus sessionBootstrap (provisioned, skipped, unavailable or
+                disabled), the outcome of placing a fresh session key. The start runs in the
+                background; poll get_edh_workstation until it is ACTIVE with no activity. A start
+                EDH refuses leaves the record STOPPED with lastError CAPACITY_UNAVAILABLE,
+                RESERVATION_FULL or START_FAILED and the startFailure it recorded
 
         Raises:
             EdhWorkstationNotFoundError: When the workstation is not found or not the caller's
             EdhOperationError: When the workstation cannot be started from its current state
             EdhStartInProgressError: When an earlier start of the workstation may still be under way
-            EdhOutcomeUnknownError: When EDH did not confirm the start; it may be in progress
+            EdhOutcomeUnknownError: When the start was not confirmed; it may be in progress
             EdhUnavailableError: When the EDH cluster did not answer
             AuthenticationError: When authentication fails
             APIError: When API call fails

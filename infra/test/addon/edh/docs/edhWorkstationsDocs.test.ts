@@ -1684,7 +1684,7 @@ describe("EDH Workstations documentation matches the code it describes", () => {
     describe("capacity reservations", () => {
         const RESERVATIONS = "backend/backend/handlers/addon/edh/common/edhCapacityReservations.py";
         const CAPACITY_RESERVATIONS = "## Capacity reservations";
-        /** The answers the workstation service gives a launch or start that names a reservation. */
+        /** The answers the workstation service gives a launch that names a reservation. */
         const serviceRefusals = (): string[] =>
             Array.from(
                 pythonCode(read(EDH_SERVICE)).matchAll(
@@ -1740,7 +1740,22 @@ describe("EDH Workstations documentation matches the code it describes", () => {
                     "The capacity reservation has no free capacity",
                 ])
             );
-            expect(serviceRefusals().length).toBeGreaterThanOrEqual(7);
+            // The route answers only a launch's reservation checks; a start EDH refuses while the desktop's
+            // reservation is full is the launch worker's to record, through the shared classifier.
+            expect(serviceRefusals()).toEqual([
+                "capacityReservationId is not registered",
+                "The capacity reservation could not be read; try again",
+                "The capacity reservation is not active",
+                "instanceType does not match the capacity reservation",
+                "The capacity reservation's platform does not match the image",
+                "The capacity reservation has no free capacity",
+            ]);
+            const worker = pythonCode(
+                read("backend/backend/handlers/addon/edh/edhLaunchWorker.py")
+            );
+            expect(
+                capture(worker, /^def _start_refusal_code\(row, err\):([\s\S]*?)^def /m)
+            ).toMatch(/reservation_refusal_last_error\(facts\) == LAST_ERROR_RESERVATION_FULL/);
             expect(adminRefusals()).toContain(
                 "Capacity reservation not found in this account and Region"
             );
@@ -1762,7 +1777,7 @@ describe("EDH Workstations documentation matches the code it describes", () => {
         test.each([
             [OVERVIEW, CAPACITY_RESERVATIONS],
             [API_ADDON, "## EDH Workstations add-on"],
-        ])("%s %s quotes every launch, start and registry answer", (rel, heading) => {
+        ])("%s %s quotes every launch and registry answer", (rel, heading) => {
             const text = sectionOf(page(rel), heading);
             expect(text).not.toBe("");
             expect(

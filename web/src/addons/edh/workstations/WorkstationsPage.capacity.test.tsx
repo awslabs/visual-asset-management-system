@@ -4,15 +4,14 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import WorkstationsPage from "./WorkstationsPage";
 import * as queries from "../api/queries";
 import * as useAllowedRoutesModule from "../../../features/orchestration/permissions/useAllowedRoutes";
 import { LAST_ERROR_COPY } from "../components/WorkstationStatusBadge";
-import { EdhRequestError, RESERVATION_FULL_START_MESSAGE } from "../api/outcome";
+import { RESERVATION_FULL_START_MESSAGE } from "../api/outcome";
 import type { WorkstationRecord } from "../types";
 
 const mockToast = { success: jest.fn(), warning: jest.fn(), info: jest.fn(), error: jest.fn() };
@@ -114,10 +113,10 @@ const list = (rows: WorkstationRecord[]) => ({
     isFetching: false,
 });
 
-const mutations = (start = jest.fn().mockResolvedValue({})) => ({
+const mutations = () => ({
     createWorkstation: { mutateAsync: jest.fn(), isPending: false },
     stopWorkstation: { mutateAsync: jest.fn().mockResolvedValue({}), isPending: false },
-    startWorkstation: { mutateAsync: start, isPending: false },
+    startWorkstation: { mutateAsync: jest.fn().mockResolvedValue({}), isPending: false },
     deleteWorkstation: { mutateAsync: jest.fn().mockResolvedValue({}), isPending: false },
     renewWorkstation: { mutateAsync: jest.fn().mockResolvedValue({}), isPending: false },
 });
@@ -176,31 +175,20 @@ describe("WorkstationsPage capacity", () => {
         expect(screen.getByText(LAST_ERROR_COPY.RESERVATION_FULL)).toBeInTheDocument();
     });
 
-    it("says a start refused for a full reservation leaves the workstation stopped", async () => {
-        const start = jest
-            .fn()
-            .mockRejectedValue(
-                new EdhRequestError(
-                    "The capacity reservation has no free capacity; the workstation stays stopped",
-                    409,
-                    { code: "RESERVATION_FULL" }
-                )
-            );
-        (queries.useWorkstations as jest.Mock).mockReturnValue(list([stoppedReservedRow]));
-        (queries.useWorkstationMutations as jest.Mock).mockReturnValue(mutations(start));
-        const user = userEvent.setup();
+    it("says a start refused for a full reservation left the workstation stopped, beneath its badge", () => {
+        // A start answers 202; the worker records the refusal on the row, which the list then shows.
+        (queries.useWorkstations as jest.Mock).mockReturnValue(
+            list([
+                {
+                    ...stoppedReservedRow,
+                    lastError: "RESERVATION_FULL",
+                    startFailure: { observedAt: "2026-10-23T15:19:30Z" },
+                },
+            ])
+        );
         renderPage();
-        screen.getByLabelText("Actions for Stopped box").focus();
-        await user.keyboard("{Enter}");
-        await user.click(await screen.findByRole("menuitem", { name: /Start/ }));
-
-        await waitFor(() =>
-            expect(mockToast.error).toHaveBeenCalledWith("Start failed", {
-                description: `Stopped box: ${RESERVATION_FULL_START_MESSAGE}`,
-            })
-        );
-        expect(screen.getByRole("alert")).toHaveTextContent(
-            `Failed to start Stopped box: ${RESERVATION_FULL_START_MESSAGE}`
-        );
+        expect(screen.getByText(RESERVATION_FULL_START_MESSAGE)).toBeInTheDocument();
+        // The orphaned launch's sentence is for a launch, not for a start.
+        expect(screen.queryByText(LAST_ERROR_COPY.RESERVATION_FULL)).not.toBeInTheDocument();
     });
 });

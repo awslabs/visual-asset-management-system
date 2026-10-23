@@ -56,6 +56,11 @@ WORKSTATION_ROW_INTERNAL_FIELDS = (
 # names; a stored value that is not such a map projects as None, and any other key is dropped.
 EDH_FAILURE_FIELDS = ('event', 'errorCode', 'operation', 'checkpoint', 'observedAt')
 EDH_FAILURE_EVENTS = ('placement_failed', 'session-failed')
+# The keys of what a start that did not happen recorded (``startFailure``) and returns; a stored value that is
+# not such a map projects as None, and any other key is dropped.
+START_FAILURE_FIELDS = ('errorCode', 'availabilityZone', 'observedAt')
+# What a workstation is doing between two states, derived when its record is read.
+WORKSTATION_ACTIVITIES = ('starting', 'stopping')
 
 AMI_RECIPE_KINDS = ('vdi', 'simulation')
 EDH_ARCHITECTURES = ('x86_64', 'arm64')
@@ -113,6 +118,14 @@ def edh_failure_projection(value) -> Optional[Dict[str, str]]:
     if not isinstance(value, dict) or value.get('event') not in EDH_FAILURE_EVENTS:
         return None
     return {key: value[key] for key in EDH_FAILURE_FIELDS if isinstance(value.get(key), str)}
+
+
+def start_failure_projection(value) -> Optional[Dict[str, str]]:
+    """What a start that did not happen recorded, as the API returns it: the string values of
+    ``START_FAILURE_FIELDS`` from a stored map that carries ``observedAt``; None for anything else."""
+    if not isinstance(value, dict) or not isinstance(value.get('observedAt'), str):
+        return None
+    return {key: value[key] for key in START_FAILURE_FIELDS if isinstance(value.get(key), str)}
 
 
 class CreateWorkstationRequestModel(BaseModel, extra='ignore'):
@@ -180,13 +193,20 @@ class WorkstationRecordModel(BaseModel, extra='ignore'):
     capacityReservationId: Optional[str] = None
     capacityReservationLabel: Optional[str] = None
     capacityReservationFallback: bool = False
+    # What the workstation is doing between two states (``starting`` or ``stopping``), derived from the row when
+    # the record is read, never taken from the row as stored; and what its last start that did not happen
+    # recorded, kept beside ``lastError`` while the row stays STOPPED.
+    activity: Optional[str] = None
+    startFailure: Optional[Dict[str, str]] = None
 
     _project_edh_failure = validator('edhFailure', pre=True, allow_reuse=True)(edh_failure_projection)
+    _project_start_failure = validator('startFailure', pre=True, allow_reuse=True)(start_failure_projection)
 
     @root_validator
     def validate_fields(cls, values):
         _require_one_of(values, 'state', WORKSTATION_STATES)
         _require_one_of(values, 'osFamily', EDH_OS_FAMILIES)
+        _require_one_of(values, 'activity', WORKSTATION_ACTIVITIES)
         return values
 
 

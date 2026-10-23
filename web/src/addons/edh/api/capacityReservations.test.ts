@@ -21,12 +21,7 @@ import {
     updateCapacityReservation,
 } from "./admin";
 import { createWorkstation, startWorkstation } from "./workstations";
-import {
-    EdhRequestError,
-    RESERVATION_FULL_LAUNCH_MESSAGE,
-    isReservationFull,
-    unconfirmedNotice,
-} from "./outcome";
+import { EdhRequestError, RESERVATION_FULL_LAUNCH_MESSAGE, isReservationFull } from "./outcome";
 
 const CR_ID = "cr-0123456789abcdef0";
 
@@ -130,19 +125,19 @@ describe("capacity reservation services", () => {
         }
     });
 
-    it("keeps a start's RESERVATION_FULL code, and does not read it as unconfirmed", async () => {
-        const startFull = {
-            message: "The capacity reservation has no free capacity; the workstation stays stopped",
-            code: "RESERVATION_FULL",
+    it("returns the record a start is accepted with (202): the start runs in the background", async () => {
+        // A start no longer answers RESERVATION_FULL: the launch worker records a refusal on the row.
+        const accepted = {
+            bootstrapId: "b-1",
+            sessionId: "s-1",
+            state: "STOPPED",
+            activity: "starting",
         };
-        (apiClient.post as jest.Mock).mockRejectedValue(
-            rejection(startFull.message, 409, startFull)
-        );
-        const [ok, err] = await startWorkstation("s-1");
-        expect(ok).toBe(false);
-        expect(err).toBeInstanceOf(EdhRequestError);
-        expect(isReservationFull(err)).toBe(true);
-        expect(unconfirmedNotice("Start", err)).toBeNull();
+        (apiClient.post as jest.Mock).mockResolvedValue(accepted);
+        const [ok, record] = await startWorkstation("s-1");
+        expect(ok).toBe(true);
+        expect(record).toEqual(accepted);
+        expect(apiClient.post).toHaveBeenCalledWith("addon/edh/workstations/s-1/start", {});
     });
 
     it("recognises only a 409 coded RESERVATION_FULL", () => {

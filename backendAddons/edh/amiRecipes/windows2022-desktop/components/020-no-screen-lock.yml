@@ -1,0 +1,86 @@
+name: vams-windows2022-no-screen-lock
+description: Turns off the idle screen lock on VAMS Windows desktops, so a desktop left idle while connected does not ask for the Windows password again.
+schemaVersion: 1.0
+phases:
+    - name: build
+      steps:
+          - name: WriteMachinePolicies
+            action: ExecutePowerShell
+            inputs:
+                commands:
+                    - |
+                        $ErrorActionPreference = 'Stop'
+                        # Computer Configuration > Control Panel > Personalization > Do not display the lock screen.
+                        $personalization = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization'
+                        if (-not (Test-Path $personalization)) { New-Item -Path $personalization -Force | Out-Null }
+                        New-ItemProperty -Path $personalization -Name NoLockScreen -PropertyType DWord -Value 1 -Force | Out-Null
+                        # Computer Configuration > System > Power Management > Sleep Settings > Require a password
+                        # when a computer wakes, plugged in (AC) and on battery (DC): disabled, so the desktop
+                        # does not ask for the Windows password when it resumes.
+                        $wakePassword = 'HKLM:\SOFTWARE\Policies\Microsoft\Power\PowerSettings\0e796bdb-100d-47d6-a2d5-f7d2daa51f51'
+                        if (-not (Test-Path $wakePassword)) { New-Item -Path $wakePassword -Force | Out-Null }
+                        New-ItemProperty -Path $wakePassword -Name ACSettingIndex -PropertyType DWord -Value 0 -Force | Out-Null
+                        New-ItemProperty -Path $wakePassword -Name DCSettingIndex -PropertyType DWord -Value 0 -Force | Out-Null
+          - name: TurnOffDisplayAndSleepTimeouts
+            action: ExecutePowerShell
+            inputs:
+                commands:
+                    - |
+                        powercfg /change monitor-timeout-ac 0
+                        if ($LASTEXITCODE -ne 0) { throw "powercfg /change monitor-timeout-ac exited $LASTEXITCODE" }
+                        powercfg /change standby-timeout-ac 0
+                        if ($LASTEXITCODE -ne 0) { throw "powercfg /change standby-timeout-ac exited $LASTEXITCODE" }
+          - name: WriteDefaultUserScreenSaverPolicy
+            action: ExecutePowerShell
+            inputs:
+                commands:
+                    - |
+                        $ErrorActionPreference = 'Stop'
+                        # The screen saver policies (Enable screen saver, Password protect the screen saver,
+                        # Screen saver timeout) are User Configuration policies, read from each user's own
+                        # HKCU\Software\Policies key. They are written into the default user profile, which the
+                        # profile of every new account is copied from, including the account EDH creates for
+                        # the desktop user at first boot. reg.exe holds no handle on the hive, so it unloads.
+                        $hive = 'HKU\VamsDefaultUser'
+                        & reg.exe load $hive 'C:\Users\Default\NTUSER.DAT' | Out-Null
+                        if ($LASTEXITCODE -ne 0) { throw "reg.exe load of the default user profile exited $LASTEXITCODE" }
+                        try {
+                            $desktop = "$hive\Software\Policies\Microsoft\Windows\Control Panel\Desktop"
+                            foreach ($name in 'ScreenSaveActive', 'ScreenSaverIsSecure', 'ScreenSaveTimeOut') {
+                                & reg.exe add $desktop /v $name /t REG_SZ /d 0 /f | Out-Null
+                                if ($LASTEXITCODE -ne 0) { throw "reg.exe add $name exited $LASTEXITCODE" }
+                            }
+                        } finally {
+                            [GC]::Collect()
+                            & reg.exe unload $hive | Out-Null
+                        }
+                        if ($LASTEXITCODE -ne 0) { throw "reg.exe unload of the default user profile exited $LASTEXITCODE" }
+    - name: validate
+      steps:
+          - name: PoliciesPresent
+            action: ExecutePowerShell
+            inputs:
+                commands:
+                    - |
+                        $ErrorActionPreference = 'Stop'
+                        $personalization = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization'
+                        if ($personalization.NoLockScreen -ne 1) { throw 'NoLockScreen is not 1' }
+                        $wakePassword = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Power\PowerSettings\0e796bdb-100d-47d6-a2d5-f7d2daa51f51'
+                        if ($wakePassword.ACSettingIndex -ne 0) { throw 'a password is still required on wake (AC)' }
+                        if ($wakePassword.DCSettingIndex -ne 0) { throw 'a password is still required on wake (DC)' }
+                        $hive = 'HKU\VamsDefaultUser'
+                        & reg.exe load $hive 'C:\Users\Default\NTUSER.DAT' | Out-Null
+                        if ($LASTEXITCODE -ne 0) { throw "reg.exe load of the default user profile exited $LASTEXITCODE" }
+                        try {
+                            $desktop = "$hive\Software\Policies\Microsoft\Windows\Control Panel\Desktop"
+                            foreach ($name in 'ScreenSaveActive', 'ScreenSaverIsSecure', 'ScreenSaveTimeOut') {
+                                $answer = & reg.exe query $desktop /v $name
+                                if ($LASTEXITCODE -ne 0 -or -not ($answer -match "^\s+$name\s+REG_SZ\s+0\s*$")) {
+                                    throw "the default user profile does not set $name to 0"
+                                }
+                            }
+                        } finally {
+                            [GC]::Collect()
+                            & reg.exe unload $hive | Out-Null
+                        }
+                        if ($LASTEXITCODE -ne 0) { throw "reg.exe unload of the default user profile exited $LASTEXITCODE" }

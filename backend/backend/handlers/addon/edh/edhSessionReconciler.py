@@ -78,13 +78,14 @@ from .common.edhClient import (
 from .common.edhIdentity import SYSTEM_USER_ID
 from .common.edhLeasePolicy import lease_action, parse_iso, read_lease_policy
 from .common.edhSessionState import (
-    CREDENTIAL_CLAIM_SECONDS, EDH_FAILURE_FIELD, EDH_FIELD_INSTANCE_ID, EDH_SCHEDULE_FIELD,
-    EDH_SESSION_STATE_FIELD, EXPIRES_AT_FIELD, LAST_ERROR_CREATE_TIMED_OUT, LAST_ERROR_LAUNCH_ERROR,
-    LAST_ERROR_LEASE_EXPIRED, MAX_LAUNCH_ATTEMPTS, START_IN_PROGRESS_SECONDS,
+    ACTIVITY_FIELD, CREDENTIAL_CLAIM_SECONDS, EDH_FAILURE_FIELD, EDH_FIELD_INSTANCE_ID, EDH_SCHEDULE_FIELD,
+    EDH_SESSION_STATE_FIELD, EDH_SESSION_STATE_STOPPED, EXPIRES_AT_FIELD, LAST_ERROR_CREATE_TIMED_OUT,
+    LAST_ERROR_LAUNCH_ERROR, LAST_ERROR_LEASE_EXPIRED, LAST_ERROR_START_FAILED, MAX_LAUNCH_ATTEMPTS,
+    START_FAILURE_FIELD, START_IN_PROGRESS_SECONDS,
     STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED, credential_claim_fresh,
     credential_claim_stamp, deleted_row_expiry, edh_failure_attributes, edh_failure_read_due,
     never_auto_start_schedule, observed_row_attributes, schedule_never_auto_starts, session_row_live,
-    start_in_progress, start_stamp, state_for_edh_session_state,
+    start_failure, start_in_progress, start_resolve_due, start_stamp, state_for_edh_session_state,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -122,7 +123,7 @@ SECRET_REMOVING_STATES = frozenset({STATE_ORPHANED, STATE_DELETED})
 # A CREATING row written more recently than this may still be inside the launch worker's retries.
 CREATING_GRACE_MINUTES = 30
 # The launch worker's timeout: an attempt it stamped longer ago than this can no longer be running.
-WORKER_ATTEMPT_SETTLE_SECONDS = 300
+WORKER_ATTEMPT_SETTLE_SECONDS = 360
 # A DELETED row whose launch never received a session id is still examined for this long after its
 # last write, for the desktop EDH may have created for that launch after the row was deleted.
 DELETED_RECLAIM_WINDOW_HOURS = 24
@@ -501,6 +502,7 @@ def _reconcile_decision(row: Dict[str, Any], index: DesktopIndex, now: datetime,
             logger.info(f"Bootstrap {row['bootstrapId']} follows its desktop resumed by EDH under a new session")
         if not re_adopted:
             updates.update(_bind_session_secret(row, desktop, summary))
+            updates.update(_start_resolution(row, updates, desktop, now))
     elif state == STATE_CREATING and not row.get("sessionId"):
         if _inside_creating_grace(row, now):
             return {}, False, False
@@ -536,6 +538,22 @@ def _reconcile_decision(row: Dict[str, Any], index: DesktopIndex, now: datetime,
         summary["deferred"] += 1
     revoke = (has_key and not held and (final_state in REVOKING_STATES or _key_expired(row, now))) or remove_secret
     return updates, revoke, revoke and final_state in SECRET_REMOVING_STATES
+
+
+def _start_resolution(row: Dict[str, Any], updates: Dict[str, Any], desktop: Dict[str, Any],
+                      now: datetime) -> Dict[str, Any]:
+    """The attributes that resolve a start the launch worker could not: a row this pass leaves STOPPED, still
+    marked with a start the owner asked for whose stamp is ``START_RESOLVE_SECONDS`` old, whose desktop EDH lists
+    stopped, did not start. Its mark and stamp go and it records START_FAILED with a ``startFailure`` that names
+    nothing EDH said; the key the start minted is then revoked as any stopped desktop's is. The desktop is never
+    deleted for it: the row stays STOPPED. Nothing for any other row."""
+    if (not start_resolve_due({**row, **updates}, now)
+            or str(desktop.get(EDH_SESSION_STATE_FIELD) or "").lower() != EDH_SESSION_STATE_STOPPED):
+        return {}
+    logger.warning(f"The start of bootstrap {row.get('bootstrapId')} was not resolved and EDH lists its desktop "
+                   "stopped; recorded as a failed start")
+    return {ACTIVITY_FIELD: None, "startRequestedAt": None, "lastError": LAST_ERROR_START_FAILED,
+            START_FAILURE_FIELD: start_failure(None, None, now)}
 
 
 def _persist(bootstrap_id: str, updates: Dict[str, Any], seen_updated_at, *, touch: bool = True) -> Optional[str]:

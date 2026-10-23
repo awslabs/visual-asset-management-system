@@ -17,9 +17,6 @@ import pytest
 from moto import mock_aws
 
 import backend.backend.handlers.addon.edh.edhWorkstationService as service
-from backend.backend.handlers.addon.edh.common.edhClient import (
-    EdhApiError, EdhCapacityError, EdhOutcomeUnknownError,
-)
 from backend.backend.handlers.addon.edh.common.edhSessionState import (
     EDH_SESSION_ID_FIELD, EDH_SESSION_STATE_FIELD, WORKER_PAYLOAD_KEYS,
 )
@@ -438,76 +435,28 @@ def _start(monkeypatch, row, start_result, *, records=None, failure=None):
     return service.lambda_handler(event, MagicMock()), fakes
 
 
-def _start_claim_released(fakes):
-    for call in fakes.table.update_item.call_args_list:
-        names, values = call.kwargs["ExpressionAttributeNames"], call.kwargs["ExpressionAttributeValues"]
-        for placeholder, name in names.items():
-            if name == "startRequestedAt" and placeholder.startswith("#a") and values[":v" + placeholder[2:]] is None:
-                return True
-    return False
-
-
 @pytest.mark.unit
 class TestStartOfAReservationBoundDesktop:
-    @pytest.mark.parametrize("refusal", [EdhCapacityError("no reserved capacity available"),
-                                         EdhApiError("GENERIC_ERROR")])
-    def test_a_refused_start_into_a_full_reservation_is_a_409_and_the_desktop_stays_stopped(
-            self, monkeypatch, aws, refusal):
-        response, fakes = _start(monkeypatch, _stopped_row(capacityReservationId=CR_FULL), refusal,
+    """The start route hands every start to the launch worker and reads no reservation: a start EDH refuses while
+    the desktop's reservation is full is recorded RESERVATION_FULL by the worker (test_edhLaunchWorker_start.py),
+    not answered 409 here (in-dev D10, D11)."""
+
+    @pytest.mark.parametrize("overrides", [{"capacityReservationId": CR_FULL},
+                                           {"capacityReservationFallback": True,
+                                            "capacityReservationRequested": CR_FULL}, {}],
+                             ids=["reservation-bound", "fell back", "on-demand"])
+    def test_the_start_is_handed_over_and_reads_no_reservation(self, monkeypatch, aws, overrides):
+        response, fakes = _start(monkeypatch, _stopped_row(**overrides), {},
                                  records={CR_FULL: ec2_reservation(CR_FULL, AvailableInstanceCount=0)})
 
-        assert response["statusCode"] == 409
-        assert response_body(response) == {
-            "message": "The capacity reservation has no free capacity; the workstation stays stopped",
-            "code": "RESERVATION_FULL"}
-        assert _start_claim_released(fakes)
-        assert fakes.reservations.ec2.ids_asked() == [[CR_FULL]]
-
-    def test_a_refused_start_into_a_reservation_with_a_free_slot_keeps_the_edh_answer(self, monkeypatch, aws):
-        response, fakes = _start(monkeypatch, _stopped_row(capacityReservationId=CR_FULL),
-                                 EdhCapacityError("no reserved capacity available"),
-                                 records={CR_FULL: ec2_reservation(CR_FULL)})
-
-        assert response["statusCode"] == 400
+        assert response["statusCode"] == 202
         assert "code" not in response_body(response)
-
-    def test_a_refused_start_whose_reservation_cannot_be_read_keeps_the_edh_answer(self, monkeypatch, aws):
-        response, fakes = _start(monkeypatch, _stopped_row(capacityReservationId=CR_FULL),
-                                 EdhCapacityError("no reserved capacity available"),
-                                 failure=client_error("RequestLimitExceeded"))
-
-        assert response["statusCode"] == 400
-        assert "code" not in response_body(response)
-
-    def test_a_refused_start_of_an_on_demand_desktop_reads_no_reservation(self, monkeypatch, aws):
-        response, fakes = _start(monkeypatch, _stopped_row(), EdhCapacityError("insufficientinstancecapacity"),
-                                 records={CR_FULL: ec2_reservation(CR_FULL, AvailableInstanceCount=0)})
-
-        assert response["statusCode"] == 400
-        assert fakes.reservations.ec2.calls == []
-
-    def test_a_fallback_desktop_is_not_reservation_bound(self, monkeypatch, aws):
-        row = _stopped_row(capacityReservationFallback=True, capacityReservationRequested=CR_FULL)
-        response, fakes = _start(monkeypatch, row, EdhCapacityError("insufficientinstancecapacity"),
-                                 records={CR_FULL: ec2_reservation(CR_FULL, AvailableInstanceCount=0)})
-
-        assert response["statusCode"] == 400
-        assert fakes.reservations.ec2.calls == []
-
-    def test_a_start_whose_answer_was_lost_reads_no_reservation(self, monkeypatch, aws):
-        response, fakes = _start(monkeypatch, _stopped_row(capacityReservationId=CR_FULL),
-                                 EdhOutcomeUnknownError("read timeout"),
-                                 records={CR_FULL: ec2_reservation(CR_FULL, AvailableInstanceCount=0)})
-
-        assert response["statusCode"] == 502
-        assert fakes.reservations.ec2.calls == []
-
-    def test_an_accepted_start_reads_no_reservation(self, monkeypatch, aws):
-        response, fakes = _start(monkeypatch, _stopped_row(capacityReservationId=CR_FULL), {},
-                                 records={CR_FULL: ec2_reservation(CR_FULL, AvailableInstanceCount=0)})
-
-        assert response["statusCode"] == 200
-        assert fakes.reservations.ec2.calls == []
+        assert fakes.edh.calls_to("start_desktop") == []
+        assert fakes.reservations.ec2.ids_asked() == []
+        handed_over = {(payload["action"], payload["bootstrapId"])
+                       for payload in (json.loads(call.kwargs["Payload"])
+                                       for call in fakes.lambda_client.invoke.call_args_list)}
+        assert handed_over == {("start", own_row()["bootstrapId"])}
 
 
 @pytest.mark.unit

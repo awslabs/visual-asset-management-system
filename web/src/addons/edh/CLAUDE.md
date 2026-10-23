@@ -23,8 +23,9 @@ web/src/addons/edh/
                   #   queries.ts adminQueries.ts containerQueries.ts amiRecipeQueries.ts (TanStack hooks, module-local qk, polling cadence)
                   #   outcome.ts (EdhRequestError, toOutcomeTuple, unconfirmedNotice: a mutation EDH did not confirm, a start in progress;
                   #   isReservationFull and the RESERVATION_FULL launch and start sentences)
-  components/     # WorkstationStatusBadge.tsx (also describeLastError, describeEdhFailure and EdhFailureDetail; see
-                  #   Launch Failures) CapacityDetail.tsx (the row's `Capacity:` line) DeleteWorkstationDialog.tsx TabStrip.tsx
+  components/     # WorkstationStatusBadge.tsx (also describeLastError, describeEdhFailure and EdhFailureDetail, see
+                  #   Launch Failures; describeStartFailure and StartFailureNotice, see Start Status) CapacityDetail.tsx
+                  #   (the row's `Capacity:` line) DeleteWorkstationDialog.tsx TabStrip.tsx
                   #   (roving-tabindex tablist shared by both pages)
                   #   EdhFeatureTabs.tsx NotEnabledPanel.tsx (both pages' "not enabled" notice) useTextFilter.ts (the toolbar search
                   #   the three EDH lists share) useInFlight.ts (the synchronous double-submit guard every EDH mutation handler claims)
@@ -45,6 +46,8 @@ web/src/addons/edh/
   labels.ts       # The words shown for the OS family and EDH state tokens
   capacityReservations.ts  # The Capacity rules: which reservations suit a launch, the option and Review text, the
                   #   preselection, and the row's Capacity text (describeCapacity)
+  workstationStatusCases.json  # Test data shared with the CLI: records of every state x activity x lastError of the
+                  #   start-status contract with the agreed badge, State column and start-failure lines (see Start Status)
   edhLanes.test.tsx  # The module's lane entries, read through the real route table and side navigation
 ```
 
@@ -84,7 +87,7 @@ With containers on, the Workstations page shows the Workstations / Simulations s
 The module keeps its own `api/` directory (`web/CLAUDE.md` Rule 3 lists an add-on module's `api/` as a service directory): the services import the module's `types.ts` and the orchestration client's `toTuple`, which `services/addons/` could not do without the services layer depending on a feature module. Components never import `apiClient`.
 
 -   The callers return `[boolean, data]` tuples through `toTuple`; the EDH mutations use `toOutcomeTuple` from `outcome.ts`, which keeps the status and body a page reads for an unconfirmed outcome (`EdhRequestError`).
--   The query hooks use the module-local `qk` factory (keys under `"edh"`, never colliding with the orchestration module's). `computeWorkstationRefetchInterval` polls every `WORKSTATION_POLL_TRANSITIONAL_MS` while a listed workstation is still changing state, every `WORKSTATION_POLL_STABLE_MS` once all are settled (EDH can still stop one on idle), and not at all for an empty list.
+-   The query hooks use the module-local `qk` factory (keys under `"edh"`, never colliding with the orchestration module's). `computeWorkstationRefetchInterval` polls every `WORKSTATION_POLL_TRANSITIONAL_MS` while a listed workstation is still changing state (it carries an `activity`, is CREATING, or is ACTIVE and not yet connectable), every `WORKSTATION_POLL_STABLE_MS` once all are settled (EDH can still stop one on idle), and not at all for an empty list. A start's 202 record replaces its row in the cached list at once (without its `sessionBootstrap`), so the badge reads Starting before the next poll.
 
 ---
 
@@ -94,12 +97,24 @@ A failed launch shows, beneath its **Orphaned** badge, the sentence `describeLas
 
 ---
 
+## Start Status
+
+A start answers `202` and runs in the launch worker; the record carries `activity` (`starting` | `stopping` | null), which the service derives on every read, and `startFailure`.
+
+-   **Badge.** `WorkstationStatusBadge` reads `activity` first: **Starting** (the creating colours) or **Stopping** (the stopped colours), both with the pulsing dot, whatever `state` says. A record without the field (`undefined`, a service that predates it) falls back to the old rule (ACTIVE and not connectable, or CREATING with a session, read Starting); `null` is the service saying neither, so the state decides.
+-   **Actions.** While `activity` is `starting`, Start, Stop and Delete are disabled with `A start of this workstation is in progress.` (the same hint the client-side in-flight claim gives). Stopping keeps Start disabled through the `The workstation is still <edhState>; …` hint.
+-   **Refused start.** `describeStartFailure` gives, for a STOPPED row with no `activity` whose `lastError` is `CAPACITY_UNAVAILABLE`, `RESERVATION_FULL` or `START_FAILED`, the sentence (`capacityStartFailureMessage` naming the instance type and `startFailure.availabilityZone`; `RESERVATION_FULL_START_MESSAGE` from `outcome.ts`; `LAST_ERROR_COPY.START_FAILED`) and the detail line `AWS: <errorCode> in <availabilityZone>` (the code alone without a zone, nothing without a code). `StartFailureNotice` renders both beneath the badge on My Workstations and the admin Sessions tab, and the badge takes the sentence as its title. A new start of the row (`activity` `starting`) hides them.
+-   **Start handler.** A 202 is reported as **Workstation start requested** and left to the list; the start path no longer maps `RESERVATION_FULL` (the launch path still does).
+-   **CLI parity.** `workstationStatusCases.json` lists records of every state x activity x lastError combination with the badge label, the CLI State column, and the sentence and detail line both clients show. `components/WorkstationStatusBadge.cases.test.tsx` and `tools/VamsCLI/tests/addon/test_edh_start_status.py` both read it; change the words in both clients and the file together.
+
+---
+
 ## Capacity Reservations
 
 An administrator registers EC2 capacity reservations; a launch may name one. With none registered, or none the caller's role grants (`edhCapacityReservation`), nothing on either page changes and every launch is on-demand.
 
 -   **Launch wizard.** `useEdhCatalogCapacityReservations(open)` reads `GET /addon/edh/catalog/capacity-reservations` once, unfiltered; `matchingReservations` keeps the reservations whose `instanceType` equals the chosen type and whose `instancePlatform` suits the image's `osFamily` (`Linux/UNIX` prefix for linux, `Windows` for windows), the service's own rule. The **Capacity** select after **Instance type** shows only when one matches: `On-demand` plus `<label> (<free>/<total> free)`, `(full, will launch on-demand)` for a full one that falls back, and a disabled `(full)` for one that does not. The choice is `null` until the user picks (the first reservation with a free slot is then preselected, else On-demand); a change of instance type or image clears a chosen reservation that no longer suits it, never an explicit On-demand. Review shows **Capacity** only when the field was offered. The launch body carries `capacityReservationId` only for a reservation, so an on-demand body is the one it always was. A read the route refuses or fails hides the field.
--   **Refusals.** `createWorkstation` maps a `409` coded `RESERVATION_FULL` to `RESERVATION_FULL_LAUNCH_MESSAGE` (shown on Review); the start handler maps the start's `RESERVATION_FULL` to `RESERVATION_FULL_START_MESSAGE` (`isReservationFull` in `outcome.ts`). Every other refusal (not registered, not active, type or platform mismatch, the `503` read failure) shows the service's message. `LAST_ERROR_COPY.RESERVATION_FULL` explains an orphaned launch.
+-   **Refusals.** `createWorkstation` maps a `409` coded `RESERVATION_FULL` to `RESERVATION_FULL_LAUNCH_MESSAGE` (shown on Review; `isReservationFull` in `outcome.ts`). A start answers `202`, and a start refused for a full reservation comes back on the row as `lastError` `RESERVATION_FULL`, shown with `RESERVATION_FULL_START_MESSAGE` (see Start Status). Every other refusal (not registered, not active, type or platform mismatch, the `503` read failure) shows the service's message. `LAST_ERROR_COPY.RESERVATION_FULL` explains an orphaned launch.
 -   **Rows.** `CapacityDetail` puts `Capacity: <label> (<id>)` (the id alone once unregistered) or `Capacity: On-demand (reservation full)` beneath the instance type, on My Workstations and the admin Sessions tab; an on-demand row shows nothing.
 -   **Settings.** `CapacityReservationsSection` sits below the lease form, shown on `can("GET", CAPACITY_RESERVATIONS_ROUTE)`; Register on `POST` of that route, Edit on `PUT` and Unregister on `DELETE` of `CAPACITY_RESERVATION_ROUTE`. The dialog checks the id (`^cr-[0-9a-f]{17}$`) and label (1-64 display-name characters) before any request and keeps a refusal inside it; Edit sends `label`, `fallbackToOnDemand` and `enabled`, never the id; Unregister confirms first and says EC2 is not changed.
 

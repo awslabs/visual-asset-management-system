@@ -4,9 +4,10 @@
 
 import json
 import sys
+import time
 import uuid
 import click
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from urllib.parse import urlsplit
 
 from ...addon_constants import (
@@ -19,7 +20,8 @@ from ...utils.json_output import output_status, output_result, output_error, out
 from ...utils.addon.edh_exceptions import (
     EdhError, EdhWorkstationNotFoundError, EdhImageNotFoundError, EdhContainerJobNotFoundError,
     EdhAmiRecipeNotFoundError, EdhAmiRecipeBuildNotFoundError, EdhReservationFullError,
-    EdhCapacityReservationNotFoundError,
+    EdhCapacityReservationNotFoundError, EdhStartFailedError, EdhStartWaitTimeoutError,
+    EdhUnavailableError,
 )
 from ...utils.addon.edh_api_client import EDH_CAPACITY_RESERVATION_ID, EDH_CAPACITY_RESERVATION_ID_MESSAGE
 
@@ -49,14 +51,123 @@ CAPACITY_RESERVATION_LABEL_MAX = 64
 # Capacity detail says the same.
 ON_DEMAND_FALLBACK_TEXT = 'On-demand (reservation full)'
 
-# The remedies printed with a launch or start refused because its capacity reservation is full.
+# The remedies printed with a launch refused because its capacity reservation is full.
 RESERVATION_FULL_LAUNCH_HINT = (
     "Launch without --capacity-reservation-id for an on-demand workstation, choose another reservation "
     "('vamscli edh catalog capacity-reservations'), or try again once a slot is free.")
-RESERVATION_FULL_START_HINT = (
-    "The workstation stays stopped. Start it again once a slot in its reservation is free, or ask an "
-    "administrator.")
 CAPACITY_RESERVATION_LISTING_HINT = "Use 'vamscli edh admin capacity-reservation list' to see the registry."
+
+# `start --wait` reads the workstation every START_WAIT_POLL_SECONDS until it is ACTIVE, the start has
+# left it stopped, or START_WAIT_TIMEOUT_SECONDS have passed. The clock and the sleep are module names
+# so the tests can replace them.
+START_WAIT_POLL_SECONDS = 10
+START_WAIT_TIMEOUT_SECONDS = 600
+_monotonic = time.monotonic
+_sleep = time.sleep
+
+# The words the State column prints for a record's `activity`, whatever its state; the web's status
+# badge reads Starting and Stopping for the same records (web/src/addons/edh/workstationStatusCases.json).
+ACTIVITY_LABELS = {'starting': 'STARTING', 'stopping': 'STOPPING'}
+
+# The lastError codes a start the service could not carry out leaves on a STOPPED workstation, and the
+# sentences the web shows beneath its badge for the two that do not name the instance type.
+START_FAILURE_CODES = ('CAPACITY_UNAVAILABLE', 'RESERVATION_FULL', 'START_FAILED')
+RESERVATION_FULL_START_MESSAGE = (
+    "The capacity reservation has no free capacity; the workstation stays stopped. Start it again once "
+    "a slot is free, or ask an administrator.")
+START_FAILED_MESSAGE = (
+    "The workstation did not start; it is still stopped with its disk. Start it again, or ask an "
+    "administrator.")
+
+# The `get` record's label column: a continuation line of a value starts under the value.
+RECORD_VALUE_INDENT = ' ' * 19
+
+
+def state_label(record: Dict[str, Any]) -> str:
+    """What the State column prints for a workstation: STARTING or STOPPING while the record's
+    `activity` says so, otherwise its state."""
+    activity = record.get('activity')
+    if activity in ACTIVITY_LABELS:
+        return ACTIVITY_LABELS[activity]
+    return str(record.get('state') or 'N/A')
+
+
+def capacity_start_failure_message(instance_type: Any, availability_zone: Any) -> str:
+    """The sentence for a start AWS had no on-demand capacity for. A stopped desktop keeps its root
+    disk in its instance's Availability Zone, so it can start only there."""
+    instance = instance_type if isinstance(instance_type, str) and instance_type else "its instance type"
+    zone = f" ({availability_zone})" if isinstance(availability_zone, str) and availability_zone else ""
+    return (f"AWS had no capacity for {instance} in this workstation's Availability Zone{zone} when it "
+            "was started. A stopped workstation keeps its disk and starts only in that zone, so it "
+            "stays stopped; start it again later.")
+
+
+def describe_start_failure(record: Dict[str, Any]) -> Optional[Tuple[str, Optional[str]]]:
+    """Why the last start left a STOPPED workstation stopped, as the sentence and the AWS detail line
+    (`AWS: <errorCode> in <Availability Zone>`, or the code alone; None when the failure names no
+    code) the web shows beneath its badge. None for a workstation whose start did not fail, and while a
+    new start of it runs."""
+    if record.get('state') != 'STOPPED' or record.get('activity'):
+        return None
+    code = record.get('lastError')
+    if code not in START_FAILURE_CODES:
+        return None
+    failure = record.get('startFailure') if isinstance(record.get('startFailure'), dict) else {}
+    zone = failure.get('availabilityZone')
+    if code == 'CAPACITY_UNAVAILABLE':
+        message = capacity_start_failure_message(record.get('instanceType'), zone)
+    elif code == 'RESERVATION_FULL':
+        message = RESERVATION_FULL_START_MESSAGE
+    else:
+        message = START_FAILED_MESSAGE
+    error_code = failure.get('errorCode')
+    detail = None
+    if isinstance(error_code, str) and error_code:
+        detail = f"AWS: {error_code}" + (f" in {zone}" if isinstance(zone, str) and zone else "")
+    return message, detail
+
+
+def start_wait_outcome(record: Any) -> Optional[str]:
+    """`active` once the workstation runs (ACTIVE with no activity), `failed` once the start is over
+    without it (STOPPED, DELETED or ORPHANED with no activity), None while it is still starting."""
+    if not isinstance(record, dict):
+        return None
+    if record.get('activity'):
+        return None
+    state = record.get('state')
+    if state == 'ACTIVE':
+        # A service that predates `activity` reports a desktop that is not connectable yet as ACTIVE.
+        if 'activity' not in record and record.get('connectionAvailable') is False:
+            return None
+        return 'active'
+    if state == 'CREATING':
+        return None
+    return 'failed'
+
+
+def wait_for_start(api_client: APIClient, session_id: str, record: Dict[str, Any],
+                   json_output: bool) -> Tuple[str, Dict[str, Any]]:
+    """Read the workstation every START_WAIT_POLL_SECONDS until start_wait_outcome settles or
+    START_WAIT_TIMEOUT_SECONDS pass; returns the outcome (`active`, `failed` or `timedOut`) and the last
+    record read. A read the cluster did not answer is tried again at the next poll."""
+    deadline = _monotonic() + START_WAIT_TIMEOUT_SECONDS
+    shown = state_label(record)
+    output_status(f"  {shown}", json_output)
+    while True:
+        outcome = start_wait_outcome(record)
+        if outcome:
+            return outcome, record
+        remaining = deadline - _monotonic()
+        if remaining <= 0:
+            return 'timedOut', record
+        _sleep(min(START_WAIT_POLL_SECONDS, remaining))
+        try:
+            record = api_client.get_edh_workstation(session_id)
+        except EdhUnavailableError:
+            continue
+        if state_label(record) != shown:
+            shown = state_label(record)
+            output_status(f"  {shown}", json_output)
 
 
 def _capacity_reservation_id(ctx, param, value):
@@ -200,7 +311,7 @@ def format_workstation_list(result: Dict[str, Any]) -> str:
         session_less = session_less or not item.get('sessionId')
         lines.append(
             f"  {_identifier(item):38s}  {str(item.get('name', 'N/A')):24s}  "
-            f"{str(item.get('state', 'N/A')):10s}  {str(item.get('lastError') or '-'):22s}  "
+            f"{state_label(item):10s}  {str(item.get('lastError') or '-'):22s}  "
             f"{str(item.get('instanceType', 'N/A')):14s}  {str(item.get('osFamily', 'N/A')):8s}  "
             f"{item.get('createdAt', 'N/A')}"
         )
@@ -217,8 +328,15 @@ def format_workstation(result: Dict[str, Any]) -> str:
     lines.append(f"  Bootstrap ID:    {result.get('bootstrapId', 'N/A')}")
     lines.append(f"  Name:            {result.get('name', 'N/A')}")
     lines.append(f"  State:           {result.get('state', 'N/A')}")
+    lines.append(f"  Activity:        {result.get('activity') or 'none'}")
     lines.append(f"  EDH State:       {result.get('edhState') or 'N/A'}")
     lines.append(f"  Last Error:      {result.get('lastError') or 'none'}")
+    start_failure = describe_start_failure(result)
+    if start_failure:
+        message, detail = start_failure
+        lines.append(f"  Start Failure:   {message}")
+        if detail:
+            lines.append(f"{RECORD_VALUE_INDENT}{detail}")
     edh_failure = _edh_failure_line(result)
     if edh_failure:
         lines.append(edh_failure)
@@ -253,6 +371,17 @@ def format_launch_accepted(result: Dict[str, Any]) -> str:
         f"    vamscli edh workstation get {bootstrap_id}",
         "  A launch EDH refuses ends in state ORPHANED with the reason under Last Error, and the AWS",
         "  error EDH reported, when VAMS captured one, under EDH failure.",
+    ])
+
+
+def format_start_accepted(result: Dict[str, Any]) -> str:
+    """The accepted start record, then what happens next: the start itself runs in the background."""
+    session_id = result.get('sessionId') or result.get('bootstrapId', 'N/A')
+    return '\n'.join([
+        format_workstation(result),
+        "",
+        f"  Start requested; the workstation is starting. Follow it with "
+        f"`vamscli edh workstation get {session_id}`.",
     ])
 
 
@@ -296,7 +425,8 @@ def workstation():
 @requires_setup_and_auth
 @requires_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
 def workstation_list(ctx: click.Context, json_output: bool):
-    """List your EDH workstations.
+    """List your EDH workstations. The State column reads STARTING or STOPPING while a workstation
+    is between states (its `activity`), otherwise its state.
 
     Examples:
         vamscli edh workstation list
@@ -415,7 +545,9 @@ def workstation_get(ctx: click.Context, session_id: str, json_output: bool):
     received one. A workstation that belongs to another user is reported as not found. A launch that
     ended ORPHANED shows its reason under Last Error and, when VAMS captured the failure from EDH
     (the record's edhFailure), the AWS error code and operation, or the desktop setup checkpoint,
-    under EDH failure.
+    under EDH failure. Activity is `starting` or `stopping` while the workstation is between states
+    (none otherwise), and a start that left it STOPPED shows why under Start Failure, with the AWS
+    error and Availability Zone the start recorded (the record's startFailure).
 
     Examples:
         vamscli edh workstation get SESSION_ID
@@ -441,16 +573,28 @@ def workstation_get(ctx: click.Context, session_id: str, json_output: bool):
 
 @workstation.command(name='start')
 @click.argument('session_id')
+@click.option('--wait', is_flag=True,
+              help=f'Follow the start: read the workstation every {START_WAIT_POLL_SECONDS} s until it is '
+                   f'ACTIVE (exit 0), the start left it stopped (exit 1, with the reason), or '
+                   f'{START_WAIT_TIMEOUT_SECONDS // 60} minutes pass (exit 1)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 @requires_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
-def start(ctx: click.Context, session_id: str, json_output: bool):
+def start(ctx: click.Context, session_id: str, wait: bool, json_output: bool):
     """Start one of your stopped workstations. SESSION_ID may be the bootstrap id of a launch that has
     no session id yet; such a launch cannot be started and is refused (HTTP 409).
 
+    The start is accepted (HTTP 202) and runs in the background: the returned record carries activity
+    `starting`, and `edh workstation get` or `list` shows STARTING until the workstation is ACTIVE. A
+    start EDH refuses leaves it STOPPED with the reason under Last Error and Start Failure (for lack
+    of capacity, CAPACITY_UNAVAILABLE: the workstation keeps its disk in its Availability Zone; start
+    it again later). The workstation is never deleted for a refused start. --wait follows the start
+    and exits 0 only once the workstation is ACTIVE.
+
     Examples:
         vamscli edh workstation start SESSION_ID
+        vamscli edh workstation start SESSION_ID --wait
         vamscli edh workstation start SESSION_ID --json-output
     """
     # Setup/auth already validated by decorator
@@ -460,15 +604,42 @@ def start(ctx: click.Context, session_id: str, json_output: bool):
 
     try:
         result = api_client.start_edh_workstation(session_id)
-        output_result(result, json_output, success_message="Workstation start requested",
-                      cli_formatter=format_workstation)
+        if not wait:
+            output_result(result, json_output, success_message="Workstation start requested",
+                          cli_formatter=format_start_accepted)
+            return
+        target = result.get('sessionId') or session_id
+        output_status(
+            f"Workstation start requested; waiting for it to start (every {START_WAIT_POLL_SECONDS} s, "
+            f"up to {START_WAIT_TIMEOUT_SECONDS // 60} minutes)...", json_output)
+        outcome, record = wait_for_start(api_client, target, result, json_output)
+        if outcome == 'active':
+            output_result(record, json_output, success_message="Workstation started (ACTIVE)",
+                          cli_formatter=format_workstation)
+            return
+        if not json_output:
+            click.echo(format_workstation(record))
+        if outcome == 'timedOut':
+            raise EdhStartWaitTimeoutError(
+                f"Workstation still {state_label(record)} after {START_WAIT_TIMEOUT_SECONDS // 60} "
+                f"minutes; the start may still complete. Follow it with "
+                f"'vamscli edh workstation get {target}'.", record)
+        failure = describe_start_failure(record)
+        if failure:
+            raise EdhStartFailedError(
+                f"Workstation start failed ({record.get('lastError')}): {failure[0]}", record)
+        raise EdhStartFailedError(
+            f"Workstation start did not complete: the workstation is {state_label(record)}.", record)
+    except EdhStartWaitTimeoutError as e:
+        output_error(e, json_output, error_type="Workstation Start Not Finished")
+        raise click.ClickException(str(e))
+    except EdhStartFailedError as e:
+        output_error(e, json_output, error_type="Workstation Start Failed",
+                     helpful_message="See 'Start Failure' above; the workstation keeps its disk.")
+        raise click.ClickException(str(e))
     except EdhWorkstationNotFoundError as e:
         output_error(e, json_output, error_type="Workstation Not Found",
                      helpful_message="Use 'vamscli edh workstation list' to see your workstations.")
-        raise click.ClickException(str(e))
-    except EdhReservationFullError as e:
-        output_error(e, json_output, error_type="Capacity Reservation Full",
-                     helpful_message=RESERVATION_FULL_START_HINT)
         raise click.ClickException(str(e))
     except EdhError as e:
         output_error(e, json_output, error_type="EDH Error")

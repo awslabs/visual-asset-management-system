@@ -198,13 +198,14 @@ def test_a_launch_into_a_full_reservation_raises_the_reservation_full_error(monk
     assert isinstance(raised.value, EdhOperationError)
 
 
-def test_a_start_refused_for_a_full_reservation_raises_the_reservation_full_error(monkeypatch):
+def test_a_start_is_accepted_with_the_record_and_runs_in_the_background(monkeypatch):
+    # The start route answers 202 with the record; a refusal for a full reservation is recorded on the
+    # row by the launch worker (lastError RESERVATION_FULL), never answered by the route.
     client = _client()
-    body = {"message": "The capacity reservation has no free capacity; the workstation stays stopped",
-            "code": "RESERVATION_FULL"}
-    _capture(monkeypatch, client, "post", error=_http_error(409, body))
-    with pytest.raises(EdhReservationFullError, match="stays stopped"):
-        client.start_edh_workstation("s-1")
+    accepted = {**WORKSTATION, "state": "STOPPED", "activity": "starting"}
+    seen = _capture(monkeypatch, client, "post", accepted)
+    assert client.start_edh_workstation("s-1") == accepted
+    assert seen["endpoint"] == "/addon/edh/workstations/s-1/start"
 
 
 def test_a_reservation_read_failure_is_reported_as_unavailable(monkeypatch):

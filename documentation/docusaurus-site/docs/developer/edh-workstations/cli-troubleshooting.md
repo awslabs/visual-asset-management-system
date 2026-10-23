@@ -13,11 +13,12 @@ This page covers common problems encountered with the VamsCLI `edh` commands, al
 
 With `--json-output`, an `edh` command error can carry these fields beside the ones the [JSON Error Format](../../cli/automation.md#json-error-format) lists:
 
-| Field             | Carried by                                                                                                                                                                                                                                                                                                                                                     |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `outcomeUnknown`  | `EdhOutcomeUnknownError` (`true`): EDH may have carried out a request whose answer was lost; check the listing before sending it again (see [A Request Was Not Confirmed](#a-request-was-not-confirmed))                                                                                                                                                       |
-| `startInProgress` | `EdhStartInProgressError` (`true`): another start of the workstation is in progress (see [Start Refused Because a Start Is in Progress](#start-refused-because-a-start-is-in-progress))                                                                                                                                                                        |
-| `code`            | `EdhReservationFullError` (`RESERVATION_FULL`): the capacity reservation of a launch or start has no free slot (see [Launch Refused Because the Capacity Reservation Is Full](#launch-refused-because-the-capacity-reservation-is-full) and [Start Refused Because the Capacity Reservation Is Full](#start-refused-because-the-capacity-reservation-is-full)) |
+| Field             | Carried by                                                                                                                                                                                                                                                                                                                                                                         |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `outcomeUnknown`  | `EdhOutcomeUnknownError` (`true`): EDH may have carried out a request whose answer was lost; check the listing before sending it again (see [A Request Was Not Confirmed](#a-request-was-not-confirmed))                                                                                                                                                                           |
+| `startInProgress` | `EdhStartInProgressError` (`true`): another start of the workstation is in progress (see [Start Refused Because a Start Is in Progress](#start-refused-because-a-start-is-in-progress))                                                                                                                                                                                            |
+| `code`            | `EdhReservationFullError` (`RESERVATION_FULL`): the capacity reservation of a launch has no free slot (see [Launch Refused Because the Capacity Reservation Is Full](#launch-refused-because-the-capacity-reservation-is-full)); a start's full reservation is recorded on the workstation instead (see [Start Left the Workstation Stopped](#start-left-the-workstation-stopped)) |
+| `waitOutcome`     | `EdhStartFailedError` (`failed`) and `EdhStartWaitTimeoutError` (`timedOut`), raised by `edh workstation start --wait` alone, beside the record's `state`, `activity`, `lastError` and `startFailure` (see [Start Left the Workstation Stopped](#start-left-the-workstation-stopped) and [Waiting for a Start Timed Out](#waiting-for-a-start-timed-out))                          |
 
 ---
 
@@ -103,11 +104,11 @@ The launch runs asynchronously. Until VAMS reads the created desktop back from E
 
 **Cause:**
 
-Only a `STOPPED` workstation can be started. A running one is already available to `connect`; one that is `CREATING` — including one you have just started, which stays `CREATING` (EDH `pending`) until EDH reports it running — is still in transition.
+Only a `STOPPED` workstation can be started. A running one is already available to `connect`; one that is `CREATING` — including one you have just started, whose `State` column reads `STARTING` (`activity` `starting`) until EDH reports it running — is still in transition.
 
 **Resolution:**
 
-Watch the record with `vamscli edh workstation get SESSION_ID` until it reports `ACTIVE` with `connectionAvailable` true, then `connect`; stop it first if you meant to restart it.
+Watch the record with `vamscli edh workstation get SESSION_ID` until it reports `ACTIVE` with `Activity: none` and `connectionAvailable` true, then `connect`; stop it first if you meant to restart it. `vamscli edh workstation start SESSION_ID --wait` does the watching for you.
 
 ### Start Refused While EDH Is Still Stopping the Workstation
 
@@ -117,11 +118,11 @@ Watch the record with `vamscli edh workstation get SESSION_ID` until it reports 
 
 **Cause:**
 
-VAMS records a workstation `STOPPED` as soon as the stop is accepted, but EDH reports the desktop `stopping` while Amazon EC2 stops the instance and until EDH next checks the desktop's state, which can take several minutes. EDH starts a desktop only once it reports it `stopped`, so the start is refused before a session key is minted or EDH is sent a start.
+VAMS records a workstation `STOPPED` as soon as the stop is accepted, but EDH reports the desktop `stopping` while Amazon EC2 stops the instance and until EDH next checks the desktop's state, which can take several minutes; meanwhile the `State` column reads `STOPPING` (`activity` `stopping`). EDH starts a desktop only once it reports it `stopped`, so the start is refused before a session key is minted or EDH is sent a start.
 
 **Resolution:**
 
-Wait until `vamscli edh workstation get SESSION_ID` reports `edhState` `stopped`, then run `edh workstation start` again.
+Wait until `vamscli edh workstation get SESSION_ID` reports `edhState` `stopped` and `Activity: none`, then run `edh workstation start` again.
 
 ### Start Refused Because a Start Is in Progress
 
@@ -132,11 +133,11 @@ Wait until `vamscli edh workstation get SESSION_ID` reports `edhState` `stopped`
 
 **Cause:**
 
-Another start of the workstation is still being processed, for example from another terminal or the web console, a start sent less than 3 minutes earlier was not confirmed by EDH (`Workstation start not confirmed`), the reconciler is revoking the stopped desktop's session key, or a lease renewal is still re-issuing that key, and EDH still reports the desktop stopped. A renewal, or a reconciler sweep that ends part-way through its revoke, holds off a start for up to 5 minutes. EDH records a start only once any capacity reservation it makes has settled, so that start is most likely still under way. The refusal follows the proxy's read of the desktop's state, mints no session key and sends EDH no start.
+Another start of the workstation is still in progress (its `State` column reads `STARTING`), for example one sent from another terminal or the web console, the reconciler is revoking the stopped desktop's session key, or a lease renewal is still re-issuing that key, and EDH still reports the desktop stopped. A start runs in the background, and can take several minutes when EDH first waits for a capacity reservation; a renewal, or a reconciler sweep that ends part-way through its revoke, holds off a start for up to 5 minutes. The refusal follows the proxy's read of the desktop's state, mints no session key and sends EDH no start.
 
 **Resolution:**
 
-Watch the workstation with `vamscli edh workstation list` until it reports `CREATING` or `ACTIVE`. If it still reports `STOPPED` 3 minutes after the earlier start, or 5 minutes after a renewal or the reconciler's revoke, run `edh workstation start` again.
+Watch the workstation with `vamscli edh workstation list` until its `State` column leaves `STARTING`: it reads `ACTIVE` once the start succeeded, or `STOPPED` with a `Last Error` once it failed (see [Start Left the Workstation Stopped](#start-left-the-workstation-stopped)). If it reads `STOPPED` with no `Last Error` 5 minutes after a renewal or the reconciler's revoke, run `edh workstation start` again.
 
 ### Start Refused Because the Lease Expired
 
@@ -160,36 +161,53 @@ vamscli edh workstation start SESSION_ID
 
 A renewal grants the policy's current lease length, which `vamscli edh catalog lease` reports, and is only possible while leases are enabled. A renewal that answers `409` `Leases are disabled for this deployment` means an administrator has turned leases off since the expiry was stamped; a start is not refused while they are off, so the workstation starts as it is, and the stored expiry applies again if an administrator turns leases back on. An administrator changes the lease length and the grace hours with `vamscli edh admin settings set`.
 
-### Start Refused for Lack of Capacity
+### Start Left the Workstation Stopped
 
 **Symptoms:**
 
--   `edh workstation start` fails with HTTP 400 `EDH found no available AWS capacity for this instance type. Try again later.`
+-   After `edh workstation start`, `edh workstation list` read `STARTING`, then the workstation is `STOPPED` again, with `Last Error` `CAPACITY_UNAVAILABLE`, `RESERVATION_FULL` or `START_FAILED`
+-   `edh workstation get SESSION_ID` shows a `Start Failure:` line, for example:
+
+    ```text
+      Last Error:      CAPACITY_UNAVAILABLE
+      Start Failure:   AWS had no capacity for g5.16xlarge in this workstation's Availability Zone (us-west-2b) when it was started. A stopped workstation keeps its disk and starts only in that zone, so it stays stopped; start it again later.
+                       AWS: InsufficientInstanceCapacity in us-west-2b
+    ```
+
+-   `edh workstation start --wait` exits 1 with `Workstation Start Failed: Workstation start failed (<lastError>): <reason>`, and with `--json-output` an error object carrying `"error_type": "EdhStartFailedError"`, `"waitOutcome": "failed"`, `lastError` and `startFailure`
 
 **Cause:**
 
-EDH found no available AWS capacity for the workstation's instance type when it tried to start the stopped desktop. The workstation stays `STOPPED`, and any session key minted for the start is revoked.
+A start is accepted (HTTP 202) and carried out in the background, so a start EDH refuses is recorded on the workstation rather than answered by the command. The workstation and its root disk are kept: VAMS never deletes, terminates or orphans a desktop for a refused start, and takes back the session key it minted for the start. `startFailure` holds the AWS error code EDH's refusal named (`errorCode`) and the Availability Zone the desktop's instance, and so its disk, is in (`availabilityZone`); either is absent when it could not be read.
+
+| `lastError`            | Reason shown                                                                                                                                                                                                                  | What happened                                                                                                                                                                                                                                                                                                                              |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `CAPACITY_UNAVAILABLE` | `AWS had no capacity for <instance type> in this workstation's Availability Zone (<zone>) when it was started. A stopped workstation keeps its disk and starts only in that zone, so it stays stopped; start it again later.` | AWS had no capacity for the instance type in the desktop's Availability Zone (typically `InsufficientInstanceCapacity`). EDH first tries to reserve capacity in that zone and then, in its default configuration, starts the instance on-demand; both found none. A stopped desktop starts only in its own zone, on its own instance type. |
+| `RESERVATION_FULL`     | `The capacity reservation has no free capacity; the workstation stays stopped. Start it again once a slot is free, or ask an administrator.`                                                                                  | The workstation was launched into a capacity reservation (`capacityReservationId` in `edh workstation get --json-output`). A stopped desktop gives its slot back and starts again in the same reservation; every slot is in use now. VAMS does not move a stopped desktop to another reservation or to on-demand.                          |
+| `START_FAILED`         | `The workstation did not start; it is still stopped with its disk. Start it again, or ask an administrator.`                                                                                                                  | EDH refused the start for another reason, or the start never took effect: the reconciler's sweep records it once EDH still reports the desktop stopped 10 minutes after the start was requested.                                                                                                                                           |
+
+The `Last Error` and `Start Failure` lines stay until a start of the workstation is accepted.
 
 **Resolution:**
 
-Start the workstation again later. A stopped desktop starts on its own instance, in that instance's Availability Zone.
+1. For `CAPACITY_UNAVAILABLE`, run `vamscli edh workstation start SESSION_ID` again later, when AWS has capacity in that zone again; `--wait` tells you whether it ran. If you need a desktop at once, launch a new workstation (`edh workstation create`), which EDH may place in another zone, and delete the stopped one only once you no longer need its disk.
+2. For `RESERVATION_FULL`, start it again once a slot is free; an administrator sees the free slots with `vamscli edh admin capacity-reservation list` (`FREE/TOTAL`). Free a slot by stopping or deleting another workstation in the same reservation, or ask an administrator to. To run a desktop on-demand, launch a new workstation without `--capacity-reservation-id`; the stopped one keeps its reservation.
+3. For `START_FAILED`, start it again; if it fails again, give the `Start Failure` lines to an administrator, who can check the cluster with `vamscli edh admin health`.
 
-### Start Refused Because the Capacity Reservation Is Full
+### Waiting for a Start Timed Out
 
 **Symptoms:**
 
--   `edh workstation start` fails with `Capacity Reservation Full: Workstation start refused (409): The capacity reservation has no free capacity; the workstation stays stopped`
--   With `--json-output`, the error carries `error_type` `EdhReservationFullError` and `"code": "RESERVATION_FULL"`
+-   `edh workstation start --wait` exits 1 with `Workstation still STARTING after 10 minutes; the start may still complete. Follow it with 'vamscli edh workstation get <id>'.`
+-   With `--json-output`, the error object carries `"error_type": "EdhStartWaitTimeoutError"`, `"waitOutcome": "timedOut"` and the record's `state` and `activity`
 
 **Cause:**
 
-The workstation was launched into a capacity reservation (`capacityReservationId` in `edh workstation get --json-output`). A stopped desktop gives its slot back, and EDH starts it again in the same reservation; every slot is in use now, so EDH refused the start. VAMS does not move a stopped desktop to another reservation or to on-demand. The workstation stays `STOPPED`, and the session key minted for the start is revoked.
+`--wait` reads the workstation every 10 seconds for up to 10 minutes. The start was still in progress when the wait ran out: EDH can wait for a capacity reservation in the desktop's zone before it starts the instance, and a large instance type takes several minutes to boot. The start is not cancelled.
 
 **Resolution:**
 
-1. Start it again once a slot is free; an administrator sees the free slots with `vamscli edh admin capacity-reservation list` (`FREE/TOTAL`).
-2. Free a slot by stopping or deleting another workstation in the same reservation, or ask an administrator to.
-3. To run the desktop on-demand, launch a new workstation without `--capacity-reservation-id`; the stopped one keeps its reservation.
+Follow the workstation with `vamscli edh workstation get SESSION_ID` until it reads `ACTIVE` with `Activity: none`, or `STOPPED` with a `Start Failure` line (see [Start Left the Workstation Stopped](#start-left-the-workstation-stopped)). Do not start it again while it reads `STARTING`: the start is refused with `Workstation start already in progress (409)`.
 
 ### The Connection URL Is Not Shown
 

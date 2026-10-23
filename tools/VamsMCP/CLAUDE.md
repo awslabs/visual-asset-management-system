@@ -64,6 +64,9 @@ tools/VamsMCP/
       test_edh_capacity_reservation_tools.py
                              # the capacity reservation tools and create's capacity_reservation_id:
                              # requests, passthrough, the RESERVATION_FULL error and the README
+      test_edh_start_status_tools.py
+                             # the asynchronous start: start's 202 record passed through unchanged,
+                             # `activity` / `startFailure` passthrough, the descriptions and README
 ```
 
 **No dotenv.** `config.py` reads `os.environ` only, and there is no `python-dotenv` dependency. That
@@ -371,6 +374,12 @@ ships an add-on with tools; a fork does not.
     `EdhStartInProgressError` and `EdhReservationFullError` carry `outcomeUnknown` /
     `startInProgress` / `code` (`RESERVATION_FULL`) in their `json_fields`, which `@tool_result`
     passes through (Mandatory Rule 5).
+-   Start status: `start_edh_workstation` returns the record the route accepts the start with
+    (HTTP 202, still STOPPED with `activity` `starting`) and does not poll; the agent follows it
+    with `list_edh_workstations`. Every workstation record and admin instance item carries
+    `activity` (`starting` | `stopping` | null) and `startFailure` (why the last start left a
+    STOPPED row stopped, beside `lastError` `CAPACITY_UNAVAILABLE`, `RESERVATION_FULL` or
+    `START_FAILED`); the tools pass both through, and the workstation tools' descriptions name them.
 -   Capacity reservations: `list_edh_catalog_capacity_reservations` (read, in the README's
     `autoApprove` addition) and `list_edh_admin_capacity_reservations` (read, admin),
     `register_edh_capacity_reservation` and `update_edh_capacity_reservation` (write) and
