@@ -73,13 +73,16 @@ jest.mock("../services/APIService", () => ({
 
 const mockEnsureValidSession = jest.fn();
 const mockClearLocalStore = jest.fn();
+const mockRevokeSession = jest.fn();
+const mockClearStoredSession = jest.fn();
 jest.mock("../utils/sessionManager", () => ({
     ensureValidSession: (...args: any[]) => mockEnsureValidSession(...args),
     scheduleExpiryTimer: jest.fn().mockResolvedValue(undefined),
     clearExpiryTimer: jest.fn(),
     registerFocusRevalidation: jest.fn(() => () => {}),
     clearLocalStore: (...args: any[]) => mockClearLocalStore(...args),
-    clearStoredSession: jest.fn(),
+    clearStoredSession: (...args: any[]) => mockClearStoredSession(...args),
+    revokeSession: (...args: any[]) => mockRevokeSession(...args),
     SESSION_EXPIRED_KEY: "session_expired",
     SESSION_RETURN_TO_KEY: "session_return_to",
 }));
@@ -131,6 +134,8 @@ describe("Auth external OAuth redirect_uri", () => {
         // Signed out: no stored token validates, so the login screen renders.
         mockEnsureValidSession.mockResolvedValue(false);
         mockClearLocalStore.mockResolvedValue(undefined);
+        mockRevokeSession.mockReset().mockResolvedValue(undefined);
+        mockClearStoredSession.mockReset();
         // jsdom reports document.location assignments as unimplemented navigation.
         consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
     });
@@ -177,6 +182,8 @@ describe("Auth sign-out after a failed code exchange", () => {
         mockGetAmplifyConfig.mockResolvedValue({ ...OAUTH2_CONFIG });
         mockEnsureValidSession.mockResolvedValue(false);
         mockClearLocalStore.mockResolvedValue(undefined);
+        mockRevokeSession.mockReset().mockResolvedValue(undefined);
+        mockClearStoredSession.mockReset();
         // jsdom reports document.location assignments as unimplemented navigation.
         consoleError = jest.spyOn(console, "error").mockImplementation(() => undefined);
     });
@@ -209,6 +216,51 @@ describe("Auth sign-out after a failed code exchange", () => {
             expect(localStorage.getItem("auth_error")).toBe("Failed to get access token")
         );
     });
+
+    it("signs out of Amplify before clearing localStorage and the asset store", async () => {
+        localStorage.setItem("auth_state", `http://localhost${DEEP_LINK}`);
+        localStorage.setItem("code_verifier", "verifier-1");
+        window.history.replaceState(null, "", "/?code=abc&state=xyz");
+        let rejectExchange!: (error: Error) => void;
+        mockGetTokenFromCodeRedirect.mockReturnValue(
+            new Promise((_resolve, reject) => {
+                rejectExchange = reject;
+            })
+        );
+
+        renderAuth();
+
+        await waitFor(() => expect(mockGetTokenFromCodeRedirect).toHaveBeenCalledTimes(1));
+        const order: string[] = [];
+        let finishRevoke!: () => void;
+        mockRevokeSession.mockImplementation(() => {
+            order.push("revokeSession:start");
+            return new Promise<void>((resolve) => {
+                finishRevoke = () => {
+                    order.push("revokeSession:done");
+                    resolve();
+                };
+            });
+        });
+        mockClearStoredSession.mockImplementation(() => order.push("clearStoredSession"));
+        mockClearLocalStore.mockImplementation(async () => {
+            order.push("clearLocalStore");
+        });
+
+        rejectExchange(new Error("bad code"));
+
+        await waitFor(() => expect(order).toEqual(["revokeSession:start"]));
+        finishRevoke();
+        await waitFor(() =>
+            expect(order).toEqual([
+                "revokeSession:start",
+                "revokeSession:done",
+                "clearStoredSession",
+                "clearLocalStore",
+            ])
+        );
+        expect(localStorage.getItem("auth_error")).toBe("Failed to get access token");
+    });
 });
 
 describe("Auth browser asset store on page load", () => {
@@ -219,6 +271,8 @@ describe("Auth browser asset store on page load", () => {
         mockGetAmplifyConfig.mockResolvedValue({ ...OAUTH2_CONFIG });
         mockEnsureValidSession.mockResolvedValue(false);
         mockClearLocalStore.mockResolvedValue(undefined);
+        mockRevokeSession.mockReset().mockResolvedValue(undefined);
+        mockClearStoredSession.mockReset();
     });
 
     it("clears the store once for a signed-out visitor", async () => {

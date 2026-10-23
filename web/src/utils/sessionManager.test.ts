@@ -12,11 +12,15 @@ import {
     clearStoredSession,
     logoutExpired,
     navigation,
+    revokeSession,
     SESSION_EXPIRED_KEY,
     SESSION_RETURN_TO_KEY,
     __resetForTests,
 } from "./sessionManager";
 import * as tokenUtils from "./authTokenUtils";
+
+/** A key in the shape Amplify v6 stores the Cognito refresh token under. */
+const AMPLIFY_REFRESH_TOKEN_KEY = "CognitoIdentityServiceProvider.client-1.user-1.refreshToken";
 
 jest.mock("./authTokenUtils");
 const mockSignOut = jest.fn().mockResolvedValue(undefined);
@@ -140,19 +144,109 @@ describe("sessionManager", () => {
             expect(localStorage.getItem("ov_camera_settings")).toBe('{"b":2}');
         });
 
-        it("empties the localforage store before signing out of Amplify", async () => {
+        it("signs out of Amplify before clearing localStorage or the localforage store", async () => {
             const order: string[] = [];
+            const storageClear = jest.spyOn(Storage.prototype, "clear").mockImplementation(() => {
+                order.push("localStorage.clear");
+            });
             mockLocalforageClear.mockImplementation(async () => {
                 order.push("localforage.clear");
             });
             mockSignOut.mockImplementation(async () => {
-                order.push("signOut");
+                order.push("signOut:start");
+                await Promise.resolve();
+                order.push("signOut:done");
+            });
+            redirectSpy.mockImplementation(() => {
+                order.push("redirect");
+            });
+
+            try {
+                await logoutExpired("#/assets");
+            } finally {
+                storageClear.mockRestore();
+            }
+
+            expect(order).toEqual([
+                "signOut:start",
+                "signOut:done",
+                "localStorage.clear",
+                "localforage.clear",
+                "redirect",
+            ]);
+        });
+
+        it("leaves the stored tokens in place while Amplify reads them to revoke the session", async () => {
+            localStorage.setItem(AMPLIFY_REFRESH_TOKEN_KEY, "refresh-1");
+            let seenByAmplify: string | null = "not read";
+            mockSignOut.mockImplementation(async () => {
+                // Amplify loads the tokens asynchronously before it calls RevokeToken.
+                await Promise.resolve();
+                seenByAmplify = localStorage.getItem(AMPLIFY_REFRESH_TOKEN_KEY);
             });
 
             await logoutExpired("#/assets");
 
-            expect(order).toEqual(["localforage.clear", "signOut"]);
+            expect(seenByAmplify).toBe("refresh-1");
+            expect(localStorage.getItem(AMPLIFY_REFRESH_TOKEN_KEY)).toBeNull();
+        });
+
+        it("waits at most five seconds for Amplify, then clears storage and redirects", async () => {
+            jest.useFakeTimers();
+            mockSignOut.mockReturnValue(new Promise(() => undefined));
+            localStorage.setItem("user", JSON.stringify({ username: "u" }));
+
+            const pending = logoutExpired("#/assets");
+
+            await jest.advanceTimersByTimeAsync(4_999);
+            expect(localStorage.getItem("user")).not.toBeNull();
+            expect(redirectSpy).not.toHaveBeenCalled();
+
+            await jest.advanceTimersByTimeAsync(1);
+            await pending;
+            expect(localStorage.getItem("user")).toBeNull();
+            expect(localStorage.getItem(SESSION_EXPIRED_KEY)).toBe("true");
             expect(redirectSpy).toHaveBeenCalledTimes(1);
+        });
+
+        it("still clears storage and redirects when Amplify sign-out fails", async () => {
+            mockSignOut.mockRejectedValue(new Error("network down"));
+            localStorage.setItem("user", JSON.stringify({ username: "u" }));
+
+            await logoutExpired("#/assets");
+
+            expect(localStorage.getItem("user")).toBeNull();
+            expect(localStorage.getItem(SESSION_EXPIRED_KEY)).toBe("true");
+            expect(localStorage.getItem(SESSION_RETURN_TO_KEY)).toBe("#/assets");
+            expect(mockLocalforageClear).toHaveBeenCalledTimes(1);
+            expect(redirectSpy).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    describe("revokeSession", () => {
+        it("signs out of Amplify once", async () => {
+            await revokeSession();
+            expect(mockSignOut).toHaveBeenCalledTimes(1);
+        });
+
+        it("resolves when Amplify sign-out fails", async () => {
+            mockSignOut.mockRejectedValue(new Error("network down"));
+            await expect(revokeSession()).resolves.toBeUndefined();
+        });
+
+        it("stops waiting after five seconds when Amplify sign-out does not finish", async () => {
+            jest.useFakeTimers();
+            mockSignOut.mockReturnValue(new Promise(() => undefined));
+            let settled = false;
+            const pending = revokeSession().then(() => {
+                settled = true;
+            });
+
+            await jest.advanceTimersByTimeAsync(4_999);
+            expect(settled).toBe(false);
+            await jest.advanceTimersByTimeAsync(1);
+            await pending;
+            expect(settled).toBe(true);
         });
     });
 

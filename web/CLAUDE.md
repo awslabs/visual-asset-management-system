@@ -577,6 +577,7 @@ const header = await getDualAuthorizationHeader();
 -   Custom `TokenProvider` is used for external OAuth token integration
 -   `appCache` replaces Amplify Cache for runtime config storage
 -   Hub event names changed: `signIn` -> `signedIn`, `signOut` -> `signedOut`
+-   Every sign-out path awaits `revokeSession()` (`utils/sessionManager.ts`; Amplify `signOut()`, bounded at 5 s) BEFORE `clearStoredSession()` and `clearLocalStore()`. Amplify reads the stored tokens to revoke the refresh token, so clearing localStorage first skips the revocation.
 
 ### 5.4 User State
 

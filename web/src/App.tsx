@@ -5,7 +5,6 @@
 
 import { useEffect, useState } from "react";
 import ReactDOM from "react-dom";
-import { signOut as amplifySignOut } from "aws-amplify/auth";
 import { appCache } from "./services/appCache";
 import { HashRouter } from "react-router-dom";
 import { TopNavigation } from "@cloudscape-design/components";
@@ -17,7 +16,12 @@ import { PageFooter } from "./authenticator/Footer";
 import config from "./config";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "./features/orchestration/components/ToastProvider";
-import { clearLocalStore, clearStoredSession } from "./utils/sessionManager";
+import {
+    clearLocalStore,
+    clearStoredSession,
+    navigation,
+    revokeSession,
+} from "./utils/sessionManager";
 
 const queryClient = new QueryClient({
     defaultOptions: {
@@ -63,17 +67,11 @@ function App() {
     const menuText = user?.username;
 
     const signOut = async () => {
-        await clearLocalStore();
+        // Amplify revokes the refresh token from the stored tokens, so it runs before any clear.
+        await revokeSession();
         clearStoredSession();
-        amplifySignOut()
-            .then(() => {
-                console.log("User signed out - signout button clicked");
-            })
-            .catch((error) => {
-                console.log("User sign out error - signout button clicked", error);
-            });
-
-        window.location.href = "/";
+        await clearLocalStore();
+        navigation.redirectToLogin();
     };
 
     return (

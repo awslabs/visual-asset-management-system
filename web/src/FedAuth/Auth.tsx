@@ -31,6 +31,7 @@ import {
     registerFocusRevalidation,
     clearLocalStore,
     clearStoredSession,
+    revokeSession,
     SESSION_EXPIRED_KEY,
     SESSION_RETURN_TO_KEY,
 } from "../utils/sessionManager";
@@ -1321,17 +1322,11 @@ const parseJwt = (
 };
 
 const signOutWithError = async (key = "auth_error", value = "Unauthorized") => {
-    await clearLocalStore();
-    // Reset amplify info
-    signOut()
-        .then(() => {
-            console.log("User signed out");
-        })
-        .catch((error) => {
-            console.log("User sign out error", error);
-        });
+    // Amplify revokes the refresh token from the stored tokens, so it runs before any clear.
+    await revokeSession();
     clearStoredSession();
     localStorage.setItem(key, value);
+    await clearLocalStore();
     window.location.href = "/";
 };
 
