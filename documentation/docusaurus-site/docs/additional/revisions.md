@@ -117,6 +117,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
     -   Note: a misconfigured later step fails the execution when the run reaches it, after the earlier steps have run, instead of being refused at launch, unless the selected files alone already give a single-file later step two or more files.
 -   **3D Preview Thumbnail image updates** — The 3D Preview Thumbnail container uses the current `python:3.12-slim` digest (Python 3.12.15), applies the Debian security updates in both build stages at build time, and installs certifi 2026.10.19, Pillow 13.0.0, aiohttp 3.14.5 and urllib3 2.8.0 from its dependency lock. The image no longer ships npm, npx or corepack; npm installs `splat-transform` during the build, and none of the three is used when a job runs. (issues #570, #572)
 -   **RapidPipeline EKS Kubernetes client** — The pipeline's Kubernetes Lambda layer installs the Kubernetes Python client 36.0.3, which matches the default EKS cluster version 1.36, and the pipeline Lambda's own requirements ask for the same release, so the two can be installed together. (issue #722)
+-   **RapidPipeline EKS Kubernetes request settings** — Every Kubernetes API call the pipeline makes has a 30-second connect and 60-second read timeout and sends the `vams-eks-pipeline/1.0` user agent. The Kubernetes client resends a request only after a connection failure; the pipeline's retry wrapper handles throttling, server errors and timeouts. (issue #724)
 
 **Other changes:**
 
