@@ -112,6 +112,10 @@ class TestDenyAppliesToArchivedRecords:
     def test_an_archived_record_of_another_database_is_allowed(self, svc):
         assert svc.enforce(_database(OTHER_DB + ARCHIVED), "GET") is True
 
+    def test_a_repeated_suffix_is_decided_on_the_same_database(self, svc):
+        assert svc.enforce(_asset(DENIED_DB + ARCHIVED + ARCHIVED), "GET") is False
+        assert svc.enforce(_asset(OTHER_DB + ARCHIVED + ARCHIVED), "GET") is True
+
 
 @pytest.mark.unit
 class TestScopedAllowReachesArchivedRecords:
