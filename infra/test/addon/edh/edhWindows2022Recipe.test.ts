@@ -173,17 +173,61 @@ describe("the Windows screen-lock component", () => {
         );
     });
 
-    test("leaves the Windows sign-in and the Amazon DCV settings alone", () => {
-        // The first sign-in uses the password VAMS shows, and EDH's first boot writes the DCV
-        // settings, including the lock when the last connection closes.
-        for (const text of [
-            "Winlogon",
-            "AutoAdminLogon",
-            "DisableCAD",
-            "nicesoftware",
-            "os-auto-lock",
-        ]) {
+    test("leaves the Windows sign-in alone", () => {
+        // The first sign-in uses the password VAMS shows.
+        for (const text of ["Winlogon", "AutoAdminLogon", "DisableCAD"]) {
             expect({ text, hit: body.includes(text) }).toEqual({ text, hit: false });
         }
+    });
+
+    describe("DCV's lock when the last connection closes", () => {
+        // EDH's first-boot DCV setup writes os-auto-lock = 1 after the image is built, so the image
+        // installs a SYSTEM startup task that sets it back to 0 on every boot, restarting the DCV
+        // server only when the value changed.
+        const script = () => {
+            const step = build.split("- name: InstallDcvNoLockOnDisconnect")[1] ?? "";
+            return step;
+        };
+
+        test("installs a delayed SYSTEM startup task", () => {
+            const step = script();
+            expect(step).toContain("Register-ScheduledTask -TaskName 'VAMS-DcvNoLockOnDisconnect'");
+            expect(step).toContain("New-ScheduledTaskTrigger -AtStartup");
+            expect(step).toMatch(/\$trigger\.Delay = 'PT\d+M'/);
+            expect(step).toContain("New-ScheduledTaskPrincipal -UserId 'SYSTEM'");
+        });
+
+        test("sets os-auto-lock to 0 in DCV's security key and restarts DCV only on a change", () => {
+            const step = script();
+            expect(step).toContain(
+                "Registry::HKEY_USERS\\S-1-5-18\\Software\\GSettings\\com\\nicesoftware\\dcv\\security"
+            );
+            expect(step).toContain("os-auto-lock -PropertyType DWord -Value 0 -Force");
+            const restart = step.indexOf("Restart-Service -Name dcvserver -Force");
+            const guard = step.indexOf("if ($current -ne 0) {");
+            expect(guard).toBeGreaterThan(-1);
+            expect(restart).toBeGreaterThan(guard);
+        });
+
+        test("does nothing when the DCV server is not installed", () => {
+            expect(script()).toContain(
+                "if (-not (Get-Service -Name dcvserver -ErrorAction SilentlyContinue)) { exit 0 }"
+            );
+        });
+
+        test("waits up to 30 minutes for EDH to write the value before acting", () => {
+            // EDH's setup can finish on the first boot without a restart, after the task has started.
+            const step = script();
+            const wait = step.indexOf("'for ($i = 0; $i -lt 120; $i++) {'");
+            expect(wait).toBeGreaterThan(-1);
+            expect(step).toContain("'    if ($null -ne $current) { break }'");
+            expect(step).toContain("'    Start-Sleep -Seconds 15'");
+            expect(step.indexOf("'if ($current -ne 0) {'")).toBeGreaterThan(wait);
+        });
+
+        test("the validate phase checks the task and its script", () => {
+            expect(validate).toContain("Get-ScheduledTask -TaskName 'VAMS-DcvNoLockOnDisconnect'");
+            expect(validate).toContain("'os-auto-lock -PropertyType DWord -Value 0'");
+        });
     });
 });

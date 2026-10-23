@@ -55,8 +55,55 @@ phases:
                             & reg.exe unload $hive | Out-Null
                         }
                         if ($LASTEXITCODE -ne 0) { throw "reg.exe unload of the default user profile exited $LASTEXITCODE" }
+          - name: InstallDcvNoLockOnDisconnect
+            action: ExecutePowerShell
+            inputs:
+                commands:
+                    - |
+                        $ErrorActionPreference = 'Stop'
+                        # Amazon DCV's os-auto-lock (session security parameter, 1 = lock the OS session when the
+                        # last client connection ends) is written to 1 by EDH's first-boot DCV setup, after this
+                        # image is built, so it cannot be set here once. A SYSTEM startup task sets it to 0 on every
+                        # boot instead. EDH's setup may finish without a restart, so the task waits up to 30 minutes
+                        # for EDH to write the value before it acts; it restarts the DCV server only when the value
+                        # changed, and changes nothing when DCV is not installed.
+                        $script = 'C:\ProgramData\VAMS\dcv-no-lock-on-disconnect.ps1'
+                        New-Item -ItemType Directory -Force -Path (Split-Path $script) | Out-Null
+                        $body = @(
+                            '$ErrorActionPreference = ''Stop'''
+                            '$security = ''Registry::HKEY_USERS\S-1-5-18\Software\GSettings\com\nicesoftware\dcv\security'''
+                            '$current = $null'
+                            'for ($i = 0; $i -lt 120; $i++) {'
+                            '    $current = (Get-ItemProperty -Path $security -Name os-auto-lock -ErrorAction SilentlyContinue).''os-auto-lock'''
+                            '    if ($null -ne $current) { break }'
+                            '    Start-Sleep -Seconds 15'
+                            '}'
+                            'if (-not (Get-Service -Name dcvserver -ErrorAction SilentlyContinue)) { exit 0 }'
+                            'if ($current -ne 0) {'
+                            '    if (-not (Test-Path $security)) { New-Item -Path $security -Force | Out-Null }'
+                            '    New-ItemProperty -Path $security -Name os-auto-lock -PropertyType DWord -Value 0 -Force | Out-Null'
+                            '    Restart-Service -Name dcvserver -Force'
+                            '}'
+                        )
+                        Set-Content -Path $script -Value $body -Encoding UTF8
+                        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$script`""
+                        $trigger = New-ScheduledTaskTrigger -AtStartup
+                        $trigger.Delay = 'PT2M'
+                        $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+                        Register-ScheduledTask -TaskName 'VAMS-DcvNoLockOnDisconnect' -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
     - name: validate
       steps:
+          - name: DcvNoLockOnDisconnectTaskPresent
+            action: ExecutePowerShell
+            inputs:
+                commands:
+                    - |
+                        $ErrorActionPreference = 'Stop'
+                        $task = Get-ScheduledTask -TaskName 'VAMS-DcvNoLockOnDisconnect'
+                        if ($task.Principal.UserId -ne 'SYSTEM') { throw 'the DCV no-lock task does not run as SYSTEM' }
+                        if (-not (Select-String -Path 'C:\ProgramData\VAMS\dcv-no-lock-on-disconnect.ps1' -SimpleMatch 'os-auto-lock -PropertyType DWord -Value 0' -Quiet)) {
+                            throw 'the DCV no-lock script does not set os-auto-lock to 0'
+                        }
           - name: PoliciesPresent
             action: ExecutePowerShell
             inputs:
