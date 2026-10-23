@@ -30,6 +30,7 @@ from .commands.industry import industry
 from .commands.user import user
 from .commands.roleUserConstraints import role
 from .commands.apiKey import api_key
+from .commands.compliance import compliance
 from .commands.custom import CUSTOM_COMMANDS
 from .utils.profile import ProfileManager
 from .utils.exceptions import SetupRequiredError
@@ -220,6 +221,7 @@ cli.add_command(industry)
 cli.add_command(user)
 cli.add_command(role)
 cli.add_command(api_key)
+cli.add_command(compliance)
 
 
 @cli.command()

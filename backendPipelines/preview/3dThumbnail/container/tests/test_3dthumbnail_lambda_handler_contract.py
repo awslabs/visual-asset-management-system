@@ -129,9 +129,9 @@ def _invoke(handler, tmp_path, fake, result, body):
             patch.object(handler.workdirs, "ensure_runtime_dirs", return_value=[]), \
             patch.object(handler.image_utils, "save_png", side_effect=_save_png), \
             patch.object(handler.analysis, "analyze_local_file", analyze), \
-            patch.object(handler.core, "_download_gltf_dependencies") as gltf:
+            patch.object(handler.dependencies, "fetch_referenced_files") as fetch:
         response = handler.lambda_handler(body, None)
-    return response, analyze, gltf, work["dir"]
+    return response, analyze, fetch, work["dir"]
 
 
 @pytest.mark.unit
@@ -155,10 +155,11 @@ class TestParseRequest:
         """renderViews comes from the template configuration (constructPipeline sets no render knob on the
         state) and the size gate is constructPipeline's, so the request has no field to hold them. The one
         render field is the state's renderImages switch: off when the pipeline's GenAI layer is off. The
-        other state field is bucketRegions, the asset buckets outside the deployment Region."""
+        other state fields are bucketRegions, the asset buckets outside the deployment Region, and assetId,
+        which confines the files the input references to its asset."""
         assert {field.name for field in dataclasses.fields(handler.Render3dRequest)} == {
             "analysis_manifest_s3_location", "input_s3_asset_file_path", "input_configuration_s3_location",
-            "file_class", "file_extension", "render_images", "bucket_regions"}
+            "file_class", "file_extension", "render_images", "bucket_regions", "asset_id"}
         assert handler.parse_request(_body()).render_images is True
         assert handler.parse_request(_body(renderImages=False)).render_images is False
         assert handler.parse_request(_body(renderImages="false")).render_images is False
@@ -229,7 +230,8 @@ class TestLambdaHandler:
 
         assert response == {**_body(), "analysisManifestS3Location": MANIFEST_URI, "renderBranch": "RENDER3D",
                             "fileClass": "cad", "renderSkipped": None, "renderImageCount": 2, "warningCount": 1}
-        assert analyze.call_args.args == (os.path.join(work_dir, "input", "pump.stp"), ".stp")
+        assert analyze.call_args.args == (
+            os.path.realpath(os.path.join(work_dir, "input", "asset", "pump.stp")), ".stp")
         assert analyze.call_args.kwargs == {"render": True, "n_views": 4, "work_dir": work_dir}, \
             "no configuration in the event: the spec's 4 stills; the point cap stays the renderer's own"
         assert not os.path.exists(work_dir), "the invocation directory is removed (warm /tmp persists)"
@@ -317,10 +319,20 @@ class TestLambdaHandler:
 
     def test_gltf_dependencies_are_fetched_beside_the_file(self, handler, tmp_path):
         fake = _FakeS3({("aux-bucket", MANIFEST_KEY): dict(PREWRITTEN)},
-                       {("asset-bucket", "xid/scene.gltf"): b"{}"})
-        _r, _a, gltf, work_dir = _invoke(handler, tmp_path, fake, _result(frames=1),
-                                         _body(inputS3AssetFilePath="s3://asset-bucket/xid/scene.gltf"))
-        gltf.assert_called_once_with("asset-bucket", "xid/scene.gltf", os.path.join(work_dir, "input"))
+                       {("asset-bucket", "xid/models/scene.gltf"): b"{}"})
+        _r, _a, fetch, work_dir = _invoke(handler, tmp_path, fake, _result(frames=1),
+                                          _body(inputS3AssetFilePath="s3://asset-bucket/xid/models/scene.gltf",
+                                                assetId="xid"))
+        # The input sits at its asset-relative path under the local root; references are confined to the
+        # asset's prefix, not to the input's directory.
+        local_root = os.path.join(work_dir, "input", "asset")
+        fetch.assert_called_once_with(
+            "asset-bucket", "xid/models/scene.gltf",
+            os.path.realpath(os.path.join(local_root, "models", "scene.gltf")), local_root, "xid/", ".gltf")
+
+    def test_a_file_with_no_references_fetches_nothing(self, handler, tmp_path):
+        _r, _a, fetch, _w = _invoke(handler, tmp_path, _fake(), _result(frames=1), _body())
+        fetch.assert_not_called()
 
     def test_the_state_bucket_regions_are_registered_before_the_download(self, handler, tmp_path):
         """The input file's bucket may be in another Region; the state's bucketRegions map reaches the S3

@@ -116,6 +116,24 @@ GLOBAL_DATABASE = "GLOBAL"
 # Page cap for the cross-database id-uniqueness lookup (see pipelineService.MAX_ID_LOOKUP_PAGES).
 MAX_ID_LOOKUP_PAGES = 50
 
+# Internal actions other VAMS Lambdas invoke directly. An event is dispatched to one only when it
+# carries the top-level INTERNAL_ACTION_KEY, a SYSTEM_USER lambdaCrossCall identity and no
+# requestContext. API Gateway builds every proxy event with a requestContext and cannot add top-level
+# keys, so no API route reaches these actions. Neither action changes anything a workflow's author
+# wrote: both regenerate the state machine from the stored step list and the pipelines' current
+# records.
+INTERNAL_ACTION_KEY = wr.INTERNAL_ACTION_KEY
+INTERNAL_ACTION_REFRESH_PIPELINE_REFERENCES = wr.INTERNAL_ACTION_REFRESH_PIPELINE_REFERENCES
+INTERNAL_ACTION_REDEPLOY_WORKFLOW = wr.INTERNAL_ACTION_REDEPLOY_WORKFLOW
+SYSTEM_USER = "SYSTEM_USER"
+
+# Page size for the referencing-workflow walk behind refreshPipelineReferences. The walk itself is
+# not capped: every workflow that references the changed pipeline is redeployed.
+REFERENCING_WORKFLOW_PAGE_SIZE = 200
+
+# How many times a redeploy re-reads the workflow after another writer redeployed it first.
+MAX_REDEPLOY_WRITE_ATTEMPTS = 3
+
 
 def _workflow_table():
     return dynamodb.Table(workflow_table_name)
@@ -185,10 +203,13 @@ def _enforce_workflow(claims_and_roles, item, action):
 # Pipeline resolution (for authorization, save-validation, and ASL generation)
 #######################
 
-def _get_pipeline_record(pipeline_database_id, pipeline_id):
-    return _pipeline_table().get_item(
-        Key={"databaseId": pipeline_database_id, "pipelineId": pipeline_id}
-    ).get("Item")
+def _get_pipeline_record(pipeline_database_id, pipeline_id, consistent_read=False):
+    """The pipeline row, or None. `consistent_read` makes the read strongly consistent, for a caller
+    that must see a write made just before it was invoked."""
+    kwargs = {"Key": {"databaseId": pipeline_database_id, "pipelineId": pipeline_id}}
+    if consistent_read:
+        kwargs["ConsistentRead"] = True
+    return _pipeline_table().get_item(**kwargs).get("Item")
 
 
 def _resolve_referenced_pipelines(workflow_database_id, specified_pipelines, claims_and_roles):
@@ -284,19 +305,24 @@ def _item_to_response(item, triggers=None, warnings=None, execution_count=None,
         createdBy=item.get("createdBy", ""),
         modifiedBy=item.get("modifiedBy", ""),
         schemaVersion=item.get("schemaVersion", 1),
+        deploymentStale=item.get("deploymentStale") or None,
+        deploymentStaleReason=(item.get("deploymentStaleReason") or None)
+        if item.get("deploymentStale") else None,
         triggers=triggers,
         warnings=warnings,
         executionCount=execution_count,
     )
 
 
-def get_workflow_item(database_id, workflow_id):
-    return _workflow_table().get_item(
-        Key={"databaseId": database_id, "workflowId": workflow_id}
-    ).get("Item")
+def get_workflow_item(database_id, workflow_id, consistent_read=False):
+    """The workflow row, or None. `consistent_read` makes the read strongly consistent."""
+    kwargs = {"Key": {"databaseId": database_id, "workflowId": workflow_id}}
+    if consistent_read:
+        kwargs["ConsistentRead"] = True
+    return _workflow_table().get_item(**kwargs).get("Item")
 
 
-def _write_workflow_updates(database_id, workflow_id, updates):
+def _write_workflow_updates(database_id, workflow_id, updates, condition=None):
     """SET only the attributes a request changed on an existing workflow row.
 
     Update and archive both read the row, mutate it in memory, and can then spend seconds elsewhere
@@ -306,24 +332,234 @@ def _write_workflow_updates(database_id, workflow_id, updates):
     reverted by a concurrent archive while its freshly deployed state machine stays deployed. A
     targeted SET touches only the attributes the caller supplied, so the two writes merge instead of
     overwriting each other; the existence condition keeps update_item from creating a row that is no
-    longer there.
+    longer there. `condition` is ANDed onto it.
 
-    Returns False when the row no longer exists (nothing was written)."""
+    Returns False when the condition fails (nothing was written)."""
     keys_map, values_map, expr = to_update_expr(updates)
+    write_condition = Attr("workflowId").exists()
+    if condition is not None:
+        write_condition = write_condition & condition
     try:
         _workflow_table().update_item(
             Key={"databaseId": database_id, "workflowId": workflow_id},
             UpdateExpression=expr,
             ExpressionAttributeNames=keys_map,
             ExpressionAttributeValues=values_map,
-            ConditionExpression=Attr("workflowId").exists(),
+            ConditionExpression=write_condition,
         )
         return True
     except botocore.exceptions.ClientError as e:
         if e.response.get("Error", {}).get("Code", "") != "ConditionalCheckFailedException":
             raise
-        logger.info(f"Workflow {database_id}:{workflow_id} no longer exists; nothing written")
+        logger.info(f"Workflow {database_id}:{workflow_id} changed or no longer exists; "
+                    "nothing written")
         return False
+
+
+#######################
+# State machine deployment
+#######################
+
+def _ref_identity(ref):
+    """(pipeline composite, jobName) for a request ref model or a stored ref dict."""
+    if isinstance(ref, dict):
+        composite = (ref.get("pipelineDatabaseId:pipelineId")
+                     or f"{ref.get('pipelineDatabaseId', '')}:{ref.get('pipelineId', '')}")
+        return composite, ref.get("jobName", "") or ""
+    return None, getattr(ref, "jobName", "") or ""
+
+
+def _same_steps(stored_refs, ref_records):
+    """Whether ref_records are the stored workflow's steps, in the same order with the same job
+    names — the case in which a redeploy keeps the stored jobNames instead of generating new ones."""
+    stored = [_ref_identity(ref) for ref in stored_refs or []]
+    current = [(f"{rec.get('databaseId', '')}:{rec.get('pipelineId', '')}", _ref_identity(ref)[1])
+               for ref, rec in ref_records]
+    return bool(stored) and stored == current
+
+
+def _deploy_fields(database_id, workflow_id, ref_records, item=None):
+    """Deploy a workflow's state machine from (ref, pipeline record) pairs and return the workflow
+    attributes that describe the deployment. Every path that (re)deploys a workflow — create, update,
+    a pipeline-change refresh, and the launch-time check — goes through here, so the state machine,
+    the version a launch starts on, the job names and the per-pipeline fingerprints are always
+    written together.
+
+    The stored jobNames are kept when the steps are unchanged, so an execution that read them just
+    before a redeploy still reconstructs the output prefixes the definition uses. Raises on a deploy
+    failure."""
+    item = item or {}
+    stored_job_names = (item.get("jobNames")
+                        if _same_steps(item.get("specifiedPipelines"), ref_records) else None)
+    workflow_arn, job_names, version_arn = workflowAsl.deploy_state_machine(
+        database_id, workflow_id, ref_records, existing_arn=item.get("workflow_arn", ""),
+        job_names=stored_job_names)
+    return {
+        "workflow_arn": workflow_arn or item.get("workflow_arn", ""),
+        "workflowVersionArn": version_arn or "",
+        "jobNames": job_names or [],
+        "pipelineFingerprints": workflowAsl.workflow_pipeline_fingerprints(
+            [rec for _ref, rec in ref_records]),
+        "deploymentRevision": int(item.get("deploymentRevision") or 0) + 1,
+        "deploymentStale": False,
+        "deploymentStaleReason": "",
+    }
+
+
+def deployment_is_stale(item, pipeline_records):
+    """True when the workflow's deployed definition was not built from these pipeline records: no
+    published version is recorded (a workflow deployed before versions were published), or a stored
+    per-pipeline fingerprint differs from the record's current one (a missing map counts as
+    different). A workflow with no steps has nothing deployed and is never stale."""
+    if not (item.get("specifiedPipelines") or []):
+        return False
+    return not workflowAsl.deployment_matches(item, pipeline_records)
+
+
+def _align_snapshot_records(item, pipeline_records):
+    """Pair each stored step with its pipeline record, in workflow order. Returns None when any
+    step's pipeline record is absent, since a definition cannot be built without it."""
+    by_composite = {f"{rec.get('databaseId', '')}:{rec.get('pipelineId', '')}": rec
+                    for rec in pipeline_records or []}
+    pairs = []
+    for ref in item.get("specifiedPipelines", []) or []:
+        composite, _job = _ref_identity(ref)
+        if composite not in by_composite:
+            return None
+        pairs.append((ref, by_composite[composite]))
+    return pairs
+
+
+def _deploy_failure_reason(error):
+    """A short reason recorded on a workflow whose redeploy failed. A ValueError from the ASL
+    generator already carries a caller-facing message; anything else is named by its error code."""
+    if isinstance(error, ValueError):
+        return str(error)[:500]
+    code = getattr(error, "response", {}).get("Error", {}).get("Code") or type(error).__name__
+    return f"The state machine could not be redeployed ({code})."
+
+
+def _mark_deployment_stale(database_id, workflow_id, reason):
+    """Record that a workflow's deployed definition no longer matches its pipelines. Best-effort:
+    the launch-time check refuses to run a stale definition either way."""
+    try:
+        _write_workflow_updates(database_id, workflow_id, {
+            "deploymentStale": True,
+            "deploymentStaleReason": reason,
+            "deploymentStaleDate": pr.iso_now(),
+        })
+    except Exception:
+        logger.exception(f"Could not record the stale deployment of {database_id}:{workflow_id}")
+
+
+def _deployment_view(item):
+    """The deployment attributes the launch-time check needs back from a redeploy."""
+    return {
+        "workflow_arn": item.get("workflow_arn", ""),
+        "workflowVersionArn": item.get("workflowVersionArn", ""),
+        "jobNames": list(item.get("jobNames") or []),
+        "pipelineFingerprints": dict(item.get("pipelineFingerprints") or {}),
+    }
+
+
+def redeploy_workflow(database_id, workflow_id, reason=""):
+    """Redeploy one workflow from its stored steps and its pipelines' current records when the
+    deployed definition is stale. Returns {"outcome": current|redeployed|missing|empty|failed, ...};
+    current and redeployed carry the deployment view.
+
+    Both reads are strongly consistent. A pipeline save invokes this path right after its write, and
+    the re-read after a lost conditional write must see the other writer's deployment; an eventually
+    consistent read in either place can return the previous row and conclude nothing changed.
+
+    The write is conditional on the deploymentRevision this call read, so it never replaces a
+    deployment another writer recorded in the meantime; the workflow is then re-read and re-checked.
+    A failure is recorded on the workflow (deploymentStale + reason) rather than raised."""
+    for _attempt in range(MAX_REDEPLOY_WRITE_ATTEMPTS):
+        item = get_workflow_item(database_id, workflow_id, consistent_read=True)
+        if not item:
+            return {"outcome": "missing"}
+        if not (item.get("specifiedPipelines") or []):
+            return {"outcome": "empty"}
+        ref_records = _align_snapshot_records(
+            item, _resolve_snapshot_pipeline_records(item, consistent_read=True))
+        if ref_records is None:
+            failure = "A referenced pipeline no longer exists, so the state machine was not redeployed."
+            _mark_deployment_stale(database_id, workflow_id, failure)
+            return {"outcome": "failed", "reason": failure}
+        if not deployment_is_stale(item, [rec for _ref, rec in ref_records]):
+            return {"outcome": "current", **_deployment_view(item)}
+        try:
+            fields = _deploy_fields(database_id, workflow_id, ref_records, item)
+        except Exception as e:
+            logger.exception(f"Redeploy of workflow {database_id}:{workflow_id} failed ({reason})")
+            failure = _deploy_failure_reason(e)
+            _mark_deployment_stale(database_id, workflow_id, failure)
+            return {"outcome": "failed", "reason": failure}
+        read_revision = item.get("deploymentRevision")
+        revision_unchanged = (Attr("deploymentRevision").eq(read_revision)
+                              if read_revision is not None
+                              else Attr("deploymentRevision").not_exists())
+        if _write_workflow_updates(database_id, workflow_id, fields, condition=revision_unchanged):
+            logger.info(f"Redeployed workflow {database_id}:{workflow_id} ({reason})")
+            return {"outcome": "redeployed", **_deployment_view(fields)}
+    logger.warning(f"Workflow {database_id}:{workflow_id} kept changing during its redeploy")
+    return {"outcome": "failed", "reason": "The workflow changed repeatedly during its redeploy."}
+
+
+def _referencing_workflow_keys(pipeline_database_id, pipeline_id):
+    """(databaseId, workflowId) of every non-archived workflow whose steps include this pipeline.
+
+    Pages the constant-partition by-date GSI to exhaustion with only the match attributes projected.
+    Unlike the pipeline-save warning lookup this walk has no cap: each workflow it misses would keep
+    its stale definition until its next launch."""
+    composite = pr.pipeline_composite_key(pipeline_database_id, pipeline_id)
+    keys = []
+    kwargs = {
+        "IndexName": "WorkflowsByDateGSI",
+        "KeyConditionExpression": Key("allListPartition").eq(wr.ALL_WORKFLOWS_LIST_PARTITION),
+        "ProjectionExpression": "databaseId, workflowId, specifiedPipelines, #archived",
+        "ExpressionAttributeNames": {"#archived": "archived"},
+        "Limit": REFERENCING_WORKFLOW_PAGE_SIZE,
+    }
+    table = _workflow_table()
+    while True:
+        response = table.query(**kwargs) or {}
+        for workflow in response.get("Items", []) or []:
+            if workflow.get("archived"):
+                continue
+            if any(_ref_identity(ref or {})[0] == composite
+                   for ref in workflow.get("specifiedPipelines", []) or []):
+                keys.append((workflow.get("databaseId", ""), workflow.get("workflowId", "")))
+        if "LastEvaluatedKey" not in response:
+            return keys
+        kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+
+
+def refresh_pipeline_references(pipeline_database_id, pipeline_id, event=None):
+    """Redeploy every workflow that references a pipeline whose definition-relevant settings changed.
+    The target list is derived here from the stored workflows; the caller names only the pipeline.
+    One workflow's failure is recorded on it and does not stop the walk."""
+    composite = pr.pipeline_composite_key(pipeline_database_id, pipeline_id)
+    keys = _referencing_workflow_keys(pipeline_database_id, pipeline_id)
+    outcomes = {}
+    for database_id, workflow_id in keys:
+        try:
+            outcome = redeploy_workflow(
+                database_id, workflow_id, reason=f"pipeline {composite} changed")["outcome"]
+        except Exception:
+            logger.exception(f"Refresh of workflow {database_id}:{workflow_id} failed")
+            outcome = "failed"
+        outcomes[outcome] = outcomes.get(outcome, 0) + 1
+    logger.info(f"Refreshed {len(keys)} workflow(s) referencing {composite}: {outcomes}")
+    # AUDIT LOG: system-initiated redeploy of the workflows referencing a changed pipeline.
+    log_actions(event or {}, "workflowPipelineRefresh", {
+        "pipelineDatabaseId": pipeline_database_id,
+        "pipelineId": pipeline_id,
+        "workflowCount": len(keys),
+        "outcomes": outcomes,
+        "operation": "refresh",
+    })
+    return {"workflowCount": len(keys), "outcomes": outcomes}
 
 
 def find_workflow_id_owner(workflow_id, excluding_database_id=None):
@@ -622,10 +858,7 @@ def create_workflow(database_id, request, username, claims_and_roles, event=None
     # the ASL's uuid-prefixed per-pipeline output-path job names; persist them on the record so the
     # execute handler reconstructs the identical output prefixes (parity with V1's jobNames). The
     # per-ref jobName (the stable ASL state name) is left untouched.
-    workflow_arn, job_names = workflowAsl.deploy_state_machine(
-        database_id, workflow_id, ref_records, existing_arn="")
-    record["workflow_arn"] = workflow_arn or ""
-    record["jobNames"] = job_names or []
+    record.update(_deploy_fields(database_id, workflow_id, ref_records))
 
     _workflow_table().put_item(Item=record)
     # AUDIT LOG: workflow created (after the write, so a failed write is never audited as a success).
@@ -659,6 +892,10 @@ def update_workflow(database_id, workflow_id, request, username, claims_and_role
             logger.info(f"Update of system workflow {database_id}:{workflow_id} refused: "
                         f"'{disallowed}' is read-only")
             return validation_error(body={"message": SYSTEM_WORKFLOW_READONLY_MESSAGE}, event=event)
+
+    # The deployment as stored, before this request's changes are merged into `item`: the redeploy
+    # below compares its steps with the new ones to decide whether the stored job names still apply.
+    stored_deployment = dict(item)
 
     # The attributes this request changes are collected separately from the row that was read: only
     # they are written (see _write_workflow_updates), while `item` carries the merged view the
@@ -725,11 +962,25 @@ def update_workflow(database_id, workflow_id, request, username, claims_and_role
     # the record so the execute handler's output-path reconstruction stays in parity (the per-ref
     # stable ASL state name is left untouched).
     if ref_records is not None:
-        workflow_arn, job_names = workflowAsl.deploy_state_machine(
-            database_id, workflow_id, ref_records, existing_arn=item.get("workflow_arn", ""))
-        updates["workflow_arn"] = workflow_arn or item.get("workflow_arn", "")
-        updates["jobNames"] = job_names or []
+        updates.update(_deploy_fields(database_id, workflow_id, ref_records, stored_deployment))
         item.update(updates)
+    else:
+        # An edit that leaves the step list alone still redeploys when the deployed definition no
+        # longer matches the pipelines' current settings, so saving a workflow is always enough to
+        # bring it up to date. A redeploy failure does not block the edit: it is recorded on the
+        # workflow and reported as a warning, and the launch-time check refuses the stale definition.
+        snapshot_records = _align_snapshot_records(item, pipeline_records)
+        if snapshot_records and deployment_is_stale(item, pipeline_records):
+            try:
+                updates.update(_deploy_fields(
+                    database_id, workflow_id, snapshot_records, stored_deployment))
+            except Exception as e:
+                logger.exception(f"Redeploy of workflow {database_id}:{workflow_id} on update failed")
+                failure = _deploy_failure_reason(e)
+                updates.update({"deploymentStale": True, "deploymentStaleReason": failure,
+                                "deploymentStaleDate": pr.iso_now()})
+                warnings = list(warnings) + [failure]
+            item.update(updates)
 
     if not _write_workflow_updates(database_id, workflow_id, updates):
         return validation_error(status_code=404, body={"message": "Workflow not found"})
@@ -791,13 +1042,15 @@ def _ordered_pipeline_system_configs(workflow_item, configs_by_key):
     ]
 
 
-def _resolve_snapshot_pipeline_records(workflow_item):
+def _resolve_snapshot_pipeline_records(workflow_item, consistent_read=False):
     """Fetch the pipeline records referenced by a stored workflow's specifiedPipelines snapshot
     (best-effort; skips any that no longer exist). The full record (incl. current enabled/archived
-    state) is returned so save-validation can flag a pipeline archived/disabled after it was added."""
+    state) is returned so save-validation can flag a pipeline archived/disabled after it was added.
+    `consistent_read` is passed to each pipeline read."""
     records = []
     for ref in workflow_item.get("specifiedPipelines", []) or []:
-        rec = _get_pipeline_record(ref.get("pipelineDatabaseId", ""), ref.get("pipelineId", ""))
+        rec = _get_pipeline_record(ref.get("pipelineDatabaseId", ""), ref.get("pipelineId", ""),
+                                   consistent_read=consistent_read)
         if rec:
             records.append(rec)
     return records
@@ -909,7 +1162,65 @@ def _validate_path_ids(path_parameters):
     return None
 
 
+def _is_internal_action_event(event):
+    return isinstance(event, dict) and INTERNAL_ACTION_KEY in event
+
+
+def _validated_internal_ids(payload, database_field, id_field):
+    """(databaseId, entityId) from an internal-action payload, or None when either fails the ID
+    validator."""
+    database_id = payload.get(database_field)
+    entity_id = payload.get(id_field)
+    (valid, _message) = validate({
+        database_field: {"value": database_id, "validator": "ID", "allowGlobalKeyword": True},
+        id_field: {"value": entity_id, "validator": "ID"},
+    })
+    return (database_id, entity_id) if valid else None
+
+
+def handle_internal_action(event):
+    """Serve an internal action invoked by another VAMS Lambda (see INTERNAL_ACTION_KEY). Rejected
+    unless the event is a SYSTEM_USER cross-call with no API Gateway requestContext."""
+    cross_call = event.get("lambdaCrossCall") if isinstance(event.get("lambdaCrossCall"), dict) else {}
+    if "requestContext" in event or cross_call.get("userName") != SYSTEM_USER:
+        logger.warning("Rejected an internal action that is not a SYSTEM_USER cross-call")
+        return authorization_error()
+    action = event.get(INTERNAL_ACTION_KEY)
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+
+    if action == INTERNAL_ACTION_REFRESH_PIPELINE_REFERENCES:
+        ids = _validated_internal_ids(payload, "pipelineDatabaseId", "pipelineId")
+        if not ids:
+            return validation_error(body={"message": "Invalid pipeline identifier."})
+        return success(body={"message": refresh_pipeline_references(ids[0], ids[1], event)})
+
+    if action == INTERNAL_ACTION_REDEPLOY_WORKFLOW:
+        ids = _validated_internal_ids(payload, "workflowDatabaseId", "workflowId")
+        if not ids:
+            return validation_error(body={"message": "Invalid workflow identifier."})
+        result = redeploy_workflow(ids[0], ids[1], reason="launch-time check")
+        if result.get("outcome") == "redeployed":
+            # AUDIT LOG: system-initiated redeploy of one workflow before it was launched.
+            log_actions(event, "workflowRedeploy", {
+                "databaseId": ids[0], "workflowId": ids[1], "operation": "redeploy"})
+        return success(body={"message": result})
+
+    logger.warning(f"Unknown internal action: {action}")
+    return validation_error(body={"message": "Unknown internal action."})
+
+
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    if _is_internal_action_event(event):
+        try:
+            return handle_internal_action(event)
+        except Exception as e:
+            logger.exception(f"Internal action failed: {e}")
+            # The refresh is invoked asynchronously, so raising hands it to Lambda's asynchronous
+            # retry. Each workflow's own failure is caught inside the walk; what reaches here is the
+            # walk itself failing, and a retry skips the workflows already brought up to date.
+            if event.get(INTERNAL_ACTION_KEY) == INTERNAL_ACTION_REFRESH_PIPELINE_REFERENCES:
+                raise
+            return internal_error()
     normalize_event(event)
     logger.info(event)
     try:

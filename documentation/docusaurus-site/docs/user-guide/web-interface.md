@@ -224,6 +224,7 @@ VAMS uses hash-based routing (URLs contain `#/`), which ensures compatibility ac
 | File at version           | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>?version=<fileVersionId>`       |
 | File at asset version     | `https://<VAMS_WEBSITE>/#/databases/<databaseId>/assets/<assetId>/file/<encodedFilePath>?assetVersion=<assetVersionId>` |
 | Upload page               | `https://<VAMS_WEBSITE>/#/upload/`                                                                                      |
+| Upload to a database      | `https://<VAMS_WEBSITE>/#/upload/<databaseId>`                                                                          |
 
 ### File Path Encoding
 

@@ -102,7 +102,7 @@ def _call(event, item, obj=True, tokens=("user1",), triggers=None):
         triggers = MagicMock()
         triggers.query.return_value = {"Items": []}
     asl = MagicMock()
-    asl.deploy_state_machine.return_value = ("arn:test:states:sm", ["job1"])
+    asl.deploy_state_machine.return_value = ("arn:test:states:sm", ["job1"], "arn:test:states:sm:1")
     resolved = (None, [(SpecifiedPipelineInput(pipelineId="pipe1", pipelineDatabaseId="GLOBAL"),
                         dict(PIPELINE_REC))])
     with patch(f"{MOD}.CasbinEnforcer", return_value=_enforcer(obj=obj)), \

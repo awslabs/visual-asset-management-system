@@ -20,13 +20,13 @@ logger = get_logger()
 # Default rendering parameters
 DEFAULT_N_FRAMES = 36
 DEFAULT_RESOLUTION = (800, 600)
-POINT_SIZE = 2.0
 
 # Still frames for image analysis: a few views at fixed angles, square, bounded by the number of
 # images one analysis request may carry.
 DEFAULT_STILL_VIEWS = 4
 MAX_STILL_VIEWS = 8
 DEFAULT_STILL_RESOLUTION = (768, 768)
+POINT_SIZE = 2.0
 
 # Background color for rendering. Mid-gray minimizes visible halos on
 # anti-aliased edges when composited over both light and dark backgrounds,
@@ -41,35 +41,106 @@ _FOCUS_PERCENTILE_HI = 98
 # 25 degrees is the industry standard for 3D product thumbnails.
 _CAMERA_ELEVATION_DEG = 25
 
+# Orbit angle of a still preview: the front three-quarter view. Orbit frame i is at
+# i * 360 / n_frames degrees, so the middle frame of an orbit shows the back of the model.
+STILL_VIEW_DEG = 45.0
+
+# Splats are drawn as flat, unlit discs of radius ``splat_radius`` (the splat handler sizes them to the
+# coverage of each splat's Gaussian). VTK's default splat shader darkens a disc toward its edge, which
+# rings every splat in a dark outline; this one only clips the quad to the disc.
+SPLAT_SCALE_FACTOR = 1.0
+SPLAT_DISC_SHADER = (
+    "//VTK::Color::Impl\n"
+    "  float dist2 = dot(offsetVCVSOutput.xy, offsetVCVSOutput.xy);\n"
+    "  if (dist2 > 1.0) { discard; }\n"
+)
+
+
+def is_point_cloud(pv_data) -> bool:
+    """True when the data has no surface cells: no cells at all, or vertex cells only.
+
+    A scene that mixes meshes and points holds both vertex and face cells, so it is not a point
+    cloud and renders through the mesh path, points included.
+    """
+    n_cells = pv_data.n_cells
+    if n_cells == 0:
+        return True
+    n_verts = getattr(pv_data, "n_verts", None)
+    if isinstance(n_verts, (int, np.integer)):
+        return int(n_verts) == n_cells
+    return n_cells == pv_data.n_points
+
+
+def still_view_frame_index(n_frames: int) -> int:
+    """The orbit frame nearest the still-preview angle, for a still taken from an orbit."""
+    if n_frames <= 1:
+        return 0
+    return int(np.floor(STILL_VIEW_DEG / (360.0 / n_frames) + 0.5)) % n_frames
+
+
+def _resolve_full_bounds(pv_data, use_full_bounds):
+    """Frame a mesh on its full bounds and a point cloud on its percentile bounds unless told.
+
+    Percentile framing exists to ignore stray points in scans and splats; on a mesh it crops the
+    coarser parts of a model whose vertices concentrate in a finely detailed region.
+    """
+    if use_full_bounds is None:
+        return not is_point_cloud(pv_data)
+    return bool(use_full_bounds)
+
 
 def generate_rotating_frames(
     pv_data: pv.PolyData,
     n_frames: int = DEFAULT_N_FRAMES,
     resolution: tuple = DEFAULT_RESOLUTION,
-    use_full_bounds: bool = False,
+    use_full_bounds=None,
 ) -> list:
     """
     Render a rotating sequence of frames around the Y-axis of the given PyVista data.
-    Returns RGBA frames with transparent background.
+    Returns RGBA frames with transparent background. ``use_full_bounds`` None frames a mesh on its
+    full bounds and a point cloud on its percentile bounds.
     """
     logger.info(f"Generating {n_frames} rotating frames at {resolution}")
 
     plotter = pv.Plotter(off_screen=True, window_size=resolution)
     plotter.set_background(_BG_COLOR)
-    _add_geometry(plotter, pv_data)
+
+    if is_point_cloud(pv_data):
+        _add_point_cloud(plotter, pv_data)
+    else:
+        _add_mesh(plotter, pv_data)
 
     focal_point, radius, elevation = _compute_camera_framing(
-        pv_data, use_full_bounds=use_full_bounds, resolution=resolution
+        pv_data, use_full_bounds=_resolve_full_bounds(pv_data, use_full_bounds), resolution=resolution
     )
-    max_extent = _max_extent(pv_data, focal_point)
+
+    # Compute stable clipping range from the actual max vertex distance
+    # to the focal point. This is more accurate than the bounding box diagonal
+    # because it accounts for corner vertices that are farther from center.
+    # Using per-vertex distance ensures no geometry gets near-plane clipped
+    # at any orbit angle (critical for USD models with tighter framing).
+    max_extent = float(np.max(np.linalg.norm(pv_data.points - focal_point, axis=1)))
 
     frames = []
     for i in range(n_frames):
-        _position_camera(plotter, focal_point, radius, elevation, max_extent, i * (360.0 / n_frames))
+        angle_rad = np.radians(i * (360.0 / n_frames))
+
+        cam_x = focal_point[0] + radius * np.cos(angle_rad)
+        cam_z = focal_point[2] + radius * np.sin(angle_rad)
+        cam_y = focal_point[1] + elevation
+
+        cam_pos = np.array([cam_x, cam_y, cam_z])
+        cam_distance = float(np.linalg.norm(cam_pos - focal_point))
+        near_clip = max(cam_distance - max_extent * 1.1, cam_distance * 0.001)
+        far_clip = cam_distance + max_extent * 1.5
+
+        plotter.camera.position = (cam_x, cam_y, cam_z)
+        plotter.camera.focal_point = tuple(focal_point)
+        plotter.camera.up = (0.0, 1.0, 0.0)
+        plotter.camera.clipping_range = (near_clip, far_clip)
+
         plotter.render()
-        img = plotter.screenshot(return_img=True)
-        img = _add_alpha_from_depth(plotter, img)
-        frames.append(img)
+        frames.append(_capture_rgba(plotter))
 
     plotter.close()
     logger.info(f"Generated {len(frames)} frames")
@@ -79,90 +150,29 @@ def generate_rotating_frames(
 def generate_static_frame(
     pv_data: pv.PolyData,
     resolution: tuple = DEFAULT_RESOLUTION,
-    use_full_bounds: bool = False,
+    use_full_bounds=None,
 ) -> np.ndarray:
     """
-    Render a single static frame of the given PyVista data at a 45 degree orbit angle.
-    Returns RGBA image with transparent background.
+    Render a single static frame of the given PyVista data from the front three-quarter view
+    (STILL_VIEW_DEG). Returns RGBA image with transparent background.
     """
     logger.info(f"Generating static frame at {resolution}")
 
     plotter = pv.Plotter(off_screen=True, window_size=resolution)
     plotter.set_background(_BG_COLOR)
-    _add_geometry(plotter, pv_data)
 
-    focal_point, radius, elevation = _compute_camera_framing(
-        pv_data, use_full_bounds=use_full_bounds, resolution=resolution
-    )
-    max_extent = _max_extent(pv_data, focal_point)
-
-    _position_camera(plotter, focal_point, radius, elevation, max_extent, 45.0)
-    plotter.render()
-    img = plotter.screenshot(return_img=True)
-    img = _add_alpha_from_depth(plotter, img)
-    plotter.close()
-
-    return img
-
-
-def generate_still_frames(
-    pv_data: pv.PolyData,
-    n_views: int = DEFAULT_STILL_VIEWS,
-    resolution: tuple = DEFAULT_STILL_RESOLUTION,
-    use_full_bounds: bool = False,
-    start_angle_deg: float = 45.0,
-) -> list:
-    """
-    Render ``n_views`` still frames at evenly spaced orbit angles starting at ``start_angle_deg``.
-    Returns RGB frames (no alpha) on the renderer's neutral background: these are analysis inputs
-    rather than thumbnails, so the depth-mask transparency step is not applied. ``n_views`` is
-    clamped to [1, MAX_STILL_VIEWS].
-    """
-    n_views = max(1, min(int(n_views), MAX_STILL_VIEWS))
-    logger.info(f"Generating {n_views} still frames at {resolution}")
-
-    plotter = pv.Plotter(off_screen=True, window_size=resolution)
-    plotter.set_background(_BG_COLOR)
-    _add_geometry(plotter, pv_data)
-
-    focal_point, radius, elevation = _compute_camera_framing(
-        pv_data, use_full_bounds=use_full_bounds, resolution=resolution
-    )
-    max_extent = _max_extent(pv_data, focal_point)
-
-    frames = []
-    for i in range(n_views):
-        angle_deg = start_angle_deg + i * (360.0 / n_views)
-        _position_camera(plotter, focal_point, radius, elevation, max_extent, angle_deg)
-        plotter.render()
-        img = plotter.screenshot(return_img=True)
-        frames.append(np.ascontiguousarray(np.asarray(img)[:, :, :3], dtype=np.uint8))
-
-    plotter.close()
-    logger.info(f"Generated {len(frames)} still frames")
-    return frames
-
-
-def _add_geometry(plotter: pv.Plotter, pv_data: pv.PolyData):
-    """Add the data as a point cloud or a mesh, by whether it carries cells beyond its vertices."""
-    is_point_cloud = pv_data.n_cells == 0 or pv_data.n_cells == pv_data.n_points
-    if is_point_cloud:
+    if is_point_cloud(pv_data):
         _add_point_cloud(plotter, pv_data)
     else:
         _add_mesh(plotter, pv_data)
 
+    focal_point, radius, elevation = _compute_camera_framing(
+        pv_data, use_full_bounds=_resolve_full_bounds(pv_data, use_full_bounds), resolution=resolution
+    )
 
-def _max_extent(pv_data, focal_point) -> float:
-    """The farthest vertex distance from the focal point; the clipping range is derived from it so no
-    geometry is near-plane clipped at any orbit angle."""
-    return float(np.max(np.linalg.norm(pv_data.points - focal_point, axis=1)))
+    max_extent = float(np.max(np.linalg.norm(pv_data.points - focal_point, axis=1)))
 
-
-def _position_camera(plotter, focal_point, radius, elevation, max_extent, angle_deg):
-    """Place the camera on the orbit at ``angle_deg`` (around Y), looking at the focal point, with a
-    clipping range that covers the whole model from that position."""
-    angle_rad = np.radians(angle_deg)
-
+    angle_rad = np.radians(STILL_VIEW_DEG)
     cam_x = focal_point[0] + radius * np.cos(angle_rad)
     cam_z = focal_point[2] + radius * np.sin(angle_rad)
     cam_y = focal_point[1] + elevation
@@ -177,11 +187,70 @@ def _position_camera(plotter, focal_point, radius, elevation, max_extent, angle_
     plotter.camera.up = (0.0, 1.0, 0.0)
     plotter.camera.clipping_range = (near_clip, far_clip)
 
+    plotter.render()
+    img = _capture_rgba(plotter)
+    plotter.close()
+
+    return img
+
+
+def generate_still_frames(
+    pv_data: pv.PolyData,
+    n_views: int = DEFAULT_STILL_VIEWS,
+    resolution: tuple = DEFAULT_STILL_RESOLUTION,
+    use_full_bounds=None,
+    start_angle_deg: float = STILL_VIEW_DEG,
+) -> list:
+    """
+    Render ``n_views`` still frames at evenly spaced orbit angles starting at ``start_angle_deg``.
+    Returns RGB frames (no alpha) on the renderer's neutral background: these are analysis inputs
+    rather than thumbnails, so the depth-mask transparency step is not applied. ``n_views`` is
+    clamped to [1, MAX_STILL_VIEWS]; ``use_full_bounds`` None frames a mesh on its full bounds and a
+    point cloud on its percentile bounds.
+    """
+    n_views = max(1, min(int(n_views), MAX_STILL_VIEWS))
+    logger.info(f"Generating {n_views} still frames at {resolution}")
+
+    plotter = pv.Plotter(off_screen=True, window_size=resolution)
+    plotter.set_background(_BG_COLOR)
+    if is_point_cloud(pv_data):
+        _add_point_cloud(plotter, pv_data)
+    else:
+        _add_mesh(plotter, pv_data)
+
+    focal_point, radius, elevation = _compute_camera_framing(
+        pv_data, use_full_bounds=_resolve_full_bounds(pv_data, use_full_bounds), resolution=resolution
+    )
+    max_extent = float(np.max(np.linalg.norm(pv_data.points - focal_point, axis=1)))
+
+    frames = []
+    for i in range(n_views):
+        angle_rad = np.radians(start_angle_deg + i * (360.0 / n_views))
+        cam_x = focal_point[0] + radius * np.cos(angle_rad)
+        cam_z = focal_point[2] + radius * np.sin(angle_rad)
+        cam_y = focal_point[1] + elevation
+        cam_distance = float(np.linalg.norm(np.array([cam_x, cam_y, cam_z]) - focal_point))
+        plotter.camera.position = (cam_x, cam_y, cam_z)
+        plotter.camera.focal_point = tuple(focal_point)
+        plotter.camera.up = (0.0, 1.0, 0.0)
+        plotter.camera.clipping_range = (
+            max(cam_distance - max_extent * 1.1, cam_distance * 0.001),
+            cam_distance + max_extent * 1.5,
+        )
+        plotter.render()
+        img = plotter.screenshot(return_img=True)
+        frames.append(np.ascontiguousarray(np.asarray(img)[:, :, :3], dtype=np.uint8))
+
+    plotter.close()
+    logger.info(f"Generated {len(frames)} still frames")
+    return frames
+
 
 def _add_mesh(plotter: pv.Plotter, pv_data: pv.PolyData):
     """Add a mesh to the plotter with appropriate styling."""
     texture = getattr(pv_data, '_preview_texture', None)
-    has_colors = "RGB" in pv_data.point_data
+    # Per-point colours, or per-cell colours on a mesh decimated to the triangle budget.
+    has_colors = "RGB" in pv_data.point_data or "RGB" in pv_data.cell_data
 
     if texture is not None:
         logger.info("Rendering with UV texture mapping")
@@ -200,6 +269,7 @@ def _add_mesh(plotter: pv.Plotter, pv_data: pv.PolyData):
             rgb=True,
             smooth_shading=True,
             show_edges=False,
+            point_size=POINT_SIZE,  # vertex cells of a scene that mixes meshes and points
         )
     else:
         plotter.add_mesh(
@@ -217,6 +287,24 @@ def _add_mesh(plotter: pv.Plotter, pv_data: pv.PolyData):
 def _add_point_cloud(plotter: pv.Plotter, pv_data: pv.PolyData):
     """Add a point cloud to the plotter with appropriate styling."""
     has_colors = "RGB" in pv_data.point_data
+
+    if "splat_radius" in pv_data.point_data:
+        # Gaussian splats: one screen-aligned disc per splat, of the radius the splat handler set.
+        actor = plotter.add_mesh(
+            pv_data,
+            scalars="RGB",
+            rgb=True,
+            style="points_gaussian",
+            emissive=False,
+        )
+        actor.mapper.SetScaleArray("splat_radius")
+        actor.mapper.SetScaleFactor(SPLAT_SCALE_FACTOR)
+        actor.mapper.SetSplatShaderCode(SPLAT_DISC_SHADER)
+        # The colour is the splat's own radiance: no lighting, and fully opaque discs (pyvista sets
+        # 0.9999 for its own shader, which this one replaces).
+        actor.prop.lighting = False
+        actor.prop.opacity = 1.0
+        return
 
     if has_colors:
         plotter.add_mesh(
@@ -237,37 +325,16 @@ def _add_point_cloud(plotter: pv.Plotter, pv_data: pv.PolyData):
         )
 
 
-def _add_alpha_from_depth(plotter, img_rgb):
+def _capture_rgba(plotter) -> np.ndarray:
     """
-    Create RGBA image using the Z-buffer (depth buffer) to determine transparency.
+    Read the rendered frame as RGBA with a transparent background.
 
-    The depth buffer contains the distance from the camera to each pixel.
-    Background pixels have depth = 1.0 (far plane). Any pixel with geometry
-    has depth < 1.0. This gives a perfect binary mask regardless of model
-    color, texture, or sparsity — no color matching needed.
-
-    This works for all model types: solid meshes, sparse point clouds,
-    textured models, white surfaces, and models with holes.
+    Colour and alpha come from the same render: the background is cleared with zero alpha, so a pixel
+    is opaque exactly where geometry covers it and partially transparent where an anti-aliased edge
+    covers it in part.
     """
-    # Get the depth buffer from VTK's renderer
-    z_buffer = plotter.get_image_depth()
-
-    h, w = img_rgb.shape[:2]
-    rgba = np.zeros((h, w, 4), dtype=np.uint8)
-    rgba[:, :, :3] = img_rgb[:, :, :3]
-
-    # Background pixels have depth == 1.0 (far clipping plane)
-    # Model pixels have depth < 1.0
-    has_geometry = z_buffer < 0.9999
-
-    # Erode the geometry mask by 1 pixel to remove anti-aliased edge fringe
-    # that picks up background color blending
-    from scipy.ndimage import binary_erosion
-    has_geometry = binary_erosion(has_geometry, iterations=1)
-
-    rgba[:, :, 3] = np.where(has_geometry, 255, 0).astype(np.uint8)
-
-    return rgba
+    img = plotter.screenshot(transparent_background=True, return_img=True)
+    return np.ascontiguousarray(img, dtype=np.uint8)
 
 
 def _compute_camera_framing(pv_data, use_full_bounds=False, resolution=DEFAULT_RESOLUTION):

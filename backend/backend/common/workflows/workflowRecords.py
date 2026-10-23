@@ -22,6 +22,23 @@ ALL_WORKFLOWS_LIST_PARTITION = "workflow"
 # Trigger types (only fileUpload implemented now; typed for extensibility).
 TRIGGER_TYPES = ("fileUpload",)
 
+# Internal actions the workflow service serves to other VAMS Lambdas (never to an API route; see
+# workflowService.handle_internal_action). The pipeline service schedules a refresh of every workflow
+# referencing a changed pipeline; the execute handler asks for one workflow to be redeployed before
+# it launches it.
+INTERNAL_ACTION_KEY = "vamsInternalAction"
+INTERNAL_ACTION_REFRESH_PIPELINE_REFERENCES = "refreshPipelineReferences"
+INTERNAL_ACTION_REDEPLOY_WORKFLOW = "redeployWorkflow"
+
+
+def build_internal_action_event(action, payload):
+    """The direct-invoke event for a workflow-service internal action, as a SYSTEM_USER cross-call."""
+    return {
+        INTERNAL_ACTION_KEY: action,
+        "lambdaCrossCall": {"userName": "SYSTEM_USER"},
+        "payload": dict(payload or {}),
+    }
+
 
 def build_workflow_system_config(
     input_file_arity="one",

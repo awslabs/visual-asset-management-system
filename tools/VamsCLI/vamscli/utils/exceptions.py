@@ -1,5 +1,7 @@
 """Custom exceptions for VamsCLI."""
 
+from typing import Optional
+
 
 class VamsCLIError(Exception):
     """Base exception for VamsCLI errors."""
@@ -59,6 +61,19 @@ class TokenExpiredError(GlobalInfrastructureError):
 class PermissionDeniedError(GlobalInfrastructureError):
     """Raised when user lacks permissions for the requested action (legitimate 403)."""
     pass
+
+
+class RequestBlockedError(GlobalInfrastructureError):
+    """Raised when the deployment's AWS WAF web ACL blocked a request before VAMS handled it (HTTP 403)."""
+
+    def __init__(self, message: str, request_id: Optional[str] = None, confirmed: bool = True):
+        super().__init__(message)
+        self.request_id = request_id
+        self.confirmed = confirmed
+        # Carried into --json-output beside the error.
+        self.json_fields = {"blockedBy": "waf" if confirmed else "waf-or-stage"}
+        if request_id:
+            self.json_fields["requestId"] = request_id
 
 
 class VersionMismatchError(GlobalInfrastructureError):
@@ -721,6 +736,28 @@ class MetadataSchemaDeletionError(MetadataSchemaError):
 
 class InvalidMetadataSchemaDataError(MetadataSchemaError):
     """Raised when metadata schema data is invalid."""
+    pass
+
+
+# Compliance-related business logic exceptions
+class ComplianceError(BusinessLogicError):
+    """Base class for compliance errors."""
+    pass
+
+
+class ComplianceSchemaNotFoundError(ComplianceError):
+    """Raised when a compliance schema is not found."""
+    pass
+
+
+class ComplianceCascadeNotFoundError(ComplianceError):
+    """Raised when a compliance cascade is not found, or is no longer awaiting approval."""
+    pass
+
+
+class InvalidComplianceDataError(ComplianceError):
+    """Raised when a compliance request is rejected (invalid schema body, asset not quarantined,
+    schema not visible to the database, and the other handler-side validation failures)."""
     pass
 
 

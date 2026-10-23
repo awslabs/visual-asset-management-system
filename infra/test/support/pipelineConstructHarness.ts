@@ -59,16 +59,32 @@ export interface PipelineHarness {
     codeBuildImage: { repository: ecr.IRepository; tag: string };
 }
 
+export interface PipelineHarnessOptions {
+    /**
+     * Synthesize with no deployment account, as `cdk synth` does with the shipped templates'
+     * `env.account: null` and no AWS credentials: `config.env.account` is left unset and the stack
+     * takes the `AWS::AccountId` pseudo parameter as its account. The Region stays concrete.
+     */
+    unresolvedAccount?: boolean;
+}
+
 export const makePipelineHarness = (
     id: string,
-    mutate?: (c: Config.Config) => void
+    mutate?: (c: Config.Config) => void,
+    options: PipelineHarnessOptions = {}
 ): PipelineHarness => {
     const config = createMockConfig();
+    if (options.unresolvedAccount) {
+        // What getConfig() leaves when neither context, config.json nor CDK_DEFAULT_ACCOUNT names one.
+        config.env.account = undefined as unknown as string;
+    }
     mutate?.(config);
     Service.SetConfig(config);
 
     const app = newTestApp();
-    const stack = new cdk.Stack(app, id, { env: { account: ACCOUNT, region: REGION } });
+    const stack = new cdk.Stack(app, id, {
+        env: options.unresolvedAccount ? { region: REGION } : { account: ACCOUNT, region: REGION },
+    });
 
     const vpc = new ec2.Vpc(stack, "Vpc", { maxAzs: 2 });
     const securityGroups = [new ec2.SecurityGroup(stack, "Sg", { vpc })];

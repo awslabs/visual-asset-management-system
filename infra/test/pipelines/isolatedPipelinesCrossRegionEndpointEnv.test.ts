@@ -4,8 +4,8 @@
  */
 
 /**
- * The four Batch pipelines whose compute runs in the VPC's isolated subnets (Potree viewer, 3D
- * thumbnail, SYSTEM GenAI metadata, coordinate transform) read an input in another Region only
+ * The five Batch pipelines whose compute runs in the VPC's isolated subnets (Potree viewer, 3D
+ * thumbnail, SYSTEM GenAI metadata, coordinate transform, Video SOP/BOM) read an input in another Region only
  * through the cross-Region S3 interface endpoint the VPC builder creates in those subnets. Their
  * `vamsExecute` Lambdas therefore carry `CROSS_REGION_S3_ENDPOINT_REGIONS`, the Regions such an
  * endpoint exists for, and `manifestHelper.enforce_inputs_in_region` rejects an input anywhere else
@@ -21,13 +21,14 @@ import { Preview3dThumbnailConstruct } from "../../lib/nestedStacks/pipelines/pr
 import { PcPotreeViewerConstruct } from "../../lib/nestedStacks/pipelines/preview/pcPotreeViewer/constructs/pcPotreeViewer-construct";
 import { SystemGenAiMetadataConstruct } from "../../lib/nestedStacks/pipelines/system/genAiMetadata/constructs/systemGenAiMetadata-construct";
 import { CoordinateTransformConstruct } from "../../lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/coordinateTransform-construct";
+import { VideoSopBomConstruct } from "../../lib/nestedStacks/pipelines/genAi/videoSopBom/constructs/videoSopBom-construct";
 import { makePipelineHarness, PipelineHarness } from "../support/pipelineConstructHarness";
 import { lambdaEnvironmentsByHandler } from "../support/asl";
 import { synthTemplate, SynthResult } from "../support/templateSynth";
 
 const ENV = "CROSS_REGION_S3_ENDPOINT_REGIONS";
 
-/** The four isolated-subnet pipelines: config flag, construct, and the vamsExecute handler. */
+/** The five isolated-subnet pipelines: config flag, construct, and the vamsExecute handler. */
 const ISOLATED_PIPELINES: {
     name: string;
     handler: string;
@@ -104,6 +105,30 @@ const ISOLATED_PIPELINES: {
         },
         build: (h) => {
             new CoordinateTransformConstruct(h.stack, "CoordinateTransformPipeline", {
+                config: h.config,
+                vpc: h.vpc,
+                pipelineSubnets: h.subnets,
+                pipelineSecurityGroups: h.securityGroups,
+                lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+                assetAuxiliaryBucket: h.assetAuxiliaryBucket,
+                storageResources: h.storage,
+                kmsKey: h.kmsKey,
+                importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+            });
+            return Template.fromStack(h.stack);
+        },
+    },
+    {
+        name: "genAi/videoSopBom",
+        handler: "vamsExecuteVideoSopBomPipeline.lambda_handler",
+        enable: (c) => {
+            c.app.pipelines.useGenAiVideoSopBom.enabled = true;
+            // Sources the container image from an ECR repository instead of a local Docker build.
+            c.app.pipelines.useGenAiVideoSopBom.useCodeBuild = true;
+            c.app.pipelines.useGenAiVideoSopBom.autoRegisterWithVAMS = false;
+        },
+        build: (h) => {
+            new VideoSopBomConstruct(h.stack, "VideoSopBomPipeline", {
                 config: h.config,
                 vpc: h.vpc,
                 pipelineSubnets: h.subnets,
@@ -225,7 +250,7 @@ describe("the whole-app synth: the Lambdas' list IS the VPC builder's endpoint l
             },
         });
 
-    test("each of the four vamsExecute Lambdas names exactly the Regions that have a cross-Region S3 endpoint", () => {
+    test("each of the five vamsExecute Lambdas names exactly the Regions that have a cross-Region S3 endpoint", () => {
         const s = synth();
         const endpointRegions = s
             .where("AWS::EC2::VPCEndpoint", (r) => "ServiceRegion" in r.properties)

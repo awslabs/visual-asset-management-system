@@ -123,7 +123,11 @@ bulk operations before executing.
 
 Summarize results with the relevant IDs. For mutating tasks, state exactly what
 changed. On errors, act on the CLI message (auth error → re-check auth; unknown
-command/flag → re-run `--help`; `403` → identify the tier per
+command/flag → re-run `--help`; `Request Blocked` / `error_type`
+`RequestBlockedError` → the deployment's AWS WAF web ACL blocked the request ahead
+of both tiers: do not retry it, do not re-authenticate, and do not rephrase or
+re-encode it to get past the rule; report its `requestId` to the administrator;
+any other `403` → identify the tier per
 [Authorization](#authorization-two-tiers-and-reading-a-403) and report rather than
 retry). Relay any `warnings` an execute or re-run returned; they mean the run
 started with inputs that differ from what was named.
@@ -167,6 +171,16 @@ tier refused is the difference between a useful report and a wrong guess.
 | ------------------- | ----------------------------------------- | ----------------------------------------- |
 | **Tier 1** — route  | May this role call this endpoint at all?  | HTTP method + route path                  |
 | **Tier 2** — object | May this role do this to **this** entity? | HTTP method + the entity's own attributes |
+
+**Rule out the firewall first.** The deployment's AWS WAF web ACL inspects every
+request in front of both tiers. A `403` whose `error_type` is `RequestBlockedError`
+(the CLI prints `Request Blocked:`) comes from that web ACL, not from either tier:
+its `blockedBy` is `waf`, or `waf-or-stage` for a bare API Gateway `Forbidden`,
+which a base URL that names no deployed stage also produces. It says nothing about
+the user's permissions. Do not retry it, do not re-authenticate, and do not rephrase
+or re-encode the request to get past the rule. Report the `requestId` to the
+administrator, who finds the matching rule in the web ACL's sampled requests or WAF
+log group. The tier rules below apply to every other `403`.
 
 **Why this matters to you:** the allowed-routes listing from Step 1b is Tier 1
 **only**. A route appearing there means the user may call it — not that they may
@@ -546,8 +560,9 @@ session, default to read-only. Do not hardcode environment-specific commands.
 -   Default to read-only; require explicit authorization to mutate.
 -   Scope every action to the user's **allowed API routes** (Step 1b); never
     attempt or work around actions outside the permission boundary. Route access
-    is only Tier 1 — a `403` on an allowed route is a Tier-2 entity refusal, to be
-    reported rather than retried.
+    is only Tier 1 — a `403` on an allowed route is a Tier-2 entity refusal, or with
+    `error_type` `RequestBlockedError` a firewall block, to be reported rather than
+    retried.
 -   Confirm destructive and bulk operations before executing. Executing a
     workflow, re-running an execution, and enabling a trigger all start real AWS
     compute.

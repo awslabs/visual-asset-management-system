@@ -45,6 +45,7 @@ ASSET_BUCKET_HANDLERS = [
     "handlers/addon/garnetFramework/garnetDataIndexFile.py",
     "handlers/addon/physna/physnaCommon.py", "handlers/addon/physna/physnaFileSync.py",
     "handlers/pipelines/pipelineTemplateService.py",
+    "handlers/compliance/complianceEvaluationStore.py", "handlers/compliance/complianceTrigger.py",
 ]
 
 # Every bucket-details helper, as (module path, helper name, row variable it reads).

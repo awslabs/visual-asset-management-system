@@ -16,6 +16,7 @@ Event (the state object, or ``{"body": state}``):
                                   default 4 when the key or the file is absent              optional
     fileClass                     classifier value, copied into the manifest                optional
     fileExt                       ".stp", dotted lower-case; derived from the key if absent optional
+    assetId                       the input's asset; confines the files the input references   optional
 
 Returns the whole state merged with analysisManifestS3Location, renderBranch, fileClass, renderSkipped,
 renderImageCount and warningCount (BRANCH_RESULT_KEYS). The Fargate analysis job
@@ -29,7 +30,7 @@ import dataclasses
 import os
 from typing import List, Tuple
 
-from preview_pipeline import core, renderer
+from preview_pipeline import dependencies, renderer
 from preview_pipeline.analysis import analysis, workdirs
 from preview_pipeline.utils import image_utils, manifest_io
 from preview_pipeline.utils import s3_utils as s3
@@ -61,6 +62,9 @@ class Render3dRequest:
     # The state's ``bucketRegions``: bucket name -> Region for the asset buckets outside the deployment
     # Region, registered with the S3 helper so the input file's reads are signed for its bucket's Region.
     bucket_regions: dict = dataclasses.field(default_factory=dict)
+    # The state's ``assetId``: the files the input references are fetched only from under its asset root
+    # (the input's own directory when absent).
+    asset_id: str = ""
 
 
 def _state_flag(value, default: bool) -> bool:
@@ -98,6 +102,7 @@ def parse_request(body) -> Render3dRequest:
         file_extension=extension,
         render_images=_state_flag(body.get("renderImages"), _state_flag(body.get("genAiAnalysisEnabled"), True)),
         bucket_regions=body.get("bucketRegions") if isinstance(body.get("bucketRegions"), dict) else {},
+        asset_id=str(body.get("assetId") or ""),
     )
 
 
@@ -190,15 +195,23 @@ def lambda_handler(event, context):
         # Sign each asset bucket's requests for its own Region before any S3 call (see utils s3 helper).
         s3.register_bucket_regions(request.bucket_regions)
         input_bucket, input_key = s3.parse_s3_uri(request.input_s3_asset_file_path)
-        local_path = s3.download(input_bucket, input_key,
-                                 os.path.join(input_dir, os.path.basename(input_key)))
+        # The input lands at its path relative to its asset's root, so the files it references are fetched
+        # beside it at their own relative paths and resolve locally as they do in the asset.
+        root_key = dependencies.asset_root_key(input_key, request.asset_id)
+        local_root = os.path.join(input_dir, "asset")
+        target = dependencies.local_path_for(local_root, dependencies.relative_to_root(input_key, root_key)) \
+            or os.path.join(input_dir, os.path.basename(input_key))
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        local_path = s3.download(input_bucket, input_key, target)
         if local_path is None or not os.path.isfile(local_path):
             raise RuntimeError(f"Unable to download {request.input_s3_asset_file_path}")
-        if request.file_extension == ".gltf":
+        if dependencies.has_references(request.file_extension):
+            # A rejected or missing reference is skipped; the input still renders.
             try:
-                core._download_gltf_dependencies(input_bucket, input_key, input_dir)
+                dependencies.fetch_referenced_files(input_bucket, input_key, local_path, local_root, root_key,
+                                                    request.file_extension)
             except Exception as exc:
-                logger.warning(f"Failed to download some GLTF dependencies: {exc}")
+                logger.warning(f"Failed to fetch some referenced files: {exc}")
 
         result = analysis.analyze_local_file(local_path, request.file_extension, render=request.render_images,
                                              n_views=n_views, work_dir=work_dir)

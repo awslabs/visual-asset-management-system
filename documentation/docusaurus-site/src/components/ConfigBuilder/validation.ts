@@ -162,6 +162,42 @@ const COGNITO_USERNAME_MAX_LENGTH = 128;
 // this long for the pipeline's task-token callback, so the Kubernetes job must not outlive it.
 const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 14400;
 
+// The 3D preview thumbnail compute tiers getConfig() fills in when a tier names none, mirroring
+// PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS in infra/config/config.ts.
+const PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS = {
+    standard: { vcpu: 4, memoryGiB: 16 },
+    large: { vcpu: 16, memoryGiB: 120 },
+} as const;
+
+/** `minGiB`..`maxGiB` in `stepGiB` increments, as MiB. */
+function mibRange(minGiB: number, maxGiB: number, stepGiB: number): number[] {
+    const values: number[] = [];
+    for (let gib = minGiB; gib <= maxGiB; gib += stepGiB) values.push(gib * 1024);
+    return values;
+}
+
+// The memory sizes (MiB) AWS Fargate accepts for each Linux task vCPU size, mirroring
+// FARGATE_MEMORY_MIB_BY_VCPU in infra/config/config.ts.
+const FARGATE_MEMORY_MIB_BY_VCPU: ReadonlyMap<number, readonly number[]> = new Map([
+    [0.25, [512, 1024, 2048]],
+    [0.5, mibRange(1, 4, 1)],
+    [1, mibRange(2, 8, 1)],
+    [2, mibRange(4, 16, 1)],
+    [4, mibRange(8, 30, 1)],
+    [8, mibRange(16, 60, 4)],
+    [16, mibRange(32, 120, 8)],
+]);
+
+/** True when AWS Fargate runs a Linux task of `vcpu` vCPU with `memoryGiB` (config.ts: `isFargateCpuMemory`). */
+function isFargateCpuMemory(vcpu: unknown, memoryGiB: unknown): boolean {
+    if (typeof vcpu !== "number" || typeof memoryGiB !== "number") return false;
+    const memoryMiB = memoryGiB * 1024;
+    return (
+        Number.isInteger(memoryMiB) &&
+        (FARGATE_MEMORY_MIB_BY_VCPU.get(vcpu) ?? []).includes(memoryMiB)
+    );
+}
+
 // The API implementation types the deployment accepts, mirroring SUPPORTED_API_TYPES in
 // infra/config/config.ts.
 const SUPPORTED_API_TYPES = ["APIGATEWAY_REST"];
@@ -660,6 +696,12 @@ const VPC_REQUIRING_FEATURES: {
         fieldPaths: ["app.pipelines.useConversionCoordinateTransform.enabled"],
         appliesWhen: (c) => !!g(c, "app.pipelines.useConversionCoordinateTransform.enabled"),
     },
+    {
+        id: "vpc-required-genai-video-sop-bom",
+        label: "pipelines.useGenAiVideoSopBom",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.enabled"],
+        appliesWhen: (c) => !!g(c, "app.pipelines.useGenAiVideoSopBom.enabled"),
+    },
 ];
 
 /** Partitions whose capability downgrades are gated on app.govCloud.enabled (config.ts: `restrictedPartitionRequiringFlag`). */
@@ -1013,6 +1055,55 @@ export const RULES: Rule[] = [
             `declares, so the parent workflow would stop waiting while the Kubernetes job is still ` +
             `allowed to run. Lower jobTimeout, or raise taskTimeout in ` +
             `backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json to match.`,
+    },
+
+    // ----- 3D preview thumbnail compute tiers
+    // (config.ts: "3D preview thumbnail compute tiers. Each tier's vCPU and memory are the resource
+    // overrides") -----
+    //
+    // AWS Batch checks a tier's vCPU/memory override against the Fargate task sizes only when a job is
+    // submitted, so an unsupported large-tier pair deploys and then fails every run routed to it. An
+    // absent value takes the getConfig() default, which is valid.
+    ...(["standard", "large"] as const).map(
+        (tier): Rule => ({
+            id: `preview3dthumbnail-${tier}-tier-fargate-size`,
+            severity: "error",
+            fieldPaths: [
+                `app.pipelines.usePreview3dThumbnail.computeTiers.${tier}.vcpu`,
+                `app.pipelines.usePreview3dThumbnail.computeTiers.${tier}.memoryGiB`,
+            ],
+            appliesWhen: (c) => {
+                if (!g(c, "app.pipelines.usePreview3dThumbnail.enabled")) return false;
+                const base = `app.pipelines.usePreview3dThumbnail.computeTiers.${tier}`;
+                const vcpu = g(c, `${base}.vcpu`);
+                const memoryGiB = g(c, `${base}.memoryGiB`);
+                return !isFargateCpuMemory(
+                    vcpu === undefined
+                        ? PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS[tier].vcpu
+                        : vcpu,
+                    memoryGiB === undefined
+                        ? PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS[tier].memoryGiB
+                        : memoryGiB
+                );
+            },
+            message:
+                `usePreview3dThumbnail.computeTiers.${tier} is not an AWS Fargate task size: vcpu ` +
+                `must be 0.25, 0.5, 1, 2, 4, 8 or 16 with a memoryGiB that vCPU supports (4 vCPU: ` +
+                `8–30 GiB in 1 GiB steps; 8 vCPU: 16–60 GiB in 4 GiB steps; 16 vCPU: 32–120 GiB in ` +
+                `8 GiB steps).`,
+        })
+    ),
+    {
+        id: "preview3dthumbnail-large-tier-threshold",
+        severity: "error",
+        fieldPaths: ["app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.usePreview3dThumbnail.enabled")) return false;
+            const threshold = g(c, "app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB");
+            if (isAbsent(threshold)) return false;
+            return typeof threshold !== "number" || !Number.isFinite(threshold) || threshold <= 0;
+        },
+        message: "usePreview3dThumbnail.largeTierThresholdGiB must be a positive number of GiB.",
     },
 
     // ----- NVIDIA Cosmos 3
@@ -2939,6 +3030,81 @@ export const RULES: Rule[] = [
         message:
             "vectorSearch.indexingConcurrency must be an integer between 2 and 1000 (Lambda SQS event-source MaximumConcurrency bound).",
     },
+    // The Video SOP/BOM Extraction pipeline's id goes through the same getConfig() helper
+    // (validateBedrockModelId), so the two rules above are restated for its path.
+    {
+        id: "video-sop-bom-bedrock-model-id-required",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.bedrockModelId"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useGenAiVideoSopBom.enabled") &&
+            isBlank(g(c, "app.pipelines.useGenAiVideoSopBom.bedrockModelId")),
+        message:
+            "useGenAiVideoSopBom requires a bedrockModelId available in this partition and Region; one model serves the pipeline's text and vision calls. The restricted-partition presets leave it empty because the commercial cross-Region inference profiles do not exist there.",
+    },
+    {
+        id: "video-sop-bom-bedrock-model-id-commercial-only-prefix",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.bedrockModelId", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiVideoSopBom.enabled")) return false;
+            const id = String(g(c, "app.pipelines.useGenAiVideoSopBom.bedrockModelId") ?? "");
+            return !isCommercialPartition(c) && (id.startsWith("global.") || id.startsWith("us."));
+        },
+        message:
+            'useGenAiVideoSopBom.bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition. Use a model id offered in this partition (GovCloud uses the "us-gov." prefix).',
+    },
+
+    // ----- Video SOP/BOM Extraction partition and limits
+    // (config.ts: "not validated outside the commercial and GovCloud partitions") -----
+    //
+    // The pipeline calls Amazon Transcribe and Amazon Bedrock from an isolated-subnet container through
+    // VPC interface endpoints; where the Transcribe endpoint is unverified a missing one hangs a run
+    // until its timeout rather than failing. Keyed on the partition the configured region resolves to,
+    // and silent while the region is unset.
+    {
+        id: "video-sop-bom-commercial-or-govcloud-only",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.enabled", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiVideoSopBom.enabled")) return false;
+            const partition = partitionForRegionName(g(c, "env.region"));
+            return partition !== undefined && partition !== "aws" && partition !== "aws-us-gov";
+        },
+        message:
+            "useGenAiVideoSopBom is not validated outside the commercial and GovCloud partitions: Amazon Transcribe endpoint availability is unverified and the service-helper has no row for this partition; a missing endpoint hangs a run until its timeout. Set app.pipelines.useGenAiVideoSopBom.enabled to false for this deployment Region.",
+    },
+    // The two operator-set caps reach the pipeline's Lambdas as environment variables; a value outside
+    // the range the pipeline can honour is refused at deploy time rather than at the first run. An
+    // absent leaf is backfilled by getConfig(), so it is not reported here.
+    {
+        id: "video-sop-bom-max-video-files-range",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiVideoSopBom.enabled")) return false;
+            const value = g(c, "app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles");
+            if (isAbsent(value)) return false; // backfilled to 4
+            return typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 4;
+        },
+        message:
+            "useGenAiVideoSopBom.limits.maxVideoFiles must be an integer from 1 to 4 (videos per run).",
+    },
+    {
+        id: "video-sop-bom-max-total-duration-range",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiVideoSopBom.enabled")) return false;
+            const value = g(c, "app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes");
+            if (isAbsent(value)) return false; // backfilled to 240
+            return (
+                typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 480
+            );
+        },
+        message:
+            "useGenAiVideoSopBom.limits.maxTotalDurationMinutes must be an integer from 1 to 480 (minutes of video per run; Amazon Transcribe accepts at most 28,800 seconds of audio per job).",
+    },
 
     // ----- Physna outbound endpoints (config.ts: "must use https, or the credentials VAMS sends to it travel in cleartext") -----
     ...(
@@ -2997,6 +3163,37 @@ export const RULES: Rule[] = [
         },
         message: `usePhysnaSync.${label} points at a loopback, link-local, or private address. It is called by a Lambda that can read the VAMS asset buckets, so it must name an external service.`,
     })),
+
+    // ----- Compliance default schema
+    // (config.ts: "The default compliance schema holds one metadata rule against the GLOBAL
+    // `defaultAsset` metadata schema") -----
+    //
+    // The seeded compliance schema's only rule references the GLOBAL `defaultAsset` metadata schema,
+    // which is seeded by `autoLoadDefaultAssetSchema` alone. Without it the evaluation engine skips
+    // the rule's required-field and type checks, so the schema reports every asset compliant while
+    // checking nothing. Absence follows `getConfig()`'s backfills: a missing
+    // `autoLoadDefaultSchema` is true, a missing `metadataSchema` BLOCK is every flag true, and a
+    // missing flag inside a present block is false (the seeding construct tests it for truthiness).
+    {
+        id: "compliance-default-schema-requires-default-asset-metadata-schema",
+        severity: "error",
+        fieldPaths: [
+            "app.compliance.autoLoadDefaultSchema",
+            "app.metadataSchema.autoLoadDefaultAssetSchema",
+        ],
+        appliesWhen: (c) => {
+            const autoLoadDefaultSchema = g(c, "app.compliance.autoLoadDefaultSchema");
+            const seedsComplianceSchema = isAbsent(autoLoadDefaultSchema)
+                ? true
+                : !!autoLoadDefaultSchema;
+            const seedsDefaultAssetSchema = isAbsent(g(c, "app.metadataSchema"))
+                ? true
+                : !!g(c, "app.metadataSchema.autoLoadDefaultAssetSchema");
+            return seedsComplianceSchema && !seedsDefaultAssetSchema;
+        },
+        message:
+            "app.compliance.autoLoadDefaultSchema is true but app.metadataSchema.autoLoadDefaultAssetSchema is false. The default compliance schema validates assets against the GLOBAL defaultAsset metadata schema, which only that flag seeds; without it the seeded rule checks nothing. Set autoLoadDefaultAssetSchema to true, or set autoLoadDefaultSchema to false.",
+    },
 ];
 
 /** Evaluate every rule against the config and return those that apply. */

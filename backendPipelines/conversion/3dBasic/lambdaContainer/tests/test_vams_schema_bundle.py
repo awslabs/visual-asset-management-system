@@ -22,7 +22,7 @@ _TEMPLATES_ROOT = os.path.join(_SCHEMA_ROOT, "templates")
 
 # Formats trimesh registers a loader for only when an optional dependency is present: `.dae` needs
 # pycollada, and `.xaml` / `.3dxml` need lxml and networkx. poetry.lock resolves this container to
-# aws-lambda-powertools, jmespath, numpy, trimesh and typing-extensions only, so trimesh answers a
+# aws-lambda-powertools, jmespath, numpy, pillow, trimesh and typing-extensions only, so trimesh answers a
 # load of one of these with an ExceptionWrapper. It also carries no `.xaml` / `.3dxml` exporter at
 # any dependency set, so neither can be a conversion target either.
 _FORMATS_WITHOUT_A_LOADER = (".dae", ".xaml", ".3dxml")
@@ -107,7 +107,7 @@ class Test3dBasicBundle:
         # The count is asserted in-band: a listing that matched nothing would otherwise leave this
         # test passing while checking no template at all.
         template_files = _template_files()
-        assert len(template_files) == 4, template_files
+        assert len(template_files) == 5, template_files
         exportable = _output_formats()
         checked = []
         for name in template_files:
@@ -116,7 +116,7 @@ class Test3dBasicBundle:
             output_type = json.loads(template["configBody"])["outputType"]
             assert output_type in exportable, (name, output_type)
             checked.append(output_type)
-        assert sorted(checked) == [".glb", ".gltf", ".obj", ".stl"], checked
+        assert sorted(checked) == [".glb", ".gltf", ".obj", ".ply", ".stl"], checked
 
     def test_the_workflow_declares_no_trigger_filter_to_keep_in_step(self):
         # The meshCad bundle's fileUpload trigger carries its own copy of the filter and can drift

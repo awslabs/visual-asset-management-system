@@ -11,7 +11,7 @@ For asset-level operations, see [Assets](assets.md). For file metadata, see [Met
 -   **File**: An individual object stored in S3 within an asset's directory structure. Files can be organized in folders.
 -   **File Version**: S3 object versions tracked through bucket versioning. VAMS also tracks file versions within asset version snapshots.
 -   **Primary File Type**: A designation that marks a file as the primary representative of a particular type within an asset (e.g., the primary `.ifc` file).
--   **Preview File**: A generated preview image (`.previewFile.gif`, `.previewFile.jpg`, `.previewFile.png`) associated with a specific file.
+-   **Preview File**: A generated or uploaded preview image (`.previewFile.gif`, `.previewFile.jpg`, `.previewFile.png`) associated with a specific file. When a file has several, `previewFile` names the newest one that is not archived.
 -   **Archive**: Soft-deletion of a file using S3 delete markers. Archived files can be unarchived.
 
 ---
@@ -737,11 +737,12 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 
 **Error Responses:**
 
-| Status | Description                                                                   |
-| ------ | ----------------------------------------------------------------------------- |
-| `403`  | Not authorized to stream this file, or the asset is not marked distributable. |
-| `404`  | File not found.                                                               |
-| `500`  | Internal server error.                                                        |
+| Status | Description                                                                                                      |
+| ------ | ---------------------------------------------------------------------------------------------------------------- |
+| `400`  | The asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload`. |
+| `403`  | Not authorized to stream this file, or the asset is not marked distributable.                                    |
+| `404`  | File not found.                                                                                                  |
+| `500`  | Internal server error.                                                                                           |
 
 ---
 
@@ -769,11 +770,12 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 
 **Error Responses:**
 
-| Status | Description                                                                   |
-| ------ | ----------------------------------------------------------------------------- |
-| `403`  | Not authorized to stream this file, or the asset is not marked distributable. |
-| `404`  | File not found.                                                               |
-| `500`  | Internal server error.                                                        |
+| Status | Description                                                                                                      |
+| ------ | ---------------------------------------------------------------------------------------------------------------- |
+| `400`  | The asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload`. |
+| `403`  | Not authorized to stream this file, or the asset is not marked distributable.                                    |
+| `404`  | File not found.                                                                                                  |
+| `500`  | Internal server error.                                                                                           |
 
 ---
 

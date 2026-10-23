@@ -9,8 +9,8 @@ trimesh keeps its XML- and COLLADA-backed formats behind optional dependencies a
 is missing is not a startup error -- it is a run that fails at the load, after the file has been
 downloaded. ``requirements.txt`` installs neither ``pycollada`` (COLLADA) nor ``lxml`` + ``networkx``
 (3MF, XAML, 3DXML), and ``poetry.lock`` resolves this container to exactly aws-lambda-powertools,
-jmespath, numpy, trimesh and typing-extensions -- lxml, networkx and pycollada appear there only inside
-trimesh's optional ``easy`` extra.
+jmespath, numpy, pillow, trimesh and typing-extensions -- lxml, networkx and pycollada appear there only
+inside trimesh's optional ``easy`` extra.
 
 The check is DERIVED rather than a list of known-bad extensions: the dependencies absent from
 ``requirements.txt`` are simulated away and trimesh's own loader and exporter registries are then read.
@@ -217,7 +217,7 @@ class TestEveryOfferedTargetCanBeWritten:
         templates = sorted(name for name in os.listdir(os.path.join(_SCHEMA_ROOT, "templates"))
                            if name.endswith(".json"))
         # Asserted in-band: a listing that matched nothing would leave this test checking no template.
-        assert len(templates) == 4, templates
+        assert len(templates) == 5, templates
         for name in templates:
             with open(os.path.join(_SCHEMA_ROOT, "templates", name), encoding="utf-8") as handle:
                 template = json.load(handle)

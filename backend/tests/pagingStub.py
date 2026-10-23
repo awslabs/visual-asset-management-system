@@ -28,8 +28,8 @@ assertion wearing a bound's clothing.
 
 ``PagingLoopDidNotTerminate`` derives from ``BaseException`` deliberately. Several of the loops these
 stubs feed sit inside best-effort helpers that catch ``Exception`` and degrade quietly
-(``pipelineService._template_count`` returns ``None``, ``_referencing_workflow_labels`` returns
-``[]``, ``tagService.get_tags`` re-raises as a generic error), so an ``Exception`` here would be
+(``pipelineService._template_count`` returns ``None``, ``_referencing_workflows`` returns what it
+found, ``tagService.get_tags`` re-raises as a generic error), so an ``Exception`` here would be
 swallowed and the failure would read as an ordinary degraded result.
 
 Pages are served by CURSOR, not by call order, so what gets asserted is "the cursor is threaded"

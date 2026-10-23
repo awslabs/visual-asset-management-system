@@ -100,6 +100,25 @@ class TestNextPipelineInputNarrowing:
         narrowed = ipt.narrow_next_pipeline_inputs(body, files)
         assert [f["relativePath"] for f in narrowed] == ["/a.glb"]
 
+    @pytest.mark.parametrize("outputs", [
+        [],
+        # An earlier step rewrote a selected file in place: the entry is replaced at its path.
+        [{"relativePath": "/a.obj", "key": "run/files/a.obj", "versionId": "o1"}],
+        # An earlier step wrote a new file: the entry is added.
+        [{"relativePath": "/c.glb", "key": "run/files/c.glb", "versionId": "o2"}],
+    ])
+    def test_two_admitted_selected_files_fail_the_transition_whatever_was_written(self, outputs):
+        # The premise of the launch refusal for a single-file later step (#715): the step's manifest
+        # is the selection overlaid by earlier outputs, which only adds entries or replaces one at the
+        # same path, so two selected files its filters admit always reach it.
+        originals = [_entry("/a.obj"), _entry("/b.obj")]
+        files = ipt.eo.resolve_manifest_input_files(
+            None, originals, "runbkt", "run/files/", current_output_files=outputs)
+        body = {"nextPipelineInputFileFilters": {"allow": ["*.obj", "*.glb"]},
+                "nextPipelineInputFileArity": "one", "nextPipelineId": "consume"}
+        with pytest.raises(VAMSGeneralErrorResponse):
+            ipt.narrow_next_pipeline_inputs(body, files)
+
     def test_arity_multi_with_nothing_admitted_raises(self):
         # The chain-breakage case: step 1 emitted only files step 2 cannot read.
         files = [_entry("/out.txt")]

@@ -57,6 +57,7 @@ tools/VamsCLI/
       execution.py           # Execution ops: list (global), details, details-metadata (paged), logs, abort, rerun, permanent-delete
       user.py                # Cognito user management
       roleUserConstraints.py # Roles, constraints, user-role assignment
+      compliance.py          # Compliance: schema sub-group, bind/unbind/bindings, evaluate/sweep/state/evaluations, quarantine + cascade sub-groups, audit
       custom/__init__.py     # FORK EXTENSION POINT: CUSTOM_COMMANDS, registered on the root group by main.py
       industry/
         industry.py          # Industry command group
@@ -89,14 +90,15 @@ tools/VamsCLI/
     industry/                # Engineering BOM and PLM command tests (engineering/bom/, engineering/plm/)
 ```
 
-### Command Groups (24 top-level)
+### Command Groups (25 top-level)
 
 All registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
 tag, tag-type, metadata, metadata-schema, comment, subscription, features,
-search, sync, workflow, pipeline, execution, industry, user, role, api-key
+search, sync, workflow, pipeline, execution, industry, user, role, api-key,
+compliance
 ```
 
 Sync has a nested sub-command group:
@@ -113,6 +115,18 @@ Comment and subscription cover the comments and subscriptions APIs:
 
 -   `comment list|get|add|update|delete` -- `list` takes `-v/--asset-version-id` to switch from the asset-wide route to the version-scoped one; `get`, `add`, `update` and `delete` address a comment by asset, asset version and comment ID
 -   `subscription list|create|update|delete|unsubscribe|check` -- `delete` removes the whole subscription (and, for an asset, its notification topic); `unsubscribe` removes one subscriber and is a different route
+
+Compliance covers the schema registry, bindings, evaluation, quarantine, cascades and the audit trail:
+
+-   `compliance schema list|get|create|update|delete` -- `create`/`update` take `--schema-file` (a JSON file path or the body inline); `delete` requires `--confirm` and the API refuses a schema that is still bound
+-   `compliance bind|unbind|bindings` -- `-d` binds a database, `-d -a` binds one asset as an override; `--no-auto-eval` is rejected with `-a` because the asset route does not read it
+-   `compliance evaluate|sweep|state|evaluations` -- `state -d` is the database overview (paged on `--max-items`/`--starting-token`; `summary`/`totalAssets` cover the full set, `assets` is one page; the options are rejected with `-a`), `state -d -a` one asset's record; `evaluations` pages on `--max-items`/`--starting-token` (the route reads its page size from `maxItems`); `sweep` reports `skipped` (bound assets the caller may not evaluate), `superseded` (assets whose evaluation a newer one had already started; marked in the list, not an error) and `assetsRemaining`
+-   `compliance schema list|get` print `Format:` from the record's top-level `schemaFormat` (`legacy` rows cannot be bound, updated or evaluated); `compliance evaluate` prints `schemaVersion`, `exceptionApplied`, `hasRuleErrors` and marks `status: error` rule results with `!`; `compliance state` prints `lastEvaluationStatus` and the overview's `error` overlay bucket
+-   `compliance quarantine list|release|exception|revoke-exception` -- `list` pages on `--max-items`/`--starting-token` (an authorization-filtered page may be empty while a token remains); `exception` moves the asset to the `exception` state (scoped to the bound schema's name + version); `revoke-exception` (DELETE on the exception route, no reason) returns it to its last verdict's state
+-   `compliance cascade list|get|create|approve|reject` -- `create --no-approval` and `approve` return 202 with `state` `executing` and no result; the CLI prints a hint to poll `cascade get` until `completed` or `aborted` (`abortReason`)
+-   `compliance audit [-d -a] [--event-type] [--start-date] [--end-date] [--max-items|--limit] [--starting-token]` -- pages on `--max-items` (`--limit` is an alias; `click.IntRange(1, 500)`) and `--starting-token`, printing the `NextToken` hint; `--event-type` is rejected with `-d -a` because the per-asset route has no such filter
+
+The compliance `schemas` and pending `cascades` listings return their whole list in one response and take no paging parameters, so `schema list` and `cascade list` have none — a `--starting-token` there would be a knob the route ignores (`tools/VamsMCP/CLAUDE.md` Rule 9). `bindings` (`assetOverrides`), `state -d` (`assets`), `quarantine list` (`quarantinedAssets`), `evaluations` and `audit` (`entries`) all page on `maxItems` + `startingToken` with a `NextToken`; the CLI exposes them as `--max-items` (IntRange to the route cap) and `--starting-token`.
 
 Industry has nested sub-command groups:
 
@@ -140,6 +154,7 @@ VamsCLIError (base)
     OverrideTokenError
     TokenExpiredError
     PermissionDeniedError
+    RequestBlockedError
     VersionMismatchError
     RetryExhaustedError
     RateLimitExceededError
@@ -161,6 +176,7 @@ VamsCLIError (base)
     RoleError (+ 4 subclasses)
     ConstraintError (+ 5 subclasses)
     UserRoleError (+ 4 subclasses)
+    ComplianceError (+ 3 subclasses: ComplianceSchemaNotFoundError, ComplianceCascadeNotFoundError, InvalidComplianceDataError)
     ProfileAlreadyExistsError
 ```
 
@@ -221,12 +237,25 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
 -   Pre-flight token validation for override tokens (checks expiry before request)
 -   HTTP 429: Exponential backoff with jitter, respects `Retry-After` header
 -   HTTP 401: Auto-refresh token (Cognito only), fails immediately for override tokens
--   HTTP 403: Distinguishes expired tokens vs. permission denied
+-   HTTP 403: Classified by the party that answered it (see the table below); only the authorizer's deny and an unclassified (`unknown`) 403 are refreshed and resent
 -   HTTP status to exception mapping in response handlers:
     -   `404` --> `NotFoundError` variants
     -   `409` --> `AlreadyExistsError` variants
-    -   `403` --> `PermissionDeniedError` or `TokenExpiredError`
+    -   `403` --> `RequestBlockedError`, `PermissionDeniedError`, `TokenExpiredError` or `APIError`, raised by `_make_request` itself
     -   `429` --> `RateLimitExceededError` / `RetryExhaustedError`
+
+**HTTP 403 classification.** `_classify_403(response)` (module level in `api_client.py`, never raises) names the party that answered from the response alone, and `_make_request` raises before the `raise_http_errors` re-raise. A 403 from another host that a followed redirect reached (`_redirected_host`: a non-empty `response.history` and a final host other than the request's, such as the presigned Amazon S3 URL of a staged `assets export` payload) is not classified: it is `APIError` (`_REDIRECT_TARGET_REFUSED_MESSAGE`) naming that host, never the URL, after one send. Only the authorizer's deny can be cured by a fresh token, so only it and an unclassified (`unknown`) 403, which may be one, are refreshed and resent:
+
+| Kind (first match)                                                       | Raised                                                                                                                                                                                                                                             |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `waf`: JSON `blockedBy == "waf"`, or CloudFront's "request blocked" text | `RequestBlockedError(confirmed=True)`, with or without auth; one send                                                                                                                                                                              |
+| `waf_or_stage`: the body is exactly `{"message": "Forbidden"}`           | With auth, `RequestBlockedError(confirmed=False)`, one send; without auth, `APIError` + `_STAGE_HINT` naming both causes (the original `HTTPError` with `raise_http_errors=True`)                                                                  |
+| `no_route`: `Missing Authentication Token`, or its `x-amzn-ErrorType`    | `APIError` naming the method and URL path, never the body; one send                                                                                                                                                                                |
+| `resource_policy`: `execute-api:invoke` in `Message` or `message`, auth  | `PermissionDeniedError(_RESOURCE_POLICY_MESSAGE)`; one send                                                                                                                                                                                        |
+| `handler`: any other lowercase `message`, with auth                      | `PermissionDeniedError("Access forbidden. " + message)`; one send                                                                                                                                                                                  |
+| `authorizer`, `unknown`, with auth                                       | The override-token checks, then a Cognito refresh up to `MAX_AUTH_RETRIES`; a failed refresh is `TokenExpiredError` or `PermissionDeniedError` as before, and a deny that outlasts the retries `PermissionDeniedError(_AUTHORIZER_DENIED_MESSAGE)` |
+
+`RequestBlockedError` carries `json_fields` `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` (the marker body's request ID, else the first non-blank `x-amz-apigw-id`, `x-amz-cf-id` or `x-amzn-RequestId` header: the IDs the regional web ACL log, the CloudFront web ACL log and the API Gateway access log record), never clears stored credentials (`call_login_profile` re-raises global errors), and is printed under `Request Blocked`, ahead of the `AuthenticationError` branch, with `WAF_ADMIN_HINT` (`WAF_OR_STAGE_ADMIN_HINT`, which also names the stage-path check, when `confirmed` is false) and the request ID. Its texts carry no sign-in wording (`auth login`, `401`, `token has expired`, `Authentication failed`), which the IsaacSim connector would class as a credential failure; `tests/test_api_403_classification.py::TestBlockWording` holds them to that. `check_api_availability` raises `RequestBlockedError` for the marker and `APIUnavailableError` naming both causes for a bare `Forbidden`, and `requires_api_access` re-raises both, so a blocked version check stops `auth login`, `auth change-password` and `auth forgot-password` before any Cognito call; `setup` refuses a URL whose stage probe the web ACL blocked.
 
 **Rules**:
 
@@ -234,6 +263,7 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
 2. Never make raw `requests` calls -- always go through `APIClient`
 3. API endpoint constants are in `constants.py` as format strings (e.g., `API_DATABASE_ASSETS = "/database/{databaseId}/assets"`)
 4. New API methods go in `api_client.py`, not in command files
+5. In an `APIClient` method, every broad handler that raises -- a bare `except`, or one naming `Exception`, `BaseException` or `VamsCLIError` -- is preceded by `except GlobalInfrastructureError: raise` in the same `try`, and a handler naming `GlobalInfrastructureError` or a subclass re-raises with a bare `raise`; a handler that swallows the error or returns a value is exempt. The ratchet `tests/test_api_client_global_error_guards.py` fails otherwise. This keeps a web ACL block, a permission denial or an expired token typed through every `APIClient` method; `utils/upload_manager.py`, `utils/download_manager.py` and a few command wrappers still record one per file, upload sequence or item, with its message but without its heading or `json_fields`
 
 ### 4. JSON Output Contract
 
@@ -254,6 +284,7 @@ output_info("Hint text", json_output)          # Suppressed in JSON mode
 2. Never use `click.echo()` directly in commands that support `--json-output` -- it would pollute JSON output
 3. Status/warning/info messages are suppressed when `json_output=True`
 4. CLI mode uses colored output via `click.secho()` with `fg='green'`, `fg='red'`, etc.
+5. The JSON error object is `{"error", "error_type"}` plus the exception's `json_fields`, merged without replacing those two and only when it is a dict, whether it is set on the class or on the instance (any other value is left out) -- `RequestBlockedError` carries `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` on the instance; `tests/test_json_output_error_fields.py` holds `output_error` to that. A global error's document (`_global_error_data` in `utils/global_exceptions.py`) is `{"error": "<Heading>: <message>", "error_type", ...json_fields, "additional_info"?}`, also on stdout; in text mode its `✗ <Heading>: <message>` line goes to stderr and its `additional_info` lines to stdout. Both exit 1
 
 ### 5. Decorator Usage
 
@@ -790,7 +821,7 @@ Follow this checklist:
 
     - Check whether `tools/VamsMCP/vams_mcp/server.py` calls the `APIClient` method you changed, and update the call site
     - Add an `@mcp.tool()` + `@tool_result` function for a new method agents should be able to use, in the correct gate section (read at top, writes under `if CONFIG.enable_writes:`, destructive under `if CONFIG.enable_destructive:`)
-    - Confirm the pagination `items_key` still matches the endpoint's list field. Read the handler's response model rather than checking against a list of names: the names in use today are `Items`, `items`, `versions` and `metadata`. `VamsClient.paginate()` also unwraps the legacy `message` envelope
+    - Confirm the pagination `items_key` still matches the endpoint's list field. Read the handler's response model rather than checking against a list of names: the names in use today are `Items`, `items`, `versions`, `metadata`, and the compliance fields `evaluations`, `entries`, `quarantinedAssets`. `VamsClient.paginate()` also unwraps the legacy `message` envelope
     - Verify the new `def` is unique and correctly positioned. The tools are module-level functions, so a duplicate name silently shadows the earlier one and a `def` placed after the `if __name__` entrypoint or outside its gate block never executes — the tool goes missing with no import error. `tests/test_server_tools.py` asserts the source layout for this
     - Add the tool to the `tools/VamsMCP/README.md` tool list (and the `autoApprove` sample if it is a safe read)
     - Run `cd tools/VamsMCP && pytest` in that server's own virtual environment — tests mock the client, so no live deployment is needed, but the `mcp` SDK needs Pydantic v2 and installing it into a shared environment breaks the Pydantic-v1 backend suite
@@ -840,7 +871,7 @@ A fork adds commands without editing `main.py`, `constants.py` or `utils/api_cli
 
 2. Add the class in the correct section of `utils/exceptions.py`
 
-3. If `GlobalInfrastructureError`: add handler in `utils/global_exceptions.py`
+3. If `GlobalInfrastructureError`: add a branch in `utils/global_exceptions.py` (`_handle_global_error("<Heading>", str(e), <info>, exc=e)`) ahead of any branch for a class it subclasses; `exc=e` puts its class name in `error_type` and merges its `json_fields`
 
 4. If `BusinessLogicError`: catch and handle in the relevant command file
 

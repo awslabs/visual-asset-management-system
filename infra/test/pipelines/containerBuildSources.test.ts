@@ -74,7 +74,7 @@ describe("container buildspecs are partition-portable", () => {
     it("finds the buildspecs to scan", () => {
         // Control. An empty list would make both assertions below pass while checking nothing, which is
         // the failure mode of every file-scanning test.
-        expect(files.length).toBeGreaterThanOrEqual(8);
+        expect(files.length).toBeGreaterThanOrEqual(9);
     });
 
     it("the composed-host detector actually detects", () => {
@@ -144,7 +144,7 @@ describe("container buildspecs push an immutable tag", () => {
 
     it("finds the buildspecs to scan", () => {
         // Control, as above: an empty list passes every assertion in this block.
-        expect(files.length).toBeGreaterThanOrEqual(8);
+        expect(files.length).toBeGreaterThanOrEqual(9);
     });
 
     it("the defaulted-tag detector actually detects", () => {
@@ -300,6 +300,11 @@ const NON_ROOT_IMAGES: { label: string; file: string; scratchDir?: string }[] = 
             "Dockerfile"
         ),
     },
+    {
+        label: "videoSopBom",
+        file: path.join(PIPELINES_DIR, "genAi", "videoSopBom", "container", "Dockerfile"),
+        scratchDir: "/app/tmp",
+    },
 ];
 
 /**
@@ -326,7 +331,7 @@ describe("base images are not pulled from a floating tag", () => {
 
     it("examines every Dockerfile it names", () => {
         // Control: a typo'd path would otherwise make the rule below pass over an empty set.
-        expect(ALL_DOCKERFILES.length).toBeGreaterThanOrEqual(7);
+        expect(ALL_DOCKERFILES.length).toBeGreaterThanOrEqual(8);
         for (const f of ALL_DOCKERFILES) expect(fs.existsSync(f)).toBe(true);
     });
 

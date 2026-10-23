@@ -407,6 +407,11 @@ class WorkflowResponseModel(BaseModel, extra='ignore'):
     createdBy: Optional[str] = ""
     modifiedBy: Optional[str] = ""
     schemaVersion: Optional[int] = 1
+    # True when the workflow's state machine could not be redeployed after a referenced pipeline's
+    # settings changed, with the reason; None when the deployment is current. A stale workflow is
+    # redeployed on its next save or launch, and a launch never runs the stale definition.
+    deploymentStale: Optional[bool] = None
+    deploymentStaleReason: Optional[str] = None
     # Non-fatal save-time consistency warnings (workflow<->pipeline). Present on create/update.
     warnings: Optional[List[str]] = None
     # A workflow's triggers, present on the single-workflow details response.

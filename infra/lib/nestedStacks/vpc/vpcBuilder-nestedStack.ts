@@ -693,6 +693,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                 (props.config.app.pipelines.useSystemGenAiMetadata.enabled &&
                     props.config.app.pipelines.useSystemGenAiMetadata.useFargateRenderer) ||
                 props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
+                props.config.app.pipelines.useGenAiVideoSopBom?.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useModelOps.enabled ||
@@ -745,20 +746,38 @@ export class VPCBuilderNestedStack extends NestedStack {
                 }
             }
 
-            // Bedrock Runtime endpoint. The analysis and embedding Lambdas call Bedrock from the
-            // isolated subnets when every Lambda runs in the VPC; the vector search Lambda does so
-            // whenever the search stack's placement puts it in the VPC.
+            // Amazon Bedrock Runtime endpoint. A VPC allows one private-DNS endpoint per service, so its
+            // in-VPC callers share it and only its condition is the union: the SYSTEM GenAI analysis and
+            // embedding Lambdas, which call Bedrock from the isolated subnets when every Lambda runs in
+            // the VPC; the vector search Lambda, whenever the search stack's placement puts it in the
+            // VPC; and the video SOP/BOM Batch container, which always runs in the isolated subnets.
             const bedrockFromAllLambdas =
                 props.config.app.useGlobalVpc.useForAllLambdas &&
                 (props.config.app.pipelines.useSystemGenAiMetadata.enabled ||
                     props.config.app.vectorSearch.enabled);
             const bedrockFromSearch =
                 props.config.app.vectorSearch.enabled && searchLambdasInVpc(props.config);
-            if (bedrockFromAllLambdas || bedrockFromSearch) {
+            const bedrockRuntimeFromContainer =
+                props.config.app.pipelines.useGenAiVideoSopBom?.enabled === true;
+            if (bedrockFromAllLambdas || bedrockFromSearch || bedrockRuntimeFromContainer) {
                 new ec2.InterfaceVpcEndpoint(this, "BedrockEndpoint", {
                     vpc: this.vpc,
                     privateDnsEnabled: true,
                     service: ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME,
+                    subnets: { subnets: this.isolatedSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                });
+            }
+
+            // Amazon Transcribe batch API (StartTranscriptionJob, GetTranscriptionJob,
+            // DeleteTranscriptionJob), called by the video SOP/BOM container from the isolated subnets.
+            // Standard endpoint only: the container resolves the default regional hostname, not the
+            // FIPS variant.
+            if (bedrockRuntimeFromContainer) {
+                new ec2.InterfaceVpcEndpoint(this, "TranscribeEndpoint", {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: ec2.InterfaceVpcEndpointAwsService.TRANSCRIBE,
                     subnets: { subnets: this.isolatedSubnets },
                     securityGroups: [vpceSecurityGroup],
                 });

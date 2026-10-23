@@ -3,10 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { apiClient } from "./apiClient";
+import { apiClient, isRequestBlocked } from "./apiClient";
 import { default as vamsConfig } from "../config";
 import { ensureApiStage } from "../utils/apiEndpoint";
 import type { NlpSearchRequest, NlpSearchResponse } from "../components/search/types";
+
+// Components tell a blocked request from a permission denial through the service layer.
+export { isRequestBlocked };
 
 export const getAmplifyConfig = async () => {
     console.log("getAmplifyConfig");
@@ -708,9 +711,14 @@ export const deleteAssetLink = async ({ assetLinkId }: any) => {
         return [true, response?.message ?? response];
     } catch (error: any) {
         // [false, message, status] so callers can distinguish authorization
-        // failures (403) from other errors.
+        // failures (403) from other errors. A blocked request carries no status, so its
+        // message is shown.
         console.log(error);
-        return [false, error?.message || "Failed to delete asset link", error?.status];
+        return [
+            false,
+            error?.message || "Failed to delete asset link",
+            isRequestBlocked(error) ? undefined : error?.status,
+        ];
     }
 };
 
@@ -1089,7 +1097,7 @@ export const deleteComment = async ({ assetId, assetVersionIdAndCommentId }: any
             return false;
         }
     } catch (error: any) {
-        if (error.status === 403) return error.status;
+        if (error.status === 403 && !isRequestBlocked(error)) return error.status;
         return [false, error?.message];
     }
 };

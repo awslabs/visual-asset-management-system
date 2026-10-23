@@ -55,8 +55,9 @@ from models.pipelines import (
 )
 from common.workflows import pipelineRecords as pr
 from common.workflows import workflowRecords as wr
+from common.workflows import workflowAsl
 from common.workflows.triggerTemplateValidation import pipeline_trigger_template_warnings
-from common.workflows.executionValidation import arity_none_metadata_warnings
+from common.workflows.executionValidation import arity_none_metadata_warnings, validate_workflow_save
 from common.workflows.systemRecords import (
     is_schema_import_call,
     system_update_allowed_fields,
@@ -86,6 +87,11 @@ except Exception as e:
 # executions that hang forever on an unresolvable task token — creation is rejected up front.
 DEADLINE_CLOUD_EXECUTION_TYPE_ENABLED = (
     os.environ.get("DEADLINE_CLOUD_EXECUTION_TYPE_ENABLED", "false").strip().lower() == "true")
+
+# The workflow service, which this handler invokes asynchronously to redeploy every workflow that
+# references a pipeline whose definition-relevant settings changed. When unset, the refresh is not
+# scheduled and each referencing workflow is redeployed at its next save or launch instead.
+workflow_service_function = os.environ.get("WORKFLOW_SERVICE_V2_FUNCTION_NAME", "")
 
 # Optional deploy-time env for provisioning a Lambda for an API-created Lambda-type pipeline that does
 # not reference an existing function. Absent for built-in pipelines (they inject their function name at
@@ -134,8 +140,9 @@ MAX_DETAIL_TEMPLATES = 10
 
 # Bounds on the referencing-workflow lookup behind the save-path advisory warnings. The lookup pages
 # the constant-partition by-date GSI with only the reference fields projected; the page cap keeps one
-# save from paging an arbitrarily large workflow table, and the label cap bounds the warning string.
-# Both produce a non-blocking advisory, so stopping early degrades the hint rather than the save.
+# save from paging an arbitrarily large workflow table, and MAX_REFERENCING_WORKFLOWS bounds how many
+# per-workflow findings one warning list carries. Both produce a non-blocking advisory, so stopping
+# early degrades the hint rather than the save.
 REFERENCING_WORKFLOW_PAGE_SIZE = 200
 MAX_REFERENCING_WORKFLOW_PAGES = 20
 MAX_REFERENCING_WORKFLOWS = 25
@@ -183,57 +190,128 @@ def _pipeline_save_warnings(item):
     return warnings
 
 
-def _referencing_workflow_labels(database_id, pipeline_id):
-    """`databaseId:workflowId` labels of the workflows whose specifiedPipelines snapshot lists this
-    pipeline. Queries the constant-partition by-date GSI rather than scanning the table, projecting
-    only the three attributes the match needs, and stops at MAX_REFERENCING_WORKFLOWS labels or
-    MAX_REFERENCING_WORKFLOW_PAGES pages. Best-effort — returns [] on any read error."""
+def _referencing_workflows(database_id, pipeline_id, include_system_config=False):
+    """The non-archived workflows whose specifiedPipelines snapshot lists this pipeline, for the
+    save-path warnings: a list of {"label": "databaseId:workflowId", "systemConfig": {...}} plus
+    whether the walk read the whole table.
+
+    Queries the constant-partition by-date GSI rather than scanning the table, projecting only the
+    attributes the match needs (systemConfig only when asked for), and stops at
+    MAX_REFERENCING_WORKFLOW_PAGES pages. Best-effort: a read error ends the walk with what it found
+    and reports it incomplete. The redeploy itself does not depend on this walk — the workflow
+    service derives and walks its own target list to exhaustion."""
     composite = pr.pipeline_composite_key(database_id, pipeline_id)
-    labels = []
+    matches = []
+    projection = ["databaseId", "workflowId", "specifiedPipelines", "#archived"]
+    if include_system_config:
+        projection.append("systemConfig")
+    kwargs = {
+        "IndexName": "WorkflowsByDateGSI",
+        "KeyConditionExpression": Key("allListPartition").eq(wr.ALL_WORKFLOWS_LIST_PARTITION),
+        "ProjectionExpression": ", ".join(projection),
+        "ExpressionAttributeNames": {"#archived": "archived"},
+        "Limit": REFERENCING_WORKFLOW_PAGE_SIZE,
+    }
     try:
         table = _workflow_table()
-        kwargs = {
-            "IndexName": "WorkflowsByDateGSI",
-            "KeyConditionExpression": Key("allListPartition").eq(wr.ALL_WORKFLOWS_LIST_PARTITION),
-            "ProjectionExpression": "databaseId, workflowId, specifiedPipelines",
-            "Limit": REFERENCING_WORKFLOW_PAGE_SIZE,
-        }
         for _ in range(MAX_REFERENCING_WORKFLOW_PAGES):
             resp = table.query(**kwargs) or {}
             for workflow in resp.get("Items", []):
+                if workflow.get("archived"):
+                    continue
                 for ref in workflow.get("specifiedPipelines", []) or []:
                     if (ref or {}).get("pipelineDatabaseId:pipelineId") == composite:
-                        labels.append(
-                            f"{workflow.get('databaseId', '')}:{workflow.get('workflowId', '')}")
+                        matches.append({
+                            "label": f"{workflow.get('databaseId', '')}:{workflow.get('workflowId', '')}",
+                            "systemConfig": workflow.get("systemConfig") or {},
+                        })
                         break
-                if len(labels) >= MAX_REFERENCING_WORKFLOWS:
-                    return labels
             if "LastEvaluatedKey" not in resp:
-                return labels
+                return matches, True
             kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
         logger.warning(
             f"Referencing-workflow lookup for {composite} stopped after "
-            f"{MAX_REFERENCING_WORKFLOW_PAGES} pages; the save warning may name fewer workflows "
+            f"{MAX_REFERENCING_WORKFLOW_PAGES} pages; the save warning may count fewer workflows "
             "than reference this pipeline.")
     except Exception as e:
         logger.warning(f"Referencing-workflow lookup failed for {composite}: {e}")
-        return []
-    return labels
+    return matches, False
 
 
-def _stale_deployment_warnings(database_id, pipeline_id):
-    """Warnings (non-blocking) for an executionConfig change: the pipeline's execution target and
-    callback/timeout values are baked into each referencing workflow's deployed Step Functions
-    definition at workflow-save time, so those state machines keep invoking the previous target until
-    the workflow is saved again."""
-    labels = _referencing_workflow_labels(database_id, pipeline_id)
-    if not labels:
+def _schedule_workflow_refresh(database_id, pipeline_id):
+    """Ask the workflow service, asynchronously, to redeploy every workflow referencing this
+    pipeline. Only the pipeline is named: the service derives the workflows itself. Returns whether
+    the invoke was accepted. A refresh that is not scheduled leaves each referencing workflow to be
+    redeployed at its next save or launch, so the pipeline save does not fail on it."""
+    if not workflow_service_function:
+        logger.warning("WORKFLOW_SERVICE_V2_FUNCTION_NAME is not set; the referencing-workflow "
+                       "refresh was not scheduled")
+        return False
+    event = wr.build_internal_action_event(
+        wr.INTERNAL_ACTION_REFRESH_PIPELINE_REFERENCES,
+        {"pipelineDatabaseId": database_id, "pipelineId": pipeline_id})
+    try:
+        lambda_client.invoke(
+            FunctionName=workflow_service_function, InvocationType="Event",
+            Payload=json.dumps(event).encode("utf-8"))
+        return True
+    except Exception as e:
+        logger.exception(f"Scheduling the referencing-workflow refresh for "
+                         f"{database_id}:{pipeline_id} failed: {e}")
+        return False
+
+
+def _refresh_warnings(matches, complete, scheduled):
+    """The save warning for a definition-relevant change: how many referencing workflows are being
+    redeployed, or that they will be redeployed at their next save or launch when the refresh could
+    not be scheduled. Empty when the full lookup found none."""
+    count = len(matches)
+    if complete and not count:
         return []
-    return [
-        f"the execution configuration changed while workflow(s) [{', '.join(labels)}] reference this "
-        f"pipeline. Their deployed state machines still invoke the previous execution target — save "
-        f"each workflow again to redeploy it against the new configuration."
-    ]
+    if complete:
+        subject = f"{count} referencing workflow(s)"
+    elif count:
+        subject = f"At least {count} referencing workflow(s)"
+    else:
+        subject = "Referencing workflows"
+    if scheduled:
+        return [f"{subject} are being redeployed against the new execution configuration."]
+    return [f"{subject} could not be scheduled for redeployment against the new execution "
+            "configuration; each is redeployed at its next save or launch."]
+
+
+def _save_check_config(item, system_config):
+    """The pipeline config shape the workflow save checks read, with the given systemConfig."""
+    return {
+        "pipelineId": item.get("pipelineId", ""),
+        "pipelineDatabaseId": item.get("databaseId", ""),
+        "enabled": item.get("enabled", True),
+        "archived": item.get("archived", False),
+        "systemConfig": system_config or {},
+    }
+
+
+def _validation_drift_warnings(matches, previous_system_config, item):
+    """Warnings for the referencing workflows this pipeline's new systemConfig makes fail the
+    workflow save checks (executionValidation.validate_workflow_save). Only findings the previous
+    systemConfig did not already produce are reported, so a workflow that was already flagged is not
+    repeated on every pipeline save. Non-blocking, and bounded to MAX_REFERENCING_WORKFLOWS entries."""
+    before_config = _save_check_config(item, previous_system_config)
+    after_config = _save_check_config(item, item.get("systemConfig"))
+    findings = []
+    for match in matches:
+        workflow_config = match.get("systemConfig") or {}
+        before_errors, before_warnings = validate_workflow_save(workflow_config, [before_config])
+        after_errors, after_warnings = validate_workflow_save(workflow_config, [after_config])
+        already = set(before_errors) | set(before_warnings)
+        for finding in list(after_errors) + list(after_warnings):
+            if finding not in already:
+                findings.append(f"workflow {match['label']}: {finding}")
+    if len(findings) <= MAX_REFERENCING_WORKFLOWS:
+        return findings
+    hidden = len(findings) - MAX_REFERENCING_WORKFLOWS
+    return findings[:MAX_REFERENCING_WORKFLOWS] + [
+        f"{hidden} further workflow save-check finding(s) caused by this change are not listed."]
 
 
 def _casbin_object(item):
@@ -682,11 +760,18 @@ def create_pipeline(database_id, request, username, claims_and_roles, event=None
         record.get("executionConfig"), pipeline_id)
 
     table.put_item(Item=record)
+    # A create that restored an archived row in place may have changed what the workflows still
+    # referencing it were built from.
+    refresh_scheduled = False
+    if existing and (workflowAsl.pipeline_asl_fingerprint(record)
+                     != workflowAsl.pipeline_asl_fingerprint(existing)):
+        refresh_scheduled = _schedule_workflow_refresh(database_id, pipeline_id)
     # AUDIT LOG: pipeline created (after the write, so a failed write is never audited as a success).
     log_actions(event or {}, "pipelineCreate", {
         "databaseId": database_id,
         "pipelineId": pipeline_id,
         "executionType": (record.get("executionConfig") or {}).get("executionType", ""),
+        "workflowRefreshScheduled": bool(refresh_scheduled),
         "operation": "create",
     })
     body = {"message": _item_to_response(record).dict()}
@@ -726,6 +811,10 @@ def update_pipeline(database_id, pipeline_id, request, username, claims_and_role
             "message": "The DeadlineCloud execution type is not enabled for this deployment."})
 
     stored_execution_config = item.get("executionConfig")
+    stored_system_config = item.get("systemConfig") or {}
+    # What the referencing workflows' state machines were last built from, compared with the saved
+    # record below to decide whether they have to be redeployed.
+    stored_fingerprint = workflowAsl.pipeline_asl_fingerprint(item)
 
     if request.pipelineName is not None:
         item["pipelineName"] = request.pipelineName
@@ -768,20 +857,36 @@ def update_pipeline(database_id, pipeline_id, request, username, claims_and_role
 
     execution_config_changed = (request.executionConfig is not None
                                 and item.get("executionConfig") != stored_execution_config)
+    # A change the generated state machines encode (execution type, target, callback mode, timeouts,
+    # Deadline Cloud job settings). An executionConfig edit outside those, such as the lambda block's
+    # isProvided bookkeeping flag, leaves every definition as it is and needs no redeploy.
+    definition_changed = (request.executionConfig is not None
+                          and workflowAsl.pipeline_asl_fingerprint(item) != stored_fingerprint)
+    system_config_changed = (request.systemConfig is not None
+                             and (item.get("systemConfig") or {}) != stored_system_config)
 
     _pipeline_table().put_item(Item=item)
+    # Scheduled only after the write, so the workflow service reads the saved record.
+    refresh_scheduled = _schedule_workflow_refresh(database_id, pipeline_id) \
+        if definition_changed else False
     # AUDIT LOG: pipeline updated. executionConfigChanged is worth auditing on its own — it repoints
     # the compute the pipeline invokes.
     log_actions(event or {}, "pipelineUpdate", {
         "databaseId": database_id,
         "pipelineId": pipeline_id,
         "executionConfigChanged": bool(execution_config_changed),
+        "workflowRefreshScheduled": bool(refresh_scheduled),
         "operation": "update",
     })
     body = {"message": _item_to_response(item).dict()}
     warnings = _pipeline_save_warnings(item)
-    if execution_config_changed:
-        warnings = warnings + _stale_deployment_warnings(database_id, pipeline_id)
+    if definition_changed or system_config_changed:
+        matches, complete = _referencing_workflows(
+            database_id, pipeline_id, include_system_config=system_config_changed)
+        if definition_changed:
+            warnings = warnings + _refresh_warnings(matches, complete, refresh_scheduled)
+        if system_config_changed:
+            warnings = warnings + _validation_drift_warnings(matches, stored_system_config, item)
     if warnings:
         body["warnings"] = warnings
     return success(body=body)

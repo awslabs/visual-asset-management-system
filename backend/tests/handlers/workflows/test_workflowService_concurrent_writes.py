@@ -49,8 +49,8 @@ def _real_to_update_expr(record, op="SET"):
     handler issues the same one it issues in the deployed handler.
     """
     keys = record.keys()
-    keys_attr_names = ["#f{n}".format(n=x) for x in range(len(keys))]
-    values_attr_names = [":v{n}".format(n=x) for x in range(len(keys))]
+    keys_attr_names = ["#u{n}".format(n=x) for x in range(len(keys))]
+    values_attr_names = [":u{n}".format(n=x) for x in range(len(keys))]
     keys_map = {k: key for k, key in zip(keys_attr_names, keys)}
     values_map = {v1: record[v] for v, v1 in zip(keys, values_attr_names)}
     expr = "{op} ".format(op=op) + ", ".join(
@@ -168,7 +168,8 @@ class TestConcurrentWorkflowWrites:
             table.row["archived"] = True
             table.row["enabled"] = False
             table.row["modifiedBy"] = "other-user"
-            return "arn:aws:states:us-east-1:111122223333:stateMachine:new", ["new-job-uuid"]
+            return ("arn:aws:states:us-east-1:111122223333:stateMachine:new", ["new-job-uuid"],
+                    "arn:aws:states:us-east-1:111122223333:stateMachine:new:1")
 
         mock_asl.deploy_state_machine.side_effect = _deploy_then_a_concurrent_archive
 
@@ -340,7 +341,8 @@ class TestConcurrentWorkflowWrites:
         mock_get_pipe.return_value = PIPELINE_REC
         mock_ev.validate_workflow_save.return_value = ([], [])
         mock_asl.deploy_state_machine.return_value = (
-            "arn:aws:states:us-east-1:111122223333:stateMachine:new", ["new-job-uuid"])
+            "arn:aws:states:us-east-1:111122223333:stateMachine:new", ["new-job-uuid"],
+            "arn:aws:states:us-east-1:111122223333:stateMachine:new:1")
         table = FakeWorkflowTable(_stored_row())
         mock_table.return_value = table
 

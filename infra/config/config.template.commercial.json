@@ -108,7 +108,18 @@
             "usePreview3dThumbnail": {
                 "enabled": false,
                 "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true
+                "autoRegisterAutoTriggerOnFileUpload": true,
+                "computeTiers": {
+                    "standard": {
+                        "vcpu": 4,
+                        "memoryGiB": 16
+                    },
+                    "large": {
+                        "vcpu": 16,
+                        "memoryGiB": 120
+                    }
+                },
+                "largeTierThresholdGiB": 2
             },
             "useSystemGenAiMetadata": {
                 "enabled": true,
@@ -145,6 +156,16 @@
                 "enabled": false,
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true
+            },
+            "useGenAiVideoSopBom": {
+                "enabled": false,
+                "useCodeBuild": false,
+                "autoRegisterWithVAMS": true,
+                "bedrockModelId": "global.anthropic.claude-sonnet-5-5",
+                "limits": {
+                    "maxVideoFiles": 4,
+                    "maxTotalDurationMinutes": 240
+                }
             },
             "useSplatToolbox": {
                 "enabled": false,
@@ -367,6 +388,10 @@
             "autoLoadDefaultDatabaseSchema": true,
             "autoLoadDefaultAssetSchema": true,
             "autoLoadDefaultAssetFileSchema": true
+        },
+        "compliance": {
+            "autoLoadDefaultSchema": true,
+            "quarantineBlocksDownload": false
         }
     }
 }

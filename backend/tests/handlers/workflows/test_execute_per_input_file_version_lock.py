@@ -48,6 +48,7 @@ if "common.workflows.stepfunctions_builder" not in sys.modules:
     sys.modules["common.workflows.stepfunctions_builder"] = _stub
 
 from backend.backend.handlers.workflows import executeWorkflow as ewv2  # noqa: E402
+from backend.tests.workflowDeploymentStub import with_current_deployment  # noqa: E402
 
 MOD = "backend.backend.handlers.workflows.executeWorkflow"
 # Taken from the handler's own module attributes: the test tree puts both `backend/` and
@@ -158,7 +159,8 @@ def _run(lock_table, restriction="perInputFileVersion", body=_TWO_FILES, persist
 
     with contextlib.ExitStack() as stack:
         for context in (
-            patch(f"{MOD}._get_workflow", return_value=_workflow(restriction)),
+            patch(f"{MOD}._get_workflow",
+                  return_value=with_current_deployment(_workflow(restriction), [_PIPELINE])),
             patch(f"{MOD}._get_pipeline", return_value=dict(_PIPELINE)),
             patch(f"{MOD}._get_asset", return_value=dict(_ASSET)),
             patch(f"{MOD}._default_run_bucket",

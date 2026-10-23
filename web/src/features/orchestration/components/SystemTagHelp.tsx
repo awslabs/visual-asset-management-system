@@ -53,7 +53,10 @@ const SYSTEM_TAG_GROUPS: TagGroup[] = [
             { tag: "pipelineId", desc: "The pipeline's id." },
             { tag: "pipelineName", desc: "The pipeline's name." },
             { tag: "pipelineDatabaseId", desc: "The pipeline's database id." },
-            { tag: "jobName", desc: "The per-pipeline job name in the workflow." },
+            {
+                tag: "jobName",
+                desc: "This step's job name for this run: its generated job name plus its pipeline execution id.",
+            },
         ],
     },
     {

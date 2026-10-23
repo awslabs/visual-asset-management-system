@@ -3,9 +3,12 @@
 
 """Point-cloud readers that need no native library beyond numpy: PCD in all three encodings, ASCII XYZ,
 the cap applied by `load_points`, and the FARO path that names its conversion route. Also pins that
-Open3D is imported nowhere in the package except the FBX fallback of the mesh handler, which is what
-lets the Lambda image omit it."""
+the path the Lambda image runs (`load_points` and the analysis package) imports no Open3D: the
+thumbnail's own PCD reader and the FBX loader of the mesh handler are the only Open3D importers, and
+neither is reached from it, which is what lets the Lambda image omit it."""
 
+import ast
+import inspect
 import os
 import struct
 import sys
@@ -198,17 +201,19 @@ class TestLoadPoints:
             return SimpleNamespace(points=points, point_data={})
 
         with patch.object(pointcloud_handler, "pv", SimpleNamespace(PolyData=_polydata)):
-            cloud = pointcloud_handler.load(path)
+            cloud = pointcloud_handler.to_polydata(*pointcloud_handler.load_points(path))
         assert made["points"].shape == (2, 3)
         assert cloud.point_data["RGB"].tolist() == [[1, 2, 3], [4, 5, 6]]
 
     def test_supported_extensions_and_loader_names(self):
-        assert ".xyz" in pointcloud_handler.SUPPORTED_EXTENSIONS
-        assert ".pcd" in pointcloud_handler.SUPPORTED_EXTENSIONS
+        # load_points reads every format the thumbnail renders, plus XYZ and the FARO formats it
+        # names a conversion route for.
+        assert pointcloud_handler.SUPPORTED_EXTENSIONS <= set(pointcloud_handler.LOADERS)
+        assert set(pointcloud_handler.LOADERS) - pointcloud_handler.SUPPORTED_EXTENSIONS == {
+            ".xyz", ".fls", ".fws"}
         assert pointcloud_handler.LOADERS[".pcd"] == "pcd_reader"
         assert pointcloud_handler.LOADERS[".las"] == pointcloud_handler.LOADERS[".laz"] == "laspy"
         assert pointcloud_handler.LOADERS[".e57"] == "pye57"
-        assert set(pointcloud_handler.LOADERS) == pointcloud_handler.SUPPORTED_EXTENSIONS
 
 
 @pytest.mark.unit
@@ -222,19 +227,46 @@ class TestFaro:
 
 @pytest.mark.unit
 class TestOpen3dConfinement:
-    def test_open3d_is_imported_only_by_the_fbx_fallback(self):
-        """The Lambda image ships no Open3D; every other loader must not reach for it."""
-        hits = []
+    @staticmethod
+    def _open3d_importers():
+        """``{(file, function)}`` of every function in the package whose body imports open3d."""
+        found = set()
         for root, _dirs, files in os.walk(PACKAGE_DIR):
             for name in files:
                 if not name.endswith(".py"):
                     continue
                 path = os.path.join(root, name)
                 with open(path, encoding="utf-8") as handle:
-                    for number, line in enumerate(handle, start=1):
-                        if "open3d" in line and not line.lstrip().startswith("#"):
-                            hits.append((os.path.relpath(path, PACKAGE_DIR).replace("\\", "/"), number, line.strip()))
-        files_hit = {h[0] for h in hits}
-        assert files_hit == {"format_handlers/mesh_handler.py"}, hits
-        for _file, _number, line in hits:
-            assert "fbx" in line.lower() or "import open3d" in line or "Open3D" in line, line
+                    tree = ast.parse(handle.read())
+                rel = os.path.relpath(path, PACKAGE_DIR).replace("\\", "/")
+                for node in ast.walk(tree):
+                    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        continue
+                    for inner in ast.walk(node):
+                        if isinstance(inner, ast.Import) and any(
+                                alias.name.split(".")[0] == "open3d" for alias in inner.names):
+                            found.add((rel, node.name))
+                        if isinstance(inner, ast.ImportFrom) and (inner.module or "").split(".")[0] == "open3d":
+                            found.add((rel, node.name))
+                if any(isinstance(n, (ast.Import, ast.ImportFrom)) and "open3d" in ast.dump(n)
+                       for n in tree.body):
+                    found.add((rel, "<module>"))
+        return found
+
+    def test_open3d_is_imported_only_by_the_thumbnail_pcd_and_fbx_loaders(self):
+        """The Lambda image ships no Open3D; only the two thumbnail-path loaders may import it."""
+        assert self._open3d_importers() == {
+            ("format_handlers/mesh_handler.py", "_load_fbx_open3d"),
+            ("format_handlers/pointcloud_handler.py", "_load_pcd"),
+        }
+
+    def test_the_lambda_path_never_reaches_the_open3d_pcd_reader(self):
+        source = inspect.getsource(pointcloud_handler.load_points)
+        assert "_load_pcd_without_open3d(" in source
+        assert "_load_pcd(" not in source
+        for root, _dirs, files in os.walk(os.path.join(PACKAGE_DIR, "analysis")):
+            for name in files:
+                if name.endswith(".py"):
+                    with open(os.path.join(root, name), encoding="utf-8") as handle:
+                        text = handle.read()
+                    assert "open3d" not in text and "_load_pcd(" not in text, name

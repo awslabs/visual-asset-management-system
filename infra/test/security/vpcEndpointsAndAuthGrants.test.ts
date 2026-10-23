@@ -88,6 +88,69 @@ describe("Deadline Cloud VPC interface endpoint gating", () => {
     });
 });
 
+describe("Bedrock Runtime and Transcribe VPC interface endpoint gating", () => {
+    // The video SOP/BOM Batch container calls Amazon Bedrock Runtime and Amazon Transcribe from the
+    // isolated subnets, which have no NAT, so both endpoints key on that pipeline's flag alone. The
+    // SYSTEM GenAI metadata pipeline's Bedrock callers are Lambdas that are in the VPC only under
+    // useForAllLambdas, so its half of the Bedrock gate keeps that condition. Vector search is off in
+    // every case so the search Lambda's placement does not contribute to the gate.
+    const servicesFor = (mutate: (c: Config.Config) => void): string[] => {
+        const config = createMockConfig();
+        config.app.vectorSearch.enabled = false;
+        mutate(config);
+        return synthVpcEndpointServices(config);
+    };
+    // Service names are JSON-stringified, so the closing quote pins the exact suffix: `.transcribe"`
+    // does not match `transcribestreaming`, `.bedrock-runtime"` does not match `bedrock-runtime-fips`.
+    const count = (services: string[], suffix: string): number =>
+        services.filter((s) => s.includes(`.${suffix}"`)).length;
+
+    test("both are created for the video SOP/BOM pipeline with lambdas outside the VPC", () => {
+        const services = servicesFor((c) => {
+            c.app.pipelines.useGenAiVideoSopBom.enabled = true;
+            c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+            c.app.useGlobalVpc.useForAllLambdas = false;
+        });
+        expect(count(services, "transcribe")).toBe(1);
+        expect(count(services, "bedrock-runtime")).toBe(1);
+        expect(count(services, "rekognition")).toBe(0);
+    });
+
+    test("[control] the SYSTEM GenAI pipeline with in-VPC lambdas keeps Bedrock", () => {
+        // The positive control for the Lambda path: the widened gate must still create what the
+        // Lambda-gated gate created, and the Transcribe endpoint must not ride along.
+        const services = servicesFor((c) => {
+            c.app.pipelines.useGenAiVideoSopBom.enabled = false;
+            c.app.pipelines.useSystemGenAiMetadata.enabled = true;
+            c.app.useGlobalVpc.useForAllLambdas = true;
+        });
+        expect(count(services, "bedrock-runtime")).toBe(1);
+        expect(count(services, "transcribe")).toBe(0);
+    });
+
+    test("the widened gate does not create Bedrock for the SYSTEM GenAI pipeline alone", () => {
+        // Pins that the OR did not loosen the Lambda half: with lambdas outside the VPC the analysis
+        // Lambdas reach Bedrock over the public endpoint and an interface endpoint has no consumer.
+        const services = servicesFor((c) => {
+            c.app.pipelines.useGenAiVideoSopBom.enabled = false;
+            c.app.pipelines.useSystemGenAiMetadata.enabled = true;
+            c.app.useGlobalVpc.useForAllLambdas = false;
+        });
+        expect(count(services, "bedrock-runtime")).toBe(0);
+        expect(count(services, "transcribe")).toBe(0);
+    });
+
+    test("neither is created when both pipelines are disabled", () => {
+        const services = servicesFor((c) => {
+            c.app.pipelines.useGenAiVideoSopBom.enabled = false;
+            c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+            c.app.useGlobalVpc.useForAllLambdas = true;
+        });
+        expect(count(services, "bedrock-runtime")).toBe(0);
+        expect(count(services, "transcribe")).toBe(0);
+    });
+});
+
 describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
     // The three condition blocks are subnet creation, the Batch/ECR endpoint block, and the ECS
     // endpoint block. Which of them a Batch/ECS/Fargate pipeline flag appears in is set out below.
@@ -120,6 +183,7 @@ describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
         "usePreviewPcPotreeViewer",
         "usePreview3dThumbnail",
         "useSystemGenAiMetadata.useFargateRenderer",
+        "useGenAiVideoSopBom",
     ];
 
     // The three blocks, keyed by an anchor unique to each.

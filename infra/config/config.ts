@@ -14,6 +14,11 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import { region_info } from "aws-cdk-lib";
 import { oidcSettings } from "./oidc-config";
 import { samlSettings } from "./saml-config";
+import {
+    CONFIG_FILE_CONTEXT_KEY,
+    DEFAULT_CONFIG_FILE_NAME,
+    resolveConfigFilePath,
+} from "./configFile";
 
 dotenv.config({ quiet: true });
 
@@ -162,6 +167,95 @@ export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
 // long for the pipeline's task-token callback, so the Kubernetes job must not be allowed to run longer.
 export const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 14400;
 
+// Input caps of the Video SOP/BOM Extraction pipeline that are tied to its compute sizing rather than
+// being operator cost levers. The Fargate job's ephemeral volume has to hold every input video plus
+// the audio and key frames extracted from them, so the byte caps are fixed alongside the volume size
+// and getConfig() rejects a pair the volume cannot hold. The per-run count and duration caps are
+// deployment configuration (app.pipelines.useGenAiVideoSopBom.limits). The key-frame ceiling bounds
+// the MAX_KEY_FRAMES template tag, and the bundle timeout is the taskTimeout the pipeline's
+// vamsSchema declares (backendPipelines/genAi/videoSopBom/vamsSchema/pipeline.json).
+export const VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB = 4096;
+export const VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB = 16384;
+export const VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB = 100;
+export const VIDEO_SOP_BOM_MAX_KEY_FRAMES_CEILING = 200;
+export const VIDEO_SOP_BOM_BUNDLE_TASK_TIMEOUT_SECONDS = 30600;
+
+/**
+ * Ephemeral storage, in GiB, that a total input size requires: the inputs, a 1.5x working factor for
+ * the audio and frames extracted from them, and 2 GiB for the image and scratch space.
+ */
+export function videoSopBomWorkingSetGib(totalInputSizeMb: number): number {
+    return Math.ceil((totalInputSizeMb * 1.5) / 1024) + 2;
+}
+
+/**
+ * Refuses a byte-cap pair the Fargate job's ephemeral volume cannot hold. The caps are constants sized
+ * together with the volume, so a failing pair is a code error; getConfig() calls this on every load,
+ * so a constant edit cannot ship without the matching volume.
+ */
+export function assertVideoSopBomCapsFitVolume(
+    fileMb: number,
+    totalMb: number,
+    volumeGib: number
+): void {
+    if (fileMb > totalMb) {
+        throw new Error(
+            `Configuration Error: VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB (${fileMb}) exceeds ` +
+                `VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB (${totalMb}) in infra/config/config.ts.`
+        );
+    }
+    const requiredGib = videoSopBomWorkingSetGib(totalMb);
+    if (requiredGib > volumeGib) {
+        throw new Error(
+            `Configuration Error: VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB (${totalMb} MB) needs ` +
+                `${requiredGib} GiB of ephemeral storage but VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB is ` +
+                `${volumeGib}. Raise the volume or lower the cap in infra/config/config.ts.`
+        );
+    }
+}
+
+// The 3D preview thumbnail compute tiers when app.pipelines.usePreview3dThumbnail sets none: each
+// tier's AWS Fargate vCPU and memory, and the input size (GiB) at or above which a run takes the
+// large tier.
+export const PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS = {
+    standard: { vcpu: 4, memoryGiB: 16 },
+    large: { vcpu: 16, memoryGiB: 120 },
+} as const;
+export const PREVIEW_3D_THUMBNAIL_DEFAULT_LARGE_TIER_THRESHOLD_GIB = 2;
+
+/** `minGiB`..`maxGiB` in `stepGiB` increments, as MiB. */
+const mibRange = (minGiB: number, maxGiB: number, stepGiB: number): number[] => {
+    const values: number[] = [];
+    for (let gib = minGiB; gib <= maxGiB; gib += stepGiB) values.push(gib * 1024);
+    return values;
+};
+
+// The memory sizes (MiB) AWS Fargate accepts for each Linux task vCPU size.
+export const FARGATE_MEMORY_MIB_BY_VCPU: ReadonlyMap<number, readonly number[]> = new Map([
+    [0.25, [512, 1024, 2048]],
+    [0.5, mibRange(1, 4, 1)],
+    [1, mibRange(2, 8, 1)],
+    [2, mibRange(4, 16, 1)],
+    [4, mibRange(8, 30, 1)],
+    [8, mibRange(16, 60, 4)],
+    [16, mibRange(32, 120, 8)],
+]);
+
+/** A memory size in GiB as the MiB value a Fargate resource requirement carries. */
+export function fargateMemoryMiB(memoryGiB: number): number {
+    return Math.round(memoryGiB * 1024);
+}
+
+/** True when AWS Fargate runs a Linux task of `vcpu` vCPU with `memoryGiB` of memory. */
+export function isFargateCpuMemory(vcpu: unknown, memoryGiB: unknown): boolean {
+    if (typeof vcpu !== "number" || typeof memoryGiB !== "number") return false;
+    const memoryMiB = memoryGiB * 1024;
+    return (
+        Number.isInteger(memoryMiB) &&
+        (FARGATE_MEMORY_MIB_BY_VCPU.get(vcpu) ?? []).includes(memoryMiB)
+    );
+}
+
 // CloudWatch log-group name patterns the executionService Lambda may read registered sub-process logs
 // from when app.pipelines.executionLogReadPrefixes is absent. Each entry is used verbatim as an IAM
 // log-group resource name (a trailing `*` is a prefix match; none is an exact group). IAM matching is
@@ -308,6 +402,35 @@ function validateOutboundHttpsEndpoint(endpoint: string, configPath: string) {
             `Configuration Error: ${configPath} resolves to a loopback, link-local, or private ` +
                 `address (${url.hostname}). This endpoint is called by a Lambda that can read the ` +
                 `VAMS asset buckets, so it must name an external service. Got: ${endpoint}`
+        );
+    }
+}
+
+/**
+ * Requires an enabled GenAI pipeline's Amazon Bedrock model id to be set and to exist in the
+ * deployment's partition.
+ *
+ * The id carries a cross-Region inference-profile prefix, and the prefixes are partition-specific:
+ * `global.` and `us.` are commercial, GovCloud uses `us-gov.`. The value is passed through to the
+ * Lambda unvalidated, and the IAM grant is derived by stripping the prefix — so a commercial profile
+ * id in a restricted partition produces both a model that does not exist and a grant that does not
+ * match it. `flagPath` is the `pipelines.<flag>` path the message names.
+ */
+export function validateBedrockModelId(flagPath: string, modelId: string, partition: string): void {
+    if (modelId.trim() === "") {
+        throw new Error(
+            `Configuration Error: ${flagPath} is enabled but bedrockModelId is empty. Set a model id ` +
+                "available in this partition and Region (the restricted-partition templates ship it " +
+                "empty because the commercial cross-Region inference profiles do not exist there)."
+        );
+    }
+    const commercialOnlyPrefix = ["global.", "us."].find((prefix) => modelId.startsWith(prefix));
+    if (commercialOnlyPrefix && partition !== "aws") {
+        throw new Error(
+            `Configuration Error: ${flagPath}.bedrockModelId is "${modelId}", whose ` +
+                `"${commercialOnlyPrefix}" cross-Region inference-profile prefix exists only in the ` +
+                `commercial partition. This deployment targets ${partition}. Use a model id or ` +
+                `inference profile offered there (GovCloud uses the "us-gov." prefix).`
         );
     }
 }
@@ -488,12 +611,32 @@ function validateWafPolicy(policy: any) {
 }
 
 export function getConfig(app: cdk.App): Config {
-    const file: string = readFileSync(join(__dirname, "config.json"), {
-        encoding: "utf8",
-        flag: "r",
-    });
+    // CDK context `configFile` names the file (`-c configFile=config.staging.json`); default config.json.
+    const configFilePath = resolveConfigFilePath(app.node.tryGetContext(CONFIG_FILE_CONTEXT_KEY));
+    let file: string;
+    try {
+        file = readFileSync(configFilePath, {
+            encoding: "utf8",
+            flag: "r",
+        });
+    } catch (error) {
+        const reason = (error as Error).message;
+        throw new Error(
+            `Configuration Error: cannot read the configuration file ${configFilePath} (${reason}). ` +
+                `Set CDK context \`${CONFIG_FILE_CONTEXT_KEY}\` to a file in infra/config/ or to an ` +
+                `absolute path, for example \`-c ${CONFIG_FILE_CONTEXT_KEY}=${DEFAULT_CONFIG_FILE_NAME}\`.`
+        );
+    }
 
-    const configPublic: ConfigPublic = JSON.parse(file);
+    let configPublic: ConfigPublic;
+    try {
+        configPublic = JSON.parse(file);
+    } catch (error) {
+        throw new Error(
+            `Configuration Error: the configuration file ${configFilePath} is not valid JSON ` +
+                `(${(error as Error).message}).`
+        );
+    }
     //Configuration keys of the two pipelines that app.pipelines.useSystemGenAiMetadata replaces. A block
     //under either key is rejected rather than ignored, so an upgraded deployment cannot carry settings
     //nothing reads.
@@ -517,6 +660,7 @@ export function getConfig(app: cdk.App): Config {
     config.dockerDefaultPlatform = <string>process.env.DOCKER_DEFAULT_PLATFORM;
     config.enableCdkNag = true;
 
+    console.log("Configuration File: ", configFilePath);
     console.log("Python Version: ", LAMBDA_PYTHON_RUNTIME.name);
     console.log("Node Version: ", LAMBDA_NODE_RUNTIME.name);
 
@@ -772,10 +916,59 @@ export function getConfig(app: cdk.App): Config {
             enabled: false,
             autoRegisterWithVAMS: false,
             autoRegisterAutoTriggerOnFileUpload: false,
+            computeTiers: {
+                standard: { ...PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS.standard },
+                large: { ...PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS.large },
+            },
+            largeTierThresholdGiB: PREVIEW_3D_THUMBNAIL_DEFAULT_LARGE_TIER_THRESHOLD_GIB,
         };
     }
     if (config.app.pipelines.usePreview3dThumbnail.enabled == undefined) {
         config.app.pipelines.usePreview3dThumbnail.enabled = false;
+    }
+    if (config.app.pipelines.usePreview3dThumbnail.computeTiers == undefined) {
+        config.app.pipelines.usePreview3dThumbnail.computeTiers = {
+            standard: { ...PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS.standard },
+            large: { ...PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS.large },
+        };
+    }
+    for (const tier of ["standard", "large"] as const) {
+        const tiers = config.app.pipelines.usePreview3dThumbnail.computeTiers;
+        tiers[tier] = { ...PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS[tier], ...tiers[tier] };
+    }
+    if (config.app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB == undefined) {
+        config.app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB =
+            PREVIEW_3D_THUMBNAIL_DEFAULT_LARGE_TIER_THRESHOLD_GIB;
+    }
+
+    // 3D preview thumbnail compute tiers. Each tier's vCPU and memory are the resource overrides of its
+    // Batch state, and AWS Batch checks an override against the Fargate task sizes only when a job is
+    // submitted -- so an unsupported large-tier pair deploys and then fails every run routed to it.
+    if (config.app.pipelines.usePreview3dThumbnail.enabled) {
+        const thumbnail = config.app.pipelines.usePreview3dThumbnail;
+        for (const tier of ["standard", "large"] as const) {
+            const { vcpu, memoryGiB } = thumbnail.computeTiers[tier];
+            if (!isFargateCpuMemory(vcpu, memoryGiB)) {
+                const memoryChoices = FARGATE_MEMORY_MIB_BY_VCPU.get(vcpu as number);
+                throw new Error(
+                    `Configuration Error: pipelines.usePreview3dThumbnail.computeTiers.${tier} ` +
+                        `(vcpu ${JSON.stringify(vcpu)}, memoryGiB ${JSON.stringify(memoryGiB)}) ` +
+                        `is not an AWS Fargate task size. ` +
+                        (memoryChoices
+                            ? `With ${vcpu} vCPU, memoryGiB must be one of ` +
+                              `${memoryChoices.map((mib) => mib / 1024).join(", ")}.`
+                            : `vcpu must be one of ` +
+                              `${Array.from(FARGATE_MEMORY_MIB_BY_VCPU.keys()).join(", ")}.`)
+                );
+            }
+        }
+        const threshold = thumbnail.largeTierThresholdGiB;
+        if (typeof threshold !== "number" || !Number.isFinite(threshold) || threshold <= 0) {
+            throw new Error(
+                "Configuration Error: pipelines.usePreview3dThumbnail.largeTierThresholdGiB must be " +
+                    `a positive number of GiB. Received: ${JSON.stringify(threshold)}`
+            );
+        }
     }
 
     if (config.app.pipelines.useSystemGenAiMetadata == undefined) {
@@ -1268,6 +1461,45 @@ export function getConfig(app: cdk.App): Config {
         };
     }
 
+    // The Video SOP/BOM caps travel to the pipeline's Lambdas as environment variables, so every leaf
+    // is filled here: an absent one would reach the Lambda as the string "undefined".
+    if (config.app.pipelines.useGenAiVideoSopBom == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom = {
+            enabled: false,
+            useCodeBuild: false,
+            autoRegisterWithVAMS: false,
+            bedrockModelId: "",
+            limits: { maxVideoFiles: 4, maxTotalDurationMinutes: 240 },
+        };
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.enabled == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.enabled = false;
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.useCodeBuild == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.useCodeBuild = false;
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.bedrockModelId == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.bedrockModelId = "";
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.limits == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.limits = {
+            maxVideoFiles: 4,
+            maxTotalDurationMinutes: 240,
+        };
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles = 4;
+    }
+
+    if (config.app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes == undefined) {
+        config.app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes = 240;
+    }
+
     // Pipeline constructs gate the VamsSchemaRegistration custom resource on
     // `autoRegisterWithVAMS === true`, so an omitted flag on an otherwise-present pipeline block
     // would deploy the pipeline stack with no VAMS registration. A partially-specified block
@@ -1292,6 +1524,7 @@ export function getConfig(app: cdk.App): Config {
     defaultAutoRegisterFlags(config.app.pipelines.usePreviewPcPotreeViewer, true);
     defaultAutoRegisterFlags(config.app.pipelines.usePreview3dThumbnail, true);
     defaultAutoRegisterFlags(config.app.pipelines.useSystemGenAiMetadata, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useGenAiVideoSopBom);
     defaultAutoRegisterFlags(config.app.pipelines.useSplatToolbox);
     defaultAutoRegisterFlags(config.app.pipelines.useRapidPipeline?.useEcs);
     defaultAutoRegisterFlags(config.app.pipelines.useRapidPipeline?.useEks);
@@ -1507,6 +1740,38 @@ export function getConfig(app: cdk.App): Config {
         };
     }
 
+    // Initialize compliance configuration if undefined (backward compatibility)
+    if (config.app.compliance == undefined) {
+        config.app.compliance = {
+            autoLoadDefaultSchema: true,
+            quarantineBlocksDownload: false,
+        };
+    }
+    if (config.app.compliance.autoLoadDefaultSchema == undefined) {
+        config.app.compliance.autoLoadDefaultSchema = true;
+    }
+    if (config.app.compliance.quarantineBlocksDownload == undefined) {
+        config.app.compliance.quarantineBlocksDownload = false;
+    }
+
+    //The default compliance schema holds one metadata rule against the GLOBAL `defaultAsset` metadata
+    //schema, which only autoLoadDefaultAssetSchema seeds. With that schema absent the evaluation
+    //engine skips the rule's required-field and type checks, so the seeded schema reports every
+    //asset compliant while checking nothing, and no deploy step names the missing reference.
+    if (
+        config.app.compliance.autoLoadDefaultSchema &&
+        !config.app.metadataSchema.autoLoadDefaultAssetSchema
+    ) {
+        throw new Error(
+            "Configuration Error: app.compliance.autoLoadDefaultSchema is true but " +
+                "app.metadataSchema.autoLoadDefaultAssetSchema is false. The default compliance " +
+                "schema validates assets against the GLOBAL defaultAsset metadata schema, which only " +
+                "that flag seeds; without it the seeded rule checks nothing. Set " +
+                "app.metadataSchema.autoLoadDefaultAssetSchema to true, or set " +
+                "app.compliance.autoLoadDefaultSchema to false."
+        );
+    }
+
     //Load S3 Policy statements JSON
     const s3AdditionalBucketPolicyFile: string = readFileSync(
         join(__dirname, "policy", "s3AdditionalBucketPolicyConfig.json"),
@@ -1673,6 +1938,7 @@ export function getConfig(app: cdk.App): Config {
             "useNvidiaCosmos",
             "useNvidiaCosmos3",
             "useNvidiaGr00t",
+            "useGenAiVideoSopBom",
         ];
         const enabledOutsideSupport = codeBuildPipelinePaths.filter(
             (name) => pipelines[name]?.useCodeBuild === true
@@ -1807,6 +2073,8 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useNvidiaGr00t");
     if (config.app.pipelines.useConversionCoordinateTransform.enabled)
         vpcRequiringFeatures.push("pipelines.useConversionCoordinateTransform");
+    if (config.app.pipelines.useGenAiVideoSopBom.enabled)
+        vpcRequiringFeatures.push("pipelines.useGenAiVideoSopBom");
 
     if (vpcRequiringFeatures.length > 0 && !config.app.useGlobalVpc.enabled) {
         throw new Error(
@@ -2232,6 +2500,76 @@ export function getConfig(app: cdk.App): Config {
                 "before the first invocation; until it is submitted, executions end FAILED with " +
                 "BedrockAccessDenied while file attributes are still written."
         );
+    }
+
+    // The Video SOP/BOM byte caps are constants sized together with the Fargate job's ephemeral volume,
+    // so the pair is checked on every load, enabled or not: a constant edit cannot ship without the
+    // matching volume.
+    assertVideoSopBomCapsFitVolume(
+        VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB,
+        VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB,
+        VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB
+    );
+
+    // The Video SOP/BOM Extraction pipeline calls Amazon Transcribe and Amazon Bedrock from a Fargate
+    // container in isolated subnets, reachable only through VPC interface endpoints. Outside the
+    // commercial and GovCloud partitions the Transcribe endpoint's availability is unverified and the
+    // service-helper has no row for the service, and a missing endpoint does not fail: the container's
+    // connect hangs until the run's timeout. The check is authoritative regardless of
+    // app.govCloud.enabled, and it runs before the model-id check so an operator enabling the pipeline
+    // on a restricted template (which ships the model id empty) is told the pipeline is unavailable
+    // rather than sent to fill in a model id.
+    if (config.app.pipelines.useGenAiVideoSopBom.enabled) {
+        const videoSopBomPartitions = ["aws", "aws-us-gov"];
+        if (!videoSopBomPartitions.includes(config.env.partition)) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiVideoSopBom is enabled while deploying to the " +
+                    `'${config.env.partition}' partition. The Video SOP/BOM Extraction pipeline is ` +
+                    "not validated outside the commercial and GovCloud partitions: Amazon Transcribe " +
+                    "endpoint availability is unverified and the service-helper has no row for this " +
+                    "partition; a missing endpoint hangs a run until its timeout. Set " +
+                    "app.pipelines.useGenAiVideoSopBom.enabled to false."
+            );
+        }
+
+        validateBedrockModelId(
+            "pipelines.useGenAiVideoSopBom",
+            config.app.pipelines.useGenAiVideoSopBom.bedrockModelId ?? "",
+            config.env.partition
+        );
+
+        // The two operator-set caps travel to the pipeline's Lambdas as environment variables and are
+        // enforced there, so a value outside the range the pipeline can honour is refused here rather
+        // than at the first run. The file-count ceiling is the pipeline's own; the duration ceiling is
+        // Amazon Transcribe's 28,800 seconds of audio per job.
+        const { maxVideoFiles, maxTotalDurationMinutes } =
+            config.app.pipelines.useGenAiVideoSopBom.limits;
+        if (
+            typeof maxVideoFiles !== "number" ||
+            !Number.isInteger(maxVideoFiles) ||
+            maxVideoFiles < 1 ||
+            maxVideoFiles > 4
+        ) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiVideoSopBom.limits.maxVideoFiles must be an " +
+                    `integer from 1 to 4 (videos per run). Received: ${JSON.stringify(
+                        maxVideoFiles
+                    )}`
+            );
+        }
+        if (
+            typeof maxTotalDurationMinutes !== "number" ||
+            !Number.isInteger(maxTotalDurationMinutes) ||
+            maxTotalDurationMinutes < 1 ||
+            maxTotalDurationMinutes > 480
+        ) {
+            throw new Error(
+                "Configuration Error: pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes " +
+                    "must be an integer from 1 to 480 (minutes of video per run; Amazon Transcribe " +
+                    "accepts at most 28,800 seconds of audio per job). Received: " +
+                    JSON.stringify(maxTotalDurationMinutes)
+            );
+        }
     }
 
     //Any configuration warnings/errors checks
@@ -4101,6 +4439,16 @@ export interface ConfigPublic {
                 useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;
             };
+            useGenAiVideoSopBom: {
+                enabled: boolean;
+                useCodeBuild: boolean;
+                autoRegisterWithVAMS: boolean;
+                bedrockModelId: string;
+                limits: {
+                    maxVideoFiles: number;
+                    maxTotalDurationMinutes: number;
+                };
+            };
             useRapidPipeline: {
                 useEcs: {
                     enabled: boolean;
@@ -4143,6 +4491,17 @@ export interface ConfigPublic {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
+                computeTiers: {
+                    standard: {
+                        vcpu: number;
+                        memoryGiB: number;
+                    };
+                    large: {
+                        vcpu: number;
+                        memoryGiB: number;
+                    };
+                };
+                largeTierThresholdGiB: number;
             };
             useSystemGenAiMetadata: {
                 enabled: boolean;
@@ -4351,6 +4710,10 @@ export interface ConfigPublic {
             autoLoadDefaultDatabaseSchema: boolean;
             autoLoadDefaultAssetSchema: boolean;
             autoLoadDefaultAssetFileSchema: boolean;
+        };
+        compliance: {
+            autoLoadDefaultSchema: boolean;
+            quarantineBlocksDownload: boolean;
         };
     };
 }

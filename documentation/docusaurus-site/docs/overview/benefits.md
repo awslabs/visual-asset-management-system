@@ -54,8 +54,9 @@ VAMS provides a configurable pipeline and workflow system that automates common 
 -   **3D Conversion** -- Convert between 3D file formats using Trimesh and Blender
 -   **Point Cloud Processing** -- Generate Potree octree representations for browser-based point cloud streaming
 -   **Gaussian Splat Generation** -- Create 3D Gaussian splats from media files using the 3D Reconstruction Toolkit
--   **3D Preview Thumbnails** -- Generate animated GIF or static image previews from 3D, point cloud, CAD, and USD files via headless rendering
+-   **3D Preview Thumbnails** -- Generate animated GIF or static image previews from 3D mesh, point cloud, CAD, USD, and Gaussian splat files via headless rendering
 -   **GenAI Metadata Generation** -- Analyze every viewer-supported file with Amazon Bedrock: extract geometric and media attributes, write typed and descriptive file metadata, and embed each file version for natural-language search
+-   **Video SOP/BOM Extraction** -- Transcribe narrated teardown videos with Amazon Transcribe and derive a step-by-step procedure, a bill of materials, a lab summary, and verification key frames with Amazon Bedrock
 -   **NVIDIA Isaac Lab Training** -- Run reinforcement learning training and evaluation workloads
 -   **RapidPipeline and VNTANA ModelOps** -- Licensed pipeline integrations for advanced spatial data optimization
 

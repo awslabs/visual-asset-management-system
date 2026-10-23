@@ -5,7 +5,8 @@ Provides typed Python methods for VAMS operations by executing CLI commands
 via subprocess and parsing their JSON output.
 
 Prerequisites:
-    - VAMS CLI installed and on PATH (pip install vamscli or pip install -e path/to/VamsCLI)
+    - VAMS CLI installed from the VAMS repository and on PATH
+      (pip install -e <path-to-VAMS>/tools/VamsCLI; VamsCLI is not published on PyPI)
     - Profile configured via: vamscli --profile <profile> setup <api-gateway-url>
 """
 
@@ -27,6 +28,50 @@ _MATCH_EVERYTHING_PATTERNS = ("*", "**", "*.*", "/*", "/**")
 
 # How many failed file keys a transfer-failure message names before it summarizes the rest.
 _MAX_NAMED_TRANSFER_FAILURES = 5
+
+# The Amazon CA bundle an operator may place in the extension's certs directory (see certs/README.md).
+_BUNDLED_CA_FILE = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "certs", "amazon-ca-bundle.pem"))
+# The operating system's CA bundle: Debian and Ubuntu, then Amazon Linux, RHEL and Fedora.
+_SYSTEM_CA_FILES = ("/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt")
+_CA_ENV_KEYS = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE")
+_merged_ca_file: Optional[str] = None
+
+
+def _merged_ca_bundle(system_file: str, bundled_file: str) -> str:
+    """The system bundle followed by the bundled Amazon certificates, written once per process into a
+    private directory so no other local user can supply or alter the trust store."""
+    global _merged_ca_file
+    if _merged_ca_file is None or not os.path.isfile(_merged_ca_file):
+        path = os.path.join(tempfile.mkdtemp(prefix="vams_ca_"), "ca-bundle.pem")
+        with open(path, "wb") as merged:
+            for source in (system_file, bundled_file):
+                with open(source, "rb") as src:
+                    merged.write(src.read())
+                    merged.write(b"\n")
+        _merged_ca_file = path
+    return _merged_ca_file
+
+
+def _ca_environment(env: Dict[str, str], *, bundled_file: str = _BUNDLED_CA_FILE,
+                    system_files=_SYSTEM_CA_FILES) -> Dict[str, str]:
+    """``env`` with the CA bundle the CLI subprocess verifies TLS against. Isaac Sim sets its own
+    ``SSL_CERT_FILE``, which Amazon S3 certificate verification fails against, so an inherited value is
+    never passed on: the system bundle (merged with a bundled Amazon bundle when one is present) is
+    named instead, or, with no system bundle, the bundled one alone; with neither the inherited value
+    is dropped and the CLI falls back to its own default trust store."""
+    system_file = next((path for path in system_files if os.path.isfile(path)), None)
+    has_bundled = os.path.isfile(bundled_file)
+    if system_file and has_bundled:
+        ca_file = _merged_ca_bundle(system_file, bundled_file)
+    else:
+        ca_file = system_file or (bundled_file if has_bundled else None)
+    for key in _CA_ENV_KEYS:
+        if ca_file:
+            env[key] = ca_file
+        else:
+            env.pop(key, None)
+    return env
 
 
 def _is_extension_pattern(pattern: str) -> bool:
@@ -66,6 +111,29 @@ def _matches_any(relative_key: str, patterns: Optional[List[str]]) -> bool:
         elif pat == fk:
             return True
     return False
+
+
+def _passes_input_file_filters(relative_key: str,
+                               filters: Optional[Dict[str, List[str]]]) -> bool:
+    """Whether one concrete input file passes an inputFileFilters ``{allow, exclude}`` map.
+
+    Mirrors the service's allow-then-exclude evaluation for a single file: an open allow list
+    (absent, empty, or only match-everything patterns) admits everything, and exclude is applied
+    after allow. The key is normalized to the leading-slash form the execute request carries, so a
+    filter written as a path glob ('/models/*') is evaluated against the same string the service
+    sees.
+    """
+    filters = filters or {}
+    key = relative_key or ""
+    if not key.startswith("/"):
+        key = f"/{key}"
+    allow = [] if _is_open_allow_list(filters.get("allow")) else (filters.get("allow") or [])
+    exclude = filters.get("exclude") or []
+    if allow and not _matches_any(key, allow):
+        return False
+    if exclude and _matches_any(key, exclude):
+        return False
+    return True
 
 
 def _is_open_allow_list(allow: Optional[List[str]]) -> bool:
@@ -291,29 +359,60 @@ class Workflow:
     def allows_file(self, relative_key: str) -> bool:
         """Whether one concrete input file passes this workflow's inputFileFilters.
 
-        Mirrors the service's allow-then-exclude evaluation for a single file: an open allow list
-        (absent, empty, or only match-everything patterns) admits everything, and exclude is applied
-        after allow. A file the filters reject is a hard execute error, so no run control is offered
-        for it.
-
-        The key is normalized to the leading-slash form the execute request carries, so a filter
-        written as a path glob ('/models/*') is evaluated against the same string the service sees.
-        Only a concrete file key is meaningful here — a container selection ('/' or a folder) is
-        gated by :attr:`allows_whole_asset` instead. The aggregate
+        A file the filters reject is a hard execute error, so no run control is offered for it. Only
+        a concrete file key is meaningful here — a container selection ('/' or a folder) is gated by
+        :attr:`allows_whole_asset` instead. The aggregate
         ``aggregateWorkflowPipelineInputFileFilters`` field must not be used for this: it describes
-        the union across pipelines, not what a concrete selection may be.
+        the union across pipelines, not what a concrete selection may be; a pipeline's own filters
+        are :meth:`Pipeline.allows_file`.
         """
-        filters = self.input_file_filters
-        key = relative_key or ""
-        if not key.startswith("/"):
-            key = f"/{key}"
-        allow = [] if _is_open_allow_list(filters.get("allow")) else (filters.get("allow") or [])
-        exclude = filters.get("exclude") or []
-        if allow and not _matches_any(key, allow):
-            return False
-        if exclude and _matches_any(key, exclude):
-            return False
-        return True
+        return _passes_input_file_filters(relative_key, self.input_file_filters)
+
+
+@dataclass
+class PipelineTemplate:
+    """Parsed template entry from vamscli pipeline template list."""
+    template_id: str = ""
+    template_name: str = ""
+    is_default: bool = False
+    # Replaces, per key, the pipeline systemConfig a run using this template is validated against.
+    overrides: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Pipeline:
+    """Parsed pipeline record from vamscli pipeline get."""
+    pipeline_id: str = ""
+    database_id: str = ""
+    pipeline_name: str = ""
+    system_config: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def requires_template(self) -> bool:
+        """A run is refused unless it names a template, or one is named for it (the workflow
+        reference's defaultTemplateId, or the pipeline's isDefault template)."""
+        return bool(self.system_config.get("requireTemplate"))
+
+    def _effective(self, key: str, template: Optional[PipelineTemplate]) -> Any:
+        overrides = template.overrides if template else {}
+        if overrides.get(key) is not None:
+            return overrides[key]
+        return self.system_config.get(key)
+
+    def allows_file(self, relative_key: str,
+                    template: Optional[PipelineTemplate] = None) -> bool:
+        """Whether one concrete input file passes this pipeline's inputFileFilters, as a run using
+        ``template`` has them (the template's override replaces the pipeline's own).
+
+        The service gives a pipeline only the inputs its filters admit, and refuses a run that
+        leaves the workflow's FIRST pipeline, when it takes files, with none; a later pipeline also
+        receives the files the earlier ones wrote and is checked when the run reaches it. A pipeline
+        of arity 'none' receives no files, so it refuses none.
+        """
+        if (self._effective("inputFileArity", template) or "one") == "none":
+            return True
+        return _passes_input_file_filters(relative_key,
+                                          self._effective("inputFileFilters", template))
 
 
 @dataclass
@@ -364,7 +463,8 @@ class VamsCliService:
         if shutil.which(self._vamscli) is None and not os.path.isfile(self._vamscli):
             raise VamsNotInstalledError(
                 f"VAMS CLI not found at '{self._vamscli}'. "
-                "Install it with: pip install vamscli (or pip install -e path/to/VamsCLI)"
+                "Install it from the VAMS repository with: pip install -e <path-to-VAMS>/tools/VamsCLI "
+                "(VamsCLI is not published on PyPI)"
             )
 
     def _execute_command(self, args: List[str], stdin_payload: Optional[str] = None) -> str:
@@ -393,28 +493,8 @@ class VamsCliService:
 
         logger.debug("Executing: %s", cmd)
 
-        # Build a CA bundle that includes the bundled Amazon certs plus whatever
-        # system CA bundle exists. This ensures S3 downloads work on any machine
-        # regardless of SSL_CERT_FILE set by the parent process (e.g. Isaac Sim).
-        env = os.environ.copy()
-        _bundled = os.path.join(
-            os.path.dirname(__file__), "..", "..", "..", "certs", "amazon-ca-bundle.pem"
-        )
-        _bundled = os.path.normpath(_bundled)
-        if os.path.isfile(_bundled):
-            _system = "/etc/ssl/certs/ca-certificates.crt"
-            if os.path.isfile(_system):
-                _merged = os.path.join(tempfile.gettempdir(), "vams_ca_bundle.pem")
-                if not os.path.isfile(_merged):
-                    with open(_merged, "wb") as _f:
-                        for _src in (_system, _bundled):
-                            with open(_src, "rb") as _s:
-                                _f.write(_s.read())
-                env["SSL_CERT_FILE"] = _merged
-                env["REQUESTS_CA_BUNDLE"] = _merged
-            else:
-                env["SSL_CERT_FILE"] = _bundled
-                env["REQUESTS_CA_BUNDLE"] = _bundled
+        # The parent process (Isaac Sim) sets its own SSL_CERT_FILE, which S3 downloads fail against.
+        env = _ca_environment(os.environ.copy())
 
         try:
             # nosemgrep: dangerous-subprocess-use-audit
@@ -433,7 +513,8 @@ class VamsCliService:
         except FileNotFoundError:
             raise VamsNotInstalledError(
                 f"VAMS CLI not found: '{self._vamscli}'. "
-                "Install it with: pip install vamscli"
+                "Install it from the VAMS repository with: pip install -e <path-to-VAMS>/tools/VamsCLI "
+                "(VamsCLI is not published on PyPI)"
             )
 
         logger.debug("Exit code: %d", result.returncode)
@@ -1140,6 +1221,7 @@ class VamsCliService:
         workflow_id: str,
         workflow_database_id: str,
         file_key: Optional[str] = None,
+        pipeline_parameters: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Execute a workflow on one input file, or on an entire asset.
@@ -1156,6 +1238,8 @@ class VamsCliService:
             workflow_database_id: The database ID that owns the workflow.
             file_key: Optional relative file key within the asset. Defaults to "/"
                       (the whole asset) when not specified.
+            pipeline_parameters: Optional pipelineExecutionParameters, keyed by pipelineId, such as
+                                 ``{"my-pipeline": {"templateId": "my-template"}}``.
 
         Returns:
             Raw JSON dict with execution result (includes executionId).
@@ -1169,8 +1253,66 @@ class VamsCliService:
         cmd = ["workflow", "execute",
                "--workflow-database-id", workflow_database_id,
                "-w", workflow_id,
-               "--input-file", f"{database_id}:{asset_id}:{relative_file_key}",
-               "--json-output"]
+               "--input-file", f"{database_id}:{asset_id}:{relative_file_key}"]
+        if pipeline_parameters:
+            cmd += ["--pipeline-parameters", json.dumps(pipeline_parameters)]
+        cmd.append("--json-output")
 
         output = self._execute_command(cmd)
         return self._parse_json(output)
+
+    # -------------------------------------------------------------------------
+    # Pipeline Operations
+    # -------------------------------------------------------------------------
+
+    def get_pipeline(self, database_id: str, pipeline_id: str) -> Pipeline:
+        """
+        Get a pipeline record.
+
+        Args:
+            database_id: The database ID that owns the pipeline.
+            pipeline_id: The pipeline ID.
+
+        Returns:
+            A Pipeline. The record's inline template descriptors carry no ``isDefault`` or
+            ``overrides``; :meth:`list_pipeline_templates` returns those.
+        """
+        self.ensure_authenticated()
+
+        output = self._execute_command(
+            ["pipeline", "get", "-d", database_id, "-p", pipeline_id, "--json-output"])
+        data = self._parse_json(output)
+        return Pipeline(
+            pipeline_id=data.get("pipelineId", pipeline_id),
+            database_id=data.get("databaseId", database_id),
+            pipeline_name=data.get("pipelineName", ""),
+            system_config=data.get("systemConfig") or {},
+        )
+
+    def list_pipeline_templates(self, database_id: str,
+                                pipeline_id: str) -> List[PipelineTemplate]:
+        """
+        List a pipeline's templates.
+
+        Args:
+            database_id: The database ID that owns the pipeline.
+            pipeline_id: The pipeline ID.
+
+        Returns:
+            List of PipelineTemplate objects, every page of them.
+        """
+        self.ensure_authenticated()
+
+        output = self._execute_command(
+            ["pipeline", "template", "list", "-d", database_id, "-p", pipeline_id,
+             "--json-output"])
+        data = self._parse_json(output)
+        return [
+            PipelineTemplate(
+                template_id=item.get("templateId", ""),
+                template_name=item.get("templateName", ""),
+                is_default=bool(item.get("isDefault", False)),
+                overrides=item.get("overrides") or {},
+            )
+            for item in data.get("Items", [])
+        ]

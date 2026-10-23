@@ -52,9 +52,10 @@ class _FakePlotter:
     def render(self):
         self.rendered_positions.append(tuple(float(v) for v in self.camera.position))
 
-    def screenshot(self, return_img=True):
+    def screenshot(self, transparent_background=False, return_img=True):
         width, height = self.window_size
-        return np.full((height, width, 3), 128, dtype=np.uint8)
+        channels = 4 if transparent_background else 3
+        return np.full((height, width, channels), 128, dtype=np.uint8)
 
     def get_image_depth(self):
         self.depth_reads += 1
@@ -71,12 +72,12 @@ def _box_points():
 
 def _mesh(points=None):
     points = _box_points() if points is None else points
-    return SimpleNamespace(points=points, n_points=len(points), n_cells=12, point_data={})
+    return SimpleNamespace(points=points, n_points=len(points), n_cells=12, point_data={}, cell_data={})
 
 
 def _cloud():
     points = _box_points()
-    return SimpleNamespace(points=points, n_points=len(points), n_cells=0, point_data={})
+    return SimpleNamespace(points=points, n_points=len(points), n_cells=0, point_data={}, cell_data={})
 
 
 def _yaw_degrees(position, focal_point):
@@ -143,18 +144,14 @@ class TestGenerateStillFrames:
 @pytest.mark.unit
 class TestThumbnailGeneratorsKeepTheirContract:
     def test_static_frame_is_still_alpha_masked(self, fake_plotter):
-        """Control: the thumbnail path keeps its RGBA output and its depth-based transparency."""
-        def _alpha(plotter, img):
-            return np.dstack([img, np.full(img.shape[:2], 255, dtype=np.uint8)])
-
-        with patch.object(renderer, "_add_alpha_from_depth", side_effect=_alpha) as alpha:
+        """Control: the thumbnail path keeps its RGBA output, read from one transparent render."""
+        with patch.object(renderer, "_capture_rgba", wraps=renderer._capture_rgba) as capture:
             frame = renderer.generate_static_frame(_mesh())
         assert frame.shape == (600, 800, 4)
-        assert alpha.call_count == 1
+        assert capture.call_count == 1
 
     def test_rotating_frames_still_orbit_the_full_circle(self, fake_plotter):
-        with patch.object(renderer, "_add_alpha_from_depth", side_effect=lambda p, img: img):
-            frames = renderer.generate_rotating_frames(_mesh(), n_frames=6)
+        frames = renderer.generate_rotating_frames(_mesh(), n_frames=6)
         plotter = fake_plotter.instances[-1]
         focal = np.array(plotter.camera.focal_point)
         yaws = [round(_yaw_degrees(p, focal)) for p in plotter.rendered_positions]

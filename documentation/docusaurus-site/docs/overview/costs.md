@@ -106,6 +106,8 @@ Processing pipeline costs are variable and depend on the number of assets proces
 | **Amazon CloudWatch (Pipeline Logs)**          | 1 GB logs                                        | $3.28             | $4.12                      |
 | **Amazon Bedrock (SYSTEM GenAI metadata)**     | 1M input + 200K output tokens (Claude Haiku 4.5) | ~$2.00            | ~$9.00 (Claude Sonnet 4.5) |
 | **AWS Lambda (SYSTEM GenAI metadata renders)** | 1,000 files at 10 GB memory, 60 s average        | ~$10.00           | ~$12.00                    |
+| **Amazon Transcribe (Video SOP/BOM)**          | 100 audio minutes (batch)                        | $0.60             | N/A                        |
+| **Amazon Bedrock (Video SOP/BOM)**             | 1M tokens (Claude Sonnet)                        | $18.00            | N/A                        |
 | **Amazon ECR**                                 | 40 GB container images (in-region)               | $4.00             | $4.00                      |
 
 :::tip[Pipeline Cost Optimization]

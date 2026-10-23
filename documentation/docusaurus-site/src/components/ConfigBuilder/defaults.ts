@@ -248,6 +248,11 @@ const COMMERCIAL: ConfigShape = {
                 enabled: false,
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: true,
+                computeTiers: {
+                    standard: { vcpu: 4, memoryGiB: 16 },
+                    large: { vcpu: 16, memoryGiB: 120 },
+                },
+                largeTierThresholdGiB: 2,
             },
             useSystemGenAiMetadata: {
                 enabled: true,
@@ -284,6 +289,16 @@ const COMMERCIAL: ConfigShape = {
                 enabled: false,
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: true,
+            },
+            useGenAiVideoSopBom: {
+                enabled: false,
+                useCodeBuild: false,
+                autoRegisterWithVAMS: true,
+                bedrockModelId: "global.anthropic.claude-sonnet-5-5",
+                limits: {
+                    maxVideoFiles: 4,
+                    maxTotalDurationMinutes: 240,
+                },
             },
             useSplatToolbox: {
                 enabled: false,
@@ -403,6 +418,10 @@ const COMMERCIAL: ConfigShape = {
             autoLoadDefaultAssetSchema: true,
             autoLoadDefaultAssetFileSchema: true,
         },
+        compliance: {
+            autoLoadDefaultSchema: true,
+            quarantineBlocksDownload: false,
+        },
     },
 };
 
@@ -439,6 +458,9 @@ function buildGovCloud(): ConfigShape {
     // profile there, with a warning.
     cfg.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
         "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0";
+    // Left empty: one model id serves the Video SOP/BOM pipeline's text and vision calls, and the
+    // commercial default is a "global." inference profile, which getConfig() rejects here.
+    cfg.app.pipelines.useGenAiVideoSopBom.bedrockModelId = "";
     return cfg;
 }
 

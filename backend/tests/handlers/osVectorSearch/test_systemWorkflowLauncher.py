@@ -108,7 +108,9 @@ class TestInvoke:
         assert _identifiers(response) == []
         launcher.lambda_client.invoke.assert_called_once()
         kwargs = launcher.lambda_client.invoke.call_args.kwargs
-        assert kwargs["FunctionName"] == "executeWorkflowV2-test" and kwargs["InvocationType"] == "RequestResponse"
+        # The module read its target at import; another suite may have set the variable first.
+        assert kwargs["FunctionName"] == launcher.execute_workflow_v2_function
+        assert kwargs["InvocationType"] == "RequestResponse"
         event = json.loads(kwargs["Payload"])
         assert event["lambdaCrossCall"] == {"userName": "SYSTEM_USER"}
         assert event["requestContext"]["http"] == {"method": "POST", "path": "/workflows/GLOBAL/system-genai-metadata/execute"}

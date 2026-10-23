@@ -72,7 +72,6 @@ export class Gr00tFinetuneConstruct extends Construct {
         props = { ...defaultProps, ...props };
 
         const region = Stack.of(this).region;
-        const account = Stack.of(this).account;
         const gr00tConfig = props.config.app.pipelines.useNvidiaGr00t;
 
         /**
@@ -878,7 +877,9 @@ chown -R 10000:10000 /mnt/efs/gr00t-models
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
-                        `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                        {
+                            regex: "/^Resource::arn:<AWS::Partition>:batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job-definition\\/\\*$/g",
+                        },
                         {
                             regex: "/^Resource::<.*Function.*.Arn>:.*$/g",
                         },

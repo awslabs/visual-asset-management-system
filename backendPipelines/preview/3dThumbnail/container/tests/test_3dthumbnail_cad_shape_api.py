@@ -119,6 +119,7 @@ def _install_fake_ocp(monkeypatch, read_status=1, kinds=None):
             props.mass = 130.0
 
     monkeypatch.setitem(sys.modules, "OCP", types.ModuleType("OCP"))
+    module("OCP.IFSelect", IFSelect_RetDone=1)
     module("OCP.STEPControl", STEPControl_Reader=_StepReader)
     module("OCP.IGESControl", IGESControl_Reader=_IgesReader)
     module("OCP.BRepTools", BRepTools=_BRepTools)
@@ -187,13 +188,6 @@ class TestTessellateAndMeasure:
         assert calls["meshed"] == [("shape", 0.25)]
         assert made["vertices"].shape == (6, 3)
         assert made["faces"].tolist() == [3, 0, 1, 2, 3, 3, 4, 5]
-
-    def test_load_with_ocp_delegates(self, monkeypatch):
-        calls = _install_fake_ocp(monkeypatch, kinds={"FACE": 1})
-        with patch.object(cad_handler, "pv", SimpleNamespace(PolyData=lambda v, f: "polydata")):
-            assert cad_handler._load_with_ocp("/w/part.step") == "polydata"
-        assert calls["step"] == ["/w/part.step"]
-        assert calls["meshed"] == [("shape-from-step", 0.1)]
 
     def test_statistics_count_every_topology_kind(self, monkeypatch):
         _install_fake_ocp(monkeypatch)

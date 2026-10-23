@@ -131,6 +131,10 @@ const clearPreferenceCookie = () => {
     document.cookie = "vams-search-preferences=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/";
 };
 
+// Several cases wait out the page's 500 ms auto-refresh window on real timers, so a full parallel run can
+// take them past the 5-second default.
+jest.setTimeout(20000);
+
 describe("ModernSearchContainer search modes", () => {
     beforeEach(() => {
         jest.clearAllMocks();

@@ -664,6 +664,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                     <SearchPageListView
                         state={listViewState}
                         onShowToast={showSuccess}
+                        onCreateAsset={handleCreateAsset}
                         dispatch={handleListDispatch}
                     />
                 );
@@ -674,6 +675,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                     <SearchPageListView
                         state={listViewState}
                         onShowToast={showSuccess}
+                        onCreateAsset={handleCreateAsset}
                         dispatch={handleListDispatch}
                     />
                 );

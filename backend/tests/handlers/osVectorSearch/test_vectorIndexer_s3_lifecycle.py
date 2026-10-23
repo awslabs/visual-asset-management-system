@@ -207,6 +207,11 @@ class TestIgnoredKeys:
         assert indexer.vector_store.calls == []
 
 
+# The one INFO line a permanent delete of a file whose asset is also gone writes.
+GONE_LINE = ("S3 record for assets/prefix-a/a1/models/part.glb: the object and its asset are gone, "
+             "nothing to update")
+
+
 @pytest.mark.unit
 class TestUnattributedRecordLogging:
     """One log line per unattributed record, at a level that tells the expected case from a failure.
@@ -237,9 +242,7 @@ class TestUnattributedRecordLogging:
         assert indexer.vector_store.calls == []
         assert indexer.asset_storage_table.query.call_args.kwargs["IndexName"] == "assetIdGSI"
         log.warning.assert_not_called()
-        gone = [m for m in self._messages(log.info) if "are gone" in m]
-        assert gone == ["S3 record for assets/prefix-a/a1/models/part.glb: the object and its asset are gone, "
-                        "nothing to update"]
+        assert self._messages(log.info).count(GONE_LINE) == 1
 
     def test_readable_object_that_no_asset_claims_is_one_warning(self, indexer, log):
         indexer.s3_client.head_object.side_effect = None
@@ -251,7 +254,7 @@ class TestUnattributedRecordLogging:
         assert indexer.vector_store.calls == []
         assert self._messages(log.warning) == [
             "S3 record for assets/prefix-a/a1/models/part.glb resolves to no asset; nothing to update"]
-        assert not [m for m in self._messages(log.info) if "are gone" in m]
+        assert GONE_LINE not in self._messages(log.info)
 
     def test_asset_id_in_two_databases_is_one_warning_naming_the_ambiguity(self, indexer, log):
         indexer.s3_client.head_object.side_effect = _not_found()
@@ -264,4 +267,4 @@ class TestUnattributedRecordLogging:
         assert indexer.vector_store.calls == []
         assert self._messages(log.warning) == [
             "assetId a1 resolves to 2 databases for bucket assets/prefix-a/; cannot attribute the file"]
-        assert not [m for m in self._messages(log.info) if "are gone" in m]
+        assert GONE_LINE not in self._messages(log.info)
