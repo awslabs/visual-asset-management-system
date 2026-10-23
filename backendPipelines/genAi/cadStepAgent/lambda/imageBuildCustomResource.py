@@ -2,13 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Image build custom resource handlers for the GenAI CAD STEP agent pipeline (CDK Provider framework).
+Image build wait handler for the GenAI CAD STEP agent pipeline (CDK Provider framework).
 
-``on_event`` starts the AWS CodeBuild build that produces the agent container image and names the
-build id as the resource's physical id; ``is_complete`` is polled until that build reaches a terminal
-status. CloudFormation therefore holds the resource in progress for the length of the build, and a
-resource that depends on it (the Amazon Bedrock AgentCore Runtime, the AWS Batch job definition) is
-created or updated only once the image tag it names exists in the repository.
+The build is started by the shared CodeBuild build-trigger handler
+(``infra/lib/nestedStacks/pipelines/constructs/codeBuildTrigger/index.py``), the provider's onEvent
+handler for every ``*CodeBuild`` construct, which returns ``{"Data": {"BuildId": ...}}``. The provider
+framework merges that reply into the event it hands this module's ``is_complete``, which is polled until
+the build reaches a terminal status. CloudFormation therefore holds the resource in progress for the
+length of the build, and a resource that depends on it (the Amazon Bedrock AgentCore Runtime, the AWS
+Batch job definition) is created or updated only once the image tag it names exists in the repository.
+
+The build id is read from ``Data.BuildId``, never from the physical id: the shared handler returns no
+physical id, so on an Update the physical id is still the one an earlier deployment recorded, and
+polling it would report an earlier, finished build as this deployment's.
 """
 
 import logging
@@ -34,18 +40,6 @@ def codebuild_client():
     if _codebuild is None:
         _codebuild = boto3.client("codebuild", config=retry_config)
     return _codebuild
-
-
-def on_event(event, context):
-    """Start the build on Create and Update; Delete has nothing to undo (the image stays in ECR)."""
-    request_type = event.get("RequestType", "")
-    if request_type in ("Create", "Update"):
-        project_name = event["ResourceProperties"]["ProjectName"]
-        response = codebuild_client().start_build(projectName=project_name)
-        build_id = response["build"]["id"]
-        logger.info("started build %s of project %s", build_id, project_name)
-        return {"PhysicalResourceId": build_id, "Data": {"BuildId": build_id}}
-    return {"PhysicalResourceId": event.get("PhysicalResourceId", "none")}
 
 
 def describe_build(build_id, client=None):
@@ -74,11 +68,15 @@ def completion(request_type, build_id, status, phase):
 
 
 def is_complete(event, context):
-    """Polled by the Provider framework until the build named by the physical id is terminal."""
+    """Polled by the Provider framework until the build the onEvent reply named is terminal."""
     request_type = event.get("RequestType", "")
-    build_id = event.get("PhysicalResourceId", "")
     if request_type == "Delete":
-        return completion(request_type, build_id, None, None)
+        return completion(request_type, "", None, None)
+    build_id = (event.get("Data") or {}).get("BuildId", "")
+    if not build_id:
+        raise RuntimeError(
+            "The build trigger returned no BuildId, so there is no build to wait for; "
+            "the container image may not have been pushed.")
     status, phase = describe_build(build_id)
     logger.info("build %s status=%s phase=%s", build_id, status, phase)
     return completion(request_type, build_id, status, phase)

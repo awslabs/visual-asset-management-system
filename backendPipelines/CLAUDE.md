@@ -884,12 +884,14 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     job fails at start), which is why the Batch pipelines start the build from a fire-and-forget custom
     resource; an Amazon Bedrock AgentCore Runtime rejects `CreateAgentRuntime` for a missing tag, so a
     fresh deploy that creates it in parallel with the build always fails. The CAD STEP agent's
-    `cadStepAgentCodeBuild-construct.ts` is the pattern: a `cr.Provider` whose `onEventHandler` starts
-    the build (build id as physical id) and whose `isCompleteHandler` polls `codebuild:BatchGetBuilds`
-    on the project until the build is terminal, the handlers in
-    `genAi/cadStepAgent/lambda/imageBuildCustomResource.py` so the status mapping is unit-tested, and
-    `node.addDependency(<build custom resource>)` on every resource that names the tag
-    (`cadStepAgentRuntimes.test.ts` asserts the `DependsOn`).
+    `cadStepAgentCodeBuild-construct.ts` is the pattern: a `cr.Provider` whose `onEventHandler` is the
+    shared build trigger (`code: codeBuildTriggerCode()`, which starts the build and returns
+    `Data.BuildId`) and whose `isCompleteHandler` polls `codebuild:BatchGetBuilds` on the project until
+    that build is terminal, raising on a failed, stopped or timed-out build. The waiter is
+    `genAi/cadStepAgent/lambda/imageBuildCustomResource.py`, so the status mapping is unit-tested; it
+    reads `Data.BuildId`, never the physical id, which the shared trigger leaves at an earlier
+    deployment's value on an Update. Add `node.addDependency(<build custom resource>)` on every
+    resource that names the tag (`cadStepAgentRuntimes.test.ts` asserts the `DependsOn`).
 
 19. **A container that clones an upstream repository at build time clones a FIXED revision.** Declare
     the revision as an `ARG <NAME>_COMMIT=<40-hex>`, `git checkout --detach` it, and verify it landed

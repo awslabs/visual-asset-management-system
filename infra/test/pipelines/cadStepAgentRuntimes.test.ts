@@ -14,6 +14,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { SynthResult, synthTemplate } from "../support/templateSynth";
+import { CODEBUILD_TRIGGER_HANDLER_PATH } from "../../lib/nestedStacks/pipelines/constructs/codeBuildTrigger";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const SCHEMA_DIR = path.join(REPO_ROOT, "backendPipelines", "genAi", "cadStepAgent", "vamsSchema");
@@ -126,11 +127,19 @@ function expectSynchronousImageBuild(synth: SynthResult) {
         .ofType("AWS::Lambda::Function")
         .filter((f) => f.stack === cadStepAgentStack)
         .map((f) => (f.properties as any).Handler);
-    expect(handlers).toEqual(
-        expect.arrayContaining([
-            "imageBuildCustomResource.on_event",
-            "imageBuildCustomResource.is_complete",
-        ])
+    expect(handlers).toEqual(expect.arrayContaining(["imageBuildCustomResource.is_complete"]));
+    // The build is started by the shared trigger handler, inlined, whose BuildId the waiter reads.
+    const starters = synth
+        .ofType("AWS::Lambda::Function")
+        .filter(
+            (f) =>
+                f.stack === cadStepAgentStack &&
+                /CadStepAgent.*BuildTriggerCadStepAgent/.test(f.logicalId)
+        );
+    expect(starters).toHaveLength(1);
+    expect((starters[0].properties as any).Handler).toBe("index.handler");
+    expect((starters[0].properties as any).Code.ZipFile).toBe(
+        fs.readFileSync(CODEBUILD_TRIGGER_HANDLER_PATH, "utf8")
     );
 }
 

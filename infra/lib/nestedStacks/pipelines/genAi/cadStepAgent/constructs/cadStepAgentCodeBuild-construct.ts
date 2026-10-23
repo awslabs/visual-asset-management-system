@@ -17,11 +17,12 @@ import { Stack, RemovalPolicy, Duration } from "aws-cdk-lib";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../../../config/config";
 import { contentImageTag } from "../../../../../helper/containerImageTag";
+import { codeBuildTriggerCode } from "../../../constructs/codeBuildTrigger";
 
 /** The Docker platform the image is built for; decided by the runtime that will run it. */
 export type CadStepAgentImagePlatform = "linux/arm64" | "linux/amd64";
 
-/** The pipeline's Lambda sources; the image-build custom resource handlers live beside the pipeline Lambdas. */
+/** The pipeline's Lambda sources; the image-build wait handler lives beside the pipeline Lambdas. */
 const LAMBDA_CODE_PATH = path.join(
     __dirname,
     "../../../../../../../backendPipelines/genAi/cadStepAgent/lambda"
@@ -173,16 +174,17 @@ export class CadStepAgentCodeBuildConstruct extends Construct {
             })
         );
 
-        // The build is synchronous from CloudFormation's point of view: the onEvent handler starts it
-        // and names the build id as the physical id, and the isComplete handler is polled until that
-        // build is terminal. Amazon Bedrock AgentCore validates the image at CreateAgentRuntime time,
-        // so the Runtime (and the Batch job definition) depend on this resource and are created only
-        // once the content-addressed tag exists in the repository.
+        // The build is synchronous from CloudFormation's point of view: the onEvent handler is the
+        // shared build trigger every *CodeBuild construct uses (it starts the build and returns
+        // `Data.BuildId`), and the isComplete handler is polled until that build is terminal. Amazon
+        // Bedrock AgentCore validates the image at CreateAgentRuntime time, so the Runtime (and the
+        // Batch job definition) depend on this resource and are created only once the
+        // content-addressed tag exists in the repository.
         const startBuildFunction = new lambda.Function(this, "BuildTrigger-CadStepAgent", {
             runtime: Config.LAMBDA_PYTHON_RUNTIME,
-            handler: "imageBuildCustomResource.on_event",
+            handler: "index.handler",
             timeout: Duration.minutes(1),
-            code: lambda.Code.fromAsset(LAMBDA_CODE_PATH),
+            code: codeBuildTriggerCode(),
         });
         startBuildFunction.addToRolePolicy(
             new iam.PolicyStatement({
