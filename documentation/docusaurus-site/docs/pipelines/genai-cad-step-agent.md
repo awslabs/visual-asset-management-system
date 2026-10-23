@@ -97,6 +97,17 @@ One container image serves both runtimes; the AWS CodeBuild project builds the p
 
 An asset whose bucket is in another Region of the deployment's partition is supported on both runtimes: the definition carries each asset bucket's Region from the workflow manifest (`bucketRegions`), and the container reads the input file and writes every output with an Amazon S3 client for that bucket's Region ([External S3 setup](../deployment/external-s3-setup.md#pipelines-and-cross-region-inputs)).
 
+### Logs
+
+Every run registers the pipeline's state machine log group, `/aws/vendedlogs/VAMSStateMachine-CadStepAgent<hash>`, with its execution. Where the container's own output goes depends on the runtime:
+
+| Runtime     | Container log group                                    | In the execution's logs view                                                                                                                                                                                                                                                                                                                                         |
+| :---------- | :----------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fargate`   | `/aws/vendedlogs/Pipelines/CadStepAgent<hash>`         | Yes: the run registers the Batch job's log stream as a container source.                                                                                                                                                                                                                                                                                             |
+| `agentcore` | `/aws/bedrock-agentcore/runtimes/<runtime id>-DEFAULT` | No. Amazon Bedrock AgentCore creates the group and names its streams `<date>/[runtime-logs]<instance id>`, and a warm session serves several runs, so a stream is not one run's. Open the group in Amazon CloudWatch and filter on the `runId` from the run's `cad-agent-result.json`; the container logs it at the start of the run (`agent run start id=<runId>`). |
+
+The `agentcore` group is created by the service rather than the stack, so it carries the service's default encryption and no retention policy, and it remains after the stack is deleted (see [Uninstall](../deployment/uninstall.md)).
+
 ## Configuration
 
 Enable the pipeline in `infra/config/config.json`:
@@ -179,7 +190,7 @@ Cases with a reviewed reference part are also compared with it geometrically (a 
 
 ## Third-Party Library Licenses
 
-CadQuery (Apache-2.0) with the Open CASCADE Technology bindings (LGPL-2.1 with the Open CASCADE exception, dynamically linked), Strands Agents (Apache-2.0), the Amazon Bedrock AgentCore SDK (Apache-2.0), `ddgs` (MIT) and `httpx` (BSD-3-Clause). See [Notices](../additional/notices.md#genai-cad-step-agent-pipeline-library-notice).
+CadQuery (Apache-2.0) with the Open CASCADE Technology bindings (LGPL-2.1 with the Open CASCADE exception, dynamically linked), Strands Agents (Apache-2.0) with the OpenAI Python SDK its `openai` extra installs (Apache-2.0), the Amazon Bedrock AgentCore SDK (Apache-2.0), `ddgs` (MIT) and `httpx` (BSD-3-Clause). See [Notices](../additional/notices.md#genai-cad-step-agent-pipeline-library-notice).
 
 ## Related Resources
 

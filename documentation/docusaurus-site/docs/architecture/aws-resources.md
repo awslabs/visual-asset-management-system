@@ -331,14 +331,17 @@ The AWS WAF groups are the one set outside the `/aws/vendedlogs/` namespace: AWS
 
 Each enabled pipeline's Step Functions state machine logs to `/aws/vendedlogs/VAMSstateMachine-<PipelineName>[-<modelKey>]<hash>` or `/aws/vendedlogs/VAMSStateMachine-<PipelineName><hash>` — the case of `stateMachine` varies by pipeline, and Amazon CloudWatch log group names are case sensitive, so a search must cover both spellings. Examples: `VAMSstateMachine-SplatToolboxPipeline`, `VAMSstateMachine-Preview3dThumbnailPipeline`, `VAMSstateMachine-CosmosPredict-<modelKey>`, `VAMSStateMachine-CoordTransform`, `VAMSStateMachine-Metadata3dLabelingPipeline`. Container-based pipelines additionally create groups under `/aws/vendedlogs/Pipelines/` for their container output. The AWS Fargate job groups carry the deployment's KMS key when `useKmsCmkEncryption` is enabled, and the workflow execution-service role is granted read access to every group under that prefix.
 
-| Log Group                                                           | Container                                 | Created When                       | Removal Policy | Custom Name |
-| ------------------------------------------------------------------- | ----------------------------------------- | ---------------------------------- | -------------- | ----------- |
-| `/aws/vendedlogs/Pipelines/CoordTransform<hash>`                    | Coordinate transform (AWS Fargate)        | `useConversionCoordinateTransform` | DESTROY        | Yes         |
-| `/aws/vendedlogs/Pipelines/Metadata3dLabelingBlenderRenderer<hash>` | Blender renderer (AWS Fargate)            | `useGenAiMetadata3dLabeling`       | DESTROY        | Yes         |
-| `/aws/vendedlogs/Pipelines/Preview3dThumbnail<hash>`                | 3D thumbnail renderer (AWS Fargate)       | `usePreview3dThumbnail`            | DESTROY        | Yes         |
-| `/aws/vendedlogs/Pipelines/PcPotreeViewerPDAL<hash>`                | PDAL point cloud conversion (AWS Fargate) | `usePreviewPcPotreeViewer`         | DESTROY        | Yes         |
-| `/aws/vendedlogs/Pipelines/PcPotreeViewerPotree<hash>`              | Potree octree conversion (AWS Fargate)    | `usePreviewPcPotreeViewer`         | DESTROY        | Yes         |
-| `/aws/vendedlogs/Pipelines/<containerName>`                         | RapidPipeline, ModelOps containers        | `useRapidPipeline`, `useModelOps`  | DESTROY        | Yes         |
+| Log Group                                                           | Container                                 | Created When                                     | Removal Policy | Custom Name |
+| ------------------------------------------------------------------- | ----------------------------------------- | ------------------------------------------------ | -------------- | ----------- |
+| `/aws/vendedlogs/Pipelines/CoordTransform<hash>`                    | Coordinate transform (AWS Fargate)        | `useConversionCoordinateTransform`               | DESTROY        | Yes         |
+| `/aws/vendedlogs/Pipelines/Metadata3dLabelingBlenderRenderer<hash>` | Blender renderer (AWS Fargate)            | `useGenAiMetadata3dLabeling`                     | DESTROY        | Yes         |
+| `/aws/vendedlogs/Pipelines/Preview3dThumbnail<hash>`                | 3D thumbnail renderer (AWS Fargate)       | `usePreview3dThumbnail`                          | DESTROY        | Yes         |
+| `/aws/vendedlogs/Pipelines/PcPotreeViewerPDAL<hash>`                | PDAL point cloud conversion (AWS Fargate) | `usePreviewPcPotreeViewer`                       | DESTROY        | Yes         |
+| `/aws/vendedlogs/Pipelines/PcPotreeViewerPotree<hash>`              | Potree octree conversion (AWS Fargate)    | `usePreviewPcPotreeViewer`                       | DESTROY        | Yes         |
+| `/aws/vendedlogs/Pipelines/CadStepAgent<hash>`                      | GenAI CAD STEP agent (AWS Fargate)        | `useGenAiCadStepAgent` with `runtime: "fargate"` | DESTROY        | Yes         |
+| `/aws/vendedlogs/Pipelines/<containerName>`                         | RapidPipeline, ModelOps containers        | `useRapidPipeline`, `useModelOps`                | DESTROY        | Yes         |
+
+On its `agentcore` runtime the GenAI CAD STEP agent's container logs to `/aws/bedrock-agentcore/runtimes/<runtime id>-DEFAULT`. Amazon Bedrock AgentCore creates that group, so it is not in the stack: the retention aspect does not reach it, it uses the service's default encryption rather than the VAMS key, and it remains after the stack is deleted. The runtime id begins with the runtime name (`vams_cad_step_agent_<hash>`) and changes whenever the runtime is replaced, so one deployment can accumulate several such groups.
 
 :::note[Log Retention]
 A CDK aspect (`LogRetentionAspect`) sets one-year retention on every CloudWatch log group **declared in the stack**, including the audit groups and the `/aws/vendedlogs/` groups above. A `retention` value declared on an individual log group has no effect, because the aspect runs afterwards and overwrites it. To hold logs longer across the whole deployment, pass a longer `logs.RetentionDays` value to the aspect in `infra/lib/core-stack.ts` — see [Configuring Log Retention](../developer/audit-logging.md#configuring-log-retention).
@@ -504,7 +507,8 @@ Deployed conditionally for each enabled pipeline:
 
 Deployed for each pipeline configured with `useCodeBuild: true`. AWS CodeBuild builds the pipeline's
 container image from the source in the repository and pushes it to a private Amazon ECR repository, which
-the pipeline's AWS Batch job definition then references. Pipelines that do not set `useCodeBuild` build
+the pipeline's AWS Batch job definition then references (for the GenAI CAD STEP agent on its `agentcore`
+runtime, the Amazon Bedrock AgentCore Runtime instead). Pipelines that do not set `useCodeBuild` build
 their image locally at synthesis time and use the CDK asset repository instead.
 
 | Resource              | Configuration                                                                                 |
@@ -516,21 +520,41 @@ their image locally at synthesis time and use the CDK asset repository instead.
 All repositories use the `DESTROY` removal policy with `emptyOnDelete`, so both the repository and its
 images are removed when the stack is destroyed cleanly.
 
-Most repositories are auto-named by AWS CloudFormation and therefore cannot collide on a redeploy. The
-**Coordinate Transform** repository is the exception: it carries an explicit name,
-`{config.name}-{app.baseStackName}-coordtransform`, and is redeploy-collision relevant. Delete any
-orphaned repository of that name left by a failed teardown before redeploying with the same configuration
-name and account.
+Most repositories are auto-named by AWS CloudFormation and therefore cannot collide on a redeploy. Two
+carry an explicit name and are redeploy-collision relevant:
 
-:::note[Why one repository is explicitly named]
+| Pipeline             | Repository name                                    |
+| -------------------- | -------------------------------------------------- |
+| Coordinate Transform | `{config.name}-{app.baseStackName}-coordtransform` |
+| GenAI CAD STEP agent | `{config.name}-{app.baseStackName}-cadstepagent`   |
+
+Delete any orphaned repository of either name left by a failed teardown before redeploying with the same
+configuration name and account.
+
+:::note[Why these repositories are explicitly named]
 Amazon ECS and AWS Batch cap a container image reference at 255 characters across the whole
 `{account}.dkr.ecr.{region}.amazonaws.com/{repository}:{tag}` string. An auto-generated repository
-name is derived from the nested-stack path, and the Coordinate Transform pipeline's path is deep enough
-that the resulting reference exceeds the cap — AWS Batch then rejects every job at submission. Because the
+name is derived from the nested-stack path, and these two pipelines' paths are deep enough that the
+resulting reference exceeds the cap — AWS Batch then rejects every job at submission. Because the
 job never starts, no container log or exit code is produced; the reason appears only in the job's
 `statusReason`. An explicit short name keeps the reference well inside the limit without shortening the
 content-addressed tag.
 :::
+
+## Amazon Bedrock AgentCore and Amazon Bedrock Guardrails
+
+Deployed for the GenAI CAD STEP agent pipeline (`useGenAiCadStepAgent`):
+
+| Resource                                          | Created When                                          | Name                         | Removal on teardown    |
+| ------------------------------------------------- | ----------------------------------------------------- | ---------------------------- | ---------------------- |
+| Amazon Bedrock AgentCore Runtime                  | `runtime: "agentcore"` (the default)                  | `vams_cad_step_agent_<hash>` | Deleted with the stack |
+| Amazon Bedrock guardrail and its numbered version | `bedrockGuardrail.guardrailId` is empty (the default) | `vams-cad-step-agent-<hash>` | Deleted with the stack |
+
+Both names are deterministic, derived from the core stack name and account, so each is
+redeploy-collision relevant: delete an orphaned runtime or guardrail of the same name left by a failed
+teardown before redeploying with the same configuration. The guardrail is encrypted with the VAMS key when
+`useKmsCmkEncryption.enabled` is `true`. The runtime's log group is created by the service; see
+[Pipeline Log Groups](#pipeline-log-groups-per-enabled-pipeline).
 
 ## AWS CloudTrail
 
