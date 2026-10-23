@@ -920,6 +920,40 @@ export class RapidPipelineEKSConstruct extends Construct {
             )
             .otherwise(counterState);
 
+        // CONSTRUCT_PIPELINE reports that it could not build the job (a missing or invalid path, or
+        // an error while building the manifest) by returning a body without jobManifest, which
+        // is not an invocation error and so is not caught by the task's Catch. RunJob's payload reads
+        // the manifest, so a missing one fails RunJob with States.Runtime before it is invoked, which
+        // its Catch does not route either. This state hands that body to PipelineEnd instead.
+        const handleConstructPipelineError = new sfn.Pass(this, "HandleConstructPipelineError", {
+            parameters: {
+                "jobName.$": "$.jobName",
+                k8sJobName: "failure-before-creation", // No Kubernetes job exists to clean up
+                "externalSfnTaskToken.$": "$.externalSfnTaskToken",
+                status: "FAILED",
+                error: {
+                    Error: "ConstructPipelineFailed",
+                    "Cause.$": "States.JsonToString($.ConstructPipelineResult.Payload)",
+                },
+                errorContext: {
+                    "timestamp.$": "$$.State.EnteredTime",
+                    "stateName.$": "$$.State.Name",
+                    "executionName.$": "$$.Execution.Name",
+                },
+            },
+            resultPath: "$",
+        }).next(pipelineEndTask);
+
+        // The negative case on IsPresent, as in RunJobSucceeded?, guarding the field RunJob reads.
+        const constructPipelineOutcomeChoice = new sfn.Choice(this, "ConstructPipelineSucceeded?")
+            .when(
+                sfn.Condition.not(
+                    sfn.Condition.isPresent("$.ConstructPipelineResult.Payload.jobManifest")
+                ),
+                handleConstructPipelineError
+            )
+            .otherwise(runJobTask);
+
         // Enhanced max attempts check with better logic
         const checkMaxAttemptsChoice = new sfn.Choice(this, "Check Max Attempts")
             .when(
@@ -1036,7 +1070,8 @@ export class RapidPipelineEKSConstruct extends Construct {
 
         // Define the state machine - connect the workflow
         counterState.next(checkJobTask);
-        const definition = constructPipelineTask.next(runJobTask).next(runJobOutcomeChoice);
+        runJobTask.next(runJobOutcomeChoice);
+        const definition = constructPipelineTask.next(constructPipelineOutcomeChoice);
 
         // 8. Create Step Function State Machine with enhanced configuration
         const stateMachine = new sfn.StateMachine(this, "StateMachine", {
