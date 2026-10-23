@@ -16,9 +16,10 @@ or not the asset exists, so the 404 cannot be used to probe the asset namespace.
 
 For a missing asset, ``checkSubscriptionService`` also runs one Tier-2 check on a
 provisional object built from the assetId (the route carries no databaseId) and answers
-404 only when that check allows, 403 otherwise. ``unsubscribeService`` runs no Tier-2
-check for a missing asset; its Tier-2 ``enforce`` needs the asset record and stays after
-the lookup.
+404 only when that check allows, 403 otherwise. ``unsubscribeService`` and the
+``subscriptionService`` create, update and delete routes do the same with the action they
+check an existing asset with (``POST``), so a caller the object-level check denies receives
+the same 403 whether or not the asset exists.
 
 Each not-found case is paired with a positive control that resolves a real asset record,
 so a guard that answers 404 unconditionally fails the pair. The not-found cases also
@@ -31,9 +32,13 @@ import json
 import pytest
 
 from backend.backend.handlers.subscription import checkSubscriptionService
+from backend.backend.handlers.subscription import subscriptionService
 from backend.backend.handlers.subscription import unsubscribeService
 
 ASSET_ID = "test-asset-id"
+
+# The provisional object a missing asset is checked as, and the action each write route uses.
+PROVISIONAL_POST = ({"assetId": ASSET_ID, "object__type": "asset"}, "POST")
 
 # Shape returned by the no-databaseId lookup path for a live asset.
 ASSET_OBJECT = {
@@ -131,6 +136,27 @@ def _unsubscribe_event():
     }
 
 
+def _subscription_event(method):
+    return {
+        "requestContext": {"http": {"method": method, "path": "/subscriptions"}},
+        "queryStringParameters": {},
+        "body": {
+            "eventName": "Asset Version Change",
+            "entityName": "Asset",
+            "entityId": ASSET_ID,
+            "subscribers": ["test-user@example.com"],
+        },
+    }
+
+
+# (http method, the subscriptionService operation that method dispatches to)
+SUBSCRIPTION_WRITES = [
+    ("POST", "create_subscription"),
+    ("PUT", "update_subscription"),
+    ("DELETE", "delete_subscription"),
+]
+
+
 def _unauthorized_responses(monkeypatch, module, downstream_name, event_factory):
     """Call a handler as a Tier-1-denied caller for a missing then an existing asset."""
     responses = []
@@ -200,10 +226,36 @@ class TestUnsubscribeServiceAssetLookup:
 
         assert response["statusCode"] == 404
         assert enforcer.api_calls == 1, "route check must run before the asset lookup"
-        assert enforcer.object_calls == 0, "guard must run before object-level enforcement"
+        # One provisional check, built from the entityId rather than the missing record.
+        assert enforcer.objects == [PROVISIONAL_POST]
         assert lookup.calls == [(None, ASSET_ID)]
         assert downstream.bodies == []
         assert ASSET_ID not in response["body"], "response must not echo the requested id"
+
+    def test_unresolvable_asset_denied_by_the_provisional_check_returns_403(self, monkeypatch):
+        enforcer, downstream, lookup = _patch_handler(
+            monkeypatch, unsubscribeService, "delete_subscription", None, object_allowed=False)
+
+        response = unsubscribeService.lambda_handler(_unsubscribe_event(), None)
+
+        assert response["statusCode"] == 403
+        assert enforcer.objects == [PROVISIONAL_POST]
+        assert downstream.bodies == []
+        assert ASSET_ID not in response["body"], "response must not echo the requested id"
+
+    def test_object_level_denial_is_identical_for_missing_and_existing_assets(self, monkeypatch):
+        responses = []
+        for asset_object in (None, dict(ASSET_OBJECT)):
+            _enforcer, downstream, _lookup = _patch_handler(
+                monkeypatch, unsubscribeService, "delete_subscription", asset_object,
+                object_allowed=False)
+            responses.append(unsubscribeService.lambda_handler(_unsubscribe_event(), None))
+            assert downstream.bodies == []
+
+        missing, existing = responses
+        assert [missing["statusCode"], existing["statusCode"]] == [403, 403]
+        assert missing["body"] == existing["body"], (
+            "a differing body would reveal whether the asset exists")
 
     def test_resolvable_asset_is_authorized(self, monkeypatch):
         enforcer, downstream, lookup = _patch_handler(
@@ -241,3 +293,64 @@ class TestSubscriptionAssetExistenceIsNotObservableWhenUnauthorized:
         assert missing["body"] == existing["body"], (
             "a differing body would reveal whether the asset exists")
         assert lookups == [[], []], "the asset lookup must not run for a denied caller"
+
+
+@pytest.mark.unit
+class TestSubscriptionServiceWritesCheckTheObjectBeforeNotFound:
+    """subscriptionService create/update/delete answer 404 only to a caller the check allows."""
+
+    @pytest.mark.parametrize("method, operation", SUBSCRIPTION_WRITES,
+                             ids=[m for m, _ in SUBSCRIPTION_WRITES])
+    def test_unresolvable_asset_allowed_by_the_provisional_check_returns_404(
+            self, monkeypatch, method, operation):
+        enforcer, downstream, lookup = _patch_handler(
+            monkeypatch, subscriptionService, operation, None)
+
+        response = subscriptionService.lambda_handler(_subscription_event(method), None)
+
+        assert response["statusCode"] == 404
+        assert enforcer.api_calls == 1, "route check must run before the asset lookup"
+        assert enforcer.objects == [PROVISIONAL_POST]
+        assert lookup.calls == [(None, ASSET_ID)]
+        assert downstream.bodies == []
+        assert ASSET_ID not in response["body"], "response must not echo the requested id"
+
+    @pytest.mark.parametrize("method, operation", SUBSCRIPTION_WRITES,
+                             ids=[m for m, _ in SUBSCRIPTION_WRITES])
+    def test_object_level_denial_is_identical_for_missing_and_existing_assets(
+            self, monkeypatch, method, operation):
+        responses = []
+        for asset_object in (None, dict(ASSET_OBJECT)):
+            _enforcer, downstream, _lookup = _patch_handler(
+                monkeypatch, subscriptionService, operation, asset_object, object_allowed=False)
+            responses.append(subscriptionService.lambda_handler(_subscription_event(method), None))
+            assert downstream.bodies == []
+
+        missing, existing = responses
+        assert [missing["statusCode"], existing["statusCode"]] == [403, 403]
+        assert missing["body"] == existing["body"], (
+            "a differing body would reveal whether the asset exists")
+
+    @pytest.mark.parametrize("method, operation", SUBSCRIPTION_WRITES,
+                             ids=[m for m, _ in SUBSCRIPTION_WRITES])
+    def test_resolvable_asset_is_authorized_and_dispatched(self, monkeypatch, method, operation):
+        enforcer, downstream, lookup = _patch_handler(
+            monkeypatch, subscriptionService, operation, dict(ASSET_OBJECT))
+
+        response = subscriptionService.lambda_handler(_subscription_event(method), None)
+
+        assert response["statusCode"] == 200
+        assert [action for _obj, action in enforcer.objects] == ["POST"]
+        assert enforcer.objects[0][0]["databaseId"] == ASSET_OBJECT["databaseId"]
+        assert len(downstream.bodies) == 1
+
+    def test_an_empty_token_list_is_refused_before_the_lookup(self, monkeypatch):
+        _enforcer, downstream, lookup = _patch_handler(
+            monkeypatch, subscriptionService, "create_subscription", None)
+        monkeypatch.setattr(subscriptionService, "request_to_claims", lambda event: {"tokens": []})
+
+        response = subscriptionService.lambda_handler(_subscription_event("POST"), None)
+
+        assert response["statusCode"] == 403
+        assert lookup.calls == []
+        assert downstream.bodies == []
