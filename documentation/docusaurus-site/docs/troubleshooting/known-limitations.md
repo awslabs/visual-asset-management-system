@@ -109,9 +109,16 @@ Exceeding a bound does not fail the execution. When one entity passes a per-enti
 Each truncation is reported as a warning in the response to the execute request. The VamsCLI prints these under `Warnings` after `vamscli workflow execute`, and the web execute wizard displays them in place when the run starts. The warnings are not stored on the execution record, so a pipeline whose logic depends on a specific metadata key can receive an incomplete metadata file and produce incorrect output with no later indication. Review the launch warnings for executions over heavily annotated assets.
 :::
 
-### 3D Preview Thumbnail Pipeline File Size Limit
+### 3D Preview Thumbnail Pipeline Input Size
 
-The 3D Preview Thumbnail pipeline supports a maximum input file size of **100 GB**. The pipeline performs a pre-download Amazon S3 size validation and rejects files exceeding this limit. Supporting larger files may require an Amazon Elastic File System (Amazon EFS) and AWS Fargate implementation.
+The largest input the 3D Preview Thumbnail pipeline accepts is the free space of its task's work volume (200 GiB of AWS Fargate ephemeral storage), less 1 GiB kept for the output. The container compares the object size with the free space before it downloads, and fails with a message that names both sizes. PTX and PTS files are streamed from Amazon S3 and need no disk. Split a larger file before you upload it.
+
+### 3D Preview Thumbnail Rendering Limits
+
+-   **FBX** -- FBX 2011 (7.1) and later files are read. FBX meshes are coloured by vertex colour or material base colour; textures are not sampled.
+-   **USD** -- MaterialX materials are not read, so their prims render in the default colour. A USD stage that expands past 30 million vertices is drawn up to that point.
+-   **Gaussian splats** -- Splats are drawn as flat discs in their base colour, so view-dependent colour and splat shape are not shown. The preview shows a captured scene's core and leaves out the background around it. A scene whose up axis differs from the 3D Gaussian Splatting convention renders tilted unless its core is a ground plane, which is levelled.
+-   **Referenced files** -- A referenced file is fetched only when it lies inside the same asset; a reference to another asset, an absolute path or a URL is skipped and the preview renders without it. An `.lcc2` scene that names a chunk file outside its asset is not rendered.
 
 ### Video SOP/BOM Extraction Pipeline Input Limits
 

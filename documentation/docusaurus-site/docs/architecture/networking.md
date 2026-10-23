@@ -38,7 +38,7 @@ graph LR
 In this mode:
 
 -   Amazon CloudFront serves the React web application from an Amazon S3 origin bucket
--   API requests are proxied through Amazon CloudFront to the REST API, with CloudFront's `/api/*` behavior using an originPath of `/api` (the REST API stage) to absorb the stage path
+-   CloudFront's `/api/*` behavior forwards to the REST API with an originPath of `/api` (the REST API stage); the web application reads the API base URL through it from `/api/amplify-config` and sends every other API request to the stage directly (see [Stage Path Fronting](#stage-path-fronting))
 -   When AWS WAF is enabled, a `CLOUDFRONT`-scoped Web ACL (deployed in `us-east-1`) protects the distribution, and a separate regional Web ACL protects the API Gateway stage (see [WAF Protection Scope](#waf-protection-scope))
 -   Custom domain names are supported via `useCloudFront.customDomain` configuration with an AWS Certificate Manager certificate and optional Amazon Route 53 hosted zone
 -   The API endpoint type is configurable: `REGIONAL` (default, public; not routed through any VPC endpoint) or `PRIVATE` (VPC interface endpoint only, incompatible with CloudFront)
@@ -66,7 +66,7 @@ graph LR
     WAF -.->|Protects| ALB
     WAF -.->|Protects| APIGW
     ALB -->|Static Assets| S3W
-    ALB -->|API Proxy| APIGW
+    ALB -.->|API Redirect| APIGW
     APIGW --> AUTH
     AUTH --> HANDLERS
 ```
@@ -75,9 +75,9 @@ graph LR
 
 In this mode:
 
--   An Application Load Balancer serves the web application and proxies API requests
+-   An Application Load Balancer serves the web application and redirects API requests to the REST API stage
 -   The ALB requires a domain host name and an AWS Certificate Manager certificate ARN
--   The ALB redirects `/api*` and `/secure-config*` paths by prepending `/api` (the REST API stage) to absorb the stage path
+-   The ALB answers `/api*` and `/secure-config*` paths with a temporary (302) redirect to the REST API that prepends `/api`, the REST API stage; it forwards no API request
 -   The ALB can be deployed in public subnets (`useAlb.usePublicSubnet = true`) or isolated subnets (`useAlb.usePublicSubnet = false`)
 -   When AWS WAF is enabled, a single regional Web ACL protects both the ALB and the API Gateway stage
 -   VPC is required (`useGlobalVpc.enabled = true`)
@@ -148,16 +148,16 @@ A `PRIVATE` API endpoint is incompatible with Amazon CloudFront, which cannot re
 
 ### Stage Path Fronting
 
-The REST API deployment stage is named `api` (a fixed internal value, not a configuration option) and is absorbed by the web distribution fronting layer so that client requests use clean `/api/*` paths:
+The REST API deployment stage is named `api` (a fixed internal value, not a configuration option). The web distribution fronting layer maps the web application's `/api/*` paths onto that stage:
 
--   **CloudFront**: The `/api/*` behavior uses `originPath: "/api"`, mapping `https://example.com/api/version` to the stage's invoke URL at `https://{restApiId}.execute-api.{region}.amazonaws.com/api/version`.
--   **ALB**: The listener redirects `/api*` and `/secure-config*` paths by prepending `/api`, mapping `https://example.com/api/version` to the same stage invoke URL.
+-   **CloudFront**: The `/api/*` behavior uses `originPath: "/api"`, which CloudFront prepends to the request path, so `https://example.com/api/version` reaches `https://{restApiId}.execute-api.{region}.amazonaws.com/api/api/version`: the `/api/version` route of the `api` stage.
+-   **ALB**: The listener answers `/api*` and `/secure-config*` paths with a temporary (302) redirect that prepends `/api`, so `https://example.com/api/version` redirects to the same `.../api/api/version` invoke URL. The ALB forwards no request to API Gateway.
 
-This keeps the browser/CLI base URL unchanged (`/api/version`). The stage name is shared with the VamsCLI endpoint constants, so it is fixed in the codebase rather than configurable.
+Through CloudFront's `/api/*` behavior and the ALB's `/api*` redirect, only the two unauthenticated routes under the stage's `/api/` path, `/api/amplify-config` and `/api/version`, are reached this way; the ALB's `/secure-config*` redirect also reaches the stage's `/secure-config` route. The web application, the VamsCLI and the VAMS MCP server read the API base URL from `/api/amplify-config`, which returns the stage's invoke URL (`https://{restApiId}.execute-api.{region}.amazonaws.com/api/`), and send every other API request to the stage directly. The stage name is shared with the VamsCLI endpoint constants, so it is fixed in the codebase rather than configurable.
 
 ### WAF Protection Scope
 
-When AWS WAF is enabled (`app.useWaf = true`), VAMS always creates a **regional** Web ACL in the deployment Region and associates it with the API Gateway stage — for both `REGIONAL` and `PRIVATE` endpoint types. The API's `execute-api` endpoint stays directly reachable in every fronting configuration (CloudFront and the ALB proxy `/api/*`, but neither replaces direct API access), so protecting the API stage itself closes a path that fronting alone does not cover.
+When AWS WAF is enabled (`app.useWaf = true`), VAMS always creates a **regional** Web ACL in the deployment Region and associates it with the API Gateway stage — for both `REGIONAL` and `PRIVATE` endpoint types. The API's `execute-api` endpoint stays directly reachable in every fronting configuration (CloudFront forwards `/api/*` to the stage and the ALB redirects `/api*` to it, but clients call the stage directly for every other route), so protecting the API stage itself closes a path that fronting alone does not cover.
 
 The web distribution determines whether a second Web ACL is also created:
 

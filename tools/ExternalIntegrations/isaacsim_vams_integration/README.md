@@ -22,10 +22,12 @@ An [Omniverse Kit](https://docs.omniverse.nvidia.com/kit/docs/kit-manual/latest/
 -   **Single File Download**: Download individual files from any asset
 -   **Full Asset Download**: Recursively download all files in an asset with progress tracking
 -   **Stage Import**: Download a USD file and open it as a new Isaac Sim stage (via UI button or scripting API)
--   **Reference Import**: Download a USD file and add it as a reference to the current stage at an auto-generated prim path
--   **URDF Import**: Download a URDF file and import it into the current stage using Isaac Sim's URDF importer (requires `isaacsim.asset.importer.urdf`)
--   **MJCF Import**: Download a MJCF/MuJoCo XML file and import it into the current stage using Isaac Sim's MJCF importer (requires `isaacsim.asset.importer.mjcf`)
--   **General Download**: Download any other file to a local temporary directory
+-   **Reference Import**: Download a USD file and add it as a reference to the current stage: from the UI at a prim of its own under `/World`, named after the file, and from the scripting API at the prim path given. The reference brings in the file's default prim, or its one root prim when it has none; a file with neither is refused and leaves the stage as it was
+-   **URDF Import**: Download a URDF file and import it into the current stage using Isaac Sim's URDF importer (requires `isaacsim.asset.importer.urdf`), under the prim the stage's default prim names, or at the stage root when it names none. The stage's default prim is left as it was
+-   **MJCF Import**: Download a MJCF/MuJoCo XML file and import it into the current stage using Isaac Sim's MJCF importer (requires `isaacsim.asset.importer.mjcf`), at a prim of its own under `/World`, named after the file. A file that is not well-formed XML is refused before the importer runs, an import that brings in nothing from the file is removed again, and the stage's default prim is left as it was
+-   **General Download**: Download any other file to `~/vams_downloads`, keeping its path within the asset
+
+A `.usd`, `.usda` or `.usdc` layer, a URDF file and a MJCF file name other files of the asset by relative path (sublayers, references, textures, meshes), so opening or importing one downloads the whole asset, laid out as it is in VAMS, into a new private temporary directory. The status line reports how many of the asset's other files did not download, and a requested file that did not download with the reason the download gave, for example `Reference error: /robot.usd did not download: <error>`. A `.usdz` package carries its dependencies and is downloaded alone.
 
 ### Scene Export & Upload
 
@@ -33,11 +35,15 @@ An [Omniverse Kit](https://docs.omniverse.nvidia.com/kit/docs/kit-manual/latest/
 -   **Upload to VAMS**: Upload files or directories to existing assets
 -   **Create & Upload**: Create a new VAMS asset and upload a file in a single operation
 
+Export & Upload writes the current stage, flattened into a single layer, to the root of the selected asset. A texture, reference or sublayer path to a file downloaded with that same asset is rewritten relative to the asset root, so the export resolves in VAMS and in a whole-asset download. A path to any other local file, including a file of another asset or one written into a download directory afterwards (such as importer output), is left as it is and resolves only on the machine that exported the stage; the status line reports how many such paths the export contains, and `export_and_upload_scene` returns the count as `unportablePaths`.
+
 ### Workflow Execution
 
 -   **Browse Workflows**: List all available processing workflows
--   **Execution History**: View past workflow executions on any asset
+-   **Execution History**: View past workflow executions on any asset, each with its input file's path within the asset
 -   **Trigger Workflows**: Execute workflows on assets directly from the UI or scripting API
+
+The Execute view offers **Run** only for the files that pass the input-file filters of the workflow and of its first pipeline, as the template in use sets them, and **Run on Entire Asset** reports that no file passes, instead of running, when none of the asset's files does. A later pipeline's filters do not limit **Run**: that pipeline also receives the files the earlier pipelines write and VAMS checks it when the run reaches it, so a workflow whose second pipeline reads only the GLB its first pipeline converts an OBJ to offers **Run** for the OBJ. A pipeline that requires a template and names no default (no `defaultTemplateId` on the workflow's reference to it and no default template) gets a template choice; **Run** is refused until one is chosen, and the run passes it as that pipeline's `templateId`. Choosing one replaces the status line's `Choose a template for <pipeline> before running`, or an earlier choice's status, with `Template for <pipeline>: <template>`. Template tags are not collected: a run the service refuses for a required tag shows the refusal with a hint to run the workflow from the VAMS web UI. The view reads each pipeline once when it opens; a pipeline that cannot be read does not gate **Run**, and the status line says so.
 
 ---
 
@@ -56,11 +62,8 @@ The connector uses the **VAMS CLI** (`vamscli`) for all VAMS operations. The CLI
 #### 1. Install the VAMS CLI
 
 ```bash
-# From the VAMS repository
+# From the VAMS repository; VamsCLI is not published on PyPI
 pip install -e /path/to/vams/tools/VamsCLI
-
-# Or if published to a package registry
-pip install vamscli
 ```
 
 Verify the installation:
@@ -118,12 +121,22 @@ vamscli auth login --user-id user@example.com --token-override "eyJhbGciOiJSUzI1
 
 ## Installation
 
+Kit treats each child of an extension folder as an extension named after that child, so this directory goes into a folder of its own under the extension's name, `vams.connector.isaacsim`. Copy it there, and run the same commands again after updating the connector; they remove the earlier copy first, since `cp -r` would otherwise place the new one inside it:
+
+```bash
+mkdir -p /path/to/kit-exts
+rm -rf /path/to/kit-exts/vams.connector.isaacsim
+cp -r /path/to/isaacsim_vams_integration /path/to/kit-exts/vams.connector.isaacsim
+```
+
+Kit loads the copy, so the `extension.toml` settings and the certificate bundle described below go into `/path/to/kit-exts/vams.connector.isaacsim`, and are made again after each update.
+
 ### Option A: Extension search path (recommended)
 
-In Isaac Sim, go to **Window > Extensions**, click the gear icon, and add the path to this directory as an extension search path:
+In Isaac Sim, go to **Window > Extensions**, click the gear icon, and add the folder that contains `vams.connector.isaacsim` as an extension search path:
 
 ```
-/path/to/isaacsim_vams_integration
+/path/to/kit-exts
 ```
 
 Then search for "VAMS" and enable `vams.connector.isaacsim`.
@@ -133,7 +146,7 @@ Then search for "VAMS" and enable `vams.connector.isaacsim`.
 ### Ubuntu Example
 
 ```bash
-/opt/IsaacSim/isaac-sim.sh --ext-folder /path/to/isaacsim_vams_integration --enable vams.connector.isaacsim
+/opt/IsaacSim/isaac-sim.sh --ext-folder /path/to/kit-exts --enable vams.connector.isaacsim
 ```
 
 ### Option C: In your app .kit file
@@ -143,7 +156,7 @@ Then search for "VAMS" and enable `vams.connector.isaacsim`.
 "vams.connector.isaacsim" = {}
 
 [settings.app.exts]
-folders = ["/path/to/isaacsim_vams_integration"]
+folders = ["/path/to/kit-exts"]
 ```
 
 ---
@@ -156,7 +169,7 @@ When running Isaac Sim on Ubuntu (e.g., on an EC2 instance), the VAMS CLI should
 
 ```bash
 python3 -m venv ~/vamscli-venv
-~/vamscli-venv/bin/pip install vamscli
+~/vamscli-venv/bin/pip install -e /path/to/vams/tools/VamsCLI
 ```
 
 ### 2. Configure a VAMS CLI profile
@@ -167,7 +180,7 @@ python3 -m venv ~/vamscli-venv
 
 ### 3. Set the vamscli path in extension.toml
 
-Point the extension to the venv executable so it does not depend on `PATH`:
+Point the extension to the venv executable so it does not depend on `PATH`, in `/path/to/kit-exts/vams.connector.isaacsim/config/extension.toml`:
 
 ```toml
 [settings]
@@ -183,26 +196,26 @@ exts."vams.connector.isaacsim".vamscli_path = "/home/ubuntu/vamscli-venv/bin/vam
 
 ### 5. Load the extension in Isaac Sim
 
-Using the command line (adjust paths for your installation):
+Using the command line, with the folder that contains `vams.connector.isaacsim` (adjust paths for your installation):
 
 ```bash
-/opt/IsaacSim/isaac-sim.sh --ext-folder /path/to/isaacsim_vams_integration --enable vams.connector.isaacsim
+/opt/IsaacSim/isaac-sim.sh --ext-folder /path/to/kit-exts --enable vams.connector.isaacsim
 ```
 
 Or via **Window > Extensions** in the Isaac Sim UI (see [Installation](#installation) above).
 
 ### SSL Certificate Bundle (Optional)
 
-Isaac Sim may set its own `SSL_CERT_FILE` environment variable that does not include Amazon's CA certificates, causing S3 download failures. The extension automatically handles this if a certificate bundle is present.
+Isaac Sim may set its own `SSL_CERT_FILE` environment variable that does not include Amazon's CA certificates, causing S3 download failures. The extension never passes that value to the CLI subprocess: it names the operating system's CA bundle instead, merged with a certificate bundle placed in `certs/` when one is present.
 
 To set up the CA certificate bundle:
 
 1.  Download the Amazon Root CA certificates from [https://www.amazontrust.com/repository/](https://www.amazontrust.com/repository/)
 2.  Concatenate the root certificates into a single PEM file named `amazon-ca-bundle.pem`
-3.  Place it in the `certs/` directory at the root of this extension:
+3.  Place it in `/path/to/kit-exts/vams.connector.isaacsim/certs/`, the `certs/` directory of the copy Kit loads:
 
 ```
-isaacsim_vams_integration/
+/path/to/kit-exts/vams.connector.isaacsim/
 ├── certs/
 │   └── amazon-ca-bundle.pem    # <-- place the file here
 ├── config/
@@ -224,12 +237,12 @@ Once enabled, the extension opens a **VAMS Connector** window with:
 1.  **Authentication** - Enter username + password (Cognito) or user ID + token/API key, then click the appropriate login button
 2.  **Databases** - Click to list all databases, then click one to select it
 3.  **Assets** - Lists assets in the selected database, click to select
-4.  **Files** - Lists files in the selected asset with context-aware actions:
-    -   **USD files** (`.usd`, `.usda`, `.usdc`, `.usdz`): Click the play button to download and open as a new stage, or click **Add Ref** to add as a reference to the current stage
-    -   **URDF files** (`.urdf`): Click the play button to download and import the robot description into the current stage
-    -   **MJCF files** (`.mjcf`, `.xml`): Click the play button to download and import the MuJoCo model into the current stage
-    -   **Other files**: Click the download button to save to a local temporary directory
-5.  **Workflows** - Lists available workflows with an Execute button per workflow
+4.  **Files** - Lists files in the selected asset; select a file to show the actions for its type:
+    -   **USD files** (`.usd`, `.usda`, `.usdc`, `.usdz`): **Open Stage (replace entire scene)** downloads the file and opens it as a new stage. **Add USD Reference (add to current scene)** adds it as a reference under `/World/<name>`, the file name without its extension and with each character other than a letter, digit or underscore replaced by `_`, or under `<name>_1`, `<name>_2`, ... when that prim exists, so each add gets a prim of its own; the status line names the prim used. The reference brings in the file's default prim, or its one root prim when it has none, counting the root prims of the layers it sublayers; a file with neither is refused, the stage is left as it was, and the status line gives the reason (`Reference error: <file> has no default prim (<n> root prims), so a reference would bring in nothing. Open it with Open Stage, or set a default prim on the file.`)
+    -   **URDF files** (`.urdf`): **Import URDF (add to current scene)** downloads the robot description and imports it into the current stage, under the prim the stage's default prim names, or at the stage root when it names none, and under `<name>_0` when `<name>` is taken there; the stage's default prim is left as it was, and the status line names the prim used (`Imported URDF as <prim>`) or reads `URDF import failed`
+    -   **MJCF files** (`.mjcf`, `.xml`): **Import MJCF (add to current scene)** downloads the MuJoCo model and imports it into the current stage under `/World/<name>`, with `<name>` made from the file name as for a USD reference, or under `<name>_1`, `<name>_2`, ... when that prim exists; the stage's default prim is left as it was, and the status line names the prim used (`Imported MJCF <file> as <prim>`). A file that is not well-formed XML is refused before the importer runs (`MJCF error: <file> is not well-formed XML: <parser message>`), and an import that brings in nothing from the file is removed again, together with a `/World` it created, and the status line reads `MJCF import failed: <file>`
+    -   **Any file**: **Download Only (save to disk)** saves it to `~/vams_downloads`, under its path within the asset
+5.  **Workflows** - Lists the enabled workflows of `GLOBAL` and the selected database, and the asset's execution history, where each execution's input file is shown by its path within the asset and a value too long for its column is shortened, with the workflow ID and the file's full key in tooltips. Choosing a workflow opens its Execute view: **Run on Entire Asset** where the workflow takes a whole asset, **Run** for each file the workflow and its first pipeline accept, and a template choice for a pipeline that requires one (see [Workflow Execution](#workflow-execution))
 
 ### Viewing a loaded asset
 
@@ -278,7 +291,7 @@ for f in files:
 #### Download Files & Assets
 
 ```python
-# Download a single file
+# Download a single file; one that does not download raises VamsCliError naming the download's error
 connector.download_file("my-db", "my-asset", "/model.usd", "/tmp/downloads")
 
 # Download an entire asset (all files, recursively)
@@ -317,6 +330,16 @@ result = connector.execute_workflow("my-db", "my-asset", "wf-id", "wf-db-id")
 print(f"Started execution: {result.get('executionId')}")
 for warning in result.get("warnings", []):
     print(f"  warning: {warning}")
+
+# Read a pipeline and its templates; a pipeline that requires a template and names no default is
+# run with one named for it, keyed by pipelineId
+pipeline = connector.get_pipeline("GLOBAL", "my-pipeline")
+templates = connector.list_pipeline_templates("GLOBAL", "my-pipeline")
+print(pipeline.requires_template, [(t.template_id, t.is_default) for t in templates])
+result = connector.execute_workflow(
+    "my-db", "my-asset", "wf-id", "wf-db-id", file_key="/model.stl",
+    pipeline_parameters={"my-pipeline": {"templateId": "my-template"}},
+)
 ```
 
 #### Isaac Sim Stage Operations
@@ -328,8 +351,15 @@ connector.export_and_upload_scene("my-db", "scene_v1", description="Exported fro
 # Download a USD file and open it as a new stage
 connector.download_and_import_asset("my-db", "my-asset", "/scene.usd")
 
-# Download a USD file and add it as a reference to the current stage
+# Download a USD file and add it as a reference to the current stage; returns False, with the reason
+# logged, for a file that did not download or has no prim a reference could bring in; a prim
+# already at the path keeps its references and gets this one as well
 connector.download_and_add_reference("my-db", "my-asset", "/robot.usd", "/World/Robot")
+
+# Reference a USD file already on disk; raises UnreferenceableLayerError (a VamsCliError, imported
+# from vams.connector.isaacsim.connector) for a file with no default prim and no single root prim
+import omni.usd
+connector.add_reference_to_stage(omni.usd.get_context().get_stage(), "/World/Robot", "/tmp/robot.usd")
 ```
 
 #### URDF & MJCF Import
@@ -343,11 +373,18 @@ prim_path = connector.download_and_import_urdf(
     fix_base=True, import_inertia_tensor=True,
 )
 
-# Import a MJCF/MuJoCo model into the current stage
-connector.download_and_import_mjcf(
+# Import a MJCF/MuJoCo model into the current stage, under /World; returns the prim path, or None,
+# with the reason logged, for a file that did not download, is not well-formed XML or imports nothing
+prim_path = connector.download_and_import_mjcf(
     "my-db", "my-asset", "/ant.xml",
     fix_base=True, import_inertia_tensor=True,
 )
+
+# Import a URDF or MJCF file already on disk; both return the prim path, or None. import_mjcf_file
+# raises MalformedXmlError (a VamsCliError, imported from vams.connector.isaacsim.connector) for a
+# file that is not well-formed XML
+prim_path = connector.import_urdf_file("/tmp/robot/robot.urdf", fix_base=True)
+prim_path = connector.import_mjcf_file("/tmp/ant/ant.xml")
 ```
 
 ---
@@ -425,18 +462,20 @@ UI button handlers are deferred via `omni.kit.app`'s update event stream to avoi
 
 ## Troubleshooting
 
-| Issue                               | Solution                                                                                                   |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| **"VAMS CLI not found"**            | Install the CLI: `pip install vamscli` and ensure it is on PATH, or set `vamscli_path` in extension.toml   |
-| **"Profile may not be configured"** | Run `vamscli setup <api-gateway-url>` to configure the default profile                                     |
-| **Login fails (Cognito)**           | Verify credentials with `vamscli auth login -u <email>` in a terminal                                      |
-| **Login fails (token/API key)**     | Verify with `vamscli auth login --user-id <email> --token-override <token>`                                |
-| **Extension not found**             | Ensure the extension search path points to the `isaacsim_vams_integration/` directory (not a subdirectory) |
-| **omni.usd import errors**          | Stage operations (`export_and_upload_scene`, etc.) must be called from within Isaac Sim                    |
-| **SSL/S3 download errors**          | See [SSL Certificate Bundle](#ssl-certificate-bundle-optional) in the Ubuntu setup section                 |
-| **Viewport empty after load**       | Add a light (Create > Light > Dome Light) and press F to frame the camera                                  |
-| **URDF/MJCF import fails**          | Ensure `isaacsim.asset.importer.urdf` or `isaacsim.asset.importer.mjcf` is enabled in Isaac Sim            |
-| **UI freezes on button click**      | This should not happen with the deferred execution pattern; if it does, file an issue                      |
+| Issue                               | Solution                                                                                                                                                                                                               |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **"VAMS CLI not found"**            | Install the CLI from the VAMS repository, `pip install -e /path/to/vams/tools/VamsCLI`, and ensure it is on PATH, or set `vamscli_path` in extension.toml                                                              |
+| **"Profile may not be configured"** | Run `vamscli setup <api-gateway-url>` to configure the default profile                                                                                                                                                 |
+| **Login fails (Cognito)**           | Verify credentials with `vamscli auth login -u <email>` in a terminal                                                                                                                                                  |
+| **Login fails (token/API key)**     | Verify with `vamscli auth login --user-id <email> --token-override <token>`                                                                                                                                            |
+| **Extension not found**             | Ensure the extension search path names the folder that contains the connector as `vams.connector.isaacsim` (see [Installation](#installation)), not the `isaacsim_vams_integration/` directory itself                  |
+| **omni.usd import errors**          | Stage operations (`export_and_upload_scene`, etc.) must be called from within Isaac Sim                                                                                                                                |
+| **SSL/S3 download errors**          | See [SSL Certificate Bundle](#ssl-certificate-bundle-optional) in the Ubuntu setup section                                                                                                                             |
+| **Viewport empty after load**       | Add a light (Create > Light > Dome Light) and press F to frame the camera                                                                                                                                              |
+| **URDF/MJCF import fails**          | Ensure `isaacsim.asset.importer.urdf` or `isaacsim.asset.importer.mjcf` is enabled in Isaac Sim                                                                                                                        |
+| **"is not well-formed XML" status** | The MJCF file cannot be parsed as XML, so the importer did not run and the stage is unchanged. Correct the file at the line and column the parser message gives, and upload it again                                   |
+| **"MJCF import failed" status**     | The MJCF importer brought in nothing from the file, for example from an `.xml` file that is not a MuJoCo model, and the prim the import created was removed again. Isaac Sim's log carries the importer's own messages |
+| **UI freezes on button click**      | This should not happen with the deferred execution pattern; if it does, file an issue                                                                                                                                  |
 
 ---
 

@@ -8,6 +8,7 @@ import datetime
 import uuid
 from customLogging.logger import safeLogger
 import manifestHelper
+import computeTier
 from botocore.config import Config
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
@@ -28,6 +29,7 @@ events_client = boto3.client(
     region_name=os.environ["AWS_REGION"],
     config=retry_config
 )
+s3_client = boto3.client('s3', config=retry_config)
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
@@ -41,8 +43,16 @@ STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
 BATCH_JOB_LOG_GROUP_NAME = os.environ.get("BATCH_JOB_LOG_GROUP_NAME", "")
 BATCH_JOB_LOG_GROUP_ARN = os.environ.get("BATCH_JOB_LOG_GROUP_ARN", "")
 BATCH_JOB_DEFINITION_NAME = os.environ.get("BATCH_JOB_DEFINITION_NAME", "")
-# The Batch state of this pipeline's state machine (its CDK construct id).
-BATCH_STATE_NAME = "Preview3dThumbnailBatchJob"
+# The Batch states of this pipeline's state machine (their CDK construct ids), one per compute tier.
+# Both submit the same job definition, so their containers stream under the same prefix; a run
+# registers the container log source of the one state its tier routes it to.
+STANDARD_BATCH_STATE_NAME = "Preview3dThumbnailBatchJob"
+LARGE_BATCH_STATE_NAME = "Preview3dThumbnailLargeBatchJob"
+BATCH_STATE_NAME_BY_TIER = {
+    computeTier.TIER_STANDARD: STANDARD_BATCH_STATE_NAME,
+    computeTier.TIER_LARGE: LARGE_BATCH_STATE_NAME,
+}
+LARGE_TIER_THRESHOLD_BYTES = computeTier.large_tier_threshold_bytes()
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 def abort_external_workflow(error, task_token):
@@ -72,8 +82,10 @@ def batch_container_log_entry(job_definition_name, state_name):
 
 
 def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
-                           sub_execution_arn, state_machine_arn):
-    """Best-effort: report this pipeline's sub-SFN execution + its log sources to the orchestration bus."""
+                           sub_execution_arn, state_machine_arn,
+                           batch_state_name=STANDARD_BATCH_STATE_NAME):
+    """Best-effort: report this pipeline's sub-SFN execution + its log sources to the orchestration bus.
+    `batch_state_name` is the Batch state the run is routed to, whose container log source is registered."""
     if not orchestration_bus_name or not orchestration_event_prefix:
         logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
         return
@@ -99,7 +111,7 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
             "sourceType": "stateMachine",
             "label": "3D thumbnail state machine",
         })
-    container_log = batch_container_log_entry(BATCH_JOB_DEFINITION_NAME, BATCH_STATE_NAME)
+    container_log = batch_container_log_entry(BATCH_JOB_DEFINITION_NAME, batch_state_name)
     if container_log:
         logs.append(container_log)
     if logs:
@@ -179,9 +191,13 @@ def lambda_handler(event, context):
     # Generate new job name
     job_name = f"PipelineJob_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]}_{uuid.uuid4().hex[:8]}"
 
+    # The compute tier the state machine routes the Batch job to
+    compute_tier = computeTier.select_compute_tier(s3_client, event, LARGE_TIER_THRESHOLD_BYTES)
+
     # StateMachine Execution Input
     sfn_input = {
         "jobName": job_name,
+        "computeTier": compute_tier,
         "inputS3AssetFilePath": input_s3_asset_files_uri,
         "outputS3AssetFilesPath": output_s3_asset_files_uri,
         "outputS3AssetPreviewPath": output_s3_asset_preview_uri,
@@ -214,7 +230,8 @@ def lambda_handler(event, context):
         # Best-effort: register this sub-SFN execution + its log group
         register_sub_execution(
             ORCHESTRATION_BUS_NAME, orchestration_event_prefix,
-            sfn_response.get("executionArn", ""), STATE_MACHINE_ARN)
+            sfn_response.get("executionArn", ""), STATE_MACHINE_ARN,
+            BATCH_STATE_NAME_BY_TIER[compute_tier])
 
         # response datetime not JSON serializable
         sfn_response["startDate"] = sfn_response["startDate"].strftime('%m-%d-%Y %H:%M:%S')

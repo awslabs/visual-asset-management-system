@@ -794,7 +794,7 @@ DELETE /user/cognito/{userId}
 
 ### Reset a user's password
 
-Sends a password reset to the specified Cognito user.
+Replaces the specified Cognito user's password with a new temporary password, which Amazon Cognito emails to the user in the registration (invitation) message. The user must set a new password at the next sign-in. The account and its attributes are kept.
 
 ```
 POST /user/cognito/{userId}/resetPassword

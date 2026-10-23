@@ -346,6 +346,47 @@ class TestExecutionDetails:
             result = cli_runner.invoke(cli, ['execution', 'details', 'bad'])
             assert result.exit_code != 0
 
+    @pytest.mark.parametrize("current, expected", [
+        (True, 'Workflow version: 3 (latest)\n'),
+        (False, 'Workflow version: 3 (superseded)\n'),
+        (None, 'Workflow version: 3\n'),
+    ])
+    def test_details_shows_the_workflow_version_the_run_started_on(
+            self, cli_runner, generic_command_mocks, current, expected):
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1', 'workflowVersion': 3,
+                'workflowVersionCurrent': current})
+            assert result.exit_code == 0
+            assert expected in result.output
+
+    def test_details_says_when_a_run_recorded_no_workflow_version(self, cli_runner,
+                                                                   generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {
+                'workflowExecutionId': 'e1', 'workflowVersion': None,
+                'workflowVersionCurrent': None})
+            assert result.exit_code == 0
+            assert 'Workflow version: not recorded' in result.output
+
+    def test_details_omits_the_version_line_when_the_service_does_not_report_it(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            result = self._details(mocks, cli_runner, {'workflowExecutionId': 'e1'})
+            assert result.exit_code == 0
+            assert 'Workflow version' not in result.output
+
+    def test_details_json_output_passes_the_workflow_version_fields_through(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details.return_value = {'message': {
+                'workflowExecutionId': 'e1', 'workflowVersion': 3, 'workflowVersionCurrent': False}}
+            result = cli_runner.invoke(cli, ['execution', 'details', 'e1', '--json-output'])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data['workflowVersion'] == 3
+            assert data['workflowVersionCurrent'] is False
+
     def _details(self, mocks, cli_runner, message):
         mocks['api_client'].get_execution_details.return_value = {'message': message}
         return cli_runner.invoke(cli, ['execution', 'details', 'e1'])

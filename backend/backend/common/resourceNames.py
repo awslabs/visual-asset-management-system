@@ -80,6 +80,12 @@ class ResourceKeys:
     PIPELINE_TEMPLATE_TAG_SCHEMA_STORAGE_TABLE = ResourceParamKey("dynamoTables/pipelineTemplateTagSchemaStorage", ("PIPELINE_TEMPLATE_TAG_SCHEMA_STORAGE_TABLE_NAME",))
     WORKFLOW_STORAGE_TABLE_V2 = ResourceParamKey("dynamoTables/workflowStorageV2", ("WORKFLOW_STORAGE_TABLE_V2_NAME",))
     WORKFLOW_TRIGGERS_STORAGE_TABLE = ResourceParamKey("dynamoTables/workflowTriggersStorage", ("WORKFLOW_TRIGGERS_STORAGE_TABLE_NAME",))
+    # Compliance tables
+    COMPLIANCE_SCHEMA_STORAGE_TABLE = ResourceParamKey("dynamoTables/complianceSchemaStorage", ("COMPLIANCE_SCHEMA_STORAGE_TABLE_NAME",))
+    COMPLIANCE_ASSET_STATE_STORAGE_TABLE = ResourceParamKey("dynamoTables/complianceAssetStateStorage", ("COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME",))
+    COMPLIANCE_EVALUATION_STORAGE_TABLE = ResourceParamKey("dynamoTables/complianceEvaluationStorage", ("COMPLIANCE_EVALUATION_STORAGE_TABLE_NAME",))
+    COMPLIANCE_CASCADE_STORAGE_TABLE = ResourceParamKey("dynamoTables/complianceCascadeStorage", ("COMPLIANCE_CASCADE_STORAGE_TABLE_NAME",))
+    COMPLIANCE_AUDIT_STORAGE_TABLE = ResourceParamKey("dynamoTables/complianceAuditStorage", ("COMPLIANCE_AUDIT_STORAGE_TABLE_NAME",))
     # Non-asset S3 buckets
     ASSET_AUXILIARY_BUCKET = ResourceParamKey("s3Buckets/assetAuxiliary", ("S3_ASSET_AUXILIARY_BUCKET", "ASSET_AUXILIARY_BUCKET_NAME", "S3_ASSETAUXILIARY_STORAGE_BUCKET"))
     ARTEFACTS_BUCKET = ResourceParamKey("s3Buckets/artefacts", ("LAMBDA_PIPELINE_SAMPLE_FUNCTION_BUCKET",))

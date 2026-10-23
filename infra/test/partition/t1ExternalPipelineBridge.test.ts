@@ -334,16 +334,16 @@ describe("SageMaker sub-process grants", () => {
         }
     );
 
-    test.each(ALL_TEMPLATES)("%s handleExecutionError stops only", (name) => {
-        const s = synth(name);
-        const statements = lambdaRoleStatements(s, "handleExecutionError");
-        for (const action of STOPS) {
-            expect(resourcesFor(statements, action).sort()).toEqual(expected(s));
+    test.each(ALL_TEMPLATES)(
+        "%s handleExecutionError stops and describes in its own partition",
+        (name) => {
+            const s = synth(name);
+            const statements = lambdaRoleStatements(s, "handleExecutionError");
+            for (const action of [...STOPS, ...DESCRIBES]) {
+                expect(resourcesFor(statements, action).sort()).toEqual(expected(s));
+            }
         }
-        for (const action of DESCRIBES) {
-            expect(resourcesFor(statements, action)).toEqual([]);
-        }
-    });
+    );
 
     test.each(ALL_TEMPLATES)("%s grants no bare wildcard on any SageMaker action", (name) => {
         const s = synth(name);
@@ -393,10 +393,10 @@ describe("SSM integration surface", () => {
         for (const key of required) {
             expect(names.filter((n) => n.endsWith(`/resourceNames/${key}`))).toHaveLength(1);
         }
-        // 66 registry parameters (ResourceNamesBuilder) + the two late-bound ones here, plus the
+        // 71 registry parameters (ResourceNamesBuilder) + the two late-bound ones here, plus the
         // reindexer when search is enabled.
-        expect(names.length).toBeGreaterThanOrEqual(68);
-        expect(names.length).toBeLessThanOrEqual(69);
+        expect(names.length).toBeGreaterThanOrEqual(73);
+        expect(names.length).toBeLessThanOrEqual(74);
     });
 
     test.each(ALL_TEMPLATES)("%s binds the workflow role ARN parameter to the role", (name) => {
