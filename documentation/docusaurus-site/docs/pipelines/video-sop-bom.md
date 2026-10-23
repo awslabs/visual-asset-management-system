@@ -112,7 +112,7 @@ flowchart LR
 
 ### Container Image Build
 
-The container image is built by AWS CodeBuild during CDK deployment when `useCodeBuild` is enabled: CDK uploads the container source to Amazon S3 and a custom resource starts a build that pushes the image, tagged by the content hash of that source, to an Amazon ECR repository named `<config.name>-<baseStackName>-videosopbom`. With `useCodeBuild` disabled the image is built locally with Docker at synthesis time. The image is a digest-pinned `python:3.12-slim` (Debian) base with the Debian `ffmpeg` package, boto3, jsonschema, and Pillow, and runs as a non-root user.
+The container image is built by AWS CodeBuild during CDK deployment when `useCodeBuild` is enabled: CDK uploads the container source to Amazon S3 and a custom resource starts a build that pushes the image, tagged by the content hash of that source, to an Amazon ECR repository named `<config.name>-<baseStackName>-videosopbom` (with `-kms` appended when `app.useKmsCmkEncryption.enabled` is `true`). With `useCodeBuild` disabled the image is built locally with Docker at synthesis time. The image is a digest-pinned `python:3.12-slim` (Debian) base with the Debian `ffmpeg` package, boto3, jsonschema, and Pillow, and runs as a non-root user.
 
 ## Configuration
 

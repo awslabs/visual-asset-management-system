@@ -340,7 +340,7 @@ All rights reserved.
 | boto3                        | 1.43.93                                                                                          | Apache-2.0       | AWS SDK for Python (Amazon S3, Amazon Transcribe, Amazon Bedrock, AWS Step Functions)                 |
 | botocore                     | 1.43.93                                                                                          | Apache-2.0       | Low-level AWS service client library used by boto3                                                    |
 | jsonschema                   | 4.26.0                                                                                           | MIT              | Configuration and output schema validation                                                            |
-| Pillow                       | 12.3.0                                                                                           | HPND             | Key-frame scaling and JPEG encoding                                                                   |
+| Pillow                       | 13.0.0                                                                                           | HPND             | Key-frame scaling and JPEG encoding                                                                   |
 
 **Container Base Image**
 
