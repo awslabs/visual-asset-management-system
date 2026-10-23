@@ -970,6 +970,12 @@ def handle_get_request(event):
         return internal_error(event=event)
 ```
 
+**An archived record is authorized on the database it belongs to.** Archiving an asset and deleting a
+database rewrite the record under the partition key `<databaseId>#deleted`; `CasbinEnforcerService.enforce`
+removes the suffix from the evaluated `databaseId`, so constraints match it exactly as they match the live
+record. Pass the stored record to `enforce()` unchanged; do not strip or add the suffix in a handler for
+authorization.
+
 **Compiled matcher expressions are cached per user enforcer, never decisions.**
 `ExpressionCachingEnforcer` (`handlers/authz/__init__.py`, the `FastEnforcer` subclass that
 `_create_casbin_enforcer_helper` builds) keeps an **instance-level** dict of compiled `SimpleEval`
