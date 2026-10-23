@@ -286,7 +286,7 @@ User uploads 3D file → VAMS UI → Lambda → Step Functions → EKS Cluster �
 
 **Purpose:** Lambda layer Python dependencies  
 **Lines:** ~5  
-**Dependencies:** kubernetes==26.1.0, boto3, PyYAML, requests, urllib3
+**Dependencies:** kubernetes==36.0.3, boto3, PyYAML, requests, urllib3
 
 ---
 

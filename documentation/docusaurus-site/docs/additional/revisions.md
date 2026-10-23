@@ -112,6 +112,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **`{{jobName}}` renders per run** — The tag renders the step's generated job name joined to its pipeline execution id, so a `/{{jobName}}/` output path prefix gives every run its own asset folder and no two steps of a run share a value. (issue #569)
 -   **Pipeline synthesis without an account** — The cdk-nag suppression for the state machine role's `batch:SubmitJob` grant on `job-definition/*` in every pipeline construct that submits AWS Batch jobs matches the resource by pattern instead of a string built from the deployment account, so `cdk synth` with `env.account: null` and no AWS credentials no longer fails on that `AwsSolutions-IAM5` finding. (issue #477)
 -   **3D Preview Thumbnail image updates** — The 3D Preview Thumbnail container uses the current `python:3.12-slim` digest (Python 3.12.15), applies the Debian security updates in both build stages at build time, and installs certifi 2026.10.19, Pillow 13.0.0, aiohttp 3.14.5 and urllib3 2.8.0 from its dependency lock. The image no longer ships npm, npx or corepack; npm installs `splat-transform` during the build, and none of the three is used when a job runs. (issues #570, #572)
+-   **RapidPipeline EKS Kubernetes client** — The pipeline's Kubernetes Lambda layer installs the Kubernetes Python client 36.0.3, which matches the default EKS cluster version 1.36, and the pipeline Lambda's own requirements ask for the same release, so the two can be installed together. (issue #722)
 
 **Other changes:**
 
