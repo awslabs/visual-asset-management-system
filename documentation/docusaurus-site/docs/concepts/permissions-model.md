@@ -221,6 +221,15 @@ Deny rules explicitly block specific operations. A single matching deny rule ove
 
 A common example denies `PUT`, `POST`, and `DELETE` on the `asset` object type wherever the asset's tag list includes `locked`. Write operations on such an asset are then blocked regardless of any other allow rule, while users can still view (`GET`) it. `tags` holds a list, so the criterion uses the membership operator `is_one_of` — the shipped `deny-tagged-assets` permission template applies the same rule with a variable tag value. For the constraint JSON, see [Developer Guide: Permissions](../developer/permissions.md#deny-by-tag).
 
+## Archived records
+
+Archiving an asset and deleting a database keep the record, stored under the id `<databaseId>#deleted` (for example `building-scans#deleted`). An archived asset or archived database record is allowed only when it passes on both forms of that id: the stored `<databaseId>#deleted` and the database id `<databaseId>`.
+
+-   A deny on a database (for example `databaseId equals building-scans`) also applies to that database's archived assets and to its archived database record.
+-   An allow written only as `databaseId equals building-scans` does not reach archived records. To grant them, the constraint must also name the stored id, for example with `criteriaOr`: `databaseId equals building-scans` OR `databaseId equals building-scans#deleted`. The `database-admin` template does this; the `database-user` and `database-readonly` templates do not, so their roles neither see nor act on archived records.
+-   A rule written against the stored id matches archived records. For example, a deny with `databaseId contains #deleted` hides every archived record from the role.
+-   A `starts_with` or `contains` criterion that matches both forms (such as `databaseId contains .*` in the `global-readonly` template) reaches archived records without naming the suffix.
+
 ## Common role patterns
 
 For detailed constraint tables, JSON examples, and design rationale for common roles (Database Admin, Database User, Database Read-Only, Global Read-Only, and Deny by Tag), see [Developer Guide: Permissions](../developer/permissions.md).

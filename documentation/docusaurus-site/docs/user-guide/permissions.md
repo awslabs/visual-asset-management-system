@@ -182,6 +182,7 @@ If you receive a 403 Forbidden error or cannot see expected data, check both aut
 
     - Does the user's role have a constraint on the correct object type (for example, `asset`, `database`)? For an object type the deployment registered itself, even an administrator needs a constraint on that type.
     - Does the criteria match the specific resource? Check `databaseId`, `assetName`, or other filter fields.
+    - For an archived asset or a deleted database's record, does the criteria also match its stored id `<databaseId>#deleted`? An archived record must pass on both its stored id and its database id (see [Permissions Model: Archived records](../concepts/permissions-model.md#archived-records)).
     - Is there a **deny** constraint that overrides the allow?
 
 3. **Check role assignment:**

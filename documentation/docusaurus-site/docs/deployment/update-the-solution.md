@@ -637,7 +637,7 @@ The output-asset half narrows access for a deployment that already ran workflows
 
 Deleting an asset does not delete the executions that ran against it. An asset that has been **permanently deleted** is authorized on the database it lived in, under the same action — a database is never removed, since deleting one archives the record — so the history of runs against a deleted asset stays reachable by whoever can read that database.
 
-**Archiving** an asset is not a deletion and does not change how its executions are authorized. An archived asset's record is retained, so it is still authorized on its own attributes (name, type, tags) exactly as it was before archiving, and any asset-level constraint that applied to it continues to apply.
+**Archiving** an asset is not a deletion. An archived asset's record is retained, and its executions are authorized on that record's own attributes (name, type, tags) and its stored database id, `<databaseId>#deleted`. The record must pass on both that id and `<databaseId>`, so a role whose constraints name only `databaseId equals <databaseId>` does not see the runs of an archived asset, and a constraint that also names `<databaseId>#deleted` does (see [Permissions model: Archived records](../concepts/permissions-model.md#archived-records)).
 
 #### Permission constraint audit for `pipelineType`
 
