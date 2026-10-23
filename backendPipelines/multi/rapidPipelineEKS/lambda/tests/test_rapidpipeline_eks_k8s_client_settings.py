@@ -4,9 +4,11 @@
 """The Kubernetes client settings `get_k8s_client` intends must reach the requests it sends.
 
 `kubernetes.client.Configuration` has no `timeout`, `socket_timeout`, `connect_timeout`, `user_agent` or
-`retries_config` setting, so assigning them changes nothing: requests had no timeout, the default user
-agent, and no retry of 429/5xx responses. The client takes a timeout per call (`_request_timeout`), the user
-agent on the ApiClient, and a retry policy as a urllib3 `Retry` in `Configuration.retries`.
+`retries_config` setting, so assigning them changes nothing: requests had no timeout and sent the default
+user agent. The client takes a timeout per call (`_request_timeout`), the user agent on the ApiClient, and a
+retry policy as a urllib3 `Retry` in `Configuration.retries`. Status and timeout retries belong to
+`with_retries`, which wraps the pipeline's API calls, so the client policy resends only after a connection
+failure.
 
 These tests run the real client against a local HTTP server, so they observe what is actually sent.
 """
@@ -14,6 +16,7 @@ These tests run the real client against a local HTTP server, so they observe wha
 import ast
 import json
 import os
+import socket
 import sys
 import threading
 import time
@@ -23,6 +26,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import urllib3
+import urllib3.connectionpool
 from kubernetes import client as k8s_client
 
 _LAMBDA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -58,7 +62,7 @@ _VERSION_BODY = json.dumps(
 class _Server:
     """Local HTTP server answering every request with `status` after `delay` seconds."""
 
-    def __init__(self, status=200, delay=0.0):
+    def __init__(self, status=200, delay=0.0, headers=None):
         self.requests = []
         outer = self
 
@@ -74,6 +78,8 @@ class _Server:
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -141,32 +147,60 @@ class TestNoIgnoredConfigurationSettings:
 
 @pytest.mark.unit
 class TestRetryPolicy:
+    """The client resends only when no response arrived; with_retries owns status and timeout retries."""
+
     def test_policy(self):
         retry = ku.k8s_retry_policy()
         assert isinstance(retry, urllib3.util.Retry)
-        assert retry.total == 5
-        assert retry.backoff_factor == 1
-        assert set(retry.status_forcelist) == {429, 500, 502, 503, 504}
-        assert retry.raise_on_status is False
-        assert "POST" not in retry.allowed_methods
+        assert retry.total == ku.K8S_RETRY_TOTAL
+        assert retry.read == 0
+        assert not retry.status_forcelist
+        assert retry.respect_retry_after_header is False
 
-    def test_idempotent_call_is_retried_then_reported_as_api_exception(self, server_factory, monkeypatch):
-        monkeypatch.setattr(ku, "K8S_RETRY_BACKOFF_FACTOR", 0)
-        server = server_factory(status=503)
-        version_api = k8s_client.VersionApi(_api_client(server.url))
+    @pytest.mark.parametrize("status,headers", [(503, None), (500, None), (429, {"Retry-After": "1"})])
+    def test_client_does_not_resend_on_a_status(self, server_factory, status, headers):
+        server = server_factory(status=status, headers=headers)
         with pytest.raises(k8s_client.ApiException) as err:
-            version_api.get_code()
-        assert err.value.status == 503
-        assert len(server.requests) == 1 + ku.K8S_RETRY_TOTAL
+            k8s_client.VersionApi(_api_client(server.url)).get_code()
+        assert err.value.status == status
+        assert len(server.requests) == 1
 
-    def test_job_creation_is_not_resent(self, server_factory, monkeypatch):
-        monkeypatch.setattr(ku, "K8S_RETRY_BACKOFF_FACTOR", 0)
+    def test_job_creation_is_sent_once_by_the_client(self, server_factory):
         server = server_factory(status=503)
         batch = k8s_client.BatchV1Api(_api_client(server.url))
         with pytest.raises(k8s_client.ApiException) as err:
             batch.create_namespaced_job(namespace="default", body={"metadata": {"name": "j"}})
         assert err.value.status == 503
         assert [r[0] for r in server.requests] == ["POST"]
+
+    def test_client_resends_after_a_connection_failure(self, monkeypatch):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        sends = []
+        urlopen = urllib3.connectionpool.HTTPConnectionPool.urlopen
+
+        def counting_urlopen(self, *args, **kwargs):
+            sends.append(1)
+            return urlopen(self, *args, **kwargs)
+
+        monkeypatch.setattr(urllib3.connectionpool.HTTPConnectionPool, "urlopen", counting_urlopen)
+        with pytest.raises(urllib3.exceptions.MaxRetryError):
+            k8s_client.VersionApi(_api_client(f"http://127.0.0.1:{port}")).get_code()
+        assert len(sends) == 1 + ku.K8S_RETRY_TOTAL
+
+    def test_wrapped_call_site_under_persistent_503_makes_with_retries_attempts_only(
+        self, server_factory, monkeypatch
+    ):
+        server = server_factory(status=503)
+        monkeypatch.setattr(ku, "get_k8s_client", lambda: _api_client(server.url))
+        monkeypatch.setattr(ku.time, "sleep", lambda seconds: None)
+        try:
+            ku.check_job_status("rapid-pipeline-job-x", "default")
+        except Exception:
+            pass
+        status_reads = [r for r in server.requests if r[1].startswith("/apis/batch/v1/")]
+        assert len(status_reads) == 3  # with_retries' default max_retries, one request each
 
 
 @pytest.mark.unit
@@ -195,12 +229,12 @@ class TestTimeoutAndUserAgent:
         timeout = spy.call_args.kwargs["timeout"]
         assert (timeout.connect_timeout, timeout.read_timeout) == (5, 7)
 
-    def test_unresponsive_server_fails_at_the_read_timeout(self, server_factory, monkeypatch):
+    def test_unresponsive_server_fails_once_at_the_read_timeout(self, server_factory, monkeypatch):
         monkeypatch.setattr(ku, "K8S_REQUEST_TIMEOUT", (1, 0.5))
-        monkeypatch.setattr(ku, "K8S_RETRY_TOTAL", 0)
         server = server_factory(delay=3)
         version_api = k8s_client.VersionApi(_api_client(server.url))
         started = time.monotonic()
         with pytest.raises(urllib3.exceptions.HTTPError):
             version_api.get_code()
         assert time.monotonic() - started < 2
+        assert len(server.requests) == 1

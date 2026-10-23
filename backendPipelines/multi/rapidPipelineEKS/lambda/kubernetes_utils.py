@@ -69,23 +69,17 @@ except ImportError as e:
 K8S_REQUEST_TIMEOUT = (30, 60)  # (connect, read) seconds
 K8S_USER_AGENT = "vams-eks-pipeline/1.0"
 K8S_RETRY_TOTAL = 5
-K8S_RETRY_BACKOFF_FACTOR = 1
-K8S_RETRY_STATUS_FORCELIST = (429, 500, 502, 503, 504)
 
 
 def k8s_retry_policy():
-    """Retry policy for Kubernetes API requests.
+    """urllib3 retry policy for Kubernetes API requests: resend only when no response was received.
 
-    urllib3 retries a listed status only for idempotent methods, so job creation (POST) is never resent.
-    raise_on_status=False hands the last response back once the retries are spent, so the client raises
-    ApiException with that status rather than urllib3's MaxRetryError.
+    The client resends after a connection failure, the case where the request never reached the API
+    server. It does not resend after a read timeout or on any response status, Retry-After included:
+    with_retries() wraps the pipeline's Kubernetes API calls and already retries 429 and 5xx responses
+    and timeouts, and a second layer would multiply its attempts and the time a call can take.
     """
-    return Retry(
-        total=K8S_RETRY_TOTAL,
-        backoff_factor=K8S_RETRY_BACKOFF_FACTOR,
-        status_forcelist=K8S_RETRY_STATUS_FORCELIST,
-        raise_on_status=False,
-    )
+    return Retry(total=K8S_RETRY_TOTAL, read=0, respect_retry_after_header=False)
 
 
 def new_k8s_api_client(k8s_client, configuration):
@@ -423,7 +417,7 @@ def get_k8s_client():
         # Configuration settings; new_k8s_api_client() applies them to the ApiClient below.
         configuration.connection_pool_maxsize = 20
         configuration.retries = k8s_retry_policy()
-        logger.info("Configured connection pool and retry settings")
+        logger.info("Configured connection pool and connection-retry settings")
 
         # Hostname verification is automatically enabled when verify_ssl=True
         # Don't set assert_hostname separately as it can cause issues with the Kubernetes client
