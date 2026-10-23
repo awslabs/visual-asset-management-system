@@ -55,7 +55,7 @@ VAMS provides a configurable pipeline and workflow system that automates common 
 -   **CAD/Mesh Metadata Extraction** -- Automatically extract geometric metadata from CAD and mesh files using CADQuery
 -   **Point Cloud Processing** -- Generate Potree octree representations for browser-based point cloud streaming
 -   **Gaussian Splat Generation** -- Create 3D Gaussian splats from media files using the 3D Reconstruction Toolkit
--   **3D Preview Thumbnails** -- Generate animated GIF or static image previews from 3D, point cloud, CAD, and USD files via headless rendering
+-   **3D Preview Thumbnails** -- Generate animated GIF or static image previews from 3D mesh, point cloud, CAD, USD, and Gaussian splat files via headless rendering
 -   **GenAI Metadata Labeling** -- Automatically generate metadata labels using Amazon Bedrock foundation models
 -   **NVIDIA Isaac Lab Training** -- Run reinforcement learning training and evaluation workloads
 -   **RapidPipeline and VNTANA ModelOps** -- Licensed pipeline integrations for advanced spatial data optimization

@@ -1,11 +1,11 @@
 {
     "pipelineName": "3D Preview Thumbnail",
     "category": "Preview",
-    "description": "Generate preview thumbnails (GIF/JPG/PNG) for 3D files - .ply, .stl, .obj, .glb, .gltf, .fbx, .las, .laz, .e57, .ptx, .fls, .fws, .pcd, .drc, .stp, .step, .usd, .usda, .usdc, .usdz",
+    "description": "Generate preview thumbnails (GIF/JPG/PNG) for 3D files - .ply, .stl, .obj, .glb, .gltf, .fbx, .las, .laz, .e57, .ptx, .pts, .pcd, .drc, .off, .3mf, .dae, .stp, .step, .usd, .usda, .usdc, .usdz, .spz, .sog, .splat, .ksplat, .lcc, .lcc2",
     "executionConfig": {
         "executionType": "Lambda",
         "waitForCallback": "Enabled",
-        "taskTimeout": "3600",
+        "taskTimeout": "14400",
         "taskHeartbeatTimeout": "",
         "lambda": {}
     },
@@ -33,16 +33,24 @@
                 "*.laz",
                 "*.e57",
                 "*.ptx",
-                "*.fls",
-                "*.fws",
+                "*.pts",
                 "*.pcd",
                 "*.drc",
+                "*.off",
+                "*.3mf",
+                "*.dae",
                 "*.stp",
                 "*.step",
                 "*.usd",
                 "*.usda",
                 "*.usdc",
-                "*.usdz"
+                "*.usdz",
+                "*.spz",
+                "*.sog",
+                "*.splat",
+                "*.ksplat",
+                "*.lcc",
+                "*.lcc2"
             ],
             "exclude": []
         }

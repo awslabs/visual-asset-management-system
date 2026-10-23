@@ -62,6 +62,7 @@ One folder per domain. The current domains:
 -   `authz/` — Casbin ABAC/RBAC enforcer (`CasbinEnforcer` proxy)
 -   `assetLinks/` — Asset relationship management
 -   `comments/` — Comment CRUD
+-   `compliance/` — Compliance (schemas, bindings, evaluation, quarantine, cascades, audit). API handlers `complianceSchemaService`, `complianceSchemaBindingService`, `complianceEvaluateService`, `complianceQuarantineService`, `complianceCascadeService`, `complianceAuditService`; event-driven `complianceTrigger` (asset indexer SNS), `complianceWorkflowCallback` (EventBridge `workflow.execution.completed`) and `complianceCascadeExecutor` (async Lambda invoke from `complianceCascadeService`, event `{"cascadeId"}`); shared `complianceEvaluationStore` (all AWS access + `run_evaluation`; it reads the asset row, the asset's current-file listing (one `list_object_versions` walk through the Region-routing S3 client) and the asset file-versions table only when a rule of a type that uses them is present, and the file-metadata, file-attribute and asset-links-metadata tables only for a metadata rule of the `files`, `fileAttributes` or `links` scope), `complianceNotifications`. Pure rule logic for the six `vams-rules-v1` rule types (`pipeline`, `metadata`, `relationship`, `fileStructure`, `versionCoverage`, `assetAttributes`) lives in `common/compliance/evaluationEngine.py`; creating or reverting to an asset version stamps `lastChangeSource: assetVersion` on the asset row (`common/assetProvenance.py`), an asset edit that changes its name, description or tags stamps `assetEdit`, a metadata write (`metadataService`) stamps `metadataEdit` and an asset-link create or delete (`createAssetLink`, `assetLinksService`, a permanent asset deletion's link cleanup) stamps `linkChange` through `stamp_asset_change`, so the trigger re-evaluates it (a workflow execution's metadata write-back carries `workflowExecutionId` on its cross-call and is stamped `workflowExecution`, which the trigger skips), the quarantine-blocks-download guard shared by `downloadAsset`, `streamAsset`, `assetExportService` and `streamAuxiliaryPreviewAsset` in `common/compliance/quarantineGuard.py` (called after Tier-1 + Tier-2 authorization), the one audit-row builder `build_audit_item` (sets the constant `allListPartition` that `AuditByDateGSI` is partitioned on; every audit `put_item` goes through it, guard-tested) in `common/compliance/auditRecord.py`, models in `models/compliance.py`. Casbin object types `complianceSchema` (`complianceSchemaName`), `complianceEvaluation` (`databaseId`, `complianceState`), `complianceCascade` (`cascadeId`). Tests in `tests/handlers/compliance/`
 -   `config/` — System configuration
 -   `databases/` — Database CRUD
 -   `indexing/` — OpenSearch indexing (DynamoDB/S3 streams)
@@ -102,6 +103,17 @@ Custom routes go through `attachFunctionToApi` with the shared `RouteRegistry` (
 #### **Workflow Execution Storage**
 
 Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed as the Step Functions execution name, so `$$.Execution.Name == executionId`. Asset/database linkage is not on the main row — it lives in `WorkflowExecutionInputsStorageTable`, queried via the `WorkflowExecInputsByAssetGSI` GSI for the asset-scoped execution listing. `executeWorkflow` writes the V2 main execution row plus the workflow inputs/configuration rows, one `PipelineExecutions` row per pipeline in the workflow, and the first-pipeline input rows (files/metadata/configuration). `processWorkflowExecutionOutput` writes the end-state pipeline's output/metadata/log rows and the completion status back to the main row. The pure record-building logic (key construction, S3 prefix derivation, record-dict builders, text truncation) lives in `common/workflows/executionRecords.py` and is unit-tested in isolation. The execution details/logs read side keeps its pure logic in the same package: `common/workflows/subExecutionStages.py` folds a sub-state-machine's ASL definition and execution history into per-stage status, and `common/workflows/availableLogs.py` identifies a pipeline execution's log sources by location (`logId`), plans each read and classifies its outcome; `executionService.py` holds only the memoised `DescribeStateMachine`, `DescribeExecution`/`DescribeJobs`/SageMaker `Describe*`, paged `GetExecutionHistory` and `FilterLogEvents` calls around them. The sub-process stop helper and `ABORTABLE_RESOURCE_TYPES` (Step Functions executions, Batch jobs, Deadline Cloud jobs, SageMaker training jobs and pipeline executions) live in `common/workflows/executionOutputs.py` and are shared by the abort API and the failure path (`sfn/handleExecutionError.py`); a registered type outside the set is displayed with `abortable: false` and listed under `notAbortable` on the abort response rather than stopped.
+
+#### **Workflow State Machine Deployment**
+
+A workflow's Step Functions definition encodes each referenced pipeline's execution settings, so it is rebuilt whenever one changes (mirrors `backend/CLAUDE.md` "Workflow State Machine Deployment" and "Internal Actions"):
+
+-   **One deploy routine.** Create, update, the pipeline-change refresh and the launch-time check all deploy through `workflowService._deploy_fields`, which writes `workflow_arn`, `workflowVersionArn` (every deploy publishes a version; older ones past `MAX_RETAINED_STATE_MACHINE_VERSIONS` are deleted), `jobNames` (reused while the steps are unchanged), `pipelineFingerprints` (sha256 of `workflowAsl.to_asl_pipeline_dict` minus `name`, keyed `pipelineDatabaseId:pipelineId`) and `deploymentRevision` together. The refresh writes conditionally on the revision it read.
+-   **Everything the ASL builders read from a pipeline record goes through `to_asl_pipeline_dict`**, because that dict is what is fingerprinted.
+-   **A pipeline change refreshes its workflows.** `pipelineService.update_pipeline` invokes the workflow service's `refreshPipelineReferences` internal action asynchronously when the fingerprint changes; the service walks every non-archived referencing workflow to exhaustion and records a failed redeploy as `deploymentStale` + `deploymentStaleReason`.
+-   **The redeploy path reads strongly consistent.** `workflowService.redeploy_workflow` (behind both internal actions) reads the workflow and each pipeline with `ConsistentRead=True` via the `consistent_read` parameter of `get_workflow_item`, `_get_pipeline_record` and `_resolve_snapshot_pipeline_records`: the refresh runs right after the pipeline write, and the re-read after a lost conditional write must see the other writer's deployment. API reads keep the default.
+-   **A launch never runs a stale definition.** `executeWorkflow._ensure_current_deployment` compares stored and live fingerprints, invokes `redeployWorkflow` synchronously on a mismatch, starts on `workflowVersionArn`, and returns `409` without starting when the deployment cannot be made current.
+-   **Internal actions are not API-reachable.** They dispatch on a top-level `vamsInternalAction` key only for a `SYSTEM_USER` `lambdaCrossCall` with no `requestContext`; callers hold `lambda:InvokeFunction` on the workflow service ARN only (`grantWorkflowServiceInternalInvoke`).
 
 ## 📋 **Development Workflow Checklist**
 
@@ -308,6 +320,12 @@ authorization, as a denial — and decide what to do with the leftover: read it 
 (`executionService`, `assetExportService`, `assetService` listings), report it as unresolved
 (`assetLinksService`), or log and degrade with `max_retries=0` where the data is a display-only
 hint (`workflowService`). A `ClientError` propagates; the caller owns its fallback.
+
+**Targeted updates.** `common.dynamodb.to_update_expr(record)` returns the names map, values map and
+`SET` expression for an `update_item`. The helper names its placeholders `#u<i>` / `:u<i>`, so a boto3
+condition object (`ConditionExpression=Attr("rev").eq(n)`) is safe in the same call: boto3 renders it with
+`#n<i>` / `:v<i>` and merges those into the maps, replacing any entry of the same name. A hand-built update
+expression combined with a condition object must avoid `#n<i>` / `:v<i>` for the same reason.
 
 ### **Rule 3: Paginate large GET responses; never return an unbounded in-memory set**
 
@@ -576,7 +594,13 @@ group that itself repeats or alternates (`(a+)+`, `(a|a)*`), a backreference, an
 ambiguity than one evaluation can afford — the estimated worst-case backtracking search space against a
 256-character subject must stay under `MAX_REGEX_SEARCH_SPACE`, which admits at most three unbounded
 quantifiers (`.*`, `+`, `{n,}`). The budget is calibrated by measurement: three unbounded quantifiers
-separated by literals match in ~16 ms, four in ~1 s, and five do not finish in 25 s. This matters because
+separated by literals match in ~16 ms, four in ~1 s, and five do not finish in 25 s. A value that runs
+against longer subjects is checked at its own length: `validate_regex(subject_length=...)`, or
+`subjectLength` in the `REGEX` spec (`models/compliance.py` checks path patterns at
+`MAX_S3_OBJECT_KEY_BYTES`, 1024, which admits two). A value evaluated with `re.search` passes
+`searched` (`searched: True` in the spec): unless it begins with `^` (`_anchored_at_start`), the
+start positions the search tries count as one more unbounded quantifier; every compliance rule
+pattern is searched. This matters because
 a constraint criterion value becomes a Casbin `regexMatch(...)` pattern re-evaluated for every policy line
 on every authorization decision. General regex stays accepted (literals, character classes, anchors, `.*`, `|`,
 un-quantified groups). The check runs on the **save** paths — `ConstraintCriteriaModel`, plus
@@ -1023,7 +1047,7 @@ return {
 
 Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth. This rule governs core endpoints. `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts` hold most routes, but a feature stack registers the routes of the Lambdas it builds into the same registry: `searchBuilder-nestedStack.ts` registers `/search` and `/search/simple`, and add-on stacks such as `physnaSyncBuilder-nestedStack.ts` register theirs only when the add-on is enabled. A fork registers its routes from `infra/lib/nestedStacks/custom/customResources.ts`, built inside the `CustomBuilder` nested stack, which the REST API stack depends on. `rest-api-gateway-construct.ts` registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `apiRoutes.py` and the route lists it splices in (`addonApiRoutes.py`, `custom/customApiRoutes.py`).
 
-**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.48 MB template and `apiBuilder2` emits 73 in ~0.30 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
+**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.48 MB template and `apiBuilder2` emits 114 in ~0.51 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
 
 A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 122 nodes from 100 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
 
@@ -1156,10 +1180,16 @@ def [operation_name](self, [params]) -> Dict[str, Any]:
 
         elif e.response.status_code == 404:
             raise [Domain]NotFoundError(f"[Domain] not found")
-        elif e.response.status_code in [401, 403]:
+        elif e.response.status_code == 401:
+            # _make_request raises a 403 itself as RequestBlockedError, PermissionDeniedError,
+            # TokenExpiredError or, for an unrouted path, APIError, so only a 401 reaches this
+            # handler as an HTTPError
             raise AuthenticationError(f"Authentication failed: {e}")
         else:
             raise APIError(f"[Operation] failed: {e}")
+
+    except GlobalInfrastructureError:
+        raise
 
     except Exception as e:
         raise APIError(f"Failed to [operation]: {e}")
@@ -2617,6 +2647,10 @@ for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
 # IMPORTANT: Only use this pattern when you genuinely need ALL items for internal processing.
 # For API responses that return lists to users, always use the LastEvaluatedKey pattern above.
 ```
+
+### **Choosing a File's `.previewFile.<ext>`**
+
+A file can hold several `<file>.previewFile.<ext>` objects (a pipeline re-run in another format writes a `.png` beside an existing `.gif`; nothing deletes the other). Every path that attaches a file's preview goes through `select_newest_preview_file((key, lastModified, isArchived) …)` (`backend/common/s3PathPatterns.py`): in `handlers/assets/assetFiles.py` the current listing, the version-snapshot listing in basic and detailed mode, and the single-file info that set `previewFile`, and in `handlers/assets/assetExportService.py` the export's per-file preview path. A live preview beats an archived one, then the latest `lastModified` wins, ties keep key order. Do not pick "the first in key order" in a new path. Tests: `tests/handlers/assets/test_assetFiles_newest_preview.py`, `tests/handlers/assets/test_assetExportService_newest_preview.py`.
 
 ## 🔍 **Code Review Checklist**
 

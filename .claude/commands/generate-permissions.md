@@ -19,7 +19,7 @@ Both tiers must allow an action for it to succeed. This creates a defense-in-dep
 
 2. **Every role needs web, API, AND data constraints.** Without all three, users either can't see pages (no web), can't call APIs (no api), or can't access data (no entity constraints). All three layers must be present.
 
-3. **Read-only roles still need POST on non-mutating APIs**: `/auth/routes`, `/search`, `/check-subscription`. These use POST for request bodies but don't mutate data.
+3. **Read-only roles still need POST on non-mutating APIs**: `/auth/routes`, `/search`, `/check-subscription`, and the file download `POST /database/{databaseId}/assets/{assetId}/download`, which the file viewers use. These use POST for request bodies but don't mutate data. Grant the download as its own constraint with `starts_with /database/` and `ends_with /download` both in `criteriaAnd`; a `/database` prefix on the general POST list would open every write route under it.
 
 4. **Deny always wins.** Casbin policy effect: `e = some(where (p.eft == allow)) && !some(where (p.eft == deny))`. If any deny constraint matches, access is denied regardless of allow rules.
 
@@ -33,19 +33,22 @@ Both tiers must allow an action for it to succeed. This creates a defense-in-dep
 
 ### Object Types and Their Key Fields
 
-| ObjectType       | Key Fields                                                              | Notes                                                                                                        |
-| ---------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `web`            | `route__path`                                                           | UI page visibility, only needs GET                                                                           |
-| `api`            | `route__path`                                                           | API endpoint access, needs relevant HTTP methods                                                             |
-| `database`       | `databaseId`                                                            | Database entity only (not assets within it)                                                                  |
-| `asset`          | `databaseId`, `assetName`, `assetType`, `tags`                          | **Must be constrained separately from database**                                                             |
-| `pipeline`       | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name` | Needs scoped + GLOBAL constraints; covers pipeline templates + tag schemas (enforced on the owning pipeline) |
-| `workflow`       | `databaseId`, `workflowId`, `category`, `name`                          | Needs scoped + GLOBAL constraints; covers workflow triggers + executions                                     |
-| `metadataSchema` | `databaseId`, `metadataSchemaEntityType`, `metadataSchemaName`          | Needs scoped + GLOBAL constraints                                                                            |
-| `tag`            | `tagName`                                                               | Global, use `contains .*` wildcard for all tags                                                              |
-| `tagType`        | `tagTypeName`                                                           | Global, use `contains .*` wildcard for all tag types                                                         |
-| `role`           | `roleName`                                                              | Role management (super admin only)                                                                           |
-| `userRole`       | `roleName`, `userId`                                                    | User-role assignment (super admin only)                                                                      |
+| ObjectType             | Key Fields                                                              | Notes                                                                                                                                                                                     |
+| ---------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `web`                  | `route__path`                                                           | UI page visibility, only needs GET                                                                                                                                                        |
+| `api`                  | `route__path`                                                           | API endpoint access, needs relevant HTTP methods                                                                                                                                          |
+| `database`             | `databaseId`                                                            | Database entity only (not assets within it)                                                                                                                                               |
+| `asset`                | `databaseId`, `assetName`, `assetType`, `tags`                          | **Must be constrained separately from database**                                                                                                                                          |
+| `pipeline`             | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name` | Needs scoped + GLOBAL constraints; covers pipeline templates + tag schemas (enforced on the owning pipeline)                                                                              |
+| `workflow`             | `databaseId`, `workflowId`, `category`, `name`                          | Needs scoped + GLOBAL constraints; covers workflow triggers + executions                                                                                                                  |
+| `metadataSchema`       | `databaseId`, `metadataSchemaEntityType`, `metadataSchemaName`          | Needs scoped + GLOBAL constraints                                                                                                                                                         |
+| `complianceSchema`     | `complianceSchemaName`                                                  | Compliance schema CRUD and bindings; global by name (`contains .*` for all schemas). Binding a schema to a database or asset is additionally enforced on that `database` / `asset` object |
+| `complianceEvaluation` | `databaseId`, `complianceState`                                         | Evaluate, sweep, evaluation history, state, quarantine release/exception, cascade trigger/approval — scoped to the asset's database                                                       |
+| `complianceCascade`    | `cascadeId`                                                             | Cascade read/approve/reject; global by id (`contains .*`). The trigger asset's database is enforced through `complianceEvaluation`                                                        |
+| `tag`                  | `tagName`                                                               | Global, use `contains .*` wildcard for all tags                                                                                                                                           |
+| `tagType`              | `tagTypeName`                                                           | Global, use `contains .*` wildcard for all tag types                                                                                                                                      |
+| `role`                 | `roleName`                                                              | Role management (super admin only)                                                                                                                                                        |
+| `userRole`             | `roleName`, `userId`                                                    | User-role assignment (super admin only)                                                                                                                                                   |
 
 ### Constraint Operators
 
@@ -232,7 +235,7 @@ Read paths (GET): `/secure-config`, `/amplify-config`, `/auth/routes`, `/asset-l
 
 Write paths (POST/PUT for editors/admins): `/uploads`, `/ingest-asset` (admin only), `/unsubscribe`
 
-Non-mutating POST paths (needed by all roles including read-only): `/auth/routes`, `/search`, `/check-subscription`
+Non-mutating POST paths (needed by all roles including read-only): `/auth/routes`, `/search`, `/check-subscription`, and the file download (`starts_with /database/` + `ends_with /download`, in one constraint's `criteriaAnd`)
 
 Add-on paths (GET; each is deployed only when its add-on is enabled, and a criterion for an undeployed route matches nothing): `/addon/physna/viewer` (the Physna viewer plugin; granted by every shipped template whose role views files)
 
@@ -252,14 +255,16 @@ Admin paths: `/roles`, `/user-roles`, `/auth/constraints`, `/user/cognito`
 
 Pre-built JSON templates are in `documentation/permissionsTemplates/`:
 
-| Template                  | Constraints | Variables                  | Description                                                                                                                                                                                                                                               |
-| ------------------------- | ----------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `database-admin.json`     | 14          | `DATABASE_ID`, `ROLE_NAME` | Admin: full CRUD + permanent delete + pipeline/workflow/schema management + ingestion. No new DB creation. Tags/tag-types GET-only. Separate scoped + GLOBAL constraints.                                                                                 |
-| `database-user.json`      | 17          | `DATABASE_ID`, `ROLE_NAME` | User: create/update/archive assets, execute workflows. No permanent delete, no management, no ingestion. Archive-only DELETE enforced at Tier 1. Tags/tag-types GET-only. Separate API constraints per HTTP method. Separate scoped + GLOBAL constraints. |
-| `database-readonly.json`  | 12          | `DATABASE_ID`, `ROLE_NAME` | Read-only scoped to a specific database. GET-only on all entities.                                                                                                                                                                                        |
-| `database-tag-admin.json` | 6           | `DATABASE_ID`, `ROLE_NAME` | Tag admin: create/update/delete tags and tag types scoped to one database, GET on all tags and tag types (GLOBAL ones stay read-only). Web access to the `/auth/tags` pages only. No database, asset, pipeline, workflow or metadataSchema constraints.   |
-| `global-readonly.json`    | 12          | `ROLE_NAME`                | Read-only across all databases (uses `contains .*` wildcards). No `DATABASE_ID` variable.                                                                                                                                                                 |
-| `deny-tagged-assets.json` | 1           | `ROLE_NAME`, `TAG_VALUE`   | Overlay: denies PUT/POST/DELETE on assets with a specific tag. Applied on top of existing roles.                                                                                                                                                          |
+| Template                   | Constraints | Variables                  | Description                                                                                                                                                                                                                                               |
+| -------------------------- | ----------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `database-admin.json`      | 14          | `DATABASE_ID`, `ROLE_NAME` | Admin: full CRUD + permanent delete + pipeline/workflow/schema management + ingestion. No new DB creation. Tags/tag-types GET-only. Separate scoped + GLOBAL constraints.                                                                                 |
+| `database-user.json`       | 17          | `DATABASE_ID`, `ROLE_NAME` | User: create/update/archive assets, execute workflows. No permanent delete, no management, no ingestion. Archive-only DELETE enforced at Tier 1. Tags/tag-types GET-only. Separate API constraints per HTTP method. Separate scoped + GLOBAL constraints. |
+| `database-readonly.json`   | 13          | `DATABASE_ID`, `ROLE_NAME` | Read-only scoped to a specific database. GET-only on all entities, plus POST on the file download route.                                                                                                                                                  |
+| `database-tag-admin.json`  | 6           | `DATABASE_ID`, `ROLE_NAME` | Tag admin: create/update/delete tags and tag types scoped to one database, GET on all tags and tag types (GLOBAL ones stay read-only). Web access to the `/auth/tags` pages only. No database, asset, pipeline, workflow or metadataSchema constraints.   |
+| `global-readonly.json`     | 13          | `ROLE_NAME`                | Read-only across all databases (uses `contains .*` wildcards), plus POST on the file download route. No `DATABASE_ID` variable.                                                                                                                           |
+| `deny-tagged-assets.json`  | 1           | `ROLE_NAME`, `TAG_VALUE`   | Overlay: denies PUT/POST/DELETE on assets with a specific tag. Applied on top of existing roles.                                                                                                                                                          |
+| `compliance-admin.json`    | 7           | `DATABASE_ID`, `ROLE_NAME` | Compliance admin for one database: schema management, evaluate/sweep, quarantine release and exceptions, cascade approve/reject. Carries the `database` + `asset` constraints the bind routes enforce.                                                    |
+| `compliance-readonly.json` | 8           | `DATABASE_ID`, `ROLE_NAME` | Compliance read-only for one database: schemas, state, evaluation history, audit trail, cascade status. GET-only.                                                                                                                                         |
 
 ### Constraint Count Reference by Role Type
 
@@ -267,12 +272,12 @@ When building a new template, use these as a guide for expected constraint count
 
 -   **Admin (database-scoped)**: ~14 constraints (1 web + 3 api + 1 database + 1 asset + 2 pipeline + 2 workflow + 2 metadataSchema + 1 tag + 1 tagType)
 -   **User (database-scoped)**: ~17 constraints (1 web + 6 api + 1 database + 1 asset + 2 pipeline + 2 workflow + 2 metadataSchema + 1 tag + 1 tagType)
--   **Read-only (database-scoped)**: ~12 constraints (1 web + 4 api + 1 database + 1 asset + 1 pipeline + 1 workflow + 1 metadataSchema + 1 tag + 1 tagType)
--   **Read-only (global)**: ~12 constraints (same structure but uses `contains .*` wildcards instead of `equals {{DATABASE_ID}}`)
+-   **Read-only (database-scoped)**: ~13 constraints (1 web + 5 api + 1 database + 1 asset + 1 pipeline + 1 workflow + 1 metadataSchema + 1 tag + 1 tagType)
+-   **Read-only (global)**: ~13 constraints (same structure but uses `contains .*` wildcards instead of `equals {{DATABASE_ID}}`)
 -   **Tag admin (database-scoped)**: ~6 constraints (1 web + 1 api + 2 tag + 2 tagType)
 -   **Deny overlay**: 1 constraint per deny rule
 
-The api counts include the `{{ROLE_NAME}}-user-api-keys` constraint on `/auth/user/api-keys` (the caller's own API keys) that the admin, user and read-only templates each carry: the admin and user templates grant all methods on it, the two read-only templates grant GET only, so a read-only user can view their own keys but cannot create, extend, or delete them. The remaining api constraints are the route grants, the admin template's GET-only `/tags` and `/tag-types` constraint, and the execution-route denies described under Workflow Execution Routes: `executions-admin-deny` in the user template and `execution-logs-deny` in the two read-only templates.
+The api counts include the `{{ROLE_NAME}}-user-api-keys` constraint on `/auth/user/api-keys` (the caller's own API keys) that the admin, user and read-only templates each carry: the admin and user templates grant all methods on it, the two read-only templates grant GET only, so a read-only user can view their own keys but cannot create, extend, or delete them. The remaining api constraints are the route grants, the admin template's GET-only `/tags` and `/tag-types` constraint, the execution-route denies described under Workflow Execution Routes (`executions-admin-deny` in the user template and `execution-logs-deny` in the two read-only templates), and the read-only templates' POST-only `api-routes-download` constraint.
 
 ## Workflow
 

@@ -85,6 +85,7 @@ web/
       FileOperationsService.ts
       MetadataService.ts
       MetadataSchemaService.ts
+      ComplianceService.ts  # Compliance schemas, bindings, evaluations, quarantine, cascades, audit
       apiClient.ts          # Custom fetch-based client, injects auth headers
       appCache.ts           # Replaces Amplify Cache for runtime config
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks for routes.tsx/Navigation
@@ -104,9 +105,24 @@ web/
 
     components/             # Domain/feature components (organized by domain)
       asset/                  # Asset viewing (ViewAsset.tsx is the main detail page)
-        tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions tabs
+        tabs/                 #   FileManager, Versions, AssetLinks, Comments, AssetExecutions,
+                              #   Compliance tabs
         versions/             # Asset version management (list, comparison, edit/archive modals)
       common/ createupdate/ form/
+      compliance/             # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1
+                              #   rules: "Add rule" for all six types, the pipeline-rule input-file
+                              #   selector (mode / globs / explicit paths), the metadata-rule scope
+                              #   form (scope select, include/exclude paths, link direction + type),
+                              #   typed checks for fileStructure / versionCoverage / assetAttributes)
+                              #   + complianceSchemaRules.ts (pure pipelineRef fields/validation,
+                              #   rule-draft round-trip, example rule per type, metadata-scope
+                              #   switching/validation and check validators carrying the API's messages);
+                              #   ReasonModal.tsx (Cloudscape modal collecting a mandatory reason:
+                              #   reject cascade, grant quarantine exception, release from
+                              #   quarantine); complianceStateBadge.tsx
+                              #   (shared compliance-state -> StatusIndicator map + Badge color accessor;
+                              #   `exception` renders as info/blue; EvaluationErrorIndicator flags a
+                              #   record whose lastEvaluationStatus is `error`)
       filemanager/            # Asset file manager (Cloudscape)
                                 #   EnhancedFileManager.tsx lazy-loads the orchestration execution
                                 #   quick view for a file's "View execution" provenance link.
@@ -129,6 +145,11 @@ web/
       Databases.tsx LandingPage.tsx ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
       search/                 # SearchPage.tsx
       Subscription/ Tag/
+
+      # Compliance pages — permission-filtered via webRoutes() like every other page (no feature
+      # flag); each deploys unconditionally and the nav/routes filter hides them without access.
+      ComplianceSchemas.tsx ComplianceQuarantine.tsx ComplianceCascades.tsx
+      ComplianceAuditLog.tsx DatabaseCompliance.tsx
 
       # Orchestration route shells — each reads route params and renders the matching
       # features/orchestration component; keep the page logic in the feature module.
@@ -245,6 +266,7 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `FileOperationsService.ts` — file operations
 -   `MetadataService.ts` — metadata CRUD
 -   `MetadataSchemaService.ts` — schema management
+-   `ComplianceService.ts` — compliance schemas, bindings, evaluations, quarantine, cascades, audit trail (paged listings return `nextToken`)
 -   `addons/*.ts` — add-on API calls (`addons/physnaAPIService.ts` for the Physna viewer)
 -   `features/orchestration/api/*.ts` — orchestration services (pipelines, workflows, executions, templates, triggers)
 -   `custom/services/*.ts` — the fork extension point for a fork's own API calls (shipped empty)
@@ -479,6 +501,7 @@ Key patterns to follow:
 2. Error detection uses `response.message.indexOf("error") !== -1` (legacy pattern, maintain consistency)
 3. Return `[false, errorMessage]` on error, `[true, data]` on success, `false` for unknown failures
 4. Always log errors with `console.log` (NOT `console.error` -- match existing convention)
+5. A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message (`ViewFile.tsx`, `deleteAssetLink`, `deleteComment`)
 
 ### 4.2 Consuming API Results
 
@@ -1250,7 +1273,7 @@ See section 9.4 for the full Synonyms rules.
 
 ### 14.1 Key Service Files
 
--   **`src/services/apiClient.ts`** -- Custom fetch-based API client, injects auth headers automatically via `getDualAuthorizationHeader()`
+-   **`src/services/apiClient.ts`** -- Custom fetch-based API client, injects auth headers automatically via `getDualAuthorizationHeader()`; `isRequestBlocked(error)` recognizes a `403` the deployment's AWS WAF web ACL blocked, whose message `parseErrorResponse` extends with the request ID
 -   **`src/services/appCache.ts`** -- Replaces Amplify Cache for runtime config and preference storage
 
 ---

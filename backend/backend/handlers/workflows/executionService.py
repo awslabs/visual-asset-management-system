@@ -226,6 +226,56 @@ except Exception as e:
 
 lambda_client = boto3.client('lambda', config=retry_config)
 
+# Orchestration bus the workflow completion event is published on when this handler finishes an
+# execution: the abort API, and the lazy Step Functions reconciles that observe a completion first.
+orchestration_bus_arn = os.environ.get("ORCHESTRATION_BUS_ARN", "")
+orchestration_event_source_prefix = os.environ.get("ORCHESTRATION_EVENT_SOURCE_PREFIX", "")
+events_retry_config = Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2})
+events_client = boto3.client('events', config=events_retry_config)
+
+
+def emit_workflow_execution_completed(workflow_execution_id, workflow_database_id, workflow_id,
+                                      execution_status, started_at, completed_at,
+                                      execution_group_id=""):
+    """This lambda's `workflow.execution.completed` announcement: the shared emitter bound to the
+    events client and bus configuration resolved at import. Best-effort — skipped (logged) when no
+    bus is configured, and a publish failure is logged rather than failing the terminal-status write
+    that precedes it."""
+    return eo.emit_workflow_execution_completed(
+        events_client, orchestration_bus_arn, orchestration_event_source_prefix,
+        workflow_execution_id, workflow_database_id, workflow_id, execution_status,
+        started_at, completed_at, execution_group_id=execution_group_id)
+
+
+def _announce_reconciled_completion(main_row, reconciled_snapshot):
+    """Publish the completion event for a terminal status a lazy Step Functions reconcile has just
+    written onto the main row.
+
+    The reconciles poll executions the end-state lambda and the error handler did not finish — a
+    StopExecution issued outside VAMS, a failed error-handler invocation, a throttled end-state lambda —
+    so without this the run's terminal status would be recorded but never announced, and a consumer
+    waiting on the event (a compliance evaluation pending its pipeline rule) would wait forever. Called
+    only after the guarded write landed, so the announcement obeys the same exactly-once rule as the
+    other writers. `reconciled_snapshot` carries what the poll wrote; `main_row` supplies the identity
+    fields the snapshot does not (the workflow ids and the execution group), falling back to the
+    composite key when the row lacks them."""
+    status = reconciled_snapshot.get("executionStatus", "")
+    if status not in TERMINAL_STATUSES:
+        return
+    row = main_row or {}
+    workflow_database_id = row.get("workflowDatabaseId", "")
+    workflow_id = row.get("workflowId", "")
+    if not (workflow_database_id and workflow_id):
+        composite = reconciled_snapshot.get("workflowDatabaseId:workflowId", "") or ""
+        workflow_database_id, _, workflow_id = composite.partition(":")
+    emit_workflow_execution_completed(
+        reconciled_snapshot.get("workflowExecutionId", ""), workflow_database_id, workflow_id,
+        status,
+        started_at=(reconciled_snapshot.get("executionStartDate")
+                    or row.get("executionStartDate", "")),
+        completed_at=reconciled_snapshot.get("executionStopDate", ""),
+        execution_group_id=row.get("executionGroupId", ""))
+
 asset_table = dynamodb.Table(asset_storage_table_name)
 asset_file_version_history_table = (
     dynamodb.Table(asset_file_version_history_table_name)
@@ -420,10 +470,11 @@ def _persist_reconciled_main_row(table, main_item, attributes, only_if_not_termi
     terminal status by reading the current one first: the read and the write are separate calls, so
     another writer can finish the execution in between and a plain write would revert it. Losing that
     race is the expected outcome for the second writer, so the ConditionalCheckFailed is logged and
-    swallowed while any other write error surfaces."""
+    swallowed while any other write error surfaces. Returns True when the row was written and False
+    when there was nothing to write or the terminal guard rejected the write."""
     reconciled = {attr: main_item[attr] for attr in attributes if attr in main_item}
     if not reconciled:
-        return
+        return False
     names = {f"#a{i}": attr for i, attr in enumerate(reconciled)}
     values = {f":v{i}": main_item[attr] for i, attr in enumerate(reconciled)}
     expr = "SET " + ", ".join(f"{n} = {v}" for n, v in zip(names, values))
@@ -443,6 +494,8 @@ def _persist_reconciled_main_row(table, main_item, attributes, only_if_not_termi
             raise
         logger.info(f"Main execution row {main_item.get('workflowExecutionId', '')} already holds a "
                     f"terminal status; the {main_item.get('executionStatus', '')} write was skipped")
+        return False
+    return True
 
 
 def _fetch_execution_logs(log_group_arn, execution_id, limit_events=50):
@@ -1107,10 +1160,16 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             # too. A sync-stamp-only write needs no guard: it touches nothing a terminal writer owns,
             # and guarding it would leave a row that somehow holds a terminal status without a stop date
             # re-polling Step Functions on every request.
-            _persist_reconciled_main_row(
+            #
+            # A terminal status this poll wrote is one no other writer recorded, so the completion event
+            # has not been published either: the reconcile that won the guard announces it.
+            written = _persist_reconciled_main_row(
                 main_table, item, LIST_RECONCILED_MAIN_ROW_ATTRIBUTES,
                 only_if_not_terminal=any(
                     attr in item for attr in COMPLETION_OWNED_MAIN_ROW_ATTRIBUTES))
+            if written:
+                _announce_reconciled_completion(
+                    main_row_memo.get(item.get('workflowExecutionId', '')), item)
 
         def _fetch_execution_log_and_error(execution_id, main_item, describe_response):
             """For a terminal execution, return (error_text, log_text).
@@ -1924,8 +1983,15 @@ def abort_execution(event, execution_id):
         if not main_item.get('executionStopDate'):
             main_item['executionStopDate'] = now
         main_item['lastSfnSyncCheckDate'] = now
-        _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES,
-                                     only_if_not_terminal=True)
+        # Stopping the state machine skips its error handler, so the abort publishes the completion
+        # event itself once the ABORTED status lands.
+        if _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES,
+                                        only_if_not_terminal=True):
+            emit_workflow_execution_completed(
+                execution_id, main_item.get('workflowDatabaseId', ''), main_item.get('workflowId', ''),
+                ABORTED_STATUS, started_at=main_item.get('executionStartDate', ''),
+                completed_at=main_item['executionStopDate'],
+                execution_group_id=main_item.get('executionGroupId', ''))
 
     logger.info(f"Aborted execution {execution_id}")
     # AUDIT LOG: execution aborted — it stops a run mid-flight, so who stopped it is audit-worthy.
@@ -1963,6 +2029,33 @@ MAX_LOG_EVENTS_PER_CALL = 1000
 # Slack subtracted from an execution's recorded start when bounding a live log search, covering clock
 # skew between the recorded start and the first emitted event.
 LOG_SEARCH_WINDOW_MARGIN_MS = 5 * 60 * 1000
+
+# Bounds on following FilterLogEvents' nextToken past pages that hold no events. CloudWatch Logs
+# returns a page per slice of the group it searched, and "a returned page might only be partially full,
+# or even empty ... If the results don't include a nextToken, then pagination is finished"
+# (FilterLogEvents API reference). On a group holding many streams -- the shared workflow log group, a
+# shared Lambda log group -- the first page of a search for one run is often empty with the run's
+# events on a later page, so a read that stops there reports none. A read therefore follows the token
+# until a page holds events or the token is absent, and stops on whichever bound below comes first,
+# returning the token it would have read next so the caller continues from there:
+#
+#   MAX_LOG_PAGES_PER_READ              pages one source's read issues, counting the first. Bounds the
+#                                       walk when the clock does not, e.g. against a fast empty group.
+#   LOG_EMPTY_PAGE_WALK_BUDGET_SECONDS  wall-clock budget for the reads that follow an empty page,
+#                                       shared by every source of ONE logs request. A pipeline-scoped
+#                                       request reads the shared group plus up to
+#                                       MAX_REGISTERED_LOGS_INSPECTED registered sources, and the whole
+#                                       request must answer inside the 29 s API Gateway ceiling (see
+#                                       GLOBAL_LIST_WALK_BUDGET_SECONDS for what is reserved outside a
+#                                       walk). The clock is checked before each follow-up read, so the
+#                                       overshoot is one read. FilterLogEvents is also throttled per
+#                                       account and Region (5 to 25 transactions per second depending on
+#                                       the Region, not adjustable) and that quota is shared with every
+#                                       other caller in the account, which is why the walk is bounded in
+#                                       time rather than left to the adaptive retry. The first read of
+#                                       each source is never charged to this budget.
+MAX_LOG_PAGES_PER_READ = 10
+LOG_EMPTY_PAGE_WALK_BUDGET_SECONDS = 6
 
 # Upper bound on registered sub-process logs / sub-executions read per logs request. A pipeline may
 # register an unbounded number of these; each read is a CloudWatch/SFN API call, so a single logs GET
@@ -2688,6 +2781,41 @@ def _enrich_output_files_with_asset_versions(output_files, execution_id, config_
     return output_files
 
 
+def _state_machine_version_number(version_arn):
+    """arn:p:states:r:a:stateMachine:<machine>:<n> -> n; None for an unqualified state machine ARN, an
+    alias ARN, or any value that is not a published version ARN."""
+    parts = version_arn.split(":") if isinstance(version_arn, str) else []
+    if len(parts) != 8 or parts[2] != "states" or parts[5] != "stateMachine":
+        return None
+    number = parts[7]
+    if not (number.isascii() and number.isdigit()):
+        return None
+    return int(number)
+
+
+def _workflow_version_fields(main_item, workflow_def):
+    """The published state machine version the run started on, as the detail view reports it.
+
+    workflowVersion is the number from the execution row's workflowVersionArn: None for a run started
+    on the unqualified state machine ARN, or a stored value that does not parse. workflowVersionCurrent
+    compares that ARN with the workflow record's current workflowVersionArn: True or False when both
+    are recorded, None when either is missing. A False means the workflow's state machine has been
+    redeployed since the run: every save from the workflow builder redeploys it, as does an API or CLI
+    update that supplies the step list, and so does a change to a setting a step's pipeline contributes
+    to the state machine. It says nothing about workflowSystemConfig or the pipeline names and
+    descriptions, which are read live and change without a redeploy; each step's effectiveSystemConfig
+    is the snapshot it ran under. The ARNs themselves are not returned: like every other ARN this view
+    omits, they carry the account id and Region."""
+    run_arn = main_item.get('workflowVersionArn') or ''
+    current_arn = (workflow_def or {}).get('workflowVersionArn') or ''
+    run_arn = run_arn if isinstance(run_arn, str) else ''
+    current_arn = current_arn if isinstance(current_arn, str) else ''
+    return {
+        "workflowVersion": _state_machine_version_number(run_arn),
+        "workflowVersionCurrent": (run_arn == current_arn) if run_arn and current_arn else None,
+    }
+
+
 def assemble_execution_details(execution_id, main_item, config_row=None, include_sub_executions=False):
     """Assemble the full, traceability-focused detail view for an execution.
 
@@ -2734,6 +2862,7 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
     and the execution history; that view pages Step Functions history, so it is opt-in."""
     workflow_def = get_workflow_definition(
         main_item.get('workflowDatabaseId', ''), main_item.get('workflowId', ''))
+    workflow_version = _workflow_version_fields(main_item, workflow_def)
 
     # Per-pipeline rows, with name/description cross-fetched (cache by pipeline key).
     pipeline_rows = get_pipeline_execution_rows(execution_id)
@@ -3040,6 +3169,10 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
         # Human-readable name for UI display (breadcrumbs/headers); falls back to the id downstream.
         "workflowName": workflow_def.get('workflowName', ''),
         "workflowDescription": workflow_def.get('description', ''),
+        # The published state machine version the run started on, and whether it is still the
+        # workflow's current deployment (see _workflow_version_fields).
+        "workflowVersion": workflow_version["workflowVersion"],
+        "workflowVersionCurrent": workflow_version["workflowVersionCurrent"],
         # The workflow's systemConfig as it stands NOW. The workflow-level settings are the outer gate
         # of the workflow -> pipeline -> template chain; each pipeline step's own resolved settings are
         # snapshotted per step (see effectiveSystemConfig on each pipeline entry). This one is read live
@@ -3427,12 +3560,17 @@ def _reconcile_main_status(execution_id, main_item):
         main_item["executionStatus"] = status or main_item.get("executionStatus", "")
         reconciled_snapshot["executionStatus"] = main_item["executionStatus"]
     try:
-        _persist_reconciled_main_row(
+        written = _persist_reconciled_main_row(
             dynamodb.Table(workflow_execution_database_v2), reconciled_snapshot,
             DETAIL_RECONCILED_MAIN_ROW_ATTRIBUTES,
             only_if_not_terminal=True)
     except Exception as e:
         logger.info(f"Could not persist reconciled main row (non-critical): {e}")
+        return
+    # A terminal status this poll wrote is one no other writer recorded, so the completion event has
+    # not been published either: the reconcile that won the guard announces it.
+    if written:
+        _announce_reconciled_completion(main_item, reconciled_snapshot)
 
 
 def _log_search_window_start(main_item):
@@ -3451,7 +3589,41 @@ def _log_search_window_start(main_item):
     return int(parsed.timestamp() * 1000) - LOG_SEARCH_WINDOW_MARGIN_MS
 
 
-def _full_log_search(log_group_arn, filter_terms, query_params, default_start_time=None):
+def _log_walk_deadline():
+    """The monotonic-clock deadline for one logs request's empty-page follow-up reads."""
+    return time.monotonic() + LOG_EMPTY_PAGE_WALK_BUDGET_SECONDS
+
+
+def _filter_log_events_past_empty_pages(kwargs, walk_deadline=None):
+    """FilterLogEvents with ``kwargs``, following nextToken past pages that hold no events.
+
+    Returns the last page read. Its ``events`` are the first non-empty page's, and its ``nextToken``
+    is present whenever more may follow -- including when MAX_LOG_PAGES_PER_READ or the
+    ``walk_deadline`` (``time.monotonic()`` seconds; one request's shared budget, else
+    LOG_EMPTY_PAGE_WALK_BUDGET_SECONDS from now) stopped the walk on an empty page. The first read's
+    exception propagates to the caller. A later read that fails ends the walk on the page before it,
+    whose token is the one that read was continuing from."""
+    if walk_deadline is None:
+        walk_deadline = _log_walk_deadline()
+    resp = logs_client.filter_log_events(**kwargs)
+    pages_read = 1
+    while not resp.get('events'):
+        if 'nextToken' not in resp:
+            break
+        if pages_read >= MAX_LOG_PAGES_PER_READ or time.monotonic() >= walk_deadline:
+            break
+        try:
+            following = logs_client.filter_log_events(**dict(kwargs, nextToken=resp['nextToken']))
+        except Exception as e:
+            logger.info(f"Log read stopped after an empty page (non-critical): {e}")
+            break
+        resp = following
+        pages_read += 1
+    return resp
+
+
+def _full_log_search(log_group_arn, filter_terms, query_params, default_start_time=None,
+                     walk_deadline=None):
     """Live CloudWatch FilterLogEvents search within the shared workflow log group.
 
     filter_terms is the list of REQUIRED literal terms the search is scoped to (e.g. the
@@ -3466,7 +3638,11 @@ def _full_log_search(log_group_arn, filter_terms, query_params, default_start_ti
     older streams, an unbounded search returns those streams' events and reports nothing for a run
     that finished seconds ago, even though the events are present (verified against a group where a
     stream-scoped query returned 12 events and the same unbounded group-wide query returned 0).
-    Anchoring on the execution's own start makes the search look where its events actually are."""
+    Anchoring on the execution's own start makes the search look where its events actually are.
+
+    A page with no events and a nextToken is followed (``_filter_log_events_past_empty_pages``,
+    bounded by MAX_LOG_PAGES_PER_READ and ``walk_deadline``), so the result is the first page that
+    holds events, or the outstanding token when the bound stopped the walk first."""
     if not log_group_arn:
         return {"events": [], "nextToken": None}
     parts = log_group_arn.split(":log-group:")
@@ -3506,7 +3682,7 @@ def _full_log_search(log_group_arn, filter_terms, query_params, default_start_ti
         kwargs['nextToken'] = query_params['nextToken']
 
     try:
-        resp = logs_client.filter_log_events(**kwargs)
+        resp = _filter_log_events_past_empty_pages(kwargs, walk_deadline)
     except Exception as e:
         logger.info(f"Full log search failed (non-critical): {e}")
         return {"events": [], "nextToken": None}
@@ -3567,7 +3743,7 @@ def step_invocation_log_group_arn(pipeline_row, reference_log_group_arn=""):
 
 def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, log_stream_prefix="",
                                  scope_terms=None, default_start_time=None, next_token=None,
-                                 log_stream_names=None):
+                                 log_stream_names=None, walk_deadline=None):
     """Best-effort fetch of events from a registered sub-process log location. Returns
     (True, events, nextToken) on success or (False, reason, None) on a real failure (e.g.
     AccessDenied), never raising; the caller surfaces a failure as a warning and classifies it.
@@ -3579,7 +3755,8 @@ def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, l
     id) are AND-ed into the filter pattern as required literal terms so a group SHARED across
     executions (a nested state machine's own log group) returns only this execution's events, not
     every execution's; the caller passes none for a stream it registered itself. `next_token`
-    continues an earlier page of this same read."""
+    continues an earlier page of this same read. A page with no events and a nextToken is followed
+    as `_full_log_search` follows one, within MAX_LOG_PAGES_PER_READ and `walk_deadline`."""
     parts = (log_group_arn or "").split(":log-group:")
     if len(parts) < 2:
         return False, "unparseable log group ARN", None
@@ -3611,7 +3788,7 @@ def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, l
     if next_token:
         kwargs['nextToken'] = next_token
     try:
-        resp = logs_client.filter_log_events(**kwargs)
+        resp = _filter_log_events_past_empty_pages(kwargs, walk_deadline)
     except botocore.exceptions.ClientError as e:
         code = e.response.get('Error', {}).get('Code', '')
         logger.warning(f"Could not read registered log {log_group_arn}: {e}")
@@ -4372,6 +4549,9 @@ def get_execution_logs(event, execution_id, query_params):
     log_group_arn = main_item.get('executionLogGroupArn', '')
     # Lower bound shared by every live read below, so none of them scans unbounded history.
     window_start = _log_search_window_start(main_item)
+    # One budget for every read below that follows an empty page, so the sources together stay inside
+    # LOG_EMPTY_PAGE_WALK_BUDGET_SECONDS however many of them this request reads.
+    walk_deadline = _log_walk_deadline()
     scope_terms = [execution_id]
     if pipeline_execution_id:
         scope_terms.append(pipeline_execution_id)
@@ -4379,7 +4559,7 @@ def get_execution_logs(event, execution_id, query_params):
     search = {"events": [], "nextToken": None}
     if not log_id:
         search = _full_log_search(log_group_arn, scope_terms, query_params,
-                                  default_start_time=window_start)
+                                  default_start_time=window_start, walk_deadline=walk_deadline)
 
     # When scoped to a pipeline, read every log source that pipeline offers (its invocation log, what
     # it registered, and each sub-state-machine's own group) and report how each read went.
@@ -4444,7 +4624,8 @@ def get_execution_logs(event, execution_id, query_params):
                 scope_terms=source_terms if plan["scoped"] else None,
                 default_start_time=window_start,
                 next_token=(query_params.get('nextToken') if log_id else None),
-                log_stream_names=plan.get("logStreamNames"))
+                log_stream_names=plan.get("logStreamNames"),
+                walk_deadline=walk_deadline)
             status = al.classify_read(ok, payload, token, unscoped=plan["unscoped"])
             events = [dict(e, logId=source["logId"]) for e in payload] if ok else []
             if not ok:

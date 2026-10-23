@@ -88,6 +88,14 @@ export const SECTIONS: Section[] = [
         advanced: true,
         order: 11,
     },
+    {
+        id: "compliance",
+        label: "Compliance",
+        description:
+            "Default compliance schema seeding and whether quarantine blocks downloads. Compliance itself always deploys.",
+        advanced: true,
+        order: 12,
+    },
 ];
 
 // --- Visibility predicates (shared) ---
@@ -1120,6 +1128,55 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled"),
     },
     {
+        path: "app.pipelines.usePreview3dThumbnail.computeTiers.standard.vcpu",
+        label: "3D thumbnail — standard tier vCPU",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 0.25,
+        help: "AWS Fargate vCPU for inputs below the large-tier threshold: 0.25, 0.5, 1, 2, 4, 8 or 16.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled"),
+    },
+    {
+        path: "app.pipelines.usePreview3dThumbnail.computeTiers.standard.memoryGiB",
+        label: "3D thumbnail — standard tier memory (GiB)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 0.5,
+        help: "A memory size AWS Fargate supports for the standard tier's vCPU (4 vCPU: 8–30 GiB).",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled"),
+    },
+    {
+        path: "app.pipelines.usePreview3dThumbnail.computeTiers.large.vcpu",
+        label: "3D thumbnail — large tier vCPU",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 0.25,
+        help: "AWS Fargate vCPU for inputs at or above the large-tier threshold: 0.25, 0.5, 1, 2, 4, 8 or 16.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled"),
+    },
+    {
+        path: "app.pipelines.usePreview3dThumbnail.computeTiers.large.memoryGiB",
+        label: "3D thumbnail — large tier memory (GiB)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 0.5,
+        help: "A memory size AWS Fargate supports for the large tier's vCPU (16 vCPU: 32–120 GiB in 8 GiB steps).",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled"),
+    },
+    {
+        path: "app.pipelines.usePreview3dThumbnail.largeTierThresholdGiB",
+        label: "3D thumbnail — large-tier threshold (GiB)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Inputs at or above this size run on the large tier.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreview3dThumbnail.enabled"),
+    },
+    {
         path: "app.pipelines.usePreviewPcPotreeViewer.enabled",
         label: "Point cloud Potree viewer",
         input: "boolean",
@@ -1820,6 +1877,24 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "metadata",
         advanced: true,
+    },
+
+    // ===== Compliance =====
+    {
+        path: "app.compliance.autoLoadDefaultSchema",
+        label: "Auto-load default compliance schema",
+        input: "boolean",
+        section: "compliance",
+        advanced: true,
+        help: "Seeds the GLOBAL default-compliance-schema (a warn-level metadata rule against the default asset metadata schema) at deploy.",
+    },
+    {
+        path: "app.compliance.quarantineBlocksDownload",
+        label: "Quarantine blocks download",
+        input: "boolean",
+        section: "compliance",
+        advanced: true,
+        help: "When on, a quarantined asset cannot be downloaded unless it holds an active exception. When off, quarantine is informational only.",
     },
 ];
 

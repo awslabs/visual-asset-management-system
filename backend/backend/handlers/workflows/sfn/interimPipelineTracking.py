@@ -423,7 +423,8 @@ def _render_next_pipeline_config(body, manifest, wf_exec_bucket, next_config_key
         "pipelineExecutionId": body.get('nextPipelineExecutionId', ''),
         "pipelineId": body.get('nextPipelineId', ''),
         "pipelineDatabaseId": body.get('nextPipelineDatabaseId', ''),
-        "jobName": body.get('nextPipelineJobName', ''),
+        "jobName": er.run_job_name(body.get('nextPipelineJobName', ''),
+                                   body.get('nextPipelineExecutionId', '')),
         "executingUserName": body.get('executingUserName', ''),
         "inputConfigurationS3Location": next_config_location,
     }

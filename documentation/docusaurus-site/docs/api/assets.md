@@ -657,13 +657,13 @@ Bulk requests return one entry per requested key. File paths that do not exist o
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                                            |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, multiple version parameters specified, `key`/`keys` combined, over 1,500 keys, no URLs generatable, version parameters used with preview downloads, or asset is not distributable. |
-| `403`  | Not authorized to download this asset.                                                                                                                                                                 |
-| `404`  | Database, asset, version, or file not found.                                                                                                                                                           |
-| `410`  | The requested file version has been archived and cannot be downloaded.                                                                                                                                 |
-| `500`  | Internal server error.                                                                                                                                                                                 |
+| Status | Description                                                                                                                                                                                                                                                                                                             |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, multiple version parameters specified, `key`/`keys` combined, over 1,500 keys, no URLs generatable, version parameters used with preview downloads, asset is not distributable, or the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload`. |
+| `403`  | Not authorized to download this asset.                                                                                                                                                                                                                                                                                  |
+| `404`  | Database, asset, version, or file not found.                                                                                                                                                                                                                                                                            |
+| `410`  | The requested file version has been archived and cannot be downloaded.                                                                                                                                                                                                                                                  |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                  |
 
 ---
 
@@ -749,6 +749,8 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
 }
 ```
 
+Each file's preview path in the export is chosen the way the file listing chooses it: when a file has several `.previewFile.` objects, the newest one that is not archived.
+
 :::note[A Large Asset Is Returned Over Several Pages]
 `maxFiles` bounds the files one page returns across all of its assets, so a page can end before `maxAssets` assets when the budget runs out. An asset holding more files than the budget is returned over successive pages: its entry sets `files_truncated` to `true`, and `NextToken` resumes that asset's file list where the page stopped rather than moving on to the next asset.
 
@@ -778,12 +780,12 @@ Two constraints apply to the redirect target:
 
 **Error Responses:**
 
-| Status | Description                          |
-| ------ | ------------------------------------ |
-| `400`  | Invalid parameters.                  |
-| `403`  | Not authorized to export this asset. |
-| `404`  | Asset not found.                     |
-| `500`  | Internal server error.               |
+| Status | Description                                                                                                                                                                                       |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or `generatePresignedUrls` was requested for an asset on the page that is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload`. |
+| `403`  | Not authorized to export this asset.                                                                                                                                                              |
+| `404`  | Asset not found.                                                                                                                                                                                  |
+| `500`  | Internal server error.                                                                                                                                                                            |
 
 ---
 

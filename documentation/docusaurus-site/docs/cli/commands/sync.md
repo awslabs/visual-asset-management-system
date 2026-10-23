@@ -71,6 +71,10 @@ A file is considered changed when its size differs, or (unless `--size-only` is 
 Without `--allow-delete`, remote files missing locally are only reported, never removed. With `--allow-delete`, they are archived (recoverable via `vamscli file unarchive`). Permanent deletion additionally requires `--permanent-delete` and `--confirm`, and prompts interactively outside `--json-output` mode.
 :::
 
+:::note[Errors That Stop a Push]
+An AWS WAF block (`Request Blocked`), a permission denial or an expired token while the push archives or deletes asset files, or creates the version for `--version-comment`, stops the push with that error and exit code `1`, and no push summary is printed. The uploads and deletions already completed stay in place and the remaining deletions are not attempted; run the push again to plan from the asset's current state. A file whose upload fails is reported per file instead.
+:::
+
 :::tip[Ignore Patterns]
 When a `.vamsignore` file exists in the sync directory root (or a file is supplied via `--ignore-file`), its patterns exclude matching files on both sides of the comparison. Patterns use gitignore syntax: `*.log`, `build/`, `**/temp`, and negation with `!important.log`. Add `.vamsignore` itself to the patterns to keep it out of the asset.
 :::

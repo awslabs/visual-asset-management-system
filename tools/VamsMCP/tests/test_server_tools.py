@@ -54,6 +54,50 @@ def test_tool_result_wraps_errors(mock_client):
     assert result["error_type"] == "RuntimeError"
 
 
+def test_tool_result_carries_what_a_blocked_request_names(mock_client):
+    """A request the deployment's AWS WAF web ACL blocked reaches the agent with the keys the CLI's
+    --json-output gives it, so the agent can tell a block from a permission denial and report the
+    request ID rather than retry."""
+    from vamscli.utils.exceptions import RequestBlockedError
+
+    mock_client.api.get_database.side_effect = RequestBlockedError("m", request_id="r-1")
+    assert server.get_database("db1") == {
+        "error": "m", "error_type": "RequestBlockedError", "blockedBy": "waf", "requestId": "r-1"}
+
+
+def test_tool_result_carries_an_unconfirmed_block_without_a_request_id(mock_client):
+    """A bare API Gateway "Forbidden" is a block or a base URL that names no stage, and says so."""
+    from vamscli.utils.exceptions import RequestBlockedError
+
+    mock_client.api.get_database.side_effect = RequestBlockedError("m", confirmed=False)
+    assert server.get_database("db1") == {
+        "error": "m", "error_type": "RequestBlockedError", "blockedBy": "waf-or-stage"}
+
+
+def test_tool_result_never_lets_json_fields_replace_the_error_or_its_type():
+    class Colliding(Exception):
+        json_fields = {"error": "replaced", "error_type": "Replaced", "extra": 1}
+
+    @server.tool_result
+    def tool():
+        raise Colliding("kept")
+
+    assert tool() == {"error": "kept", "error_type": "Colliding", "extra": 1}
+
+
+def test_tool_result_returns_an_error_whose_json_fields_are_not_a_mapping():
+    """The wrapper must never raise: a json_fields that is not a mapping is left out, not read."""
+
+    class Odd(Exception):
+        json_fields = ["blockedBy"]
+
+    @server.tool_result
+    def tool():
+        raise Odd("kept")
+
+    assert tool() == {"error": "kept", "error_type": "Odd"}
+
+
 def test_search_assets_builds_request(mock_client):
     mock_client.api.search_query.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
     mock_client.trim_search_results.return_value = {"total": 0, "returned": 0, "results": []}
@@ -255,6 +299,10 @@ def test_find_and_summarize_within_the_clamp_adds_no_note(mock_client):
         lambda: server.list_executions(starting_token="tok"),
         lambda: server.page_execution_detail_metadata("e1", starting_token="tok"),
         lambda: server.list_subscriptions(starting_token="tok"),
+        lambda: server.list_compliance_evaluations("db1", "a1", starting_token="tok"),
+        lambda: server.list_quarantined_assets(starting_token="tok"),
+        lambda: server.query_compliance_audit(starting_token="tok"),
+        lambda: server.get_asset_compliance_audit("db1", "a1", starting_token="tok"),
     ],
 )
 def test_every_paginated_read_tool_forwards_starting_token(mock_client, call):
@@ -507,6 +555,10 @@ def test_no_read_tool_calls_a_mutating_apiclient_method():
         "create_", "update_", "delete_", "set_", "archive_", "unarchive_", "execute_", "rerun_",
         "abort_", "permanent_", "revert_", "move_", "copy_", "import_", "reset_", "initialize_",
         "complete_",
+        # The compliance write verbs: none deletes stored data, but every one of them changes state
+        # or starts compute, and a read-section placement would reach them with both gates off.
+        "bind_", "unbind_", "evaluate_", "sweep_", "release_", "grant_", "revoke_", "approve_",
+        "reject_",
     )
 
     offenders = []
@@ -753,6 +805,17 @@ def test_get_execution_details_forwards_the_sub_execution_flag(mock_client):
 
     params = mock_client.api.get_execution_details.call_args.kwargs["params"]
     assert params == {"includeSubExecutions": "true"}
+
+
+def test_get_execution_details_passes_the_workflow_version_fields_through(mock_client):
+    mock_client.unwrap_message.side_effect = lambda page: page
+    mock_client.api.get_execution_details.return_value = {
+        "pipelines": [], "workflowVersion": 3, "workflowVersionCurrent": False}
+
+    result = server.get_execution_details("e1")
+
+    assert result["workflowVersion"] == 3
+    assert result["workflowVersionCurrent"] is False
 
 
 def test_get_execution_logs_forwards_log_id_and_stage_name_in_full_mode(mock_client):
@@ -1058,6 +1121,7 @@ _PAGINATED_READ_TOOLS = (
     "list_subscriptions",
     "list_api_keys",
     "list_user_api_keys",
+    "list_compliance_evaluations",
 )
 
 
@@ -1292,7 +1356,13 @@ def test_non_pipeline_saves_stay_on_plain_unwrap(tool):
 # kill of running AWS compute. The classification is now stated in all three places, so the risk of
 # drift moves to keeping them in step — which is what this asserts.
 
-_COMPUTE_CAUTION_TOOLS = ("execute_workflow", "rerun_execution", "abort_execution")
+_COMPUTE_CAUTION_TOOLS = (
+    "execute_workflow", "rerun_execution", "abort_execution",
+    # A pipeline rule runs a workflow execution per evaluated asset, so these four start compute too:
+    # one asset, every bound asset, and the two ways a cascade's re-evaluation is set running.
+    "evaluate_asset_compliance", "sweep_compliance_schema", "create_compliance_cascade",
+    "approve_compliance_cascade",
+)
 
 
 def _sibling_doc(name):

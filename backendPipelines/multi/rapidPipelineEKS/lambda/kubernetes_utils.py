@@ -13,6 +13,7 @@ import base64
 import tempfile
 import time
 from botocore.exceptions import ClientError
+from urllib3.util import Retry
 
 # Import custom logging utilities
 from customLogging.logger import safeLogger
@@ -61,6 +62,42 @@ except ImportError as e:
     client = None
     ApiException = Exception  # Fallback type for ApiException
     logger.warning("Will attempt to import kubernetes module at runtime")
+
+# Kubernetes API request settings. The client takes a per-request timeout only through each call's
+# _request_timeout argument, the user agent only on the ApiClient, and a retry policy only as a urllib3
+# Retry in Configuration.retries.
+K8S_REQUEST_TIMEOUT = (30, 60)  # (connect, read) seconds
+K8S_USER_AGENT = "vams-eks-pipeline/1.0"
+K8S_RETRY_TOTAL = 5
+
+
+def k8s_retry_policy():
+    """urllib3 retry policy for Kubernetes API requests: resend only when no response was received.
+
+    The client resends after a connection failure, the case where the request never reached the API
+    server. It does not resend after a read timeout or on any response status, Retry-After included:
+    with_retries() wraps the pipeline's Kubernetes API calls and already retries 429 and 5xx responses
+    and timeouts, and a second layer would multiply its attempts and the time a call can take.
+    """
+    return Retry(total=K8S_RETRY_TOTAL, read=0, respect_retry_after_header=False)
+
+
+def new_k8s_api_client(k8s_client, configuration):
+    """ApiClient that sends K8S_USER_AGENT and applies K8S_REQUEST_TIMEOUT to every call that sets none.
+
+    Every generated API method passes _request_timeout to ApiClient.call_api as a keyword, None when the
+    caller set no timeout.
+    """
+
+    class TimeoutApiClient(k8s_client.ApiClient):
+        def call_api(self, *args, **kwargs):
+            if kwargs.get("_request_timeout") is None:
+                kwargs["_request_timeout"] = K8S_REQUEST_TIMEOUT
+            return super().call_api(*args, **kwargs)
+
+    api_client = TimeoutApiClient(configuration)
+    api_client.user_agent = K8S_USER_AGENT
+    return api_client
 
 def validate_env_vars(required_vars):
     """
@@ -376,30 +413,16 @@ def get_k8s_client():
         # Note: We don't set ssl_context when using ssl_ca_cert - they're mutually exclusive
         # The Kubernetes client will create its own SSL context using the CA cert file
 
-        # Enhanced connection and timeout settings
-        configuration.connection_pool_maxsize = 20  # Increased pool size
-        configuration.retries = 5  # More retries for resilience
-        configuration.timeout = 120  # 2 minute timeout for large operations
-
-        # Add additional timeout configurations
-        configuration.socket_timeout = 60  # Socket timeout
-        configuration.connect_timeout = 30  # Connection timeout
-        logger.info("Configured connection timeouts and retry settings")
+        # Connection pool size and retry policy. The per-request timeout and the user agent are not
+        # Configuration settings; new_k8s_api_client() applies them to the ApiClient below.
+        configuration.connection_pool_maxsize = 20
+        configuration.retries = k8s_retry_policy()
+        logger.info("Configured connection pool and connection-retry settings")
 
         # Hostname verification is automatically enabled when verify_ssl=True
         # Don't set assert_hostname separately as it can cause issues with the Kubernetes client
         logger.info("⚠️ AUTH DEBUG: SSL verification and hostname validation enabled")
         logger.info("⚠️ SECURITY NOTE: Using proper security settings for EKS authentication")
-
-        # Add user agent for debugging
-        configuration.user_agent = "vams-eks-pipeline/1.0"
-
-        # Configure retry settings
-        configuration.retries_config = {
-            'total': 5,
-            'backoff_factor': 1,
-            'status_forcelist': [429, 500, 502, 503, 504]
-        }
 
         logger.info(f"Configured Kubernetes client for endpoint: {endpoint}")
         logger.info(f"SSL context configured with verify_ssl: {configuration.verify_ssl}")
@@ -956,7 +979,7 @@ def get_k8s_client():
             logger.warning(f"⚠️ AUTH DEBUG: Could not get cluster info: {e}")
 
         # Create API client
-        api_client = client.ApiClient(configuration)
+        api_client = new_k8s_api_client(client, configuration)
         logger.warning("⚠️ AUTH DEBUG: Successfully created Kubernetes API client")
 
         # Test the connection

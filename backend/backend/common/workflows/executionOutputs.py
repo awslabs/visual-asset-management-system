@@ -21,6 +21,9 @@ This module centralizes the parts those three lambdas must do identically:
   - The terminal-status write guard (`not_terminal_condition` / `is_conditional_check_failure`),
     which every writer of a terminal status on a main or pipeline row shares so the condition
     cannot drift between them. The abort path in handlers.workflows.executionService uses it too.
+  - The `workflow.execution.completed` announcement (`emit_workflow_execution_completed`) the
+    writer that won that guard publishes on the orchestration bus, so the end-state lambda, the
+    error handler and the execution service emit one event shape under one configuration guard.
 
 Callers inject their boto3 dynamo resource + s3 client and the resolved table names, so no AWS
 client is constructed here and no resource name is read from the environment (mirrors
@@ -423,7 +426,11 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
     """Set terminal status + stop date (+ optional log/error) on the V2 main execution row, under the
     same terminal guard the pipeline rows use: a row another writer already finished keeps its status.
     Losing that race is the expected outcome for the second writer, not a failure, so the
-    ConditionalCheckFailed is logged and swallowed while any other write error surfaces."""
+    ConditionalCheckFailed is logged and swallowed while any other write error surfaces.
+
+    Returns True when this call wrote the terminal status and False when the guard rejected it. The
+    caller that announces the terminal status on the orchestration bus keys on that answer: only the
+    writer whose status landed announces, so a run finished by two writers is announced once."""
     table = dynamo.Table(main_table_name)
     expr = "SET executionStopDate = :s, executionStatus = :st, lastSfnSyncCheckDate = :s"
     values = {":s": stop_date, ":st": status}
@@ -447,6 +454,45 @@ def finalize_main_row(dynamo, main_table_name, workflow_execution_id, workflow_d
             raise
         logger.info(f"Main execution row {workflow_execution_id} already holds a terminal status; "
                     f"the {status} finalization write was skipped")
+        return False
+    return True
+
+
+def emit_workflow_execution_completed(events_client, event_bus_arn, event_source_prefix,
+                                      workflow_execution_id, workflow_database_id, workflow_id,
+                                      execution_status, started_at, completed_at,
+                                      execution_group_id=""):
+    """Best-effort `workflow.execution.completed` event on the orchestration bus, published by the
+    writer whose terminal-status write on the main execution row landed (the end-state lambda, the
+    error handler, the abort API, or a read-path reconcile that observed the completion first).
+
+    Skipped (logged) when no bus ARN or no event source prefix is configured: the standing rule on the
+    bus matches `Source` by that prefix, so an event published without it could never be delivered. A
+    publish failure is logged and never fails the terminal-status write that precedes it. Returns True
+    when an event was published.
+
+    `events_client` is injected like this module's other clients, so the three lambdas that emit share
+    one implementation while each keeps its own client and configuration."""
+    if not event_bus_arn or not event_source_prefix:
+        logger.info("No orchestration bus or event source prefix configured; "
+                    "workflow completion event skipped")
+        return False
+    try:
+        events_client.put_events(Entries=[er.workflow_execution_completed_event(
+            event_bus_arn=event_bus_arn,
+            event_source_prefix=event_source_prefix,
+            execution_id=workflow_execution_id,
+            workflow_database_id=workflow_database_id,
+            workflow_id=workflow_id,
+            status=execution_status,
+            started_at=started_at,
+            completed_at=completed_at,
+            execution_group_id=execution_group_id,
+        )])
+    except Exception as e:
+        logger.exception(f"Failed publishing workflow completion event for {workflow_execution_id}: {e}")
+        return False
+    return True
 
 
 def stop_registered_sub_process(sub, sfn_client=None, batch_client=None, deadline_client=None,
@@ -613,9 +659,9 @@ _SAGEMAKER_PIPELINE_SETTLED_STATUSES = frozenset(("Stopped", "Stopping", "Succee
 # running, as the service returns it (StopTrainingJob: "The request was rejected because the training
 # job is in status Stopped." / "... Completed."; StopPipelineExecution: "Pipeline execution with ARN
 # ... status 'Failed'. Only pipelines with 'Executing' status can be stopped."). Consulted only when the
-# Describe* call that normally classifies the refusal is itself unavailable (the failure path's role
-# holds the Stop grants alone), so a rewording degrades to a false "may still be running" warning there
-# rather than to a wrong classification. The unit tests pin these strings verbatim.
+# Describe* call that normally classifies the refusal itself fails (a throttle, a denial or a transient
+# service error), so a rewording degrades to a false "may still be running" warning there rather than to
+# a wrong classification. The unit tests pin these strings verbatim.
 _SAGEMAKER_TRAINING_NOT_RUNNING_RE = re.compile(
     r"training job is in status (Stopped|Stopping|Completed|Failed)\b", re.IGNORECASE)
 _SAGEMAKER_PIPELINE_NOT_RUNNING_RE = re.compile(
@@ -642,8 +688,8 @@ def _classify_sagemaker_stop_error(error, what, describe_status, settled_statuse
     code. For a state refusal the resource's live status is read through `describe_status` — on this
     exception path only, never on a stop that succeeded — and a status in `settled_statuses` is
     benign while any other status (a job still InProgress / Executing whose stop was refused) is
-    reported with that status. When Describe itself fails (the failure path's role holds no Describe
-    grant), the refusal is classified by SageMaker's own message against `not_running_re`, and a
+    reported with that status. When Describe itself fails (a throttle, a denial or a transient service
+    error), the refusal is classified by SageMaker's own message against `not_running_re`, and a
     message outside that wording is reported as the refusal code.
 
     The returned `reason` carries only an AWS error code or a SageMaker status word, never the service

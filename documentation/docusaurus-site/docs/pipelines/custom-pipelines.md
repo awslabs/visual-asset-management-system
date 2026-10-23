@@ -1251,9 +1251,15 @@ is checked against, and it is authored rather than derived from the pipeline:
     selection a template would have accepted.
 
 -   **The workflow's `inputFileFilters` are applied before the pipelines'.** The selected files are
-    narrowed by the workflow first, and each pipeline is then judged against what survived. A workflow
-    whose filters exclude a type its own pipeline requires produces a workflow that can never satisfy
-    that pipeline — the API rejects such an execution, and the workflow editor warns while saving.
+    narrowed by the workflow first, and the first step is then judged against what survived. A workflow
+    whose filters exclude a type its first step requires can never satisfy that step — the API rejects
+    such an execution, and the workflow editor warns while saving. From the second step on, a step
+    receives the selected files plus every file the earlier steps wrote, narrowed by its own filters
+    when the run reaches it, so a later step may accept only the type an earlier step produces. A
+    single-file later step whose filters admit both the selected type and an earlier step's output type
+    is handed two files and fails at that step; the workflow editor warns about it while saving. When
+    two or more selected files already pass a single-file later step's filters, the API rejects the
+    execution at launch.
 
 -   **`outputTarget`** is `{ "locationType": "asset" | "none", "allowOverride": boolean }` and decides
     where a run writes. `asset` (the default) writes the run's output files and metadata to a VAMS asset.
@@ -1414,6 +1420,8 @@ A tag that is neither a system tag nor declared in the template's `tagSchema` is
 
 **Execution and pipeline identity:** `{{executionId}}`, `{{workflowId}}`, `{{workflowDatabaseId}}`, `{{triggerType}}`, `{{executingUserName}}`, `{{pipelineExecutionId}}`, `{{pipelineId}}` / `{{pipelineName}}`, `{{pipelineDatabaseId}}`, `{{jobName}}`.
 
+`{{jobName}}` is a per-run name for the step: the step's generated job name joined to its `{{pipelineExecutionId}}`, at most 80 characters of letters, numbers, hyphens, and underscores. It differs on every execution and for every step of one execution, and is the same everywhere it renders within one step, so a template can use it to name a per-run resource such as an AWS Batch job or an AWS Step Functions execution. An Amazon SageMaker job name allows at most 63 characters, so build one from `{{pipelineExecutionId}}` instead.
+
 **Timestamps:** `{{jobStartTimestamp}}`, `{{jobStartTimestampUnix}}`, `{{jobStartDate}}`, `{{executionStartTimestamp}}`.
 
 **First input file** (`{{firstAssetFile...}}`): `DatabaseId`, `AssetId`, `AssetBucket`, `AssetRootS3Key`, `RelativePath`, `Key`, `VersionId`, `AuxPreviewPrefix`, `S3Uri`, `AuxPreviewS3Uri`, `FileName`, `FileNameNoExt`, `FileExtension`.
@@ -1430,7 +1438,7 @@ Each of these resolves for the subject the pipeline task is running against: the
 
 **Deadline Cloud** (`{{deadlineFarmId}}`, `{{deadlineQueueId}}`, `{{deadlineStorageProfileId}}`): recognized so a Deadline Cloud job template can reference them today, but they resolve to empty values until a future pipeline configuration supplies the pipeline's farm, queue, and storage profile.
 
-The `{{outputFileBaseExecutionPathExtension}}` value is also itself template-rendered, so an execute request — or a workflow's `systemConfig.defaultOutputFileBaseExecutionPathExtension`, which supplies it when a request does not — can produce a per-run output sub-folder such as `/{{jobName}}/`, `/{{executionId}}/`, or `/{{jobStartDate}}/`. The prefix is inserted immediately before each output file's own name, so the folder structure a container writes below its output prefix is preserved: a container writing `render/thumb.png` under a prefix of `/{{jobName}}/` produces `render/<jobName>/thumb.png` in the asset. Containers should therefore not create their own per-job folder — the workflow's prefix is what separates runs.
+The `{{outputFileBaseExecutionPathExtension}}` value is also itself template-rendered, so an execute request — or a workflow's `systemConfig.defaultOutputFileBaseExecutionPathExtension`, which supplies it when a request does not — can produce a per-run output sub-folder such as `/{{jobName}}/`, `/{{executionId}}/`, or `/{{jobStartDate}}/`. The prefix is inserted immediately before each output file's own name, so the folder structure a container writes below its output prefix is preserved: a container writing `render/thumb.png` under a prefix of `/{{jobName}}/` produces `render/<jobName>/thumb.png` in the asset. Containers should therefore not create their own per-job folder — the workflow's prefix is what separates runs. The prefix resolves once, at launch, with the first step's values, so in a later step `{{outputFileBaseExecutionPathExtension}}` carries the first step's `{{jobName}}`, not that step's own.
 
 :::note
 One dynamic tag family is planned but not yet available: `{{metadata_<key>}}`, for looking up an individual metadata field by name. Using it today is rejected with a 400 — unlike an ordinary unrecognized tag, a name under the reserved `metadata_` prefix claims a value no renderer resolves, and the prefix is reserved so a template's own tag key cannot collide with it either. User-defined tags **are** available — they are declared per template rather than on the pipeline definition, as described next.

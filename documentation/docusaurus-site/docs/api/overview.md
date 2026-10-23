@@ -6,15 +6,13 @@ This section describes the VAMS REST API, which provides programmatic access to 
 
 ## Base URL
 
-All API endpoints are served through an Amazon API Gateway REST API deployed to a stage named `api`. The base URL includes that stage:
+All API endpoints are served by an Amazon API Gateway REST API under the fixed stage `api`. Every path on these pages is relative to the stage-inclusive invoke URL:
 
 ```
 https://{api-id}.execute-api.{region}.amazonaws.com/api
 ```
 
-This is the value of the `APIGatewayEndpointOutput` stack output. The paths documented on the following pages are appended to it, so `GET /database` is `https://{api-id}.execute-api.{region}.amazonaws.com/api/database`.
-
-When deployed behind CloudFront, the distribution forwards `/api/*` on the web domain to that stage, so the same request is `https://{web-domain}/api/database`. An Application Load Balancer (ALB) deployment answers `/api/*` on the web domain with a redirect to the execute-api URL above instead.
+The domain suffix follows the deployment's partition, for example `amazonaws.eu` in the AWS European Sovereign Cloud. The base URL is the same for an Amazon CloudFront, an Application Load Balancer (ALB) or an API-only deployment. The web application URL reaches only a few routes: the CloudFront `/api/*` behavior forwards `/api/amplify-config` and `/api/version` to the stage, and the ALB answers `/api*` and `/secure-config*` with a redirect to it. The web application, the VamsCLI and the VAMS MCP server send every other request to the invoke URL. A `PRIVATE` endpoint is reachable only through an execute-api VPC interface endpoint, either one VAMS created or one supplied through `optionalExternalPrivateApigVPCEId`. See [Stage Path Fronting](../architecture/networking.md#stage-path-fronting).
 
 The two unauthenticated routes carry `/api` in their own path, so on the execute-api host the stage segment appears twice:
 
@@ -24,7 +22,7 @@ The two unauthenticated routes carry `/api` in their own path, so on the execute
 | `GET /api/amplify-config` | `https://{api-id}.execute-api.{region}.amazonaws.com/api/api/amplify-config` | `https://{web-domain}/api/amplify-config` |
 
 :::info[Discovering the Base URL]
-After deployment, read `APIGatewayEndpointOutput` from the CDK stack outputs, or request `https://{web-domain}/api/amplify-config` from the web application's domain (`WebAppCloudFrontDistributionDomainName` or `webDistributionUrl` in the outputs): its `api` field is the base URL.
+After deployment, read the base URL from the core stack's `APIGatewayEndpointOutput` output, or from the `api` field of `GET /api/amplify-config`, which returns it with a trailing slash. Request `/api/amplify-config` on the web application URL, or on the invoke URL as `.../api/api/amplify-config`.
 :::
 
 ---
@@ -100,14 +98,28 @@ The `body` field contains a JSON-encoded string. When successful, the body conta
 
 VAMS uses standard HTTP status codes to indicate the result of an API request.
 
-| Status Code | Description                                                                                                                                                                       |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `200`       | The request succeeded.                                                                                                                                                            |
-| `400`       | Bad request. The request contains invalid parameters, fails validation, or targets a feature that is disabled (for example, Cognito user management when Cognito is not enabled). |
-| `401`       | Unauthorized. No VAMS handler returns this code; API Gateway returns it when a request carries no credential.                                                                     |
-| `403`       | Forbidden. The authenticated user does not have permission for the requested action.                                                                                              |
-| `404`       | Not found. The requested resource does not exist, or a feature-gated resource is unavailable (for example, search when the OpenSearch feature is not enabled).                    |
-| `500`       | Internal server error. An unexpected error occurred on the server.                                                                                                                |
+| Status Code | Description                                                                                                                                                                                                     |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `200`       | The request succeeded.                                                                                                                                                                                          |
+| `400`       | Bad request. The request contains invalid parameters, fails validation, or targets a feature that is disabled (for example, Cognito user management when Cognito is not enabled).                               |
+| `401`       | Unauthorized. No VAMS handler returns this code; API Gateway returns it when a request carries no credential.                                                                                                   |
+| `403`       | Forbidden. The authenticated user does not have permission for the requested action, or the deployment's AWS WAF web ACL blocked the request (see [Requests Blocked by AWS WAF](#requests-blocked-by-aws-waf)). |
+| `404`       | Not found. The requested resource does not exist, or a feature-gated resource is unavailable (for example, search when the OpenSearch feature is not enabled).                                                  |
+| `500`       | Internal server error. An unexpected error occurred on the server.                                                                                                                                              |
+
+### Requests Blocked by AWS WAF
+
+When the deployment enables AWS WAF (`app.useWaf`), a request that a web ACL rule blocks at the API Gateway stage never reaches VAMS. API Gateway answers it with HTTP `403` and this body, which names AWS WAF as the source and carries API Gateway's extended request ID:
+
+```json
+{
+    "message": "Request blocked by the deployment's AWS WAF web ACL",
+    "blockedBy": "waf",
+    "requestId": "E7BBKGcCvHcEXAMPLE="
+}
+```
+
+A `403` from an authorization denial carries no `blockedBy` field. Signing in again does not change a blocked request's result: a managed rule matched something in the request, most often a value in its body. An administrator looks the request ID up in the web ACL's `aws-waf-logs-vams-*` log group, where the request's record carries it as `httpRequest.requestId` and names the rule that matched; the response carries the same ID in its `x-amz-apigw-id` header. The web ACL's sampled requests carry no request ID; a request is matched there by its time, URI and client IP. A rate-based rule answers `429` with a `Retry-After` header instead (see [AWS WAF and Rate Limiting](../architecture/security.md#aws-waf-and-rate-limiting)).
 
 ---
 
@@ -123,20 +135,22 @@ Many list endpoints support pagination using a token-based pattern. The followin
 
 Default and maximum values for `maxItems` and `pageSize` vary by listing:
 
-| Listing                                      | `maxItems` default | `pageSize` default            | Maximum                                                                                                        |
-| -------------------------------------------- | ------------------ | ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Assets (all, or within a database)           | 30,000             | 3,000                         | `maxItems` 30,000; `pageSize` 10,000                                                                           |
-| Asset files                                  | 10,000             | 100 (1,500 with `basic=true`) | `maxItems` 30,000; `pageSize` 10,000                                                                           |
-| Asset versions                               | 1,000              | 1,000                         | 1,000 for each                                                                                                 |
-| Databases                                    | 10,000             | 10,000                        | `maxItems` 30,000; `pageSize` 10,000                                                                           |
-| Bucket configurations                        | 3,000              | 3,000                         | `maxItems` 30,000; `pageSize` 10,000                                                                           |
-| Metadata (asset, file, database, asset link) | 1,000              | 100                           | 1,000 for each                                                                                                 |
-| Metadata schemas                             | 30,000             | 3,000                         | `maxItems` 30,000; `pageSize` 10,000                                                                           |
-| Constraints                                  | 30,000             | 3,000                         | `maxItems` 30,000; `pageSize` 10,000                                                                           |
-| Roles, tags, tag types, and user roles       | 30,000             | 3,000                         | `maxItems` 30,000; `pageSize` 10,000; roles, tags and tag types reduce a larger value rather than rejecting it |
-| Pipelines and workflows                      | 100                | 100                           | 500 for each; a larger value is reduced to 500 rather than rejected                                            |
-| Comments                                     | 10,000             | 10,000                        | `maxItems` 30,000; `pageSize` 10,000; a larger value is reduced, not rejected                                  |
-| Subscriptions                                | 10,000             | 10,000                        | None                                                                                                           |
+| Listing                                      | `maxItems` default         | `pageSize` default            | Maximum                                                                                                        |
+| -------------------------------------------- | -------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Assets (all, or within a database)           | 30,000                     | 3,000                         | `maxItems` 30,000; `pageSize` 10,000                                                                           |
+| Asset files                                  | 10,000                     | 100 (1,500 with `basic=true`) | `maxItems` 30,000; `pageSize` 10,000                                                                           |
+| Asset versions                               | 1,000                      | 1,000                         | 1,000 for each                                                                                                 |
+| Databases                                    | 10,000                     | 10,000                        | `maxItems` 30,000; `pageSize` 10,000                                                                           |
+| Bucket configurations                        | 3,000                      | 3,000                         | `maxItems` 30,000; `pageSize` 10,000                                                                           |
+| Metadata (asset, file, database, asset link) | 1,000                      | 100                           | 1,000 for each                                                                                                 |
+| Metadata schemas                             | 30,000                     | 3,000                         | `maxItems` 30,000; `pageSize` 10,000                                                                           |
+| Constraints                                  | 30,000                     | 3,000                         | `maxItems` 30,000; `pageSize` 10,000                                                                           |
+| Roles, tags, tag types, and user roles       | 30,000                     | 3,000                         | `maxItems` 30,000; `pageSize` 10,000; roles, tags and tag types reduce a larger value rather than rejecting it |
+| Pipelines and workflows                      | 100                        | 100                           | 500 for each; a larger value is reduced to 500 rather than rejected                                            |
+| Comments                                     | 10,000                     | 10,000                        | `maxItems` 30,000; `pageSize` 10,000; a larger value is reduced, not rejected                                  |
+| Subscriptions                                | 10,000                     | 10,000                        | None                                                                                                           |
+| Compliance evaluations of an asset           | 50                         | —                             | 200; a larger value is reduced, not rejected                                                                   |
+| Compliance audit entries                     | 50 (`maxItems` or `limit`) | —                             | 500; a larger value is reduced, not rejected                                                                   |
 
 Unless the table says otherwise, a listing with a maximum rejects a larger value with `400` rather than reducing it to the maximum, so a caller asking for more than one response can hold learns that from the answer instead of reading a shortened page as the complete set. A listing with no maximum accepts the value as given. Amazon Cognito user listings are capped at 60 items per page. Rely on the `NextToken` in each response rather than assuming a fixed page size — the whole set is reachable by following it whatever the page size.
 
@@ -219,20 +233,21 @@ Version information can be retrieved from the `GET /api/version` endpoint:
 
 The VAMS API is organized into the following functional groups:
 
-| Category           | Description                                                                                       | Documentation                       |
-| ------------------ | ------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| **Authentication** | Authentication providers, runtime configuration, web route authorization, login profiles          | [Authentication](authentication.md) |
-| **Databases**      | Database CRUD and the bucket configurations a database is created against                         | [Databases](databases.md)           |
-| **Assets**         | Asset CRUD, archive/unarchive, download, export, history, single-call ingest                      | [Assets](assets.md)                 |
-| **Asset Versions** | Asset version creation, retrieval, revert, archive/unarchive                                      | [Asset Versions](asset-versions.md) |
-| **Files**          | File listing, operations, upload, streaming, preview management                                   | [Files](files.md)                   |
-| **Metadata**       | Metadata CRUD for assets, files, databases, and asset links, plus metadata schemas                | [Metadata](metadata.md)             |
-| **Search**         | Full-text and structured search across assets and files                                           | [Search](search.md)                 |
-| **Pipelines**      | Pipeline CRUD, configuration templates, and template tag schemas                                  | [Pipelines](pipelines.md)           |
-| **Workflows**      | Workflow CRUD, triggers, and execution launch, listing, detail, logs, re-run, and abort           | [Workflows](workflows.md)           |
-| **Asset Links**    | Relationships between assets, with optional tags and tree views                                   | [Asset Links](asset-links.md)       |
-| **Comments**       | Review comments attached to an asset version                                                      | [Comments](comments.md)             |
-| **Tags**           | Tags and tag types, global or scoped to a database                                                | [Tags](tags.md)                     |
-| **Subscriptions**  | Event subscriptions and notification opt-in                                                       | [Subscriptions](subscriptions.md)   |
-| **Authorization**  | Permission constraints, API route listings, roles, user-role assignments, Cognito users, API keys | [Authorization](auth.md)            |
-| **Add-ons**        | Endpoints contributed by optional add-ons                                                         | [Add-ons](addon.md)                 |
+| Category           | Description                                                                                           | Documentation                       |
+| ------------------ | ----------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| **Authentication** | Authentication providers, runtime configuration, web route authorization, login profiles              | [Authentication](authentication.md) |
+| **Databases**      | Database CRUD and the bucket configurations a database is created against                             | [Databases](databases.md)           |
+| **Assets**         | Asset CRUD, archive/unarchive, download, export, history, single-call ingest                          | [Assets](assets.md)                 |
+| **Asset Versions** | Asset version creation, retrieval, revert, archive/unarchive                                          | [Asset Versions](asset-versions.md) |
+| **Files**          | File listing, operations, upload, streaming, preview management                                       | [Files](files.md)                   |
+| **Metadata**       | Metadata CRUD for assets, files, databases, and asset links, plus metadata schemas                    | [Metadata](metadata.md)             |
+| **Search**         | Full-text and structured search across assets and files                                               | [Search](search.md)                 |
+| **Pipelines**      | Pipeline CRUD, configuration templates, and template tag schemas                                      | [Pipelines](pipelines.md)           |
+| **Workflows**      | Workflow CRUD, triggers, and execution launch, listing, detail, logs, re-run, and abort               | [Workflows](workflows.md)           |
+| **Asset Links**    | Relationships between assets, with optional tags and tree views                                       | [Asset Links](asset-links.md)       |
+| **Comments**       | Review comments attached to an asset version                                                          | [Comments](comments.md)             |
+| **Tags**           | Tags and tag types, global or scoped to a database                                                    | [Tags](tags.md)                     |
+| **Subscriptions**  | Event subscriptions and notification opt-in                                                           | [Subscriptions](subscriptions.md)   |
+| **Compliance**     | Compliance schemas, schema bindings, evaluation, quarantine, cascades, and the compliance audit trail | [Compliance](compliance.md)         |
+| **Authorization**  | Permission constraints, API route listings, roles, user-role assignments, Cognito users, API keys     | [Authorization](auth.md)            |
+| **Add-ons**        | Endpoints contributed by optional add-ons                                                             | [Add-ons](addon.md)                 |

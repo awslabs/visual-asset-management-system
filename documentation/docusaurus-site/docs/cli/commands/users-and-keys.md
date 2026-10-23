@@ -128,7 +128,7 @@ This action is permanent and cannot be undone. All user data and sessions are re
 
 ## user cognito reset-password
 
-Reset a user's password. Amazon Cognito emails the user a reset code, or — for an account that has never completed a first sign-in — a new invitation carrying a fresh temporary password. Nothing is returned in the response, so the new credential cannot be read from the command output. The user must change their password on their next login.
+Reset a user's password. Amazon Cognito emails the user a new temporary password in the registration (invitation) message, whether or not the account has completed a first sign-in. Nothing is returned in the response, so the new credential cannot be read from the command output. The user must change their password on their next login.
 
 ```bash
 vamscli user cognito reset-password -u <USER_ID> --confirm [OPTIONS]

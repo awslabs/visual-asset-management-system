@@ -89,8 +89,13 @@ export function buildExecutionServiceFunction(
         // Table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX). The log group each execution
         // was launched against is read from that execution's own record (executionLogGroupArn), so
         // no log group ARN is set here; the read scope is granted on the role policy below.
-        environment: {},
+        environment: {
+            // Abort publishes workflow.execution.completed once the ABORTED status is written.
+            ORCHESTRATION_BUS_ARN: storageResources.eventBridge.orchestrationBus.eventBusArn,
+            ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
+        },
     });
+    storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun); // write for lazy status reconciliation + abort + permanent-delete
     // Permanent-delete removes an execution's rows across every sub-table, so the execution
@@ -442,11 +447,15 @@ export function buildProcessWorkflowExecutionOutputFunction(
             FILE_UPLOAD_LAMBDA_FUNCTION_NAME: fileUploadLambdaFunction.functionName,
             METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
             WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
+            // The workflow.execution.completed event is published to the orchestration bus.
+            ORCHESTRATION_BUS_ARN: storageResources.eventBridge.orchestrationBus.eventBusArn,
+            ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
         },
     });
 
     fileUploadLambdaFunction.grantInvoke(fun);
     metadataServiceFunction.grantInvoke(fun);
+    storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
@@ -566,11 +575,15 @@ export function buildHandleExecutionErrorFunction(
             // DynamoDB table names resolve from SSM (VAMS_RESOURCE_PARAM_PREFIX). Only the
             // non-SSM shared workflow SFN log group ARN is set here (used to pull failed-run logs).
             WORKFLOW_EXECUTION_LOG_GROUP_ARN: workflowsLogGroup.logGroupArn,
+            // The workflow.execution.completed event is published to the orchestration bus.
+            ORCHESTRATION_BUS_ARN: storageResources.eventBridge.orchestrationBus.eventBusArn,
+            ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
         },
     });
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionLogsStorageTable.grantReadWriteData(fun);
+    storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -620,9 +633,15 @@ export function buildHandleExecutionErrorFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             // Stop a SageMaker training job or pipeline execution a pipeline this failure is about to
-            // stamp terminal registered as its sub-process. Scoped exactly as the abort path's grant is:
+            // stamp terminal registered as its sub-process, and describe it when the stop is refused so
+            // the refusal is classified by its live status. Scoped exactly as the abort path's grant is:
             // the two share the stop implementation and act on the same registration rows.
-            actions: ["sagemaker:StopTrainingJob", "sagemaker:StopPipelineExecution"],
+            actions: [
+                "sagemaker:StopTrainingJob",
+                "sagemaker:StopPipelineExecution",
+                "sagemaker:DescribeTrainingJob",
+                "sagemaker:DescribePipelineExecution",
+            ],
             resources: [
                 `arn:${Partition()}:sagemaker:${config.env.region}:${
                     config.env.account
@@ -1273,6 +1292,30 @@ export function buildImportGlobalPipelineWorkflowFunction(
 }
 
 /**
+ * Let `caller` invoke the workflow service's internal redeploy actions: the pipeline service schedules
+ * a refresh of every workflow referencing a pipeline whose definition-relevant settings changed, and the
+ * execute handler redeploys a stale workflow before launching it. The grant is `lambda:InvokeFunction`
+ * on the workflow service's function ARN only; the caller gets no Step Functions or iam:PassRole
+ * permission, since the workflow service performs the deploy with its own role.
+ */
+export function grantWorkflowServiceInternalInvoke(
+    caller: lambda.Function,
+    workflowServiceFunction: lambda.Function
+): void {
+    caller.addEnvironment(
+        "WORKFLOW_SERVICE_V2_FUNCTION_NAME",
+        workflowServiceFunction.functionName
+    );
+    caller.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["lambda:InvokeFunction"],
+            resources: [workflowServiceFunction.functionArn],
+        })
+    );
+}
+
+/**
  * Workflow V2 service (CRUD + enable/disable/archive + save-validation). Reads/writes the V2
  * workflow + triggers tables (triggers listed on the details view) and reads the V2 pipeline table
  * (referenced-pipeline authorization + save-consistency checks + GLOBAL/scope string checks).
@@ -1281,7 +1324,8 @@ export function buildImportGlobalPipelineWorkflowFunction(
  * Functions state machine (common.workflows.workflowAsl.deploy_state_machine), so it receives the
  * dedicated SFN execution role (buildWorkflowRole, built by the caller so its ARN can also be published
  * to SSM) and the execution-overhaul lambda names + log group + partition as env, plus
- * states:Create/Describe/UpdateStateMachine + iam:PassRole.
+ * states:Create/Describe/UpdateStateMachine + iam:PassRole. Every deploy publishes a state machine
+ * version (and deletes versions past the retained count), which a launch starts on.
  */
 export function buildWorkflowServiceV2Function(
     scope: Construct,
@@ -1336,6 +1380,9 @@ export function buildWorkflowServiceV2Function(
                 "states:CreateStateMachine",
                 "states:DescribeStateMachine",
                 "states:UpdateStateMachine",
+                "states:PublishStateMachineVersion",
+                "states:ListStateMachineVersions",
+                "states:DeleteStateMachineVersion",
             ],
             resources: [
                 IAMArn("*" + config.name + "*").statemachine,
