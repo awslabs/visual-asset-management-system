@@ -84,7 +84,7 @@ Amazon OpenSearch Serverless is the recommended option for most deployments. Pro
 | **Import existing VPC** | `useGlobalVpc.enabled: true` with `optionalExternalVpcId` | Import an existing VPC by ID. Requires providing isolated subnet IDs and optionally private and public subnet IDs. See [Deploy the solution](deploy-the-solution.md) for the two-phase deployment process. |
 
 :::warning[VPC is required for some features]
-Some features require a VPC and `useGlobalVpc.enabled` must be `true` when they are enabled. If any of the following are turned on while `useGlobalVpc.enabled` is `false`, deployment fails with a configuration error that lists the offending features — set `useGlobalVpc.enabled` to `true` (or disable those features): ALB deployment, OpenSearch Provisioned, or any container-based pipeline (Potree viewer, Gaussian splatting, GenAI labeling, RapidPipeline, ModelOps, Isaac Lab, 3D preview thumbnail, NVIDIA Cosmos, NVIDIA Gr00t).
+Some features require a VPC and `useGlobalVpc.enabled` must be `true` when they are enabled. If any of the following are turned on while `useGlobalVpc.enabled` is `false`, deployment fails with a configuration error that lists the offending features — set `useGlobalVpc.enabled` to `true` (or disable those features): ALB deployment, OpenSearch Provisioned, or any container-based pipeline (Potree viewer, Gaussian splatting, GenAI labeling, RapidPipeline, ModelOps, Isaac Lab, 3D preview thumbnail, NVIDIA Cosmos, NVIDIA Gr00t, GenAI CAD STEP agent).
 :::
 
 **Subnet sizing guidance:**
