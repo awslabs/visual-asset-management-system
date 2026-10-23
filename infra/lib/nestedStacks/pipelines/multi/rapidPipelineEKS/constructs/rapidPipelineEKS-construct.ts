@@ -920,7 +920,8 @@ export class RapidPipelineEKSConstruct extends Construct {
             )
             .otherwise(counterState);
 
-        // CONSTRUCT_PIPELINE reports a rejected input by returning a body without jobManifest, which
+        // CONSTRUCT_PIPELINE reports that it could not build the job (a missing or invalid path, or
+        // an error while building the manifest) by returning a body without jobManifest, which
         // is not an invocation error and so is not caught by the task's Catch. RunJob's payload reads
         // the manifest, so a missing one fails RunJob with States.Runtime before it is invoked, which
         // its Catch does not route either. This state hands that body to PipelineEnd instead.
