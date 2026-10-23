@@ -894,15 +894,18 @@ class CasbinEnforcerService:
         ``<databaseId>#deleted``, and the listings and single-record reads that include archived
         records hand that stored id to ``enforce()``. Constraint values name the database itself, and
         the anchored operators (``equals`` -> ``^value\\Z``, ``ends_with``) never match the suffixed
-        id, so an archived record escaped every rule written that way: a deny on its database did not
+        id, so no rule written that way matched an archived record: a deny on its database did not
         apply to it, and an allow scoped to its database did not reach it. Removing the suffix here,
         where every object-level decision is evaluated, authorizes an archived record exactly like a
         live record of the same database. Database ids cannot contain ``#`` (``id_pattern``), so the
-        suffix is unambiguous. A copy is returned; the caller's object is not modified.
+        suffix is unambiguous; every trailing occurrence is removed, so a repeated suffix is decided on
+        the same database. A copy is returned; the caller's object is not modified.
         """
         database_id = obj.get("databaseId")
         if isinstance(database_id, str) and database_id.endswith(ARCHIVED_DATABASE_ID_SUFFIX):
-            return {**obj, "databaseId": database_id[: -len(ARCHIVED_DATABASE_ID_SUFFIX)]}
+            while database_id.endswith(ARCHIVED_DATABASE_ID_SUFFIX):
+                database_id = database_id[: -len(ARCHIVED_DATABASE_ID_SUFFIX)]
+            return {**obj, "databaseId": database_id}
         return obj
 
     def enforce(self, obj, act):
