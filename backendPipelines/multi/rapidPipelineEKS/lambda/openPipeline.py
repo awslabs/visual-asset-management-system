@@ -9,6 +9,7 @@ import time
 import uuid
 from customLogging.logger import safeLogger
 import manifestHelper
+from taskFailureBounds import bounded_task_failure
 from botocore.config import Config
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
@@ -93,14 +94,16 @@ def abort_external_workflow(error, task_token, context_info=None):
             if context_info:
                 cause_message += f' Context: {context_info}'
 
+            failure_error, failure_cause = bounded_task_failure(error_message, cause_message)
+
             # Add retry logic for task failure notification
             max_retries = 3
             for attempt in range(max_retries):
                 try:
                     sfn.send_task_failure(
                         taskToken=task_token,
-                        error=error_message,
-                        cause=cause_message
+                        error=failure_error,
+                        cause=failure_cause
                     )
                     logger.info(f"Successfully sent task failure notification on attempt {attempt + 1}")
                     break

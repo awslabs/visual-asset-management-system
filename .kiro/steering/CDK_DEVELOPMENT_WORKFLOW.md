@@ -925,6 +925,17 @@ conditional on a token being present — a direct invoke carries none. The abort
 carries the child's own output and bounds that text itself to fit the 32768-character limit, as
 `backendPipelines/multi/rapidPipelineEKS`'s CHECK_JOB path does.
 
+A value over either `SendTaskFailure` limit (`error` 256 characters, `cause` 32768) is rejected by the
+service — botocore checks only the minimum length — and the rejection lands in the callback's own `except`,
+so the token goes unreported as if no callback existed. A route that forwards an error it did not compose (a
+`PipelineEnd` handler passing on `$.error`) cannot know its size.
+`backendPipelines/multi/rapidPipelineEKS/lambda/taskFailureBounds.py` is the pattern: every
+`send_task_failure` in that pipeline's `consolidated_handler.py` and `openPipeline.py` takes its `error` and
+`cause` from `bounded_task_failure`, which returns a value within its limit unchanged, keeps the head of a
+longer one with a `... [truncated from N characters]` marker inside the limit, and converts a non-string
+with `str()`. A durable syntax-tree guard in `tests/test_rapidpipeline_eks_task_failure_bounds.py` holds
+every call to that form.
+
 **On the SUCCESS path, report the outcome and not the job's output.** A `SendTaskSuccess` output and the
 lambda's own return value both land in the execution record, which is durable and readable by anyone who can
 read the execution, and on a run that worked a third-party tool's stdout has no diagnostic value there.
