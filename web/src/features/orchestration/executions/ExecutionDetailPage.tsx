@@ -1330,11 +1330,6 @@ function flattenInputMetadata(records: any[]): any[] {
 // Helper functions
 
 /**
- * Deep link to a file inside the View Assets file manager. Uses the HashRouter asset detail
- * route with a ?filePath query param (ViewAsset treats the query param as the authoritative
- * file selector). Links to the file, not a specific version.
- */
-/**
  * A preview file is stored next to its base file as {baseFile}.previewFile.{ext}. Viewing goes to
  * the base file, so strip the ".previewFile.{ext}" suffix; non-preview paths are returned unchanged.
  */
@@ -1344,6 +1339,12 @@ function baseFilePathForPreview(relativeFilePath: string): string {
     return idx === -1 ? relativeFilePath : relativeFilePath.slice(0, idx);
 }
 
+/**
+ * Deep link to a file inside the View Assets file manager. Uses the HashRouter asset detail
+ * route with a ?filePath query param (ViewAsset treats the query param as the authoritative
+ * file selector). Links to the file, not a specific version. The path carries one leading "/",
+ * the form of the file manager tree's paths; output rows store it without one.
+ */
 function buildFileManagerLink(
     databaseId: string,
     assetId: string,
@@ -1353,7 +1354,8 @@ function buildFileManagerLink(
         assetId
     )}`;
     if (!relativeFilePath) return path;
-    return `${path}?filePath=${encodeURIComponent(relativeFilePath)}`;
+    const filePath = relativeFilePath.startsWith("/") ? relativeFilePath : `/${relativeFilePath}`;
+    return `${path}?filePath=${encodeURIComponent(filePath)}`;
 }
 
 function formatDate(dateString: string): string {

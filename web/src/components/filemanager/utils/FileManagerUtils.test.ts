@@ -3,7 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { addFiles, getRootByPath, mergeFiles } from "./FileManagerUtils";
+import {
+    addFiles,
+    getRootByPath,
+    mergeFiles,
+    normalizeFileManagerPath,
+    resolveFileManagerPath,
+} from "./FileManagerUtils";
 import type { FileKey, FileTree } from "../types/FileManagerTypes";
 
 jest.mock("../../../services/APIService", () => ({
@@ -112,5 +118,86 @@ describe("mergeFiles provenance", () => {
         const tree = addFiles([fileKey("/a.glb")], rootTree());
         const merged = mergeFiles([fileKey("/out/b.glb", PROVENANCE)], tree);
         expect(getRootByPath(merged, "/out/b.glb")).toMatchObject(PROVENANCE);
+    });
+});
+
+/**
+ * Deep links name a file by its asset-relative path, and not every producer writes the tree's own
+ * form: workflow output rows store the path without its leading slash.
+ */
+describe("normalizeFileManagerPath", () => {
+    it.each([
+        ["out/sub/model.glb", "/out/sub/model.glb"],
+        ["/out/sub/model.glb", "/out/sub/model.glb"],
+        ["//out//sub///model.glb", "/out/sub/model.glb"],
+        ["out/sub/", "/out/sub/"],
+        ["", "/"],
+        ["/", "/"],
+    ])("maps %p to %p", (input, expected) => {
+        expect(normalizeFileManagerPath(input)).toBe(expected);
+    });
+});
+
+describe("resolveFileManagerPath", () => {
+    const tree = () =>
+        addFiles(
+            [
+                fileKey("/model.glb"),
+                fileKey("/out/sub/model.glb"),
+                {
+                    ...fileKey("/out/empty/"),
+                    fileName: "",
+                    key: "asset-1/out/empty/",
+                    isFolder: true,
+                },
+            ],
+            rootTree()
+        );
+
+    it("finds a nested file by its path with the leading slash", () => {
+        expect(resolveFileManagerPath(tree(), "/out/sub/model.glb")?.relativePath).toBe(
+            "/out/sub/model.glb"
+        );
+    });
+
+    it("finds a nested file by its path without the leading slash", () => {
+        expect(resolveFileManagerPath(tree(), "out/sub/model.glb")?.relativePath).toBe(
+            "/out/sub/model.glb"
+        );
+    });
+
+    it("finds a root-level file without the leading slash", () => {
+        expect(resolveFileManagerPath(tree(), "model.glb")?.relativePath).toBe("/model.glb");
+    });
+
+    it("finds a path written with repeated slashes", () => {
+        expect(resolveFileManagerPath(tree(), "//out//sub/model.glb")?.relativePath).toBe(
+            "/out/sub/model.glb"
+        );
+    });
+
+    it.each(["/out/sub/", "out/sub/", "/out/sub", "out/sub"])("finds a folder from %p", (input) => {
+        const node = resolveFileManagerPath(tree(), input);
+        expect(node?.relativePath).toBe("/out/sub/");
+        expect(node?.isFolder).toBe(true);
+    });
+
+    it("finds a folder that holds no files", () => {
+        expect(resolveFileManagerPath(tree(), "out/empty")?.relativePath).toBe("/out/empty/");
+    });
+
+    it("returns the root for the root path and for an empty path", () => {
+        const root = tree();
+        expect(resolveFileManagerPath(root, "/")).toBe(root);
+        expect(resolveFileManagerPath(root, "")).toBe(root);
+    });
+
+    it("returns null for a path the asset does not hold", () => {
+        expect(resolveFileManagerPath(tree(), "out/sub/missing.glb")).toBeNull();
+        expect(resolveFileManagerPath(tree(), "missing/")).toBeNull();
+    });
+
+    it("returns null without a tree", () => {
+        expect(resolveFileManagerPath(null, "/model.glb")).toBeNull();
     });
 });

@@ -249,3 +249,78 @@ describe("EnhancedFileManager multi-selection with URL filePath sync", () => {
         expect(getFilePathParam()).toBe("/b.txt");
     });
 });
+
+describe("EnhancedFileManager deep link to a nested path", () => {
+    const nestedFiles = [
+        {
+            fileName: "model.glb",
+            key: "asset1/out/sub/model.glb",
+            relativePath: "/out/sub/model.glb",
+            isFolder: false,
+            size: 10,
+            dateCreatedCurrentVersion: "2026-01-01T00:00:00Z",
+            versionId: "v1",
+            isArchived: false,
+            primaryType: null,
+        },
+        {
+            fileName: "top.txt",
+            key: "asset1/top.txt",
+            relativePath: "/top.txt",
+            isFolder: false,
+            size: 20,
+            dateCreatedCurrentVersion: "2026-01-01T00:00:00Z",
+            versionId: "v1",
+            isArchived: false,
+            primaryType: null,
+        },
+    ];
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        (fetchAssetS3FilesStreaming as jest.Mock).mockImplementation(async function* () {
+            yield {
+                success: true,
+                items: nestedFiles,
+                nextToken: null,
+                error: null,
+                pageNumber: 1,
+                isLastPage: true,
+            };
+        });
+    });
+
+    it("selects a nested file named without the leading slash and shows no error", async () => {
+        // Workflow output rows store the path without its leading slash.
+        const { container } = renderFileManager(
+            "/databases/db1/assets/asset1?filePath=out%2Fsub%2Fmodel.glb"
+        );
+
+        await waitFor(() => expect(getSingleSelectedName(container)).toBe("model.glb"));
+        await flushEffects();
+
+        expect(screen.queryByText(/does not exist in this asset/)).not.toBeInTheDocument();
+        // The selection writes the tree's own form back, which then counts as already navigated.
+        expect(getFilePathParam()).toBe("/out/sub/model.glb");
+        expect(getSingleSelectedName(container)).toBe("model.glb");
+    });
+
+    it("selects a folder named without its trailing slash", async () => {
+        const { container } = renderFileManager("/databases/db1/assets/asset1?filePath=out%2Fsub");
+
+        // A folder row's name carries its item count, e.g. "sub(1)".
+        await waitFor(() => expect(getSingleSelectedName(container)).toMatch(/^sub\(\d+\)$/));
+        await flushEffects();
+
+        expect(screen.queryByText(/does not exist in this asset/)).not.toBeInTheDocument();
+        expect(getFilePathParam()).toBe("/out/sub/");
+    });
+
+    it("still reports a path the asset does not hold", async () => {
+        renderFileManager("/databases/db1/assets/asset1?filePath=out%2Fsub%2Fmissing.glb");
+
+        expect(
+            await screen.findByText('File path "out/sub/missing.glb" does not exist in this asset.')
+        ).toBeInTheDocument();
+    });
+});

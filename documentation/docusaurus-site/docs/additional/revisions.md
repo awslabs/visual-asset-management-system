@@ -53,6 +53,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **CAD/Mesh Metadata Extraction task token stays out of logs** — The handler checks for a task token before it logs anything and logs only the manifest location, never the invocation event. (issue #521)
 -   **Admin password reset sends a temporary password** — Resetting an Amazon Cognito user's password from User Management, the CLI or the API emails the user a new temporary password and requires a new password at the next sign-in, instead of a verification code the user could not sign in with. (issue #575)
 -   **Container image troubleshooting** — The entry for `InvalidImage` and `400 Bad Request` push errors explains that the pinned AWS CDK CLI disables Docker's default provenance attestation and how to remove a cached image index; it no longer recommends `docker system prune -a` or a privileged emulation container. (issue #514)
+-   **File Manager opens links without a leading slash** — A File Manager link whose path has no leading slash, such as **Open in file manager** on a workflow output file inside a folder, selects the file it names instead of reporting that it does not exist in the asset; a folder also opens from its path without the trailing slash. (issue #728)
 
 **Other changes:**
 

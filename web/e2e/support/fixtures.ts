@@ -504,3 +504,65 @@ export async function findAssetFiles(
     }
     return found;
 }
+
+/** The File Manager tree's single-selected row label, in the visible tree (see `treeNode`). */
+export function selectedTreeNode(page: Page): Locator {
+    return page.locator(".directory-tree .tree-item-content.selected .tree-item-name").first();
+}
+
+/**
+ * The first live file found inside a folder (an asset-relative key with two or more segments, e.g.
+ * `/out/sub/model.glb`), or null when the scan finds none or the running app exposes no API context.
+ * Scans the way `findAssetFiles` does and is bounded the same way; a named `asset`
+ * (`databaseId/assetId`) is listed on its own.
+ */
+export async function findNestedAssetFile(
+    page: Page,
+    options: Pick<FindAssetFilesOptions, "asset" | "maxDatabases" | "maxAssetsPerDatabase"> = {}
+): Promise<AssetFileRef | null> {
+    const ctx = await apiContext(page);
+    if (!ctx) return null;
+    const headers = { Authorization: `Bearer ${ctx.token}` };
+    const asJson = async (path: string) => {
+        const r = await page.request.get(`${ctx.base}${path}`, { headers });
+        if (!r.ok()) return null;
+        const b = await r.json().catch(() => null);
+        return b?.message ?? b ?? null;
+    };
+    const itemsOf = (body: any): any[] => {
+        const items = body?.Items ?? body?.items ?? body ?? [];
+        return Array.isArray(items) ? items : [];
+    };
+    const nestedIn = async (databaseId: string, assetId: string): Promise<AssetFileRef | null> => {
+        const files = await asJson(
+            `/database/${databaseId}/assets/${assetId}/listFiles?basic=true`
+        );
+        for (const f of itemsOf(files)) {
+            const relative: string = f?.relativePath ?? "";
+            if (!relative || f.isFolder || f.isArchived || relative.endsWith("/")) continue;
+            const key = relative.startsWith("/") ? relative : `/${relative}`;
+            if (key.split("/").filter(Boolean).length >= 2) {
+                return { databaseId, assetId, key };
+            }
+        }
+        return null;
+    };
+
+    if (options.asset) {
+        const [databaseId, assetId] = options.asset.split("/");
+        return databaseId && assetId ? nestedIn(databaseId, assetId) : null;
+    }
+    const databases = itemsOf(await asJson("/database"));
+    for (const db of databases.slice(0, options.maxDatabases ?? 8)) {
+        const databaseId = db?.databaseId;
+        if (!databaseId) continue;
+        const assets = itemsOf(await asJson(`/database/${databaseId}/assets`));
+        for (const asset of assets.slice(0, options.maxAssetsPerDatabase ?? 20)) {
+            const assetId = asset?.assetId;
+            if (!assetId) continue;
+            const found = await nestedIn(databaseId, assetId);
+            if (found) return found;
+        }
+    }
+    return null;
+}
