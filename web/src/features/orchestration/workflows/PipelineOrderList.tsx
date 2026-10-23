@@ -74,8 +74,8 @@ const JOB_NAME_HELP = (
         <p className="mb-1">
             Note the two are different things: this field is a fixed label, while the{" "}
             <span className="font-mono">&#123;&#123;jobName&#125;&#125;</span> tag — valid in output
-            path prefixes and template bodies — resolves to the workflow&apos;s generated job name
-            for the run.
+            path prefixes and template bodies — resolves to a per-run name for the step: its
+            generated job name plus its pipeline execution id.
         </p>
         <p>
             <strong>This is part of the output path, not a display label.</strong> Changing it on an

@@ -784,7 +784,7 @@ v2.7 moves add-on code out of the core list files into add-on files beside them,
     ```bash
     aws codebuild batch-get-builds \
         --ids "$(aws codebuild list-builds-for-project --project-name <PROJECT_NAME> \
-            --max-items 1 --query 'ids[0]' --output text)" \
+            --no-paginate --query 'ids[0]' --output text)" \
         --query 'builds[0].buildStatus' --output text
     ```
 

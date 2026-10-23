@@ -1094,7 +1094,8 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
    `inputFileFilters`.
 7. **A workflow's `defaultOutputFileBaseExecutionPathExtension` supplies the output path prefix when
    an execution names none.** It is stored UNRESOLVED, so its `{{tag}}` placeholders resolve per run --
-   one stored `/{{jobName}}/` gives every execution its own output folder. The prefix is inserted
+   one stored `/{{jobName}}/` gives every execution its own output folder, because the `{{jobName}}`
+   tag renders a value unique to each run and step (rule 9). The prefix is inserted
    immediately before each output file's own name, so a container's own output folders are preserved.
    **A container must therefore not create its own per-job folder** -- the workflow prefix is what
    separates runs, and a container-side folder shows up as a stray level inside every asset. The
@@ -1133,7 +1134,10 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
    the step — blank already falls back to the pipeline id, keeping each step's output distinct. It
    takes the id charset only (3-63 chars), so **`{{tag}}` placeholders are rejected**: use the
    workflow's `defaultOutputFileBaseExecutionPathExtension` (rule 7) to vary the path per run. Do not
-   confuse the FIELD with the `{{jobName}}` TAG, which resolves to the run's generated job name.
+   confuse the FIELD with the `{{jobName}}` TAG, which renders `executionRecords.run_job_name()`: the
+   step's stored `jobNames[]` entry joined to that step's `pipelineExecutionId`, at most 80 characters,
+   so it differs on every run and for every step of one run. The run-bucket prefix above keeps the
+   stored name, which the deployed state machine bakes in.
 10. **A workflow may not list the same pipeline twice.** Per-step execute params, resolved template
     configs, and filtered inputs are all keyed by `pipelineDatabaseId:pipelineId`, so a repeated
     pipeline silently overwrites the earlier step's resolved config and both steps run identically —
@@ -1205,6 +1209,12 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
     resolves to. Container output does not print the VAMS execution ids, so a registered prefix that the
     real stream falls under is what lets the read skip the execution-scope terms; a prefix the stream does
     not start with reads as `scoped`, and the filter drops every container line.
+
+-   **Batch states that submit the same job definition share one stream prefix**, so register only the
+    state the run is routed to. The registration handler dedups log entries by location and keeps the
+    first entry's `stageName`, so registering every such state attributes the run's container lines to
+    whichever state was listed first. The 3D thumbnail pipeline's standard and large tiers are the case
+    in the tree (`preview/3dThumbnail/lambda/openPipeline.py`).
 
 CDK rules for those env values (`infra/lib/nestedStacks/pipelines/**`):
 
@@ -1511,7 +1521,7 @@ One `BatchFargatePipelineConstruct` job definition is registered at the standard
 `attemptDuration` = the longest tier's bound; each tier is its own `tasks.BatchSubmitJob` with fixed
 `containerOverrides.vcpus` / `memory` (aws-cdk-lib renders them as `ResourceRequirements` `VCPU` /
 `MEMORY` in MiB, the form AWS Batch accepts for Fargate — never the deprecated top-level
-`Vcpus`/`Memory`), a `VAMS_COMPUTE_TIER` env value and its own `timeout`, behind a `sfn.Choice` on
+`Vcpus`/`Memory`), a `VAMS_COMPUTE_TIER` env value and its own `taskTimeout`, behind a `sfn.Choice` on
 the tier the lambdas carry in the state. Ephemeral storage is a job-definition property and cannot be
 overridden per job, so size it for the largest tier. AWS Batch checks a vCPU/memory override against
 the Fargate task sizes only at submit, so every configurable tier size is validated in `getConfig()`
@@ -1646,7 +1656,7 @@ The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, gran
 2. **Configuration Driven**: All pipelines must be configurable via `config.ts`
 3. **VPC Awareness**: Distinguish between VPC-required and optional pipelines
 4. **Container Separation**: Keep container code separate from Lambda orchestration
-5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`. All `customLogging/logger.py` copies must stay byte-identical (verify with `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`, which must print one hash): the logger redacts task tokens from every log line, so edit one copy, propagate to the rest in the same change, and add the new pipeline's path to `LOGGER_COPIES` in `backendPipelines/tests/test_pipeline_logger_identity.py` (the one list; `test_pipeline_logger_formatter.py` reads it too). Log an event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never log a task token on its own. The same byte-identity rule applies to every vendored `manifestHelper.py`.
+5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`. All `customLogging/logger.py` copies must stay byte-identical (verify with `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`, which must print one hash): the logger redacts task tokens from every log line, so edit one copy, propagate to the rest in the same change, and add the new pipeline's path to `LOGGER_COPIES` in `backendPipelines/tests/test_pipeline_logger_identity.py` (the one list; `test_pipeline_logger_formatter.py` reads it too). Log an event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never log a task token on its own. The same byte-identity rule applies to every vendored `manifestHelper.py`. The Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) log through `lambdaContainer/common/logger.py` instead, and VAMS reads a Lambda step's log group only for lines that contain the workflow execution id: each handler puts the body's `workflowExecutionId` on every line with `logger.append_keys` after the task-token check and removes it with `remove_keys` first thing in each invocation, and a module that logs on the handler's behalf uses a Powertools child logger of the handler's service (`child=True`) so its lines carry the id too. Full rule: `backendPipelines/CLAUDE.md` "Files a Model Input References".
 6. **Error Handling**: Implement comprehensive error handling and logging
 7. **Resource Cleanup**: Ensure proper cleanup of temporary resources
 8. **VPC Builder Updates (CRITICAL)**: A pipeline using AWS Batch, ECS, or Fargate goes into some of the three condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in.** Determine that from what `pipelineBuilder-nestedStack.ts` passes as its `pipelineSubnets` (`pipelineNetwork.isolatedSubnets.pipeline` vs `pipelineNetwork.privateSubnets.pipeline`). Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments.
@@ -1667,9 +1677,11 @@ The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, gran
 
     Declare the constant **above the first client**, not merely after the imports: a few modules interleave imports with executable code (`multi/rapidPipelineEKS/lambda/consolidated_handler.py` builds a client and then keeps importing), and a constant placed after the last import lands below the client that uses it — `NameError` at module import, which in a Lambda is a cold-start 500 on every request. A deliberate departure (a non-idempotent call a retry would duplicate) needs a comment saying why, because the ratchet cannot tell it from an oversight. Coverage: `backend/tests/common/workflows/test_pipeline_boto_clients_configured.py`.
 
-11. **Sub-Process and Log Registration**: `openPipeline.py` (or `executeBatchJob.py` when that lambda submits the job itself) registers the state-machine log entry with `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state naming the group that job definition writes to — the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration — (`logStreamPrefix` `"<jobDefinitionName>/default/"`, `stageName` = the ASL state name, declared as a module-level `*_STATE_NAME` literal). The builder supplies `ORCHESTRATION_BUS_NAME` + `orchestrationBus.grantPutEventsTo(fun)`, `STATE_MACHINE_LOG_GROUP_NAME` / `_ARN`, `...vendedBatchJobLogGroupEnvironment(logGroup)` (Fargate) or `...batchJobLogGroupEnvironment()` (GPU) and the job-definition-name env the producer reads (`BATCH_JOB_DEFINITION_NAME`). Add the construct to `infra/test/pipelines/batchLogRegistrationEnv{Fargate,Gpu}.test.ts` (or `containerLogRegistrationEnvEcs.test.ts` for an ECS task) and assert the emitted entries in `lambda/tests/test_manifest_refactor.py`. Without it, abort leaves the compute running and the execution shows no stages or container logs. See "Registering Sub-Processes and Logs" above.
+11. **Sub-Process and Log Registration**: `openPipeline.py` (or `executeBatchJob.py` when that lambda submits the job itself) registers the state-machine log entry with `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state (only the state the run is routed to when several states share one job definition) naming the group that job definition writes to — the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration — (`logStreamPrefix` `"<jobDefinitionName>/default/"`, `stageName` = the ASL state name, declared as a module-level `*_STATE_NAME` literal). The builder supplies `ORCHESTRATION_BUS_NAME` + `orchestrationBus.grantPutEventsTo(fun)`, `STATE_MACHINE_LOG_GROUP_NAME` / `_ARN`, `...vendedBatchJobLogGroupEnvironment(logGroup)` (Fargate) or `...batchJobLogGroupEnvironment()` (GPU) and the job-definition-name env the producer reads (`BATCH_JOB_DEFINITION_NAME`). Add the construct to `infra/test/pipelines/batchLogRegistrationEnv{Fargate,Gpu}.test.ts` (or `containerLogRegistrationEnvEcs.test.ts` for an ECS task) and assert the emitted entries in `lambda/tests/test_manifest_refactor.py`. Without it, abort leaves the compute running and the execution shows no stages or container logs. See "Registering Sub-Processes and Logs" above.
 
 12. **Non-Root Containers Normalize Read Bits After COPY**: a container that drops to a non-root `USER` runs `RUN chmod -R a+rX <path>` on the line immediately after every `COPY` of source it reads. `COPY` preserves the build host's umask, so a hardened host (umask `077`/`027`) yields root-owned `600`/`640` files that raise `PermissionError: [Errno 13]` at import under the non-root user — invisible to the build, failing only at container runtime. `COPY --chown` alone is not sufficient. See "Read Bits on COPY'd Source in a Non-Root Container" above.
+
+13. **CodeBuild Build Triggers Use the Shared Handler**: every `*CodeBuild-construct.ts` gives its build-trigger function `code: codeBuildTriggerCode()` (`infra/lib/nestedStacks/pipelines/constructs/codeBuildTrigger.ts`), which inlines the single handler `constructs/codeBuildTrigger/index.py`. The handler returns its data, retries `start_build` on throttling and transient errors, and raises otherwise so `cr.Provider` reports `FAILED`; a Delete never raises. Never paste a handler that calls `cfnresponse.send(...)` — behind the provider framework that reports to nothing, and a caught exception then deploys as a success. Coverage: `infra/test/pipelines/codeBuildTriggerHandler.test.ts`, `backendPipelines/tests/test_codebuild_build_trigger_handler.py`.
 
 #### **Pipeline Configuration Rules**
 

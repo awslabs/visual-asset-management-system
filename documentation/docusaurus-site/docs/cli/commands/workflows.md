@@ -270,8 +270,9 @@ response warnings.
 
 A workflow may define a default output path prefix, which is used when `--output-path-prefix` is
 omitted. Because the stored default keeps its template tags unresolved, one setting such as
-`/{{jobName}}/` gives every run its own output folder. Pass an empty prefix to write at the asset root
-instead:
+`/{{jobName}}/` gives every run its own output folder: `{{jobName}}` resolves to the first step's
+generated job name joined to that step's pipeline execution id. Pass an empty prefix to write at the
+asset root instead:
 
 ```bash
 vamscli workflow execute --workflow-database-id global -w my-workflow     --input-file my-db:asset1:/model.glb --output-path-prefix ""

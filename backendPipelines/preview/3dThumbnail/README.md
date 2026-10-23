@@ -57,10 +57,11 @@ The pipeline produces a single preview file alongside the original asset:
 
 Input parameters are passed as a JSON string via the `inputParameters` field of the pipeline execution payload. All parameters are optional.
 
-| Parameter                       | Type    | Default | Description                                                                                                                                                                          |
-| :------------------------------ | :------ | :------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `overwriteExistingPreviewFiles` | boolean | `true`  | When `true`, a preview is generated even if one already exists for the input file. When `false`, a file that already has a preview is skipped and the run completes without writing. |
-| `outputType`                    | enum    | `auto`  | `auto` writes an animated GIF when the renderer produces several frames and a JPEG otherwise; `gif`, `jpg` and `png` write that format for every input.                              |
+| Parameter                       | Type    | Default | Description                                                                                                                                                                             |
+| :------------------------------ | :------ | :------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `overwriteExistingPreviewFiles` | boolean | `true`  | When `true`, a preview is generated even if one already exists for the input file. When `false`, a file that already has a preview is skipped and the run completes without writing.    |
+| `outputType`                    | enum    | `auto`  | `auto` writes an animated GIF when the renderer produces several frames and a JPEG otherwise; `gif`, `jpg` and `png` write that format for every input.                                 |
+| `computeTier`                   | enum    | `auto`  | The compute tier the job runs on. `auto` runs the large tier for an input at or above the large-tier threshold and the standard tier otherwise; `standard` and `large` force that tier. |
 
 ### Example
 

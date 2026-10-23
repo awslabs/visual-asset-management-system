@@ -306,13 +306,14 @@ class DownloadManager:
                     "error": result.get("error", "Unknown error")
                 })
         
+        bytes_written = _bytes_written(successful_files)
         return {
             "overall_success": len(failed_files) == 0,
             "total_files": len(files),
             "successful_files": len(successful_files),
             "failed_files": len(failed_files),
-            "total_size": progress.total_size,
-            "total_size_formatted": format_file_size(progress.total_size),
+            "total_size": bytes_written,
+            "total_size_formatted": format_file_size(bytes_written),
             "download_duration": progress.elapsed_time,
             "average_speed": progress.download_speed,
             "average_speed_formatted": format_file_size(int(progress.download_speed)) + "/s",
@@ -465,13 +466,14 @@ class DownloadManager:
                 else:
                     failed_files.append({"relative_key": fi.relative_key, "local_path": str(fi.local_path), "error": result.get("error", "Unknown error")})
 
+        bytes_written = _bytes_written(successful_files)
         return {
             "overall_success": len(failed_files) == 0,
             "total_files": len(all_files),
             "successful_files": len(successful_files),
             "failed_files": len(failed_files),
-            "total_size": progress.total_size,
-            "total_size_formatted": format_file_size(progress.total_size),
+            "total_size": bytes_written,
+            "total_size_formatted": format_file_size(bytes_written),
             "download_duration": progress.elapsed_time,
             "average_speed": progress.download_speed,
             "average_speed_formatted": format_file_size(int(progress.download_speed)) + "/s",
@@ -510,6 +512,16 @@ class DownloadManager:
                             return {"success": False, "error": str(e)}
             finally:
                 progress.active_downloads -= 1
+
+
+def _bytes_written(successful_files: List[Dict[str, Any]]) -> int:
+    """Sum the bytes written to disk by the downloads that completed.
+
+    A result's ``total_size`` reports this rather than the planned size: the planned size is the sum of
+    the sizes the caller passed in, which is 0 for a file whose size the listing did not supply (a
+    single-file or preview download), and it also counts files that then failed.
+    """
+    return sum(f.get("size") or 0 for f in successful_files)
 
 
 def format_file_size(size_bytes: int) -> str:

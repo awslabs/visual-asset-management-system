@@ -877,7 +877,11 @@ file name.
 
 A workflow may declare a default in `systemConfig.defaultOutputFileBaseExecutionPathExtension`. The
 default is stored **unresolved**, so its template tags are substituted per execution — a single stored
-`/{{jobName}}/` gives every run its own output folder. Resolution follows the request:
+`/{{jobName}}/` gives every run its own output folder. `{{jobName}}` resolves to the first step's
+generated job name joined to that step's `pipelineExecutionId` (for example
+`fb522-convert-3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a`), at most 80 characters, so its value differs on
+every run. A re-run reuses the prefix its original execution resolved, so it writes into that
+execution's folder. Resolution follows the request:
 
 | `outputFileBaseExecutionPathExtension` on the request | Prefix used                  |
 | ----------------------------------------------------- | ---------------------------- |
@@ -1965,6 +1969,8 @@ When `pipelineExecutionId` is supplied in truncated mode, the stored per-pipelin
     }
 }
 ```
+
+Every live read follows the Amazon CloudWatch Logs `nextToken` past pages that hold no events, because a `FilterLogEvents` page can be empty while a later page holds the run's events. The read stops at the first page that holds events or when no token remains, and is bounded to 10 pages per log source and to about six seconds for the follow-up reads of one request together. When the bound stops a read on an empty page, `nextToken` is returned so the caller can continue from there: an empty `events` list with a `nextToken` is an incomplete read, not an empty log.
 
 For the whole execution (no `pipelineExecutionId`), a full-mode response also includes `sfnHistoryEvents` — the Step Functions execution history rendered as a state-transition timeline. When `pipelineExecutionId` is supplied, `subProcessEvents` carries four kinds of log, merged and sorted by timestamp, and each event names its source by `logId` — a CloudWatch event carries the `logId` of the source it was read from, and a registered sub-state-machine's history line carries the `logId` of the log group that machine writes to (an empty string when it has no logging destination):
 
