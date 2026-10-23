@@ -400,7 +400,8 @@ server-side encryption without it. Inside the storage nested stack, spread `dyna
 
 An `ecr.Repository`'s encryption is immutable, so changing it replaces the repository, and AWS CloudFormation
 cannot replace an explicitly named resource under the same name. An explicit `repositoryName` must therefore
-change with the encryption, as `coordinateTransformCodeBuild-construct.ts` does with its `-kms` suffix. A
+change with the encryption, as `coordinateTransformCodeBuild-construct.ts` and `cadStepAgentCodeBuild-construct.ts`
+do with their `-kms` suffix. A
 CodeBuild build trigger that does not wait for the image carries the repository URI as a property, so the
 replacement re-fires the build into the new repository. Import the key by ARN, as for secrets (trap 2);
 Amazon ECR creates its own grants on the key, so the build and pull roles need no key permission.

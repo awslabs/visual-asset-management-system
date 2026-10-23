@@ -580,7 +580,7 @@ imported by ARN (Amazon ECR creates its own grants on it, so the build and pull 
 Given `KMS` and no key, CDK creates no key for a repository, which then uses the AWS managed `aws/ecr` key
 instead of the VAMS key. A repository's encryption is immutable, so changing it replaces the repository, and
 AWS CloudFormation cannot replace an explicitly named resource under the same name: a custom `repositoryName`
-must change with the encryption (the coordinate transform repository adds `-kms`), and a CodeBuild build
+must change with the encryption (the coordinate transform and CAD STEP agent repositories add `-kms`), and a CodeBuild build
 trigger that does not wait for the image carries the repository URI as a property, so the replacement re-fires
 the build into the new repository.
 

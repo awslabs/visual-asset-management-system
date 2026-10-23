@@ -556,13 +556,13 @@ All repositories use the `DESTROY` removal policy with `emptyOnDelete`, so both 
 images are removed when the stack is destroyed cleanly.
 
 Most repositories are auto-named by AWS CloudFormation and therefore cannot collide on a redeploy. Two
-carry an explicit name and are redeploy-collision relevant. The Coordinate Transform name carries `-kms`
-when `useKmsCmkEncryption.enabled` is `true`:
+carry an explicit name and are redeploy-collision relevant. Each name carries `-kms` when
+`useKmsCmkEncryption.enabled` is `true`:
 
 | Pipeline             | Repository name, CMK off                           | Repository name, CMK on                                |
 | -------------------- | -------------------------------------------------- | ------------------------------------------------------ |
 | Coordinate Transform | `{config.name}-{app.baseStackName}-coordtransform` | `{config.name}-{app.baseStackName}-coordtransform-kms` |
-| GenAI CAD STEP agent | `{config.name}-{app.baseStackName}-cadstepagent`   | `{config.name}-{app.baseStackName}-cadstepagent`       |
+| GenAI CAD STEP agent | `{config.name}-{app.baseStackName}-cadstepagent`   | `{config.name}-{app.baseStackName}-cadstepagent-kms`   |
 
 Delete any orphaned repository of either name left by a failed teardown before redeploying with the same
 configuration name and account.
@@ -580,17 +580,21 @@ content-addressed tag.
 :::note[The repositories follow their encryption]
 Amazon ECR cannot change a repository's encryption after the repository is created, so turning
 `useKmsCmkEncryption.enabled` on or off replaces every CodeBuild repository. An auto-named repository gets
-a new generated name, and the Coordinate Transform repository changes between its two names, because AWS
+a new generated name, and the two explicitly named repositories change between their two names, because AWS
 CloudFormation cannot replace an explicitly named resource under the same name. The deployment creates each
-new repository, points the AWS Batch job definitions at it, starts a build of the image into it, and deletes
-the old repository with its images. The deployment does not wait for these builds, so a job submitted before
-its pipeline's build finishes fails to pull the image.
+new repository, points the AWS Batch job definitions (and the GenAI CAD STEP agent's Amazon Bedrock
+AgentCore Runtime) at it, starts a build of the image into it, and deletes the old repository with its
+images. The deployment does not wait for these builds, so a job submitted before its pipeline's build
+finishes fails to pull the image. The GenAI CAD STEP agent is the exception: its deployment waits for its
+build, and its runtime or job definition moves to the new repository only once the image is there.
 
 Changing to a different key while the CMK stays on (for example, setting `optionalExternalCmkArn` on a
-deployment that uses the VAMS-generated key) also replaces the repositories, but the Coordinate Transform
-repository keeps its name, so that update fails. Deploy once with
+deployment that uses the VAMS-generated key) also replaces the repositories, but the two explicitly named
+repositories keep their names, so that update fails. Deploy once with
 `useConversionCoordinateTransform.useCodeBuild` set to `false`, which builds the image with local Docker for
-that deployment and removes the repository, then set it back to `true` and deploy again.
+that deployment and removes the repository, then set it back to `true` and deploy again. For the GenAI CAD
+STEP agent, do the same with `useGenAiCadStepAgent.useCodeBuild` on its `fargate` runtime; its `agentcore`
+runtime requires CodeBuild, so deploy once with `useGenAiCadStepAgent.enabled` set to `false` instead.
 
 The principal that creates or deletes a KMS-encrypted Amazon ECR repository needs `kms:CreateGrant`,
 `kms:DescribeKey` and `kms:RetireGrant` on the key in its IAM policy. For VAMS that principal is the AWS
@@ -599,7 +603,8 @@ role (`app.iamRoleConfig.useCustomBootstrapRoles`, or `cdk bootstrap --cloudform
 must allow them on the key; with `useCliCredentialsSynthesizer` set in `infra/config/policy/iamRoleConfig.json`,
 the deploying credentials must. An external key's policy must keep the statement that lets IAM policies in the
 account authorize use of the key. Amazon ECR encrypts and decrypts image layers through the grants it creates
-on the key, so the CodeBuild projects and the AWS Batch jobs get no permission on it.
+on the key, so the CodeBuild projects, the AWS Batch jobs and the Amazon Bedrock AgentCore Runtime need no
+permission on it to push or pull an image.
 :::
 
 ## Amazon Bedrock AgentCore and Amazon Bedrock Guardrails

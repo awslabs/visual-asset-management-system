@@ -272,6 +272,7 @@ export class CadStepAgentConstruct extends Construct {
             codeBuildConstruct = new CadStepAgentCodeBuildConstruct(this, "CadStepAgentCodeBuild", {
                 config: props.config,
                 platform: runtime === "agentcore" ? "linux/arm64" : "linux/amd64",
+                kmsKey: props.kmsKey,
             });
             new cdk.CfnOutput(this, "CadStepAgentCodeBuildProject", {
                 value: codeBuildConstruct.codeBuildProjectName,

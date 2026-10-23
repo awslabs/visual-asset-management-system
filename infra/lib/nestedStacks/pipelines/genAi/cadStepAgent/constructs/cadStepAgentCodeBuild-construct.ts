@@ -9,6 +9,7 @@ import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as codebuild from "aws-cdk-lib/aws-codebuild";
 import * as s3assets from "aws-cdk-lib/aws-s3-assets";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as kms from "aws-cdk-lib/aws-kms";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as cr from "aws-cdk-lib/custom-resources";
 import * as path from "path";
@@ -30,6 +31,8 @@ export interface CadStepAgentCodeBuildConstructProps extends cdk.StackProps {
     config: Config.Config;
     /** linux/arm64 for the AgentCore Runtime (its only supported architecture), linux/amd64 for Fargate. */
     platform: CadStepAgentImagePlatform;
+    /** `storageResources.encryption.kmsKey`: the shared VAMS key, undefined when the CMK is off. */
+    kmsKey?: kms.IKey;
 }
 
 export class CadStepAgentCodeBuildConstruct extends Construct {
@@ -54,12 +57,36 @@ export class CadStepAgentCodeBuildConstruct extends Construct {
         // content tag is appended. Custom-named, therefore redeploy-collision relevant: the name embeds
         // config.name and app.baseStackName, and removalPolicy DESTROY + emptyOnDelete removes it on
         // an ordinary teardown.
-        const repositoryName = [props.config.name, props.config.app.baseStackName, "cadstepagent"]
+        //
+        // Amazon ECR cannot change a repository's encryption after it is created, so turning
+        // useKmsCmkEncryption on or off replaces the repository, and AWS CloudFormation cannot replace
+        // a custom-named resource under the same name. The name therefore carries `-kms` when the key
+        // is used: a flip creates the repository under the other name, the build custom resource
+        // re-fires on its new URI (the runtime and the job definition wait for that build), and the
+        // old repository is deleted in the cleanup phase.
+        const repositoryName = [
+            props.config.name,
+            props.config.app.baseStackName,
+            "cadstepagent",
+            ...(props.kmsKey ? ["kms"] : []),
+        ]
             .join("-")
             .toLowerCase();
 
+        // Imported by ARN, not passed as the key object, so no grant CDK derives can land in the key
+        // policy of the storage nested stack (infra/CLAUDE.md, encryption trap 2). Amazon ECR creates
+        // its own grants on the key when the repository is created; pushing and pulling need no
+        // permission on the key.
+        const encryptionKey = props.kmsKey
+            ? kms.Key.fromKeyArn(this, "CadStepAgentEcrKmsKeyRef", props.kmsKey.keyArn)
+            : undefined;
+
         this.repository = new ecr.Repository(this, "EcrRepo-CadStepAgent", {
             repositoryName,
+            encryption: encryptionKey
+                ? ecr.RepositoryEncryption.KMS
+                : ecr.RepositoryEncryption.AES_256,
+            encryptionKey,
             removalPolicy: RemovalPolicy.DESTROY,
             emptyOnDelete: true,
             imageScanOnPush: true,
