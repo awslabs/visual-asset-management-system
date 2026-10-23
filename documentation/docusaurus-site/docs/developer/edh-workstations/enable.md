@@ -488,7 +488,7 @@ To register a shipped recipe against another profile, or change it otherwise, du
 Before users launch desktops from the shipped `isaacsim` recipe (Isaac Sim 6.2 on Ubuntu 24.04), check that:
 
 -   The cluster's GRID driver pin names an R595 driver the cluster holds, as [GPU desktops and the NVIDIA driver](#gpu-desktops-and-the-nvidia-driver) describes.
--   Virtual desktop profile `1`, and `edhAllowedInstanceTypes` when it is set, allow at least one of the recipe's instance types (the RTX `g5`, `g6`, `gr6`, `g6e` and `g7e` sizes listed in [Isaac Sim recipe](overview.md#isaac-sim-recipe)), and a root volume of at least 150 GB.
+-   Virtual desktop profile `1`, and `edhAllowedInstanceTypes` when it is set, allow at least one of the recipe's instance types (the RTX `g5`, `g6`, `gr6`, `g6e` and `g7e` sizes listed in [Isaac Sim recipe](overview.md#isaac-sim-recipe)), and a root volume of at least 150 GB. P instance types are not offered for Isaac Sim desktops: their GPUs have no ray-tracing cores and EDH installs the Tesla compute driver on them. Run training on P instances through VAMS's headless pipelines instead (see [Pipelines](../../pipelines/overview.md)).
 -   The account's G-instance quota covers the sizes users pick.
 -   Users' address ranges are on the cluster's client prefix list (see [Browser access to Amazon DCV](#browser-access-to-amazon-dcv)).
 -   The build subnet reaches `downloads.isaacsim.nvidia.com` for the 13 GB Isaac Sim archive, as well as the Ubuntu archive, `awscli.amazonaws.com` and PyPI.
