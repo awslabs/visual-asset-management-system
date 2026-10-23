@@ -125,6 +125,25 @@ async function featuresEnabled(page: Page): Promise<string[]> {
 /** A query parameter only a presigned (SigV4 query-authenticated) URL carries. */
 const SIGNED_URL = /X-Amz-(?:Signature|Credential|Security-Token)=/i;
 
+/** How long to wait for a request's full header list before using its provisional headers. */
+const ALL_HEADERS_TIMEOUT_MS = 2_000;
+
+/**
+ * A request's headers: the provisional ones Playwright records when the request starts (they
+ * carry `Referer`), plus the full list when it arrives within ALL_HEADERS_TIMEOUT_MS. The full
+ * list does not settle for some of the requests the page makes while a framed viewer is open, so
+ * it is not awaited unbounded.
+ */
+async function requestHeaders(request: Request): Promise<Record<string, string>> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), ALL_HEADERS_TIMEOUT_MS);
+    });
+    const all = await Promise.race([request.allHeaders().catch(() => null), timeout]);
+    clearTimeout(timer);
+    return { ...request.headers(), ...(all ?? {}) };
+}
+
 /**
  * Records, across the page and its frames (and the COI service worker, which re-issues the framed
  * viewer's fetches), the 206 responses to presigned URLs and every request to the app origin. The
@@ -145,24 +164,26 @@ function trackSignedUrls(page: Page) {
             context.off("request", onRequest);
             context.off("response", onResponse);
             const appOrigin = new URL(page.url()).origin;
-            const appOriginLeaks: string[] = [];
-            for (const request of requests) {
-                let url: URL;
+            const appOriginRequests = requests.flatMap((request) => {
                 try {
-                    url = new URL(request.url());
+                    const url = new URL(request.url());
+                    return url.origin === appOrigin ? [{ request, url }] : [];
                 } catch {
-                    continue;
+                    return [];
                 }
-                if (url.origin !== appOrigin) continue;
-                const headers = await request
-                    .allHeaders()
-                    .catch(() => ({} as Record<string, string>));
-                if (SIGNED_URL.test(request.url())) appOriginLeaks.push(`${url.pathname} (URL)`);
-                if (SIGNED_URL.test(headers["referer"] ?? "")) {
-                    appOriginLeaks.push(`${url.pathname} (Referer)`);
-                }
-            }
-            return { partialResponses, appOriginLeaks };
+            });
+            const checked = await Promise.all(
+                appOriginRequests.map(async ({ request, url }) => {
+                    const leaks: string[] = [];
+                    const headers = await requestHeaders(request);
+                    if (SIGNED_URL.test(request.url())) leaks.push(`${url.pathname} (URL)`);
+                    if (SIGNED_URL.test(headers["referer"] ?? "")) {
+                        leaks.push(`${url.pathname} (Referer)`);
+                    }
+                    return leaks;
+                })
+            );
+            return { partialResponses, appOriginLeaks: checked.flat() };
         },
     };
 }
