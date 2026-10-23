@@ -1,0 +1,76 @@
+{
+    "templateId": "cad-step-agent-modify",
+    "templateName": "Modify an existing STEP file",
+    "description": "Apply a described change to one input STEP file (.stp, .step). The result is written to the input file's own name by default (a new file version) or to a prefixed/overridden name.",
+    "isDefault": true,
+    "configFormat": "json",
+    "configBody": "{\"mode\":\"modify\",\"prompt\":\"{{PROMPT}}\",\"outputFilename\":\"{{OUTPUT_FILENAME}}\",\"outputFilenamePrefix\":\"{{OUTPUT_FILENAME_PREFIX}}\",\"allowInternetResearch\":{{ALLOW_INTERNET_RESEARCH}},\"modelProvider\":\"{{MODEL_PROVIDER}}\",\"modelId\":\"{{MODEL_ID}}\",\"maxAttempts\":{{MAX_ATTEMPTS}}}",
+    "tagSchema": [
+        {
+            "tagKey": "PROMPT",
+            "type": "string",
+            "required": false,
+            "label": "Design instruction",
+            "description": "What the agent should do. For a modify run, describe the change to the input STEP file (for example \"add four M3 clearance holes on the base plate at 40 mm spacing\"). For a generate run, describe the part or assembly to create. The agent reports anything it could not do in the run's report. Left unchanged, the default instruction re-exports the input after reporting its geometry.",
+            "default": "Inspect the STEP file and report its geometry (solid count, bounding box, volume). Make no design changes: re-export the part as it is."
+        },
+        {
+            "tagKey": "OUTPUT_FILENAME",
+            "type": "string",
+            "required": false,
+            "default": "",
+            "label": "Output file name",
+            "description": "Optional file name for the result (no folders). Empty keeps the input file's name for a modify run, which writes a new version of that file; empty on a generate run produces a name from the design name or prompt plus a timestamp. The STEP extension is kept or added."
+        },
+        {
+            "tagKey": "OUTPUT_FILENAME_PREFIX",
+            "type": "string",
+            "required": false,
+            "default": "",
+            "label": "Output file name prefix",
+            "description": "Optional prefix prepended to the resolved file name (for example \"v2-\"), so a modify run writes a separate file instead of a new version of the input."
+        },
+        {
+            "tagKey": "ALLOW_INTERNET_RESEARCH",
+            "type": "boolean",
+            "required": false,
+            "default": true,
+            "label": "Allow internet research",
+            "description": "Let the agent search the web and fetch pages to research the design (reference dimensions, published board layouts). The deployment can disable research for every run; this setting then has no effect."
+        },
+        {
+            "tagKey": "MODEL_PROVIDER",
+            "type": "enum",
+            "required": false,
+            "default": "bedrock",
+            "enumValues": ["bedrock", "openai"],
+            "label": "Model provider",
+            "description": "bedrock uses the deployment's Amazon Bedrock model (Anthropic Claude by default); openai uses the deployment's OpenAI model and requires the OpenAI API key secret to be configured."
+        },
+        {
+            "tagKey": "MODEL_ID",
+            "type": "string",
+            "required": false,
+            "default": "",
+            "label": "Model ID override",
+            "description": "Optional model id for the chosen provider; empty uses the deployment default."
+        },
+        {
+            "tagKey": "MAX_ATTEMPTS",
+            "type": "integer",
+            "required": false,
+            "default": 4,
+            "label": "Maximum script attempts",
+            "description": "How many generated-script attempts the agent may make before the run is failed (1-10). Each attempt validates the produced STEP file and feeds the result back to the agent."
+        }
+    ],
+    "overrides": {
+        "inputFileArity": "one",
+        "inputFileFilters": {
+            "allow": ["*.stp", "*.step"],
+            "exclude": []
+        }
+    },
+    "allowCustomEdit": true,
+    "inputInstructions": "Select exactly one STEP file (.stp or .step) and describe the change in the design instruction. The agent reads the file's geometry, writes CadQuery scripts to apply the change, validates the result and writes it back. Leave the output file name empty to update the selected file in place (VAMS keeps the previous version); set a prefix or a file name to write a separate file. The run's report (a Markdown file beside the result, and the file's cadAgent* metadata) lists what was done and anything that could not be completed."
+}

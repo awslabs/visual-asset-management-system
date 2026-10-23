@@ -95,6 +95,12 @@ for STACK in $(aws cloudformation list-stack-resources \
         --query 'StackResourceSummaries[].[ResourceType,LogicalResourceId,PhysicalResourceId]' \
         --output text >> vams-nested-stack-resources.txt
 done
+
+# GenAI CAD STEP agent on its agentcore runtime: record the runtime name and id, which the
+# service-created runtime log groups are named for (Step 4)
+aws bedrock-agentcore-control list-agent-runtimes \
+    --query "agentRuntimes[?starts_with(agentRuntimeName, 'vams_cad_step_agent_')].[agentRuntimeName,agentRuntimeId]" \
+    --output text > vams-cad-agent-runtimes.txt
 ```
 
 ## Step 1: Destroy the CDK stack
@@ -143,6 +149,19 @@ Every VAMS Amazon SQS queue uses a `DESTROY` removal policy, so none of the step
 Check the indexer dead-letter queues before deleting them. They hold the asset and file records the indexer could not add to the search index, and a redeploy does not replay them — run a reindex to rebuild the index for the affected assets and files.
 
 Check the Physna sync dead-letter queues the same way when Physna sync is enabled. They hold the file and asset sync events that never reached Physna, and a redeploy does not replay them — anything left in them is a file or asset the Physna tenant does not have.
+:::
+
+:::note[GenAI CAD STEP agent runtime and guardrail]
+The GenAI CAD STEP agent's Amazon Bedrock AgentCore Runtime (`vams_cad_step_agent_<hash>`, on the `agentcore` runtime) and the Amazon Bedrock guardrail the deployment creates when `bedrockGuardrail.guardrailId` is empty (`vams-cad-step-agent-<hash>`) are deleted with the stack. Deleting the runtime takes several minutes longer than the rest of the pipeline stack. Both names are deterministic, so if a teardown fails and leaves either behind, delete it before redeploying with the same configuration name and account:
+
+```bash
+aws bedrock-agentcore-control delete-agent-runtime --agent-runtime-id <RUNTIME_ID>
+
+aws bedrock list-guardrails \
+    --query "guardrails[?starts_with(name, 'vams-cad-step-agent-')].[name,id]" --output text
+aws bedrock delete-guardrail --guardrail-identifier <GUARDRAIL_ID>
+```
+
 :::
 
 ## Step 2: Delete S3 buckets
@@ -245,7 +264,7 @@ The key named log groups are:
 -   `/aws/vendedlogs/VAMSCloudTrailLogs-{hash}` — AWS CloudTrail logs (conditional on `addStackCloudTrailLogs`)
 -   `aws-waf-logs-vams-{hash}` — AWS WAF request logs, one per web ACL (conditional on `useWaf`). Outside the `/aws/vendedlogs/` namespace because AWS WAF requires the `aws-waf-logs-` prefix, and the CloudFront ACL's group is in us-east-1 rather than the deployment Region
 -   `/aws/vendedlogs/VAMSstateMachine-*-{hash}` — Per-pipeline state machine logs
--   `/aws/vendedlogs/Pipelines/*` — Per-pipeline container logs. The AWS Fargate job groups are `CoordTransform{hash}`, `Metadata3dLabelingBlenderRenderer{hash}`, `Preview3dThumbnail{hash}`, `PcPotreeViewerPDAL{hash}` and `PcPotreeViewerPotree{hash}` (conditional on the matching pipeline flag); the RapidPipeline and ModelOps groups are named for their container
+-   `/aws/vendedlogs/Pipelines/*` — Per-pipeline container logs. The AWS Fargate job groups are `CoordTransform{hash}`, `Metadata3dLabelingBlenderRenderer{hash}`, `Preview3dThumbnail{hash}`, `PcPotreeViewerPDAL{hash}`, `PcPotreeViewerPotree{hash}` and `CadStepAgent{hash}` (conditional on the matching pipeline flag; `CadStepAgent{hash}` on the GenAI CAD STEP agent's `fargate` runtime only); the RapidPipeline and ModelOps groups are named for their container
 
 The `/aws/codebuild/` build log groups of pipelines configured with `useCodeBuild: true` are not named by VAMS; the last command block below finds and deletes them.
 
@@ -337,6 +356,23 @@ for PROJECT in ${PROJECTS}; do
 done
 ```
 
+The GenAI CAD STEP agent on its `agentcore` runtime also leaves log groups the stack never owned: Amazon Bedrock AgentCore creates `/aws/bedrock-agentcore/runtimes/<runtime id>-DEFAULT` for each runtime the deployment had, so stack deletion does not remove them. Their names begin with the runtime name, `vams_cad_step_agent_<hash>`, which other VAMS deployments in the same account share except for the hash. Delete only the groups whose hash matches the runtime recorded in `vams-cad-agent-runtimes.txt`:
+
+```bash
+# List the AgentCore runtime log groups of every CAD STEP agent deployment in the account
+aws logs describe-log-groups \
+    --log-group-name-prefix "/aws/bedrock-agentcore/runtimes/vams_cad_step_agent_" \
+    --query 'logGroups[].logGroupName' --output text
+
+# Delete those of this deployment
+for LG in $(aws logs describe-log-groups \
+    --log-group-name-prefix "/aws/bedrock-agentcore/runtimes/<CAD_RUNTIME_NAME>" \
+    --query 'logGroups[].logGroupName' --output text); do
+    echo "Deleting log group ${LG}..."
+    aws logs delete-log-group --log-group-name "${LG}"
+done
+```
+
 :::warning[Redeploying with the same configuration]
 VAMS log group names are deterministic (a hash of the stack name plus account ID). If you intend to redeploy VAMS with the same configuration name into the same account, you **must** delete any orphaned `/aws/vendedlogs/...` groups first. A pre-existing log group with the same name causes the deployment's log group creation to fail. This most commonly affects the conditional `VAMSCloudTrailLogs` (when `addStackCloudTrailLogs` is enabled) and `VAMSCloudWatchVPCLogs` (when `useGlobalVpc` is enabled) groups.
 :::
@@ -345,17 +381,20 @@ VAMS log group names are deterministic (a hash of the stack name plus account ID
 
 A pipeline configured with `useCodeBuild: true` creates a private Amazon ECR repository for its container image. All of them use the `DESTROY` removal policy with `emptyOnDelete`, so a clean teardown removes both the repository and its images.
 
-Most are auto-named by AWS CloudFormation and cannot collide on a redeploy. The Coordinate Transform repository is the exception — it carries the explicit name `<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform`, or `<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform-kms` when `app.useKmsCmkEncryption.enabled` is `true` — so if a teardown fails and leaves it behind, delete it before redeploying with the same configuration name and account. The commands below show the name without the key; add `-kms` for a deployment with the CMK enabled. With the CMK enabled, the repositories are encrypted with the VAMS KMS key, and deleting one retires the grants Amazon ECR holds on the key, so the caller needs `kms:RetireGrant` on the key:
+Most are auto-named by AWS CloudFormation and cannot collide on a redeploy. Two carry an explicit name — the Coordinate Transform repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform`, or `<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform-kms` when `app.useKmsCmkEncryption.enabled` is `true`, and the GenAI CAD STEP agent repository, `<CONFIG_NAME>-<BASE_STACK_NAME>-cadstepagent`, or `<CONFIG_NAME>-<BASE_STACK_NAME>-cadstepagent-kms` with the CMK enabled — so if a teardown fails and leaves either behind, delete it before redeploying with the same configuration name and account. The commands below show the names without the key; add `-kms` to each name for a deployment with the CMK enabled. With the CMK enabled, the repositories are encrypted with the VAMS KMS key, and deleting one retires the grants Amazon ECR holds on the key, so the caller needs `kms:RetireGrant` on the key:
 
 ```bash
-# Check for the explicitly named repository
+# Check for the explicitly named repositories
 aws ecr describe-repositories \
     --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform" \
     --query 'repositories[].repositoryName' --output text 2>/dev/null
+aws ecr describe-repositories \
+    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-cadstepagent" \
+    --query 'repositories[].repositoryName' --output text 2>/dev/null
 
-# Delete it, including any images it still holds
+# Delete a repository that remains, including any images it still holds
 aws ecr delete-repository \
-    --repository-name "<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform" \
+    --repository-name "<REPOSITORY_NAME>" \
     --force
 ```
 

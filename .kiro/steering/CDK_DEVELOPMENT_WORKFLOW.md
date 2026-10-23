@@ -580,7 +580,7 @@ imported by ARN (Amazon ECR creates its own grants on it, so the build and pull 
 Given `KMS` and no key, CDK creates no key for a repository, which then uses the AWS managed `aws/ecr` key
 instead of the VAMS key. A repository's encryption is immutable, so changing it replaces the repository, and
 AWS CloudFormation cannot replace an explicitly named resource under the same name: a custom `repositoryName`
-must change with the encryption (the coordinate transform repository adds `-kms`), and a CodeBuild build
+must change with the encryption (the coordinate transform and CAD STEP agent repositories add `-kms`), and a CodeBuild build
 trigger that does not wait for the image carries the repository URI as a property, so the replacement re-fires
 the build into the new repository.
 
@@ -1494,13 +1494,30 @@ A pipeline whose image is built by AWS CodeBuild pushes and consumes ONE content
 construct supplies `IMAGE_TAG` to the project's `environmentVariables` from `sourceAsset.assetHash`,
 and the pull site names that same value; a shared compute construct takes it as one prop together with
 the repository (`ecrImage` on `batch-fargate-pipeline.ts`, `codeBuildImage` on
-`batch-gpu-pipeline.ts`) so the tag cannot be omitted while the repository is supplied. The buildspec
+`batch-gpu-pipeline.ts`) so the tag cannot be omitted while the repository is supplied. A construct
+that builds one source tree for more than one architecture (the CAD STEP agent: arm64 for the AgentCore
+Runtime, amd64 for Fargate) passes the build platform as `contentImageTag`'s second argument, so the tag
+carries the architecture (`<hash>-arm64`, `<hash>-amd64`) and a runtime switch cannot replace the digest
+behind a tag the previous consumer still names. The buildspec
 must not default `IMAGE_TAG` — it fails the build when the project supplied none, because a default
 pushes a tag the AWS Batch job definition does not name and the deploy still reports success, with
 every execution then failing `CannotPullContainerError`. `:latest` is pushed alongside solely as the
 `--cache-from` alias, since a content-addressed tag never pre-exists and a cold cache adds hours to a
 GPU image build. Coverage: `infra/test/pipelines/codeBuildImageTagCoordination.test.ts` and the
 immutable-tag block of `infra/test/pipelines/containerBuildSources.test.ts`.
+
+A consumer that validates the image when it is CREATED needs the build to be synchronous from
+CloudFormation's point of view. An AWS Batch job definition accepts a tag that does not exist yet (the
+job fails at start), so the Batch pipelines start the build from a fire-and-forget custom resource; an
+Amazon Bedrock AgentCore Runtime rejects `CreateAgentRuntime` for a missing tag, so a fresh deploy that
+creates it in parallel with the build always fails. The CAD STEP agent's
+`cadStepAgentCodeBuild-construct.ts` is the pattern: a `cr.Provider` whose `onEventHandler` is the shared
+build trigger (`code: codeBuildTriggerCode()`, which starts the build and returns `Data.BuildId`) and whose
+`isCompleteHandler` polls `codebuild:BatchGetBuilds` on the project until that build is terminal, raising
+on a failed or timed-out build. The waiter is `backendPipelines/genAi/cadStepAgent/lambda/imageBuildCustomResource.py`
+so the status mapping is unit-tested; it reads `Data.BuildId`, never the physical id, which the shared
+trigger leaves at an earlier deployment's value on an Update. Add `node.addDependency(<build custom
+resource>)` on every resource that names the tag.
 
 #### **Pinned Upstream Clones in a Container Build**
 
@@ -1680,7 +1697,7 @@ The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, gran
     - **Pipeline-only endpoints** (~line 651): creates Batch, ECR API, ECR Docker endpoints in the isolated subnets. **Required for every pipeline, either placement** — without it Batch cannot pull the container image.
     - **ECS endpoint** (~line 736): the `needsEcsPrivate` variable. **Private-subnet pipelines only** — this is the ECS control-plane endpoint an EC2-launch-type container instance's agent needs; Fargate tasks do not use it. One ENI per AZ, ~$15/month.
 
-    Four Batch pipelines run in isolated subnets (Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; seven run in private subnets (Splat Toolbox, ModelOps, RapidPipeline ECS and EKS, NVIDIA Cosmos, NVIDIA Cosmos 3, NVIDIA GR00T) and appear in all three. Isaac Lab training runs its compute in private subnets and appears in the subnet-creation and endpoint conditions, with its ECS endpoint gated separately by `needsEcsIsolated`. The Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) use no Batch and appear in none. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
+    Four Batch pipelines run in isolated subnets (Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; eight run in private subnets (Splat Toolbox, ModelOps, RapidPipeline ECS and EKS, NVIDIA Cosmos, NVIDIA Cosmos 3, NVIDIA GR00T, and the GenAI CAD STEP agent on its `fargate` runtime) and appear in all three. Isaac Lab training runs its compute in private subnets and appears in the subnet-creation and endpoint conditions, with its ECS endpoint gated separately by `needsEcsIsolated`. The Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) use no Batch and appear in none; the CAD STEP agent on its `agentcore` runtime runs no compute in the VPC and is likewise gated out of all three. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
 
     **Placement also decides how the pipeline treats an asset bucket in another Region.** The manifest names every input file's `bucketRegion` and the output bucket's; `vamsExecute` passes `inputBucketRegion` / `outputBucketRegion` to `openPipeline`, `constructPipeline` writes the definition's `bucketRegions` map, and the container signs each bucket's requests for its Region. An isolated-subnet pipeline additionally calls `manifestHelper.enforce_inputs_in_region(resolved)` right after `enforce_single_input_file`: its compute reaches Amazon S3 in the deployment Region and in the Regions the VPC builder created a cross-Region S3 interface endpoint for (`app.useGlobalVpc.addCrossRegionS3Endpoints`), so its lambda builder sets `CROSS_REGION_S3_ENDPOINT_REGIONS` on the `vamsExecute` function from `Config.crossRegionS3EndpointRegions(config)` — the helper the VPC builder iterates — and the gate rejects any other Region before the job is submitted. `infra/test/pipelines/isolatedPipelinesCrossRegionEndpointEnv.test.ts` holds the env value to the endpoint list. A pipeline that hands `s3://` locations to a third-party container image (ModelOps, RapidPipeline ECS/EKS) is same-Region only and calls `manifestHelper.enforce_same_region_io(resolved)` there instead, rejecting a cross-Region input or output bucket. `backendPipelines/tests/test_pipeline_cross_region_inputs.py` requires every `vamsExecute*.py` to be in exactly one class (isolated-subnet gate, Region-consuming, same-Region-only). Full rule: `backendPipelines/CLAUDE.md` step 2.
 
@@ -1696,7 +1713,7 @@ The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, gran
 
 12. **Non-Root Containers Normalize Read Bits After COPY**: a container that drops to a non-root `USER` runs `RUN chmod -R a+rX <path>` on the line immediately after every `COPY` of source it reads. `COPY` preserves the build host's umask, so a hardened host (umask `077`/`027`) yields root-owned `600`/`640` files that raise `PermissionError: [Errno 13]` at import under the non-root user — invisible to the build, failing only at container runtime. `COPY --chown` alone is not sufficient. See "Read Bits on COPY'd Source in a Non-Root Container" above.
 
-13. **CodeBuild Build Triggers Use the Shared Handler**: every `*CodeBuild-construct.ts` gives its build-trigger function `code: codeBuildTriggerCode()` (`infra/lib/nestedStacks/pipelines/constructs/codeBuildTrigger.ts`), which inlines the single handler `constructs/codeBuildTrigger/index.py`. The handler returns its data, retries `start_build` on throttling and transient errors, and raises otherwise so `cr.Provider` reports `FAILED`; a Delete never raises. Never paste a handler that calls `cfnresponse.send(...)` — behind the provider framework that reports to nothing, and a caught exception then deploys as a success. Coverage: `infra/test/pipelines/codeBuildTriggerHandler.test.ts`, `backendPipelines/tests/test_codebuild_build_trigger_handler.py`.
+13. **CodeBuild Build Triggers Use the Shared Handler**: every `*CodeBuild-construct.ts` gives its build-trigger function `code: codeBuildTriggerCode()` (`infra/lib/nestedStacks/pipelines/constructs/codeBuildTrigger.ts`), which inlines the single handler `constructs/codeBuildTrigger/index.py`. The handler returns its data, retries `start_build` on throttling and transient errors, and raises otherwise so `cr.Provider` reports `FAILED`; a Delete never raises. Never paste a handler that calls `cfnresponse.send(...)` — behind the provider framework that reports to nothing, and a caught exception then deploys as a success. A construct whose consumer validates the image at create (the CAD STEP agent's AgentCore Runtime) keeps the shared handler as its provider's `onEventHandler` and adds an `isCompleteHandler` that waits on the returned `Data.BuildId`. Coverage: `infra/test/pipelines/codeBuildTriggerHandler.test.ts`, `backendPipelines/tests/test_codebuild_build_trigger_handler.py`.
 
 #### **Pipeline Configuration Rules**
 

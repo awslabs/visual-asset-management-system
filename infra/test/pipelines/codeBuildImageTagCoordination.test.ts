@@ -206,6 +206,68 @@ describe.each(PLUMBING)("$construct consumes the tag CodeBuild pushes", (plumbin
     });
 });
 
+/**
+ * The CAD STEP agent builds ONE source tree for either of two architectures — arm64 for the AgentCore
+ * Runtime, amd64 for Batch on Fargate — from one CodeBuild construct. With a platform-agnostic tag the
+ * two builds push the same tag and an in-place runtime switch replaces the digest behind the tag the
+ * old consumer still names; so its tag carries the architecture, and the consumer is the AgentCore
+ * Runtime's container URI on one runtime and the Batch job definition's image on the other.
+ */
+describe.each([
+    {
+        runtime: "agentcore",
+        architecture: "arm64",
+        mutateKey: "image-tag-coordination-cad-agentcore",
+    },
+    { runtime: "fargate", architecture: "amd64", mutateKey: "image-tag-coordination-cad-fargate" },
+])("the CAD STEP agent on $runtime consumes the $architecture tag CodeBuild pushes", (cad) => {
+    let synth: SynthResult;
+
+    /** The image reference of whichever resource runs the agent container on this runtime. */
+    function consumedImages(): string[] {
+        return [
+            ...jobDefinitionImages(synth).map(({ image }) => image),
+            ...synth
+                .ofType("AWS::BedrockAgentCore::Runtime")
+                .map((r) =>
+                    SynthResult.flatten(
+                        r.properties.AgentRuntimeArtifact?.ContainerConfiguration?.ContainerUri
+                    )
+                ),
+        ];
+    }
+
+    beforeAll(() => {
+        synth = synthTemplate("commercial", {
+            mutate: (c: any) => {
+                onlyPipeline("useGenAiCadStepAgent")(c);
+                c.app.pipelines.useGenAiCadStepAgent.useCodeBuild = true;
+                c.app.pipelines.useGenAiCadStepAgent.runtime = cad.runtime;
+            },
+            mutateKey: cad.mutateKey,
+        });
+    });
+
+    test("[control] this synth contains one build project and one consumer", () => {
+        expect(imageBuildProjects(synth)).toHaveLength(1);
+        expect(consumedImages()).toHaveLength(1);
+    });
+
+    test("the build is told to push a content-addressed tag that carries the architecture", () => {
+        const tag = environmentVariables(imageBuildProjects(synth)[0]).IMAGE_TAG;
+        expect(tag).toMatch(new RegExp(`^[0-9a-f]{${IMAGE_TAG_LENGTH}}-${cad.architecture}$`));
+        // The build runs for that same platform.
+        expect(environmentVariables(imageBuildProjects(synth)[0]).TARGET_PLATFORM).toBe(
+            `linux/${cad.architecture}`
+        );
+    });
+
+    test("the tag the build pushes is the tag the consumer pulls", () => {
+        const pushed = environmentVariables(imageBuildProjects(synth)[0]).IMAGE_TAG;
+        expect(consumedImages().map(tagOf)).toEqual([pushed]);
+    });
+});
+
 /** Every .ts file under the pipelines tree. */
 function typescriptFiles(dir: string): string[] {
     const out: string[] = [];
@@ -246,7 +308,13 @@ describe("every pipeline CodeBuild construct supplies IMAGE_TAG", () => {
             if (!/IMAGE_TAG:\s*\{\s*value:\s*imageTag,/.test(text)) {
                 offenders.push(path.basename(file));
             }
-            if (!/const imageTag = contentImageTag\(sourceAsset\.assetHash\);/.test(text)) {
+            // The optional second argument is the build platform, for a construct whose image is
+            // built for more than one architecture (the CAD STEP agent).
+            if (
+                !/const imageTag = contentImageTag\(sourceAsset\.assetHash(, props\.platform)?\);/.test(
+                    text
+                )
+            ) {
                 offenders.push(`${path.basename(file)} (imageTag not derived from the asset hash)`);
             }
         }

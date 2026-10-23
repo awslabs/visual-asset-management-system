@@ -6,22 +6,26 @@
 /**
  * The Amazon ECR repositories of the CodeBuild-built pipelines follow `app.useKmsCmkEncryption`.
  *
- * With `useCodeBuild` on, five pipelines build their container image with AWS CodeBuild into a
+ * With `useCodeBuild` on, six pipelines build their container image with AWS CodeBuild into a
  * VAMS-owned repository: coordinate transform, Gaussian splat toolbox, NVIDIA Cosmos (one repository per
- * model family), NVIDIA GR00T and Isaac Lab training. With the CMK on, each repository is encrypted with
- * the deployment's shared key; with it off, each stays on the Amazon ECR AES-256 default, which is no
- * `EncryptionConfiguration` at all. Both directions are asserted for every repository.
+ * model family), NVIDIA GR00T, Isaac Lab training and the GenAI CAD STEP agent. With the CMK on, each
+ * repository is encrypted with the deployment's shared key; with it off, each stays on the Amazon ECR
+ * AES-256 default, which is no `EncryptionConfiguration` at all. Both directions are asserted for every
+ * repository.
  *
  * Amazon ECR cannot change a repository's encryption, so `EncryptionConfiguration` is a REPLACEMENT
  * property and turning the CMK on or off replaces every repository. Three things must hold for that
  * update to deploy and leave working pipelines, and none of them is visible in a single synth:
  *
- *   - The explicitly named coordinate transform repository changes its name with the encryption
- *     (`-kms`), because AWS CloudFormation cannot replace a custom-named resource under the same name.
- *   - Every AWS Batch job definition references its repository, so it moves to the replacement.
- *   - The builds are start-only: the deployment does not wait for the image. The build-trigger custom
- *     resource is invoked only when one of its properties changes, so it must carry the repository;
- *     otherwise the replacement stays empty and every job pulls an image that does not exist.
+ *   - The explicitly named repositories (coordinate transform, GenAI CAD STEP agent) change their name
+ *     with the encryption (`-kms`), because AWS CloudFormation cannot replace a custom-named resource
+ *     under the same name.
+ *   - Every consumer references its repository, so it moves to the replacement: an AWS Batch job
+ *     definition, or the CAD STEP agent's Amazon Bedrock AgentCore Runtime on its `agentcore` runtime.
+ *   - The build-trigger custom resource is invoked only when one of its properties changes, so it must
+ *     carry the repository; otherwise the replacement stays empty and every consumer names an image that
+ *     does not exist. (The Batch pipelines' builds are start-only; the CAD STEP agent's custom resource
+ *     also waits for its build, so its consumers are updated once the image is in the replacement.)
  *
  * These are asserted between a CMK-off and a CMK-on synth of each template. A repository's physical
  * identity is modelled as its logical id plus its replacement properties (`RepositoryName`,
@@ -52,10 +56,20 @@ const EXPECTED_REPOSITORIES = [
     "CosmosCodeBuildEcrRepocosmos3",
     "Gr00tCodeBuildEcrRepogr00tfinetune",
     "IsaacLabCodeBuildEcrRepotraining",
+    "CadStepAgentPipelineCadStepAgentCodeBuildEcrRepoCadStepAgent",
 ];
 
-/** The one repository with an explicit `repositoryName`. */
-const COORDINATE_TRANSFORM = EXPECTED_REPOSITORIES[0];
+/**
+ * The repositories with an explicit `repositoryName`, mapped to the suffix that name ends in with the
+ * CMK off. Both are named because an auto-generated name at their nested-stack depth makes the image
+ * reference exceed the 255-character cap.
+ */
+const EXPLICITLY_NAMED: Record<string, string> = {
+    CoordinateTransformPipelineCoordTransformCodeBuildEcrRepoCoordTransform: "-coordtransform",
+    CadStepAgentPipelineCadStepAgentCodeBuildEcrRepoCadStepAgent: "-cadstepagent",
+};
+const isExplicitlyNamed = (repository: Resource): boolean =>
+    Object.keys(EXPLICITLY_NAMED).some((prefix) => repository.logicalId.startsWith(prefix));
 
 /**
  * Every pipeline config entry with a `useCodeBuild` key.
@@ -71,6 +85,7 @@ const EXPECTED_CODEBUILD_PIPELINES = [
     "useNvidiaCosmos",
     "useNvidiaCosmos3",
     "useNvidiaGr00t",
+    "useGenAiCadStepAgent",
 ];
 
 /**
@@ -173,12 +188,18 @@ const resolved = (s: SynthResult, stack: string, value: any): string => {
     return out;
 };
 
-/** The AWS Batch job definitions whose container image comes from a repository. */
-const jobDefinitionsOf = (s: SynthResult, repository: Resource): Resource[] =>
-    s.where(
-        "AWS::Batch::JobDefinition",
-        (jd) =>
-            jd.stack === repository.stack && refersTo(jd.properties.ContainerProperties, repository)
+/**
+ * The resources whose container image comes from a repository, each with the image it names: AWS Batch
+ * job definitions, and the CAD STEP agent's Amazon Bedrock AgentCore Runtime.
+ */
+const CONSUMER_IMAGES: Record<string, (r: Resource) => any> = {
+    "AWS::Batch::JobDefinition": (r) => r.properties.ContainerProperties?.Image,
+    "AWS::BedrockAgentCore::Runtime": (r) =>
+        r.properties.AgentRuntimeArtifact?.ContainerConfiguration?.ContainerUri,
+};
+const consumersOf = (s: SynthResult, repository: Resource): Resource[] =>
+    Object.entries(CONSUMER_IMAGES).flatMap(([type, image]) =>
+        s.where(type, (r) => r.stack === repository.stack && refersTo(image(r), repository))
     );
 
 const withoutServiceToken = (properties: Record<string, any>): Record<string, any> =>
@@ -284,21 +305,28 @@ describe.each(ALL_TEMPLATES)("%s: CodeBuild repositories follow useKmsCmkEncrypt
         );
     });
 
-    it("the coordinate transform repository name ends in -kms exactly when the CMK is on", () => {
-        const plain = repositoryByPrefix(off, COORDINATE_TRANSFORM).properties.RepositoryName;
-        expect(plain).toMatch(/-coordtransform$/);
-        expect(repositoryByPrefix(on, COORDINATE_TRANSFORM).properties.RepositoryName).toBe(
-            `${plain}-kms`
-        );
-    });
+    it.each(Object.entries(EXPLICITLY_NAMED))(
+        "the explicitly named repository %s ends in -kms exactly when the CMK is on",
+        (prefix, suffix) => {
+            const plain = repositoryByPrefix(off, prefix).properties.RepositoryName;
+            expect(plain).toMatch(new RegExp(`${suffix}$`));
+            expect(repositoryByPrefix(on, prefix).properties.RepositoryName).toBe(`${plain}-kms`);
+        }
+    );
 
     it("every other repository is auto-named, so its replacement gets a new generated name", () => {
         for (const s of [off, on]) {
             const named = repositories(s)
-                .filter((r) => !r.logicalId.startsWith(COORDINATE_TRANSFORM))
+                .filter((r) => !isExplicitlyNamed(r))
                 .filter((r) => "RepositoryName" in r.properties)
                 .map((r) => r.logicalId);
             expect(named).toEqual([]);
+            // Control: the explicitly named repositories are in this synth and do carry a name.
+            expect(
+                repositories(s).filter(
+                    (r) => isExplicitlyNamed(r) && "RepositoryName" in r.properties
+                )
+            ).toHaveLength(Object.keys(EXPLICITLY_NAMED).length);
         }
     });
 
@@ -312,27 +340,29 @@ describe.each(ALL_TEMPLATES)("%s: CodeBuild repositories follow useKmsCmkEncrypt
         }
     });
 
-    it("every job definition that pulls from a repository moves to the replacement", () => {
+    it("every job definition or runtime that pulls from a repository moves to the replacement", () => {
         const offenders: string[] = [];
         for (const prefix of EXPECTED_REPOSITORIES) {
             const repositoryOn = repositoryByPrefix(on, prefix);
-            const jobDefinitions = jobDefinitionsOf(on, repositoryOn);
-            if (jobDefinitions.length === 0) {
-                offenders.push(`${prefix}: no job definition pulls from it`);
+            const consumers = consumersOf(on, repositoryOn);
+            if (consumers.length === 0) {
+                offenders.push(`${prefix}: no job definition or runtime pulls from it`);
             }
-            for (const jdOn of jobDefinitions) {
-                const jdOff = off.where(
-                    "AWS::Batch::JobDefinition",
-                    (r) => r.stack === jdOn.stack && r.logicalId === jdOn.logicalId
+            for (const consumerOn of consumers) {
+                const imageOf = CONSUMER_IMAGES[consumerOn.type];
+                const consumerOff = off.where(
+                    consumerOn.type,
+                    (r) => r.stack === consumerOn.stack && r.logicalId === consumerOn.logicalId
                 )[0];
-                const image = (s: SynthResult, jd: Resource) =>
-                    resolved(s, jd.stack, jd.properties.ContainerProperties.Image);
-                if (!jdOff || !refersTo(jdOff.properties.ContainerProperties, repositoryOn)) {
+                const image = (s: SynthResult, r: Resource) => resolved(s, r.stack, imageOf(r));
+                if (!consumerOff || !refersTo(imageOf(consumerOff), repositoryOn)) {
                     offenders.push(
-                        `${jdOn.logicalId}: does not pull from ${prefix} with the CMK off`
+                        `${consumerOn.logicalId}: does not pull from ${prefix} with the CMK off`
                     );
-                } else if (image(off, jdOff) === image(on, jdOn)) {
-                    offenders.push(`${jdOn.logicalId}: image ${image(on, jdOn)} is unchanged`);
+                } else if (image(off, consumerOff) === image(on, consumerOn)) {
+                    offenders.push(
+                        `${consumerOn.logicalId}: image ${image(on, consumerOn)} is unchanged`
+                    );
                 }
             }
         }
