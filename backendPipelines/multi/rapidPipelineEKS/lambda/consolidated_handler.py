@@ -611,8 +611,10 @@ def handle_construct_pipeline(event):
                 f"s3://{inputOutput_s3_assetAuxiliary_files_bucket}/{inputOutput_s3_assetAuxiliary_files_key}/rp_config.json")
             processing_command = f"aws s3 cp {q_config_object} rp_config.json && {standard_command_with_config}"
 
-        # Generate unique job ID
-        job_id = str(uuid.uuid4())[:8]
+        # A random 128-bit job id, unique per run: create_job adopts an existing job with this name and
+        # job-id label as this run's own job. The name (51 characters) and the label value (32) stay
+        # within Kubernetes' 63-character limits.
+        job_id = uuid.uuid4().hex
 
         # Validate container image URI configuration
         if not CONTAINER_IMAGE_URI or CONTAINER_IMAGE_URI == "CONTAINER_IMAGE_PLACEHOLDER":
