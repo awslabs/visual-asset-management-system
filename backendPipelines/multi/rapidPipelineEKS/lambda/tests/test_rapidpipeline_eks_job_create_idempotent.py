@@ -3,12 +3,13 @@
 
 """`create_job` adopts the job an earlier create attempt for the same run made.
 
-`create_job` sends the job create through `with_retries`, which resends after a 5xx answer or a timeout.
-The API server can apply a create and still answer 504, and the client's read timeout can fire after the
-request was sent, so the resend finds the job and is answered 409. The job name is generated per run and
-the manifest labels the job with the run's `job-id`, so a job of that name carrying the same label is this
-run's job: `create_job` returns it. A job of that name with another `job-id`, or one that cannot be read
-back to compare, is a conflict as before.
+`create_job` sends the job create through `with_retries`, which resends after a server error, a dropped
+connection or a timeout. The API server can apply a create and still answer 504, the connection can drop
+before the answer arrives, and the client's read timeout can fire after the request was sent, so the
+resend finds the job and is answered 409. CONSTRUCT_PIPELINE generates a random 128-bit `job-id` per run,
+builds the job name from it and labels the job with it, so a job of that name carrying the same label is
+this run's job: `create_job` returns it. A job of that name with another `job-id`, or one that cannot be
+read back to compare, is a conflict as before.
 
 These tests run the real Kubernetes client against a local HTTP server that keeps jobs the way the API
 server does, so they count the requests actually sent.
@@ -18,11 +19,12 @@ import copy
 import importlib
 import json
 import os
+import re
 import sys
 import threading
 import types
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from kubernetes import client as k8s_client
@@ -51,10 +53,11 @@ for _key, _value in {
 import kubernetes_utils as ku  # noqa: E402
 
 NAMESPACE = "default"
-JOB_ID = "a1b2c3d4"
+JOB_ID = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
 JOB_NAME = f"rapid-pipeline-job-{JOB_ID}"
-OTHER_JOB_ID = "ffff0000"
+OTHER_JOB_ID = "ffff0000ffff0000ffff0000ffff0000"
 JOBS_PATH = f"/apis/batch/v1/namespaces/{NAMESPACE}/jobs"
+READ_JOB = ("GET", f"{JOBS_PATH}/{JOB_NAME}")
 CONFLICT_ERROR = f"Job {JOB_NAME} already exists (conflict)"
 
 
@@ -90,7 +93,8 @@ class _JobsApiServer:
     A POST for a name that is already stored is answered 409 AlreadyExists, as Kubernetes does. Any other
     POST takes the next entry of `create_outcomes`, `(status, applied, delay)`: an applied create stores
     the job before the answer is sent, so a client that gives up or sees an error status still leaves the
-    job behind. Once the entries are used, a create is applied and answered 201.
+    job behind, and a status of None closes the connection without an answer. Once the entries are used,
+    a create is applied and answered 201.
 
     A GET of a job answers 200 with the stored job, or 404. `served_job_id` replaces the job-id label on
     every job served, and `get_status` answers every GET with that error status instead.
@@ -126,6 +130,9 @@ class _JobsApiServer:
                     outer.jobs[name] = body
                 if delay:
                     threading.Event().wait(delay)
+                if status is None:
+                    self.close_connection = True
+                    return
                 self._send(status, body if status == 201 else _status_body(status, "Timeout", "request timed out"))
 
             def do_GET(self):
@@ -154,6 +161,11 @@ class _JobsApiServer:
     @property
     def posts(self):
         return [r for r in self.requests if r[0] == "POST"]
+
+    @property
+    def requests_after_the_last_post(self):
+        last_post = max(i for i, r in enumerate(self.requests) if r[0] == "POST")
+        return self.requests[last_post + 1:]
 
     def close(self):
         self.httpd.shutdown()
@@ -202,6 +214,13 @@ class TestCreateAdoptsTheJobAnEarlierAttemptMade:
         assert ku.create_job(_manifest(), namespace=NAMESPACE) == JOB_NAME
         assert len(server.posts) == 2
 
+    def test_a_create_whose_connection_dropped_before_the_answer_is_adopted(self, jobs_api):
+        server = jobs_api(create_outcomes=[(None, True, 0)])
+
+        assert ku.create_job(_manifest(), namespace=NAMESPACE) == JOB_NAME
+        assert len(server.posts) == 2
+        assert list(server.jobs) == [JOB_NAME]
+
     def test_a_first_create_answered_409_adopts_this_runs_job(self, jobs_api):
         """The job already exists before this call, as after a repeated invocation of the same RUN_JOB:
         the name is generated per run, so a job carrying the manifest's job-id is still this run's job.
@@ -229,8 +248,11 @@ class TestAnotherJobOfTheSameNameIsStillAConflict:
             ku.create_job(_manifest(), namespace=NAMESPACE)
         assert str(err.value) == CONFLICT_ERROR
         assert len(server.posts) == 2
+        assert server.requests_after_the_last_post == [READ_JOB]
 
-    def test_a_pre_existing_job_of_another_run_fails(self, jobs_api):
+    def test_a_pre_existing_job_this_run_did_not_create_fails(self, jobs_api):
+        """A job of this name that carries another job-id, such as one made outside the pipeline, is a
+        conflict: the job read after the 409 is compared, whatever the existence check found."""
         server = jobs_api()
         server.jobs[JOB_NAME] = _manifest(job_id=OTHER_JOB_ID)
 
@@ -238,9 +260,10 @@ class TestAnotherJobOfTheSameNameIsStillAConflict:
             ku.create_job(_manifest(), namespace=NAMESPACE)
         assert str(err.value) == CONFLICT_ERROR
         assert len(server.posts) == 1
+        assert server.requests_after_the_last_post == [READ_JOB]
 
     def test_without_a_job_id_label_in_the_manifest_nothing_is_adopted(self, jobs_api):
-        """A missing label on both sides must not read as a match."""
+        """A missing label on both sides must not read as a match, so the job is not even read."""
         server = jobs_api()
         server.jobs[JOB_NAME] = _manifest(job_id=None)
 
@@ -248,15 +271,68 @@ class TestAnotherJobOfTheSameNameIsStillAConflict:
             ku.create_job(_manifest(job_id=None), namespace=NAMESPACE)
         assert str(err.value) == CONFLICT_ERROR
         assert len(server.posts) == 1
+        assert server.requests_after_the_last_post == []
 
     def test_a_conflicting_job_that_cannot_be_read_fails(self, jobs_api):
+        """The read after the 409 takes the module's read budget of 2 attempts, and no more."""
         server = jobs_api(create_outcomes=[(504, True, 0)], get_status=500)
 
         with pytest.raises(ValueError) as err:
             ku.create_job(_manifest(), namespace=NAMESPACE)
         assert str(err.value) == CONFLICT_ERROR
         assert len(server.posts) == 2
-        assert server.requests[-1] == ("GET", f"{JOBS_PATH}/{JOB_NAME}")
+        assert server.requests_after_the_last_post == [READ_JOB] * 2
+
+
+def _load_handler():
+    if "consolidated_handler" in sys.modules:
+        return importlib.reload(sys.modules["consolidated_handler"])
+    return importlib.import_module("consolidated_handler")
+
+
+def _context():
+    context = MagicMock()
+    context.aws_request_id = "req-test"
+    context.get_remaining_time_in_millis.return_value = 600000
+    return context
+
+
+@pytest.mark.unit
+class TestEachRunGetsItsOwnJobId:
+    """Adoption takes a job with this run's name and job-id label as this run's own, which holds only while
+    two runs never draw the same id: CONSTRUCT_PIPELINE's id is a random 128-bit value, and the job name,
+    labels, annotation and JOB_ID env var all carry it."""
+
+    def _construct(self, handler):
+        s3 = MagicMock()
+        s3.get_object.side_effect = Exception("AccessDenied")  # no per-pipeline config to read
+        event = {
+            "operation": "CONSTRUCT_PIPELINE",
+            "jobName": "PipelineJobEKS_x",
+            "inputS3AssetFilePath": "s3://abkt/xidM/test/pump.glb",
+            "outputS3AssetFilesPath": "s3://abkt/pipelines/p1/MJOB/output/E1/files/",
+            "inputOutputS3AssetAuxiliaryFilesPath": "s3://aux/xidM/test/pump.glb/eks/p1",
+            "inputMetadataS3Location": "s3://abkt/.../metadata.json",
+            "inputConfigurationS3Location": "s3://abkt/.../config.json",
+            "externalSfnTaskToken": "tok",
+            "outputFileType": ".usdz",
+        }
+        with patch.object(handler, "s3", s3):
+            return handler.lambda_handler(event, _context())["jobManifest"]
+
+    def test_the_job_id_is_a_random_128_bit_value_shared_by_name_labels_and_env(self):
+        handler = _load_handler()
+        manifest = self._construct(handler)
+        job_id = manifest["metadata"]["labels"]["job-id"]
+        container = manifest["spec"]["template"]["spec"]["containers"][0]
+
+        assert re.fullmatch(r"[0-9a-f]{32}", job_id), job_id
+        assert manifest["metadata"]["name"] == f"rapid-pipeline-job-{job_id}"
+        assert len(manifest["metadata"]["name"]) <= 63
+        assert manifest["metadata"]["annotations"]["vams.aws.amazon.com/job-id"] == job_id
+        assert manifest["spec"]["template"]["metadata"]["labels"]["job-id"] == job_id
+        assert {"name": "JOB_ID", "value": job_id} in container["env"]
+        assert self._construct(handler)["metadata"]["labels"]["job-id"] != job_id
 
 
 @pytest.mark.unit
@@ -264,20 +340,14 @@ class TestRunJobReportsTheAdoptedJob:
     def test_run_job_returns_running_with_the_job_name_after_a_504_create(self, jobs_api):
         """RUN_JOB's body is what the state machine routes on: a RUNNING status carrying k8sJobName goes
         on to poll the job, where a failure would set k8sJobName to failure-before-creation."""
-        if "consolidated_handler" in sys.modules:
-            handler = importlib.reload(sys.modules["consolidated_handler"])
-        else:
-            handler = importlib.import_module("consolidated_handler")
+        handler = _load_handler()
         assert handler.create_job is ku.create_job, "the handler must call the kubernetes_utils patched here"
         server = jobs_api(create_outcomes=[(504, True, 0)])
-        context = MagicMock()
-        context.aws_request_id = "req-test"
-        context.get_remaining_time_in_millis.return_value = 600000
 
         result = handler.lambda_handler(
             {"operation": "RUN_JOB", "jobName": "PipelineJobEKS_x", "jobManifest": _manifest(),
              "externalSfnTaskToken": ""},
-            context,
+            _context(),
         )
 
         assert result["statusCode"] == 200, result

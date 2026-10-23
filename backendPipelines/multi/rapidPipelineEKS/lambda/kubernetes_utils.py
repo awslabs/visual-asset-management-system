@@ -1195,9 +1195,10 @@ def create_job(job_manifest, namespace="default"):
         # Create the job with enhanced retry logic
         logger.info(f"Creating Kubernetes job: {job_name}")
 
-        # The job name is generated per run and the job carries the run's job-id label, so an existing
-        # job with this name and label is this run's job. A create the API server applied can still fail
-        # on the client (a 504, or the read timeout after the request was sent), and its resend is then
+        # CONSTRUCT_PIPELINE generates a random 128-bit job-id per run, builds the job name from it and
+        # labels the job with it, so an existing job with this name and job-id label is this run's job.
+        # A create the API server applied can still fail on the client (a server error such as 504, a
+        # dropped connection, or the read timeout after the request was sent), and its resend is then
         # answered 409.
         manifest_job_id = (metadata.get('labels') or {}).get('job-id')
 
