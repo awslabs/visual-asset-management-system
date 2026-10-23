@@ -16,6 +16,7 @@ import { Stack, RemovalPolicy, Duration } from "aws-cdk-lib";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../../../config/config";
 import { contentImageTag } from "../../../../../helper/containerImageTag";
+import { codeBuildTriggerCode } from "../../../constructs/codeBuildTrigger";
 
 export interface VideoSopBomCodeBuildConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -50,20 +51,39 @@ export class VideoSopBomCodeBuildConstruct extends Construct {
         // either get different repositories, and only an orphan left by a failed teardown of the SAME
         // configuration can conflict. removalPolicy DESTROY + emptyOnDelete means an ordinary teardown
         // removes it.
-        const repositoryName = [props.config.name, props.config.app.baseStackName, "videosopbom"]
+        //
+        // Amazon ECR cannot change a repository's encryption after it is created, so turning
+        // useKmsCmkEncryption on or off replaces the repository, and AWS CloudFormation cannot replace
+        // a custom-named resource under the same name. The name therefore carries `-kms` when the key
+        // is used: a flip creates the repository under the other name, the build trigger re-fires on
+        // its new URI, and the old repository is deleted in the cleanup phase.
+        const repositoryName = [
+            props.config.name,
+            props.config.app.baseStackName,
+            "videosopbom",
+            ...(props.kmsKey ? ["kms"] : []),
+        ]
             .join("-")
             .toLowerCase();
 
         // Image layers are encrypted with the deployment key when one is configured. Amazon ECR
         // encrypts and decrypts through a grant it creates on the key at repository creation, so the
-        // push (CodeBuild) and pull (ECS agent) principals need no key permissions of their own.
+        // push (CodeBuild) and pull (ECS agent) principals need no key permissions of their own. The
+        // key is imported by ARN, not passed as the key object, so no grant CDK derives can land in the
+        // key policy of the storage nested stack (infra/CLAUDE.md, encryption trap 2).
+        const encryptionKey = props.kmsKey
+            ? kms.Key.fromKeyArn(this, "VideoSopBomEcrKmsKeyRef", props.kmsKey.keyArn)
+            : undefined;
+
         this.repository = new ecr.Repository(this, "EcrRepo-VideoSopBom", {
             repositoryName,
             removalPolicy: RemovalPolicy.DESTROY,
             emptyOnDelete: true,
             imageScanOnPush: true,
-            encryption: props.kmsKey ? ecr.RepositoryEncryption.KMS : undefined,
-            encryptionKey: props.kmsKey,
+            encryption: encryptionKey
+                ? ecr.RepositoryEncryption.KMS
+                : ecr.RepositoryEncryption.AES_256,
+            encryptionKey,
             lifecycleRules: [
                 {
                     maxImageCount: 10,
@@ -157,24 +177,7 @@ export class VideoSopBomCodeBuildConstruct extends Construct {
             runtime: cdk.aws_lambda.Runtime.PYTHON_3_12,
             handler: "index.handler",
             timeout: Duration.minutes(1),
-            code: cdk.aws_lambda.Code.fromInline(`
-import boto3
-import cfnresponse
-
-def handler(event, context):
-    try:
-        request_type = event.get("RequestType", "")
-        if request_type in ("Create", "Update"):
-            project_name = event["ResourceProperties"]["ProjectName"]
-            client = boto3.client("codebuild")
-            response = client.start_build(projectName=project_name)
-            build_id = response["build"]["id"]
-            cfnresponse.send(event, context, cfnresponse.SUCCESS, {"BuildId": build_id})
-        else:
-            cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
-    except Exception as e:
-        cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
-`),
+            code: codeBuildTriggerCode(),
         });
 
         triggerFunction.addToRolePolicy(

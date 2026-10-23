@@ -556,9 +556,9 @@ images are removed when the stack is destroyed cleanly.
 
 Most repositories are auto-named by AWS CloudFormation and therefore cannot collide on a redeploy. Two
 repositories are the exception and carry explicit names: **Coordinate Transform**
-(`{config.name}-{app.baseStackName}-coordtransform`, or `{config.name}-{app.baseStackName}-coordtransform-kms`
-when `useKmsCmkEncryption.enabled` is `true`) and **Video SOP/BOM Extraction**
-(`{config.name}-{app.baseStackName}-videosopbom`). Both are redeploy-collision relevant: delete any
+(`{config.name}-{app.baseStackName}-coordtransform`) and **Video SOP/BOM Extraction**
+(`{config.name}-{app.baseStackName}-videosopbom`), each with `-kms` appended when
+`useKmsCmkEncryption.enabled` is `true`. Both are redeploy-collision relevant: delete any
 orphaned repository of either name left by a failed teardown before redeploying with the same configuration
 name and account.
 
