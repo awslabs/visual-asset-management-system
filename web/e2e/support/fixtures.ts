@@ -590,6 +590,15 @@ export function selectedTreeNode(page: Page): Locator {
 }
 
 /**
+ * A file inside a folder. `storedKey` is the S3 key the asset bucket stores it under (the asset's
+ * root key followed by `key`, no leading slash), set only when the listing holds the asset's root
+ * entry, the listed prefix's own object, which is where the File Manager reads the root key from.
+ */
+export interface NestedAssetFileRef extends AssetFileRef {
+    storedKey?: string;
+}
+
+/**
  * The first live file found inside a folder (an asset-relative key with two or more segments, e.g.
  * `/out/sub/model.glb`), or null when the scan finds none or the running app exposes no API context.
  * Scans the way `findAssetFiles` does and is bounded the same way; a named `asset`
@@ -598,7 +607,7 @@ export function selectedTreeNode(page: Page): Locator {
 export async function findNestedAssetFile(
     page: Page,
     options: Pick<FindAssetFilesOptions, "asset" | "maxDatabases" | "maxAssetsPerDatabase"> = {}
-): Promise<AssetFileRef | null> {
+): Promise<NestedAssetFileRef | null> {
     const ctx = await apiContext(page);
     if (!ctx) return null;
     const headers = { Authorization: `Bearer ${ctx.token}` };
@@ -612,16 +621,26 @@ export async function findNestedAssetFile(
         const items = body?.Items ?? body?.items ?? body ?? [];
         return Array.isArray(items) ? items : [];
     };
-    const nestedIn = async (databaseId: string, assetId: string): Promise<AssetFileRef | null> => {
-        const files = await asJson(
-            `/database/${databaseId}/assets/${assetId}/listFiles?basic=true`
+    const nestedIn = async (
+        databaseId: string,
+        assetId: string
+    ): Promise<NestedAssetFileRef | null> => {
+        const files = itemsOf(
+            await asJson(`/database/${databaseId}/assets/${assetId}/listFiles?basic=true`)
         );
-        for (const f of itemsOf(files)) {
+        const rootEntry = files.find(
+            (f) => f?.fileName === "" && (f?.relativePath === "/" || f?.relativePath === "")
+        );
+        const rootKey: string =
+            typeof rootEntry?.key === "string" ? rootEntry.key.replace(/^\/+|\/+$/g, "") : "";
+        for (const f of files) {
             const relative: string = f?.relativePath ?? "";
             if (!relative || f.isFolder || f.isArchived || relative.endsWith("/")) continue;
             const key = relative.startsWith("/") ? relative : `/${relative}`;
             if (key.split("/").filter(Boolean).length >= 2) {
-                return { databaseId, assetId, key };
+                const storedKey =
+                    rootKey && f.key === `${rootKey}${key}` ? (f.key as string) : undefined;
+                return { databaseId, assetId, key, storedKey };
             }
         }
         return null;

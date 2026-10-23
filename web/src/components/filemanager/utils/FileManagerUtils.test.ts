@@ -201,3 +201,104 @@ describe("resolveFileManagerPath", () => {
         expect(resolveFileManagerPath(null, "/model.glb")).toBeNull();
     });
 });
+
+/**
+ * The execution page's input file link names the file by its full stored key: the asset's S3 root
+ * key followed by the asset-relative path ("/{assetId}/out/sub/model.glb"). The tree root carries
+ * that root key as its keyPrefix, taken from the listing's root entry (the object whose key is the
+ * listed prefix itself). The trees here are built through mergeFiles, the streamed listing's path.
+ */
+describe("resolveFileManagerPath with the asset's full key", () => {
+    /** The streamed listing of an asset whose root entry's S3 key is `rootKey`. */
+    const treeUnder = (rootKey: string, relativePaths = ["/model.glb", "/out/sub/model.glb"]) => {
+        const base = rootKey.endsWith("/") ? rootKey : `${rootKey}/`;
+        const rootEntry: FileKey = {
+            fileName: rootKey.endsWith("/") ? "" : rootKey.split("/").pop() || "",
+            key: rootKey,
+            relativePath: "/",
+            isFolder: rootKey.endsWith("/"),
+            dateCreatedCurrentVersion: "2026-01-01T00:00:00Z",
+            versionId: "v1",
+            isArchived: false,
+        };
+        const files = relativePaths.map((relativePath) =>
+            fileKey(relativePath, { key: `${base}${relativePath.slice(1)}` })
+        );
+        return mergeFiles([rootEntry, ...files], { ...rootTree(), keyPrefix: "/" });
+    };
+
+    // Root keys as createAsset stores them in assetLocation.Key and the listing returns them on its
+    // root entry: {baseAssetsPrefix}{assetId}/ for a new asset (a "/" baseAssetsPrefix normalizes
+    // to ""), and the caller's key under the base prefix for a bucketExistingKey asset, which keeps
+    // no trailing slash when the caller gave none.
+    const shapes: [string, string][] = [
+        ["a default asset under a '/' base prefix", "a1/"],
+        ["a default asset under an 'assets/' base prefix", "assets/a1/"],
+        ["a bucketExistingKey asset", "assets/scans/site-7/"],
+        ["a bucketExistingKey asset with no trailing slash", "assets/legacy"],
+    ];
+
+    it.each(shapes)("carries the root key of %s on the tree root", (_label, rootKey) => {
+        expect(treeUnder(rootKey).keyPrefix).toBe(rootKey);
+    });
+
+    describe.each(shapes)("for %s", (_label, rootKey) => {
+        const root = rootKey.replace(/\/+$/, "");
+
+        it.each([`/${root}/out/sub/model.glb`, `${root}/out/sub/model.glb`])(
+            "finds a nested file from %p",
+            (input) => {
+                expect(resolveFileManagerPath(treeUnder(rootKey), input)?.relativePath).toBe(
+                    "/out/sub/model.glb"
+                );
+            }
+        );
+
+        it("finds a root-level file from its full key", () => {
+            expect(
+                resolveFileManagerPath(treeUnder(rootKey), `/${root}/model.glb`)?.relativePath
+            ).toBe("/model.glb");
+        });
+
+        it("finds a folder from its full key without the trailing slash", () => {
+            expect(
+                resolveFileManagerPath(treeUnder(rootKey), `/${root}/out/sub`)?.relativePath
+            ).toBe("/out/sub/");
+        });
+
+        it.each([`/${root}/`, `/${root}`, `${root}/`, root])(
+            "returns the root for the root key written %p",
+            (input) => {
+                const tree = treeUnder(rootKey);
+                expect(resolveFileManagerPath(tree, input)).toBe(tree);
+            }
+        );
+
+        // Controls: these hold before and after the full-key support.
+        it("returns null for a full key the asset does not hold", () => {
+            expect(resolveFileManagerPath(treeUnder(rootKey), `/${root}/missing.glb`)).toBeNull();
+        });
+
+        it("strips nothing from a path that only shares the root key's leading characters", () => {
+            expect(resolveFileManagerPath(treeUnder(rootKey), `/${root}0/model.glb`)).toBeNull();
+        });
+    });
+
+    it("strips nothing when the listing had no root entry", () => {
+        // Without a root entry the root keeps its placeholder "/" key, so the root key is unknown.
+        const tree = mergeFiles([fileKey("/model.glb", { key: "a1/model.glb" })], {
+            ...rootTree(),
+            keyPrefix: "/",
+        });
+        expect(tree.keyPrefix).toBe("/");
+        expect(resolveFileManagerPath(tree, "/a1/model.glb")).toBeNull();
+    });
+
+    it("reads a path as asset-relative first, the form the URL write-back uses", () => {
+        // The asset holds a folder named like its own root key; "/a1/x.glb" names that folder's
+        // file, not the root-level x.glb, so a reload of the written-back URL selects the same node.
+        const tree = treeUnder("a1/", ["/x.glb", "/a1/x.glb"]);
+        expect(resolveFileManagerPath(tree, "/a1/x.glb")?.keyPrefix).toBe("a1/a1/x.glb");
+        expect(resolveFileManagerPath(tree, "/a1/a1/x.glb")?.relativePath).toBe("/a1/x.glb");
+    });
+});

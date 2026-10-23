@@ -323,4 +323,41 @@ describe("EnhancedFileManager deep link to a nested path", () => {
             await screen.findByText('File path "out/sub/missing.glb" does not exist in this asset.')
         ).toBeInTheDocument();
     });
+
+    it("selects a nested file named by the asset's full stored key and shows no error", async () => {
+        // The listing's root entry carries the asset's S3 root key; the execution page's input file
+        // link names the file by that key followed by its asset-relative path.
+        const rootEntry = {
+            fileName: "",
+            key: "asset1/",
+            relativePath: "/",
+            isFolder: true,
+            dateCreatedCurrentVersion: "2026-01-01T00:00:00Z",
+            versionId: "v1",
+            isArchived: false,
+            primaryType: null,
+        };
+        (fetchAssetS3FilesStreaming as jest.Mock).mockImplementation(async function* () {
+            yield {
+                success: true,
+                items: [rootEntry, ...nestedFiles],
+                nextToken: null,
+                error: null,
+                pageNumber: 1,
+                isLastPage: true,
+            };
+        });
+
+        const { container } = renderFileManager(
+            "/databases/db1/assets/asset1?filePath=%2Fasset1%2Fout%2Fsub%2Fmodel.glb"
+        );
+
+        await waitFor(() => expect(getSingleSelectedName(container)).toBe("model.glb"));
+        await flushEffects();
+
+        expect(screen.queryByText(/does not exist in this asset/)).not.toBeInTheDocument();
+        // The selection writes the asset-relative form back, which then counts as already navigated.
+        expect(getFilePathParam()).toBe("/out/sub/model.glb");
+        expect(getSingleSelectedName(container)).toBe("model.glb");
+    });
 });
