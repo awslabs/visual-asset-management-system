@@ -865,6 +865,84 @@ class TestMissingSchemaIsNotFoundOnEveryVerb:
         assert "Error retrieving metadata schema" in _body(response)["message"], verb
 
 
+# The object a missing schema is checked as. The update route carries no databaseId, so its
+# provisional object names none; the delete route checks the databaseId in its path, as GET does.
+def _provisional_schema(database_id=""):
+    return {"databaseId": database_id, "object__type": "metadataSchema",
+            "metadataSchemaName": "", "metadataSchemaEntityType": ""}
+
+
+@pytest.mark.unit
+class TestMissingSchemaIsCheckedBeforeNotFound:
+    """Update and delete answer 404 for a missing schema only to a caller the object-level check
+    allows. A caller it denies gets the same 403 whether or not the schema exists, so the answer
+    cannot be used to learn which schema ids are in use."""
+
+    def test_update_of_a_missing_schema_checks_a_provisional_object(
+            self, enforcer, claims, schema_table):
+        schema_table.query.return_value = {"Items": []}
+        installed = enforcer(_enforcer())
+
+        response = svc.handle_put_request(_update_event())
+
+        assert _status(response) == 404
+        assert installed.calls == [(_provisional_schema(), "POST")]
+        _assert_nothing_written(schema_table)
+
+    def test_update_denial_is_identical_for_missing_and_existing_schemas(
+            self, enforcer, claims, schema_table):
+        enforcer(_enforcer(allowed={OTHER_DATABASE_ID}))
+        existing = svc.handle_put_request(_update_event())
+        schema_table.query.return_value = {"Items": []}
+        missing = svc.handle_put_request(_update_event())
+
+        assert [_status(missing), _status(existing)] == [403, 403]
+        assert missing["body"] == existing["body"]
+        assert SCHEMA_ID not in missing["body"]
+        _assert_nothing_written(schema_table)
+
+    def test_delete_of_a_missing_schema_checks_the_path_database(
+            self, enforcer, claims, schema_table):
+        schema_table.query.return_value = {"Items": []}
+        installed = enforcer(_enforcer(allowed={OWNING_DATABASE_ID}))
+
+        response = svc.handle_delete_request(_delete_event(database_id=OWNING_DATABASE_ID))
+
+        assert _status(response) == 404
+        assert installed.calls == [(_provisional_schema(OWNING_DATABASE_ID), "DELETE")]
+        schema_table.delete_item.assert_not_called()
+
+    def test_delete_denial_is_identical_for_missing_and_existing_schemas(
+            self, enforcer, claims, schema_table):
+        # Denies both the stored row's database and the path's database.
+        enforcer(_enforcer(allowed={GLOBAL_DATABASE_ID}))
+        existing = svc.handle_delete_request(_delete_event(database_id=OTHER_DATABASE_ID))
+        schema_table.query.return_value = {"Items": []}
+        missing = svc.handle_delete_request(_delete_event(database_id=OTHER_DATABASE_ID))
+
+        assert [_status(missing), _status(existing)] == [403, 403]
+        assert missing["body"] == existing["body"]
+        assert SCHEMA_ID not in missing["body"]
+        schema_table.delete_item.assert_not_called()
+
+    @pytest.mark.parametrize("verb, call", [
+        ("PUT", lambda: svc.handle_put_request(_update_event())),
+        ("DELETE", lambda: svc.handle_delete_request(_delete_event())),
+    ], ids=["PUT", "DELETE"])
+    def test_an_empty_token_list_on_a_missing_schema_is_refused(
+            self, enforcer, claims, schema_table, verb, call):
+        schema_table.query.return_value = {"Items": []}
+        installed = enforcer(_enforcer())
+        claims(NO_IDENTITY)
+
+        response = call()
+
+        assert _status(response) == 403, verb
+        assert installed.calls == [], verb
+        _assert_nothing_written(schema_table)
+        schema_table.delete_item.assert_not_called()
+
+
 @pytest.mark.unit
 class TestUpdateFileTypeRestrictionFollowsTheStoredEntityType:
     """Create refuses a `fileKeyTypeRestriction` on a schema that is not fileMetadata or
