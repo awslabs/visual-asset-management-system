@@ -702,10 +702,13 @@ export class RapidPipelineEKSConstruct extends Construct {
         // End state: success
         const successState = new sfn.Succeed(this, "Success");
 
-        // End state: failure
+        // End state: failure. EndChoice routes here only when $.error is present, and every state
+        // that sets it either builds Error and Cause as strings or copies the error output of a Catch
+        // that wrote it to $.error. ErrorPath and CausePath must select string fields, and these two
+        // read the run's own error name and description from that object.
         const failState = new sfn.Fail(this, "Failure", {
-            cause: sfn.JsonPath.stringAt("$.error.Cause || 'Unknown error'"),
-            error: sfn.JsonPath.stringAt("$.error.Error || 'PipelineExecutionFailed'"),
+            errorPath: "$.error.Error",
+            causePath: "$.error.Cause",
         });
 
         // Error handlers for the three Lambda tasks. Each task gets its own pair, named
