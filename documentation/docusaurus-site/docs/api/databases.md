@@ -43,7 +43,9 @@ GET /database
             "bucketName": "vams-assets-abc123",
             "baseAssetsPrefix": "assets/",
             "restrictMetadataOutsideSchemas": false,
-            "restrictFileUploadsToExtensions": ""
+            "restrictFileUploadsToExtensions": "",
+            "complianceSchemaName": "survey-compliance",
+            "complianceAutoEval": true
         }
     ],
     "NextToken": null
@@ -51,6 +53,8 @@ GET /database
 ```
 
 `assetCount` counts the database's active (non-archived) assets and can exceed the assets the caller can list or open. Search totals likewise count assets the caller cannot open.
+
+`complianceSchemaName` and `complianceAutoEval` describe the database's compliance schema binding as written by `PUT /compliance/bind/{databaseId}` (see [Compliance API — Bind a schema to a database](compliance.md#bind-a-schema-to-a-database)); both are `null` on a database with no binding, so a client can tell "unbound" from "automatic evaluation off". They are read through the database routes only — the binding is changed through the compliance routes.
 
 ### Error responses
 
@@ -78,7 +82,7 @@ GET /database/{databaseId}
 
 ### Response
 
-Returns a single database object in the same format as the items in the list response. `assetCount` counts the database's active (non-archived) assets and can exceed the assets the caller can list or open. Search totals likewise count assets the caller cannot open.
+Returns a single database object in the same format as the items in the list response, including `complianceSchemaName` and `complianceAutoEval` (`null` when the database has no compliance schema binding). `assetCount` counts the database's active (non-archived) assets and can exceed the assets the caller can list or open. Search totals likewise count assets the caller cannot open.
 
 ### Error responses
 

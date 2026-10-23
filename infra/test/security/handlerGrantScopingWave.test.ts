@@ -10,8 +10,10 @@
  *    table. Their only asset-table access is `get_asset_object_from_id()`, a `get_item`, so three
  *    low-privilege handlers carried mutate rights over the primary asset catalog.
  *
- *  * **S1-INFRA-073** — the same shape in the assetLinks builders, whose asset-table calls are all
- *    `get_item` used to confirm both ends of a link exist.
+ *  * **S1-INFRA-073** — the same shape in the assetLinks builders, whose asset-table reads are all
+ *    `get_item` used to confirm both ends of a link exist. Their one asset-table write is the
+ *    `linkChange` stamp a link create or delete records on both assets, granted as
+ *    `dynamodb:UpdateItem` alone (the metadata service's `metadataEdit` stamp is held to the same).
  *
  *  * **S1-INFRA-076** — `configService` was granted `ssm:GetParameter` on every parameter in the
  *    account whose path merely contained the deployment name, and `geo:DescribeKey` on all Location
@@ -102,10 +104,18 @@ describe("handler grant scoping", () => {
         );
     }
 
+    // The assetLinks handlers write the asset table in one way only: the `linkChange` stamp a link
+    // create or delete records on both linked assets (common/assetProvenance.stamp_asset_change,
+    // a targeted UpdateItem), granted as `dynamodb:UpdateItem` alone. Every other write action stays
+    // absent, so the S1-INFRA-073 finding holds for put, delete and batch writes.
     describe.each([
-        ["comment handlers", /(addComment|editComment|commentService)ServiceRole/],
-        ["assetLinks handlers", /(assetLinksService|createAssetLink)ServiceRole/],
-    ])("%s hold read-only access to the asset table", (_name, rolePattern) => {
+        ["comment handlers", /(addComment|editComment|commentService)ServiceRole/, [] as string[]],
+        [
+            "assetLinks handlers",
+            /(assetLinksService|createAssetLink)ServiceRole/,
+            ["dynamodb:UpdateItem"],
+        ],
+    ])("%s hold read-only access to the asset table", (_name, rolePattern, allowedWrites) => {
         test("the handler roles and the asset table ARE in this synth", () => {
             // The control. "No write action on the asset table" is satisfied by a synth in which
             // neither the roles nor the table exist.
@@ -120,12 +130,32 @@ describe("handler grant scoping", () => {
             expect(actions).toContain("dynamodb:GetItem");
         });
 
-        test("they hold no write action on it", () => {
+        test("they hold no write action on it beyond the change stamp", () => {
             const actions = actionsOf(assetTableStatements(rolePattern));
-            for (const write of DYNAMO_WRITE_ACTIONS) {
+            for (const write of DYNAMO_WRITE_ACTIONS.filter((a) => !allowedWrites.includes(a))) {
                 expect(actions).not.toContain(write);
             }
         });
+    });
+
+    test.each([["assetLinksService"], ["createAssetLink"]])(
+        "%s can stamp the asset row it links (UpdateItem on the asset table)",
+        (role) => {
+            // Per role, so one builder losing the grant fails here rather than hiding behind the other.
+            const actions = actionsOf(assetTableStatements(new RegExp(`${role}ServiceRole`)));
+            expect(actions).toContain("dynamodb:UpdateItem");
+        }
+    );
+
+    test("metadataService writes the asset table through the change stamp only", () => {
+        // A metadata write records `metadataEdit` on the owning asset row with one UpdateItem; the
+        // handler otherwise only reads the asset table, so put, delete and batch writes stay absent.
+        const actions = actionsOf(assetTableStatements(/metadataServiceServiceRole/));
+        expect(actions).toContain("dynamodb:GetItem");
+        expect(actions).toContain("dynamodb:UpdateItem");
+        for (const write of DYNAMO_WRITE_ACTIONS.filter((a) => a !== "dynamodb:UpdateItem")) {
+            expect(actions).not.toContain(write);
+        }
     });
 
     describe("configService parameter access is scoped (S1-INFRA-076)", () => {

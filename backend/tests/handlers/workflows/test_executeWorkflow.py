@@ -1700,6 +1700,27 @@ class TestPerPipelineFilteredManifest:
         assert [i["relativeFileKey"] for i in filtered["GLOBAL:convert"]] == ["/f.glb"]
         assert [i["relativeFileKey"] for i in filtered["db1:convert"]] == ["/n.txt"]
 
+    def test_later_step_reading_only_an_earlier_steps_output_launches(self):
+        # #715: the records arrive in the workflow's step order, so the obj -> glb converter is step 1
+        # and the glb-only consumer after it is judged when the run reaches it, not against the obj
+        # selection at launch.
+        records = [
+            {"databaseId": "GLOBAL", "pipelineId": "objToGlb",
+             "systemConfig": {"inputFileArity": "one",
+                              "inputFileFilters": {"allow": ["*.obj"], "exclude": []}}},
+            {"databaseId": "GLOBAL", "pipelineId": "glbConsumer",
+             "systemConfig": {"inputFileArity": "one",
+                              "inputFileFilters": {"allow": ["*.glb"], "exclude": []}}},
+        ]
+        selected = [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/model.obj"}]
+        errors, filtered = ewv2._run_cross_validation(
+            {"systemConfig": {"inputFileArity": "one",
+                              "assetScope": {"singleAssetOnly": True},
+                              "inputFileFilters": {"allow": [], "exclude": []}}},
+            records, {}, selected, {})
+        assert errors == []
+        assert [i["relativeFileKey"] for i in filtered["GLOBAL:objToGlb"]] == ["/model.obj"]
+
 
 @pytest.mark.unit
 class TestStoredJobNamesGate:

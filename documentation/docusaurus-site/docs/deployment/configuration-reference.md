@@ -625,6 +625,21 @@ Nested stack: `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` (`Api
 A deployment writes each enabled default schema once, and on later deployments refreshes it only while no user has edited it. A default that has been edited or disabled through the web interface, the API, or the CLI is left alone. Setting a flag to `false` leaves its schema in place. A deleted default stays deleted until its seed resource is created again: after one deployment with its flag `false` and the next with it `true`, or after a change to one of the flags listed above it in this table, because the seed resources are numbered by position. A replaced metadata schema table starts with no defaults.
 :::
 
+## Compliance (`app.compliance`)
+
+Compliance deploys with every VAMS deployment: five Amazon DynamoDB tables, nine AWS Lambda functions, and the `/compliance/*` API routes for schema management, automated evaluation, quarantine management, cascade execution, and audit logging. There is no enable switch; access to the routes is governed by permissions like every other page. These two fields tune its behavior.
+
+| Field                                     | Type    | Default | Description                                                                                                                                                                                                                                                                                     |
+| ----------------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.compliance.autoLoadDefaultSchema`    | boolean | `true`  | Deploys a default global compliance schema (`default-compliance-schema`) that validates a bound asset's metadata against the default asset metadata schema at the `warn` level. Set to `false` to skip.                                                                                         |
+| `app.compliance.quarantineBlocksDownload` | boolean | `false` | When `true`, the asset download, stream, export (presigned file URLs) and auxiliary-preview stream endpoints refuse a quarantined asset unless it has an active exception. When `false` (default), quarantine is informational only — the UI displays a warning but downloads proceed normally. |
+
+The default compliance schema's single rule validates assets against the GLOBAL `defaultAsset` metadata schema, which is created by `app.metadataSchema.autoLoadDefaultAssetSchema`. Deployment validation rejects a configuration that sets `app.compliance.autoLoadDefaultSchema` to `true` while `app.metadataSchema.autoLoadDefaultAssetSchema` is `false`: without the metadata schema the rule has no fields to check, so the seeded schema would report every asset compliant. Disable both flags to run without the default schemas, or keep both enabled.
+
+The default schema is written once: a redeploy leaves an existing `default-compliance-schema` row in place.
+
+**Authorization:** The default admin role is granted full access to all compliance operations. For non-admin users, use the `compliance-admin` or `compliance-readonly` permission templates (in `documentation/permissionsTemplates/`) to grant scoped access. Compliance uses three dedicated Casbin object types: `complianceSchema`, `complianceEvaluation`, and `complianceCascade`. See [Permissions Model: Compliance Routes](../concepts/permissions-model.md#compliance-routes) for details.
+
 ## Processing pipelines (`app.pipelines`)
 
 :::note[Implemented by]

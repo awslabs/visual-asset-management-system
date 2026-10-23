@@ -63,11 +63,12 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 66 SSM resource-name parameters)
+  |     +-- ResourceNamesBuilder (publishes 71 SSM resource-name parameters)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
-  |     |    and the pipeline / pipeline template / workflow / workflow trigger / execution routes)
+  |     |    the pipeline / pipeline template / workflow / workflow trigger / execution routes,
+  |     |    and the compliance routes + trigger / workflow-callback Lambdas)
   |     |                                                    -> storage, resourceNames, ApiBuilder
   |     +-- SearchBuilder (OpenSearch)                       -> storage, resourceNames
   |     +-- PipelineBuilder (all use-case pipelines)         -> storage, ApiBuilder2
@@ -132,7 +133,7 @@ interface storageResources {
         errors: logs.LogGroup;
     };
     dynamo: {
-        // 48 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
+        // 53 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
@@ -184,11 +185,18 @@ interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table; // PK tagSchemaId, SK pipelineDatabaseId:pipelineId:templateId; GSI TagSchemaByTemplateGSI
         workflowStorageTableV2: dynamodb.Table; // PK databaseId, SK workflowId; GSIs WorkflowsByDatabaseGSI / WorkflowsByCategoryGSI / WorkflowsByDateGSI
         workflowTriggersStorageTable: dynamodb.Table; // PK workflowDatabaseId:workflowId, SK triggerType; GSI TriggersByBaseTypeGSI (PK triggerBaseType — the BARE type)
+
+        // Compliance tables
+        complianceSchemaStorageTable: dynamodb.Table; // PK schemaName, SK internalVersion; GSI DatabaseIdIndex
+        complianceAssetStateStorageTable: dynamodb.Table; // PK databaseId, SK assetId; GSIs SchemaNameIndex, ComplianceStateIndex (PK complianceState, SK databaseId — paged quarantine list)
+        complianceEvaluationStorageTable: dynamodb.Table; // PK evaluationId; GSIs AssetIndex, ExecutionIdIndex (PK executionId — pipeline-rule workflow callback)
+        complianceCascadeStorageTable: dynamodb.Table; // PK cascadeId; GSI StateIndex
+        complianceAuditStorageTable: dynamodb.Table; // PK entryId; GSIs AssetIndex, EventTypeIndex, AuditByDateGSI (PK allListPartition — unfiltered newest-first listing)
     };
 }
 ```
 
-The `*ByDateGSI` indexes on the pipeline, workflow, and workflow-execution V2 tables are partitioned on a constant `allListPartition` attribute, which is what makes the global (all-databases) list endpoints a query rather than a table scan. Every write path — including the data-migration transforms — must set that attribute, or the row is invisible to those lists.
+The `*ByDateGSI` indexes on the pipeline, workflow, and workflow-execution V2 tables and on the compliance audit table are partitioned on a constant `allListPartition` attribute, which is what makes the global (all-databases) list endpoints a query rather than a table scan. Every write path — including the data-migration transforms — must set that attribute, or the row is invisible to those lists. For the audit table every row is built by `common/compliance/auditRecord.py::build_audit_item`, which sets it; a guard test fails any `put_item` into that table that bypasses the builder.
 
 **`authResources`** (defined in `authBuilder-nestedStack.ts`):
 
@@ -422,6 +430,8 @@ const featureEnabled = true; // BAD - should be configurable
 
 #### **Rule 2: Feature Switches Must Be Defined**
 
+New features get a switch in `vamsAppFeatures.ts` and are gated by config in the core stack. The one accepted carve-out (root `CLAUDE.md` Rule 6): a feature that is inert until an operator configures it at runtime — none of its behavior applies until a record is written through its own API (an event-driven Lambda of the feature may run per event and no-op without that record), nothing beyond idle storage and those no-op invocations is billed, and access is governed by Casbin like every other route — may deploy without a switch. Compliance is the example: its tables, Lambdas and `/compliance/*` routes always deploy; the trigger and the workflow callback run per event and no-op without a binding, so no compliance behavior applies until a schema is bound. A feature that does work on its own (a poller, a scheduled job, an event consumer that acts on every event) does not qualify.
+
 ```typescript
 // ✅ CORRECT - Add to vamsAppFeatures.ts
 export enum VAMS_APP_FEATURES {
@@ -638,6 +648,8 @@ Verify before deploying: a cycle is invisible to `cdk synth` and appears only at
 and confirm the storage nested stack takes no parameter fed from another nested stack's output. Regression
 coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`, and `infra/test/pipelines/codeBuildEcrEncryption.test.ts`
 for the CodeBuild repositories and their CMK flip.
+
+A Lambda's DynamoDB grants follow the tables its handler (and the shared modules it imports) resolves through `ResourceKeys`; `infra/test/security/complianceLambdaTableGrants.test.ts` derives those needs from the compliance handler source and asserts the synthesized role policy covers each table (read, plus write where the module writes), so a missing grant fails the suite instead of surfacing as an `AccessDeniedException` 500 in production. The three compliance Lambdas that run evaluations (`complianceEvaluateService`, `complianceTrigger`, `complianceCascadeExecutor`) share `grantEvaluationEngineReads` in `complianceFunctions.ts`: read on the asset, asset-links, asset-file-metadata, file-attribute, asset-links-metadata, asset-file-versions, metadata-schema, workflow, pipeline, pipeline-template and asset-buckets tables, plus every asset bucket. The metadata service and the two asset-link Lambdas (`createAssetLink`, `assetLinksService`) hold `dynamodb:UpdateItem` alone on the asset table (`table.grant(fun, "dynamodb:UpdateItem")`, not `grantWriteData`) for the change stamp a metadata write or link change records on the asset row; `infra/test/security/handlerGrantScopingWave.test.ts` pins that no other write action reaches the asset table from them.
 
 ### **Dependency Management Standards**
 
@@ -1512,6 +1524,10 @@ Install a container's dependencies so that two builds of one commit ship the sam
 -   npm tools come from a committed `package-lock.json`, installed with `npm ci`.
 -   A release tarball (Node.js) is downloaded at a fixed version and its SHA-256 is checked in the same `RUN`.
 -   Compilers and build tools stay in a builder stage; the runtime stage copies only the installed results, from the same digest-pinned base image.
+-   Each stage's package-install `RUN` runs `apt-get update && apt-get upgrade -y` before `apt-get install -y --no-install-recommends` and removes the package lists in the same layer. The digest pin fixes the Debian packages at the day the digest was built, so the upgrade is what brings in the security updates published since; AWS Batch on AWS Fargate patches the host, not the image. `backendPipelines/preview/3dThumbnail/container/tests/test_thumbnail_dockerfile_security_updates.py` holds both stages to it.
+    -   Debian packages are the exception to "the same code": the upgrade layer takes what Debian has published on the build day, so two builds of one commit can differ in Debian patch level, and the build log's `apt-get upgrade` lines list what moved.
+    -   A deployed image takes later Debian updates only when the container directory changes and the build runs on a cold cache: `ecs.AssetImage.fromAsset` skips the build when the directory's asset hash is already in the CDK bootstrap ECR repository, and Docker reuses the cached upgrade layer, whose instruction and digest-pinned parent do not change and which comes before every `COPY`. To take new updates deliberately, move the digest, or rebuild with `--no-cache` after a change to the container directory.
+-   A package manager used only to install a tool is removed in the builder stage, in the `RUN` that used it, so the runtime image does not ship it: npm, npx and corepack arrive with the Node.js tarball and are deleted after `npm ci` installs `splat-transform`, because the pipeline runs only `node`. The same test file holds the Dockerfile to it.
 
 #### **Size-Tiered Fargate Compute**
 

@@ -27,6 +27,8 @@ Each pipeline step reads several S3 paths from its manifest (`manifestHelper.res
 
 **Key distinction:** `outputS3AssetFilesPath` is for file-level outputs including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is only for asset-level preview images that represent the asset as a whole. Most pipelines producing file previews should write to `outputS3AssetFilesPath`.
 
+**Compliance output:** a pipeline that backs a compliance pipeline rule reports its measurements as one `compliance-output.json` under the execution's `outputs.results` prefix (from the workflow manifest). `backendPipelines/common/compliance_output.py` (`write_compliance_output`, `build_compliance_output`) writes the document — `{"complianceOutput": true, "status": "success"|"error", "measurements": {...}, "errors": [], "pipelineMetadata": {}}` — whose `measurements` keys match the `outputField` of the rule's checks. The pipeline needs no evaluation id or compliance table access; the compliance workflow callback reads the file from the execution's `PipelineExecutionOutputResults` rows.
+
 **Rules for output path usage:**
 
 -   **Always pass through** all output paths resolved from the manifest in `vamsExecute` lambdas. Never hardcode empty strings for output paths — the workflow's process-output step relies on finding files at these locations.
@@ -132,6 +134,10 @@ Install a container's dependencies so that two builds of one commit ship the sam
 -   npm tools come from a committed `package-lock.json`, installed with `npm ci`.
 -   A release tarball (Node.js) is downloaded at a fixed version and its SHA-256 is checked in the same `RUN`.
 -   Compilers and build tools stay in a builder stage; the runtime stage copies only the installed results, from the same digest-pinned base image.
+-   Each stage's package-install `RUN` runs `apt-get update && apt-get upgrade -y` before `apt-get install -y --no-install-recommends` and removes the package lists in the same layer. The digest pin fixes the Debian packages at the day the digest was built, so the upgrade is what brings in the security updates published since; AWS Batch on AWS Fargate patches the host, not the image. `preview/3dThumbnail/container/tests/test_thumbnail_dockerfile_security_updates.py` holds both stages to it.
+    -   Debian packages are the exception to "the same code": the upgrade layer takes what Debian has published on the build day, so two builds of one commit can differ in Debian patch level, and the build log's `apt-get upgrade` lines list what moved.
+    -   A deployed image takes later Debian updates only when the container directory changes and the build runs on a cold cache: `ecs.AssetImage.fromAsset` skips the build when the directory's asset hash is already in the CDK bootstrap ECR repository, and Docker reuses the cached upgrade layer, whose instruction and digest-pinned parent do not change and which comes before every `COPY`. To take new updates deliberately, move the digest, or rebuild with `--no-cache` after a change to the container directory.
+-   A package manager used only to install a tool is removed in the builder stage, in the `RUN` that used it, so the runtime image does not ship it: npm, npx and corepack arrive with the Node.js tarball and are deleted after `npm ci` installs `splat-transform`, because the pipeline runs only `node`. The same test file holds the Dockerfile to it.
 
 ## Files a Model Input References
 
