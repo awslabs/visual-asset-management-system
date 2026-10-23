@@ -715,10 +715,10 @@ def _without_workflow_outputs(candidates: List[Dict[str, Any]],
 
 # --- Writes ---
 
-# Placeholders a status condition adds beside the `#f<n>` / `:v<n>` aliases `to_update_expr`
-# generates. A boto3 `Attr(...)` condition object is not used for this: boto3 renders it with its own
-# `:v0` placeholder and merges that over the caller's ExpressionAttributeValues, which would replace
-# the first SET value of the update with the condition's value.
+# Placeholders a status condition adds beside the `#u<n>` / `:u<n>` aliases `to_update_expr`
+# generates. The condition is built here, with names of its own, rather than as a boto3 `Attr(...)`
+# object, so that `status_condition` can be merged into any update without depending on how boto3
+# names its placeholders.
 _STATUS_CONDITION_NAME = "#cond_status"
 _STATUS_CONDITION_VALUE_PREFIX = ":cond_status"
 

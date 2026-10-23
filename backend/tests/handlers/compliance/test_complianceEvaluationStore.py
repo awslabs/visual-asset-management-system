@@ -1575,7 +1575,11 @@ class TestCompletePipelineRule:
         assert names["#cond_status"] == "status"
         assert values[":cond_status0"] == "pending"
         # The condition placeholders sit beside the update's own aliases rather than replacing them.
-        assert values[":v0"] == "completed"
+        status_alias = next(alias for alias, name in names.items()
+                            if name == "status" and alias != "#cond_status")
+        status_value = tracking_write["UpdateExpression"].split(f"{status_alias} = ", 1)[1]
+        status_value = status_value.split(",", 1)[0].strip()
+        assert values[status_value] == "completed"
 
     def test_a_redelivered_completion_records_nothing_twice(self):
         """At-least-once delivery: the second delivery finds the tracking row completed, so it neither
@@ -2331,8 +2335,8 @@ class TestEvaluationOrdering:
 class TestStatusCondition:
 
     def test_the_condition_placeholders_never_collide_with_the_update_aliases(self):
-        """`to_update_expr` aliases values as `:v<n>`; a condition rendered by boto3's `Attr` would
-        also use `:v0` and overwrite the first SET value with the condition's value."""
+        """The status condition's placeholders share no name with the aliases `to_update_expr`
+        generates, so merging them never replaces a SET value with the condition's value."""
         expression, names, values = store.status_condition("pending", allow_absent=True)
         assert expression == "attribute_not_exists(#cond_status) OR #cond_status = :cond_status0"
         assert names == {"#cond_status": "status"}
