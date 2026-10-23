@@ -278,6 +278,7 @@ All rights reserved.
 | Name              | Version | License                      | Notes                                                                  |
 | :---------------- | :------ | :--------------------------- | :--------------------------------------------------------------------- |
 | strands-agents    | 1.57.0  | Apache-2.0                   | Agent framework (Amazon Bedrock and OpenAI model providers)            |
+| openai            | 2.x     | Apache-2.0                   | OpenAI Python SDK, installed by the `strands-agents[openai]` extra     |
 | bedrock-agentcore | 1.23.1  | Apache-2.0                   | Amazon Bedrock AgentCore Runtime application SDK                       |
 | cadquery          | 2.8.0   | Apache-2.0                   | Parametric CAD modelling; STEP import and export                       |
 | cadquery-ocp      | 8.x     | LGPL-2.1 with OCCT exception | Open CASCADE Technology bindings bundled by CadQuery (dynamic linking) |
