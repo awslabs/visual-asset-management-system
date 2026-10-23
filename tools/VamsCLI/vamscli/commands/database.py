@@ -69,7 +69,13 @@ def format_database_output(database_data: Dict[str, Any], json_output: bool = Fa
         output_lines.append(f"  Restrict File Uploads To Extensions: {file_extensions}")
     else:
         output_lines.append(f"  Restrict File Uploads To Extensions: (none)")
-    
+
+    # Compliance schema binding: both fields are absent (null) on a database with no binding.
+    if database_data.get('complianceSchemaName'):
+        output_lines.append(f"  Compliance Schema: {database_data['complianceSchemaName']}")
+    if database_data.get('complianceAutoEval') is not None:
+        output_lines.append(f"  Compliance Auto-Eval: {database_data['complianceAutoEval']}")
+
     return '\n'.join(output_lines)
 
 

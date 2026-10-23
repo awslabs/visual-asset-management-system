@@ -130,9 +130,9 @@ class TestExtensionTypeIsNotAutoGranted:
                            "GET") is True
 
     def test_the_core_admin_set_has_one_constraint_per_core_type(self):
-        # Control: the role above really covers all eleven core types, and nothing else.
+        # Control: the role above really covers all fourteen core types, and nothing else.
         types_ = [p["objectType"] for p in _core_admin_policies()]
-        assert types_ == WIDGET_CONSTANTS.CORE_ALLOWED_CONSTRAINT_OBJECT_TYPES and len(types_) == 11
+        assert types_ == WIDGET_CONSTANTS.CORE_ALLOWED_CONSTRAINT_OBJECT_TYPES and len(types_) == 14
         assert "widget" in WIDGET_CONSTANTS.ALLOWED_CONSTRAINT_OBJECT_TYPES
 
     def test_an_unregistered_type_is_denied(self):
