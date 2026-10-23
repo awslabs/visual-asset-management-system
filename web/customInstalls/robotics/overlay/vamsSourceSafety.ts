@@ -207,8 +207,11 @@ function parseContentLength(value: string | null): number | undefined {
     return Number(value.trim());
 }
 
-/** "a.db3 is 1.2 GiB, ..." for one file; the total and every size for several. */
-function overLimitMessage(
+/**
+ * "a.db3 is 1.2 GiB, ..." for one file; the total and every size for several. Exported for the
+ * VAMS web tests, which check that the host component refuses with the same text.
+ */
+export function overLimitMessage(
     names: readonly string[],
     sizes: ReadonlyArray<number | undefined>,
     maxBytes: number

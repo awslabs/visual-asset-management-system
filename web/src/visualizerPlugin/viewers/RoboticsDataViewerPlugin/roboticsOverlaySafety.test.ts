@@ -20,6 +20,7 @@ import {
     extensionOf,
     fileNameFromUrl,
     formatBytes,
+    overLimitMessage,
     parseMaxBytes,
     scrubAlert,
     scrubError,
@@ -27,6 +28,7 @@ import {
     takeSignedUrls,
     type DownloadResponse,
 } from "../../../../customInstalls/robotics/overlay/vamsSourceSafety";
+import { formatBytes as hostFormatBytes, wholeFileOverLimitMessage } from "./roboticsDeepLink";
 
 const SIGNED =
     "https://s3.us-east-1.amazonaws.com/bucket/asset-1/logs/run%201.mcap" +
@@ -239,5 +241,42 @@ describe("downloadWholeFiles", () => {
             "Downloading run.db3 failed: the request did not complete."
         );
         expect((error as Error).message).not.toContain("X-Amz");
+    });
+});
+
+describe("the host component refuses an over-limit selection in the viewer's words", () => {
+    const GiB = 1024 * 1024 * 1024;
+    it.each([
+        [["over-limit.db3"], [1.1 * GiB], GiB],
+        [["run_0.db3", "run_1.db3"], [600 * 1024 * 1024, 700 * 1024 * 1024], GiB],
+        [["flight.ulg"], [101], 100],
+    ])("%j", (names, sizes, maxBytes) => {
+        const host = wholeFileOverLimitMessage(
+            names.map((name, i) => ({ name, size: sizes[i] })),
+            maxBytes
+        );
+        expect(host).toBe(overLimitMessage(names, sizes, maxBytes));
+    });
+
+    it("formats sizes as the viewer does", () => {
+        for (const bytes of [
+            0,
+            12,
+            1023,
+            1024,
+            1536,
+            600 * 1024 * 1024,
+            1.1 * 1024 ** 3,
+            2 ** 40,
+        ]) {
+            expect(hostFormatBytes(bytes)).toBe(formatBytes(bytes));
+        }
+    });
+
+    it("leaves a selection within the limit, or of unknown size, to the viewer", () => {
+        expect(wholeFileOverLimitMessage([{ name: "a.db3", size: 100 }], 100)).toBeNull();
+        expect(
+            wholeFileOverLimitMessage([{ name: "a.db3", size: 2 * GiB }, { name: "b.db3" }], GiB)
+        ).toBeNull();
     });
 });

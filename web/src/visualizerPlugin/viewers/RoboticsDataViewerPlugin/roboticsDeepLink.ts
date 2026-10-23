@@ -108,6 +108,58 @@ export const maxWholeFileBytes = (customParameters?: Record<string, any>): numbe
     return Number.isFinite(value) && value > 0 ? Math.floor(value) : DEFAULT_MAX_WHOLE_FILE_BYTES;
 };
 
+/** "1 GiB", "1.5 GiB", "600 MiB", "12 B": as the framed app's VAMS overlay writes a size. */
+export const formatBytes = (bytes: number): string => {
+    const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024;
+        unit += 1;
+    }
+    const rounded = unit === 0 || value >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
+    return `${rounded} ${units[unit] ?? "B"}`;
+};
+
+const LIMIT_REASON = "limit for files opened by whole download";
+
+/** A selected file's name and, when the file list carries it, its size in bytes. */
+export interface SizedFile {
+    name: string;
+    size?: number;
+}
+
+/**
+ * The refusal for a whole-file selection whose sizes are all known and together exceed
+ * `maxBytes`, or null (within the limit, or a size is unknown). The wording is the framed app's
+ * refusal by Content-Length (overlay/vamsSourceSafety.ts), so the user reads the same message
+ * whichever side refuses; the app still refuses a selection whose sizes the host does not know.
+ */
+export const wholeFileOverLimitMessage = (files: SizedFile[], maxBytes: number): string | null => {
+    const sizes = files.map((file) => file.size);
+    if (
+        files.length === 0 ||
+        !sizes.every((size) => typeof size === "number" && Number.isFinite(size) && size >= 0)
+    ) {
+        return null;
+    }
+    const total = (sizes as number[]).reduce((sum, size) => sum + size, 0);
+    if (total <= maxBytes) {
+        return null;
+    }
+    if (files.length === 1) {
+        return `${files[0].name || "The file"} is ${formatBytes(
+            total
+        )}, larger than the ${formatBytes(maxBytes)} ${LIMIT_REASON}.`;
+    }
+    const listed = files
+        .map((file) => `${file.name} ${formatBytes(file.size as number)}`)
+        .join(", ");
+    return `The selected files are ${formatBytes(
+        total
+    )} together (${listed}), larger than the ${formatBytes(maxBytes)} ${LIMIT_REASON}.`;
+};
+
 /** `customParameters.basePath` when set, else the default hosting path of the built app. */
 export const roboticsBasePath = (customParameters?: Record<string, any>): string => {
     const value = customParameters?.basePath;

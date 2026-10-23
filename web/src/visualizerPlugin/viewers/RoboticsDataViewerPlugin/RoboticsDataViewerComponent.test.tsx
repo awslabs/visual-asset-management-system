@@ -225,3 +225,79 @@ describe("RoboticsDataViewerComponent", () => {
         );
     });
 });
+
+describe("RoboticsDataViewerComponent whole-file limit", () => {
+    const MiB = 1024 * 1024;
+    const sized = (key: string, size?: number) => ({ ...file(key), size });
+
+    it("refuses a split bag over the limit before requesting any URL, naming each file", async () => {
+        render(
+            <RoboticsDataViewerComponent
+                {...baseProps}
+                multiFileKeys={["/bag/run_0.db3", "/bag/run_1.db3"]}
+                multiFiles={[
+                    sized("/bag/run_0.db3", 600 * MiB),
+                    sized("/bag/run_1.db3", 600 * MiB),
+                ]}
+            />
+        );
+        const error = await screen.findByTestId("robotics-viewer-error");
+        expect(error.textContent).toBe(
+            "The selected files are 1.2 GiB together (run_0.db3 600 MiB, run_1.db3 600 MiB), " +
+                "larger than the 1 GiB limit for files opened by whole download."
+        );
+        expect(mockDownloadAsset).not.toHaveBeenCalled();
+        expect(screen.queryByTestId("robotics-viewer-iframe")).toBeNull();
+    });
+
+    it("applies the configured limit", async () => {
+        render(
+            <RoboticsDataViewerComponent
+                {...baseProps}
+                multiFileKeys={["/a.db3", "/b.db3"]}
+                multiFiles={[sized("/a.db3", 30 * MiB), sized("/b.db3", 30 * MiB)]}
+                customParameters={{ maxWholeFileBytes: 50 * MiB }}
+            />
+        );
+        const error = await screen.findByTestId("robotics-viewer-error");
+        expect(error.textContent).toContain("larger than the 50 MiB limit");
+        expect(mockDownloadAsset).not.toHaveBeenCalled();
+    });
+
+    it("opens a whole-file selection within the limit", async () => {
+        render(
+            <RoboticsDataViewerComponent
+                {...baseProps}
+                multiFileKeys={["/a.db3", "/b.db3"]}
+                multiFiles={[sized("/a.db3", 512 * MiB), sized("/b.db3", 512 * MiB)]}
+            />
+        );
+        const link = parseDeepLink(await iframeSrc());
+        expect(link.source).toBe("vams-download");
+        expect(link.urls).toHaveLength(2);
+    });
+
+    it("leaves a selection with an unknown size to the viewer's own check", async () => {
+        render(
+            <RoboticsDataViewerComponent
+                {...baseProps}
+                multiFileKeys={["/a.db3", "/b.db3"]}
+                multiFiles={[sized("/a.db3", 2048 * MiB), sized("/b.db3")]}
+            />
+        );
+        const link = parseDeepLink(await iframeSrc());
+        expect(link.maxBytes).toBe("1073741824");
+        expect(mockDownloadAsset).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not limit range-read files", async () => {
+        render(
+            <RoboticsDataViewerComponent
+                {...baseProps}
+                multiFileKeys={["/a.mcap", "/b.mcap"]}
+                multiFiles={[sized("/a.mcap", 2048 * MiB), sized("/b.mcap", 2048 * MiB)]}
+            />
+        );
+        expect(parseDeepLink(await iframeSrc()).source).toBe("vams-remote");
+    });
+});

@@ -25,6 +25,7 @@ import {
     fileNameOf,
     maxWholeFileBytes,
     roboticsBasePath,
+    wholeFileOverLimitMessage,
 } from "./roboticsDeepLink";
 import styles from "./RoboticsDataViewer.module.css";
 
@@ -34,6 +35,8 @@ interface SelectedFile {
     databaseId: string;
     versionId?: string;
     assetVersionId?: string;
+    /** The file's size when the file list carries it (multi-file selections). */
+    size?: number;
 }
 
 interface FileError {
@@ -87,6 +90,7 @@ const RoboticsDataViewerComponent: React.FC<ViewerPluginProps> = ({
                     databaseId: fileDatabaseId,
                     versionId: multiFiles?.[i]?.versionId,
                     assetVersionId: assetVersionFor(fileAssetId, fileDatabaseId),
+                    size: multiFiles?.[i]?.size,
                 };
             });
         }
@@ -124,6 +128,20 @@ const RoboticsDataViewerComponent: React.FC<ViewerPluginProps> = ({
             setMessage(check.message);
             setPhase("failed");
             return;
+        }
+        // A whole-file selection over the limit, when the file list carries every size, is refused
+        // here, before any URL is requested. Without the sizes the framed app refuses it by the
+        // responses' Content-Length, and reports that in its Alerts tab.
+        if (check.source === "vams-download") {
+            const overLimit = wholeFileOverLimitMessage(
+                selected.map((file) => ({ name: fileNameOf(file.key), size: file.size })),
+                maxBytes
+            );
+            if (overLimit) {
+                setMessage(overLimit);
+                setPhase("failed");
+                return;
+            }
         }
         setPhase("preparing");
 
