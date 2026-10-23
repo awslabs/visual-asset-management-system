@@ -39,32 +39,66 @@ The pipeline's accepted-input list is `*.mp4`, `*.mov`, `*.m4v`, `*.webm`, and `
 
 ## Architecture
 
+The diagram shows the resources the pipeline deploys, the AWS services it calls, and the network path the container uses to reach them. Solid arrows are the run's control and data flow; dotted arrows are the build path, registration, logging, and encryption.
+
 ```mermaid
 flowchart LR
-    subgraph Workflow["AWS Step Functions Workflow"]
-        VE[vamsExecute Lambda]
-        OP[openPipeline Lambda]
+    subgraph Build["Image build at deployment"]
+        CB[AWS CodeBuild project]
+        ECR[(Amazon ECR repository)]
     end
 
-    subgraph Pipeline["Pipeline state machine"]
+    subgraph Orchestration["VAMS workflow"]
+        WF[Workflow state machine<br/>AWS Step Functions]
+        VE[vamsExecute Lambda]
+        OP[openPipeline Lambda]
+        BUS[Orchestration event bus<br/>Amazon EventBridge]
+    end
+
+    subgraph Pipeline["Pipeline state machine - AWS Step Functions"]
         CP[constructPipeline Lambda]
-        BJ[VideoSopBomBatchJob<br/>AWS Batch - Fargate]
         PE[pipelineEnd Lambda]
     end
 
-    S3In[(Asset Bucket<br/>Input videos)]
+    subgraph VPC["VAMS VPC - isolated subnets"]
+        BJ[AWS Batch job on AWS Fargate<br/>video SOP/BOM container]
+        EPC[Interface endpoints<br/>AWS Batch, Amazon ECR,<br/>Step Functions, CloudWatch Logs]
+        EPT[Interface endpoint<br/>Amazon Transcribe]
+        EPR[Interface endpoint<br/>Amazon Bedrock Runtime]
+        GW[Amazon S3 gateway endpoint<br/>plus optional cross-Region<br/>S3 interface endpoints]
+    end
+
+    S3In[(Asset bucket<br/>input videos)]
+    S3Out[(Asset bucket<br/>sop-bom/ outputs)]
+    AUX[(Auxiliary bucket<br/>run scratch prefix)]
     TR[Amazon Transcribe]
     BR[Amazon Bedrock<br/>Converse API]
-    S3Out[(Asset Bucket<br/>sop-bom/ outputs)]
+    LOGS[(Amazon CloudWatch Logs<br/>container and state machine)]
+    KMS[AWS KMS key]
 
+    CB -.-> ECR
+    ECR -.->|image pull| EPC
+    WF -->|task token| VE
     VE --> OP
+    OP -.->|registers the run| BUS
     OP --> CP
+    CP -->|definition document| AUX
     CP --> BJ
-    S3In --> BJ
-    BJ --> TR
-    BJ --> BR
-    BJ --> S3Out
-    BJ --> PE
+    BJ --- EPC
+    BJ --- GW
+    GW --- S3In
+    GW --- S3Out
+    GW --- AUX
+    BJ --- EPT
+    EPT --- TR
+    BJ --- EPR
+    EPR --- BR
+    BJ -->|outcome on the task token,<br/>then the next state| PE
+    PE -->|deletes scratch on failure| AUX
+    PE -->|outcome| WF
+    BJ -.-> LOGS
+    KMS -.->|encrypts| LOGS
+    KMS -.->|encrypts| AUX
 ```
 
 ### Processing Flow
