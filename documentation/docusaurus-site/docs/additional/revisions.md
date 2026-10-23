@@ -175,6 +175,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **3D Basic Conversion image inputs** — `requirements.txt` is exported from the container's `poetry.lock` (trimesh 4.8.3, the version the image installed), the Lambda base image is pinned by digest, and a `.dockerignore` keeps tests, Poetry files and caches out of the image. (issue #510)
 -   **CAD/Mesh Metadata Extraction task token stays out of logs** — The handler checks for a task token before it logs anything and logs only the manifest location, never the invocation event. (issue #521)
 -   **Container image troubleshooting** — The entry for `InvalidImage` and `400 Bad Request` push errors explains that the pinned AWS CDK CLI disables Docker's default provenance attestation and how to remove a cached image index; it no longer recommends `docker system prune -a` or a privileged emulation container. (issue #514)
+-   **File Manager opens links without a leading slash** — A File Manager link whose path has no leading slash, such as **Open in file manager** on a workflow output file inside a folder, selects the file it names instead of reporting that it does not exist in the asset; a folder also opens from its path without the trailing slash. (issue #728)
 
 **Other changes:**
 

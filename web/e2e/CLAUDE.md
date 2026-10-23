@@ -142,6 +142,8 @@ locators — the app's markup is not always guessable, and these were establishe
 | `chooseSelectOption(page, trigger, option, describeTrigger?)` | Choose a Cloudscape Select option matching a RegExp, by keyboard, from its trigger locator |
 | `apiContext(page)`                                            | The app's API base and Cognito ID token, for authenticated `page.request` calls            |
 | `findAssetFiles(page, extensions, options)`                   | First file per extension found via the API, or `null` without an API context               |
+| `findNestedAssetFile(page, options)`                          | First file inside a folder found via the API, or `null` when there is none                 |
+| `selectedTreeNode(page)`                                      | The File Manager tree's single-selected row label, in the visible tree                     |
 
 **Selector facts worth not rediscovering:**
 
