@@ -245,14 +245,12 @@ export function buildMetadataGenerationPipelineFunction(
         subnets: subnets,
     });
 
-    let bedrockModelId = "global.anthropic.claude-sonnet-4-5-20250929-v1:0";
-    if (
-        config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId &&
-        config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId != "" &&
-        config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId != "UNDEFINED"
-    ) {
-        bedrockModelId = config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId;
-    }
+    // Resolved by getConfig(), which defaults it in the commercial partition and REQUIRES it anywhere
+    // else: which foundation models an account may invoke differs by partition and entitlement, and this
+    // same string builds the bedrock:InvokeModel resource ARN below, so a commercial default carried here
+    // would produce a GovCloud or EU Sovereign deployment whose IAM policy names a model that does not
+    // exist in that partition.
+    const bedrockModelId = config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId;
 
     // The foundation-model id underneath any cross-Region inference-profile prefix, which is what the
     // `foundation-model/*` ARN in the grant below has to name. The prefix set is partition-specific:

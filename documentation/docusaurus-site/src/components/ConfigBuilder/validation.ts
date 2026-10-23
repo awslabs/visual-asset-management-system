@@ -273,6 +273,20 @@ function anyCosmos3ModelEnabled(cfg: ConfigShape): boolean {
     );
 }
 
+/** True if any Image to 3D model is enabled (config.ts:1122-1127). */
+function anyImageTo3dModelEnabled(cfg: ConfigShape): boolean {
+    const p = "app.pipelines.useImageTo3d.models";
+    return (
+        !!g(cfg, `${p}.sam3d.enabled`) ||
+        !!g(cfg, `${p}.stable3dgen.enabled`) ||
+        !!g(cfg, `${p}.trellis2.enabled`) ||
+        !!g(cfg, `${p}.triposr.enabled`) ||
+        !!g(cfg, `${p}.step1x3d.enabled`) ||
+        !!g(cfg, `${p}.hunyuan3d.enabled`) ||
+        !!g(cfg, `${p}.blenderagent.enabled`)
+    );
+}
+
 /** A Cosmos/Gr00t model with `enabled` true but an empty instanceTypes array. */
 function modelInstanceTypesEmpty(cfg: ConfigShape, modelPath: string): boolean {
     if (!g(cfg, `${modelPath}.enabled`)) return false;
@@ -1185,6 +1199,102 @@ export const RULES: Rule[] = [
             ),
         message:
             "useNvidiaCosmos3.modelsOmni.superImage2Video64B.instanceTypes must be a non-empty array.",
+    },
+
+    // ----- Image to 3D (config.ts: "Image to 3D validation") -----
+    {
+        id: "imageto3d-no-model",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.enabled"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useImageTo3d.enabled") && !anyImageTo3dModelEnabled(c),
+        message:
+            "useImageTo3d is enabled but no models are enabled. Enable at least one model in useImageTo3d.models.",
+    },
+    {
+        id: "imageto3d-hf-token",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.huggingFaceToken"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useImageTo3d.enabled") &&
+            isBlank(g(c, "app.pipelines.useImageTo3d.huggingFaceToken")),
+        message: "useImageTo3d requires huggingFaceToken for model downloads from HuggingFace.",
+    },
+    {
+        id: "imageto3d-instancetypes",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.instanceTypes"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useImageTo3d.enabled")) return false;
+            const types = g(c, "app.pipelines.useImageTo3d.instanceTypes");
+            return !Array.isArray(types) || types.length === 0;
+        },
+        message: "useImageTo3d.instanceTypes must be a non-empty array.",
+    },
+    {
+        id: "imageto3d-blenderagent-model-id",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useImageTo3d.enabled") &&
+            !!g(c, "app.pipelines.useImageTo3d.models.blenderagent.enabled") &&
+            isBlank(g(c, "app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId")),
+        message:
+            "useImageTo3d.models.blenderagent.bedrockModelId must be set when the Blender agent is enabled. Foundation model availability differs by partition and account; the restricted-partition presets leave it empty.",
+    },
+    {
+        id: "imageto3d-blenderagent-model-id-commercial-only-prefix",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useImageTo3d.enabled")) return false;
+            if (!g(c, "app.pipelines.useImageTo3d.models.blenderagent.enabled")) return false;
+            const id = String(
+                g(c, "app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId") ?? ""
+            );
+            return !isCommercialPartition(c) && (id.startsWith("global.") || id.startsWith("us."));
+        },
+        message:
+            'useImageTo3d.models.blenderagent.bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition. Use a model id offered in this partition.',
+    },
+    {
+        id: "imageto3d-blenderagent-image-editing-region",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useImageTo3d.models.blenderagent.useStabilityImageEditing",
+            "env.region",
+        ],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useImageTo3d.enabled")) return false;
+            if (!g(c, "app.pipelines.useImageTo3d.models.blenderagent.enabled")) return false;
+            if (!g(c, "app.pipelines.useImageTo3d.models.blenderagent.useStabilityImageEditing"))
+                return false;
+            const region = g(c, "env.region");
+            // An unset region is checked at deploy time, once it is known.
+            if (isUnset(region) || typeof region !== "string") return false;
+            return !(isCommercialPartition(c) && region.startsWith("us-"));
+        },
+        message:
+            "useImageTo3d.models.blenderagent.useStabilityImageEditing can be enabled only in the commercial partition's US Regions, where the Stability AI us. inference profiles exist. Set it to false; the agent then textures from the photographs alone.",
+    },
+    {
+        id: "imageto3d-hunyuan3d-territory",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.models.hunyuan3d.enabled", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useImageTo3d.enabled")) return false;
+            if (!g(c, "app.pipelines.useImageTo3d.models.hunyuan3d.enabled")) return false;
+            const region = String(g(c, "env.region") ?? "");
+            // eu-central-2 is Zurich, which is in neither the European Union nor the United Kingdom.
+            if (region === "eu-central-2") return false;
+            return (
+                region.startsWith("eu-") ||
+                region.startsWith("eusc-") ||
+                region === "ap-northeast-2"
+            );
+        },
+        message:
+            "useImageTo3d.models.hunyuan3d cannot be enabled in this region. The Tencent Hunyuan 3D 2.0 Community License Agreement grants no licence in the European Union, the United Kingdom or South Korea.",
     },
 
     // ----- NVIDIA Cosmos 3 instance-type GPU capacity

@@ -21,26 +21,53 @@ import subprocess
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
-# The file kinds that mean a repository's weights are really present. A snapshot directory exists as
-# soon as a download starts, so its presence proves nothing.
+# S3 prefix for HF cache backups
+S3_HF_CACHE_PREFIX = "cosmos-transfer2.5/hf_cache"
+
+# The file kinds that mean a repository's weights are really present. A snapshot directory exists as soon
+# as a download starts, so its presence proves nothing.
 WEIGHT_EXTENSIONS = (".safetensors", ".bin", ".pth", ".ckpt")
 
 # Filesystem types that mean the cache is genuinely shared between instances.
 NETWORK_FILESYSTEMS = ("nfs", "nfs4", "efs")
 
+def _repo_cache_dir(hub_dir, repo: str):
+    """Where the HuggingFace cache keeps one repo: ``hub/models--org--name``."""
+    return hub_dir / ("models--" + repo.replace("/", "--"))
+
+
+def _has_cached_repo(hub_dir, repo: str) -> bool:
+    """Whether ONE repository's snapshot holds a weight file.
+
+    Looks only under that repository's own ``snapshots`` directory, whose layout the HuggingFace cache
+    fixes as ``hub/models--org--name/snapshots/{revision}/``. Those entries are symlinks into ``blobs``,
+    so the walk covers a handful of names rather than every blob in the cache.
+    """
+    snapshots = _repo_cache_dir(hub_dir, repo) / "snapshots"
+    if not snapshots.is_dir():
+        return False
+    for revision in snapshots.iterdir():
+        if revision.is_dir():
+            for _current, _dirs, files in os.walk(revision):
+                if any(name.endswith(WEIGHT_EXTENSIONS) for name in files):
+                    return True
+    return False
+
+
 
 def warn_if_cache_is_not_shared(path: str) -> bool:
     """Whether the cache path is backed by a NETWORK filesystem. Logs loudly when it is not.
 
-    The cache is a host path bind-mounted into the container, and the difference between a shared
-    network filesystem and an empty directory on the instance's own disk is the whole value of the
-    cache. While the EFS mount silently failed, every run restored its weights from Amazon S3 onto
+    The cache is a host path bind-mounted into the container, and the difference between a shared network
+    filesystem and an empty directory on the instance's own disk is the whole value of the cache. When the
+    mount silently failed on the Image to 3D pipeline, every run restored its weights from Amazon S3 onto
     local disk and uploaded them again afterwards, and nothing in the logs said so.
 
-    Discriminated by filesystem TYPE, not by the presence of a mount point: a Docker bind mount
-    appears in /proc/mounts whatever backs it, so looking for the path there reports every run as
-    correctly mounted -- a check that cannot fail is worse than no check.
+    Discriminated by filesystem TYPE, not by the presence of a mount point: a Docker bind mount appears
+    in /proc/mounts whatever backs it, so looking for the path there reports every run as correctly
+    mounted -- a check that cannot fail is worse than no check.
     """
     try:
         with open("/proc/mounts", encoding="utf-8") as handle:
@@ -64,18 +91,15 @@ def warn_if_cache_is_not_shared(path: str) -> bool:
 
     seen = "nothing" if covering is None else f"{covering[1]} at {covering[0]}"
     logger.warning(
-        f"The model cache at {path} is NOT on a shared filesystem -- {seen}, which is this "
-        f"instance's own disk. Every run here restores its weights from S3 and uploads them again, "
-        f"and no other instance can reuse them. Check /var/log/*-efs-mount.log on the instance")
+        f"The model cache at {path} is NOT on a shared filesystem -- {seen}, which is this instance's "
+        f"own disk. Every run here restores its weights from S3 and uploads them again, and no other "
+        f"instance can reuse them. Check /var/log/*-efs-mount.log on the instance")
     return False
 
-logging.basicConfig(level=logging.INFO)
-
-# S3 prefix for HF cache backups
-S3_HF_CACHE_PREFIX = "cosmos-transfer2.5/hf_cache"
 
 
-def _has_cached_models(hf_home: str) -> bool:
+
+def _has_cached_models(hf_home: str, repos=()) -> bool:
     """
     Check if HF_HOME contains cached model files.
 
@@ -99,13 +123,29 @@ def _has_cached_models(hf_home: str) -> bool:
         return False
 
     # Stopped at the FIRST weight file rather than counting them. The previous form,
-    # list(hub_dir.rglob(f"*{ext}")), walked the whole cache tree once per extension and built a list
-    # of every match only to test it for emptiness -- over a network filesystem, on every run before
-    # any GPU work.
+    # list(hub_dir.rglob(f"*{ext}")), walked the whole cache tree once per extension and built a list of
+    # every match only to test it for emptiness -- over a network filesystem, on every run before any GPU
+    # work. Measured on the Image to 3D pipeline, which had the same check: 477 seconds of a 606-second
+    # run, more than the model's own generation took.
+    # The repositories this RUN needs, when the caller knows them. Asking whether ANY weight file is
+    # present cannot distinguish one model variant from another, and these pipelines serve several from
+    # one cache directory: 2B and 14B, 2B and 8B, Nano and Super. A hit on the wrong variant skips the
+    # restore from S3 and lets HuggingFace download the right one during inference instead, where the
+    # cost reads as a slow model rather than as a cache miss.
+    if repos:
+        missing = [repo for repo in repos if not _has_cached_repo(hub_dir, repo)]
+        if missing:
+            logger.info(f"HF cache miss: no weights for {', '.join(missing)} under {hub_dir}")
+            return False
+        logger.info(f"HF cache hit: weights present for {', '.join(repos)}")
+        return True
+
+    # Without a declared repository all that can be asked is whether anything is cached at all.
     for ext in WEIGHT_EXTENSIONS:
         found = next(hub_dir.rglob(f"*{ext}"), None)
         if found is not None:
-            logger.info(f"Found cached weights in the HF cache ({found.name})")
+            logger.info(f"HF cache hit: {found.name} under {hub_dir} (no repository declared, so this "
+                        f"does not confirm THIS run's model)")
             return True
 
     return False
@@ -179,7 +219,8 @@ def _restore_from_s3(hf_home: str, s3_bucket: str) -> bool:
         return False
 
 
-def ensure_models_cached(hf_home: str, s3_bucket: str, invalidate: bool = False) -> None:
+def ensure_models_cached(hf_home: str, s3_bucket: str, invalidate: bool = False,
+                         repos=()) -> None:
     """
     Ensure HF_HOME has model files, restoring from S3 if needed.
 
@@ -218,7 +259,7 @@ def ensure_models_cached(hf_home: str, s3_bucket: str, invalidate: bool = False)
             logger.warning(f"Failed to clear S3 cache: {e}")
 
     # Step 1: Check EFS for cached models (fast path)
-    if _has_cached_models(hf_home):
+    if _has_cached_models(hf_home, repos):
         logger.info(f"HF cache found on EFS at {hf_home}, using fast path")
         return
 
@@ -226,7 +267,7 @@ def ensure_models_cached(hf_home: str, s3_bucket: str, invalidate: bool = False)
     logger.info("No HF cache on EFS, checking S3 backup...")
     if _s3_prefix_exists(s3_bucket):
         if _restore_from_s3(hf_home, s3_bucket):
-            if _has_cached_models(hf_home):
+            if _has_cached_models(hf_home, repos):
                 logger.info("Successfully restored HF cache from S3")
                 return
             else:
@@ -255,7 +296,7 @@ def backup_cache_to_s3(hf_home: str, s3_bucket: str) -> None:
         logger.warning(f"HF_HOME does not exist at {hf_home}, nothing to backup")
         return
 
-    if not _has_cached_models(hf_home):
+    if not _has_cached_models(hf_home, repos):
         logger.warning("No model files in HF cache, skipping backup")
         return
 

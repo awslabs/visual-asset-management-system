@@ -322,10 +322,15 @@ def main():
         logger.info("Step 1: Ensuring models are cached")
         logger.info("=" * 80)
 
+        # The repository this run needs, so the cache check can tell a warm cache for THIS variant
+        # from a warm cache for another one. Serving several variants from a single cache directory,
+        # a check that only asks whether any weights are present reports a hit on the wrong variant,
+        # skips the restore from S3, and downloads the right weights during inference instead.
         ensure_models_cached(
             hf_home=hf_home,
             s3_bucket=s3_model_bucket,
-            invalidate=False
+            invalidate=False,
+            repos=("nvidia/Cosmos-Transfer2.5-2B",)
         )
 
         # Step 2: Download source video

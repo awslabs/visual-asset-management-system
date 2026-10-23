@@ -6,9 +6,9 @@
 /**
  * The Amazon ECR repositories of the CodeBuild-built pipelines follow `app.useKmsCmkEncryption`.
  *
- * With `useCodeBuild` on, five pipelines build their container image with AWS CodeBuild into a
+ * With `useCodeBuild` on, six pipelines build their container image with AWS CodeBuild into a
  * VAMS-owned repository: coordinate transform, Gaussian splat toolbox, NVIDIA Cosmos (one repository per
- * model family), NVIDIA GR00T and Isaac Lab training. With the CMK on, each repository is encrypted with
+ * model family), NVIDIA GR00T, Isaac Lab training and Image to 3D (one repository per enabled model). With the CMK on, each repository is encrypted with
  * the deployment's shared key; with it off, each stays on the Amazon ECR AES-256 default, which is no
  * `EncryptionConfiguration` at all. Both directions are asserted for every repository.
  *
@@ -52,6 +52,7 @@ const EXPECTED_REPOSITORIES = [
     "CosmosCodeBuildEcrRepocosmos3",
     "Gr00tCodeBuildEcrRepogr00tfinetune",
     "IsaacLabCodeBuildEcrRepotraining",
+    "ImageTo3dCodeBuildEcrRepostable3dgen",
 ];
 
 /** The one repository with an explicit `repositoryName`. */
@@ -71,6 +72,7 @@ const EXPECTED_CODEBUILD_PIPELINES = [
     "useNvidiaCosmos",
     "useNvidiaCosmos3",
     "useNvidiaGr00t",
+    "useImageTo3d",
 ];
 
 /**
@@ -92,7 +94,7 @@ const enableEveryCodeBuildPipeline = (c: any, cmkOn: boolean): string[] => {
         }
     }
     // Synth-only values for the fields the NVIDIA constructs require before they build.
-    for (const key of ["useNvidiaCosmos", "useNvidiaCosmos3", "useNvidiaGr00t"]) {
+    for (const key of ["useNvidiaCosmos", "useNvidiaCosmos3", "useNvidiaGr00t", "useImageTo3d"]) {
         p[key].huggingFaceToken = "synth-only";
     }
     p.useNvidiaCosmos3.acceptNvidiaEula = true;

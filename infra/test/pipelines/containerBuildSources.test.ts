@@ -405,8 +405,9 @@ describe.each(NON_ROOT_IMAGES)(
 );
 
 /**
- * The five NVIDIA GPU images clone an upstream repository at build time, and each must clone a fixed
- * revision rather than whatever the default branch holds that day.
+ * The GPU images that clone an upstream repository at build time -- the five NVIDIA images and the
+ * SAM 3D image-to-3D image -- must each clone a fixed revision rather than whatever the default branch
+ * holds that day.
  *
  * An unpinned clone makes the framework version part of WHEN the image was built rather than of which
  * VAMS commit built it: two builds of the same commit ship different inference code, `uv sync --locked`
@@ -420,7 +421,7 @@ describe.each(NON_ROOT_IMAGES)(
  * Named explicitly rather than globbed, for the reason in the file header: the splat Dockerfile is
  * gitignored, so a glob passes locally and fails in CI.
  */
-const NVIDIA_DOCKERFILES: { label: string; file: string }[] = [
+const UPSTREAM_CLONE_DOCKERFILES: { label: string; file: string }[] = [
     {
         label: "cosmos 3",
         file: path.join(PIPELINES_DIR, "genAi", "nvidia", "cosmos", "3", "container", "Dockerfile"),
@@ -465,6 +466,20 @@ const NVIDIA_DOCKERFILES: { label: string; file: string }[] = [
         label: "gr00t",
         file: path.join(PIPELINES_DIR, "genAi", "nvidia", "gr00t", "container", "Dockerfile"),
     },
+    {
+        label: "sam 3d",
+        file: path.join(PIPELINES_DIR, "genAi", "imageTo3d", "container", "Dockerfile.sam3d"),
+    },
+    {
+        label: "blender agent",
+        file: path.join(
+            PIPELINES_DIR,
+            "genAi",
+            "imageTo3d",
+            "container",
+            "Dockerfile.blenderagent"
+        ),
+    },
 ];
 
 /** Logical Dockerfile instructions: backslash continuations joined, so one RUN is one entry. */
@@ -501,12 +516,12 @@ const FULL_SHA = /^[0-9a-f]{40}$/;
 const MOVING_COPY_FROM = /COPY\s+--from=\S+:(latest|main|master)\b/;
 const UNVERSIONED_AWS_CLI = /awscli-exe-linux-x86_64\.zip/;
 
-describe("the NVIDIA container images clone a pinned revision", () => {
+describe("the container images that clone an upstream repository pin its revision", () => {
     it("[control] the Dockerfiles are all present and all clone something", () => {
         // Both halves matter. A missing file would make every assertion below pass on an empty string,
         // and an image that stopped cloning would make the pin assertions vacuously true.
-        expect(NVIDIA_DOCKERFILES.length).toBe(5);
-        const cloneCounts = NVIDIA_DOCKERFILES.map(({ label, file }) => {
+        expect(UPSTREAM_CLONE_DOCKERFILES.length).toBe(7);
+        const cloneCounts = UPSTREAM_CLONE_DOCKERFILES.map(({ label, file }) => {
             expect(fs.existsSync(file)).toBe(true);
             return `${label}=${cloneInstructions(fs.readFileSync(file, "utf-8")).length}`;
         });
@@ -516,6 +531,8 @@ describe("the NVIDIA container images clone a pinned revision", () => {
             "cosmos transfer=1",
             "cosmos reason=1",
             "gr00t=1",
+            "sam 3d=1",
+            "blender agent=1",
         ]);
     });
 
@@ -534,7 +551,7 @@ describe("the NVIDIA container images clone a pinned revision", () => {
 
     it("every clone checks out a 40-hex commit and verifies it landed", () => {
         const offenders: string[] = [];
-        for (const { label, file } of NVIDIA_DOCKERFILES) {
+        for (const { label, file } of UPSTREAM_CLONE_DOCKERFILES) {
             const text = fs.readFileSync(file, "utf-8");
             const args = argDefaults(text);
             for (const instruction of cloneInstructions(text)) {
@@ -573,7 +590,7 @@ describe("the NVIDIA container images clone a pinned revision", () => {
         // `COPY --from=ghcr.io/astral-sh/uv:latest` pulls a different binary on every build, and it is
         // not covered by the clone assertions above.
         const offenders: string[] = [];
-        for (const { label, file } of NVIDIA_DOCKERFILES) {
+        for (const { label, file } of UPSTREAM_CLONE_DOCKERFILES) {
             for (const instruction of instructions(fs.readFileSync(file, "utf-8"))) {
                 if (MOVING_COPY_FROM.test(instruction)) {
                     offenders.push(`${label}: ${instruction.trim().slice(0, 80)}`);
@@ -587,7 +604,7 @@ describe("the NVIDIA container images clone a pinned revision", () => {
         // A second unpinned build input on the same rebuild. Its failure mode is milder than the
         // clone's, but it is the same class and the same one-line fix.
         const offenders: string[] = [];
-        for (const { label, file } of NVIDIA_DOCKERFILES) {
+        for (const { label, file } of UPSTREAM_CLONE_DOCKERFILES) {
             const text = fs.readFileSync(file, "utf-8");
             if (!/awscli-exe-linux-x86_64/.test(text)) continue;
             if (UNVERSIONED_AWS_CLI.test(text)) {

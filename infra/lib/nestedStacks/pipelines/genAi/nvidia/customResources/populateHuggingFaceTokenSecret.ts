@@ -1,5 +1,5 @@
 /*
- * Populates an NVIDIA pipeline's HuggingFace token secret with the value from config,
+ * Populates a GPU pipeline's HuggingFace token secret with the value from config,
  * without placing that value in the CloudFormation template.
  *
  * The token is written into the custom-resource Lambda's CODE ASSET (a JSON file bundled
