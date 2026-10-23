@@ -431,9 +431,10 @@ class Pipeline:
         """Whether one concrete input file passes this pipeline's inputFileFilters, as a run using
         ``template`` has them (the template's override replaces the pipeline's own).
 
-        The service gives a pipeline only the inputs its filters admit and refuses a run that leaves
-        a file-taking pipeline with none. A pipeline of arity 'none' receives no files, so it refuses
-        none.
+        The service gives a pipeline only the inputs its filters admit, and refuses a run that
+        leaves the workflow's FIRST pipeline, when it takes files, with none; a later pipeline also
+        receives the files the earlier ones wrote and is checked when the run reaches it. A pipeline
+        of arity 'none' receives no files, so it refuses none.
         """
         if (self._effective("inputFileArity", template) or "one") == "none":
             return True

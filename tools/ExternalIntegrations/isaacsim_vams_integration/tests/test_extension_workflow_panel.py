@@ -2,9 +2,10 @@
 
 The panel offers a run control per selection the workflow can actually accept: a whole-asset run only
 when its assetScope admits the asset root, per-file runs only when it takes input files at all, and
-per-file runs only for files its inputFileFilters and those of each pipeline that takes files admit.
-A pipeline that requires a template and has no default gets a template choice, which Run passes to
-the CLI. Driving
+per-file runs only for files its inputFileFilters and those of its first pipeline admit (a later
+pipeline also receives the earlier pipelines' outputs, and the service checks it when the run
+reaches it). A pipeline that requires a template and has no default gets a template choice, which
+Run passes to the CLI. Driving
 `_show_wf_execute` and `_refresh_wf_panel` with recording widget stubs asserts which controls are
 built, and — for a listing that failed — that the reason reaches the panel and the status line instead
 of being swallowed.
@@ -288,7 +289,8 @@ def _chain(*refs, whole_asset=False):
                     system_config=system_config)
 
 
-PIPELINE_FILTERS = "the input-file filters of this workflow and its pipelines"
+PIPELINE_FILTERS = "the input-file filters of this workflow and its first pipeline"
+OBJ = "/models/robot.obj"
 
 
 @pytest.fixture
@@ -303,9 +305,11 @@ def _listed(panel):
 
 
 class TestThePipelinesFiltersGateRun:
-    """The service judges every pipeline that takes files against the workflow-admitted selection,
-    with the pipeline's own effective inputFileFilters, and refuses a run that leaves one of them
-    with none, so an open workflow filter does not make a file runnable."""
+    """The service judges the FIRST pipeline against the workflow-admitted selection, with that
+    pipeline's own effective inputFileFilters, and refuses a run that leaves it with none, so an
+    open workflow filter does not make a file runnable. A later pipeline receives the selection plus
+    every file the earlier pipelines wrote and is checked when the run reaches it, so its filters do
+    not gate Run: a pipeline that reads only the type the first one writes is a valid chain."""
 
     def test_only_files_the_pipeline_accepts_are_runnable(self, chain_panel):
         chain_panel._connector.pipelines[("GLOBAL", "p1")] = _pipeline(allow=["*.stl", "*.obj"])
@@ -338,12 +342,50 @@ class TestThePipelinesFiltersGateRun:
         chain_panel.recorder.combos[0].choose(1)
         assert _listed(chain_panel) == ["GingerbreadHouse.usda"]
 
-    def test_a_later_pipelines_filters_gate_too(self, chain_panel):
+    def test_a_later_pipelines_filters_do_not_gate(self, chain_panel):
         connector = chain_panel._connector
         connector.pipelines[("GLOBAL", "p1")] = _pipeline(allow=["*.stl", "*.usda"])
         connector.pipelines[("GLOBAL", "p2")] = _pipeline("p2", allow=["*.stl"], name="Thumbnail")
         chain_panel._show_wf_execute(_chain(_ref(), _ref("p2")))
-        assert _listed(chain_panel) == ["models/robot.stl"]
+        assert _listed(chain_panel) == ["models/robot.stl", "GingerbreadHouse.usda"]
+
+    def test_a_later_pipeline_reading_only_the_first_ones_output_type_offers_run(self,
+                                                                                 chain_panel):
+        """The OBJ-to-GLB chain: the second pipeline reads only the GLB the first one writes, so
+        the asset's OBJ is runnable although no file of the asset passes the second pipeline's
+        filters."""
+        connector = chain_panel._connector
+        chain_panel._files = [AssetFile(relative_path=key) for key in (OBJ, JPG)]
+        connector.pipelines[("GLOBAL", "p1")] = _pipeline(allow=["*.obj"], name="OBJ to GLB")
+        connector.pipelines[("GLOBAL", "p2")] = _pipeline("p2", allow=["*.glb"], name="Thumbnail")
+        chain_panel._show_wf_execute(_chain(_ref(), _ref("p2")))
+        assert "    models/robot.obj" in chain_panel.recorder.labels
+        assert chain_panel.recorder.buttons.count("Run") == 1
+        assert f"    1 file(s) excluded by {PIPELINE_FILTERS}." in chain_panel.recorder.labels
+        chain_panel.recorder.click("Run")
+        [run] = connector.executed
+        assert run["file_key"] == "models/robot.obj"
+
+    def test_the_first_pipelines_filters_still_gate_a_chain(self, chain_panel):
+        """Control: the same two pipelines in the other order refuse the OBJ, as the service
+        does."""
+        connector = chain_panel._connector
+        chain_panel._files = [AssetFile(relative_path=key) for key in (OBJ, JPG)]
+        connector.pipelines[("GLOBAL", "p1")] = _pipeline(allow=["*.glb"], name="Thumbnail")
+        connector.pipelines[("GLOBAL", "p2")] = _pipeline("p2", allow=["*.obj"], name="OBJ to GLB")
+        chain_panel._show_wf_execute(_chain(_ref(), _ref("p2")))
+        assert "Run" not in chain_panel.recorder.buttons
+        assert f"  No file in this asset passes {PIPELINE_FILTERS}." in chain_panel.recorder.labels
+
+    def test_a_first_pipeline_that_takes_no_file_leaves_the_workflows_filters(self, chain_panel):
+        """An arity-'none' first pipeline is still the first: it writes files a later one reads, so
+        the later pipeline's filters do not gate Run either."""
+        connector = chain_panel._connector
+        connector.pipelines[("GLOBAL", "p1")] = _pipeline(arity="none", name="Generate")
+        connector.pipelines[("GLOBAL", "p2")] = _pipeline("p2", allow=["*.glb"], name="Thumbnail")
+        chain_panel._show_wf_execute(_chain(_ref(), _ref("p2")))
+        assert _listed(chain_panel) == ["models/robot.stl", "GingerbreadHouse.usda",
+                                        "textures/color.jpg"]
 
     def test_a_later_pipeline_that_takes_no_file_does_not_gate(self, chain_panel):
         """Control: a pipeline of arity 'none' is given no files, so its filters refuse none."""
@@ -354,23 +396,34 @@ class TestThePipelinesFiltersGateRun:
         chain_panel._show_wf_execute(_chain(_ref(), _ref("p2")))
         assert _listed(chain_panel) == ["models/robot.stl", "GingerbreadHouse.usda"]
 
-    def test_a_later_pipelines_template_in_use_sets_its_filters(self, chain_panel):
+    def test_a_later_pipelines_template_in_use_does_not_gate_either(self, chain_panel):
         connector = chain_panel._connector
         connector.pipelines[("GLOBAL", "p1")] = _pipeline(allow=["*.stl", "*.usda"])
         connector.pipelines[("GLOBAL", "p2")] = _pipeline("p2", allow=["*.stl"], name="Thumbnail")
         connector.templates[("GLOBAL", "p2")] = [_template("usd-in", "USD in", allow=["*.usda"])]
         chain_panel._show_wf_execute(_chain(_ref(), _ref("p2", default_template="usd-in")))
-        assert _listed(chain_panel) == ["GingerbreadHouse.usda"]
+        assert _listed(chain_panel) == ["models/robot.stl", "GingerbreadHouse.usda"]
 
-    def test_a_pipeline_of_a_chain_that_cannot_be_read_does_not_gate_and_says_so(self,
-                                                                                 chain_panel):
+    def test_a_later_pipeline_of_a_chain_that_cannot_be_read_says_so(self, chain_panel):
         connector = chain_panel._connector
         connector.pipelines[("GLOBAL", "p1")] = _pipeline(allow=["*.stl"])
         connector.pipelines[("GLOBAL", "p2")] = VamsCliError("403 Forbidden")
         chain_panel._show_wf_execute(_chain(_ref(), _ref("p2")))
         assert _listed(chain_panel) == ["models/robot.stl"]
         assert chain_panel._status_label.text == (
-            "  Could not read pipeline GLOBAL:p2, so its filters do not gate Run and a template it "
+            "  Could not read pipeline GLOBAL:p2, so a template it requires cannot be chosen here: "
+            "403 Forbidden")
+
+    def test_a_first_pipeline_of_a_chain_that_cannot_be_read_does_not_gate_and_says_so(
+            self, chain_panel):
+        connector = chain_panel._connector
+        connector.pipelines[("GLOBAL", "p1")] = VamsCliError("403 Forbidden")
+        connector.pipelines[("GLOBAL", "p2")] = _pipeline("p2", allow=["*.stl"], name="Thumbnail")
+        chain_panel._show_wf_execute(_chain(_ref(), _ref("p2")))
+        assert _listed(chain_panel) == ["models/robot.stl", "GingerbreadHouse.usda",
+                                        "textures/color.jpg"]
+        assert chain_panel._status_label.text == (
+            "  Could not read pipeline GLOBAL:p1, so its filters do not gate Run and a template it "
             "requires cannot be chosen here: 403 Forbidden")
 
     def test_an_unreadable_pipeline_leaves_the_workflows_filters_and_says_so(self, chain_panel):
