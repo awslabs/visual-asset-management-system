@@ -134,7 +134,7 @@ When you select a file in the file manager and choose to view it, VAMS opens a d
 
 ### Supported Viewer Types
 
-VAMS includes 20 built-in viewer plugins covering 3D models, point clouds, Gaussian splats, images, video, audio, documents, and tabular data. The viewer is selected automatically only when exactly one viewer supports the file extension. If multiple viewers support the same extension, you choose one from a dropdown and can switch between them.
+VAMS includes 21 built-in viewer plugins covering 3D models, point clouds, Gaussian splats, images, video, audio, documents, and tabular data. The viewer is selected automatically only when exactly one viewer supports the file extension. If multiple viewers support the same extension, you choose one from a dropdown and can switch between them.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 
