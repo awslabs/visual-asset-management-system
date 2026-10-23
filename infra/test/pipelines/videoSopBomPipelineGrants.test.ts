@@ -696,14 +696,15 @@ describe("encryption at rest and logging", () => {
         expect(flatten(group.KmsKeyId)).toBe(`<${sharedKeyLogicalId}.Arn>`);
     });
 
-    test("the ECR repository encrypts its image layers with the deployment key", () => {
+    test("the ECR repository encrypts its image layers with the deployment key and names it -kms", () => {
         const repositories = Object.values(template.findResources("AWS::ECR::Repository")) as any[];
         expect(repositories).toHaveLength(1);
         const encryption = repositories[0].Properties.EncryptionConfiguration;
         expect(encryption.EncryptionType).toBe("KMS");
         expect(flatten(encryption.KmsKey)).toBe(`<${sharedKeyLogicalId}.Arn>`);
+        // Amazon ECR cannot change a repository's encryption, so the explicit name follows it.
         expect(repositories[0].Properties.RepositoryName).toBe(
-            `${(commercialTemplate as any).name}-vams-test-videosopbom`.toLowerCase()
+            `${(commercialTemplate as any).name}-vams-test-videosopbom-kms`.toLowerCase()
         );
     });
 
