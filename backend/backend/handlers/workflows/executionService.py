@@ -588,8 +588,9 @@ def get_asset_details(databaseId, assetId):
     (assetService.archive_asset), so a query of the active partition alone reports an archived asset as
     absent. Authorization treats an asset it cannot resolve as permanently gone and falls back to the
     asset's DATABASE, which is a weaker check — so resolving the archived row keeps an archived asset
-    authorized on its own attributes (assetName, assetType, tags) exactly as it was before archiving.
-    Only a genuinely deleted asset, whose row exists in neither partition, reaches the fallback.
+    authorized as an archived record: on its own attributes (assetName, assetType, tags), and on both
+    its stored database id and its database id (CasbinEnforcerService.enforce). Only a genuinely
+    deleted asset, whose row exists in neither partition, reaches the fallback.
 
     Returns the row (active first, then archived) or None when the asset exists in neither."""
     try:
