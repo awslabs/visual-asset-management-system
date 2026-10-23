@@ -66,12 +66,27 @@ export function normalizeFileManagerPath(path: string): string {
 /**
  * The tree node a deep-link path names, or null when the asset has no such file or folder. The
  * path matches with or without its leading slash, and a folder also matches without its trailing
- * "/".
+ * "/". A path that begins with the asset's S3 root key (the tree root's keyPrefix, which the
+ * listing's root entry sets) matches as well, as the rest of the path: the execution page names an
+ * input file by that full stored key. The path is read as asset-relative first, the form the URL
+ * write-back uses, so a reload of a written-back URL selects the same node.
  */
 export function resolveFileManagerPath(root: FileTree | null, path: string): FileTree | null {
     if (!root) {
         return null;
     }
+    const node = findByAssetRelativePath(root, path);
+    if (node) {
+        return node;
+    }
+    const withinAsset = stripAssetRootKey(root.keyPrefix, path);
+    if (withinAsset === null) {
+        return null;
+    }
+    return withinAsset === "/" ? root : findByAssetRelativePath(root, withinAsset);
+}
+
+function findByAssetRelativePath(root: FileTree, path: string): FileTree | null {
     const normalized = normalizeFileManagerPath(path);
     const candidates = [path, normalized];
     if (!normalized.endsWith("/")) {
@@ -84,6 +99,24 @@ export function resolveFileManagerPath(root: FileTree | null, path: string): Fil
         }
     }
     return null;
+}
+
+/**
+ * `path` in tree form with the asset's S3 root key removed ("/" for the root key itself), or null
+ * when the path does not begin with that key at a "/" boundary. The root key may be stored with or
+ * without its trailing slash. An unknown root key strips nothing: the tree root keeps its "/"
+ * placeholder when the listing had no root entry.
+ */
+function stripAssetRootKey(rootKey: string | undefined, path: string): string | null {
+    const root = normalizeFileManagerPath(rootKey || "").replace(/\/+$/, "");
+    if (!root) {
+        return null;
+    }
+    const normalized = normalizeFileManagerPath(path);
+    if (normalized === root || normalized === `${root}/`) {
+        return "/";
+    }
+    return normalized.startsWith(`${root}/`) ? normalized.slice(root.length) : null;
 }
 
 // Helper function to extract all parent folder paths from a file path
