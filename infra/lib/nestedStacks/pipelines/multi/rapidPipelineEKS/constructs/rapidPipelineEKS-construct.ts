@@ -636,8 +636,8 @@ export class RapidPipelineEKSConstruct extends Construct {
         // Submits Kubernetes job to EKS cluster.
         //
         // The task timeout is the handler's own timeout (Lambda's 3 s default if unset) plus a margin,
-        // so the RUN_JOB invocation has always ended before a RunJob Catch routes the run to
-        // PipelineEnd, which deletes the job by name.
+        // so a RunJob timeout, or an error the function itself returns, routes the run to
+        // PipelineEnd (which deletes the job by name) only after the RUN_JOB invocation has ended.
         const runJobTimeout = (consolidatedHandler.timeout ?? Duration.seconds(3)).plus(
             Duration.minutes(1)
         );
