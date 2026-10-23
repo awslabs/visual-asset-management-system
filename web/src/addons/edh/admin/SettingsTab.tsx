@@ -11,6 +11,9 @@ import {
 } from "../../../features/orchestration/components/ToastProvider";
 import { useEdhAdminSettings, useUpdateEdhAdminSettings } from "../api/adminQueries";
 import { useInFlight } from "../components/useInFlight";
+import CapacityReservationsSection, {
+    CAPACITY_RESERVATIONS_ROUTE,
+} from "./CapacityReservationsSection";
 
 interface SettingsTabProps {
     can: (method: string, pathTemplate: string) => boolean;
@@ -231,6 +234,13 @@ const SettingsTab: React.FC<SettingsTabProps> = ({ can }) => {
             {data.updatedBy && data.updatedAt && (
                 <div className="text-sm text-text-secondary mt-4">
                     Last changed by {data.updatedBy} at {formatDate(data.updatedAt)}
+                </div>
+            )}
+
+            {/* Below the lease policy, gated on its own route as each tab is on its GET route. */}
+            {can("GET", CAPACITY_RESERVATIONS_ROUTE) && (
+                <div className="pt-6 border-t border-border-default">
+                    <CapacityReservationsSection can={can} />
                 </div>
             )}
         </div>

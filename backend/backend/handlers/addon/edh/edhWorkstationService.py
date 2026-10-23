@@ -26,6 +26,7 @@ from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.apiRoutes import (
+    API_EDH_CATALOG_CAPACITY_RESERVATIONS,
     API_EDH_CATALOG_IMAGES,
     API_EDH_CATALOG_INSTANCE_TYPES,
     API_EDH_CATALOG_LEASE,
@@ -50,8 +51,9 @@ from models.common import (
     VAMSGeneralErrorResponse, validation_error_message,
 )
 from models.addon.edh import (
-    ARCHITECTURE_FAMILIES,
-    CreateWorkstationRequestModel, WorkstationRecordModel, ConnectResponseModel, WindowsSignInResponseModel,
+    ARCHITECTURE_FAMILIES, EDH_OS_FAMILIES, edh_instance_type_pattern,
+    CapacityReservationViewModel, CreateWorkstationRequestModel, WorkstationRecordModel, ConnectResponseModel,
+    WindowsSignInResponseModel,
 )
 from .common.edhClient import (
     EDH_PROFILE_ROUTES,
@@ -65,7 +67,7 @@ from .common.edhClient import (
     EDH_SOFTWARE_STACK_ID_FIELD,
     EDH_SOFTWARE_STACK_ROUTES,
     START_IN_PROGRESS_FIELD,
-    EdhClient, EdhError, EdhNotFoundError, EdhOutcomeUnknownError,
+    EdhApiError, EdhCapacityError, EdhClient, EdhError, EdhNotFoundError, EdhOutcomeUnknownError, EdhQuotaError,
     map_edh_error_to_response,
 )
 from .common.edhCatalogFields import (
@@ -74,6 +76,7 @@ from .common.edhCatalogFields import (
 )
 from .common.edhIdentity import SYSTEM_USER_ID, edh_uid_for
 from .common import edhAmiRecipeStore as recipe_store
+from .common import edhCapacityReservations as reservations
 from .common import edhSessionBootstrap as bootstrap
 from .common.edhLeasePolicy import (
     LeaseValidationError, compute_expiry, parse_iso, read_lease_policy, resolve_launch_lease,
@@ -87,11 +90,12 @@ from .common.edhSessionState import (
     EXPIRES_AT_FIELD,
     LAST_ERROR_LAUNCH_ERROR,
     LAST_ERROR_LEASE_EXPIRED,
+    LAST_ERROR_RESERVATION_FULL,
     START_IN_PROGRESS_SECONDS, STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED,
     WORKER_PAYLOAD_KEYS,
     credential_claim_stamp, deleted_row_expiry, edh_failure_attributes, edh_failure_read_due,
-    observed_row_attributes, session_row_live, start_in_progress, start_stamp, start_stamp_cleared,
-    state_for_edh_session_state,
+    observed_row_attributes, reservation_refusal_last_error, session_row_live, start_in_progress, start_stamp,
+    start_stamp_cleared, state_for_edh_session_state,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -106,6 +110,20 @@ request_deadline = None
 # Casbin object types enforced by this handler.
 WORKSTATION_OBJECT_TYPE = "edhWorkstation"
 IMAGE_OBJECT_TYPE = "edhImage"
+CAPACITY_RESERVATION_OBJECT_TYPE = "edhCapacityReservation"
+
+# The answers of a launch that names a capacity reservation, in the order its checks run, and of a start EDH
+# refused while the desktop's reservation is full.
+RESERVATION_NOT_REGISTERED_MESSAGE = "capacityReservationId is not registered"
+RESERVATION_READ_FAILED_MESSAGE = "The capacity reservation could not be read; try again"
+RESERVATION_NOT_ACTIVE_MESSAGE = "The capacity reservation is not active"
+RESERVATION_INSTANCE_TYPE_MESSAGE = "instanceType does not match the capacity reservation"
+RESERVATION_PLATFORM_MESSAGE = "The capacity reservation's platform does not match the image"
+RESERVATION_FULL_MESSAGE = "The capacity reservation has no free capacity"
+RESERVATION_FULL_START_MESSAGE = "The capacity reservation has no free capacity; the workstation stays stopped"
+# The EDH errors that are a definite refusal: EDH answered, and did not act.
+EDH_REFUSALS = (EdhApiError, EdhCapacityError, EdhNotFoundError, EdhQuotaError)
+INSTANCE_TYPE_QUERY_PATTERN = re.compile(edh_instance_type_pattern)
 
 # Session table indexes.
 SESSION_UUID_INDEX = "sessionUuidIndex"
@@ -233,6 +251,14 @@ def _image_auth_object(image_id, os_family):
         "object__type": IMAGE_OBJECT_TYPE,
         "edhImageId": str(image_id),
         "edhOsFamily": str(os_family),
+    }
+
+
+def _reservation_auth_object(capacity_reservation_id):
+    """The edhCapacityReservation enforcement dict: exactly the matrix field, as a string."""
+    return {
+        "object__type": CAPACITY_RESERVATION_OBJECT_TYPE,
+        "edhCapacityReservationId": str(capacity_reservation_id),
     }
 
 
@@ -407,9 +433,17 @@ def _update_live_row(row, **attributes):
     return True
 
 
-def _record(row):
-    """The API shape of a session row."""
-    return WorkstationRecordModel(**row).dict()
+def _record(row, labels=None):
+    """The API shape of a session row, with the registry label of its capacity reservation joined in: from
+    ``labels`` (id -> label) when the caller read them, else read for the row's own reservation. A row without
+    a reservation reads nothing."""
+    capacity_reservation_id = row.get('capacityReservationId')
+    label = None
+    if capacity_reservation_id:
+        if labels is None:
+            labels = reservations.labels_for([capacity_reservation_id])
+        label = labels.get(capacity_reservation_id)
+    return WorkstationRecordModel(**{**row, 'capacityReservationLabel': label}).dict()
 
 
 def _natural_key(text):
@@ -555,6 +589,44 @@ def get_catalog_lease(event):
     return success(body={'lease': {key: policy[key] for key in ('enabled', 'leaseHours', 'forced', 'graceHours')}})
 
 
+def list_catalog_capacity_reservations(event):
+    """The registered capacity reservations the caller may see (Tier-2 ``GET``) that are offered and active, with
+    their live view, by label; ``instanceType`` and ``osFamily`` narrow them to the reservations a launch of that
+    type and image family can use. EC2 is read only for the reservations the caller may see, in one call; a read
+    that fails lists none, so the launch stays on-demand."""
+    query = event.get('queryStringParameters') or {}
+    instance_type, os_family = query.get('instanceType'), query.get('osFamily')
+    if instance_type is not None and not INSTANCE_TYPE_QUERY_PATTERN.match(str(instance_type)):
+        return validation_error(body={'message': 'instanceType is not an EC2 instance type'}, event=event)
+    if os_family is not None and os_family not in EDH_OS_FAMILIES:
+        return validation_error(body={'message': f"osFamily must be one of: {', '.join(EDH_OS_FAMILIES)}"},
+                                event=event)
+    enforcer = _enforcer() if len(claims_and_roles["tokens"]) > 0 else None
+    # Kept only on an allow, so an absent enforcer lists nothing, never everything.
+    registrations = [registration for registration in reservations.list_registrations()
+                     if registration['enabled'] and enforcer
+                     and enforcer.enforce(_reservation_auth_object(registration['capacityReservationId']), "GET")]
+    if not registrations:
+        return success(body={'Items': []})
+    try:
+        live = reservations.read_live([registration['capacityReservationId'] for registration in registrations])
+    except reservations.CapacityReservationReadError as err:
+        logger.warning(f"Capacity reservations not read from EC2 ({err}), so none is offered")
+        return success(body={'Items': []})
+    items = []
+    for registration in registrations:
+        facts = live.get(registration['capacityReservationId']) or {}
+        if facts.get('state') != reservations.EC2_STATE_ACTIVE:
+            continue
+        if instance_type is not None and facts.get('instanceType') != instance_type:
+            continue
+        if os_family is not None and not reservations.platform_suits(facts.get('instancePlatform'), os_family):
+            continue
+        items.append(CapacityReservationViewModel(**reservations.view(registration, facts)).dict())
+    items.sort(key=lambda item: (_natural_key(item['label']), item['capacityReservationId']))
+    return success(body={'Items': items})
+
+
 # ---------------------------------------------------------------------------
 # Workstation routes
 # ---------------------------------------------------------------------------
@@ -683,13 +755,14 @@ def list_workstations(event):
         _record_failed_launches(event, rows, unanswered)
         _capture_launch_failures(event, client, rows, edh_uid)
     enforcer = _enforcer() if len(claims_and_roles["tokens"]) > 0 else None
-    items = []
+    allowed = []
     for row in rows:
         auth_object = _workstation_auth_object(row.get('imageId'), row.get('osFamily'), row.get('instanceType'))
         # Appends only on an allow, so an absent enforcer yields an empty list, never an open one.
         if enforcer and enforcer.enforce(auth_object, "GET"):
-            items.append(_record(row))
-    return success(body={'Items': items})
+            allowed.append(row)
+    labels = reservations.labels_for(row.get('capacityReservationId') for row in allowed)
+    return success(body={'Items': [_record(row, labels) for row in allowed]})
 
 
 def _worker_payload(row):
@@ -812,6 +885,41 @@ def _instance_type_offered_for_image(image_id, instance_type):
     return launch_types is None or instance_type in launch_types
 
 
+def _launch_reservation(event, request, os_family):
+    """(the reservation fields the launch's row carries, None), or (None, the refusal), for a launch that may
+    name a capacity reservation. None named is today's launch: no field, no read. A named one runs seven checks
+    in order, before any row, mint, worker or further EDH call: registered and offered; Tier-2 ``POST`` on it;
+    EC2 read (a failure refuses, since a reservation not read is not known to be full); active; the requested
+    instance type; a platform that suits the image's family; a free slot, or, when it has none, its fallback,
+    which launches on-demand and records the reservation asked for."""
+    capacity_reservation_id = request.capacityReservationId
+    if capacity_reservation_id is None:
+        return {}, None
+    registration = reservations.get_registration(capacity_reservation_id)
+    if registration is None or not registration['enabled']:
+        return None, validation_error(body={'message': RESERVATION_NOT_REGISTERED_MESSAGE}, event=event)
+    if not _enforcer().enforce(_reservation_auth_object(capacity_reservation_id), "POST"):
+        return None, authorization_error(event=event)
+    try:
+        facts = reservations.read_live([capacity_reservation_id])[capacity_reservation_id]
+    except reservations.CapacityReservationReadError as err:
+        logger.warning(f"The capacity reservation of a launch was not read from EC2 ({err})")
+        return None, general_error(status_code=503, body={'message': RESERVATION_READ_FAILED_MESSAGE}, event=event)
+    if facts.get('state') != reservations.EC2_STATE_ACTIVE:
+        return None, validation_error(body={'message': RESERVATION_NOT_ACTIVE_MESSAGE}, event=event)
+    if facts.get('instanceType') != request.instanceType:
+        return None, validation_error(body={'message': RESERVATION_INSTANCE_TYPE_MESSAGE}, event=event)
+    if not reservations.platform_suits(facts.get('instancePlatform'), os_family):
+        return None, validation_error(body={'message': RESERVATION_PLATFORM_MESSAGE}, event=event)
+    if not reservations.has_free_slot(facts):
+        if registration['fallbackToOnDemand']:
+            logger.info("The capacity reservation of a launch is full; launching on-demand")
+            return {'capacityReservationFallback': True, 'capacityReservationRequested': capacity_reservation_id}, None
+        return None, general_error(status_code=409, event=event,
+                                   body={'message': RESERVATION_FULL_MESSAGE, 'code': LAST_ERROR_RESERVATION_FULL})
+    return {'capacityReservationId': capacity_reservation_id}, None
+
+
 def create_workstation(event):
     if claims_and_roles.get('authMethod') == AUTH_METHOD_API_KEY:
         return authorization_error(
@@ -852,6 +960,9 @@ def create_workstation(event):
     if root_floor is not None and request.rootSizeGb < root_floor:
         return validation_error(
             body={'message': f'Root disk size must be at least {root_floor} GB for this image'}, event=event)
+    reservation_fields, error = _launch_reservation(event, request, os_family)
+    if error is not None:
+        return error
 
     user_id = _requesting_user_id()
     now = _utc_now()
@@ -877,6 +988,7 @@ def create_workstation(event):
     if lease_expires_at is not None:
         row['leaseExpiresAt'] = lease_expires_at
         row['leaseHoursAtLaunch'] = lease_hours_at_launch
+    row.update(reservation_fields)
     try:
         # A copy is written: the Item DynamoDB received is the CREATING snapshot, independent of ``row``.
         edh_session_table.put_item(Item=dict(row), ConditionExpression='attribute_not_exists(bootstrapId)')
@@ -1126,6 +1238,22 @@ def _lease_cleared(row, **attributes):
     return cleared
 
 
+def _start_refused_for_full_reservation(row, err):
+    """Whether ``err``, raised by a start, is EDH's definite refusal of a desktop launched into a capacity
+    reservation that is full when read again. A stopped instance holds no slot of its reservation, and EDH keeps
+    the reservation it was launched into, so the start cannot succeed until a slot frees; VAMS does not move the
+    instance to another reservation. A reservation that cannot be read leaves the refusal as EDH answered it."""
+    capacity_reservation_id = row.get('capacityReservationId')
+    if not capacity_reservation_id or not isinstance(err, EDH_REFUSALS):
+        return False
+    try:
+        facts = reservations.read_live([capacity_reservation_id])[capacity_reservation_id]
+    except reservations.CapacityReservationReadError as read_err:
+        logger.warning(f"The capacity reservation was not read after EDH refused a start ({read_err})")
+        return False
+    return reservation_refusal_last_error(facts) == LAST_ERROR_RESERVATION_FULL
+
+
 def start_workstation(event, path):
     if claims_and_roles.get('authMethod') == AUTH_METHOD_API_KEY:
         return authorization_error(
@@ -1197,6 +1325,9 @@ def start_workstation(event, path):
             _revoke_session_credential(event, row, delete_secret=False, every_key=False)
         # A start that did not happen gives its claim up, so a retry is not held off.
         _release_start_claim(row)
+        if _start_refused_for_full_reservation(row, err):
+            return general_error(status_code=409, event=event, body={
+                'message': RESERVATION_FULL_START_MESSAGE, 'code': LAST_ERROR_RESERVATION_FULL})
         raise
     else:
         if credential:
@@ -1617,6 +1748,8 @@ def handle_get(event, path):
         return list_catalog_images(event)
     if API_EDH_CATALOG_LEASE.matches(path):
         return get_catalog_lease(event)
+    if API_EDH_CATALOG_CAPACITY_RESERVATIONS.matches(path):
+        return list_catalog_capacity_reservations(event)
     if API_EDH_WORKSTATIONS.matches(path):
         return list_workstations(event)
     if API_EDH_WORKSTATION.matches(path):

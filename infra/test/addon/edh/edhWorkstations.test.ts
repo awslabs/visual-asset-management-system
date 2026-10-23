@@ -489,6 +489,7 @@ const WORKSTATION_PAIRS = [
     "GET /addon/edh/catalog/images",
     "GET /addon/edh/catalog/instance-types",
     "GET /addon/edh/catalog/lease",
+    "GET /addon/edh/catalog/capacity-reservations",
 ];
 
 describe("EDH add-on routes", () => {

@@ -84,6 +84,15 @@ const AMI_LAMBDA_SUPPRESSED = [
     /\[Resource::arn:<AWS::Partition>:iam::[^\]]*:role\/aws-service-role\/imagebuilder\.amazonaws\.com\/\*\]: AwsSolutions-IAM5 was triggered/,
 ];
 
+/**
+ * The three roles that read capacity reservations live: `ec2:DescribeCapacityReservations` takes no
+ * resource ARN, so each role's policy carries a `*` resource that its own suppression covers.
+ */
+const RESERVATION_READERS = ["edhWorkstationService", "edhLaunchWorker", "edhAdminService"];
+const readerPolicyPath = (module: string): RegExp =>
+    new RegExp(`/EdhWorkstationsBuilderNestedStack/${module}/ServiceRole/DefaultPolicy/`);
+const WILDCARD_RESOURCE_SUPPRESSED = /\[Resource::\*\]: AwsSolutions-IAM5 was triggered/;
+
 const nagSynth = (): SynthResult =>
     synthTemplate("commercial", {
         mutate: (c: any) => {
@@ -167,6 +176,25 @@ describe("CDK Nag over the EDH Workstations add-on", () => {
                 AMI_LAMBDA_SUPPRESSED.map((pattern) => expect.stringMatching(pattern))
             )
         );
+    });
+
+    test("[control] each capacity reservation reader's wildcard resource was evaluated and logged as suppressed", () => {
+        const s = nagSynth();
+        // The statement the suppression covers is in the template, on every reader role.
+        const describes = s.where("AWS::IAM::Policy", (r) =>
+            (r.properties.PolicyDocument?.Statement ?? []).some((st: any) =>
+                [st.Action].flat().includes("ec2:DescribeCapacityReservations")
+            )
+        );
+        expect(describes.length).toBeGreaterThan(0);
+        expect(
+            RESERVATION_READERS.map((module) => [
+                module,
+                loggedUnder(s, readerPolicyPath(module)).some((m) =>
+                    WILDCARD_RESOURCE_SUPPRESSED.test(m)
+                ),
+            ])
+        ).toEqual(RESERVATION_READERS.map((module) => [module, true]));
     });
 
     test("no error-level finding lands under the add-on's construct path", () => {

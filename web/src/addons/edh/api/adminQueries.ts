@@ -15,7 +15,12 @@ import type {
     RegisterVdiImageRequest,
 } from "./admin";
 import { type EdhRequestError, mayHaveTakenEffect } from "./outcome";
-import type { LeasePolicy } from "../types";
+import type {
+    CapacityReservationView,
+    LeasePolicy,
+    RegisterCapacityReservationRequest,
+    UpdateCapacityReservationRequest,
+} from "../types";
 
 const STALE_INSTANCES_KEY = "edhAdminStaleInstances";
 
@@ -29,6 +34,7 @@ export const adminQk = {
     capacity: () => ["edhAdminCapacity"] as const,
     health: () => ["edhAdminHealth"] as const,
     settings: () => ["edhAdminSettings"] as const,
+    capacityReservations: () => ["edhAdminCapacityReservations"] as const,
 };
 
 // Instance views poll on a fixed cadence: an administrator watches other users' sessions, none of
@@ -159,4 +165,44 @@ export function useUpdateEdhAdminSettings() {
             callService(() => adminService.updateAdminSettings(body)),
         onSuccess: () => queryClient.invalidateQueries({ queryKey: adminQk.settings() }),
     });
+}
+
+export function useEdhAdminCapacityReservations(enabled = true) {
+    return useQuery({
+        queryKey: adminQk.capacityReservations(),
+        queryFn: async (): Promise<CapacityReservationView[]> =>
+            (await callService(() => adminService.listAdminCapacityReservations())).Items,
+        enabled,
+    });
+}
+
+/** Register, edit and unregister; each re-reads the registry, and none touches EC2. */
+export function useEdhCapacityReservationMutations() {
+    const queryClient = useQueryClient();
+    const invalidate = () =>
+        queryClient.invalidateQueries({ queryKey: adminQk.capacityReservations() });
+
+    const register = useMutation({
+        mutationFn: (body: RegisterCapacityReservationRequest) =>
+            callService(() => adminService.registerCapacityReservation(body)),
+        onSuccess: invalidate,
+    });
+    const update = useMutation({
+        mutationFn: ({
+            capacityReservationId,
+            body,
+        }: {
+            capacityReservationId: string;
+            body: UpdateCapacityReservationRequest;
+        }) =>
+            callService(() => adminService.updateCapacityReservation(capacityReservationId, body)),
+        onSuccess: invalidate,
+    });
+    const unregister = useMutation({
+        mutationFn: (capacityReservationId: string) =>
+            callService(() => adminService.unregisterCapacityReservation(capacityReservationId)),
+        onSuccess: invalidate,
+    });
+
+    return { register, update, unregister };
 }

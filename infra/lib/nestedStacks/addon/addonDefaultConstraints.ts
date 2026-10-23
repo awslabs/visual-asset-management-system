@@ -339,6 +339,116 @@ export function addonAdminDefaultConstraints(config: Config.Config, roleName: st
                           S: "edhContainer",
                       },
                   },
+                  // Capacity reservations: the admin role may use and see every registered
+                  // reservation. The read-only role gets none; an administrator grants each one.
+                  {
+                      entityType: {
+                          S: "constraint",
+                      },
+                      sk: {
+                          S: "initial_admin_allow_all_edhcapacityreservations",
+                      },
+                      constraintId: {
+                          S: "initial_admin_allow_all_edhcapacityreservations",
+                      },
+                      criteriaAnd: {
+                          L: [
+                              {
+                                  M: {
+                                      field: {
+                                          S: "edhCapacityReservationId",
+                                      },
+                                      id: {
+                                          S: "all_edhcapacityreservations",
+                                      },
+                                      operator: {
+                                          S: "contains",
+                                      },
+                                      value: {
+                                          S: ".*",
+                                      },
+                                  },
+                              },
+                          ],
+                      },
+                      description: {
+                          S: "Allow GET/PUT/POST/DELETE on all EDH capacity reservations for admin",
+                      },
+                      groupPermissions: {
+                          L: [
+                              {
+                                  M: {
+                                      groupId: {
+                                          S: roleName,
+                                      },
+                                      id: {
+                                          S: "admin-allow-get-all-edhcapacityreservations",
+                                      },
+                                      permission: {
+                                          S: "GET",
+                                      },
+                                      permissionType: {
+                                          S: "allow",
+                                      },
+                                  },
+                              },
+                              {
+                                  M: {
+                                      groupId: {
+                                          S: roleName,
+                                      },
+                                      id: {
+                                          S: "admin-allow-put-all-edhcapacityreservations",
+                                      },
+                                      permission: {
+                                          S: "PUT",
+                                      },
+                                      permissionType: {
+                                          S: "allow",
+                                      },
+                                  },
+                              },
+                              {
+                                  M: {
+                                      groupId: {
+                                          S: roleName,
+                                      },
+                                      id: {
+                                          S: "admin-allow-post-all-edhcapacityreservations",
+                                      },
+                                      permission: {
+                                          S: "POST",
+                                      },
+                                      permissionType: {
+                                          S: "allow",
+                                      },
+                                  },
+                              },
+                              {
+                                  M: {
+                                      groupId: {
+                                          S: roleName,
+                                      },
+                                      id: {
+                                          S: "admin-allow-delete-all-edhcapacityreservations",
+                                      },
+                                      permission: {
+                                          S: "DELETE",
+                                      },
+                                      permissionType: {
+                                          S: "allow",
+                                      },
+                                  },
+                              },
+                          ],
+                      },
+                      name: {
+                          S: "admin-allow-all-edhcapacityreservations",
+                      },
+                      objectType: {
+                          S: "edhCapacityReservation",
+                      },
+                  },
               ]
             : []),
     ];

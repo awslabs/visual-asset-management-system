@@ -23,6 +23,19 @@ jest.mock("../api/adminQueries", () => ({
     useEdhAdminMutations: jest.fn(),
     useEdhAdminSettings: jest.fn(),
     useUpdateEdhAdminSettings: jest.fn(),
+    // The Settings tab's capacity reservations, empty unless a test lists some.
+    useEdhAdminCapacityReservations: jest.fn(() => ({
+        data: [],
+        isLoading: false,
+        error: null,
+        refetch: jest.fn(),
+        isFetching: false,
+    })),
+    useEdhCapacityReservationMutations: jest.fn(() => ({
+        register: { mutateAsync: jest.fn(), isPending: false },
+        update: { mutateAsync: jest.fn(), isPending: false },
+        unregister: { mutateAsync: jest.fn(), isPending: false },
+    })),
 }));
 
 jest.mock("../api/amiRecipeQueries", () => ({

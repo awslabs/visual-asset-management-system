@@ -13,7 +13,9 @@ launch. A refusal EDH would repeat marks the row ORPHANED with a generic code; a
 left for a retried invocation, which finds the row unchanged -- except on the last attempt, which
 orphans the row rather than leave a launch nobody settles. Each invocation counts its attempt on the row
 with a write conditioned on the row being as it read it, so of two deliveries of one launch only one
-asks EDH for a desktop.
+asks EDH for a desktop. A row launched into a capacity reservation is created in it; when EDH refuses that
+create and the reservation, read again, is full, the worker creates once more on-demand if the reservation's
+registration allows a fallback, and orphans the row RESERVATION_FULL if it does not.
 """
 
 import os
@@ -28,6 +30,7 @@ from common.addonResourceNames import AddonResourceKeys
 from common.resourceNames import get_table_name
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_actions
+from .common import edhCapacityReservations as reservations
 from .common import edhSessionBootstrap as bootstrap
 from .common.edhClient import (
     EDH_ROUTE_DESKTOPS_CREATE,
@@ -41,9 +44,9 @@ from .common.edhIdentity import display_name_for
 from .common.edhSessionState import (
     EDH_FIELD_INSTANCE_ID, EDH_SCHEDULE_FIELD,
     LAST_ERROR_CAPACITY_UNAVAILABLE, LAST_ERROR_EDH_REFUSED, LAST_ERROR_IMAGE_UNAVAILABLE, LAST_ERROR_LAUNCH_ERROR,
-    LAST_ERROR_QUOTA_EXCEEDED, LAST_ERROR_USER_NOT_PROVISIONED, MAX_LAUNCH_ATTEMPTS,
+    LAST_ERROR_QUOTA_EXCEEDED, LAST_ERROR_RESERVATION_FULL, LAST_ERROR_USER_NOT_PROVISIONED, MAX_LAUNCH_ATTEMPTS,
     STATE_CREATING, STATE_ORPHANED, WORKER_PAYLOAD_KEYS,
-    never_auto_start_schedule, observed_row_attributes, schedule_never_auto_starts,
+    never_auto_start_schedule, observed_row_attributes, reservation_refusal_last_error, schedule_never_auto_starts,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -57,6 +60,14 @@ EDH_CREATE_FIELD_DISK_SIZE = "disk_size"
 EDH_CREATE_FIELD_SOFTWARE_STACK_ID = "software_stack_id"
 EDH_CREATE_FIELD_PROJECT = "project"
 EDH_CREATE_FIELD_SESSION_TYPE = "session_type"
+# A launch into a capacity reservation names it and leaves the subnet to EDH, which picks one of its private
+# subnets in the reservation's Availability Zone; a launch without one sends neither field.
+EDH_CREATE_FIELD_CAPACITY_RESERVATION_ID = "capacity_reservation_id"
+EDH_CREATE_FIELD_SUBNET_ID = "subnet_id"
+EDH_SUBNET_AUTO = "auto"
+
+# The EDH errors that are a definite refusal of a create: EDH answered, and created nothing.
+EDH_REFUSALS = (EdhApiError, EdhCapacityError, EdhNotFoundError, EdhQuotaError)
 
 # The DCV session type of a desktop: EDH accepts only a console session for Windows.
 EDH_SESSION_TYPE_CONSOLE = "console"
@@ -86,6 +97,11 @@ except Exception as e:
     raise e
 
 edh_session_table = dynamodb.Table(edh_session_table_name)
+
+
+class ReservationFullError(Exception):
+    """EDH refused the create of a reservation-bound row, the reservation is full, and its registration does not
+    let the launch fall back to on-demand."""
 
 
 def _sleep(seconds):
@@ -167,8 +183,9 @@ def _session_type(row):
 
 
 def _create_form(row):
-    """The EDH create form for a session row; every value a string, as EDH's parser reads them."""
-    return {
+    """The EDH create form for a session row; every value a string, as EDH's parser reads them. A row launched
+    into a capacity reservation also names the reservation and an automatic subnet."""
+    form = {
         EDH_CREATE_FIELD_INSTANCE_TYPE: str(row['instanceType']),
         EDH_CREATE_FIELD_SOFTWARE_STACK_ID: str(row['imageId']),
         EDH_CREATE_FIELD_DISK_SIZE: str(int(row['rootSizeGb'])),
@@ -176,12 +193,71 @@ def _create_form(row):
         EDH_CREATE_FIELD_PROJECT: vdi_default_project,
         EDH_CREATE_FIELD_SESSION_TYPE: _session_type(row),
     }
+    if row.get('capacityReservationId'):
+        form[EDH_CREATE_FIELD_CAPACITY_RESERVATION_ID] = str(row['capacityReservationId'])
+        form[EDH_CREATE_FIELD_SUBNET_ID] = EDH_SUBNET_AUTO
+    return form
+
+
+def _falls_back(capacity_reservation_id):
+    """After EDH refused a create into the reservation: True when the reservation, read again, is full and its
+    registration, read again, lets the launch fall back to on-demand; False when it is full and does not (or is
+    no longer registered); None when it is not full or could not be read, which leaves the refusal as it came."""
+    try:
+        facts = reservations.read_live([capacity_reservation_id])[capacity_reservation_id]
+    except reservations.CapacityReservationReadError as err:
+        logger.warning(f"The capacity reservation was not read after EDH refused the create ({err})")
+        return None
+    if reservation_refusal_last_error(facts) is None:
+        return None
+    registration = reservations.get_registration(capacity_reservation_id)
+    return bool(registration and registration['fallbackToOnDemand'])
+
+
+def _record_fallback(row, capacity_reservation_id):
+    """Move the row off its reservation before the on-demand create: it records the fallback and the reservation
+    it asked for, and no longer carries ``capacityReservationId``, so a retried invocation creates on-demand too."""
+    updated_at = _utc_now()
+    edh_session_table.update_item(
+        Key={'bootstrapId': row['bootstrapId']},
+        UpdateExpression="SET #a0 = :v0, #a1 = :v1, #a2 = :v2 REMOVE #r0",
+        ExpressionAttributeNames={'#a0': 'capacityReservationFallback', '#a1': 'capacityReservationRequested',
+                                  '#a2': 'updatedAt', '#r0': 'capacityReservationId'},
+        ExpressionAttributeValues={':v0': True, ':v1': capacity_reservation_id, ':v2': updated_at},
+    )
+    row.pop('capacityReservationId', None)
+    row.update(capacityReservationFallback=True, capacityReservationRequested=capacity_reservation_id,
+               updatedAt=updated_at)
+
+
+def _create_desktop(audit_event, client, edh_uid, row):
+    """Ask EDH for the row's desktop. When EDH refuses the create of a reservation-bound row because the
+    reservation is full, the create is made once more, on-demand, if the reservation's registration allows a
+    fallback, and ``ReservationFullError`` is raised if it does not; any other failure is raised as it came. A
+    create whose answer was lost may have happened, so it is never made again here."""
+    try:
+        _call_edh(audit_event, client, "create_desktop", "workstationCreate", edh_uid, edh_uid, _create_form(row))
+        return
+    except EDH_REFUSALS as err:
+        capacity_reservation_id = row.get('capacityReservationId')
+        if not capacity_reservation_id:
+            raise
+        fallback = _falls_back(capacity_reservation_id)
+        if fallback is None:
+            raise
+        if not fallback:
+            raise ReservationFullError(capacity_reservation_id) from err
+        logger.info(f"The capacity reservation of bootstrap {row['bootstrapId']} is full, so it launches on-demand")
+        _record_fallback(row, capacity_reservation_id)
+    _call_edh(audit_event, client, "create_desktop", "workstationCreate", edh_uid, edh_uid, _create_form(row))
 
 
 def _failure_code(wrapper, err):
     """The generic code a definite EDH refusal leaves on the row, or None when the error is transient. A
     not-found answer to a read of the cluster listing is transient: EDH may still list the desktop a
     create asked for."""
+    if isinstance(err, ReservationFullError):
+        return LAST_ERROR_RESERVATION_FULL
     if isinstance(err, EdhQuotaError):
         return LAST_ERROR_QUOTA_EXCEEDED
     if isinstance(err, EdhCapacityError):
@@ -264,8 +340,7 @@ def launch(row):
             wrapper = "create_desktop"
             if retried:
                 logger.warning(f"Retried launch of bootstrap {row['bootstrapId']} found no desktop; creating one")
-            _call_edh(audit_event, client, "create_desktop", "workstationCreate", edh_uid,
-                      edh_uid, _create_form(row))
+            _create_desktop(audit_event, client, edh_uid, row)
             wrapper = "find_desktop_by_name"
             desktop = _find_desktop(audit_event, client, edh_uid, session_name, FIND_DESKTOP_ATTEMPTS)
     except Exception as err:

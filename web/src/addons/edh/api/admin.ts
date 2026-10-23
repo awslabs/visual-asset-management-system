@@ -6,7 +6,13 @@
 import { apiClient } from "../../../services/apiClient";
 import { toTuple } from "../../../features/orchestration/api/client";
 import { toOutcomeTuple } from "./outcome";
-import type { EdhFailure, LeasePolicy } from "../types";
+import type {
+    CapacityReservationView,
+    EdhFailure,
+    LeasePolicy,
+    RegisterCapacityReservationRequest,
+    UpdateCapacityReservationRequest,
+} from "../types";
 
 export type EdhImageKind = "vdi" | "simulation";
 
@@ -47,6 +53,12 @@ export interface EdhAdminInstance {
     imageId: string | null;
     osFamily: string | null;
     instanceType: string | null;
+    /** The capacity reservation the launch was sent with, from the joined VAMS row. */
+    capacityReservationId?: string | null;
+    /** The reservation's registry label; null once it is unregistered. */
+    capacityReservationLabel?: string | null;
+    /** True when the launch asked for a reservation and ran on-demand because it was full. */
+    capacityReservationFallback?: boolean | null;
     stale?: boolean;
     staleReason?: "stopped" | "missingInEdh";
 }
@@ -183,3 +195,27 @@ export const getAdminSettings = () =>
 export const updateAdminSettings = (
     body: Partial<Pick<LeasePolicy, "enabled" | "leaseHours" | "forced" | "graceHours">>
 ) => toTuple<{ lease: LeasePolicy }>(() => apiClient.put("addon/edh/admin/settings", { body }));
+
+const CAPACITY_RESERVATIONS_PATH = "addon/edh/admin/capacity-reservations";
+
+const capacityReservationPath = (capacityReservationId: string) =>
+    `${CAPACITY_RESERVATIONS_PATH}/${encodeURIComponent(capacityReservationId)}`;
+
+/** Every registered capacity reservation, with EC2's live view of each. */
+export const listAdminCapacityReservations = () =>
+    toTuple<ListResponse<CapacityReservationView>>(() => apiClient.get(CAPACITY_RESERVATIONS_PATH));
+
+// The registry routes change VAMS only, never EC2, so a failure is an ordinary refusal.
+export const registerCapacityReservation = (body: RegisterCapacityReservationRequest) =>
+    toTuple<CapacityReservationView>(() => apiClient.post(CAPACITY_RESERVATIONS_PATH, { body }));
+
+export const updateCapacityReservation = (
+    capacityReservationId: string,
+    body: UpdateCapacityReservationRequest
+) =>
+    toTuple<CapacityReservationView>(() =>
+        apiClient.put(capacityReservationPath(capacityReservationId), { body })
+    );
+
+export const unregisterCapacityReservation = (capacityReservationId: string) =>
+    toTuple(() => apiClient.del(capacityReservationPath(capacityReservationId)));

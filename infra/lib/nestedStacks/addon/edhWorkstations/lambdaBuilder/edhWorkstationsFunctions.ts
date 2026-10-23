@@ -158,6 +158,33 @@ export function buildCommonEdhLambda(props: BuildEdhLambdaProps): lambda.Functio
     return fun;
 }
 
+/**
+ * Lets a function read EC2 capacity reservations live: the launch checks and the catalog of the
+ * workstation service, the launch worker's re-read before its one retry, and the admin registry. EC2
+ * offers no resource-level scope for a Describe call, so the grant names `*`; it is the one EC2
+ * action in these roles' own policies, and no add-on role may create, modify or cancel a reservation.
+ */
+export function grantDescribeCapacityReservations(fun: lambda.Function): void {
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["ec2:DescribeCapacityReservations"],
+            resources: ["*"],
+        })
+    );
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "ec2:DescribeCapacityReservations accepts no resource ARN or resource-level condition, so the read of the capacity reservations an administrator registers names every resource; it is read-only, and the role holds no EC2 write.",
+                appliesTo: [{ regex: "/^Resource::\\*$/g" }],
+            },
+        ],
+        true
+    );
+}
+
 /** Backs every `/addon/edh/workstations*` and `/addon/edh/catalog/*` route. */
 export function buildEdhWorkstationServiceFunction(
     scope: Construct,
@@ -168,7 +195,7 @@ export function buildEdhWorkstationServiceFunction(
     network: EdhLambdaNetwork,
     secrets: EdhLambdaSecrets
 ): lambda.Function {
-    return buildCommonEdhLambda({
+    const fun = buildCommonEdhLambda({
         scope,
         name: "edhWorkstationService",
         timeout: EDH_API_LAMBDA_TIMEOUT,
@@ -181,6 +208,9 @@ export function buildEdhWorkstationServiceFunction(
         // The launch catalog reads which images recipe builds registered; only with AMI builds on.
         amiRecipeTable: config.app.addons.useEdhWorkstations.amiBuilds.enabled ? "read" : "none",
     });
+    // The capacity reservation catalog and the launch checks read each reservation live.
+    grantDescribeCapacityReservations(fun);
+    return fun;
 }
 
 // The launch worker runs the EDH calls of one launch (the directory user, the desktop create, the
@@ -227,6 +257,9 @@ export function buildEdhLaunchWorkerFunction(
         retryAttempts: EDH_LAUNCH_WORKER_ATTEMPTS - 1,
         maxEventAge: EDH_LAUNCH_WORKER_MAX_EVENT_AGE,
     });
+    // A create EDH refuses for a reservation-bound launch is retried once as an on-demand launch,
+    // and only when the reservation, read again, is full and its registry row allows the fallback.
+    grantDescribeCapacityReservations(fun);
     return fun;
 }
 
@@ -408,7 +441,7 @@ export function buildEdhAdminServiceFunction(
     network: EdhLambdaNetwork,
     secrets: EdhLambdaSecrets
 ): lambda.Function {
-    return buildCommonEdhLambda({
+    const fun = buildCommonEdhLambda({
         scope,
         name: "edhAdminService",
         timeout: EDH_API_LAMBDA_TIMEOUT,
@@ -419,6 +452,9 @@ export function buildEdhAdminServiceFunction(
         network,
         secrets,
     });
+    // The capacity reservation registry checks a reservation exists on register and lists each live.
+    grantDescribeCapacityReservations(fun);
+    return fun;
 }
 
 // Deploy-time catalog registration. Walks the predefined lists with the batch client profile, so it

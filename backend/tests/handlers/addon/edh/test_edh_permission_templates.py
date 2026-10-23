@@ -72,7 +72,7 @@ def _allowed_actions(constraint):
 
 @pytest.mark.unit
 class TestEdhTemplatesImport:
-    @pytest.mark.parametrize("name,count", [("edh-user.json", 6), ("edh-admin.json", 7)])
+    @pytest.mark.parametrize("name,count", [("edh-user.json", 6), ("edh-admin.json", 8)])
     def test_parses_through_the_import_model_with_role_name_only(self, name, count):
         template = _template(name)
         assert [v["name"] for v in template["variables"]] == ["ROLE_NAME"]
@@ -89,7 +89,8 @@ class TestEdhTemplatesImport:
         entity = _entity_constraints(_template(name))
         assert entity, f"{name} grants no Tier-2 object type"
         for constraint in entity:
-            assert constraint["objectType"] in {"edhWorkstation", "edhImage"}, constraint["name"]
+            assert constraint["objectType"] in {"edhWorkstation", "edhImage", "edhCapacityReservation"}, \
+                constraint["name"]
             fields = get_constraint_fields_for_object_type(constraint["objectType"])
             criteria = _criteria(constraint)
             assert criteria, constraint["name"]
@@ -149,6 +150,11 @@ class TestEdhUserTemplate:
         assert _allowed_actions(_single(template, "edhWorkstation")) == {"GET", "POST", "DELETE"}
         assert _allowed_actions(_single(template, "edhImage")) == {"GET"}
 
+    def test_no_capacity_reservation_is_granted_by_default(self):
+        # An administrator grants a reservation per role and id; the shipped user template grants none.
+        template = _template("edh-user.json")
+        assert not [c for c in template["constraints"] if c["objectType"] == "edhCapacityReservation"]
+
 
 @pytest.mark.unit
 class TestEdhAdminTemplate:
@@ -172,6 +178,12 @@ class TestEdhAdminTemplate:
         template = _template("edh-admin.json")
         assert _allowed_actions(_single(template, "edhWorkstation")) == {"GET", "POST", "DELETE"}
         assert _allowed_actions(_single(template, "edhImage")) == {"GET", "POST", "PUT", "DELETE"}
+
+    def test_every_capacity_reservation_is_granted_for_listing_and_launch(self):
+        constraint = _single(_template("edh-admin.json"), "edhCapacityReservation")
+        assert _allowed_actions(constraint) == {"GET", "POST"}
+        assert _criteria(constraint) == [
+            {"field": "edhCapacityReservationId", "operator": "contains", "value": ".*"}]
 
     def test_description_names_the_three_inert_mfa_configurations(self):
         description = _template("edh-admin.json")["metadata"]["description"]

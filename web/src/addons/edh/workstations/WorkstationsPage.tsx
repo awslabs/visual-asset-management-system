@@ -28,11 +28,16 @@ import {
     useWorkstations,
     useWorkstationMutations,
 } from "../api/queries";
-import { unconfirmedNotice } from "../api/outcome";
+import {
+    RESERVATION_FULL_START_MESSAGE,
+    isReservationFull,
+    unconfirmedNotice,
+} from "../api/outcome";
 import WorkstationStatusBadge, {
     EdhFailureDetail,
     describeLastError,
 } from "../components/WorkstationStatusBadge";
+import CapacityDetail from "../components/CapacityDetail";
 import DeleteWorkstationDialog from "../components/DeleteWorkstationDialog";
 import NotEnabledPanel from "../components/NotEnabledPanel";
 import { useTextFilter } from "../components/useTextFilter";
@@ -366,8 +371,12 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                 });
                 return;
             }
-            toast.error("Start failed", { description: `${row.name}: ${toastErrorMessage(err)}` });
-            setActionError(`Failed to start ${row.name}: ${toastErrorMessage(err)}`);
+            // VAMS does not move a stopped desktop off its reservation, so the start waits for a slot.
+            const message = isReservationFull(err)
+                ? RESERVATION_FULL_START_MESSAGE
+                : toastErrorMessage(err);
+            toast.error("Start failed", { description: `${row.name}: ${message}` });
+            setActionError(`Failed to start ${row.name}: ${message}`);
         } finally {
             releaseSession(row.sessionId);
         }
@@ -476,7 +485,16 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                 header: "OS",
                 cell: ({ row }) => osFamilyLabel(row.original.osFamily),
             },
-            { accessorKey: "instanceType", header: "Instance type" },
+            {
+                accessorKey: "instanceType",
+                header: "Instance type",
+                cell: ({ row }) => (
+                    <div className="text-sm">
+                        <div>{row.original.instanceType}</div>
+                        <CapacityDetail row={row.original} />
+                    </div>
+                ),
+            },
             {
                 accessorKey: "createdAt",
                 header: "Created",

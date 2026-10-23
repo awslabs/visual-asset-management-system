@@ -5,7 +5,13 @@
 
 import { apiClient } from "../../../services/apiClient";
 import { toTuple } from "../../../features/orchestration/api/client";
-import { type EdhRequestError, isUnknownOutcomeStatus, toOutcomeTuple } from "./outcome";
+import {
+    type EdhRequestError,
+    RESERVATION_FULL_LAUNCH_MESSAGE,
+    isReservationFull,
+    isUnknownOutcomeStatus,
+    toOutcomeTuple,
+} from "./outcome";
 import type {
     CreateWorkstationRequest,
     EdhListResponse,
@@ -45,6 +51,7 @@ export async function createWorkstation(
     } catch (e: any) {
         console.log(e);
         if (isUnknownOutcomeStatus(e?.status)) return [false, LAUNCH_OUTCOME_UNKNOWN_MESSAGE];
+        if (isReservationFull(e)) return [false, RESERVATION_FULL_LAUNCH_MESSAGE];
         return [false, e?.message || "Request failed"];
     }
 }

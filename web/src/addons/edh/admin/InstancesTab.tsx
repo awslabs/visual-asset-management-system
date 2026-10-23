@@ -27,6 +27,7 @@ import WorkstationStatusBadge, {
     EdhFailureDetail,
     describeLastError,
 } from "../components/WorkstationStatusBadge";
+import CapacityDetail from "../components/CapacityDetail";
 import { useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
 import type { WorkstationState } from "../types";
@@ -201,7 +202,12 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
             {
                 accessorKey: "instanceType",
                 header: "Instance type",
-                cell: ({ row }) => row.original.instanceType || "—",
+                cell: ({ row }) => (
+                    <div className="text-sm">
+                        <div>{row.original.instanceType || "—"}</div>
+                        <CapacityDetail row={row.original} />
+                    </div>
+                ),
             },
             {
                 accessorKey: "createdAt",

@@ -18,8 +18,10 @@ from ...utils.api_client import APIClient
 from ...utils.json_output import output_status, output_result, output_error, output_warning, output_info
 from ...utils.addon.edh_exceptions import (
     EdhError, EdhWorkstationNotFoundError, EdhImageNotFoundError, EdhContainerJobNotFoundError,
-    EdhAmiRecipeNotFoundError, EdhAmiRecipeBuildNotFoundError,
+    EdhAmiRecipeNotFoundError, EdhAmiRecipeBuildNotFoundError, EdhReservationFullError,
+    EdhCapacityReservationNotFoundError,
 )
+from ...utils.addon.edh_api_client import EDH_CAPACITY_RESERVATION_ID, EDH_CAPACITY_RESERVATION_ID_MESSAGE
 
 # ROOT_SIZE_GB_MAX bounds every root volume, in GiB; ROOT_SIZE_GB_MIN is the workstation model's floor
 # (image stacks accept from 1).
@@ -39,6 +41,55 @@ AMI_BUILD_IN_PROGRESS = 'in-progress'
 # The container job backends, and the least memory a job may ask for, in MiB.
 CONTAINER_BACKENDS = ('batch', 'eks')
 MIN_JOB_MEMORY_MIB = 512
+
+# A capacity reservation label: the display-name charset, 1-64 characters, as the request model takes it.
+CAPACITY_RESERVATION_LABEL_MAX = 64
+
+# What the Capacity line says for a launch that asked for a full reservation and ran on-demand; the web
+# Capacity detail says the same.
+ON_DEMAND_FALLBACK_TEXT = 'On-demand (reservation full)'
+
+# The remedies printed with a launch or start refused because its capacity reservation is full.
+RESERVATION_FULL_LAUNCH_HINT = (
+    "Launch without --capacity-reservation-id for an on-demand workstation, choose another reservation "
+    "('vamscli edh catalog capacity-reservations'), or try again once a slot is free.")
+RESERVATION_FULL_START_HINT = (
+    "The workstation stays stopped. Start it again once a slot in its reservation is free, or ask an "
+    "administrator.")
+CAPACITY_RESERVATION_LISTING_HINT = "Use 'vamscli edh admin capacity-reservation list' to see the registry."
+
+
+def _capacity_reservation_id(ctx, param, value):
+    """Click callback: an EC2 capacity reservation id (cr- and 17 hex digits), or None when absent."""
+    if value is None or EDH_CAPACITY_RESERVATION_ID.fullmatch(value):
+        return value
+    raise click.BadParameter(EDH_CAPACITY_RESERVATION_ID_MESSAGE)
+
+
+def _capacity_reservation_label(ctx, param, value):
+    """Click callback: a label of 1-64 display-name characters, or None when absent."""
+    if value is None:
+        return value
+    label = value.strip()
+    if not label or len(label) > CAPACITY_RESERVATION_LABEL_MAX or not all(
+            ch.isascii() and (ch.isalnum() or ch in '-._ ') for ch in label):
+        raise click.BadParameter(
+            f"Label must be 1-{CAPACITY_RESERVATION_LABEL_MAX} letters, digits, spaces, hyphens, periods "
+            f"or underscores")
+    return label
+
+
+def describe_capacity(record: Dict[str, Any]) -> Optional[str]:
+    """The Capacity a workstation launched with: its reservation by label and id (the id alone once
+    unregistered), that it ran on-demand because the reservation was full, or None for an on-demand
+    launch. The web Capacity detail formats the same fields."""
+    if record.get('capacityReservationFallback'):
+        return ON_DEMAND_FALLBACK_TEXT
+    reservation_id = record.get('capacityReservationId')
+    if not reservation_id:
+        return None
+    label = record.get('capacityReservationLabel')
+    return f"{label} ({reservation_id})" if label else str(reservation_id)
 
 
 @click.group()
@@ -175,6 +226,9 @@ def format_workstation(result: Dict[str, Any]) -> str:
     lines.append(f"  Image ID:        {result.get('imageId', 'N/A')}")
     lines.append(f"  OS Family:       {result.get('osFamily', 'N/A')}")
     lines.append(f"  Instance Type:   {result.get('instanceType', 'N/A')}")
+    capacity_text = describe_capacity(result)
+    if capacity_text:
+        lines.append(f"  Capacity:        {capacity_text}")
     lines.append(f"  Created At:      {result.get('createdAt', 'N/A')}")
     lines.append(f"  Updated At:      {result.get('updatedAt', 'N/A')}")
     lines.append(f"  Connectable:     {result.get('connectionAvailable', 'N/A')}")
@@ -285,12 +339,17 @@ def workstation_list(ctx: click.Context, json_output: bool):
 @click.option('--bootstrap-id', default=None, type=click.UUID,
               help='Idempotency key (UUID); generated when omitted. Re-send it only when the create '
                    'response was lost: a repeat returns the existing record and launches nothing')
+@click.option('--capacity-reservation-id', default=None, callback=_capacity_reservation_id,
+              help='Optional registered capacity reservation to launch into (see `edh catalog '
+                   'capacity-reservations`); its instance type and platform must match the launch. '
+                   'Omitted: an on-demand launch')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 @requires_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
 def create(ctx: click.Context, image_id: str, instance_type: str, name: str, root_size_gb: int,
-           os_family: str, lease_hours: Optional[int], bootstrap_id: Optional[uuid.UUID], json_output: bool):
+           os_family: str, lease_hours: Optional[int], bootstrap_id: Optional[uuid.UUID],
+           capacity_reservation_id: Optional[str], json_output: bool):
     """Launch a new EDH workstation.
 
     The launch is accepted asynchronously (HTTP 202) and runs in the background: the returned record
@@ -298,11 +357,14 @@ def create(ctx: click.Context, image_id: str, instance_type: str, name: str, roo
     row by its bootstrap id, until it reports ACTIVE and a session id; `edh workstation get
     BOOTSTRAP_ID` answers only until the session id exists. A launch EDH refuses ends ORPHANED with
     the reason in lastError. --os-family is the chosen image's family as `edh catalog images` lists it.
-    Launching is refused for a session authenticated with a VAMS API key.
+    With --capacity-reservation-id the launch goes into that reservation; when it is full, a
+    reservation that falls back launches on-demand and one that does not is refused (409,
+    RESERVATION_FULL). Launching is refused for a session authenticated with a VAMS API key.
 
     Examples:
         vamscli edh workstation create --image-id 12 --instance-type g5.2xlarge --name "Design desk" --root-size-gb 200 --os-family linux
         vamscli edh workstation create --image-id 12 --instance-type g5.2xlarge --name "Design desk" --root-size-gb 200 --os-family windows --json-output
+        vamscli edh workstation create --image-id 12 --instance-type g5.16xlarge --name "Render desk" --root-size-gb 200 --os-family linux --capacity-reservation-id cr-0123456789abcdef0
     """
     # Setup/auth already validated by decorator
     api_client = _api_client(ctx)
@@ -318,6 +380,8 @@ def create(ctx: click.Context, image_id: str, instance_type: str, name: str, roo
 
     if lease_hours is not None:
         data['leaseHours'] = lease_hours
+    if capacity_reservation_id is not None:
+        data['capacityReservationId'] = capacity_reservation_id
 
     output_status(f"Launching workstation '{name}'...", json_output)
 
@@ -329,6 +393,10 @@ def create(ctx: click.Context, image_id: str, instance_type: str, name: str, roo
             success_message="Workstation launch accepted (HTTP 202)",
             cli_formatter=format_launch_accepted,
         )
+    except EdhReservationFullError as e:
+        output_error(e, json_output, error_type="Capacity Reservation Full",
+                     helpful_message=RESERVATION_FULL_LAUNCH_HINT)
+        raise click.ClickException(str(e))
     except EdhError as e:
         output_error(e, json_output, error_type="EDH Error")
         raise click.ClickException(str(e))
@@ -397,6 +465,10 @@ def start(ctx: click.Context, session_id: str, json_output: bool):
     except EdhWorkstationNotFoundError as e:
         output_error(e, json_output, error_type="Workstation Not Found",
                      helpful_message="Use 'vamscli edh workstation list' to see your workstations.")
+        raise click.ClickException(str(e))
+    except EdhReservationFullError as e:
+        output_error(e, json_output, error_type="Capacity Reservation Full",
+                     helpful_message=RESERVATION_FULL_START_HINT)
         raise click.ClickException(str(e))
     except EdhError as e:
         output_error(e, json_output, error_type="EDH Error")
@@ -764,6 +836,76 @@ def catalog_lease(ctx: click.Context, json_output: bool):
         raise click.ClickException(str(e))
 
 
+def _dash(value: Any) -> str:
+    return '-' if value is None or value == '' else str(value)
+
+
+def format_capacity_reservations(result: Dict[str, Any]) -> str:
+    """One row per capacity reservation in the web Capacity reservations table's columns: FREE/TOTAL
+    is EC2's available and total instance counts, FALLBACK what a launch into a full reservation does
+    (`on-demand` or `refuse`), and STATE EC2's state, `notFound` when EC2 no longer knows the id, or
+    `unknown` when the read failed."""
+    items = result.get('Items', []) if isinstance(result, dict) else []
+    if not items:
+        return "No capacity reservations found."
+    rows = [['LABEL', 'RESERVATION', 'INSTANCE TYPE', 'AZ', 'PLATFORM', 'STATE', 'FREE/TOTAL', 'END DATE',
+             'FALLBACK', 'ENABLED']]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        available, total = item.get('availableInstanceCount'), item.get('totalInstanceCount')
+        rows.append([
+            str(item.get('label') or ''), str(item.get('capacityReservationId') or ''),
+            _dash(item.get('instanceType')), _dash(item.get('availabilityZone')),
+            _dash(item.get('instancePlatform')), _dash(item.get('state')),
+            '-' if available is None or total is None else f"{available}/{total}",
+            _dash(item.get('endDate')),
+            'on-demand' if item.get('fallbackToOnDemand') else 'refuse',
+            'yes' if item.get('enabled') else 'no',
+        ])
+    # Each column but the last is at least as wide as its longest value, so a long label stays aligned.
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]) - 1)]
+    return '\n'.join(' '.join(cell.ljust(width) for cell, width in zip(row, widths)) + ' ' + row[-1]
+                     for row in rows)
+
+
+@catalog.command(name='capacity-reservations')
+@click.option('--instance-type', default=None, help='Only the reservations of this instance type')
+@click.option('--os-family', default=None, type=click.Choice(['linux', 'windows']),
+              help='Only the reservations whose platform suits an image of this family (linux: '
+                   'Linux/UNIX, windows: Windows)')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+@requires_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
+def catalog_capacity_reservations(ctx: click.Context, instance_type: Optional[str], os_family: Optional[str],
+                                  json_output: bool):
+    """List the capacity reservations you may launch into: registered by an administrator, enabled,
+    granted to your role, and active in EC2. Pass one as `edh workstation create
+    --capacity-reservation-id`; its instance type and platform must match the launch. An empty list
+    means every launch is on-demand.
+
+    Examples:
+        vamscli edh catalog capacity-reservations
+        vamscli edh catalog capacity-reservations --instance-type g5.16xlarge --os-family linux
+        vamscli edh catalog capacity-reservations --json-output
+    """
+    # Setup/auth already validated by decorator
+    api_client = _api_client(ctx)
+
+    output_status("Retrieving capacity reservations...", json_output)
+
+    try:
+        result = api_client.list_edh_catalog_capacity_reservations(
+            instance_type=instance_type, os_family=os_family)
+        items = result.get('Items', []) if isinstance(result, dict) else []
+        output_result(result, json_output, success_message=f"Found {len(items)} capacity reservation(s)",
+                      cli_formatter=format_capacity_reservations)
+    except EdhError as e:
+        output_error(e, json_output, error_type="EDH Error")
+        raise click.ClickException(str(e))
+
+
 # ---------------------------------------------------------------------------
 # admin
 # ---------------------------------------------------------------------------
@@ -776,8 +918,8 @@ def format_json(result: Any) -> str:
 
 @edh.group()
 def admin():
-    """Register images, build AMI recipes, inspect every user's sessions, set the lease policy, and
-    reclaim cluster capacity."""
+    """Register images, build AMI recipes, inspect every user's sessions, set the lease policy, register
+    capacity reservations, and reclaim cluster capacity."""
     pass
 
 
@@ -1254,6 +1396,167 @@ def settings_set(ctx: click.Context, enabled, lease_hours, forced, grace_hours, 
     try:
         result = api_client.update_edh_admin_settings(data)
         output_result(result, json_output, success_message="Lease policy updated", cli_formatter=format_json)
+    except EdhError as e:
+        output_error(e, json_output, error_type="EDH Error")
+        raise click.ClickException(str(e))
+
+
+# ---------------------------------------------------------------------------
+# capacity-reservation
+# ---------------------------------------------------------------------------
+
+
+@admin.group(name='capacity-reservation')
+def capacity_reservation():
+    """Register the EC2 capacity reservations workstations may launch into. The registry is VAMS's
+    own: no command here changes a reservation in EC2."""
+    pass
+
+
+@capacity_reservation.command(name='list')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+@requires_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
+def capacity_reservation_list(ctx: click.Context, json_output: bool):
+    """List every registered capacity reservation with EC2's live view of it.
+
+    Examples:
+        vamscli edh admin capacity-reservation list
+        vamscli edh admin capacity-reservation list --json-output
+    """
+    # Setup/auth already validated by decorator
+    api_client = _api_client(ctx)
+
+    output_status("Retrieving capacity reservations...", json_output)
+
+    try:
+        result = api_client.list_edh_admin_capacity_reservations()
+        items = result.get('Items', []) if isinstance(result, dict) else []
+        output_result(result, json_output, success_message=f"Found {len(items)} capacity reservation(s)",
+                      cli_formatter=format_capacity_reservations)
+    except EdhError as e:
+        output_error(e, json_output, error_type="EDH Error")
+        raise click.ClickException(str(e))
+
+
+@capacity_reservation.command(name='add')
+@click.option('--capacity-reservation-id', required=True, callback=_capacity_reservation_id,
+              help='EC2 capacity reservation id (cr- and 17 hex digits) in this account and Region')
+@click.option('--label', required=True, callback=_capacity_reservation_label,
+              help='Name shown in the launch wizard (1-64 letters, digits, spaces, hyphens, periods, underscores)')
+@click.option('--fallback/--no-fallback', 'fallback', default=None,
+              help='When full: launch on-demand (--fallback, the server default) or refuse (--no-fallback)')
+@click.option('--enabled/--disabled', 'enabled', default=None,
+              help='Offer the reservation for launches (--enabled, the server default) or not')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+@requires_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
+def capacity_reservation_add(ctx: click.Context, capacity_reservation_id: str, label: str, fallback, enabled,
+                             json_output: bool):
+    """Register a capacity reservation for launches. EC2 must find it in this account and Region.
+    Users see it once their role grants it (object type edhCapacityReservation).
+
+    Examples:
+        vamscli edh admin capacity-reservation add --capacity-reservation-id cr-0123456789abcdef0 --label "Render pool"
+        vamscli edh admin capacity-reservation add --capacity-reservation-id cr-0123456789abcdef0 --label "Render pool" --no-fallback
+    """
+    data: Dict[str, Any] = {'capacityReservationId': capacity_reservation_id, 'label': label}
+    if fallback is not None:
+        data['fallbackToOnDemand'] = fallback
+    if enabled is not None:
+        data['enabled'] = enabled
+
+    api_client = _api_client(ctx)
+
+    output_status("Registering capacity reservation...", json_output)
+
+    try:
+        result = api_client.register_edh_capacity_reservation(data)
+        output_result(result, json_output, success_message="Capacity reservation registered",
+                      cli_formatter=format_json)
+    except EdhError as e:
+        output_error(e, json_output, error_type="EDH Error")
+        raise click.ClickException(str(e))
+
+
+@capacity_reservation.command(name='update')
+@click.argument('capacity_reservation_id', callback=_capacity_reservation_id)
+@click.option('--label', default=None, callback=_capacity_reservation_label, help='New label')
+@click.option('--fallback/--no-fallback', 'fallback', default=None,
+              help='When full: launch on-demand (--fallback) or refuse (--no-fallback)')
+@click.option('--enabled/--disabled', 'enabled', default=None, help='Offer the reservation for launches or not')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+@requires_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
+def capacity_reservation_update(ctx: click.Context, capacity_reservation_id: str, label: Optional[str],
+                                fallback, enabled, json_output: bool):
+    """Change a registered reservation's label or switches. Only the flags you pass are changed.
+
+    Examples:
+        vamscli edh admin capacity-reservation update cr-0123456789abcdef0 --label "Render farm"
+        vamscli edh admin capacity-reservation update cr-0123456789abcdef0 --no-fallback --disabled
+    """
+    data: Dict[str, Any] = {}
+    if label is not None:
+        data['label'] = label
+    if fallback is not None:
+        data['fallbackToOnDemand'] = fallback
+    if enabled is not None:
+        data['enabled'] = enabled
+    if not data:
+        raise click.UsageError("Pass at least one of --label, --fallback/--no-fallback, --enabled/--disabled")
+
+    api_client = _api_client(ctx)
+
+    output_status(f"Updating capacity reservation '{capacity_reservation_id}'...", json_output)
+
+    try:
+        result = api_client.update_edh_capacity_reservation(capacity_reservation_id, data)
+        output_result(result, json_output, success_message="Capacity reservation updated",
+                      cli_formatter=format_json)
+    except EdhCapacityReservationNotFoundError as e:
+        output_error(e, json_output, error_type="Capacity Reservation Not Found",
+                     helpful_message=CAPACITY_RESERVATION_LISTING_HINT)
+        raise click.ClickException(str(e))
+    except EdhError as e:
+        output_error(e, json_output, error_type="EDH Error")
+        raise click.ClickException(str(e))
+
+
+@capacity_reservation.command(name='remove')
+@click.argument('capacity_reservation_id', callback=_capacity_reservation_id)
+@click.option('--confirm', is_flag=True, help='Confirm unregistering (required)')
+@click.option('--json-output', is_flag=True, help='Output raw JSON response')
+@click.pass_context
+@requires_setup_and_auth
+@requires_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
+def capacity_reservation_remove(ctx: click.Context, capacity_reservation_id: str, confirm: bool,
+                                json_output: bool):
+    """Unregister a capacity reservation. VAMS stops offering it for launches; the EC2 reservation
+    itself is not changed, and workstations launched into it keep running.
+
+    Examples:
+        vamscli edh admin capacity-reservation remove cr-0123456789abcdef0 --confirm
+    """
+    if not confirm:
+        _confirmation_required("Unregistering a capacity reservation", "capacityReservationId",
+                               capacity_reservation_id, json_output)
+
+    api_client = _api_client(ctx)
+
+    output_status(f"Unregistering capacity reservation '{capacity_reservation_id}'...", json_output)
+
+    try:
+        result = api_client.unregister_edh_capacity_reservation(capacity_reservation_id)
+        output_result(result, json_output, success_message="Capacity reservation unregistered",
+                      cli_formatter=lambda _result: "  The EC2 reservation itself is not changed.")
+    except EdhCapacityReservationNotFoundError as e:
+        output_error(e, json_output, error_type="Capacity Reservation Not Found",
+                     helpful_message=CAPACITY_RESERVATION_LISTING_HINT)
+        raise click.ClickException(str(e))
     except EdhError as e:
         output_error(e, json_output, error_type="EDH Error")
         raise click.ClickException(str(e))

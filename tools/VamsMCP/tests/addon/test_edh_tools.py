@@ -68,6 +68,8 @@ EDH_READ_TOOLS = (
     "list_edh_ami_recipes",
     "get_edh_ami_recipe",
     "list_edh_ami_recipe_builds",
+    "list_edh_catalog_capacity_reservations",
+    "list_edh_admin_capacity_reservations",
 )
 
 EDH_WRITE_TOOLS = (
@@ -86,6 +88,8 @@ EDH_WRITE_TOOLS = (
     "duplicate_edh_ami_recipe",
     "start_edh_ami_recipe_build",
     "register_edh_ami_recipe_build",
+    "register_edh_capacity_reservation",
+    "update_edh_capacity_reservation",
 )
 
 EDH_DESTRUCTIVE_TOOLS = (
@@ -96,6 +100,7 @@ EDH_DESTRUCTIVE_TOOLS = (
     "kill_edh_container_job",
     "delete_edh_ami_recipe",
     "retire_edh_ami_recipe_build",
+    "unregister_edh_capacity_reservation",
 )
 
 EDH_GATED_TOOLS = EDH_WRITE_TOOLS + EDH_DESTRUCTIVE_TOOLS
@@ -108,6 +113,7 @@ SAFE_EDH_READS_IN_AUTOAPPROVE = (
     "list_edh_catalog_images",
     "list_edh_catalog_instance_types",
     "get_edh_catalog_lease",
+    "list_edh_catalog_capacity_reservations",
     "get_edh_capacity",
     "get_edh_health",
 )

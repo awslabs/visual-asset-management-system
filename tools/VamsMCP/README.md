@@ -459,7 +459,8 @@ that build them and its container jobs. The add-on's guide is in
 `list_edh_catalog_instance_types`, `get_edh_catalog_lease`, `list_edh_admin_images`,
 `list_edh_admin_instances`, `list_edh_stale_instances`, `get_edh_capacity`,
 `get_edh_health`, `get_edh_admin_settings`, `list_edh_container_catalog`, `list_edh_container_jobs`,
-`list_edh_ami_recipes`, `get_edh_ami_recipe`, `list_edh_ami_recipe_builds`. On a
+`list_edh_ami_recipes`, `get_edh_ami_recipe`, `list_edh_ami_recipe_builds`,
+`list_edh_catalog_capacity_reservations`, `list_edh_admin_capacity_reservations`. On a
 deployment that has not enabled the add-on, every EDH tool answers
 `The EDH Workstations add-on is not enabled for this deployment ...`. The
 two container reads answer only when the deployment also enables the add-on's
@@ -490,6 +491,18 @@ image when the image's `architecture` is null, the type's `architectures` is
 empty, or it contains the image's architecture; pass only such a type to
 `create_edh_workstation`.
 `get_edh_catalog_lease` returns the user-readable lease policy (no audit fields).
+`list_edh_catalog_capacity_reservations` returns the EC2 capacity reservations the
+user may launch into — registered by an administrator, enabled, granted to the
+user's role (object type `edhCapacityReservation`) and active in EC2 — as `Items`
+carrying `capacityReservationId`, `label`, `fallbackToOnDemand`, `instanceType`,
+`availabilityZone`, `instancePlatform`, `state`, `totalInstanceCount`,
+`availableInstanceCount`, `instanceMatchCriteria`, `endDate` and `reservationType`;
+its optional `instance_type` and `os_family` (`linux` or `windows`) keep the
+reservations a launch of that type and image family can take. An empty list means
+every launch is on-demand, which is also the answer when EC2 could not be read.
+`list_edh_admin_capacity_reservations` lists every registered reservation the same
+way, with `state` `notFound` for one EC2 no longer knows and `unknown` when the read
+failed.
 A row's `session_id` is its `sessionId`, or its `bootstrapId` while a launch has no
 session id yet (`create_edh_workstation` answers 202 with `sessionId` null and
 `state` CREATING; `lastError` names why a launch ended ORPHANED).
@@ -508,7 +521,9 @@ The `admin` reads require the EDH admin routes;
 `list_edh_admin_images` returns the cluster's whole image inventory, and
 `get_edh_admin_settings` returns the admin lease settings including `updatedBy`,
 and the three AMI recipe reads name the administrators who created, changed or
-built each recipe (`createdBy`, `updatedBy`, `requestedBy`), so those seven are
+built each recipe (`createdBy`, `updatedBy`, `requestedBy`), and
+`list_edh_admin_capacity_reservations` returns the whole registry whatever a role
+grants, so those eight are
 not. Each `list_edh_admin_images` item also carries `architecture`, the CPU
 architecture EDH reports for the image, such as `x86_64` or `arm64`, or null
 when EDH reports none. `list_edh_ami_recipes` returns each recipe with `latestBuild` (its newest
@@ -534,6 +549,7 @@ enables the add-on:
     "list_edh_catalog_images",
     "list_edh_catalog_instance_types",
     "get_edh_catalog_lease",
+    "list_edh_catalog_capacity_reservations",
     "get_edh_capacity",
     "get_edh_health"
 ]
@@ -545,7 +561,8 @@ enables the add-on:
 `renew_edh_workstation`, `start_edh_workstation`, `stop_edh_workstation`, `register_edh_vdi_image`,
 `register_edh_simulation_image`, `stop_edh_admin_instance`, `update_edh_admin_settings`,
 `submit_edh_container_job`, `create_edh_ami_recipe`, `update_edh_ami_recipe`,
-`duplicate_edh_ami_recipe`, `start_edh_ami_recipe_build`, `register_edh_ami_recipe_build`.
+`duplicate_edh_ami_recipe`, `start_edh_ami_recipe_build`, `register_edh_ami_recipe_build`,
+`register_edh_capacity_reservation`, `update_edh_capacity_reservation`.
 
 `get_edh_workstation_connect` changes nothing, but it issues the DCV
 `connectionUrl` of one of the caller's ACTIVE workstations — a URL carrying a
@@ -586,6 +603,23 @@ than the image's (`x86_64` and `i386` are one family) is refused (400,
 `launchInstanceTypes` a recipe image carries in `list_edh_catalog_images` is
 refused (400, `instanceType is not offered for this image`). A launch
 is refused (403) for a session authenticated with a VAMS API key.
+Its optional `capacity_reservation_id` launches into a reservation
+`list_edh_catalog_capacity_reservations` lists whose `instanceType` and platform
+match the launch; omitted, the launch is on-demand, exactly as before. It is refused
+(400) when the reservation is not registered, not active, or of another instance
+type or platform, (403) when the user's role does not grant it, and (503) when EC2
+could not be read. A full reservation whose `fallbackToOnDemand` is true launches
+on-demand, and the record carries `capacityReservationFallback: true`; one whose
+`fallbackToOnDemand` is false is refused (409, `error_type`
+`EdhReservationFullError`, `code` `RESERVATION_FULL`). A record names the
+reservation it launched into in `capacityReservationId` and
+`capacityReservationLabel`. A start of a stopped desktop whose reservation is full
+is refused the same way and leaves it stopped.
+`register_edh_capacity_reservation` (`capacity_reservation_id`, `label`, and the
+optional `fallback_to_on_demand` and `enabled`, both server default true) and
+`update_edh_capacity_reservation` (a partial patch of `label`,
+`fallback_to_on_demand` and `enabled`) maintain VAMS's registry of reservations and
+require the EDH admin routes; neither changes the reservation in EC2.
 `start_edh_workstation` returns the updated record plus `sessionBootstrap`, as for
 a launch; while EDH still lists the desktop stopped, a start is refused (409,
 `error_type` `EdhStartInProgressError`, `startInProgress: true`) when another start
@@ -661,7 +695,11 @@ successful retry retires the recipe's other AVAILABLE builds.
 
 `delete_edh_workstation`, `delete_edh_vdi_image`,
 `delete_edh_simulation_image`, `deactivate_edh_admin_instance`,
-`kill_edh_container_job`, `delete_edh_ami_recipe`, `retire_edh_ami_recipe_build`.
+`kill_edh_container_job`, `delete_edh_ami_recipe`, `retire_edh_ami_recipe_build`,
+`unregister_edh_capacity_reservation`.
+`unregister_edh_capacity_reservation` removes a reservation from VAMS's registry so
+it is no longer offered; the EC2 reservation itself is not changed, and
+workstations launched into it keep running.
 Deleting a
 workstation removes the desktop and its session; stopping it first
 (`stop_edh_workstation`) releases the GPU reversibly. The two image deletes

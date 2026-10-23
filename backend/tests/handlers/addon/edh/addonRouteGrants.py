@@ -18,6 +18,8 @@ from backend.backend.common.addonApiRoutes import (
     API_EDH_ADMIN_AMI_RECIPE_BUILDS,
     API_EDH_ADMIN_AMI_RECIPES,
     API_EDH_ADMIN_CAPACITY,
+    API_EDH_ADMIN_CAPACITY_RESERVATION,
+    API_EDH_ADMIN_CAPACITY_RESERVATIONS,
     API_EDH_ADMIN_HEALTH,
     API_EDH_ADMIN_IMAGE_SIMULATION,
     API_EDH_ADMIN_IMAGE_VDI,
@@ -29,6 +31,7 @@ from backend.backend.common.addonApiRoutes import (
     API_EDH_ADMIN_INSTANCES,
     API_EDH_ADMIN_INSTANCES_STALE,
     API_EDH_ADMIN_SETTINGS,
+    API_EDH_CATALOG_CAPACITY_RESERVATIONS,
     API_EDH_CATALOG_IMAGES,
     API_EDH_CATALOG_INSTANCE_TYPES,
     API_EDH_CATALOG_LEASE,
@@ -56,6 +59,9 @@ ROUTE_GRANTS = {
     API_EDH_CATALOG_IMAGES: {"edh-admin.json": ("GET",), "edh-user.json": ("GET",)},
     API_EDH_CATALOG_INSTANCE_TYPES: {"edh-admin.json": ("GET",), "edh-user.json": ("GET",)},
     API_EDH_CATALOG_LEASE: {"edh-admin.json": ("GET",), "edh-user.json": ("GET",)},
+    # The route answers only the reservations an edhCapacityReservation constraint grants GET on, so the
+    # user template reaches the route and, until an administrator grants a reservation, lists none.
+    API_EDH_CATALOG_CAPACITY_RESERVATIONS: {"edh-admin.json": ("GET",), "edh-user.json": ("GET",)},
     # Admin routes: the EDH admin template only.
     API_EDH_ADMIN_IMAGES: {"edh-admin.json": ("GET",)},
     API_EDH_ADMIN_IMAGES_VDI: {"edh-admin.json": ("POST",)},
@@ -69,6 +75,8 @@ ROUTE_GRANTS = {
     API_EDH_ADMIN_CAPACITY: {"edh-admin.json": ("GET",)},
     API_EDH_ADMIN_HEALTH: {"edh-admin.json": ("GET",)},
     API_EDH_ADMIN_SETTINGS: {"edh-admin.json": ("GET", "PUT")},
+    API_EDH_ADMIN_CAPACITY_RESERVATIONS: {"edh-admin.json": ("GET", "POST")},
+    API_EDH_ADMIN_CAPACITY_RESERVATION: {"edh-admin.json": ("PUT", "DELETE")},
     API_EDH_ADMIN_AMI_RECIPES: {"edh-admin.json": ("GET", "POST")},
     API_EDH_ADMIN_AMI_RECIPE: {"edh-admin.json": ("GET", "PUT", "DELETE")},
     API_EDH_ADMIN_AMI_RECIPE_BUILDS: {"edh-admin.json": ("GET", "POST")},

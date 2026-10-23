@@ -1,7 +1,7 @@
 {
     "metadata": {
         "name": "EDH Admin",
-        "description": "EDH workstation administration: everything in EDH User plus image registration and removal, session oversight (list, stale, stop, deactivate), capacity and health. Templates create constraints only: create the role first (POST /roles or `vamscli role create --mfa-required`), import this template with variableValues.ROLE_NAME, then assign users. mfaRequired is a role attribute chosen there, not a template property: an mfaRequired role is dropped from every request whose MFA claim is false, so it locks the administrator out of these routes rather than protecting them under an external OAuth IDP, with useGlobalVpc.useForAllLambdas=true (no Cognito MFA lookup), and for any request authenticated with a VAMS API key (a workstation session key, or a CLI or MCP session using an API key override). A CLI or MCP session signed in through Cognito carries the user's MFA state like the web.",
+        "description": "EDH workstation administration: everything in EDH User plus image registration and removal, session oversight (list, stale, stop, deactivate), capacity, health, the capacity reservation registry, and launches into any registered reservation. Templates create constraints only: create the role first (POST /roles or `vamscli role create --mfa-required`), import this template with variableValues.ROLE_NAME, then assign users. mfaRequired is a role attribute chosen there, not a template property: an mfaRequired role is dropped from every request whose MFA claim is false, so it locks the administrator out of these routes rather than protecting them under an external OAuth IDP, with useGlobalVpc.useForAllLambdas=true (no Cognito MFA lookup), and for any request authenticated with a VAMS API key (a workstation session key, or a CLI or MCP session using an API key override). A CLI or MCP session signed in through Cognito carries the user's MFA state like the web.",
         "version": "1.0"
     },
     "variables": [
@@ -206,6 +206,29 @@
                 },
                 {
                     "action": "DELETE",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-capacity-reservations",
+            "description": "Allow listing and launching into every registered EC2 capacity reservation for {{ROLE_NAME}}",
+            "objectType": "edhCapacityReservation",
+            "criteriaAnd": [
+                {
+                    "field": "edhCapacityReservationId",
+                    "operator": "contains",
+                    "value": ".*"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
                     "type": "allow"
                 }
             ]

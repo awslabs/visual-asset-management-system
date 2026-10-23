@@ -15,7 +15,8 @@
  * reconciler's deployment condition, the instance-type pattern, the stale reasons and launch failure
  * codes, the recipe deployments' construct ids, the names a recipe asset tree is uploaded without,
  * what starts the session sign-in on a shipped image, how the Isaac Sim recipe nests the connector,
- * the launch catalog and admin image fields, and the add-on's CLI JSON error fields. Each assertion
+ * the launch catalog and admin image fields, the capacity reservation answers, registry fields, view
+ * fields, key, ceiling and audit actions, and the add-on's CLI JSON error fields. Each assertion
  * derives the expected value from the source of truth and reads it back out of the page, so a page
  * that drifts fails here instead of shipping.
  *
@@ -1340,14 +1341,18 @@ describe("EDH Workstations documentation matches the code it describes", () => {
                 ).matchAll(/'(\w+)':/g),
                 (m) => m[1]
             );
-        /** The launch refusal of a type the image's profile lists only under another family. */
+        /**
+         * The launch refusal of a type the image's profile lists only under another family. Read by
+         * its full text: the service declares the capacity reservation's own `instanceType does not
+         * match ...` refusal as well, which a prefix match would pick up first.
+         */
         const refusal = (): string =>
-            capture(read(EDH_SERVICE), /"(instanceType does not match [^"]+)"/);
+            capture(read(EDH_SERVICE), /"(instanceType does not match the image's architecture)"/);
 
         test("the workstation service declares the fields and the refusal (control)", () => {
             expect(imageKeys()).toEqual(expect.arrayContaining(["imageId", "architecture"]));
             expect(instanceTypeKeys()).toEqual(["instanceType", "architectures"]);
-            expect(refusal()).toMatch(/^instanceType does not match /);
+            expect(refusal()).toBe("instanceType does not match the image's architecture");
         });
 
         /** The YAML path of a catalog list schema's item properties. */
@@ -1673,6 +1678,133 @@ describe("EDH Workstations documentation matches the code it describes", () => {
             expect(paragraph).toBeDefined();
             const named = Array.from(paragraph.matchAll(/\*\*([^*]+)\*\*/g), (m) => m[1]);
             expect(named.filter((name) => columns.includes(name))).toEqual(columns);
+        });
+    });
+
+    describe("capacity reservations", () => {
+        const RESERVATIONS = "backend/backend/handlers/addon/edh/common/edhCapacityReservations.py";
+        const CAPACITY_RESERVATIONS = "## Capacity reservations";
+        /** The answers the workstation service gives a launch or start that names a reservation. */
+        const serviceRefusals = (): string[] =>
+            Array.from(
+                pythonCode(read(EDH_SERVICE)).matchAll(
+                    /^RESERVATION_[A-Z0-9_]+_MESSAGE = "([^"]+)"$/gm
+                ),
+                (m) => m[1]
+            );
+        /** The answers the admin service gives the registry routes that are not a view. */
+        const adminRefusals = (): string[] =>
+            Array.from(
+                pythonCode(read(EDH_ADMIN_SERVICE)).matchAll(
+                    /^RESERVATION_[A-Z0-9_]+_MESSAGE = "([^"]+)"$/gm
+                ),
+                (m) => m[1]
+            );
+        const reservations = (): string => pythonCode(read(RESERVATIONS));
+        /** The fields a registry row carries. */
+        const registryFields = (): string[] =>
+            Array.from(
+                capture(reservations(), /^REGISTRY_FIELDS = \(([\s\S]*?)\)/m).matchAll(/"(\w+)"/g),
+                (m) => m[1]
+            );
+        /** The fields of the capacity reservation view: the registration's, then EC2's. */
+        const viewFields = (): string[] => [
+            ...Array.from(
+                capture(reservations(), /^VIEW_FIELDS = \(([^)]*)\)/m).matchAll(/"(\w+)"/g),
+                (m) => m[1]
+            ),
+            ...Array.from(
+                capture(reservations(), /^EC2_VIEW_FIELDS = \{([\s\S]*?)\n\}/m).matchAll(
+                    /^ {4}"(\w+)":/gm
+                ),
+                (m) => m[1]
+            ),
+        ];
+        const keyPrefix = (): string =>
+            capture(reservations(), /^REGISTRY_KEY_PREFIX = "([^"]+)"$/m);
+        const ceiling = (): string =>
+            capture(reservations(), /^MAX_REGISTERED_CAPACITY_RESERVATIONS = (\d+)$/m);
+        /** The audit actions the admin service writes for the registry. */
+        const auditActions = (): string[] =>
+            Array.from(
+                read(EDH_ADMIN_SERVICE).matchAll(
+                    /log_actions\(event, "(edhCapacityReservation\w+)"/g
+                ),
+                (m) => m[1]
+            );
+
+        test("the sources declare the refusals, the fields, the key, the ceiling and the audit actions (control)", () => {
+            expect(serviceRefusals()).toEqual(
+                expect.arrayContaining([
+                    "capacityReservationId is not registered",
+                    "The capacity reservation has no free capacity",
+                ])
+            );
+            expect(serviceRefusals().length).toBeGreaterThanOrEqual(7);
+            expect(adminRefusals()).toContain(
+                "Capacity reservation not found in this account and Region"
+            );
+            expect(registryFields()).toEqual(
+                expect.arrayContaining(["capacityReservationId", "fallbackToOnDemand", "updatedBy"])
+            );
+            expect(viewFields()).toEqual(
+                expect.arrayContaining(["label", "availableInstanceCount", "reservationType"])
+            );
+            expect(keyPrefix()).toBe("SETTINGS#capacityReservation#");
+            expect(ceiling()).not.toBe("");
+            expect(auditActions().sort()).toEqual([
+                "edhCapacityReservationDelete",
+                "edhCapacityReservationRegister",
+                "edhCapacityReservationUpdate",
+            ]);
+        });
+
+        test.each([
+            [OVERVIEW, CAPACITY_RESERVATIONS],
+            [API_ADDON, "## EDH Workstations add-on"],
+        ])("%s %s quotes every launch, start and registry answer", (rel, heading) => {
+            const text = sectionOf(page(rel), heading);
+            expect(text).not.toBe("");
+            expect(
+                [...serviceRefusals(), ...adminRefusals()].filter((m) => !text.includes(m))
+            ).toEqual([]);
+        });
+
+        test("the overview's registry table gives every field a registry row carries", () => {
+            const rows = tableRows(sectionOf(page(OVERVIEW), "### The registry"));
+            // A row's first cell may name two fields (`createdAt`, `createdBy`).
+            const named = [...rows.values()].flatMap((cells) =>
+                Array.from(cells[0].matchAll(/`(\w+)`/g), (m) => m[1])
+            );
+            expect(named.length).toBeGreaterThan(0);
+            expect(registryFields().filter((f) => !named.includes(f))).toEqual([]);
+        });
+
+        test("api/addon.md's capacity reservation view has a row per view field", () => {
+            const rows = tableRows(sectionOf(page(API_ADDON), "#### Capacity reservation view"));
+            expect(rows.size).toBeGreaterThan(0);
+            expect(viewFields().filter((f) => !rows.has(f))).toEqual([]);
+            expect([...rows.keys()].filter((f) => !viewFields().includes(f))).toEqual([]);
+        });
+
+        test("the overview names the registry key and states its ceiling", () => {
+            const text = page(OVERVIEW);
+            expect(text).toContain(`\`${keyPrefix()}<cr-id>\``);
+            expect(text).toContain(`At most ${ceiling()} reservations are registered at once`);
+        });
+
+        test("the resources page names the registry key and its request limits state the ceiling", () => {
+            const text = page(RESOURCES);
+            expect(text).toContain(`\`${keyPrefix()}<cr-id>\``);
+            const row = sectionOf(text, "### Request limits")
+                .split("\n")
+                .find((l) => l.startsWith("| Registered capacity reservations "));
+            expect(row ? row.split("|")[2].trim() : "<no row>").toBe(ceiling());
+        });
+
+        test("the overview names every registry audit action", () => {
+            const text = page(OVERVIEW);
+            expect(auditActions().filter((a) => !text.includes(`\`${a}\``))).toEqual([]);
         });
     });
 

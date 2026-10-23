@@ -39,6 +39,8 @@ export const LAST_ERROR_COPY: Record<WorkstationLastError, string> = {
     LAUNCH_ERROR: "EDH reported an error while starting the workstation.",
     CREATE_TIMED_OUT: "The launch did not complete in time.",
     LEASE_EXPIRED: "The workstation's lease has expired and it was automatically stopped.",
+    RESERVATION_FULL:
+        "The capacity reservation had no free capacity and does not allow an on-demand launch. Launch again later, choose On-demand, or ask an administrator.",
 };
 
 export const LAST_ERROR_FALLBACK_COPY = "The launch did not complete.";

@@ -91,6 +91,7 @@ class TestVocabulary:
             "LAUNCH_ERROR",
             "CREATE_TIMED_OUT",
             "LEASE_EXPIRED",
+            "RESERVATION_FULL",
         }
 
     def test_the_worker_payload_is_the_row_identity(self):

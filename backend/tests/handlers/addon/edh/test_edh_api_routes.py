@@ -27,6 +27,7 @@ WINDOWS_SIGN_IN = "/addon/edh/workstations/{sessionId}/windows-sign-in"
 IMAGES = "/addon/edh/catalog/images"
 INSTANCE_TYPES = "/addon/edh/catalog/instance-types"
 LEASE = "/addon/edh/catalog/lease"
+CAPACITY_RESERVATIONS = "/addon/edh/catalog/capacity-reservations"
 
 PHASE_1_CONSTANTS = {
     "API_EDH_WORKSTATIONS": (WORKSTATIONS, {GET, POST}),
@@ -39,6 +40,7 @@ PHASE_1_CONSTANTS = {
     "API_EDH_CATALOG_IMAGES": (IMAGES, {GET}),
     "API_EDH_CATALOG_INSTANCE_TYPES": (INSTANCE_TYPES, {GET}),
     "API_EDH_CATALOG_LEASE": (LEASE, {GET}),
+    "API_EDH_CATALOG_CAPACITY_RESERVATIONS": (CAPACITY_RESERVATIONS, {GET}),
 }
 
 ADMIN_IMAGES = "/addon/edh/admin/images"
@@ -53,6 +55,8 @@ ADMIN_INSTANCE_DEACTIVATE = "/addon/edh/admin/instances/{sessionId}/deactivate"
 ADMIN_CAPACITY = "/addon/edh/admin/capacity"
 ADMIN_HEALTH = "/addon/edh/admin/health"
 ADMIN_SETTINGS = "/addon/edh/admin/settings"
+ADMIN_CAPACITY_RESERVATIONS = "/addon/edh/admin/capacity-reservations"
+ADMIN_CAPACITY_RESERVATION = "/addon/edh/admin/capacity-reservations/{capacityReservationId}"
 ADMIN_AMI_RECIPES = "/addon/edh/admin/ami-recipes"
 ADMIN_AMI_RECIPE = "/addon/edh/admin/ami-recipes/{recipeId}"
 ADMIN_AMI_RECIPE_BUILDS = "/addon/edh/admin/ami-recipes/{recipeId}/builds"
@@ -72,6 +76,8 @@ PHASE_2_CONSTANTS = {
     "API_EDH_ADMIN_CAPACITY": (ADMIN_CAPACITY, {GET}),
     "API_EDH_ADMIN_HEALTH": (ADMIN_HEALTH, {GET}),
     "API_EDH_ADMIN_SETTINGS": (ADMIN_SETTINGS, {GET, PUT}),
+    "API_EDH_ADMIN_CAPACITY_RESERVATIONS": (ADMIN_CAPACITY_RESERVATIONS, {GET, POST}),
+    "API_EDH_ADMIN_CAPACITY_RESERVATION": (ADMIN_CAPACITY_RESERVATION, {PUT, DELETE}),
     "API_EDH_ADMIN_AMI_RECIPES": (ADMIN_AMI_RECIPES, {GET, POST}),
     "API_EDH_ADMIN_AMI_RECIPE": (ADMIN_AMI_RECIPE, {GET, PUT, DELETE}),
     "API_EDH_ADMIN_AMI_RECIPE_BUILDS": (ADMIN_AMI_RECIPE_BUILDS, {GET, POST}),
@@ -175,6 +181,10 @@ class TestEdhRouteMatching:
         ("API_EDH_CATALOG_LEASE", "/addon/edh/catalog/lease"),
         ("API_EDH_WORKSTATION_RENEW", "/addon/edh/workstations/3f2a/renew"),
         ("API_EDH_ADMIN_SETTINGS", "/addon/edh/admin/settings"),
+        ("API_EDH_CATALOG_CAPACITY_RESERVATIONS", "/addon/edh/catalog/capacity-reservations"),
+        ("API_EDH_ADMIN_CAPACITY", "/addon/edh/admin/capacity"),
+        ("API_EDH_ADMIN_CAPACITY_RESERVATIONS", "/addon/edh/admin/capacity-reservations"),
+        ("API_EDH_ADMIN_CAPACITY_RESERVATION", "/addon/edh/admin/capacity-reservations/cr-0123456789abcdef0"),
     ])
     def test_each_action_path_is_claimed_by_exactly_one_edh_route(self, route_name, path):
         claimants = [route for route in EDH_ROUTES if route.matches(path)]
@@ -183,3 +193,5 @@ class TestEdhRouteMatching:
     def test_the_action_routes_do_not_swallow_a_nested_segment(self):
         assert apiRoutes.API_EDH_WORKSTATION_STOP.matches("/addon/edh/workstations/3f2a/stop/now") is False
         assert apiRoutes.API_EDH_CATALOG_IMAGES.matches("/addon/edh/catalog/images/abc") is False
+        assert apiRoutes.API_EDH_ADMIN_CAPACITY_RESERVATION.matches(
+            "/addon/edh/admin/capacity-reservations/cr-0123456789abcdef0/extra") is False

@@ -16,6 +16,7 @@ jest.mock("../api/queries", () => ({
     useEdhInstanceTypes: jest.fn(),
     useWorkstationMutations: jest.fn(),
     useEdhCatalogLease: jest.fn(() => ({ data: undefined, isLoading: false, error: null })),
+    useEdhCatalogCapacityReservations: jest.fn(() => ({ data: [], isLoading: false, error: null })),
 }));
 
 jest.mock("../../../features/orchestration/components/ToastProvider", () => ({

@@ -12,7 +12,7 @@ their pattern as a module constant so the CLI and the web share one spelling.
 import re
 from typing import Dict, List, Optional, Union
 
-from pydantic import Field
+from pydantic import Field, StrictBool
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from customLogging.logger import safeLogger
 from common.validators import validate, aws_partition_group, object_name_pattern, trim_name
@@ -25,6 +25,10 @@ edh_ami_id_pattern = r'^ami-[0-9a-f]{8,17}\Z'
 # A key of EDH's DCV_BASE_OS table (``amazonlinux2023``, ``windows2022``): lowercase alphanumerics, so a
 # spelling EDH would refuse is a 400 that names the field, while any key an operator configures passes.
 edh_base_os_pattern = r'^[a-z][a-z0-9]{1,63}\Z'
+# An EC2 capacity reservation id as EC2 issues it.
+edh_capacity_reservation_id_pattern = r'^cr-[0-9a-f]{17}\Z'
+CAPACITY_RESERVATION_ID_LENGTH = 20
+CAPACITY_RESERVATION_LABEL_MAX_LENGTH = 64
 
 EDH_OS_FAMILIES = ('linux', 'windows')
 WORKSTATION_STATES = ('CREATING', 'ACTIVE', 'STOPPED', 'DELETED', 'ORPHANED')
@@ -124,6 +128,10 @@ class CreateWorkstationRequestModel(BaseModel, extra='ignore'):
     rootSizeGb: int = Field(ge=ROOT_SIZE_GB_MIN, le=ROOT_SIZE_GB_MAX)
     osFamily: str = Field(min_length=1, max_length=16)
     leaseHours: Optional[int] = Field(None, ge=1, le=720)
+    # The registered capacity reservation to launch into; None launches on-demand.
+    capacityReservationId: Optional[str] = Field(
+        None, min_length=CAPACITY_RESERVATION_ID_LENGTH, max_length=CAPACITY_RESERVATION_ID_LENGTH,
+        regex=edh_capacity_reservation_id_pattern)
 
     _trim_names = validator('name', pre=True, allow_reuse=True)(trim_name)
 
@@ -166,6 +174,12 @@ class WorkstationRecordModel(BaseModel, extra='ignore'):
     leaseHoursAtLaunch: Optional[int] = None
     # The reason EDH recorded for a failed launch, once VAMS captured it; its read stamp is not declared.
     edhFailure: Optional[Dict[str, str]] = None
+    # The capacity reservation the launch was sent with, its label (joined from the registry when the record
+    # is read, None once unregistered) and whether the launch fell back to on-demand because the reservation
+    # it asked for was full; the id it asked for then (``capacityReservationRequested``) is not declared.
+    capacityReservationId: Optional[str] = None
+    capacityReservationLabel: Optional[str] = None
+    capacityReservationFallback: bool = False
 
     _project_edh_failure = validator('edhFailure', pre=True, allow_reuse=True)(edh_failure_projection)
 
@@ -252,6 +266,61 @@ class LeaseSettingsRequestModel(BaseModel, extra='ignore'):
     leaseHours: Optional[int] = None
     forced: Optional[bool] = None
     graceHours: Optional[int] = None
+
+
+class RegisterCapacityReservationRequestModel(BaseModel, extra='ignore'):
+    """Request body for ``POST /addon/edh/admin/capacity-reservations``. A flag left out (or null) takes its
+    default: a full reservation falls back to on-demand, and the reservation is offered."""
+    capacityReservationId: str = Field(min_length=CAPACITY_RESERVATION_ID_LENGTH,
+                                       max_length=CAPACITY_RESERVATION_ID_LENGTH,
+                                       regex=edh_capacity_reservation_id_pattern)
+    label: str = Field(min_length=1, max_length=CAPACITY_RESERVATION_LABEL_MAX_LENGTH, regex=object_name_pattern)
+    fallbackToOnDemand: Optional[StrictBool] = None
+    enabled: Optional[StrictBool] = None
+
+    _trim_names = validator('label', pre=True, allow_reuse=True)(trim_name)
+
+    @root_validator
+    def validate_fields(cls, values):
+        _run_validate({'label': {'value': values.get('label'), 'validator': 'OBJECT_NAME'}})
+        return values
+
+
+class UpdateCapacityReservationRequestModel(BaseModel, extra='ignore'):
+    """Request body for ``PUT /addon/edh/admin/capacity-reservations/{capacityReservationId}``: at least one of
+    the fields; one left out keeps its value."""
+    label: Optional[str] = Field(None, min_length=1, max_length=CAPACITY_RESERVATION_LABEL_MAX_LENGTH,
+                                 regex=object_name_pattern)
+    fallbackToOnDemand: Optional[StrictBool] = None
+    enabled: Optional[StrictBool] = None
+
+    _trim_names = validator('label', pre=True, allow_reuse=True)(trim_name)
+
+    @root_validator
+    def validate_fields(cls, values):
+        if all(values.get(key) is None for key in ('label', 'fallbackToOnDemand', 'enabled')):
+            raise ValueError("Provide at least one of label, fallbackToOnDemand, enabled")
+        _run_validate({'label': {'value': values.get('label'), 'validator': 'OBJECT_NAME', 'optional': True}})
+        return values
+
+
+class CapacityReservationViewModel(BaseModel, extra='ignore'):
+    """A registered capacity reservation as the API returns it: the registration and EC2's live facts.
+    ``state`` is EC2's, or ``notFound`` when EC2 holds no such reservation, or ``unknown`` when it could not be
+    read, which leaves the facts None. ``endDate`` is ISO-8601, None for a reservation without an end."""
+    capacityReservationId: str
+    label: Optional[str] = None
+    fallbackToOnDemand: bool
+    enabled: bool
+    instanceType: Optional[str] = None
+    availabilityZone: Optional[str] = None
+    instancePlatform: Optional[str] = None
+    state: str
+    totalInstanceCount: Optional[int] = None
+    availableInstanceCount: Optional[int] = None
+    instanceMatchCriteria: Optional[str] = None
+    endDate: Optional[str] = None
+    reservationType: Optional[str] = None
 
 
 class SubmitContainerJobRequestModel(BaseModel, extra='ignore'):

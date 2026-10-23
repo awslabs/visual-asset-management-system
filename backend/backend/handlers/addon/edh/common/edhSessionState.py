@@ -66,10 +66,12 @@ LAST_ERROR_EDH_REFUSED = "EDH_REFUSED"
 LAST_ERROR_LAUNCH_ERROR = "LAUNCH_ERROR"
 LAST_ERROR_CREATE_TIMED_OUT = "CREATE_TIMED_OUT"
 LAST_ERROR_LEASE_EXPIRED = "LEASE_EXPIRED"
+# A launch into a capacity reservation the user named that failed because the reservation had no free slot.
+LAST_ERROR_RESERVATION_FULL = "RESERVATION_FULL"
 LAST_ERROR_CODES = frozenset({
     LAST_ERROR_USER_NOT_PROVISIONED, LAST_ERROR_QUOTA_EXCEEDED, LAST_ERROR_IMAGE_UNAVAILABLE,
     LAST_ERROR_CAPACITY_UNAVAILABLE, LAST_ERROR_EDH_REFUSED, LAST_ERROR_LAUNCH_ERROR,
-    LAST_ERROR_CREATE_TIMED_OUT, LAST_ERROR_LEASE_EXPIRED,
+    LAST_ERROR_CREATE_TIMED_OUT, LAST_ERROR_LEASE_EXPIRED, LAST_ERROR_RESERVATION_FULL,
 })
 # The AWS error codes, parsed from the reason EDH recorded for a failed launch, that turn a generic
 # LAUNCH_ERROR on an ORPHANED row into CAPACITY_UNAVAILABLE or QUOTA_EXCEEDED; any other code leaves it.
@@ -80,6 +82,11 @@ CAPACITY_ERROR_CODES = frozenset({
 QUOTA_ERROR_CODES = frozenset({
     "VcpuLimitExceeded", "InstanceLimitExceeded", "ReservationCapacityExceeded", "MaxSpotInstanceCountExceeded",
 })
+# On a row launched into a capacity reservation (one carrying ``capacityReservationId``), these AWS error codes
+# mean the reservation had no free slot, and turn a generic LAUNCH_ERROR into RESERVATION_FULL instead.
+RESERVATION_FULL_ERROR_CODES = CAPACITY_ERROR_CODES | frozenset({"ReservationCapacityExceeded"})
+# The EC2 state of a capacity reservation a desktop can be launched or started into.
+EC2_RESERVATION_STATE_ACTIVE = "active"
 
 # The reason EDH recorded for a failed launch, as VAMS stores it on the row (``edhFailure``), and the stamp of
 # the last read for one (``edhFailureReadAt``), which holds the next read off for the interval. EDH's per-user
@@ -312,18 +319,42 @@ def edh_failure_from_events(events) -> Tuple[Optional[Dict[str, str]], Optional[
     return failure, (sub_status[:EDH_FAILURE_TEXT_LOG_LIMIT] if sub_status is not None else None)
 
 
-def edh_failure_last_error(failure, stored_last_error):
+def edh_failure_last_error(failure, stored_last_error, reservation_bound=False):
     """The ``lastError`` an ORPHANED row holds once ``failure`` is known: a specific code the row already holds
-    is kept; a generic ``LAUNCH_ERROR``, or none, becomes ``CAPACITY_UNAVAILABLE`` or ``QUOTA_EXCEEDED`` for an
-    AWS error code of those sets, and ``LAUNCH_ERROR`` otherwise."""
+    is kept; a generic ``LAUNCH_ERROR``, or none, becomes ``RESERVATION_FULL`` for an AWS error code of
+    ``RESERVATION_FULL_ERROR_CODES`` on a ``reservation_bound`` row (one launched into a capacity reservation),
+    else ``CAPACITY_UNAVAILABLE`` or ``QUOTA_EXCEEDED`` for an AWS error code of those sets, and
+    ``LAUNCH_ERROR`` otherwise."""
     if stored_last_error and stored_last_error != LAST_ERROR_LAUNCH_ERROR:
         return stored_last_error
     code = (failure or {}).get("errorCode")
+    if reservation_bound and code in RESERVATION_FULL_ERROR_CODES:
+        return LAST_ERROR_RESERVATION_FULL
     if code in CAPACITY_ERROR_CODES:
         return LAST_ERROR_CAPACITY_UNAVAILABLE
     if code in QUOTA_ERROR_CODES:
         return LAST_ERROR_QUOTA_EXCEEDED
     return LAST_ERROR_LAUNCH_ERROR
+
+
+def reservation_has_free_slot(facts) -> bool:
+    """Whether a capacity reservation, as its live view reads (``state``, ``availableInstanceCount``), is active
+    with at least one instance slot free."""
+    available = (facts or {}).get("availableInstanceCount")
+    return ((facts or {}).get("state") == EC2_RESERVATION_STATE_ACTIVE and isinstance(available, int)
+            and not isinstance(available, bool) and available >= 1)
+
+
+def reservation_is_full(facts) -> bool:
+    """Whether a capacity reservation, as its live view reads, is active with no instance slot free."""
+    return (facts or {}).get("state") == EC2_RESERVATION_STATE_ACTIVE and not reservation_has_free_slot(facts)
+
+
+def reservation_refusal_last_error(facts) -> Optional[str]:
+    """The code a definite EDH refusal of a reservation-bound desktop's create or start reports once the
+    reservation has been read again: ``RESERVATION_FULL`` when it is full, None when it is not (or was not read),
+    which leaves the refusal's own classification standing."""
+    return LAST_ERROR_RESERVATION_FULL if facts is not None and reservation_is_full(facts) else None
 
 
 def edh_failure_read_due(row, now=None) -> bool:
@@ -350,12 +381,13 @@ def edh_failure_read_due(row, now=None) -> bool:
 def edh_failure_attributes(row, failure, now):
     """The row attributes one read for a failed launch's reason writes at ``now``: always its stamp; when the
     read found a reason, the reason with ``observedAt``, and the ``lastError`` it implies when that differs from
-    the row's."""
+    the row's, read as a reservation-bound row's when the row carries ``capacityReservationId``."""
     observed = now.isoformat()
     attributes = {EDH_FAILURE_READ_AT_FIELD: observed}
     if failure:
         attributes[EDH_FAILURE_FIELD] = {**failure, "observedAt": observed}
-        last_error = edh_failure_last_error(failure, row.get('lastError'))
+        last_error = edh_failure_last_error(failure, row.get('lastError'),
+                                            reservation_bound=bool(row.get('capacityReservationId')))
         if last_error != row.get('lastError'):
             attributes['lastError'] = last_error
     return attributes

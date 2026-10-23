@@ -14,6 +14,13 @@ jest.mock("../api/adminQueries", () => ({
     useUpdateEdhAdminSettings: jest.fn(),
 }));
 
+// The section has its own tests; here only where it sits and when it is shown.
+jest.mock("./CapacityReservationsSection", () => ({
+    __esModule: true,
+    CAPACITY_RESERVATIONS_ROUTE: "/addon/edh/admin/capacity-reservations",
+    default: () => <section aria-label="Capacity reservations stub" />,
+}));
+
 const mockToast = { success: jest.fn(), warning: jest.fn(), info: jest.fn(), error: jest.fn() };
 jest.mock("../../../features/orchestration/components/ToastProvider", () => ({
     ...jest.requireActual("../../../features/orchestration/components/ToastProvider"),
@@ -182,5 +189,28 @@ describe("SettingsTab", () => {
         expect(screen.getByLabelText("Force on all launches")).toBeDisabled();
         expect(screen.getByLabelText("Grace hours")).toBeDisabled();
         expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    });
+
+    it("shows the capacity reservations below the lease policy when their route is allowed", () => {
+        render(<SettingsTab can={() => true} />);
+        const section = screen.getByRole("region", { name: "Capacity reservations stub" });
+        const form = screen
+            .getByRole("button", { name: "Save" })
+            .closest("form") as HTMLFormElement;
+        expect(
+            form.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+    });
+
+    it("leaves the capacity reservations out when their route is not allowed", () => {
+        render(
+            <SettingsTab
+                can={(method, route) => route !== "/addon/edh/admin/capacity-reservations"}
+            />
+        );
+        expect(
+            screen.queryByRole("region", { name: "Capacity reservations stub" })
+        ).not.toBeInTheDocument();
+        expect(screen.getByLabelText("Lease hours")).toBeInTheDocument();
     });
 });

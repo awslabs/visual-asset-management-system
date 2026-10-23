@@ -16,6 +16,7 @@ import {
     toastErrorMessage,
 } from "../../../features/orchestration/components/ToastProvider";
 import {
+    useEdhCatalogCapacityReservations,
     useEdhCatalogImages,
     useEdhCatalogLease,
     useEdhInstanceTypes,
@@ -23,6 +24,7 @@ import {
 } from "../api/queries";
 import { LAUNCH_OUTCOME_UNKNOWN_MESSAGE } from "../api/workstations";
 import type {
+    CapacityReservationView,
     CatalogLeasePolicy,
     EdhCatalogImage,
     EdhCatalogImageCategory,
@@ -31,6 +33,15 @@ import type {
     SessionBootstrapOutcome,
 } from "../types";
 import { hoursWord, osFamilyLabel } from "../labels";
+import {
+    ON_DEMAND_LABEL,
+    matchingReservations,
+    preselectReservation,
+    reservationOptionLabel,
+    reservationReviewText,
+    reservationSelectable,
+    reservationSuitsLaunch,
+} from "../capacityReservations";
 import { useInFlight } from "../components/useInFlight";
 
 interface LaunchWorkstationWizardProps {
@@ -298,6 +309,25 @@ const leaseSummary = (
     return leaseHours !== undefined ? hoursWord(leaseHours) : "No expiry";
 };
 
+/**
+ * The Capacity choice kept across a change of instance type or image: none yet (`null`, which
+ * preselects) and On-demand (`""`) always are; a reservation only while the new type and family
+ * still suit it.
+ */
+const keepCapacityChoice = (
+    choice: string | null,
+    reservations: CapacityReservationView[] | undefined,
+    instanceType: string,
+    osFamily: EdhOsFamily | undefined
+): string | null => {
+    if (!choice) return choice;
+    const kept = (reservations ?? []).some(
+        (r) =>
+            r.capacityReservationId === choice && reservationSuitsLaunch(r, instanceType, osFamily)
+    );
+    return kept ? choice : null;
+};
+
 const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
     open,
     onClose,
@@ -319,7 +349,11 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
     // the disabled Next is the signal, as in the orchestration wizards.
     const [touched, setTouched] = useState<Partial<Record<LaunchField, boolean>>>({});
     const [launchError, setLaunchError] = useState<string | null>(null);
+    // The Capacity the user chose: null until they choose (the first free reservation is then
+    // preselected), "" for On-demand, else a reservation id.
+    const [capacityChoice, setCapacityChoice] = useState<string | null>(null);
     const instanceTypeId = useId();
+    const capacityId = useId();
     const rootSizeId = useId();
     const nameId = useId();
     const leaseHoursId = useId();
@@ -328,6 +362,8 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
     const images = useEdhCatalogImages(open);
     const instanceTypes = useEdhInstanceTypes(open);
     const leasePolicy = useEdhCatalogLease(open);
+    // A caller the route refuses, or a read that fails, gets no reservations: the launch is on-demand.
+    const capacityReservations = useEdhCatalogCapacityReservations(open);
     const { createWorkstation } = useWorkstationMutations();
     const { claim, release } = useInFlight();
 
@@ -354,6 +390,26 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
         !form.instanceType ||
         instanceTypeOfferedForImage({ instanceType: form.instanceType }, selectedImage);
     const rootSizeMin = rootSizeFloor(selectedImage);
+    // The reservations the chosen type and the image's family can launch into; the field is shown
+    // only when there is one. A choice the list no longer offers reads as no choice.
+    const reservationList = capacityReservations.data;
+    const offeredReservations = matchingReservations(
+        reservationList,
+        form.instanceType,
+        selectedImage?.osFamily
+    );
+    const chosenReservationOffered =
+        capacityChoice !== null &&
+        offeredReservations.some(
+            (r) => r.capacityReservationId === capacityChoice && reservationSelectable(r)
+        );
+    const capacityValue =
+        capacityChoice === "" || chosenReservationOffered
+            ? (capacityChoice as string)
+            : preselectReservation(offeredReservations);
+    const chosenReservation = offeredReservations.find(
+        (r) => r.capacityReservationId === capacityValue
+    );
     const stepIndex = STEPS.findIndex((s) => s.id === step);
     const fieldErrors = validateLaunchForm(
         form,
@@ -373,27 +429,43 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
     const shownError = (field: LaunchField) => (touched[field] ? fieldErrors[field] : undefined);
     const touch = (field: LaunchField) => setTouched((prev) => ({ ...prev, [field]: true }));
 
-    const chooseImage = (image: EdhCatalogImage) =>
+    const chooseImage = (image: EdhCatalogImage) => {
+        // A chosen type the new image does not run, or whose recipe does not offer it, is cleared;
+        // one it runs and offers is kept.
+        const keepsType = (instanceType: string) => {
+            const chosen = instanceTypeList.find((t) => t.instanceType === instanceType);
+            return (
+                !(chosen && !instanceTypeRunsImage(chosen, image)) &&
+                instanceTypeOfferedForImage({ instanceType }, image)
+            );
+        };
         setForm((prev) => {
             // The name follows the image until the user has typed one of their own.
             const previous = imageList.find((i) => i.imageId === prev.imageId);
             const ownName =
                 prev.name.trim() !== "" &&
                 (!previous || prev.name !== defaultWorkstationName(previous));
-            // A chosen type the new image does not run, or whose recipe does not offer it, is
-            // cleared; one it runs and offers is kept.
-            const chosen = instanceTypeList.find((t) => t.instanceType === prev.instanceType);
-            const keep =
-                !(chosen && !instanceTypeRunsImage(chosen, image)) &&
-                instanceTypeOfferedForImage({ instanceType: prev.instanceType }, image);
             return {
                 ...prev,
                 imageId: image.imageId,
-                instanceType: keep ? prev.instanceType : "",
+                instanceType: keepsType(prev.instanceType) ? prev.instanceType : "",
                 rootSizeGb: initialRootSize(image),
                 name: ownName ? prev.name : defaultWorkstationName(image),
             };
         });
+        // A chosen reservation the new image's family (or a cleared type) does not suit is cleared.
+        const nextType = keepsType(form.instanceType) ? form.instanceType : "";
+        setCapacityChoice((prev) =>
+            keepCapacityChoice(prev, reservationList, nextType, image.osFamily)
+        );
+    };
+
+    const chooseInstanceType = (instanceType: string) => {
+        setForm((prev) => ({ ...prev, instanceType }));
+        setCapacityChoice((prev) =>
+            keepCapacityChoice(prev, reservationList, instanceType, selectedImage?.osFamily)
+        );
+    };
 
     const handleLaunch = async () => {
         if (!selectedImage) {
@@ -413,6 +485,10 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
                 osFamily: selectedImage.osFamily,
                 ...(policy?.enabled && !policy.forced && form.leaseHours !== undefined
                     ? { leaseHours: form.leaseHours }
+                    : {}),
+                // On-demand sends no reservation, so a launch without one is the body it always was.
+                ...(chosenReservation
+                    ? { capacityReservationId: chosenReservation.capacityReservationId }
                     : {}),
             });
             // The wizard closes on success, so the toasts are the only confirmation.
@@ -572,9 +648,7 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
                         id={instanceTypeId}
                         required
                         value={form.instanceType}
-                        onChange={(e) =>
-                            setForm((prev) => ({ ...prev, instanceType: e.target.value }))
-                        }
+                        onChange={(e) => chooseInstanceType(e.target.value)}
                         onBlur={() => touch("instanceType")}
                         disabled={instanceTypes.isLoading}
                         aria-invalid={instanceTypeError ? true : undefined}
@@ -632,6 +706,39 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
                         </p>
                     )}
                 </div>
+                {offeredReservations.length > 0 && (
+                    <div>
+                        <label
+                            htmlFor={capacityId}
+                            className="block text-sm text-text-primary mb-1"
+                        >
+                            Capacity
+                        </label>
+                        <select
+                            id={capacityId}
+                            value={capacityValue}
+                            onChange={(e) => setCapacityChoice(e.target.value)}
+                            aria-describedby={`${capacityId}-hint`}
+                            className={`${control} block w-full`}
+                        >
+                            <option value="">{ON_DEMAND_LABEL}</option>
+                            {offeredReservations.map((r) => (
+                                <option
+                                    key={r.capacityReservationId}
+                                    value={r.capacityReservationId}
+                                    disabled={!reservationSelectable(r)}
+                                >
+                                    {reservationOptionLabel(r)}
+                                </option>
+                            ))}
+                        </select>
+                        <p id={`${capacityId}-hint`} className="mt-1 text-sm text-text-secondary">
+                            Launch into a capacity reservation an administrator registered for this
+                            instance type, or on-demand. A full reservation either launches the
+                            workstation on-demand or cannot be chosen, as the administrator set it.
+                        </p>
+                    </div>
+                )}
                 <div>
                     <label htmlFor={rootSizeId} className="block text-sm text-text-primary mb-1">
                         Root disk size (GB)
@@ -718,6 +825,16 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
                     <dd className="text-text-primary">{imageArchitecture ?? "-"}</dd>
                     <dt className="text-text-secondary">Instance type</dt>
                     <dd className="text-text-primary">{form.instanceType}</dd>
+                    {offeredReservations.length > 0 && (
+                        <>
+                            <dt className="text-text-secondary">Capacity</dt>
+                            <dd className="text-text-primary">
+                                {chosenReservation
+                                    ? reservationReviewText(chosenReservation)
+                                    : ON_DEMAND_LABEL}
+                            </dd>
+                        </>
+                    )}
                     <dt className="text-text-secondary">Root disk</dt>
                     <dd className="text-text-primary">{form.rootSizeGb} GB</dd>
                     {expiry && (

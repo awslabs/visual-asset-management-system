@@ -34,6 +34,7 @@ jest.mock("../api/queries", () => ({
     useEdhCatalogImages: jest.fn(() => ({ data: [], isLoading: false, error: null })),
     useEdhInstanceTypes: jest.fn(() => ({ data: [], isLoading: false, error: null })),
     useEdhCatalogLease: jest.fn(() => ({ data: undefined, isLoading: false, error: null })),
+    useEdhCatalogCapacityReservations: jest.fn(() => ({ data: [], isLoading: false, error: null })),
 }));
 
 jest.mock("../../../features/orchestration/permissions/useAllowedRoutes", () => ({

@@ -50,6 +50,19 @@ class EdhStartInProgressError(EdhOperationError):
     json_fields = {"startInProgress": True}
 
 
+class EdhReservationFullError(EdhOperationError):
+    """Raised when a launch or start is refused because its capacity reservation has no free slot
+    and does not fall back to on-demand (a launch), or the stopped desktop's reservation is full (a
+    start)."""
+    # Carried into --json-output beside the error, as the API's own error body carries it.
+    json_fields = {"code": "RESERVATION_FULL"}
+
+
+class EdhCapacityReservationNotFoundError(EdhError):
+    """Raised when a capacity reservation is not registered in VAMS."""
+    pass
+
+
 class EdhContainerJobNotFoundError(EdhError):
     """Raised when an EDH container job is not found."""
     pass

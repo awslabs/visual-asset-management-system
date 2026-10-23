@@ -53,6 +53,7 @@ const EDH_ADMIN_CONSTRAINT_IDS = [
     "initial_admin_allow_all_edhworkstations#group#admin",
     "initial_admin_allow_all_edhimages#group#admin",
     "initial_admin_allow_all_edhcontainers#group#admin",
+    "initial_admin_allow_all_edhcapacityreservations#group#admin",
 ];
 
 /** The constraint ids the add-on appends to the read-only role, in order. */
@@ -184,7 +185,12 @@ function synthReadOnly(edhEnabled: boolean): Template {
 describe("the backend object type lists", () => {
     test("both Python lists parse (control)", () => {
         expect(coreObjectTypes()).toEqual(expect.arrayContaining(["asset", "api", "web"]));
-        expect(edhObjectTypes().sort()).toEqual(["edhContainer", "edhImage", "edhWorkstation"]);
+        expect(edhObjectTypes().sort()).toEqual([
+            "edhCapacityReservation",
+            "edhContainer",
+            "edhImage",
+            "edhWorkstation",
+        ]);
     });
 
     test("the core and add-on object types are disjoint", () => {
@@ -205,6 +211,18 @@ describe("addonDefaultConstraints covers the EDH object types while the add-on i
         expect(on.map((item) => item.objectType.S).sort()).toEqual(["edhImage", "edhWorkstation"]);
         expect(
             addonReadOnlyDefaultConstraints(seedConfig(false), "basicReadOnly", "basicro")
+        ).toEqual([]);
+    });
+
+    test("read-only: no capacity reservation is granted; an administrator grants each one", () => {
+        // Control: the admin role is seeded the type, so the read-only list leaves it out by choice.
+        expect(
+            addonAdminDefaultConstraints(seedConfig(true), "admin").map((item) => item.objectType.S)
+        ).toContain("edhCapacityReservation");
+        expect(
+            addonReadOnlyDefaultConstraints(seedConfig(true), "basicReadOnly", "basicro")
+                .map((item) => item.objectType.S)
+                .filter((type) => type === "edhCapacityReservation")
         ).toEqual([]);
     });
 
@@ -251,6 +269,7 @@ describe("seeded admin Tier-2 constraints cover every Casbin object type", () =>
             edhWorkstation: "edhImageId",
             edhImage: "edhImageId",
             edhContainer: "edhJobDefinition",
+            edhCapacityReservation: "edhCapacityReservationId",
         };
         expect(Object.keys(expected).sort()).toEqual(edhObjectTypes().sort());
         for (const [type, field] of Object.entries(expected)) {

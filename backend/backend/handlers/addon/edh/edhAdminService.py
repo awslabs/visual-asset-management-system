@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """EDH Workstations admin routes: image catalog administration, cluster-wide instance views and
-lifecycle actions, capacity and health.
+lifecycle actions, capacity and health, the lease settings and the capacity-reservation registry.
 
 Serves ``/addon/edh/admin/*``. Every route runs under the EDH root key. A stop names the session
 owner as ``X-EDH-USER`` because EDH filters stop on the owner for every caller; a deactivate names
@@ -25,6 +25,8 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.apiRoutes import (
     API_EDH_ADMIN_CAPACITY,
+    API_EDH_ADMIN_CAPACITY_RESERVATION,
+    API_EDH_ADMIN_CAPACITY_RESERVATIONS,
     API_EDH_ADMIN_HEALTH,
     API_EDH_ADMIN_IMAGE_SIMULATION,
     API_EDH_ADMIN_IMAGE_VDI,
@@ -49,7 +51,8 @@ from models.common import (
     VAMSGeneralErrorResponse, validation_error_message,
 )
 from models.addon.edh import (
-    LeaseSettingsRequestModel, RegisterSimulationImageRequestModel, RegisterVdiImageRequestModel,
+    CapacityReservationViewModel, LeaseSettingsRequestModel, RegisterCapacityReservationRequestModel,
+    RegisterSimulationImageRequestModel, RegisterVdiImageRequestModel, UpdateCapacityReservationRequestModel,
     edh_failure_projection,
 )
 from .common.edhCatalogFields import (
@@ -65,6 +68,7 @@ from .common.edhClient import (
     edh_session_name, map_edh_error_to_response, outcome_unknown_fields,
 )
 from .common.edhIdentity import SYSTEM_USER_ID, edh_uid_for
+from .common import edhCapacityReservations as reservations
 from .common import edhSessionBootstrap as bootstrap
 from .common.edhLeasePolicy import LeaseValidationError, read_lease_policy, write_lease_policy
 from .common.edhSessionState import (
@@ -135,6 +139,14 @@ HEALTH_MESSAGES = {
     HEALTH_REASON_REFUSED: "EDH refused the health probe.",
 }
 
+# The capacity-reservation registry routes: the path parameter, and the answers that are not a view.
+CAPACITY_RESERVATION_PATH_PARAMETER = "capacityReservationId"
+RESERVATION_NOT_IN_EC2_MESSAGE = "Capacity reservation not found in this account and Region"
+RESERVATION_NOT_ACTIVE_MESSAGE = "The capacity reservation is not active"
+RESERVATION_READ_FAILED_MESSAGE = "The capacity reservation could not be read; try again"
+RESERVATION_NOT_REGISTERED_MESSAGE = "Capacity reservation is not registered"
+RESERVATION_ALREADY_REGISTERED_MESSAGE = "Capacity reservation is already registered"
+
 # Path identifiers (EDH software-stack ids, session uuids, bootstrap ids) as they appear in a route.
 PATH_ID_PATTERN = re.compile(r'^[A-Za-z0-9._-]{1,128}$')
 
@@ -203,6 +215,12 @@ def _utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _natural_key(text):
+    """A sort key that ignores case and compares each run of digits as a number."""
+    parts = re.split(r"(\d+)", str(text or ""))
+    return [int(part) if index % 2 else part.lower() for index, part in enumerate(parts)]
+
+
 # ---------------------------------------------------------------------------
 # EDH calls
 # ---------------------------------------------------------------------------
@@ -260,9 +278,10 @@ def _path_id(event, name):
 # Session table access
 # ---------------------------------------------------------------------------
 def _scan_to_exhaustion():
-    """Every session row, paging on key PRESENCE."""
+    """Every session row, paging on key PRESENCE. The settings rows the table also holds -- the lease policy and
+    the capacity-reservation registry, under reserved ``SETTINGS#`` keys -- are left out by the scan itself."""
     rows = []
-    scan_kwargs = {}
+    scan_kwargs = {'FilterExpression': reservations.session_rows_only()}
     while True:
         response = edh_session_table.scan(**scan_kwargs)
         rows.extend(response.get('Items', []))
@@ -426,6 +445,94 @@ def update_lease_settings(event):
         return validation_error(body={"message": str(err)}, event=event)
     log_actions(event, "edhLeasePolicyUpdate", {"lease": updated})
     return success(body={"lease": updated})
+
+
+# ---------------------------------------------------------------------------
+# Capacity reservation routes
+# ---------------------------------------------------------------------------
+def _reservation_view(registration, live):
+    """The API view of one registration, from the live read's facts for it; a read that failed (``live`` None)
+    is state unknown."""
+    facts = None if live is None else live.get(registration["capacityReservationId"])
+    return CapacityReservationViewModel(**reservations.view(registration, facts)).dict()
+
+
+def _read_live_or_none(capacity_reservation_ids):
+    """EC2's facts about the ids, or None when EC2 could not be read (logged)."""
+    try:
+        return reservations.read_live(capacity_reservation_ids)
+    except reservations.CapacityReservationReadError as err:
+        logger.warning(f"Capacity reservations not read from EC2 ({err}), so their state is reported unknown")
+        return None
+
+
+def list_capacity_reservations(event):
+    """Every registered reservation, disabled ones included, with its live view, by label."""
+    registrations = reservations.list_registrations()
+    live = _read_live_or_none([r["capacityReservationId"] for r in registrations]) if registrations else {}
+    items = [_reservation_view(registration, live) for registration in registrations]
+    items.sort(key=lambda item: (_natural_key(item["label"]), item["capacityReservationId"]))
+    return success(body={"Items": items})
+
+
+def register_capacity_reservation(event):
+    """Register a reservation EC2 holds in the deployment's account and Region and that is active or yet to
+    become active; one in a state it never leaves (``EC2_TERMINAL_STATES``) is refused."""
+    request = parse(event=_parse_body(event), model=RegisterCapacityReservationRequestModel)
+    cr_id = request.capacityReservationId
+    try:
+        facts = reservations.read_live([cr_id])[cr_id]
+    except reservations.CapacityReservationReadError as err:
+        logger.warning(f"Capacity reservation not read from EC2 before registering ({err})")
+        return general_error(status_code=503, body={"message": RESERVATION_READ_FAILED_MESSAGE}, event=event)
+    if facts.get("state") == reservations.STATE_NOT_FOUND:
+        return validation_error(body={"message": RESERVATION_NOT_IN_EC2_MESSAGE}, event=event)
+    if facts.get("state") in reservations.EC2_TERMINAL_STATES:
+        return validation_error(body={"message": RESERVATION_NOT_ACTIVE_MESSAGE}, event=event)
+    try:
+        registration = reservations.register(cr_id, request.label, request.fallbackToOnDemand, request.enabled,
+                                             _requesting_user_id())
+    except reservations.RegistrationExists:
+        return general_error(status_code=409, body={"message": RESERVATION_ALREADY_REGISTERED_MESSAGE}, event=event)
+    except reservations.RegistryFull as err:
+        return validation_error(body={"message": str(err)}, event=event)
+    log_actions(event, "edhCapacityReservationRegister", {"capacityReservation": registration})
+    return success(status_code=201, body=_reservation_view(registration, {cr_id: facts}))
+
+
+def _reservation_path_id(event):
+    """The reservation id the path names, or None when it is absent or not a reservation id."""
+    value = (event.get('pathParameters') or {}).get(CAPACITY_RESERVATION_PATH_PARAMETER)
+    return value if reservations.is_capacity_reservation_id(value) else None
+
+
+def update_capacity_reservation(event):
+    """Change a registration's label, fallback or offering."""
+    cr_id = _reservation_path_id(event)
+    if cr_id is None:
+        return validation_error(body={"message": "capacityReservationId is invalid"}, event=event)
+    request = parse(event=_parse_body(event), model=UpdateCapacityReservationRequestModel)
+    patch = {key: getattr(request, key) for key in reservations.REGISTRY_UPDATE_FIELDS}
+    try:
+        registration = reservations.update_registration(cr_id, patch, _requesting_user_id())
+    except reservations.RegistrationNotFound:
+        return general_error(status_code=404, body={"message": RESERVATION_NOT_REGISTERED_MESSAGE}, event=event)
+    log_actions(event, "edhCapacityReservationUpdate", {"capacityReservation": registration})
+    return success(body=_reservation_view(registration, _read_live_or_none([cr_id])))
+
+
+def delete_capacity_reservation(event):
+    """Unregister a reservation. VAMS stops offering it; EC2 is not touched, and the rows launched into it keep
+    their ``capacityReservationId``."""
+    cr_id = _reservation_path_id(event)
+    if cr_id is None:
+        return validation_error(body={"message": "capacityReservationId is invalid"}, event=event)
+    try:
+        reservations.unregister(cr_id)
+    except reservations.RegistrationNotFound:
+        return general_error(status_code=404, body={"message": RESERVATION_NOT_REGISTERED_MESSAGE}, event=event)
+    log_actions(event, "edhCapacityReservationDelete", {"capacityReservationId": cr_id})
+    return success(body={"capacityReservationId": cr_id, "deleted": True})
 
 
 # ---------------------------------------------------------------------------
@@ -651,7 +758,20 @@ def _instance_item(record, row):
         "imageId": str(image_id) if image_id is not None else None,
         "osFamily": row.get('osFamily') or record_str(EDH_FIELD_SESSION_OS_FAMILY),
         "instanceType": row.get('instanceType') or record_str(EDH_FIELD_SESSION_INSTANCE_TYPE),
+        # The reservation the launch was sent with; its label is joined by _with_reservation_labels.
+        "capacityReservationId": row.get('capacityReservationId'),
+        "capacityReservationLabel": None,
+        "capacityReservationFallback": bool(row.get('capacityReservationFallback')),
     }
+
+
+def _with_reservation_labels(items):
+    """The items, each carrying the registry label of its capacity reservation (None once unregistered); the
+    registry is read only for the reservations the items name."""
+    labels = reservations.labels_for(item["capacityReservationId"] for item in items)
+    for item in items:
+        item["capacityReservationLabel"] = labels.get(item["capacityReservationId"])
+    return items
 
 
 def _row_index(rows):
@@ -710,7 +830,7 @@ def _filter_allowed_instances(items):
 def list_instances(event):
     client = EdhClient(profile="api")
     items, _missing = _joined_instances(event, client, "adminInstancesList")
-    return success(body={'Items': _filter_allowed_instances(items)})
+    return success(body={'Items': _with_reservation_labels(_filter_allowed_instances(items))})
 
 
 def _parse_timestamp(value):
@@ -761,7 +881,8 @@ def list_stale_instances(event):
     for row in missing_rows:
         stale.append({**_instance_item(None, row), "stale": True, "staleReason": STALE_REASON_MISSING})
 
-    return success(body={'Items': _filter_allowed_instances(stale), 'idleMinutes': idle_minutes})
+    return success(body={'Items': _with_reservation_labels(_filter_allowed_instances(stale)),
+                         'idleMinutes': idle_minutes})
 
 
 def act_on_instance(event, action):
@@ -824,7 +945,7 @@ def act_on_instance(event, action):
         # The revoke follows the row as the write left it: a key a renew named since the read goes too.
         _update_row_from_image(row, **written)
         _revoke_session_credential(event, row, delete_secret=(new_state == STATE_DELETED))
-    return success(body={**_instance_item(record, row), "state": new_state})
+    return success(body={**_with_reservation_labels([_instance_item(record, row)])[0], "state": new_state})
 
 
 # ---------------------------------------------------------------------------
@@ -837,6 +958,8 @@ def handle_get(event, path):
         return get_capacity(event)
     if API_EDH_ADMIN_SETTINGS.matches(path):
         return get_lease_settings(event)
+    if API_EDH_ADMIN_CAPACITY_RESERVATIONS.matches(path):
+        return list_capacity_reservations(event)
     if API_EDH_ADMIN_IMAGES.matches(path):
         return list_images(event)
     if API_EDH_ADMIN_INSTANCES_STALE.matches(path):
@@ -855,6 +978,8 @@ def handle_post(event, path):
         return act_on_instance(event, "stop")
     if API_EDH_ADMIN_INSTANCE_DEACTIVATE.matches(path):
         return act_on_instance(event, "deactivate")
+    if API_EDH_ADMIN_CAPACITY_RESERVATIONS.matches(path):
+        return register_capacity_reservation(event)
     return validation_error(body={'message': 'Unsupported route'}, event=event)
 
 
@@ -863,12 +988,16 @@ def handle_delete(event, path):
         return delete_image(event, IMAGE_KIND_VDI)
     if API_EDH_ADMIN_IMAGE_SIMULATION.matches(path):
         return delete_image(event, IMAGE_KIND_SIMULATION)
+    if API_EDH_ADMIN_CAPACITY_RESERVATION.matches(path):
+        return delete_capacity_reservation(event)
     return validation_error(body={'message': 'Unsupported route'}, event=event)
 
 
 def handle_put(event, path):
     if API_EDH_ADMIN_SETTINGS.matches(path):
         return update_lease_settings(event)
+    if API_EDH_ADMIN_CAPACITY_RESERVATION.matches(path):
+        return update_capacity_reservation(event)
     return validation_error(body={'message': 'Unsupported route'}, event=event)
 
 

@@ -13,10 +13,11 @@ This page covers common problems encountered with the VamsCLI `edh` commands, al
 
 With `--json-output`, an `edh` command error can carry these fields beside the ones the [JSON Error Format](../../cli/automation.md#json-error-format) lists:
 
-| Field             | Carried by                                                                                                                                                                                               |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `outcomeUnknown`  | `EdhOutcomeUnknownError` (`true`): EDH may have carried out a request whose answer was lost; check the listing before sending it again (see [A Request Was Not Confirmed](#a-request-was-not-confirmed)) |
-| `startInProgress` | `EdhStartInProgressError` (`true`): another start of the workstation is in progress (see [Start Refused Because a Start Is in Progress](#start-refused-because-a-start-is-in-progress))                  |
+| Field             | Carried by                                                                                                                                                                                                                                                                                                                                                     |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `outcomeUnknown`  | `EdhOutcomeUnknownError` (`true`): EDH may have carried out a request whose answer was lost; check the listing before sending it again (see [A Request Was Not Confirmed](#a-request-was-not-confirmed))                                                                                                                                                       |
+| `startInProgress` | `EdhStartInProgressError` (`true`): another start of the workstation is in progress (see [Start Refused Because a Start Is in Progress](#start-refused-because-a-start-is-in-progress))                                                                                                                                                                        |
+| `code`            | `EdhReservationFullError` (`RESERVATION_FULL`): the capacity reservation of a launch or start has no free slot (see [Launch Refused Because the Capacity Reservation Is Full](#launch-refused-because-the-capacity-reservation-is-full) and [Start Refused Because the Capacity Reservation Is Full](#start-refused-because-the-capacity-reservation-is-full)) |
 
 ---
 
@@ -173,6 +174,23 @@ EDH found no available AWS capacity for the workstation's instance type when it 
 
 Start the workstation again later. A stopped desktop starts on its own instance, in that instance's Availability Zone.
 
+### Start Refused Because the Capacity Reservation Is Full
+
+**Symptoms:**
+
+-   `edh workstation start` fails with `Capacity Reservation Full: Workstation start refused (409): The capacity reservation has no free capacity; the workstation stays stopped`
+-   With `--json-output`, the error carries `error_type` `EdhReservationFullError` and `"code": "RESERVATION_FULL"`
+
+**Cause:**
+
+The workstation was launched into a capacity reservation (`capacityReservationId` in `edh workstation get --json-output`). A stopped desktop gives its slot back, and EDH starts it again in the same reservation; every slot is in use now, so EDH refused the start. VAMS does not move a stopped desktop to another reservation or to on-demand. The workstation stays `STOPPED`, and the session key minted for the start is revoked.
+
+**Resolution:**
+
+1. Start it again once a slot is free; an administrator sees the free slots with `vamscli edh admin capacity-reservation list` (`FREE/TOTAL`).
+2. Free a slot by stopping or deleting another workstation in the same reservation, or ask an administrator to.
+3. To run the desktop on-demand, launch a new workstation without `--capacity-reservation-id`; the stopped one keeps its reservation.
+
 ### The Connection URL Is Not Shown
 
 **Symptoms:**
@@ -303,6 +321,84 @@ EDH registered the image with a root volume of `<n>` GiB, and `--root-size-gb` i
 
 Read the image's `rootSize` from `vamscli edh catalog images` and launch again with `--root-size-gb` of at least that size.
 
+### Launch Refused Because the Capacity Reservation Is Full
+
+**Symptoms:**
+
+-   `edh workstation create --capacity-reservation-id` fails with `Capacity Reservation Full: Workstation launch refused (409): The capacity reservation has no free capacity`
+-   With `--json-output`, the error carries `error_type` `EdhReservationFullError` and `"code": "RESERVATION_FULL"`
+
+**Cause:**
+
+Every slot of the reservation is in use, and its registration does not fall back to on-demand (`FALLBACK` `refuse` in `edh catalog capacity-reservations`), so VAMS refused the launch rather than run it on-demand. Nothing was recorded and no desktop was requested. A reservation that falls back launches the workstation on-demand instead, and the record then carries `capacityReservationFallback` `true`.
+
+**Resolution:**
+
+1. Launch on-demand by leaving out `--capacity-reservation-id`, or into another reservation with a free slot from `vamscli edh catalog capacity-reservations --instance-type <TYPE> --os-family <FAMILY>`.
+2. Or launch again once a slot is free; stopping or deleting a workstation in the reservation frees one. An administrator can let launches fall back with `vamscli edh admin capacity-reservation update <CR_ID> --fallback`.
+
+### Capacity Reservation Not Registered
+
+**Symptoms:**
+
+-   `edh workstation create --capacity-reservation-id` fails with `Workstation launch rejected (400): capacityReservationId is not registered`
+-   It fails with `Access forbidden.` (HTTP 403)
+
+**Cause:**
+
+An administrator has not registered the reservation, has disabled it, or has unregistered it. A 403 means the reservation is registered but your role does not grant it: launching into a reservation needs an `edhCapacityReservation` constraint allowing `POST` on it, and seeing it in the catalog one allowing `GET`. The **EDH User** template grants none. Nothing was recorded.
+
+**Resolution:**
+
+List the reservations you may use with `vamscli edh catalog capacity-reservations`, and launch into one of those, or on-demand without the option. Ask an administrator to register the reservation or to grant it to your role.
+
+### Capacity Reservation Not Active
+
+**Symptoms:**
+
+-   `edh workstation create --capacity-reservation-id` fails with `Workstation launch rejected (400): The capacity reservation is not active`
+
+**Cause:**
+
+EC2 reports the reservation in a state other than `active`: it has expired, been cancelled, is still pending, or EC2 no longer knows it (`notFound` in `edh admin capacity-reservation list`). Nothing was recorded.
+
+**Resolution:**
+
+Launch on-demand or into another reservation from `vamscli edh catalog capacity-reservations`, which lists only active ones. An administrator unregisters a reservation that has ended.
+
+### Capacity Reservation Does Not Match the Launch
+
+**Symptoms:**
+
+-   `edh workstation create --capacity-reservation-id` fails with `Workstation launch rejected (400): instanceType does not match the capacity reservation`
+-   It fails with `Workstation launch rejected (400): The capacity reservation's platform does not match the image`
+
+**Cause:**
+
+A reservation holds instances of one instance type and one platform. `--instance-type` differs from the reservation's, or the reservation's platform does not suit the image: a Linux image (`--os-family linux`) launches only into a `Linux/UNIX` reservation, a Windows image only into a `Windows` one. Nothing was recorded.
+
+**Resolution:**
+
+List the reservations that suit the launch, and use the instance type a reservation holds:
+
+```bash
+vamscli edh catalog capacity-reservations --instance-type g5.16xlarge --os-family linux
+```
+
+### Capacity Reservation Could Not Be Read
+
+**Symptoms:**
+
+-   `edh workstation create --capacity-reservation-id` fails with `Workstation launch failed (503): The capacity reservation could not be read; try again`, `error_type` `EdhUnavailableError`
+
+**Cause:**
+
+VAMS reads the reservation from Amazon EC2 before every launch into it, and that read failed. VAMS does not fall back to on-demand on a failed read, since it cannot tell whether the reservation is full. Nothing was recorded and EDH was not called.
+
+**Resolution:**
+
+Run the command again. If it keeps failing, launch on-demand without `--capacity-reservation-id`, and ask an administrator to check `vamscli edh admin capacity-reservation list`, where the reservation's `STATE` reads `unknown` while EC2 cannot be read.
+
 ### Launch Ended ORPHANED
 
 **Symptoms:**
@@ -314,16 +410,17 @@ Read the image's `rootSize` from `vamscli edh catalog images` and launch again w
 
 The launch itself runs after the command returns. When EDH refuses it, VAMS records a generic code rather than EDH's own message, and the same field carries the code the lease sweep writes when it stops a workstation. When EDH's own record of the desktop names the AWS error behind a failed placement, or the setup step a desktop failed at, VAMS also stores that as `edhFailure` (shown on the `EDH failure:` line; see [edh workstation list](cli-commands.md#edh-workstation-list)), and an AWS capacity or limit code turns a generic `LAUNCH_ERROR` into `CAPACITY_UNAVAILABLE` or `QUOTA_EXCEEDED`:
 
-| `lastError`            | Meaning                                                                                                                                                                     |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `USER_NOT_PROVISIONED` | The deployment does not auto-provision EDH identities and yours does not exist yet                                                                                          |
-| `QUOTA_EXCEEDED`       | EDH's per-user or profile quota (session count or budget) is used up, or AWS refused the instance for an account limit (`edhFailure` names it, such as `VcpuLimitExceeded`) |
-| `CAPACITY_UNAVAILABLE` | EDH found no available AWS capacity for the chosen instance type (`edhFailure` names the AWS code, such as `InsufficientInstanceCapacity`)                                  |
-| `IMAGE_UNAVAILABLE`    | The chosen image is no longer registered in EDH                                                                                                                             |
-| `EDH_REFUSED`          | EDH rejected the request (an instance type the image's profile does not allow, …)                                                                                           |
-| `LAUNCH_ERROR`         | EDH reports the desktop in an `error` state, or the last launch attempt failed without a definite refusal                                                                   |
-| `CREATE_TIMED_OUT`     | The launch made no progress for 30 minutes after its record's last write (5 minutes once all three launch attempts had started) and was closed by the reconciler's sweep    |
-| `LEASE_EXPIRED`        | Not a launch refusal: the sweep stopped a workstation whose lease ran out, leaving it `STOPPED`                                                                             |
+| `lastError`            | Meaning                                                                                                                                                                                                              |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `USER_NOT_PROVISIONED` | The deployment does not auto-provision EDH identities and yours does not exist yet                                                                                                                                   |
+| `QUOTA_EXCEEDED`       | EDH's per-user or profile quota (session count or budget) is used up, or AWS refused the instance for an account limit (`edhFailure` names it, such as `VcpuLimitExceeded`)                                          |
+| `CAPACITY_UNAVAILABLE` | EDH found no available AWS capacity for the chosen instance type (`edhFailure` names the AWS code, such as `InsufficientInstanceCapacity`)                                                                           |
+| `IMAGE_UNAVAILABLE`    | The chosen image is no longer registered in EDH                                                                                                                                                                      |
+| `EDH_REFUSED`          | EDH rejected the request (an instance type the image's profile does not allow, …)                                                                                                                                    |
+| `LAUNCH_ERROR`         | EDH reports the desktop in an `error` state, or the last launch attempt failed without a definite refusal                                                                                                            |
+| `CREATE_TIMED_OUT`     | The launch made no progress for 30 minutes after its record's last write (5 minutes once all three launch attempts had started) and was closed by the reconciler's sweep                                             |
+| `RESERVATION_FULL`     | The capacity reservation the launch was sent into had no free slot when EDH placed it, and its registration does not fall back to on-demand (`edhFailure` may name `ReservationCapacityExceeded` or a capacity code) |
+| `LEASE_EXPIRED`        | Not a launch refusal: the sweep stopped a workstation whose lease ran out, leaving it `STOPPED`                                                                                                                      |
 
 **Resolution:**
 
@@ -335,7 +432,7 @@ The launch itself runs after the command returns. When EDH refuses it, VAMS reco
 
 2. For `USER_NOT_PROVISIONED`, ask the EDH cluster operator to provision your EDH identity — the `edhUid` shown by `vamscli edh workstation get BOOTSTRAP_ID --json-output`. For `QUOTA_EXCEEDED`, stop or delete a workstation you no longer need (`vamscli edh workstation list`) or ask an administrator to check `vamscli edh admin capacity`. For `EDH_REFUSED`, retry with an instance type from `edh catalog instance-types` and an image from `edh catalog images`. For `CAPACITY_UNAVAILABLE`, launch again with another instance type from `edh catalog instance-types`, or later; EDH reserves a desktop's capacity in one subnet, so the same type soon after usually fails the same way, and an administrator can add EDH subnets in more Availability Zones. EDH refuses a launch for capacity only where the cluster's `AsyncPlacement` is `false` and `EnableCapacityReservation` is `true`; with EDH's asynchronous placement, a shortage arrives as an `edhFailure` with a capacity `errorCode` and `lastError` `CAPACITY_UNAVAILABLE`, or as `LAUNCH_ERROR` when VAMS could not read the reason from EDH. For an `edhFailure` `VcpuLimitExceeded` (or another limit code under `QUOTA_EXCEEDED`), the AWS account's vCPU quota for the instance family is used up: stop or delete a workstation of the same family, or ask an administrator to raise the Amazon EC2 quota in the cluster's account and Region (for G instances, **Running On-Demand G and VT instances**) in Service Quotas.
 
-3. `LAUNCH_ERROR` and `CREATE_TIMED_OUT` are cluster-side; an administrator can confirm the proxy's view of the cluster with `vamscli edh admin health`. An `EDH failure:` line `desktop setup failed at <checkpoint>` names the step at which EDH's setup of the desktop stopped; give it to the cluster operator. `LEASE_EXPIRED` is not a launch outcome at all — see [Start Refused Because the Lease Expired](#start-refused-because-the-lease-expired).
+3. `LAUNCH_ERROR` and `CREATE_TIMED_OUT` are cluster-side; an administrator can confirm the proxy's view of the cluster with `vamscli edh admin health`. An `EDH failure:` line `desktop setup failed at <checkpoint>` names the step at which EDH's setup of the desktop stopped; give it to the cluster operator. For `RESERVATION_FULL`, launch again on-demand (without `--capacity-reservation-id`), into another reservation, or once a slot is free; see [Launch Refused Because the Capacity Reservation Is Full](#launch-refused-because-the-capacity-reservation-is-full). `LEASE_EXPIRED` is not a launch outcome at all — see [Start Refused Because the Lease Expired](#start-refused-because-the-lease-expired).
 
 ### Windows Launch Ended ORPHANED With QUOTA_EXCEEDED
 
@@ -364,6 +461,23 @@ These operations are irreversible and refuse to run without the `--confirm` flag
 **Resolution:**
 
 Re-run with `--confirm`. There is no interactive prompt; the flag is the only confirmation.
+
+### Capacity Reservation Commands Refused
+
+**Symptoms:**
+
+-   `edh admin capacity-reservation add` fails with `Capacity reservation registration rejected (400): Capacity reservation not found in this account and Region`, with HTTP 400 because 100 reservations are already registered, or with `Capacity reservation registration refused (409)` for a reservation already registered
+-   `edh admin capacity-reservation update` or `remove` fails with `Capacity Reservation Not Found: Capacity reservation '<CR_ID>' is not registered`
+-   Any of them fails with exit 2 and `Capacity reservation id must be cr- and 17 hex digits`, or a label outside its rule
+
+**Cause:**
+
+The registry holds VAMS's own entries for EC2 capacity reservations, at most 100. Registering reads the reservation from EC2 in the deployment's account and Region, so a reservation in another account or Region, or a mistyped id, is not found. `update` and `remove` address a registered reservation only. An id that is not `cr-` and 17 hexadecimal digits is refused before any request.
+
+**Resolution:**
+
+1. List the registry with `vamscli edh admin capacity-reservation list`, and the reservations in EC2 with `aws ec2 describe-capacity-reservations --region <region>` in the deployment's account.
+2. Unregister one you no longer use with `vamscli edh admin capacity-reservation remove <CR_ID> --confirm` before registering another beyond the hundredth; the EC2 reservation itself is not changed.
 
 ---
 

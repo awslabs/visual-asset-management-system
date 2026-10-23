@@ -32,6 +32,8 @@ API_EDH_WORKSTATION_WINDOWS_SIGN_IN = ApiRoute("/addon/edh/workstations/{session
 API_EDH_CATALOG_IMAGES = ApiRoute("/addon/edh/catalog/images", (GET,), "addons")
 API_EDH_CATALOG_INSTANCE_TYPES = ApiRoute("/addon/edh/catalog/instance-types", (GET,), "addons")
 API_EDH_CATALOG_LEASE = ApiRoute("/addon/edh/catalog/lease", (GET,), "addons")
+# The registered capacity reservations the caller may launch into, with their live EC2 view.
+API_EDH_CATALOG_CAPACITY_RESERVATIONS = ApiRoute("/addon/edh/catalog/capacity-reservations", (GET,), "addons")
 
 # Admin routes: image catalog administration, cluster-wide instance views and lifecycle, capacity
 # and health. The DELETE templates carry the kind segment before the id so they sit one segment
@@ -48,6 +50,10 @@ API_EDH_ADMIN_INSTANCE_DEACTIVATE = ApiRoute("/addon/edh/admin/instances/{sessio
 API_EDH_ADMIN_CAPACITY = ApiRoute("/addon/edh/admin/capacity", (GET,), "addons")
 API_EDH_ADMIN_HEALTH = ApiRoute("/addon/edh/admin/health", (GET,), "addons")
 API_EDH_ADMIN_SETTINGS = ApiRoute("/addon/edh/admin/settings", (GET, PUT), "addons")
+# The capacity-reservation registry: list and register, then update or unregister one.
+API_EDH_ADMIN_CAPACITY_RESERVATIONS = ApiRoute("/addon/edh/admin/capacity-reservations", (GET, POST), "addons")
+API_EDH_ADMIN_CAPACITY_RESERVATION = ApiRoute(
+    "/addon/edh/admin/capacity-reservations/{capacityReservationId}", (PUT, DELETE), "addons")
 # AMI recipe routes: recipes, their builds, and one build's registration retry or retirement.
 API_EDH_ADMIN_AMI_RECIPES = ApiRoute("/addon/edh/admin/ami-recipes", (GET, POST), "addons")
 API_EDH_ADMIN_AMI_RECIPE = ApiRoute("/addon/edh/admin/ami-recipes/{recipeId}", (GET, PUT, DELETE), "addons")
@@ -70,6 +76,7 @@ EDH_ROUTES: Tuple[ApiRoute, ...] = (
     API_EDH_CATALOG_IMAGES,
     API_EDH_CATALOG_INSTANCE_TYPES,
     API_EDH_CATALOG_LEASE,
+    API_EDH_CATALOG_CAPACITY_RESERVATIONS,
     API_EDH_ADMIN_IMAGES,
     API_EDH_ADMIN_IMAGES_VDI,
     API_EDH_ADMIN_IMAGES_SIMULATION,
@@ -82,6 +89,8 @@ EDH_ROUTES: Tuple[ApiRoute, ...] = (
     API_EDH_ADMIN_CAPACITY,
     API_EDH_ADMIN_HEALTH,
     API_EDH_ADMIN_SETTINGS,
+    API_EDH_ADMIN_CAPACITY_RESERVATIONS,
+    API_EDH_ADMIN_CAPACITY_RESERVATION,
     API_EDH_ADMIN_AMI_RECIPES,
     API_EDH_ADMIN_AMI_RECIPE,
     API_EDH_ADMIN_AMI_RECIPE_BUILDS,

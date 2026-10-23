@@ -25,6 +25,7 @@ import backend.backend.handlers.addon.edh.edhContainerService as containers
 import backend.backend.handlers.addon.edh.edhLaunchWorker as worker
 import backend.backend.handlers.addon.edh.edhWorkstationService as service
 from backend.backend.common.apiRoutes import (
+    API_EDH_CATALOG_CAPACITY_RESERVATIONS,
     API_EDH_CATALOG_IMAGES,
     API_EDH_CATALOG_INSTANCE_TYPES,
     API_EDH_CATALOG_LEASE,
@@ -43,6 +44,9 @@ from backend.backend.common.apiRoutes import (
 from backend.backend.handlers.addon.edh.common.edhClient import EDH_ROUTE_DESKTOPS_LIST, EdhClient
 from backend.backend.handlers.addon.edh.common.edhIdentity import edh_uid_for
 from backend.backend.handlers.addon.edh.common.edhSessionState import LAST_ERROR_EDH_REFUSED
+from backend.tests.handlers.addon.edh.edhReservationTestSupport import (
+    CR_FREE, FakeEc2, ec2_reservation, registry_item,
+)
 from backend.tests.handlers.addon.edh.edhServiceTestSupport import (
     IMAGES_PATH,
     INSTANCE_TYPES_PATH,
@@ -143,6 +147,21 @@ def _catalog_instance_types(monkeypatch):
     return fakes.module.lambda_handler(make_event("GET", INSTANCE_TYPES_PATH), {}), fakes
 
 
+class _RegistryTable:
+    """The registry rows of the session table, served by the prefix scan."""
+
+    def scan(self, **kwargs):
+        return {"Items": [registry_item(CR_FREE)]}
+
+
+def _catalog_capacity_reservations(monkeypatch):
+    fakes = install_service_fakes(monkeypatch)
+    monkeypatch.setattr(service.reservations, "_session_table", _RegistryTable())
+    monkeypatch.setattr(service.reservations, "ec2", FakeEc2({CR_FREE: ec2_reservation(CR_FREE)}))
+    response = fakes.module.lambda_handler(make_event("GET", API_EDH_CATALOG_CAPACITY_RESERVATIONS.path), {})
+    return response, fakes
+
+
 # scenario -> (route path, method, build(monkeypatch) -> (response, fakes), expected status, reads state).
 # Every build makes its rows and scripts afresh, since the handler updates a row in place and a Sequence
 # is consumed.
@@ -193,6 +212,8 @@ SCENARIOS = {
     "catalog_images": (API_EDH_CATALOG_IMAGES.path, GET, _catalog_images, 200, False),
     "catalog_instance_types": (API_EDH_CATALOG_INSTANCE_TYPES.path, GET, _catalog_instance_types, 200, False),
     "catalog_lease": (API_EDH_CATALOG_LEASE.path, GET, _read, 200, False),
+    "catalog_capacity_reservations": (
+        API_EDH_CATALOG_CAPACITY_RESERVATIONS.path, GET, _catalog_capacity_reservations, 200, False),
 }
 
 

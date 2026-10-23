@@ -9153,7 +9153,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         post:
             summary: "Launch an EDH workstation."
-            description: "Launches an Amazon DCV desktop on the EDH cluster for the caller. The launch is asynchronous: the record is written in state CREATING and the EDH calls run in a background function after the response, so the caller polls the record until it reports ACTIVE and a sessionId, or ORPHANED with a lastError. The client-generated `bootstrapId` is the idempotency key: a repeat with the caller's own value returns the stored record with `200` and launches nothing; another user's value answers `409`. Callers authenticated with an API key are refused with `403`. The request makes one EDH read, of the desktop software-stack catalog, to check that `imageId` is a registered desktop image and to derive its OS family, which the body's `osFamily` must match; it mutates nothing in EDH. Enforces VAMS two-tier Casbin authorization (object-tier on edhWorkstation from the body's imageId and instanceType and the image's OS family). This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            description: "Launches an Amazon DCV desktop on the EDH cluster for the caller. The launch is asynchronous: the record is written in state CREATING and the EDH calls run in a background function after the response, so the caller polls the record until it reports ACTIVE and a sessionId, or ORPHANED with a lastError. The client-generated `bootstrapId` is the idempotency key: a repeat with the caller's own value returns the stored record with `200` and launches nothing; another user's value answers `409`. Callers authenticated with an API key are refused with `403`. The request makes one EDH read, of the desktop software-stack catalog, to check that `imageId` is a registered desktop image and to derive its OS family, which the body's `osFamily` must match; it mutates nothing in EDH. A launch that names `capacityReservationId` then runs, in order and before any record, session key or EDH desktop call: the reservation is registered and enabled (400); the caller's roles grant object-tier `POST` on edhCapacityReservation for it (403); EC2 can be read (503, never a fallback); it is `active` (400); its instance type equals `instanceType` (400); its platform suits the image's OS family (400); and it has a free instance slot, or, when it has none, its registration allows a fallback, which launches on-demand and returns `capacityReservationFallback` true (otherwise 409 `RESERVATION_FULL`). A launch without `capacityReservationId` is on-demand and reads no reservation. Enforces VAMS two-tier Casbin authorization (object-tier on edhWorkstation from the body's imageId and instanceType and the image's OS family, and on edhCapacityReservation when a reservation is named). This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
             requestBody:
                 required: true
                 content:
@@ -9174,19 +9174,25 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/edhWorkstationRecord"
                 "400":
-                    description: "Validation failed (`Request body is not valid JSON`), the instance type is outside the deployment allow-list, the image is not a registered desktop image with a determinable OS family equal to `osFamily` (`imageId is not a registered VDI image`, `The image's OS family cannot be determined`, `osFamily does not match the image`), the image's EDH profile lists the instance type only under architectures of another family than the image's, with `x86_64` and `i386` one family (`instanceType does not match the image's architecture`), an AMI recipe whose `AVAILABLE` build registered the image lists `launchInstanceTypes` that leave the instance type out (`instanceType is not offered for this image`; a recipe read that fails refuses nothing), or `leaseHours` is outside what the lease policy allows (`leaseHours must be 1-<cap>`, `Leases are disabled for this deployment`), or `rootSizeGb` is below the image's registered root size (`Root disk size must be at least <n> GB for this image`)."
+                    description: "Validation failed (`Request body is not valid JSON`), the instance type is outside the deployment allow-list, the image is not a registered desktop image with a determinable OS family equal to `osFamily` (`imageId is not a registered VDI image`, `The image's OS family cannot be determined`, `osFamily does not match the image`), the image's EDH profile lists the instance type only under architectures of another family than the image's, with `x86_64` and `i386` one family (`instanceType does not match the image's architecture`), an AMI recipe whose `AVAILABLE` build registered the image lists `launchInstanceTypes` that leave the instance type out (`instanceType is not offered for this image`; a recipe read that fails refuses nothing), or `leaseHours` is outside what the lease policy allows (`leaseHours must be 1-<cap>`, `Leases are disabled for this deployment`), or `rootSizeGb` is below the image's registered root size (`Root disk size must be at least <n> GB for this image`); or the named capacity reservation is not registered or is disabled (`capacityReservationId is not registered`), is not `active` or EC2 holds no such reservation (`The capacity reservation is not active`), is of another instance type (`instanceType does not match the capacity reservation`), or has a platform that does not suit the image's OS family (`The capacity reservation's platform does not match the image`)."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
-                    description: "Caller lacks access or authenticated with an API key."
+                    description: "Caller lacks access, may not launch into the named capacity reservation, or authenticated with an API key."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The `bootstrapId` belongs to another user's launch."
+                    description: "The `bootstrapId` belongs to another user's launch, or the named capacity reservation has no free slot and its registration allows no fallback (`The capacity reservation has no free capacity`, with `code` `RESERVATION_FULL`)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/edhError"
+                "503":
+                    description: "The named capacity reservation could not be read from EC2 (`The capacity reservation could not be read; try again`); nothing was written."
                     content:
                         application/json:
                             schema:
@@ -9381,7 +9387,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The launch has not received a session id, the workstation is deleted (`A deleted workstation cannot be started`, also for a record deleted or removed after the start read it, which is answered after EDH's state read), its lease has expired and has not been renewed (`The lease on this workstation has expired; renew it before starting`), it is already running, it is not stopped, EDH still reports the stopped workstation in a state other than stopped, such as `stopping` or `interrupted` (`The workstation is still <state> in EDH; start it again once it has stopped.`, answered after EDH's state read; nothing is minted or claimed and EDH is sent no start), or EDH still reports it stopped while another start of it is being processed, less than 3 minutes after a start EDH did not confirm, while the reconciler revokes the stopped desktop's key, or while a lease renewal re-issues the desktop's key, for up to 5 minutes (`A start of this workstation is already in progress`, with `startInProgress` true, answered after EDH's state read; nothing is minted and EDH is sent no start)."
+                    description: "The launch has not received a session id, the workstation is deleted (`A deleted workstation cannot be started`, also for a record deleted or removed after the start read it, which is answered after EDH's state read), its lease has expired and has not been renewed (`The lease on this workstation has expired; renew it before starting`), it is already running, it is not stopped, EDH still reports the stopped workstation in a state other than stopped, such as `stopping` or `interrupted` (`The workstation is still <state> in EDH; start it again once it has stopped.`, answered after EDH's state read; nothing is minted or claimed and EDH is sent no start), or EDH still reports it stopped while another start of it is being processed, less than 3 minutes after a start EDH did not confirm, while the reconciler revokes the stopped desktop's key, or while a lease renewal re-issues the desktop's key, for up to 5 minutes (`A start of this workstation is already in progress`, with `startInProgress` true, answered after EDH's state read; nothing is minted and EDH is sent no start); or EDH refused the start of a workstation launched into a capacity reservation that is full when VAMS reads it again (`The capacity reservation has no free capacity; the workstation stays stopped`, with `code` `RESERVATION_FULL`): a stopped workstation holds no slot of its reservation, EDH keeps the reservation it was launched into, and VAMS does not move it to another, so the workstation stays `STOPPED` and any session key minted for the start is revoked."
                     content:
                         application/json:
                             schema:
@@ -9610,6 +9616,49 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 properties:
                                     lease:
                                         $ref: "#/components/schemas/edhLeasePolicy"
+                "403":
+                    description: "Caller lacks API-tier access."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+
+    /addon/edh/catalog/capacity-reservations:
+        get:
+            summary: "List the capacity reservations the caller may launch into."
+            description: "The registered EC2 capacity reservations that are enabled, that the caller's roles grant `GET` on through object-tier authorization on edhCapacityReservation (keyed by `edhCapacityReservationId`), and that EC2 reports `active`, each with its live view, ordered by label. A full reservation is listed with `availableInstanceCount` 0 and its `fallbackToOnDemand`. EC2 is read once for the reservations the caller may see; a read that fails answers 200 with no items, and a launch then stays on-demand. API-tier and object-tier authorization. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            parameters:
+                - name: instanceType
+                  in: query
+                  required: false
+                  description: "Only reservations of this instance type."
+                  schema:
+                      type: string
+                      pattern: '^[a-z0-9-]+\.[a-z0-9-]+$'
+                - name: osFamily
+                  in: query
+                  required: false
+                  description: "Only reservations whose platform suits an image of this OS family: `linux` takes a platform starting `Linux/UNIX`, `windows` one starting `Windows`."
+                  schema:
+                      type: string
+                      enum:
+                          - linux
+                          - windows
+            responses:
+                "200":
+                    description: "The reservations under `Items`."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/edhCapacityReservationList"
+                "400":
+                    description: "`instanceType` is not an EC2 instance type, or `osFamily` is neither `linux` nor `windows`."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
                 "403":
                     description: "Caller lacks API-tier access."
                     content:
@@ -10085,6 +10134,143 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: "#/components/schemas/error"
                 "403":
                     description: "Caller lacks API-tier access."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+
+    /addon/edh/admin/capacity-reservations:
+        get:
+            summary: "List the registered capacity reservations (administration)."
+            description: "Every registered EC2 capacity reservation, disabled ones included, with its live view, ordered by label. A reservation EC2 no longer holds reports `state` `notFound`; when EC2 cannot be read every reservation reports `unknown`. API-tier authorization only. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            responses:
+                "200":
+                    description: "The reservations under `Items`."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/edhCapacityReservationList"
+                "403":
+                    description: "Caller lacks API-tier access."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+        post:
+            summary: "Register a capacity reservation (administration)."
+            description: "Registers an EC2 capacity reservation VAMS may launch EDH desktops into. EC2 must hold it in the deployment's account and Region in a state it can still be used in (`active`, or a future-dated `pending` or `scheduled`); VAMS stores the id, label, `fallbackToOnDemand`, `enabled` and who registered it, never EC2's facts, and never changes the reservation in EC2. At most 100 can be registered. A user launches into it only once a role grants object-tier `POST` on edhCapacityReservation for its id. Audited as `edhCapacityReservationRegister`. API-tier authorization only. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/edhRegisterCapacityReservationRequest"
+            responses:
+                "201":
+                    description: "The registered reservation with its live view."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/edhCapacityReservation"
+                "400":
+                    description: "Validation failed, EC2 holds no such reservation (`Capacity reservation not found in this account and Region`), EC2 reports it `expired`, `cancelled` or `failed` (`The capacity reservation is not active`; an `active`, `pending` or `scheduled` reservation registers), or 100 reservations are registered already (`At most 100 capacity reservations can be registered`)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: "Caller lacks API-tier access."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "409":
+                    description: "The reservation is registered already (`Capacity reservation is already registered`)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "503":
+                    description: "EC2 could not be read (`The capacity reservation could not be read; try again`); nothing was registered."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+
+    /addon/edh/admin/capacity-reservations/{capacityReservationId}:
+        parameters:
+            - name: capacityReservationId
+              in: path
+              required: true
+              schema:
+                  type: string
+                  pattern: "^cr-[0-9a-f]{17}$"
+        put:
+            summary: "Update a registered capacity reservation (administration)."
+            description: "Changes the label, `fallbackToOnDemand` or `enabled` of a registered reservation; an omitted field keeps its value. A disabled reservation is no longer offered to launches; desktops launched into it are not changed. Audited as `edhCapacityReservationUpdate`. API-tier authorization only. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/edhUpdateCapacityReservationRequest"
+            responses:
+                "200":
+                    description: "The updated reservation with its live view (`state` `unknown` when EC2 could not be read)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/edhCapacityReservation"
+                "400":
+                    description: "`capacityReservationId` is malformed, or validation failed (including a body naming no field)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: "Caller lacks API-tier access."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "404":
+                    description: "The reservation is not registered (`Capacity reservation is not registered`)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
+        delete:
+            summary: "Unregister a capacity reservation (administration)."
+            description: "Removes the reservation from the registry, so it is no longer offered; the reservation itself is not touched in EC2, and desktops launched into it keep their `capacityReservationId` (their `capacityReservationLabel` reads null). Audited as `edhCapacityReservationDelete`. API-tier authorization only. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            responses:
+                "200":
+                    description: "The reservation was unregistered."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/edhCapacityReservationDeleted"
+                "400":
+                    description: "`capacityReservationId` is malformed."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: "Caller lacks API-tier access."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "404":
+                    description: "The reservation is not registered (`Capacity reservation is not registered`)."
                     content:
                         application/json:
                             schema:
@@ -11528,6 +11714,9 @@ components:
                 - leaseStoppedAt
                 - leaseHoursAtLaunch
                 - edhFailure
+                - capacityReservationId
+                - capacityReservationLabel
+                - capacityReservationFallback
             properties:
                 bootstrapId:
                     type: string
@@ -11584,6 +11773,7 @@ components:
                         - LAUNCH_ERROR
                         - CREATE_TIMED_OUT
                         - LEASE_EXPIRED
+                        - RESERVATION_FULL
                         - null
                 launchAttempts:
                     type: integer
@@ -11607,9 +11797,21 @@ components:
                         - $ref: "#/components/schemas/edhLaunchFailure"
                     nullable: true
                     description: "The reason EDH recorded for a failed launch, once VAMS has read it for an ORPHANED record with a session id; null otherwise."
+                capacityReservationId:
+                    type: string
+                    nullable: true
+                    pattern: "^cr-[0-9a-f]{17}$"
+                    description: "The EC2 capacity reservation the launch was sent into; null for an on-demand launch, including one that fell back to on-demand. Kept after the reservation is unregistered."
+                capacityReservationLabel:
+                    type: string
+                    nullable: true
+                    description: "The registry label of `capacityReservationId`, read when the record is read; null without a reservation or once it is unregistered."
+                capacityReservationFallback:
+                    type: boolean
+                    description: "True when the launch named a capacity reservation that was full and whose registration allows a fallback, so it was launched on-demand instead."
         edhLaunchFailure:
             type: object
-            description: "The reason EDH recorded for a failed launch, parsed from EDH's own events; EDH's text is never returned. A capacity or account-limit errorCode makes a generic LAUNCH_ERROR read CAPACITY_UNAVAILABLE or QUOTA_EXCEEDED."
+            description: "The reason EDH recorded for a failed launch, parsed from EDH's own events; EDH's text is never returned. A capacity or account-limit errorCode makes a generic LAUNCH_ERROR read CAPACITY_UNAVAILABLE or QUOTA_EXCEEDED; on a record launched into a capacity reservation, `ReservationCapacityExceeded` and the capacity codes read RESERVATION_FULL."
             required:
                 - event
                 - observedAt
@@ -11688,6 +11890,13 @@ components:
                     minimum: 1
                     maximum: 720
                     description: "How long the workstation may run before its lease expires. Refused with 400 above the policy's `leaseHours` cap, and refused with 400 when leases are disabled; ignored when the policy forces a lease, which stamps its own hours instead. Omit it for a workstation with no expiry."
+                capacityReservationId:
+                    type: string
+                    nullable: true
+                    minLength: 20
+                    maxLength: 20
+                    pattern: "^cr-[0-9a-f]{17}$"
+                    description: "A registered EC2 capacity reservation to launch into, as `GET /addon/edh/catalog/capacity-reservations` lists it. Omit it, or send null, for an on-demand launch."
         edhLaunchResponse:
             allOf:
                 - $ref: "#/components/schemas/edhWorkstationRecord"
@@ -11730,6 +11939,11 @@ components:
                 startInProgress:
                     type: boolean
                     description: "True on the refusal of a workstation start while another start of it may still be under way, the reconciler revokes the stopped desktop's key, or a lease renewal re-issues the desktop's key; absent on every other answer."
+                code:
+                    type: string
+                    enum:
+                        - RESERVATION_FULL
+                    description: "`RESERVATION_FULL` on the 409 that refuses a launch into a full capacity reservation whose registration allows no fallback, and on the 409 that answers a start EDH refused while the workstation's capacity reservation is full; absent on every other answer."
         edhConnectResponse:
             type: object
             required:
@@ -12013,6 +12227,17 @@ components:
                 instanceType:
                     type: string
                     nullable: true
+                capacityReservationId:
+                    type: string
+                    nullable: true
+                    description: "The EC2 capacity reservation the joined VAMS record was launched into; null for an on-demand launch or no joined record."
+                capacityReservationLabel:
+                    type: string
+                    nullable: true
+                    description: "The registry label of `capacityReservationId`; null without one or once it is unregistered."
+                capacityReservationFallback:
+                    type: boolean
+                    description: "True when the joined VAMS record asked for a full capacity reservation and was launched on-demand instead."
                 stale:
                     type: boolean
                 staleReason:
@@ -12172,6 +12397,133 @@ components:
                     type: integer
                     minimum: 0
                     maximum: 168
+        edhCapacityReservation:
+            type: object
+            description: "A registered EC2 capacity reservation: its registration joined with the facts EC2 reports for it now (`ec2:DescribeCapacityReservations`; VAMS stores none of them). `state` is EC2's, `notFound` when EC2 holds no such reservation in the deployment's account and Region, or `unknown` when EC2 could not be read; the EC2 facts are null in the last two cases."
+            required:
+                - capacityReservationId
+                - label
+                - fallbackToOnDemand
+                - enabled
+                - instanceType
+                - availabilityZone
+                - instancePlatform
+                - state
+                - totalInstanceCount
+                - availableInstanceCount
+                - instanceMatchCriteria
+                - endDate
+                - reservationType
+            properties:
+                capacityReservationId:
+                    type: string
+                    pattern: "^cr-[0-9a-f]{17}$"
+                label:
+                    type: string
+                    nullable: true
+                fallbackToOnDemand:
+                    type: boolean
+                    description: "Whether a launch into the reservation runs on-demand when the reservation is full (true) or is refused (false)."
+                enabled:
+                    type: boolean
+                    description: "Whether the reservation is offered to launches."
+                instanceType:
+                    type: string
+                    nullable: true
+                availabilityZone:
+                    type: string
+                    nullable: true
+                instancePlatform:
+                    type: string
+                    nullable: true
+                    description: "EC2's platform, such as `Linux/UNIX` or `Windows`; a Linux image launches into a reservation whose platform starts `Linux/UNIX`, a Windows image into one whose platform starts `Windows`."
+                state:
+                    type: string
+                    description: "EC2's state (`active`, `expired`, `cancelled`, `pending`, `failed`, ...), `notFound` or `unknown`."
+                totalInstanceCount:
+                    type: integer
+                    nullable: true
+                availableInstanceCount:
+                    type: integer
+                    nullable: true
+                instanceMatchCriteria:
+                    type: string
+                    nullable: true
+                    enum:
+                        - open
+                        - targeted
+                        - null
+                endDate:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    description: "When the reservation ends; null for one without an end."
+                reservationType:
+                    type: string
+                    nullable: true
+                    enum:
+                        - default
+                        - capacity-block
+                        - null
+        edhCapacityReservationList:
+            type: object
+            required:
+                - Items
+            properties:
+                Items:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/edhCapacityReservation"
+        edhRegisterCapacityReservationRequest:
+            type: object
+            required:
+                - capacityReservationId
+                - label
+            properties:
+                capacityReservationId:
+                    type: string
+                    minLength: 20
+                    maxLength: 20
+                    pattern: "^cr-[0-9a-f]{17}$"
+                label:
+                    type: string
+                    minLength: 1
+                    maxLength: 64
+                    pattern: '^[a-zA-Z0-9\-._\s]{1,64}$'
+                    description: "The name the launch wizard and the admin views show; surrounding whitespace is trimmed."
+                fallbackToOnDemand:
+                    type: boolean
+                    nullable: true
+                    description: "Default true."
+                enabled:
+                    type: boolean
+                    nullable: true
+                    description: "Default true."
+        edhUpdateCapacityReservationRequest:
+            type: object
+            description: "At least one field; an omitted one keeps its stored value."
+            properties:
+                label:
+                    type: string
+                    minLength: 1
+                    maxLength: 64
+                    pattern: '^[a-zA-Z0-9\-._\s]{1,64}$'
+                fallbackToOnDemand:
+                    type: boolean
+                enabled:
+                    type: boolean
+        edhCapacityReservationDeleted:
+            type: object
+            required:
+                - capacityReservationId
+                - deleted
+            properties:
+                capacityReservationId:
+                    type: string
+                deleted:
+                    type: boolean
+                    enum:
+                        - true
         edhContainerCatalogList:
             type: object
             description: "The AWS Batch job definitions the caller may submit, every job queue and (when enabled) the Amazon EKS clusters. Each item is a curated projection tagged with its `kind`; nothing else of EDH's record is copied."

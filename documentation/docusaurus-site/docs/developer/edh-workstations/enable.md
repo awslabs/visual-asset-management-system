@@ -165,6 +165,7 @@ The add-on depends on the following EDH settings. Several of them are satisfied 
 | [Project and virtual desktop profile](#project-and-virtual-desktop-profile) | Project `default` and profile `1`                                          | None                                                                                               |
 | [Feature-flag allow lists](#feature-flag-allow-lists)                       | Empty, which admits every caller                                           | None while they stay empty                                                                         |
 | [Desktop schedule updates](#desktop-schedule-updates)                       | `DCV_ALLOW_DEFAULT_SCHEDULE_UPDATE` is `True`                              | None; keep the default                                                                             |
+| [Capacity reservations](#capacity-reservations)                             | `FeatureFlags/AsyncPlacement` on                                           | Capacity reservations only: keep it on; a private subnet in each reservation's zone                |
 | [Load balancer security group](#load-balancer-security-group)               | Admits the cluster VPC and the addresses of EDH's NAT gateways             | None in the shared-VPC layout; one ingress rule when VAMS runs in a connected VPC                  |
 | [Browser access to Amazon DCV](#browser-access-to-amazon-dcv)               | The `--client-ip` ranges                                                   | Admit every range your users connect from                                                          |
 | [Desktop instance role](#desktop-instance-role)                             | `VdiNodeRole`, which holds `ec2:DescribeTags` in the high-scale layout     | Session bootstrap only: name the role in VAMS, and add `ec2:DescribeTags` where the role lacks it  |
@@ -420,7 +421,7 @@ vamscli setup <application URL>
 vamscli auth login -u <app.adminUserId>
 ```
 
-The initial administrator's seeded `admin` role already holds every route and the three EDH object types the add-on checks. Other users need an account to sign in with, and `vamscli role user create` does not check that one exists: in an Amazon Cognito deployment, create each user with `vamscli user cognito create -u <user id> -e <email>` or under **Admin - Auth** → **User Management**, and Amazon Cognito emails the user a temporary password.
+The initial administrator's seeded `admin` role already holds every route and the four EDH object types the add-on checks. Other users need an account to sign in with, and `vamscli role user create` does not check that one exists: in an Amazon Cognito deployment, create each user with `vamscli user cognito create -u <user id> -e <email>` or under **Admin - Auth** → **User Management**, and Amazon Cognito emails the user a temporary password.
 
 For those users, create an EDH user role and an EDH administrator role from the two permission templates and assign the roles. Leave `--mfa-required` off the `edh-admin.json` command unless every EDH administrator signs in with multi-factor authentication (MFA), as the paragraphs after the commands describe:
 
@@ -502,6 +503,23 @@ With `containers.enabled`, VAMS builds container images into Amazon ECR, registe
 ### Leases
 
 Leases are off by default. A lease time-boxes a workstation: VAMS stops the desktop once its lease runs out and deletes it after a grace window. While the lease policy enables leases, a launch may ask for one, and while it both enables and forces them, every launch carries one; `forced` has no effect while leases are disabled. `vdi.lease` seeds the policy, including its `enabled` and `forced` switches, at the first deployment, and administrators change it on the **Settings** tab of the Workstation Admin page; leases need no EDH setting. See [Leases](overview.md#leases).
+
+### Capacity reservations
+
+Administrators can register Amazon EC2 capacity reservations on the **Settings** tab of the Workstation Admin page, and a launch that names one is placed in it; the feature needs no VAMS configuration, and a deployment that registers none launches on-demand as before. VAMS only reads the reservations: create them yourself, in the account and Region where EDH launches its desktops, and register them in VAMS by id. A launch into one works when the EDH cluster and the reservation meet these requirements, which EDH checks before it accepts the create:
+
+-   **Asynchronous placement on.** EDH's `FeatureFlags/AsyncPlacement` setting keeps its default, on. VAMS sends a reservation-bound launch with `subnet_id` `auto`, from which EDH derives a subnet only under asynchronous placement; without it EDH requires an explicit subnet, which VAMS does not send.
+-   **An EDH private subnet in the reservation's Availability Zone.** EDH places the desktop in one of its own private subnets in that zone, so create the reservation in a zone the cluster has a private subnet in.
+-   **A platform that matches the image.** EDH compares the reservation's platform with the AMI's `PlatformDetails`: `Linux/UNIX` for the Linux images, the Amazon Linux 2023 and Ubuntu ones VAMS builds among them, and `Windows` for Windows images. VAMS lists and accepts a reservation for an image only on that rule.
+-   **The instance type users launch.** The reservation's instance type is the one a launch names, and it must be in `edhAllowedInstanceTypes` when that list is set, and allowed by the image's EDH profile.
+-   **Targeted or open.** A reservation with `targeted` or `open` match criteria both work, since VAMS names the reservation; an `open` reservation is not used by a desktop whose launch does not name it, because EDH targets a short-lived reservation of its own for every other launch.
+
+Plan for two consequences before you register one:
+
+-   **A stopped desktop frees its slot.** A desktop's instance holds a slot only while it runs, and EDH starts a stopped desktop in the same reservation, so its start answers `409` `RESERVATION_FULL` while every slot is taken; VAMS does not move it to another reservation or to on-demand.
+-   **A capacity reservation is billed whether it is used or not.** Amazon EC2 charges an On-Demand Capacity Reservation at the On-Demand rate of its instance type for as long as it is provisioned in the account, whether or not a desktop runs in it; a desktop running in it is billed as the instance instead of the reservation. Set an end date on a reservation you create for a trial, and cancel it in Amazon EC2 when it is no longer needed: unregistering it in VAMS does not cancel it. See [Capacity Reservation pricing and billing](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/capacity-reservations-pricing-billing.html) in the Amazon EC2 User Guide.
+
+Each registered reservation carries `fallbackToOnDemand` (on by default), which decides whether a launch into a full reservation runs on-demand or is refused, and is used only by the roles an administrator grants it to under the `edhCapacityReservation` object type. See [Capacity reservations](overview.md#capacity-reservations).
 
 ## Disable or remove the add-on
 

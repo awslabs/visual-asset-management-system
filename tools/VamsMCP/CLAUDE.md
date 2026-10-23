@@ -61,6 +61,9 @@ tools/VamsMCP/
       test_edh_tools.py      # the EDH tools on a recording fake mcp, one Config per gate setting:
                              # payloads, the pre-flight switch of each tool, the connect tool with
                              # the writes, no Windows sign-in, and the README's EDH section
+      test_edh_capacity_reservation_tools.py
+                             # the capacity reservation tools and create's capacity_reservation_id:
+                             # requests, passthrough, the RESERVATION_FULL error and the README
 ```
 
 **No dotenv.** `config.py` reads `os.environ` only, and there is no `python-dotenv` dependency. That
@@ -360,13 +363,19 @@ ships an add-on with tools; a fork does not.
 
 #### EDH Workstations
 
--   `addon_tools/edh.py` holds 16 read, 15 write and 7 destructive tools. The container tools
+-   `addon_tools/edh.py` holds 18 read, 17 write and 8 destructive tools. The container tools
     pre-flight `FEATURE_EDH_CONTAINERS`, the AMI recipe tools `FEATURE_EDH_AMI_RECIPES`, and the
     rest `FEATURE_EDH_WORKSTATIONS`. The add-on's list routes return every row in one
     `{"Items": [...]}` page and no `message` envelope, so the tools return the body as it comes,
-    without `paginate()` or `unwrap_message()`. `EdhOutcomeUnknownError` and
-    `EdhStartInProgressError` carry `outcomeUnknown` / `startInProgress` in their `json_fields`,
-    which `@tool_result` passes through (Mandatory Rule 5).
+    without `paginate()` or `unwrap_message()`. `EdhOutcomeUnknownError`,
+    `EdhStartInProgressError` and `EdhReservationFullError` carry `outcomeUnknown` /
+    `startInProgress` / `code` (`RESERVATION_FULL`) in their `json_fields`, which `@tool_result`
+    passes through (Mandatory Rule 5).
+-   Capacity reservations: `list_edh_catalog_capacity_reservations` (read, in the README's
+    `autoApprove` addition) and `list_edh_admin_capacity_reservations` (read, admin),
+    `register_edh_capacity_reservation` and `update_edh_capacity_reservation` (write) and
+    `unregister_edh_capacity_reservation` (destructive) change VAMS's registry only, never EC2;
+    `create_edh_workstation` takes an optional `capacity_reservation_id`, sent only when given.
 -   Compute: `create_edh_workstation`, `renew_edh_workstation`, `start_edh_workstation`,
     `stop_edh_workstation` and `stop_edh_admin_instance` (write tier) start, resume, extend the
     lease of, or interrupt a GPU desktop, `submit_edh_container_job` (write tier) starts a

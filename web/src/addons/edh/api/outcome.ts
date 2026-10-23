@@ -12,6 +12,8 @@ export interface EdhErrorBody {
     outcomeUnknown?: boolean;
     /** Set on the 409 a start answers while an earlier start of the workstation may be under way. */
     startInProgress?: boolean;
+    /** `RESERVATION_FULL` on the 409 a launch or start answers when its capacity reservation is full. */
+    code?: string;
 }
 
 /**
@@ -82,6 +84,23 @@ export function isAlreadyInProgress(err: unknown): boolean {
 export function mayHaveTakenEffect(err: unknown): boolean {
     return !err || isOutcomeUnknown(err);
 }
+
+/** The code a launch or start is refused with when its capacity reservation has no free slot. */
+export const RESERVATION_FULL_CODE = "RESERVATION_FULL";
+
+/** The 409 a launch or start answers, coded `RESERVATION_FULL`, when its reservation is full. */
+export function isReservationFull(err: unknown): boolean {
+    const e = err as Partial<EdhRequestError> | null | undefined;
+    return e?.status === 409 && e?.body?.code === RESERVATION_FULL_CODE;
+}
+
+/** What a launch refused with `RESERVATION_FULL` tells the user. */
+export const RESERVATION_FULL_LAUNCH_MESSAGE =
+    "The capacity reservation has no free capacity and does not allow an on-demand launch. Choose On-demand or another reservation, or try again once a slot is free.";
+
+/** What a start refused with `RESERVATION_FULL` tells the user. */
+export const RESERVATION_FULL_START_MESSAGE =
+    "The capacity reservation has no free capacity; the workstation stays stopped. Start it again once a slot is free, or ask an administrator.";
 
 export interface UnconfirmedNotice {
     title: string;

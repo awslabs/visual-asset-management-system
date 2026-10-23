@@ -347,6 +347,10 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
             { routePath: "/addon/edh/catalog/images", methods: [apigwv2.HttpMethod.GET] },
             { routePath: "/addon/edh/catalog/instance-types", methods: [apigwv2.HttpMethod.GET] },
             { routePath: "/addon/edh/catalog/lease", methods: [apigwv2.HttpMethod.GET] },
+            {
+                routePath: "/addon/edh/catalog/capacity-reservations",
+                methods: [apigwv2.HttpMethod.GET],
+            },
         ];
         for (const route of workstationRoutes) {
             for (const method of route.methods) {
@@ -359,8 +363,9 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
         }
 
         // Admin routes: one Lambda serves the image catalog administration, the cluster-wide
-        // instance views and actions, capacity and health. One registration per method+path pair;
-        // the strings are the admin members of EDH_ROUTES in addonApiRoutes.py.
+        // instance views and actions, capacity and health, the lease settings and the capacity
+        // reservation registry. One registration per method+path pair; the strings are the admin
+        // members of EDH_ROUTES in addonApiRoutes.py.
         const adminServiceFunction = buildEdhAdminServiceFunction(
             this,
             props.lambdaCommonBaseLayer,
@@ -404,6 +409,23 @@ export class EdhWorkstationsBuilderNestedStack extends NestedStack {
             { routePath: "/addon/edh/admin/health", method: apigwv2.HttpMethod.GET },
             { routePath: "/addon/edh/admin/settings", method: apigwv2.HttpMethod.GET },
             { routePath: "/addon/edh/admin/settings", method: apigwv2.HttpMethod.PUT },
+            // The capacity reservation registry: list and register, then update and unregister one.
+            {
+                routePath: "/addon/edh/admin/capacity-reservations",
+                method: apigwv2.HttpMethod.GET,
+            },
+            {
+                routePath: "/addon/edh/admin/capacity-reservations",
+                method: apigwv2.HttpMethod.POST,
+            },
+            {
+                routePath: "/addon/edh/admin/capacity-reservations/{capacityReservationId}",
+                method: apigwv2.HttpMethod.PUT,
+            },
+            {
+                routePath: "/addon/edh/admin/capacity-reservations/{capacityReservationId}",
+                method: apigwv2.HttpMethod.DELETE,
+            },
         ];
         for (const route of adminRoutes) {
             attachFunctionToApi(this, adminServiceFunction, {

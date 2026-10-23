@@ -16,12 +16,16 @@ web/src/addons/edh/
                   #   caller can read, each panel gated by useAllowedRoutes().can()) ImagesTab InstancesTab (the Sessions panel)
                   #   CapacityTab (each profile's allowed instance types grouped by architecture) RegisterImageDialog
                   #   ConfirmActionDialog AmiRecipesTab AmiRecipeFormDialog AmiBuildsPanel (the AMI Recipes tab, EDH_AMI_RECIPES;
-                  #   Duplicate opens the form prefilled from any recipe) SettingsTab (the lease policy, GET/PUT /addon/edh/admin/settings)
+                  #   Duplicate opens the form prefilled from any recipe) SettingsTab (the lease policy, GET/PUT /addon/edh/admin/settings,
+                  #   and below it CapacityReservationsSection, shown on GET /addon/edh/admin/capacity-reservations: the registry
+                  #   table with Register / Edit / Unregister, each gated on its own route; see Capacity Reservations)
   api/            # workstations.ts catalog.ts admin.ts containers.ts amiRecipes.ts (the apiClient callers)
                   #   queries.ts adminQueries.ts containerQueries.ts amiRecipeQueries.ts (TanStack hooks, module-local qk, polling cadence)
-                  #   outcome.ts (EdhRequestError, toOutcomeTuple, unconfirmedNotice: a mutation EDH did not confirm, a start in progress)
+                  #   outcome.ts (EdhRequestError, toOutcomeTuple, unconfirmedNotice: a mutation EDH did not confirm, a start in progress;
+                  #   isReservationFull and the RESERVATION_FULL launch and start sentences)
   components/     # WorkstationStatusBadge.tsx (also describeLastError, describeEdhFailure and EdhFailureDetail; see
-                  #   Launch Failures) DeleteWorkstationDialog.tsx TabStrip.tsx (roving-tabindex tablist shared by both pages)
+                  #   Launch Failures) CapacityDetail.tsx (the row's `Capacity:` line) DeleteWorkstationDialog.tsx TabStrip.tsx
+                  #   (roving-tabindex tablist shared by both pages)
                   #   EdhFeatureTabs.tsx NotEnabledPanel.tsx (both pages' "not enabled" notice) useTextFilter.ts (the toolbar search
                   #   the three EDH lists share) useInFlight.ts (the synchronous double-submit guard every EDH mutation handler claims)
   workstations/   # WorkstationsPage.tsx (one h1 above the Workstations / Simulations strip; the Simulations tab is selected from the
@@ -30,7 +34,8 @@ web/src/addons/edh/
                   #   LaunchWorkstationWizard.tsx (optional `Expires in (hours)` field while the lease policy is enabled and not
                   #   forced; offers only the instance types that run the chosen image's `architecture` by the catalog rule and that
                   #   its `launchInstanceTypes` names when it carries one, clears a type the image chosen next does not run or
-                  #   offer, and shows the architecture on the image card and in Review)
+                  #   offer, and shows the architecture on the image card and in Review; a Capacity select after Instance type,
+                  #   see Capacity Reservations)
                   #   ConnectLink.tsx (click-driven: opens the tab, then requests the URL) WindowsSignInDialog.tsx (the owner's
                   #   Windows user name and masked password, fetched on open through a non-cached mutation and reset on close;
                   #   opened from the row's Show Windows password action)
@@ -38,6 +43,8 @@ web/src/addons/edh/
                   #   containerRoutes.ts (route templates)
   types.ts        # API shapes
   labels.ts       # The words shown for the OS family and EDH state tokens
+  capacityReservations.ts  # The Capacity rules: which reservations suit a launch, the option and Review text, the
+                  #   preselection, and the row's Capacity text (describeCapacity)
   edhLanes.test.tsx  # The module's lane entries, read through the real route table and side navigation
 ```
 
@@ -84,6 +91,17 @@ The module keeps its own `api/` directory (`web/CLAUDE.md` Rule 3 lists an add-o
 ## Launch Failures
 
 A failed launch shows, beneath its **Orphaned** badge, the sentence `describeLastError` gives for its `lastError` code (`LAST_ERROR_COPY`; the user guide and the overview quote each sentence, and `infra/test/addon/edh/docs/edhWorkstationsDocs.test.ts` checks them). When the row also carries `edhFailure` (the AWS error or setup checkpoint VAMS captured from EDH), `EdhFailureDetail` adds one more line of text: `AWS: <errorCode> (<operation>)`, `AWS: <errorCode>`, or `Desktop setup failed at <checkpoint>`, as `describeEdhFailure` formats it. A row whose `edhFailure` is null or absent, or names neither a code nor a checkpoint, gets no line. My Workstations and the admin **Sessions** tab (both views) render the same component, so the two pages always agree. EDH's own status text never reaches the web: the service stores only the parsed fields.
+
+---
+
+## Capacity Reservations
+
+An administrator registers EC2 capacity reservations; a launch may name one. With none registered, or none the caller's role grants (`edhCapacityReservation`), nothing on either page changes and every launch is on-demand.
+
+-   **Launch wizard.** `useEdhCatalogCapacityReservations(open)` reads `GET /addon/edh/catalog/capacity-reservations` once, unfiltered; `matchingReservations` keeps the reservations whose `instanceType` equals the chosen type and whose `instancePlatform` suits the image's `osFamily` (`Linux/UNIX` prefix for linux, `Windows` for windows), the service's own rule. The **Capacity** select after **Instance type** shows only when one matches: `On-demand` plus `<label> (<free>/<total> free)`, `(full, will launch on-demand)` for a full one that falls back, and a disabled `(full)` for one that does not. The choice is `null` until the user picks (the first reservation with a free slot is then preselected, else On-demand); a change of instance type or image clears a chosen reservation that no longer suits it, never an explicit On-demand. Review shows **Capacity** only when the field was offered. The launch body carries `capacityReservationId` only for a reservation, so an on-demand body is the one it always was. A read the route refuses or fails hides the field.
+-   **Refusals.** `createWorkstation` maps a `409` coded `RESERVATION_FULL` to `RESERVATION_FULL_LAUNCH_MESSAGE` (shown on Review); the start handler maps the start's `RESERVATION_FULL` to `RESERVATION_FULL_START_MESSAGE` (`isReservationFull` in `outcome.ts`). Every other refusal (not registered, not active, type or platform mismatch, the `503` read failure) shows the service's message. `LAST_ERROR_COPY.RESERVATION_FULL` explains an orphaned launch.
+-   **Rows.** `CapacityDetail` puts `Capacity: <label> (<id>)` (the id alone once unregistered) or `Capacity: On-demand (reservation full)` beneath the instance type, on My Workstations and the admin Sessions tab; an on-demand row shows nothing.
+-   **Settings.** `CapacityReservationsSection` sits below the lease form, shown on `can("GET", CAPACITY_RESERVATIONS_ROUTE)`; Register on `POST` of that route, Edit on `PUT` and Unregister on `DELETE` of `CAPACITY_RESERVATION_ROUTE`. The dialog checks the id (`^cr-[0-9a-f]{17}$`) and label (1-64 display-name characters) before any request and keeps a refusal inside it; Edit sends `label`, `fallbackToOnDemand` and `enabled`, never the id; Unregister confirms first and says EC2 is not changed.
 
 ---
 

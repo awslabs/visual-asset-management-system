@@ -37,6 +37,7 @@ ADDON_PERMISSION_CONSTRAINT_FIELDS: Dict[str, Union[str, List[str]]] = {
     "edhImageId": "",
     "edhOsFamily": "",
     "edhInstanceType": "",
+    "edhCapacityReservationId": "",
     "edhJobDefinition": "",
 }
 
@@ -49,6 +50,9 @@ ADDON_CONSTRAINT_OBJECT_TYPE_FIELDS: Dict[str, dict] = {
     "edhImage": {"label": "EDH Image", "fields": [
         {"label": "EDH Image ID", "value": "edhImageId"},
         {"label": "EDH OS Family", "value": "edhOsFamily"}]},
+    # A registered EC2 capacity reservation: GET lists it in the launch catalog, POST launches into it.
+    "edhCapacityReservation": {"label": "EDH Capacity Reservation", "fields": [
+        {"label": "EDH Capacity Reservation ID", "value": "edhCapacityReservationId"}]},
     "edhContainer": {"label": "EDH Container Job", "fields": [
         {"label": "EDH Job Definition", "value": "edhJobDefinition"}]},
 }

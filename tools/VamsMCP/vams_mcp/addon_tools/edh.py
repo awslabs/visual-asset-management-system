@@ -126,6 +126,39 @@ def register(
 
     @mcp.tool()
     @tool_result
+    def list_edh_catalog_capacity_reservations(
+        instance_type: Optional[str] = None,
+        os_family: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List the EC2 capacity reservations the authenticated user may launch an EDH workstation
+        into, as `Items`: registered by an administrator, enabled, granted to the user's role, and
+        active in EC2. Each item carries `capacityReservationId` (the value create_edh_workstation
+        takes as `capacity_reservation_id`), `label`, `fallbackToOnDemand` (whether a launch into the
+        reservation runs on-demand when it has no free slot), `enabled`, `instanceType`,
+        `availabilityZone`, `instancePlatform` (`Linux/UNIX`, `Windows`, ...), `state`,
+        `totalInstanceCount`, `availableInstanceCount`, `instanceMatchCriteria`, `endDate` (ISO-8601
+        or null) and `reservationType` (`default` or `capacity-block`). `instance_type` keeps the
+        reservations of that type, and `os_family` (`linux` or `windows`) those whose platform suits
+        an image of that family; a launch takes a reservation only when both match. An empty list
+        means every launch is on-demand, which is also the answer when EC2 could not be read. Not
+        paginated."""
+        client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
+        return client.api.list_edh_catalog_capacity_reservations(
+            instance_type=instance_type, os_family=os_family)
+
+    @mcp.tool()
+    @tool_result
+    def list_edh_admin_capacity_reservations() -> Dict[str, Any]:
+        """ADMIN: list every registered EC2 capacity reservation with EC2's live view of it, as
+        `Items` shaped as list_edh_catalog_capacity_reservations items. `state` is EC2's, or
+        `notFound` when EC2 no longer knows the id, or `unknown` when the read failed (the EC2 fields
+        are then null). Requires the EDH admin routes; a user without them gets a 403. Not
+        paginated."""
+        client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
+        return client.api.list_edh_admin_capacity_reservations()
+
+    @mcp.tool()
+    @tool_result
     def list_edh_admin_images() -> Dict[str, Any]:
         """ADMIN: list every EDH software-stack image registered on the cluster (desktop and
         simulation), as `Items`, filtered per image by the user's permissions. Each item carries `kind`
@@ -298,6 +331,7 @@ def register(
             os_family: str,
             bootstrap_id: Optional[str] = None,
             lease_hours: Optional[int] = None,
+            capacity_reservation_id: Optional[str] = None,
         ) -> Dict[str, Any]:
             """Launch a new EDH GPU workstation for the authenticated user. Returns the accepted session
             record (HTTP 202): `state` CREATING, `sessionId` null, `lastError` null, plus
@@ -322,6 +356,14 @@ def register(
             image's (`x86_64` and `i386` are one family), refused (400) `instanceType is not offered for
             this image` when the image's recipe lists `launchInstanceTypes` that leave the type out, and
             refused (403) for a session authenticated with a VAMS API key.
+            `capacity_reservation_id` launches into a reservation from
+            list_edh_catalog_capacity_reservations whose `instanceType` and platform match the launch;
+            omitted, the launch is on-demand. It is refused (400) when it is not registered, not
+            active, or of another instance type or platform, (403) when the user's role does not grant
+            it, and (503) when EC2 could not be read. A full reservation whose `fallbackToOnDemand` is
+            true launches on-demand (the record then carries `capacityReservationFallback` true);
+            one whose `fallbackToOnDemand` is false is refused (409, `error_type`
+            `EdhReservationFullError`, `code` `RESERVATION_FULL`): launch without it, or later.
 
             This starts real GPU compute and incurs cost until the workstation is stopped or deleted.
             Confirm with the user before calling it, and keep it out of `autoApprove`.
@@ -337,6 +379,8 @@ def register(
             }
             if lease_hours is not None:
                 payload["leaseHours"] = lease_hours
+            if capacity_reservation_id is not None:
+                payload["capacityReservationId"] = capacity_reservation_id
             return client.api.create_edh_workstation(payload)
 
         @mcp.tool()
@@ -602,6 +646,56 @@ def register(
 
         @mcp.tool()
         @tool_result
+        def register_edh_capacity_reservation(
+            capacity_reservation_id: str,
+            label: str,
+            fallback_to_on_demand: Optional[bool] = None,
+            enabled: Optional[bool] = None,
+        ) -> Dict[str, Any]:
+            """ADMIN: register an EC2 capacity reservation (`cr-` and 17 hex digits, in the deployment's
+            account and Region) so users whose role grants it can launch EDH workstations into it.
+            `label` (1-64 letters, digits, spaces, hyphens, periods or underscores) is what the launch
+            wizard shows. `fallback_to_on_demand` (server default true) decides what a launch into the
+            full reservation does: run on-demand, or be refused; `enabled` (server default true)
+            whether it is offered at all. Returns the registered reservation as
+            list_edh_admin_capacity_reservations shows it. Refused (400) when EC2 does not find the
+            reservation, or 100 are already registered, and (409) when it is already registered. The
+            registry is VAMS's own: this never changes the reservation in EC2."""
+            client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
+            payload: Dict[str, Any] = {"capacityReservationId": capacity_reservation_id, "label": label}
+            if fallback_to_on_demand is not None:
+                payload["fallbackToOnDemand"] = fallback_to_on_demand
+            if enabled is not None:
+                payload["enabled"] = enabled
+            return client.api.register_edh_capacity_reservation(payload)
+
+        @mcp.tool()
+        @tool_result
+        def update_edh_capacity_reservation(
+            capacity_reservation_id: str,
+            label: Optional[str] = None,
+            fallback_to_on_demand: Optional[bool] = None,
+            enabled: Optional[bool] = None,
+        ) -> Dict[str, Any]:
+            """ADMIN: change a registered capacity reservation's `label`, `fallback_to_on_demand` or
+            `enabled`; only the arguments you pass are changed, and an empty call is refused here before
+            the API. Returns the reservation as list_edh_admin_capacity_reservations shows it; an
+            unregistered id answers not found (`EdhCapacityReservationNotFoundError`). Never changes
+            the reservation in EC2."""
+            client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
+            data: Dict[str, Any] = {}
+            if label is not None:
+                data["label"] = label
+            if fallback_to_on_demand is not None:
+                data["fallbackToOnDemand"] = fallback_to_on_demand
+            if enabled is not None:
+                data["enabled"] = enabled
+            if not data:
+                raise ValueError("Pass at least one of label, fallback_to_on_demand, enabled")
+            return client.api.update_edh_capacity_reservation(capacity_reservation_id, data)
+
+        @mcp.tool()
+        @tool_result
         def submit_edh_container_job(
             job_definition: str,
             name: str,
@@ -728,6 +822,17 @@ def register(
             retrying."""
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
             return client.api.deactivate_edh_admin_instance(session_id)
+
+        @mcp.tool()
+        @tool_result
+        def unregister_edh_capacity_reservation(capacity_reservation_id: str) -> Dict[str, Any]:
+            """ADMIN: unregister a capacity reservation, so VAMS no longer offers it for launches. The
+            EC2 reservation itself is not changed (it stays billed until it expires or is cancelled in
+            EC2), and workstations launched into it keep running and keep their
+            `capacityReservationId`. register_edh_capacity_reservation registers it again; an
+            unregistered id answers not found (`EdhCapacityReservationNotFoundError`)."""
+            client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
+            return client.api.unregister_edh_capacity_reservation(capacity_reservation_id)
 
         @mcp.tool()
         @tool_result

@@ -61,7 +61,7 @@ vamscli edh workstation list
 vamscli edh workstation list --json-output | jq '.Items[] | select(.state == "ACTIVE") | .sessionId'
 ```
 
-Each record carries `bootstrapId`, `sessionId` (null until the launch worker, or else the reconciler's next sweep, reads it back from EDH), `userId` (the VAMS user who launched it), `edhUid` (the EDH identity the desktop runs as), `state` (`CREATING`, `ACTIVE`, `STOPPED`, `DELETED`, `ORPHANED`), `edhState` (EDH's own session state, once reported), `lastError` (why a launch ended `ORPHANED`: `USER_NOT_PROVISIONED`, `QUOTA_EXCEEDED`, `IMAGE_UNAVAILABLE`, `CAPACITY_UNAVAILABLE`, `EDH_REFUSED`, `LAUNCH_ERROR` or `CREATE_TIMED_OUT`; `LEASE_EXPIRED` on a desktop the lease sweep stopped; null otherwise), `edhFailure` (the launch failure VAMS captured from EDH's own record of a desktop that never ran, null when none was captured; see below), `launchAttempts`, `name`, `imageId`, `osFamily`, `instanceType`, `rootSizeGb`, `createdAt`, `updatedAt`, `connectionAvailable` (`true` while EDH reports the desktop `running`; `connect` then fetches its connection URL), `leaseExpiresAt` (null when no lease applies), `leaseStoppedAt` (set once the sweep has stopped the desktop at expiry, otherwise null) and `leaseHoursAtLaunch` (the policy hours stamped at launch, null when no lease applied). The list is returned in one page. In CLI mode the table shows the identifier, name, state, last error, instance type, OS family and creation time; it has no column for `edhFailure`, which `edh workstation get` shows and `--json-output` carries.
+Each record carries `bootstrapId`, `sessionId` (null until the launch worker, or else the reconciler's next sweep, reads it back from EDH), `userId` (the VAMS user who launched it), `edhUid` (the EDH identity the desktop runs as), `state` (`CREATING`, `ACTIVE`, `STOPPED`, `DELETED`, `ORPHANED`), `edhState` (EDH's own session state, once reported), `lastError` (why a launch ended `ORPHANED`: `USER_NOT_PROVISIONED`, `QUOTA_EXCEEDED`, `IMAGE_UNAVAILABLE`, `CAPACITY_UNAVAILABLE`, `EDH_REFUSED`, `LAUNCH_ERROR` or `CREATE_TIMED_OUT`; `RESERVATION_FULL` when the capacity reservation the launch was sent into had no free slot and its registration does not fall back to on-demand; `LEASE_EXPIRED` on a desktop the lease sweep stopped; null otherwise), `edhFailure` (the launch failure VAMS captured from EDH's own record of a desktop that never ran, null when none was captured; see below), `launchAttempts`, `name`, `imageId`, `osFamily`, `instanceType`, `rootSizeGb`, `createdAt`, `updatedAt`, `connectionAvailable` (`true` while EDH reports the desktop `running`; `connect` then fetches its connection URL), `leaseExpiresAt` (null when no lease applies), `leaseStoppedAt` (set once the sweep has stopped the desktop at expiry, otherwise null), `leaseHoursAtLaunch` (the policy hours stamped at launch, null when no lease applied), `capacityReservationId` (the capacity reservation the launch was sent into, null for an on-demand launch), `capacityReservationLabel` (that reservation's label, null once an administrator has unregistered it) and `capacityReservationFallback` (`true` when the launch asked for a reservation that was full and ran on-demand instead). The list is returned in one page. In CLI mode the table shows the identifier, name, state, last error, instance type, OS family and creation time; it has no column for `edhFailure`, which `edh workstation get` shows and `--json-output` carries.
 
 `edhFailure` is a map of `event` (`placement_failed` when EDH could not place the desktop, `session-failed` when the desktop's setup failed), `errorCode` and `operation` (the AWS error code and the AWS operation EDH's status named, for example `InsufficientInstanceCapacity` from `CreateCapacityReservation`), `checkpoint` (for `session-failed`, the setup step it stopped at) and `observedAt` (when VAMS captured it); `errorCode`, `operation` and `checkpoint` are absent when EDH's status did not name them. EDH's own wording is never returned. A capacity error code (`InsufficientInstanceCapacity`, `InsufficientCapacity`, `InsufficientHostCapacity`, `InsufficientReservedInstanceCapacity`, `Unsupported`) records `lastError` `CAPACITY_UNAVAILABLE`, and a limit (`VcpuLimitExceeded`, `InstanceLimitExceeded`, `ReservationCapacityExceeded`, `MaxSpotInstanceCountExceeded`) records `QUOTA_EXCEEDED`, in place of a generic `LAUNCH_ERROR`.
 
@@ -73,24 +73,38 @@ Launch a workstation. The launch is accepted asynchronously (HTTP 202) and runs 
 vamscli edh workstation create --image-id <ID> --instance-type <TYPE> --name <NAME> --root-size-gb <GIB> --os-family <linux|windows> [OPTIONS]
 ```
 
-| Option            | Type    | Required | Description                                                                                                                                                                                                                                                                                |
-| ----------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--image-id`      | TEXT    | Yes      | Catalog image ID (`edh catalog images`)                                                                                                                                                                                                                                                    |
-| `--instance-type` | TEXT    | Yes      | Amazon EC2 instance type; it must run the image's architecture, and a recipe image that lists launch instance types takes one of them (`edh catalog instance-types --image-id`)                                                                                                            |
-| `--name`          | TEXT    | Yes      | Workstation name                                                                                                                                                                                                                                                                           |
-| `--root-size-gb`  | INTEGER | Yes      | Root volume size in GiB, 10 to 2048, and at least the image's `rootSize` from `edh catalog images`                                                                                                                                                                                         |
-| `--os-family`     | CHOICE  | Yes      | `linux` or `windows`: the chosen image's `osFamily` from `edh catalog images`                                                                                                                                                                                                              |
-| `--lease-hours`   | INTEGER | No       | Lease in hours, 1 up to the policy's `leaseHours` (`edh catalog lease`). Honoured only while the lease policy is enabled and not forced — omitted, the workstation has no lease; overridden when the policy is forced, and refused with HTTP 400 when leases are off or above `leaseHours` |
-| `--bootstrap-id`  | UUID    | No       | Idempotency key (UUID); generated when omitted. Re-send it only when the create response was lost: a repeat returns the existing record and launches nothing                                                                                                                               |
-| `--json-output`   | Flag    | No       | Output raw JSON response                                                                                                                                                                                                                                                                   |
+| Option                      | Type    | Required | Description                                                                                                                                                                                                                                                                                |
+| --------------------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--image-id`                | TEXT    | Yes      | Catalog image ID (`edh catalog images`)                                                                                                                                                                                                                                                    |
+| `--instance-type`           | TEXT    | Yes      | Amazon EC2 instance type; it must run the image's architecture, and a recipe image that lists launch instance types takes one of them (`edh catalog instance-types --image-id`)                                                                                                            |
+| `--name`                    | TEXT    | Yes      | Workstation name                                                                                                                                                                                                                                                                           |
+| `--root-size-gb`            | INTEGER | Yes      | Root volume size in GiB, 10 to 2048, and at least the image's `rootSize` from `edh catalog images`                                                                                                                                                                                         |
+| `--os-family`               | CHOICE  | Yes      | `linux` or `windows`: the chosen image's `osFamily` from `edh catalog images`                                                                                                                                                                                                              |
+| `--lease-hours`             | INTEGER | No       | Lease in hours, 1 up to the policy's `leaseHours` (`edh catalog lease`). Honoured only while the lease policy is enabled and not forced — omitted, the workstation has no lease; overridden when the policy is forced, and refused with HTTP 400 when leases are off or above `leaseHours` |
+| `--bootstrap-id`            | UUID    | No       | Idempotency key (UUID); generated when omitted. Re-send it only when the create response was lost: a repeat returns the existing record and launches nothing                                                                                                                               |
+| `--capacity-reservation-id` | TEXT    | No       | A registered capacity reservation to launch into (`cr-` and 17 hex digits; `edh catalog capacity-reservations`). Its instance type must equal `--instance-type` and its platform suit `--os-family`. Omitted, the launch is on-demand                                                      |
+| `--json-output`             | Flag    | No       | Output raw JSON response                                                                                                                                                                                                                                                                   |
 
 ```bash
 vamscli edh workstation create --image-id 12 --instance-type g5.2xlarge --name "Design desk" --root-size-gb 200 --os-family linux
 vamscli edh workstation create --image-id 12 --instance-type g5.2xlarge --name "Design desk" --root-size-gb 200 --os-family windows --json-output
+vamscli edh workstation create --image-id 12 --instance-type g5.16xlarge --name "Render desk" --root-size-gb 200 --os-family linux --capacity-reservation-id cr-0123456789abcdef0
 vamscli edh workstation list --json-output | jq '.Items[] | select(.bootstrapId == "<BOOTSTRAP_ID>") | {state, sessionId, lastError, edhFailure}'
 ```
 
 The response carries the record plus `sessionBootstrap` — `provisioned`, `skipped`, `unavailable` or `disabled`, the outcome of placing a session key for the desktop (always `disabled` for a Windows workstation, which takes no session key; see [POST /addon/edh/workstations](../../api/addon.md#post-addonedhworkstations)). A repeat with the same `--bootstrap-id` by the user who launched it returns the stored record with HTTP 200 and no `sessionBootstrap`, and launches nothing; a `--bootstrap-id` that another user's launch holds is refused with HTTP 409 `bootstrapId is already in use`. An `--instance-type` outside the deployment's allow-list is refused with HTTP 400 `instanceType is not permitted in this deployment`, and one the image's EDH profile lists only under architectures of another family than the image's (`x86_64` and `i386` are one family) with HTTP 400 `instanceType does not match the image's architecture`, and one outside the `launchInstanceTypes` of an image an AMI recipe built with HTTP 400 `instanceType is not offered for this image`. A `--root-size-gb` below the image's `rootSize` is refused with HTTP 400 `Root disk size must be at least <n> GB for this image`.
+
+With `--capacity-reservation-id`, the API checks the reservation before it records anything: one that is not registered or not enabled is refused with HTTP 400 `capacityReservationId is not registered`, one your role does not grant (object type `edhCapacityReservation`) with HTTP 403, a reservation EC2 could not be read with HTTP 503 `The capacity reservation could not be read; try again` (printed as `Workstation launch failed (503): The capacity reservation could not be read; try again`, `error_type` `EdhUnavailableError`; nothing was recorded, so launch again), one not `active` in EC2 with HTTP 400 `The capacity reservation is not active`, one of another instance type with HTTP 400 `instanceType does not match the capacity reservation`, and one whose platform does not suit `--os-family` (`Linux/UNIX` for `linux`, `Windows` for `windows`) with HTTP 400 `The capacity reservation's platform does not match the image`. A reservation with no free slot launches on-demand when its registration falls back, and the record then carries `capacityReservationFallback` `true` and no `capacityReservationId`; otherwise the launch is refused with HTTP 409 `The capacity reservation has no free capacity`, printed as `Capacity Reservation Full: Workstation launch refused (409): The capacity reservation has no free capacity` with the remedy `Launch without --capacity-reservation-id for an on-demand workstation, choose another reservation ('vamscli edh catalog capacity-reservations'), or try again once a slot is free.`, and under `--json-output` as:
+
+```json
+{
+    "error": "Workstation launch refused (409): The capacity reservation has no free capacity",
+    "error_type": "EdhReservationFullError",
+    "code": "RESERVATION_FULL"
+}
+```
+
+Without the option, the launch body carries no reservation and the launch is on-demand, as it always was.
 
 :::note
 Launching is refused (HTTP 403) for a session authenticated with a VAMS API key: a key seeded into a workstation cannot launch further workstations. `edh workstation start` is refused the same way. Log in with your user credentials to launch.
@@ -120,9 +134,16 @@ In CLI mode a workstation that carries an `edhFailure` (see [edh workstation lis
   EDH failure:     InsufficientInstanceCapacity (CreateCapacityReservation)
 ```
 
+A workstation launched into a capacity reservation shows it on a `Capacity:` line beneath `Instance Type`: the reservation's label and id, the id alone once the reservation is unregistered, or `On-demand (reservation full)` for a launch that asked for a full reservation and ran on-demand. An on-demand workstation has no such line.
+
+```text
+  Instance Type:   g5.16xlarge
+  Capacity:        Render pool (cr-0123456789abcdef0)
+```
+
 ### edh workstation start
 
-Start one of your stopped workstations. The returned record is `CREATING` (EDH reports the desktop `pending`) until EDH reports it running, when `get` or `list` reports `ACTIVE`; the response also carries `sessionBootstrap`, the outcome of placing a fresh session key, as for `create` (see [the start route](../../api/addon.md#post-addonedhworkstationssessionidstart)). A workstation that is not stopped — already running, or still being created — is refused with HTTP 409 (`Workstation is already running`, `Workstation is not stopped`), as are a launch that has no EDH session yet (`Workstation has no EDH session`), a deleted workstation (`A deleted workstation cannot be started`), one whose lease has expired (`The lease on this workstation has expired; renew it before starting`), one EDH still reports in a state other than `stopped`, such as `stopping` for several minutes after a stop (`The workstation is still <state> in EDH; start it again once it has stopped.`, printed as `Workstation start refused (409): …` and under `--json-output` with `error_type` `EdhOperationError`), and one EDH still reports stopped while another start of it is being processed, less than 3 minutes after a start EDH did not confirm, while the reconciler revokes its session key, or while a lease renewal is still re-issuing that key (`A start of this workstation is already in progress`, printed as `Workstation start already in progress (409)` followed by the listing to run, and under `--json-output` with `error_type` `EdhStartInProgressError` and `"startInProgress": true`); a session authenticated with a VAMS API key is refused with HTTP 403. A start EDH refuses because it found no available AWS capacity for the instance type is refused with HTTP 400 (`EDH found no available AWS capacity for this instance type. Try again later.`, printed as `Workstation start rejected (400): …` and under `--json-output` with `error_type` `InvalidEdhRequestError`); the workstation stays stopped.
+Start one of your stopped workstations. The returned record is `CREATING` (EDH reports the desktop `pending`) until EDH reports it running, when `get` or `list` reports `ACTIVE`; the response also carries `sessionBootstrap`, the outcome of placing a fresh session key, as for `create` (see [the start route](../../api/addon.md#post-addonedhworkstationssessionidstart)). A workstation that is not stopped — already running, or still being created — is refused with HTTP 409 (`Workstation is already running`, `Workstation is not stopped`), as are a launch that has no EDH session yet (`Workstation has no EDH session`), a deleted workstation (`A deleted workstation cannot be started`), one whose lease has expired (`The lease on this workstation has expired; renew it before starting`), one EDH still reports in a state other than `stopped`, such as `stopping` for several minutes after a stop (`The workstation is still <state> in EDH; start it again once it has stopped.`, printed as `Workstation start refused (409): …` and under `--json-output` with `error_type` `EdhOperationError`), and one EDH still reports stopped while another start of it is being processed, less than 3 minutes after a start EDH did not confirm, while the reconciler revokes its session key, or while a lease renewal is still re-issuing that key (`A start of this workstation is already in progress`, printed as `Workstation start already in progress (409)` followed by the listing to run, and under `--json-output` with `error_type` `EdhStartInProgressError` and `"startInProgress": true`); a session authenticated with a VAMS API key is refused with HTTP 403. A start EDH refuses because it found no available AWS capacity for the instance type is refused with HTTP 400 (`EDH found no available AWS capacity for this instance type. Try again later.`, printed as `Workstation start rejected (400): …` and under `--json-output` with `error_type` `InvalidEdhRequestError`); the workstation stays stopped. A workstation launched into a capacity reservation starts again in the same reservation, and a stopped desktop holds no slot of it: when EDH refuses the start and the reservation, read again, is full, the start is refused with HTTP 409 `The capacity reservation has no free capacity; the workstation stays stopped`, printed as `Capacity Reservation Full: Workstation start refused (409): …` with `The workstation stays stopped. Start it again once a slot in its reservation is free, or ask an administrator.`, and under `--json-output` with `error_type` `EdhReservationFullError` and `"code": "RESERVATION_FULL"`. VAMS does not move the desktop to another reservation or to on-demand.
 
 ```bash
 vamscli edh workstation start SESSION_ID [OPTIONS]
@@ -303,6 +324,52 @@ vamscli edh catalog lease --json-output | jq -r '.lease.leaseHours'
 ```
 
 The response carries `lease` with `enabled` (whether workstations are time-boxed at all), `leaseHours` (the longest lease `edh workstation create --lease-hours` may ask for, and what a renewal grants), `forced` (whether every launch is given that lease regardless of what it asks for) and `graceHours` (how long a workstation stopped for an expired lease is kept before it is removed). The policy's audit fields are administrative; read them with `edh admin settings get`.
+
+### edh catalog capacity-reservations
+
+List the capacity reservations you may launch into: registered by an administrator, enabled, granted to your role (object type `edhCapacityReservation`), and `active` in EC2. Pass one to `edh workstation create --capacity-reservation-id`. An empty list means every launch is on-demand; it is also the answer when VAMS could not read the reservations from EC2.
+
+```bash
+vamscli edh catalog capacity-reservations [OPTIONS]
+```
+
+| Option            | Type   | Required | Description                                                                                                        |
+| ----------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------ |
+| `--instance-type` | TEXT   | No       | Only the reservations of this instance type                                                                        |
+| `--os-family`     | CHOICE | No       | `linux` or `windows`: only the reservations whose platform suits an image of this family (`Linux/UNIX`, `Windows`) |
+| `--json-output`   | Flag   | No       | Output raw JSON response                                                                                           |
+
+```bash
+vamscli edh catalog capacity-reservations
+vamscli edh catalog capacity-reservations --instance-type g5.16xlarge --os-family linux
+vamscli edh catalog capacity-reservations --json-output | jq -r '.Items[] | select(.availableInstanceCount > 0) | .capacityReservationId'
+```
+
+CLI mode prints one row per reservation under the columns of the web's **Capacity reservations** table: `LABEL`, `RESERVATION` (the reservation id), `INSTANCE TYPE`, `AZ` (the Availability Zone), `PLATFORM`, `STATE`, `FREE/TOTAL` (the free and total instance slots), `END DATE` (ISO-8601, `-` for none), `FALLBACK` (`on-demand` when a launch into the full reservation runs on-demand, `refuse` when it is refused) and `ENABLED` (`yes` or `no`); a value EC2 did not give reads `-`, and an empty list prints `No capacity reservations found.` Each item of the JSON response carries the reservation's registration and EC2's live facts:
+
+```json
+{
+    "Items": [
+        {
+            "capacityReservationId": "cr-0123456789abcdef0",
+            "label": "Render pool",
+            "fallbackToOnDemand": true,
+            "enabled": true,
+            "instanceType": "g5.16xlarge",
+            "availabilityZone": "us-east-1a",
+            "instancePlatform": "Linux/UNIX",
+            "state": "active",
+            "totalInstanceCount": 4,
+            "availableInstanceCount": 3,
+            "instanceMatchCriteria": "targeted",
+            "endDate": "2026-10-24T16:00:00Z",
+            "reservationType": "default"
+        }
+    ]
+}
+```
+
+`reservationType` is `default` for an On-Demand Capacity Reservation and `capacity-block` for a Capacity Block; `endDate` is `null` for a reservation without an end.
 
 ---
 
@@ -844,6 +911,85 @@ vamscli edh admin settings set --forced --lease-hours 12 --json-output
 ```
 
 A call that passes none of the four policy flags is a usage error and writes nothing, so an empty patch cannot silently rewrite `updatedAt`. A merged `leaseHours` or `graceHours` outside its range is refused with HTTP 400.
+
+### edh admin capacity-reservation list
+
+List every registered capacity reservation with EC2's live view of it. Registering, changing and unregistering a reservation changes VAMS's own registry only, never the reservation in EC2; with none registered, every launch is on-demand.
+
+```bash
+vamscli edh admin capacity-reservation list [OPTIONS]
+```
+
+| Option          | Type | Required | Description              |
+| --------------- | ---- | -------- | ------------------------ |
+| `--json-output` | Flag | No       | Output raw JSON response |
+
+```bash
+vamscli edh admin capacity-reservation list
+vamscli edh admin capacity-reservation list --json-output
+```
+
+CLI mode prints the columns of [edh catalog capacity-reservations](#edh-catalog-capacity-reservations), and `--json-output` returns the items in the same shape, for every registered reservation whatever its state or a role's grants. `STATE` reads `notFound` for a reservation EC2 no longer knows, and `unknown` when EC2 could not be read; its EC2 columns then read `-`.
+
+### edh admin capacity-reservation add
+
+Register a capacity reservation for launches. EC2 must find it in the deployment's account and Region: one it does not find is refused with HTTP 400 `Capacity reservation not found in this account and Region`, a reservation already registered with HTTP 409, and a 101st with HTTP 400. Users see it once their role grants it with an `edhCapacityReservation` constraint; the `edh-admin` permission template grants every reservation, the `edh-user` template none.
+
+```bash
+vamscli edh admin capacity-reservation add --capacity-reservation-id <CR_ID> --label <LABEL> [OPTIONS]
+```
+
+| Option                         | Type | Required | Description                                                                                     |
+| ------------------------------ | ---- | -------- | ----------------------------------------------------------------------------------------------- |
+| `--capacity-reservation-id`    | TEXT | Yes      | The EC2 capacity reservation id: `cr-` and 17 hex digits                                        |
+| `--label`                      | TEXT | Yes      | The name the launch wizard shows: 1-64 letters, digits, spaces, hyphens, periods or underscores |
+| `--fallback` / `--no-fallback` | Flag | No       | When the reservation is full, launch on-demand (`--fallback`, the default) or refuse the launch |
+| `--enabled` / `--disabled`     | Flag | No       | Offer the reservation for launches (`--enabled`, the default) or not                            |
+| `--json-output`                | Flag | No       | Output raw JSON response                                                                        |
+
+```bash
+vamscli edh admin capacity-reservation add --capacity-reservation-id cr-0123456789abcdef0 --label "Render pool"
+vamscli edh admin capacity-reservation add --capacity-reservation-id cr-0123456789abcdef0 --label "Render pool" --no-fallback --json-output
+```
+
+The response is the registered reservation in the shape `edh catalog capacity-reservations` lists. An id or label outside its rule is a usage error (exit 2) and sends nothing.
+
+### edh admin capacity-reservation update
+
+Change a registered reservation's label or switches. Only the flags you pass are changed; a call with none is a usage error and sends nothing. A reservation that is not registered fails with `Capacity Reservation Not Found: Capacity reservation '<CR_ID>' is not registered` and `Use 'vamscli edh admin capacity-reservation list' to see the registry.`
+
+```bash
+vamscli edh admin capacity-reservation update CAPACITY_RESERVATION_ID [OPTIONS]
+```
+
+| Option                         | Type | Required | Description                                                         |
+| ------------------------------ | ---- | -------- | ------------------------------------------------------------------- |
+| `--label`                      | TEXT | No       | New label                                                           |
+| `--fallback` / `--no-fallback` | Flag | No       | When the reservation is full, launch on-demand or refuse the launch |
+| `--enabled` / `--disabled`     | Flag | No       | Offer the reservation for launches or not                           |
+| `--json-output`                | Flag | No       | Output raw JSON response                                            |
+
+```bash
+vamscli edh admin capacity-reservation update cr-0123456789abcdef0 --label "Render farm"
+vamscli edh admin capacity-reservation update cr-0123456789abcdef0 --no-fallback --disabled
+```
+
+### edh admin capacity-reservation remove
+
+Unregister a capacity reservation: VAMS stops offering it for launches. The EC2 reservation itself is not changed (it is billed until it ends or is cancelled in EC2), and workstations launched into it keep running and keep their `capacityReservationId`. Requires `--confirm`; without it the command exits non-zero and sends nothing.
+
+```bash
+vamscli edh admin capacity-reservation remove CAPACITY_RESERVATION_ID --confirm [OPTIONS]
+```
+
+| Option          | Type | Required | Description              |
+| --------------- | ---- | -------- | ------------------------ |
+| `--confirm`     | Flag | Yes      | Confirm unregistering    |
+| `--json-output` | Flag | No       | Output raw JSON response |
+
+```bash
+vamscli edh admin capacity-reservation remove cr-0123456789abcdef0 --confirm
+```
 
 ---
 

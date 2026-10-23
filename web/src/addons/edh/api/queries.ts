@@ -8,6 +8,7 @@ import * as workstationService from "./workstations";
 import * as catalogService from "./catalog";
 import { type EdhRequestError, mayHaveTakenEffect } from "./outcome";
 import type {
+    CapacityReservationView,
     CatalogLeasePolicy,
     CreateWorkstationRequest,
     EdhCatalogImage,
@@ -23,6 +24,7 @@ export const qk = {
     catalogImages: () => ["edh", "catalogImages"] as const,
     instanceTypes: () => ["edh", "instanceTypes"] as const,
     catalogLease: () => ["edh", "catalogLease"] as const,
+    catalogCapacityReservations: () => ["edh", "catalogCapacityReservations"] as const,
 };
 
 /** Poll cadence while any listed workstation is still changing state. */
@@ -177,5 +179,23 @@ export function useEdhCatalogLease(enabled = true) {
             return payload.lease;
         },
         enabled,
+    });
+}
+
+/**
+ * The capacity reservations the caller may launch into. Read fresh each time the wizard opens: the
+ * free counts move with every launch and stop.
+ */
+export function useEdhCatalogCapacityReservations(enabled = true) {
+    return useQuery({
+        queryKey: qk.catalogCapacityReservations(),
+        queryFn: () =>
+            callService<CapacityReservationView[]>(() =>
+                catalogService.listEdhCapacityReservations()
+            ),
+        enabled,
+        staleTime: 0,
+        // A caller the route refuses launches on-demand; there is nothing to retry towards.
+        retry: false,
     });
 }

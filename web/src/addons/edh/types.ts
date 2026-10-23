@@ -18,7 +18,8 @@ export type WorkstationLastError =
     | "EDH_REFUSED"
     | "LAUNCH_ERROR"
     | "CREATE_TIMED_OUT"
-    | "LEASE_EXPIRED";
+    | "LEASE_EXPIRED"
+    | "RESERVATION_FULL";
 
 /** What became of the per-session VAMS credential a launch places on the desktop. */
 export type SessionBootstrapOutcome = "provisioned" | "skipped" | "unavailable" | "disabled";
@@ -70,6 +71,12 @@ export interface WorkstationRecord {
     leaseStoppedAt?: string | null;
     /** The lease window the launch was stamped with, in hours. */
     leaseHoursAtLaunch?: number | null;
+    /** The capacity reservation the launch was sent with; null or absent for an on-demand launch. */
+    capacityReservationId?: string | null;
+    /** The reservation's label, read from the registry; null once it is unregistered. */
+    capacityReservationLabel?: string | null;
+    /** True when the launch asked for a reservation and ran on-demand because it was full. */
+    capacityReservationFallback?: boolean | null;
     /**
      * Present on the launch and start responses, and on a renew response when the renew re-issued,
      * or tried to re-issue, the desktop's VAMS sign-in.
@@ -87,7 +94,64 @@ export interface CreateWorkstationRequest {
     osFamily: EdhOsFamily;
     /** The lease window asked for, in hours; omitted for none. */
     leaseHours?: number;
+    /** The registered capacity reservation to launch into; omitted for an on-demand launch. */
+    capacityReservationId?: string;
 }
+
+/** EC2's reservation state, `notFound` when EC2 no longer knows the id, `unknown` when the read failed. */
+export type CapacityReservationState =
+    | "active"
+    | "expired"
+    | "cancelled"
+    | "pending"
+    | "failed"
+    | "scheduled"
+    | "payment-pending"
+    | "payment-failed"
+    | "assessing"
+    | "delayed"
+    | "unsupported"
+    | "notFound"
+    | "unknown";
+
+/**
+ * A registered EC2 capacity reservation: the registry's fields, and the EC2 facts read live (null
+ * when the read failed or EC2 does not know the reservation).
+ */
+export interface CapacityReservationView {
+    capacityReservationId: string;
+    label: string;
+    /** Whether a launch into the reservation runs on-demand when it has no free slot. */
+    fallbackToOnDemand: boolean;
+    enabled: boolean;
+    instanceType: string | null;
+    availabilityZone: string | null;
+    /** EC2's platform, e.g. `Linux/UNIX` or `Windows`. */
+    instancePlatform: string | null;
+    state: CapacityReservationState | string;
+    totalInstanceCount: number | null;
+    availableInstanceCount: number | null;
+    instanceMatchCriteria: string | null;
+    /** ISO-8601, or null for a reservation without an end date. */
+    endDate: string | null;
+    reservationType: "default" | "capacity-block" | string | null;
+    createdAt?: string;
+    createdBy?: string;
+    updatedAt?: string;
+    updatedBy?: string;
+}
+
+/** The registry fields an administrator sets; the id is the EC2 reservation id. */
+export interface RegisterCapacityReservationRequest {
+    capacityReservationId: string;
+    label: string;
+    fallbackToOnDemand?: boolean;
+    enabled?: boolean;
+}
+
+export type UpdateCapacityReservationRequest = Partial<
+    Pick<RegisterCapacityReservationRequest, "label" | "fallbackToOnDemand" | "enabled">
+>;
 
 export interface WorkstationConnection {
     sessionId: string;

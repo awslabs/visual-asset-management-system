@@ -26,6 +26,7 @@ jest.mock("../api/queries", () => ({
     useEdhInstanceTypes: jest.fn(),
     useWorkstationMutations: jest.fn(),
     useEdhCatalogLease: jest.fn(() => ({ data: undefined, isLoading: false, error: null })),
+    useEdhCatalogCapacityReservations: jest.fn(() => ({ data: [], isLoading: false, error: null })),
 }));
 
 const BOOTSTRAP_ID = "11111111-1111-4111-8111-111111111111";

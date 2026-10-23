@@ -22,6 +22,7 @@ from ...addon_constants import (
     API_EDH_ADMIN_IMAGE_VDI, API_EDH_ADMIN_IMAGE_SIMULATION, API_EDH_ADMIN_INSTANCES,
     API_EDH_ADMIN_INSTANCES_STALE, API_EDH_ADMIN_INSTANCE_STOP, API_EDH_ADMIN_INSTANCE_DEACTIVATE,
     API_EDH_ADMIN_CAPACITY, API_EDH_ADMIN_HEALTH, API_EDH_ADMIN_SETTINGS,
+    API_EDH_CATALOG_CAPACITY_RESERVATIONS, API_EDH_ADMIN_CAPACITY_RESERVATIONS, API_EDH_ADMIN_CAPACITY_RESERVATION,
     API_EDH_ADMIN_AMI_RECIPES, API_EDH_ADMIN_AMI_RECIPE, API_EDH_ADMIN_AMI_RECIPE_BUILDS,
     API_EDH_ADMIN_AMI_RECIPE_BUILD, API_EDH_ADMIN_AMI_RECIPE_BUILD_REGISTER,
     API_EDH_CONTAINERS_CATALOG, API_EDH_CONTAINERS_JOBS, API_EDH_CONTAINERS_JOB,
@@ -31,6 +32,7 @@ from .edh_exceptions import (
     EdhWorkstationNotFoundError, EdhImageNotFoundError, InvalidEdhRequestError, EdhOperationError,
     EdhUnavailableError, EdhOutcomeUnknownError, EdhStartInProgressError,
     EdhContainerJobNotFoundError, EdhAmiRecipeNotFoundError, EdhAmiRecipeBuildNotFoundError,
+    EdhReservationFullError, EdhCapacityReservationNotFoundError,
 )
 
 
@@ -53,6 +55,17 @@ _EDH_AMI_RECIPE_BUILD_NOT_FOUND_MESSAGE = "Build not found"
 # The service's own id rule for a workstation path value (backend/backend/common/validators.py id_pattern).
 _EDH_SESSION_ID = re.compile(r"[-_a-zA-Z0-9]{3,63}")
 
+# An EC2 capacity reservation id, as the request models take it.
+EDH_CAPACITY_RESERVATION_ID = re.compile(r"cr-[0-9a-f]{17}")
+EDH_CAPACITY_RESERVATION_ID_MESSAGE = "Capacity reservation id must be cr- and 17 hex digits"
+
+# The code a launch or start is refused with when its capacity reservation has no free slot.
+EDH_RESERVATION_FULL_CODE = "RESERVATION_FULL"
+
+# The 503 a launch answers when VAMS could not read the capacity reservation from EC2: EDH was not
+# called, so the generic "the EDH cluster did not answer" would misname the cause.
+_EDH_RESERVATION_READ_FAILED_MESSAGE = "The capacity reservation could not be read; try again"
+
 # The request fields a duplicated AMI recipe copies from its source. The copy has its own recipeId,
 # displayName and stackName, the service copies the source's bundled files (assets), and a copy starts
 # enabled.
@@ -71,6 +84,27 @@ def _edh_body_flag(response, field: str) -> bool:
     except Exception:
         return False
     return isinstance(data, dict) and data.get(field) is True
+
+
+def _edh_body_code(response) -> Optional[str]:
+    """The `code` an /addon/edh error body carries (`RESERVATION_FULL` on a launch or start refused
+    for a full capacity reservation), or None. Never raises, for the reason `_api_error_message`
+    gives."""
+    try:
+        data = response.json() if getattr(response, "content", None) else None
+    except Exception:
+        return None
+    code = data.get("code") if isinstance(data, dict) else None
+    return code if isinstance(code, str) else None
+
+
+def _edh_capacity_reservation_id(capacity_reservation_id: str) -> str:
+    """The reservation id a path is formatted with, refused before any request unless it is an EC2
+    capacity reservation id: anything else would address another route."""
+    if (not isinstance(capacity_reservation_id, str)
+            or not EDH_CAPACITY_RESERVATION_ID.fullmatch(capacity_reservation_id)):
+        raise InvalidEdhRequestError(EDH_CAPACITY_RESERVATION_ID_MESSAGE)
+    return capacity_reservation_id
 
 
 def _edh_ami_build_not_found(response, recipe_id: str, version: int) -> Optional[Exception]:
@@ -151,6 +185,8 @@ class EdhAPIClientMixin:
                 return EdhStartInProgressError(
                     f"{operation} already in progress (409): {_as_sentence(error_message)} "
                     f"Run '{list_command}' to see its state.")
+            if _edh_body_code(e.response) == EDH_RESERVATION_FULL_CODE:
+                return EdhReservationFullError(f"{operation} refused (409): {error_message}")
             return EdhOperationError(f"{operation} refused (409): {error_message}")
         if list_command is not None and (
                 status_code == 504
@@ -159,6 +195,8 @@ class EdhAPIClientMixin:
             return EdhOutcomeUnknownError(
                 f"{operation} not confirmed ({status_code}): {_as_sentence(message)} "
                 f"Run '{list_command}' to see its state.")
+        if status_code == 503 and error_message == _EDH_RESERVATION_READ_FAILED_MESSAGE:
+            return EdhUnavailableError(f"{operation} failed (503): {error_message}")
         if status_code in [502, 503, 504]:
             return EdhUnavailableError(
                 f"{operation} failed ({status_code}): the EDH cluster did not answer. {error_message}")
@@ -195,7 +233,8 @@ class EdhAPIClientMixin:
 
         Args:
             data: Launch request: bootstrapId (idempotency key), imageId, instanceType, name,
-                rootSizeGb and osFamily (linux or windows); every key is required
+                rootSizeGb and osFamily (linux or windows) are required; leaseHours and
+                capacityReservationId (a registered reservation to launch into) are optional
 
         Returns:
             API response data (HTTP 202): the workstation record as accepted -- state CREATING,
@@ -206,9 +245,14 @@ class EdhAPIClientMixin:
         Raises:
             InvalidEdhRequestError: When the request is rejected, among others with "instanceType does
                 not match the image's architecture" when the image's profile lists the type only under
-                architectures of another family than the image's (x86_64 and i386 are one family)
+                architectures of another family than the image's (x86_64 and i386 are one family), and
+                for a capacity reservation that is not registered, not active, or of another
+                instance type or platform
+            EdhReservationFullError: When the capacity reservation has no free slot and does not
+                fall back to on-demand (409 RESERVATION_FULL)
             EdhOperationError: When the launch is refused for the record's current state
-            EdhUnavailableError: When the EDH cluster did not answer
+            EdhUnavailableError: When the EDH cluster did not answer, or the capacity reservation
+                could not be read (503)
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
@@ -570,6 +614,47 @@ class EdhAPIClientMixin:
 
         except Exception as e:
             raise APIError(f"Failed to get lease policy: {e}")
+
+    def list_edh_catalog_capacity_reservations(self, instance_type: Optional[str] = None,
+                                               os_family: Optional[str] = None) -> Dict[str, Any]:
+        """
+        List the capacity reservations the caller may launch into using the
+        /addon/edh/catalog/capacity-reservations GET endpoint: registered, enabled, permitted to the
+        caller, and active in EC2.
+
+        Args:
+            instance_type: Only the reservations of this instance type; sent as instanceType
+            os_family: Only the reservations whose platform suits this image family (linux:
+                Linux/UNIX, windows: Windows); sent as osFamily
+
+        Returns:
+            API response data: {"Items": [<capacity reservation view>, ...]}; a failed EC2 read
+            answers an empty list, so a launch stays on-demand
+
+        Raises:
+            InvalidEdhRequestError: When a filter is rejected
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        params: Dict[str, Any] = {}
+        if instance_type is not None:
+            params['instanceType'] = instance_type
+        if os_family is not None:
+            params['osFamily'] = os_family
+
+        try:
+            response = self.get(API_EDH_CATALOG_CAPACITY_RESERVATIONS, include_auth=True,
+                                raise_http_errors=True, params=params)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            raise self._edh_error(e, "Capacity reservation listing")
+
+        except GlobalInfrastructureError:
+            raise
+
+        except Exception as e:
+            raise APIError(f"Failed to list capacity reservations: {e}")
 
     def list_edh_admin_images(self) -> Dict[str, Any]:
         """
@@ -1013,6 +1098,127 @@ class EdhAPIClientMixin:
 
         except Exception as e:
             raise APIError(f"Failed to update admin settings: {e}")
+
+    def list_edh_admin_capacity_reservations(self) -> Dict[str, Any]:
+        """
+        List every registered capacity reservation with EC2's live view of it using the
+        /addon/edh/admin/capacity-reservations GET endpoint.
+
+        Returns:
+            API response data: {"Items": [<capacity reservation view>, ...]}; state is EC2's, or
+            notFound when EC2 no longer knows the id, or unknown when the read failed
+
+        Raises:
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        try:
+            response = self.get(API_EDH_ADMIN_CAPACITY_RESERVATIONS, include_auth=True,
+                                raise_http_errors=True)
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            raise self._edh_error(e, "Capacity reservation listing")
+        except GlobalInfrastructureError:
+            raise
+        except Exception as e:
+            raise APIError(f"Failed to list capacity reservations: {e}")
+
+    def register_edh_capacity_reservation(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Register an EC2 capacity reservation for launches using the
+        /addon/edh/admin/capacity-reservations POST endpoint. Changes VAMS only, never EC2.
+
+        Args:
+            data: {capacityReservationId, label, fallbackToOnDemand?, enabled?}
+
+        Returns:
+            API response data: the registered reservation's view
+
+        Raises:
+            InvalidEdhRequestError: When EC2 does not find the reservation in this account and
+                Region, or the registry is full (400)
+            EdhOperationError: When the reservation is already registered (409)
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        try:
+            response = self.post(API_EDH_ADMIN_CAPACITY_RESERVATIONS, data=data, include_auth=True,
+                                 raise_http_errors=True)
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            raise self._edh_error(e, "Capacity reservation registration")
+        except GlobalInfrastructureError:
+            raise
+        except Exception as e:
+            raise APIError(f"Failed to register capacity reservation: {e}")
+
+    def update_edh_capacity_reservation(self, capacity_reservation_id: str,
+                                        data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Change a registered reservation's label, fallbackToOnDemand or enabled using the
+        /addon/edh/admin/capacity-reservations/{capacityReservationId} PUT endpoint.
+
+        Args:
+            capacity_reservation_id: The EC2 capacity reservation id (cr- and 17 hex digits)
+            data: Patch dict with any of {label, fallbackToOnDemand, enabled}
+
+        Returns:
+            API response data: the reservation's view
+
+        Raises:
+            InvalidEdhRequestError: When the id is not a reservation id, or the patch is rejected
+            EdhCapacityReservationNotFoundError: When the reservation is not registered (404)
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        endpoint = API_EDH_ADMIN_CAPACITY_RESERVATION.format(
+            capacityReservationId=_edh_capacity_reservation_id(capacity_reservation_id))
+        try:
+            response = self.put(endpoint, data=data, include_auth=True, raise_http_errors=True)
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            raise self._edh_error(
+                e, "Capacity reservation update",
+                EdhCapacityReservationNotFoundError(
+                    f"Capacity reservation '{capacity_reservation_id}' is not registered"))
+        except GlobalInfrastructureError:
+            raise
+        except Exception as e:
+            raise APIError(f"Failed to update capacity reservation: {e}")
+
+    def unregister_edh_capacity_reservation(self, capacity_reservation_id: str) -> Dict[str, Any]:
+        """
+        Unregister a capacity reservation using the
+        /addon/edh/admin/capacity-reservations/{capacityReservationId} DELETE endpoint. VAMS stops
+        offering it; the EC2 reservation is not changed, and workstations launched into it keep their
+        capacityReservationId.
+
+        Args:
+            capacity_reservation_id: The EC2 capacity reservation id (cr- and 17 hex digits)
+
+        Returns:
+            API response data: the deletion confirmation
+
+        Raises:
+            InvalidEdhRequestError: When the id is not a reservation id
+            EdhCapacityReservationNotFoundError: When the reservation is not registered (404)
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        endpoint = API_EDH_ADMIN_CAPACITY_RESERVATION.format(
+            capacityReservationId=_edh_capacity_reservation_id(capacity_reservation_id))
+        try:
+            response = self.delete(endpoint, include_auth=True, raise_http_errors=True)
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            raise self._edh_error(
+                e, "Capacity reservation unregistration",
+                EdhCapacityReservationNotFoundError(
+                    f"Capacity reservation '{capacity_reservation_id}' is not registered"))
+        except GlobalInfrastructureError:
+            raise
+        except Exception as e:
+            raise APIError(f"Failed to unregister capacity reservation: {e}")
 
     def list_edh_ami_recipes(self) -> Dict[str, Any]:
         """
