@@ -297,7 +297,9 @@ export function buildExecutionServiceFunction(
             // trailing '*' is a prefix). IAM resource matching is CASE-SENSITIVE, which is why the
             // defaults list BOTH '/aws/vendedlogs/VAMSStateMachine-*' and
             // '/aws/vendedlogs/VAMSstateMachine-*' (pipeline state machines), the pipeline container
-            // group '/aws/vendedlogs/Pipelines/*', AWS Batch's default container group
+            // group '/aws/vendedlogs/Pipelines/*' (the ECS pipelines and the six Fargate Batch
+            // pipelines: coordinate transform, Blender renderer, 3D thumbnail, PDAL, Potree, video
+            // SOP/BOM extraction), AWS Batch's default container group
             // '/aws/batch/job' and SageMaker's '/aws/sagemaker/TrainingJobs'. getConfig() rejects
             // '*', '/' and anything outside '/aws/', so the grant can never widen to the whole
             // vended-log namespace. Each entry is suffixed with ':*' for stream-level reads.

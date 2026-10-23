@@ -41,13 +41,14 @@ const CONSTRUCTS = codeBuildConstructs(PIPELINES_DIR);
 const HANDLER_SOURCE = fs.readFileSync(CODEBUILD_TRIGGER_HANDLER_PATH, "utf8");
 
 describe("CodeBuild build triggers", () => {
-    test("[control] the five CodeBuild constructs are found", () => {
+    test("[control] the six CodeBuild constructs are found", () => {
         expect(CONSTRUCTS.map((f) => path.basename(f)).sort()).toEqual([
             "coordinateTransformCodeBuild-construct.ts",
             "cosmosCodeBuild-construct.ts",
             "gr00tCodeBuild-construct.ts",
             "isaacLabCodeBuild-construct.ts",
             "splatToolboxCodeBuild-construct.ts",
+            "videoSopBomCodeBuild-construct.ts",
         ]);
     });
 

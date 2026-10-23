@@ -15,7 +15,7 @@ const INLINE_CODE_MAX_BYTES = 4096;
 
 /**
  * The build-trigger handler as inline function code (handler `index.handler`). One source file
- * serves all five constructs, so their triggers cannot drift; it stays inline so the trigger function
+ * serves every pipeline *CodeBuild construct, so their triggers cannot drift; it stays inline so the trigger function
  * keeps its ZipFile code and no construct gains an asset.
  */
 export function codeBuildTriggerCode(): lambda.Code {

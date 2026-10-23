@@ -8,8 +8,8 @@ output bucket (`outputs.bucketRegion`); an empty value is the deployment Region.
 exposes both on the resolved inputs and builds an S3 client per Region, so a pipeline that reads an
 input in another Region signs the request for that Region.
 
-The four Batch pipelines whose compute runs in the VPC's isolated subnets (Potree viewer, 3D
-thumbnail, GenAI metadata labeling, coordinate transform) reach Amazon S3 in the deployment Region
+The five Batch pipelines whose compute runs in the VPC's isolated subnets (Potree viewer, 3D
+thumbnail, GenAI metadata labeling, coordinate transform, Video SOP/BOM) reach Amazon S3 in the deployment Region
 through the S3 gateway endpoint and in each cross-Region asset bucket's Region through the
 cross-Region S3 interface endpoint the VPC builder creates there (`addCrossRegionS3Endpoints`). The
 CDK names those Regions in `CROSS_REGION_S3_ENDPOINT_REGIONS` on their `vamsExecute` Lambdas, and
@@ -17,7 +17,7 @@ the handlers reject an input in any other Region before submitting the job, from
 that reports `SendTaskFailure`. The seven private-subnet pipelines and the Lambda-container
 pipelines are not gated: their compute has a route to Amazon S3 in the bucket Region.
 
-The fourteen `manifestHelper.py` copies are one file; byte identity is asserted first so an edit
+The fifteen `manifestHelper.py` copies are one file; byte identity is asserted first so an edit
 applied to one copy and not propagated fails here.
 """
 
@@ -41,6 +41,7 @@ MANIFEST_HELPER_COPIES = (
     "backendPipelines/genAi/nvidia/cosmos/reason/lambda/manifestHelper.py",
     "backendPipelines/genAi/nvidia/cosmos/transfer/lambda/manifestHelper.py",
     "backendPipelines/genAi/nvidia/gr00t/lambda/manifestHelper.py",
+    "backendPipelines/genAi/videoSopBom/lambda/manifestHelper.py",
     "backendPipelines/multi/modelOps/lambda/manifestHelper.py",
     "backendPipelines/multi/rapidPipeline/lambda/manifestHelper.py",
     "backendPipelines/multi/rapidPipelineEKS/lambda/manifestHelper.py",
@@ -54,6 +55,7 @@ ISOLATED_SUBNET_VAMS_EXECUTE = (
     "backendPipelines/preview/3dThumbnail/lambda/vamsExecutePreview3dThumbnailPipeline.py",
     "backendPipelines/genAi/metadata3dLabeling/lambda/vamsExecuteGenAiMetadata3dLabelingPipeline.py",
     "backendPipelines/conversion/coordinateTransform/lambda/vamsExecuteCoordinateTransformPipeline.py",
+    "backendPipelines/genAi/videoSopBom/lambda/vamsExecuteVideoSopBomPipeline.py",
 )
 
 # Private-subnet pipelines whose VAMS-owned container addresses each asset bucket in its own Region: the
@@ -303,10 +305,15 @@ class TestEveryVamsExecuteHandlerConsumesOrGatesTheRegion:
     @pytest.mark.parametrize("relative", ISOLATED_SUBNET_VAMS_EXECUTE)
     def test_the_isolated_subnet_gate_runs_after_the_single_file_check_inside_the_reporting_try(self, relative):
         source = _read(relative).decode("utf-8")
-        single = source.index("manifestHelper.enforce_single_input_file(resolved)")
+        # A single-file pipeline validates its input count with the shared helper; a multi-file one
+        # (Video SOP/BOM) with its own gate. Either way the Region gate follows the resolved manifest
+        # and sits in the same try block, whose except reports SendTaskFailure.
+        anchor = "manifestHelper.enforce_single_input_file(resolved)"
+        if anchor not in source:
+            anchor = "manifestHelper.resolve_pipeline_inputs(data, s3_client)"
+        single = source.index(anchor)
         gate = source.index("manifestHelper.enforce_inputs_in_region(resolved)")
-        assert gate > single, f"{relative}: the Region gate must follow the single-file check"
-        # Both sit in the handler's try block, whose except reports SendTaskFailure.
+        assert gate > single, f"{relative}: the Region gate must follow the input check"
         between = source[single:gate]
         assert "except" not in between, f"{relative}: the Region gate is outside the reporting try"
         assert "abort_external_workflow" in source
