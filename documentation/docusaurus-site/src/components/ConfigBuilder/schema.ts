@@ -58,7 +58,7 @@ export const SECTIONS: Section[] = [
     {
         id: "pipelines-standard",
         label: "Pipelines — standard",
-        description: "3D conversion, previews, and metadata extraction.",
+        description: "3D conversion, previews, metadata extraction, and video analysis.",
         advanced: true,
         order: 7,
     },
@@ -87,6 +87,14 @@ export const SECTIONS: Section[] = [
         label: "Metadata schema auto-load",
         advanced: true,
         order: 11,
+    },
+    {
+        id: "compliance",
+        label: "Compliance",
+        description:
+            "Default compliance schema seeding and whether quarantine blocks downloads. Compliance itself always deploys.",
+        advanced: true,
+        order: 12,
     },
 ];
 
@@ -1081,6 +1089,59 @@ export const FIELDS: FieldMeta[] = [
         advanced: true,
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled"),
     },
+    {
+        path: "app.pipelines.useGenAiVideoSopBom.enabled",
+        label: "Video SOP/BOM Extraction",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Transcribe 1-4 narrated teardown videos with Amazon Transcribe and derive a SOP, an LCA bill of materials and a lab summary with Amazon Bedrock. Requires VPC. Commercial and GovCloud partitions only.",
+    },
+    {
+        path: "app.pipelines.useGenAiVideoSopBom.useCodeBuild",
+        label: "Video SOP/BOM — build via CodeBuild",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiVideoSopBom.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiVideoSopBom.autoRegisterWithVAMS",
+        label: "Video SOP/BOM — auto-register",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiVideoSopBom.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiVideoSopBom.bedrockModelId",
+        label: "Video SOP/BOM — Bedrock model ID",
+        input: "text",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Required when enabled; one model serves the text and vision calls (e.g. global.anthropic.claude-sonnet-5-5).",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiVideoSopBom.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles",
+        label: "Video SOP/BOM — max videos per run",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 1,
+        help: "Integer from 1 to 4. A run selecting more files is refused before any job starts.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiVideoSopBom.enabled"),
+    },
+    {
+        path: "app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes",
+        label: "Video SOP/BOM — max total video minutes per run",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 1,
+        help: "Integer from 1 to 480 (Amazon Transcribe accepts at most 28,800 seconds of audio per job). Checked in the container after audio extraction.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiVideoSopBom.enabled"),
+    },
 
     // ===== Pipelines — GPU / third-party =====
     {
@@ -1761,6 +1822,24 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "metadata",
         advanced: true,
+    },
+
+    // ===== Compliance =====
+    {
+        path: "app.compliance.autoLoadDefaultSchema",
+        label: "Auto-load default compliance schema",
+        input: "boolean",
+        section: "compliance",
+        advanced: true,
+        help: "Seeds the GLOBAL default-compliance-schema (a warn-level metadata rule against the default asset metadata schema) at deploy.",
+    },
+    {
+        path: "app.compliance.quarantineBlocksDownload",
+        label: "Quarantine blocks download",
+        input: "boolean",
+        section: "compliance",
+        advanced: true,
+        help: "When on, a quarantined asset cannot be downloaded unless it holds an active exception. When off, quarantine is informational only.",
     },
 ];
 

@@ -138,6 +138,16 @@
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true
             },
+            "useGenAiVideoSopBom": {
+                "enabled": false,
+                "useCodeBuild": false,
+                "autoRegisterWithVAMS": true,
+                "bedrockModelId": "",
+                "limits": {
+                    "maxVideoFiles": 4,
+                    "maxTotalDurationMinutes": 240
+                }
+            },
             "useSplatToolbox": {
                 "enabled": false,
                 "useCodeBuild": false,
@@ -365,6 +375,10 @@
             "autoLoadDefaultDatabaseSchema": true,
             "autoLoadDefaultAssetSchema": true,
             "autoLoadDefaultAssetFileSchema": true
+        },
+        "compliance": {
+            "autoLoadDefaultSchema": true,
+            "quarantineBlocksDownload": false
         }
     }
 }

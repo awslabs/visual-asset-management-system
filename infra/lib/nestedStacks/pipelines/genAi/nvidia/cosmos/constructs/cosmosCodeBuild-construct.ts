@@ -17,6 +17,7 @@ import { Stack, RemovalPolicy, Duration } from "aws-cdk-lib";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../../../../config/config";
 import { contentImageTag } from "../../../../../../helper/containerImageTag";
+import { codeBuildTriggerCode } from "../../../../constructs/codeBuildTrigger";
 
 export interface CosmosCodeBuildConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -171,24 +172,7 @@ export class CosmosCodeBuildConstruct extends Construct {
                     runtime: Config.LAMBDA_PYTHON_RUNTIME,
                     handler: "index.handler",
                     timeout: Duration.minutes(1),
-                    code: cdk.aws_lambda.Code.fromInline(`
-import boto3
-import cfnresponse
-
-def handler(event, context):
-    try:
-        request_type = event.get("RequestType", "")
-        if request_type in ("Create", "Update"):
-            project_name = event["ResourceProperties"]["ProjectName"]
-            client = boto3.client("codebuild")
-            response = client.start_build(projectName=project_name)
-            build_id = response["build"]["id"]
-            cfnresponse.send(event, context, cfnresponse.SUCCESS, {"BuildId": build_id})
-        else:
-            cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
-    except Exception as e:
-        cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
-`),
+                    code: codeBuildTriggerCode(),
                 }
             );
 
@@ -310,7 +294,7 @@ def handler(event, context):
             new cdk.CfnOutput(this, "CosmosPredictCodeBuildProject", {
                 value: this.predictV2Repo.codeBuildProjectName,
                 description:
-                    "CodeBuild project name for Cosmos Predict v2.5 container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+                    "CodeBuild project name for Cosmos Predict v2.5 container. Check build status, then run the pipeline once it prints SUCCEEDED: aws codebuild batch-get-builds --ids \"$(aws codebuild list-builds-for-project --project-name <value> --no-paginate --query 'ids[0]' --output text)\" --query 'builds[0].buildStatus' --output text",
             });
         }
 
@@ -331,7 +315,7 @@ def handler(event, context):
             new cdk.CfnOutput(this, "CosmosReasonCodeBuildProject", {
                 value: this.reasonRepo.codeBuildProjectName,
                 description:
-                    "CodeBuild project name for Cosmos Reason container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+                    "CodeBuild project name for Cosmos Reason container. Check build status, then run the pipeline once it prints SUCCEEDED: aws codebuild batch-get-builds --ids \"$(aws codebuild list-builds-for-project --project-name <value> --no-paginate --query 'ids[0]' --output text)\" --query 'builds[0].buildStatus' --output text",
             });
         }
 
@@ -350,7 +334,7 @@ def handler(event, context):
             new cdk.CfnOutput(this, "CosmosTransferCodeBuildProject", {
                 value: this.transferRepo.codeBuildProjectName,
                 description:
-                    "CodeBuild project name for Cosmos Transfer container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+                    "CodeBuild project name for Cosmos Transfer container. Check build status, then run the pipeline once it prints SUCCEEDED: aws codebuild batch-get-builds --ids \"$(aws codebuild list-builds-for-project --project-name <value> --no-paginate --query 'ids[0]' --output text)\" --query 'builds[0].buildStatus' --output text",
             });
         }
 
@@ -375,7 +359,7 @@ def handler(event, context):
             new cdk.CfnOutput(this, "Cosmos3CodeBuildProject", {
                 value: this.cosmos3Repo.codeBuildProjectName,
                 description:
-                    "CodeBuild project name for Cosmos 3 container. Check build status: aws codebuild list-builds-for-project --project-name <value>",
+                    "CodeBuild project name for Cosmos 3 container. Check build status, then run the pipeline once it prints SUCCEEDED: aws codebuild batch-get-builds --ids \"$(aws codebuild list-builds-for-project --project-name <value> --no-paginate --query 'ids[0]' --output text)\" --query 'builds[0].buildStatus' --output text",
             });
         }
     }

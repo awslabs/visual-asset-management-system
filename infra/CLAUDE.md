@@ -58,9 +58,9 @@ infra/
       security.ts               # KMS, CDK Nag, CSP, TLS enforcement, audit logging setup
       service-helper.ts         # ServiceFormatter: ARN(), Endpoint, Principal
       webAppDeployment.ts       # Web bundle upload (hashed assets / *.mjs / rest) with per-set Cache-Control
-    lambdaBuilder/              # 17 builder files, ~40+ function builders (asset, database, metadata, auth, comment,
+    lambdaBuilder/              # 18 builder files, ~50 function builders (asset, database, metadata, auth, comment,
                                 # config, pipeline, workflow, role, userRole, tag, tagType, subscription, sendEmail,
-                                # metadataSchema, assetsLink, searchIndexBucketSync)
+                                # metadataSchema, assetsLink, searchIndexBucketSync, compliance)
     nestedStacks/
       vpc/vpcBuilder-nestedStack.ts      # VPC, subnets, VPC endpoints (incl. one cross-Region S3 interface endpoint per
                                          # cross-Region asset bucket Region when addCrossRegionS3Endpoints)
@@ -68,7 +68,7 @@ infra/
         storageBuilder-nestedStack.ts    # ~2700 lines: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch
         customResources/populateS3AssetBucketsTable.ts
       resourceNames/
-        resourceNamesBuilder-nestedStack.ts  # 66 SSM String parameters, one per registry descriptor
+        resourceNamesBuilder-nestedStack.ts  # 71 SSM String parameters, one per registry descriptor
         resourceNameRegistry.ts              # ResourceNameDescriptor cross-stack registry
         laneResourceNames.ts                 # publishLaneResourceName(): add-on/custom keys, refuses core and other-lane keys
       auth/
@@ -79,11 +79,13 @@ infra/
         apiRouteRegistry.ts                # Cross-stack route registry + attachFunctionToApi()
         apiBuilder-nestedStack.ts          # Primary API routes + Lambda wiring
         apiBuilder2-nestedStack.ts         # Secondary API stack: Tags, Tag Types, Auth Constraints,
-                                           # asset history, and the pipeline / pipeline template /
-                                           # workflow / workflow trigger / execution routes
+                                           # asset history, the pipeline / pipeline template / workflow /
+                                           # workflow trigger / execution routes, and the compliance
+                                           # routes + trigger / workflow-callback Lambdas
         lambdaLayersBuilder-nestedStack.ts
         constructs/                        # rest-api-gateway-construct, buildOpenApiSpec, amplify-config-lambda,
-                                           # vams-version-lambda, dynamodb-metadataschema-defaults
+                                           # vams-version-lambda, dynamodb-metadataschema-defaults,
+                                           # dynamodb-complianceschema-defaults
       staticWebApp/
         staticWebBuilder-nestedStack.ts    # S3 + CloudFront or ALB web hosting
         constructs/                        # cloudfront-s3-website, alb-s3-website-albDeploy, gateway-albDeploy, custom-cognito-config
@@ -96,7 +98,7 @@ infra/
                                            # securitygroup-gateway-pipeline, vamsSchemaRegistration
         conversion/{3dBasic,meshCadMetadataExtraction,coordinateTransform}/
         preview/{pcPotreeViewer,3dThumbnail}/
-        3dRecon/splatToolbox/  genAi/{metadata3dLabeling,nvidia/{cosmos,gr00t}}/
+        3dRecon/splatToolbox/  genAi/{metadata3dLabeling,videoSopBom,nvidia/{cosmos,gr00t}}/
         multi/{modelOps,rapidPipeline,rapidPipelineEKS}/  simulation/isaacLabTraining/
       featureEnabled/custom-featureEnabled-config-nestedStack.ts
       locationService/location-service-nestedStack.ts    # Amazon Location Service (commercial only)
@@ -157,7 +159,7 @@ CoreVAMSStack (root)
   +-- VPCBuilder (conditional: useGlobalVpc.enabled)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch — foundation)
-  |     +-- ResourceNamesBuilder (publishes 66 SSM parameters)
+  |     +-- ResourceNamesBuilder (publishes 71 SSM parameters)
   |     +-- AuthBuilder (Cognito, SAML, external OAuth)          -> storage, resourceNames
   |     +-- ApiBuilder (primary API routes)                      -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary routes)                       -> storage, resourceNames, ApiBuilder
@@ -181,7 +183,7 @@ Outside the core stack, `bin/infra.ts` creates the WAF stacks and, for each Regi
 
 ### Cross-Stack Shared Interfaces
 
-**`storageResources`** (`storageBuilder-nestedStack.ts`): `encryption.kmsKey`; `s3.{assetAuxiliaryBucket, artefactsBucket, accessLogsBucket}`; `sns.{eventEmailSubscriptionTopic, fileIndexerSnsTopic, assetIndexerSnsTopic, databaseIndexerSnsTopic}`; `eventBridge.{orchestrationBus, orchestrationBusAuditLogGroup, eventSourcePrefix}` (deployment-unique source prefix, e.g. `"vams.prod-us-east-1"`); `cloudWatchAuditLogGroups.{authentication, authorization, fileUpload, fileDownload, fileDownloadStreamed, authOther, authChanges, actions, errors}`; and `dynamo.*` — 48 DynamoDB tables (see the interface at the top of `storageBuilder-nestedStack.ts`). Five of them are granted to no Lambda and are exposed only so their names are published to SSM for the migration tooling: the V1 `pipelineStorageTable`, `workflowStorageTable` and `workflowExecutionsStorageTable`, and the legacy `tagStorageTableLegacy` and `tagTypeStorageTableLegacy`. There is no `sqs` member: for each registered asset-bucket record the builder creates an object-created and an object-deleted Amazon SQS queue, each with its own dead-letter queue, which buffer that record's S3 notifications for its bucket-sync Lambdas (`buildSqsBucketSyncFunction`) and are wired locally (for a record whose bucket is in another Region the topics are imported from that Region's `CrossRegionBucketNotificationsStack` and the subscription is cross-Region), and each workflow trigger Lambda owns its own queue + DLQ in `lib/lambdaBuilder/workflowFunctions.ts`. Notable GSIs: `apiKeyStorageTable` has `apiKeyHashIndex` (PK: apiKeyHash) and `userIdIndex` (PK: userId); `assetVersionsStorageTable` has `databaseIdAssetIdIndex` (PK: databaseId:assetId, SK: assetVersionId); the pipeline, workflow, and workflow-execution V2 tables each carry a `*ByDateGSI` on the constant `allListPartition` attribute, which backs the global (all-databases) list endpoints as a query rather than a scan — every write path must set that attribute or the row is invisible to those lists.
+**`storageResources`** (`storageBuilder-nestedStack.ts`): `encryption.kmsKey`; `s3.{assetAuxiliaryBucket, artefactsBucket, accessLogsBucket}`; `sns.{eventEmailSubscriptionTopic, fileIndexerSnsTopic, assetIndexerSnsTopic, databaseIndexerSnsTopic}`; `eventBridge.{orchestrationBus, orchestrationBusAuditLogGroup, eventSourcePrefix}` (deployment-unique source prefix, e.g. `"vams.prod-us-east-1"`); `cloudWatchAuditLogGroups.{authentication, authorization, fileUpload, fileDownload, fileDownloadStreamed, authOther, authChanges, actions, errors}`; and `dynamo.*` — 53 DynamoDB tables (see the interface at the top of `storageBuilder-nestedStack.ts`). Five of them are granted to no Lambda and are exposed only so their names are published to SSM for the migration tooling: the V1 `pipelineStorageTable`, `workflowStorageTable` and `workflowExecutionsStorageTable`, and the legacy `tagStorageTableLegacy` and `tagTypeStorageTableLegacy`. There is no `sqs` member: for each registered asset-bucket record the builder creates an object-created and an object-deleted Amazon SQS queue, each with its own dead-letter queue, which buffer that record's S3 notifications for its bucket-sync Lambdas (`buildSqsBucketSyncFunction`) and are wired locally (for a record whose bucket is in another Region the topics are imported from that Region's `CrossRegionBucketNotificationsStack` and the subscription is cross-Region), and each workflow trigger Lambda owns its own queue + DLQ in `lib/lambdaBuilder/workflowFunctions.ts`. Notable GSIs: `apiKeyStorageTable` has `apiKeyHashIndex` (PK: apiKeyHash) and `userIdIndex` (PK: userId); `assetVersionsStorageTable` has `databaseIdAssetIdIndex` (PK: databaseId:assetId, SK: assetVersionId); the pipeline, workflow, and workflow-execution V2 tables and the `complianceAuditStorageTable` each carry a `*ByDateGSI` on the constant `allListPartition` attribute, which backs the global (all-databases) list endpoints as a query rather than a scan — every write path must set that attribute or the row is invisible to those lists (for the audit table, `common/compliance/auditRecord.py::build_audit_item` sets it and a guard test fails any put that bypasses the builder); `complianceEvaluationStorageTable` has `ExecutionIdIndex` (PK: executionId), which the workflow-completion callback uses to find the evaluation a pipeline-rule execution belongs to; `complianceAssetStateStorageTable` has `ComplianceStateIndex` (PK: complianceState, SK: databaseId), which backs the cross-database quarantine list as a paged query.
 
 **`authResources`** (`authBuilder-nestedStack.ts`): `roles.unAuthenticatedRole`; `cognito.{userPool, webClientUserPool, userPoolId, identityPoolId, webClientId}`.
 
@@ -215,12 +217,13 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 -   `app.openSearch`: useServerless (enabled, nextGen, allowPublic, enableStandbyReplicas, min/maxIndexingOcu, min/maxSearchOcu, deployDeferredIndexSchema), useProvisioned, reindexOnCdkDeploy
 -   `app.useAlb`: enabled, usePublicSubnet, domainHost, certificateArn
 -   `app.useCloudFront`: enabled, customDomain (domainHost, certificateArn, optionalHostedZoneId)
--   `app.pipelines`: deadlineCloudExecutionTypeEnabled, externalPipelineBridges (`[{accountId, roleArnPattern, invokeTargets?}]` — one `events:PutEvents` statement per entry on the orchestration bus resource policy, granted to the bridge account root under an `aws:PrincipalArn` condition on the pattern, plus the exact `invokeTargets` ARNs on the shared workflow role; validated by `validateExternalPipelineBridges()`), executionLogReadPrefixes (`string[]` of `/aws/<service>/...` log-group names, trailing `*` = prefix, used verbatim as the executionService log-read resources; default `DEFAULT_EXECUTION_LOG_READ_PREFIXES`; validated by `validateExecutionLogReadPrefixes()`, which rejects `*`, `/` and anything outside `/aws/`), useConversion3dBasic, useConversionCadMeshMetadataExtraction, usePreviewPcPotreeViewer, useSplatToolbox, useGenAiMetadata3dLabeling, useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining
+-   `app.pipelines`: deadlineCloudExecutionTypeEnabled, externalPipelineBridges (`[{accountId, roleArnPattern, invokeTargets?}]` — one `events:PutEvents` statement per entry on the orchestration bus resource policy, granted to the bridge account root under an `aws:PrincipalArn` condition on the pattern, plus the exact `invokeTargets` ARNs on the shared workflow role; validated by `validateExternalPipelineBridges()`), executionLogReadPrefixes (`string[]` of `/aws/<service>/...` log-group names, trailing `*` = prefix, used verbatim as the executionService log-read resources; default `DEFAULT_EXECUTION_LOG_READ_PREFIXES`; validated by `validateExecutionLogReadPrefixes()`, which rejects `*`, `/` and anything outside `/aws/`), useConversion3dBasic, useConversionCadMeshMetadataExtraction, useConversionCoordinateTransform, usePreviewPcPotreeViewer, useSplatToolbox, useGenAiMetadata3dLabeling, useGenAiVideoSopBom (bedrockModelId, limits.maxVideoFiles, limits.maxTotalDurationMinutes), useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining, usePreview3dThumbnail, useNvidiaCosmos, useNvidiaCosmos3, useNvidiaGr00t — recompute from the `pipelines: {` block of `ConfigPublic` in `config/config.ts` rather than extending this list
 -   `app.addons`: useGarnetFramework, usePhysnaSync
 -   `app.authProvider`: useCognito (enabled, useSaml, useOidc, useUserPasswordAuthFlow, credTokenTimeoutSeconds — `useSaml`/`useOidc` are mutually exclusive, commercial-partition only, and are ignored (resolved to `false`) when `enabled` is false); useExternalOAuthIdp (enabled, idpDisplayName, endpoints); authorizerOptions (allowedIpRanges, defaultUserRoleName — a role granted to an authenticated user with no role assignments, empty disables it). Provider details for Cognito federation live outside `config.json` in `config/saml-config.ts` and `config/oidc-config.ts`.
 -   `app.api`: apiType (fixed `"APIGATEWAY_REST"`); apiGatewayRest (globalRateLimit default 50, globalBurstLimit default 100, endpointType `"REGIONAL"`/`"PRIVATE"`, optionalExternalPrivateApigVPCEId for PRIVATE, apiGatewayTimeoutTime default 29 / max 300 — integration timeout in seconds, applied as `timeoutInMillis` on every route integration in `buildOpenApiSpec.ts`; above 29 requires an approved account `L-E5AE38E3` quota increase; customDomain (enabled, domainHost, certificateArn, optionalHostedZoneId — off by default; Regional custom domain with base path `api`, read through `apiCustomDomainHost(config)`; validated: host + cert required, lowercase host, cert in `env.region`/`env.partition`, not `PRIVATE`, partition in `API_CUSTOM_DOMAIN_PARTITIONS`))
 -   `app.govCloud` (enabled, il6Compliant); `app.iamRoleConfig` (useCustomBootstrapRoles, useCustomVamsStackRoles — mappings in `config/policy/iamRoleConfig.json`); `app.webUi` (optionalBannerHtmlMessage, allowUnsafeEvalFeatures)
 -   `app.useWaf` (boolean): when true, the Web ACL rules load from `config/policy/wafPolicyConfig.json` — `managedRuleGroups` (block or count-only per `block`, plus optional per-rule `ruleActionOverrides`; the shipped policy counts eight Common Rule Set rules that match ordinary VAMS requests — `SizeRestrictions_BODY` (upload bodies up to the API Gateway REST 10 MB limit), `SizeRestrictions_QUERYSTRING` (SuperSplat viewer presigned-URL `?load=` over 2048 bytes), `SizeRestrictions_URIPATH` (encoded file keys over 1024 bytes on the stream routes), `RestrictedExtensions_URIPATH`/`_QUERYARGUMENTS` (`.log`/`.ini`/`.cfg`/`.conf` file names the backend upload blocklist admits), and `GenericLFI_URIPATH`/`_QUERYARGUMENTS`/`_BODY` (encoded `../`; the backend rejects `..` segments itself) — see the "WAF rule policy" paragraph) and `rateBasedRules` (per-entry `limit` and `blockResponseCode` default 429; `aggregateKeyType`/`forwardedIPConfig` are accepted for compatibility but every rule is emitted with `IP`). `getConfig()` loads the file into `config.wafPolicyJSON` (undefined = legacy count-only Common Rule Set). Not part of `config.json`/ConfigPublic beyond the boolean, so it is outside ConfigBuilder + the config templates.
+-   `app.compliance` (autoLoadDefaultSchema default `true`, quarantineBlocksDownload default `false`): compliance has no enable switch — the 5 tables, 9 Lambdas and `/compliance/*` routes deploy unconditionally in `apiBuilder2` under the root Rule 6 inert-until-configured carve-out (the trigger and the workflow callback run per event and no-op without a binding, so no compliance behavior applies until a schema is bound), and access is governed by Casbin like every other route. The cascade service invokes a separate `complianceCascadeExecutor` Lambda asynchronously (no route); the three Lambdas that run evaluations (`complianceEvaluateService`, `complianceTrigger`, `complianceCascadeExecutor`) share `grantEvaluationEngineReads` in `complianceFunctions.ts` — read on the asset, asset-links, asset-file-metadata, file-attribute and asset-links-metadata (the `fileAttributes` and `links` metadata-rule scopes), asset-file-versions (version-coverage rules), metadata-schema, workflow, pipeline, pipeline-template and asset-buckets tables, plus `grantReadPermissionsToAllAssetBuckets` for the current-file listing and pipeline-rule input selection; the metadata service and both asset-link Lambdas hold `dynamodb:UpdateItem` (granted alone, through `table.grant`) on the asset table for the `metadataEdit` / `linkChange` change stamp that re-evaluates an asset, pinned by `test/security/handlerGrantScopingWave.test.ts`; the workflow-completion rule targets the callback Lambda with a KMS-encrypted `ComplianceWorkflowCompletionDLQ`, 3 retries and a 1 h max event age. `autoLoadDefaultSchema` seeds the GLOBAL `default-compliance-schema` (a `warn`-level `vams-rules-v1` metadata rule against the seeded `defaultAsset` metadata schema) through `DynamoDbComplianceSchemaDefaultsConstruct` (a conditional put that ignores `ConditionalCheckFailedException`, so an existing row is never overwritten and a re-run is a no-op) and requires `app.metadataSchema.autoLoadDefaultAssetSchema` (`getConfig()` rejects true/false; mirrored in ConfigBuilder `validation.ts`); `quarantineBlocksDownload` sets `COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD` on the four asset download Lambdas (`downloadAsset`, `streamAsset`, `assetExportService`, `streamAuxiliaryPreviewAsset`) and grants them read on the asset-state table.
 
 `Config` extends `ConfigPublic` internally with `enableCdkNag`, `dockerDefaultPlatform`, `s3AdditionalBucketPolicyJSON`, `iamRoleCustomizationJSON`, `openSearchAssetIndexName`, `openSearchFileIndexName`, and SSM parameter paths.
 
@@ -232,7 +235,7 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 
 ## Lambda Builder Pattern
 
-All 17 lambda builder files in `lib/lambdaBuilder/` follow a strict, consistent pattern. Every function builder:
+All 18 lambda builder files in `lib/lambdaBuilder/` follow a strict, consistent pattern. Every function builder:
 
 ### Standard Function Signature + Configuration
 
@@ -273,6 +276,8 @@ suppressCdkNagErrorsByGrantReadWrite(scope); // 5. Only if using grantRead/grant
 
 `suppressCdkNagLambda(fun)` is required on every authored Lambda (including those built inside constructs and custom resources). It replaces a stack-wide suppression that bloated synthesized CloudFormation templates by stamping metadata onto every nested-stack resource. Scope the suppression to the function.
 
+**Table grants follow the handler's `ResourceKeys`.** A handler resolves its tables through `get_table_name(ResourceKeys.*)` at module level, and a shared module it imports (for compliance, `complianceEvaluationStore`) resolves its own — every one of those tables needs a grant on the Lambda's role, read-only unless the module writes through it, or the request 500s with `AccessDeniedException` after the mutation already happened. `test/security/complianceLambdaTableGrants.test.ts` derives each compliance Lambda's table needs from the handler source (function-level reachability through the store) and asserts the synthesized role policy covers them, forbids write grants on read-only tables, and pins the cascade service's exact grant set; a new compliance table read or write fails it until the builder is updated.
+
 ### What the Security Helpers Do
 
 -   **`kmsKeyLambdaPermissionAddToResourcePolicy`**: Grants KMS Decrypt/Encrypt/GenerateDataKey/ReEncrypt/ListKeys/CreateGrant/ListAliases on the VAMS KMS key.
@@ -303,7 +308,7 @@ suppressCdkNagErrorsByGrantReadWrite(scope); // 5. Only if using grantRead/grant
 
 ### Route Registration (attachFunctionToApi helper)
 
-Routes are registered via `attachFunctionToApi(this, lambdaFunction, { routePath, method, registry, allowAnonymous? })` from the nested stack that builds the route's Lambda. Most routes live in the two API builder stacks, `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts`; the pipeline, pipeline-template, workflow, workflow-trigger, and execution routes all live in `apiBuilder2`. The search stack (`lib/nestedStacks/searchAndIndexing/searchBuilder-nestedStack.ts`) registers `/search` and `/search/simple`, and an add-on stack registers its routes only when its add-on is enabled (`lib/nestedStacks/addon/physna/physnaSyncBuilder-nestedStack.ts` registers `/addon/physna/viewer`). A fork registers its routes from `lib/nestedStacks/custom/customResources.ts`, inside the `CustomBuilder` stack; a custom route cannot set `allowAnonymous` (synth fails), because an anonymous route also needs the core-owned authorizer ignored-path list. `grep -rlE "attachFunctionToApi\(|registry\.register\(" lib` lists every registering file (`apiRouteRegistry.ts` is the helper's definition). For each route the helper adds a descriptor (path, method, Lambda function, allow-anonymous flag) to `RouteRegistry`, which stores it as a frozen copy, and creates no API resource itself. `RestApiGatewayConstruct` (`constructs/rest-api-gateway-construct.ts`), which the `RestApi` stack builds after every other registering stack, registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly, then renders all descriptors into a single OpenAPI spec, materializes them on the `SpecRestApi`, and adds one `lambda:InvokeFunction` permission for the API Gateway service principal per registered function. `test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `backend/backend/common/apiRoutes.py` and the route lists it splices in (`addonApiRoutes.py`, `custom/customApiRoutes.py`).
+Routes are registered via `attachFunctionToApi(this, lambdaFunction, { routePath, method, registry, allowAnonymous? })` from the nested stack that builds the route's Lambda. Most routes live in the two API builder stacks, `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts`; the pipeline, pipeline-template, workflow, workflow-trigger, execution, and compliance routes all live in `apiBuilder2`. The search stack (`lib/nestedStacks/searchAndIndexing/searchBuilder-nestedStack.ts`) registers `/search` and `/search/simple`, and an add-on stack registers its routes only when its add-on is enabled (`lib/nestedStacks/addon/physna/physnaSyncBuilder-nestedStack.ts` registers `/addon/physna/viewer`). A fork registers its routes from `lib/nestedStacks/custom/customResources.ts`, inside the `CustomBuilder` stack; a custom route cannot set `allowAnonymous` (synth fails), because an anonymous route also needs the core-owned authorizer ignored-path list. `grep -rlE "attachFunctionToApi\(|registry\.register\(" lib` lists every registering file (`apiRouteRegistry.ts` is the helper's definition). For each route the helper adds a descriptor (path, method, Lambda function, allow-anonymous flag) to `RouteRegistry`, which stores it as a frozen copy, and creates no API resource itself. `RestApiGatewayConstruct` (`constructs/rest-api-gateway-construct.ts`), which the `RestApi` stack builds after every other registering stack, registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly, then renders all descriptors into a single OpenAPI spec, materializes them on the `SpecRestApi`, and adds one `lambda:InvokeFunction` permission for the API Gateway service principal per registered function. `test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `backend/backend/common/apiRoutes.py` and the route lists it splices in (`addonApiRoutes.py`, `custom/customApiRoutes.py`).
 
 ### API Stack Ceilings
 
@@ -311,9 +316,9 @@ The two API builder stacks stay split, and consolidating them would remove headr
 
 | Limit                                     | Value                   | Scope            | Current (commercial template)                                  |
 | ----------------------------------------- | ----------------------- | ---------------- | -------------------------------------------------------------- |
-| CloudFormation resources per template     | 500, not adjustable     | Per nested stack | `apiBuilder` 108, `apiBuilder2` 73                             |
-| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.48 MB, `apiBuilder2` ~0.30 MB                  |
-| API Gateway resources per REST API        | 300 default, adjustable | Per REST API     | 122 path-tree nodes (100 OpenAPI paths) across **both** stacks |
+| CloudFormation resources per template     | 500, not adjustable     | Per nested stack | `apiBuilder` 108, `apiBuilder2` 114                            |
+| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.48 MB, `apiBuilder2` ~0.51 MB                  |
+| API Gateway resources per REST API        | 300 default, adjustable | Per REST API     | 151 path-tree nodes (118 OpenAPI paths) across **both** stacks |
 
 Two consequences worth holding onto:
 
@@ -330,9 +335,9 @@ Two consequences worth holding onto:
 The path tree counts **nodes, not routes**: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `test/api/apiStackCeilings.test.ts` asserts every figure above against the synthesized templates, so this table cannot silently go stale.
 
 **A fourth ceiling governs the storage stack: 200 Outputs per template, not adjustable.**
-`StorageResourcesBuilder` emits 131 of them where the next highest stack emits 32 — every table a
+`StorageResourcesBuilder` emits 141 of them where the next highest stack emits 32 — every table a
 sibling nested stack references contributes a `tableName` Output for its SSM parameter, plus a
-`tableArn` where a cross-stack grant needs one, and `ResourceNamesBuilder` consumes 66 as its own
+`tableArn` where a cross-stack grant needs one, and `ResourceNamesBuilder` consumes 71 as its own
 Parameters. Exceeding 200 is rejected at ValidateTemplate, the same class of failure that forced the
 API stack split, so roughly 30 more cross-stack-referenced storage resources would hit it.
 `test/api/apiStackCeilings.test.ts` fails above 170, which leaves headroom to design a split rather than
@@ -654,7 +659,7 @@ These axes are independent. **Retained + auto-named** resources (asset, auxiliar
 
 **The VAMS-generated KMS CMK** (`useKmsCmkEncryption.enabled` with no `optionalExternalCmkArn`): `RemovalPolicy.RETAIN` — it must outlive the retained tables and buckets it encrypts, so deleting it is a deliberate operator step taken after that data is removed. **Not** redeploy-collision relevant: it carries no `kms.Alias` and is addressed only by its generated key id, so a retained key never collides with the key a redeploy creates. Adding a `kms.Alias` would void that property.
 
-**SSM String parameters** (66 resource-name parameters published by ResourceNamesBuilder, including the 10 workflow-execution V2 data-model tables, the 6 pipeline/workflow V2 data-model tables and the two `integration/` values the storage builder registers; three more — `integration/workflowExecutionRoleArn`, `lambdaFunctions/importGlobalPipelineWorkflow` and `lambdaFunctions/crOsReindexer` — are published late-bound by ApiBuilder2 and the search stack): All explicitly named (`parameterName` set, e.g., `/{config.name}-{baseStackName}/resourceNames/dynamoTables/assetStorage`) → redeploy-collision relevant. RemovalPolicy: default (DESTROY with stack). String type (not SecureString) because resource names are configuration pointers, not data — an explicitly justified exception to the KMS-everywhere rule.
+**SSM String parameters** (71 resource-name parameters published by ResourceNamesBuilder, including the 10 workflow-execution V2 data-model tables, the 6 pipeline/workflow V2 data-model tables, the 5 compliance tables and the two `integration/` values the storage builder registers; three more — `integration/workflowExecutionRoleArn`, `lambdaFunctions/importGlobalPipelineWorkflow` and `lambdaFunctions/crOsReindexer` — are published late-bound by ApiBuilder2 and the search stack): All explicitly named (`parameterName` set, e.g., `/{config.name}-{baseStackName}/resourceNames/dynamoTables/assetStorage`) → redeploy-collision relevant. RemovalPolicy: default (DESTROY with stack). String type (not SecureString) because resource names are configuration pointers, not data — an explicitly justified exception to the KMS-everywhere rule.
 
 ### 5. Service Helper Usage
 
@@ -699,7 +704,7 @@ Copy-paste scaffolds for new lambda builders, API routes, nested stacks, and con
 
 ## Pipeline Stacks
 
-Pipeline nested stacks, their required `backendPipelines/{name}/lambda/` layout, which of the three VPC builder condition blocks a new Batch/ECS/Fargate pipeline joins (it depends on the subnets its compute runs in), the registering lambda's sub-process/log env wiring (`batchJobLogGroupEnvironment()`, `BATCH_JOB_DEFINITION_NAME`, construct id = `stageName`, the three registration tests), and the S3 output path conventions live in `lib/nestedStacks/pipelines/CLAUDE.md` (auto-loaded when editing under that directory).
+Pipeline nested stacks, their required `backendPipelines/{name}/lambda/` layout, the VPC builder condition blocks a new Batch/ECS/Fargate pipeline is added to (which ones follows from its subnet placement and from whether its container calls a service without an endpoint), the registering lambda's sub-process/log env wiring (`batchJobLogGroupEnvironment()`, `BATCH_JOB_DEFINITION_NAME`, construct id = `stageName`, the three registration tests), and the S3 output path conventions live in `lib/nestedStacks/pipelines/CLAUDE.md` (auto-loaded when editing under that directory).
 
 ---
 
@@ -755,7 +760,8 @@ Four things to know before writing one:
 The harness resets `s3AssetBucketRecords` between synths: it is a module-level mutable array with no reset, so a second synth in the same process otherwise fails with `There is already a Construct with name 'bucketSyncCreated--<previous stack name>--...'` (finding `S17-TEST-002`). Any new module-level registry must be reset there too.
 
 **Enabling `useSplatToolbox` in a T1 synth requires `useCodeBuild: true`.** Splat is the only one of the
-fifteen pipeline Dockerfiles that is **not in the repository** —
+sixteen pipeline Dockerfiles that is **not in the repository** (recompute as
+`git ls-files backendPipelines | grep -c Dockerfile` tracked files plus the one gitignored splat file) —
 `backendPipelines/3dRecon/splatToolbox/container/.gitignore` ignores `Dockerfile` under "Pipeline Source
 Download Ignore", because it arrives from an upstream sync. With `useCodeBuild` false,
 `batch-gpu-pipeline.ts:179` takes the `AssetImage.fromAsset(..., {file: dockerfileName})` branch, which

@@ -725,9 +725,11 @@ Filters resolve down a three-level chain, and an open list defers to the next le
 2. **Pipeline** — what that individual step accepts.
 3. **Template `overrides.inputFileFilters`** — replaces its pipeline's list entirely for executions using that template.
 
-`exclude` lists accumulate across all three levels.
+`exclude` lists accumulate down a step's chain: the workflow's exclusions apply to the whole selection, and a pipeline's or template's to that step.
 
-At execute time the selected files are narrowed by the workflow's filters first, and each pipeline is then checked against that narrowed set. If any pipeline is left without the input it requires, the request is rejected rather than launching a step that cannot run.
+At execute time the selected files are narrowed by the workflow's filters first, and the **first** step is then checked against that narrowed set. If the first step is left without the input it requires, or the file count does not satisfy its `inputFileArity`, the request is rejected rather than launching a step that cannot run.
+
+Each later step is checked when the run reaches it. It receives the selected files together with every file the earlier steps wrote, narrowed by its own effective filters, so a step can accept only the type an earlier step produces — `*.glb` after a step that converts `*.obj` to glTF binary. A later step left without a file, or handed more files than its `inputFileArity` allows, fails the execution at that step with a reason naming the pipeline. One such failure is known before the run starts: when two or more selected files pass the filters of a later step whose `inputFileArity` is `one`, the selection alone already gives it more files than it takes (an earlier step's output only adds files or replaces one at the same path), so the request is rejected at launch. A later step's `assetScope` is also checked at launch, against the selected files that reach it.
 
 A workflow response also reports `aggregateWorkflowPipelineInputFileFilters`, the restriction the workflow effectively imposes, with `source` naming whether it came from the workflow or its pipelines.
 
@@ -825,7 +827,7 @@ These constraints govern valid `systemConfig` combinations. Some are enforced at
 -   **Results-only may take input files.** `outputTarget.locationType: none` writes no asset output but places no restriction on `inputFileArity` — it may be `none`, `one`, or `multi` (e.g. a workflow that reads files and emits only a metadata report). A results-only execution supplies no `outputAssetId`/`outputDatabaseId`.
 -   **Asset output with no input files needs override.** When `outputTarget.locationType: asset` and `inputFileArity: none`, there is no input asset to lock the output to, so `outputTarget.allowOverride` must be `true` (an output asset is then chosen at execute time). Create/update rejects `asset` + `none` + `allowOverride: false`.
 -   **`inputFileArity` at execute time** — `none` rejects any supplied input file; `one` requires exactly one; `multi` requires at least one.
--   **Input-file filters** — a non-empty `allow` list means only matching files are eligible; `exclude` is applied after `allow`. A pipeline whose filters exclude every selected input fails the execution.
+-   **Input-file filters** — a non-empty `allow` list means only matching files are eligible; `exclude` is applied after `allow`. A first step whose filters exclude every selected input rejects the execution at launch; a later step whose filters leave it nothing of the selection and the earlier steps' output fails the execution when the run reaches it. A later step of `inputFileArity` `one` whose filters two or more selected files pass rejects the execution at launch.
 -   **Pipeline references** — a `GLOBAL` workflow may reference only `GLOBAL` pipelines; a database workflow may reference `GLOBAL` or its own database's pipelines.
 
 ### Trigger chaining
@@ -877,7 +879,11 @@ file name.
 
 A workflow may declare a default in `systemConfig.defaultOutputFileBaseExecutionPathExtension`. The
 default is stored **unresolved**, so its template tags are substituted per execution — a single stored
-`/{{jobName}}/` gives every run its own output folder. Resolution follows the request:
+`/{{jobName}}/` gives every run its own output folder. `{{jobName}}` resolves to the first step's
+generated job name joined to that step's `pipelineExecutionId` (for example
+`fb522-convert-3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a`), at most 80 characters, so its value differs on
+every run. A re-run reuses the prefix its original execution resolved, so it writes into that
+execution's folder. Resolution follows the request:
 
 | `outputFileBaseExecutionPathExtension` on the request | Prefix used                  |
 | ----------------------------------------------------- | ---------------------------- |
@@ -976,7 +982,7 @@ Executing requires access to this route plus `GET` permission on the workflow, `
 
 -   Input files must exist; each is read from its own asset bucket.
 -   Metadata sources are optional and take no part in arity or input-file filters. The `assetScope` **span** keys do bound them: a workflow declaring `singleAssetOnly` (or `crossAssetAllowed` `false`) rejects an execution naming more than one asset in `metadataSourceAssets`. See [Metadata inputs](#metadata-inputs) for which entities a run captures and the limits it applies, and [Asset scope](#asset-scope) for the span rule.
--   Per-pipeline template resolution and tag validation run before launch, followed by cross-entity validation (input-file arity, asset scope, and file filters).
+-   Per-pipeline template resolution and tag validation run before launch, followed by cross-entity validation: the workflow's input-file arity, asset scope, and file filters, the first step's file filters and arity, every step's asset scope, and, for each later step of `inputFileArity` `one`, whether two or more selected files already pass its filters. Everything else about a later step's file filters and arity is checked when the run reaches it (see [Input-file filters](#input-file-filters)).
 -   Every referenced pipeline must be enabled and not archived, and the workflow must be enabled and not archived.
 -   The workflow's `concurrencyRestriction` may block a launch that conflicts with an already-running execution.
 -   When the input files resolve to zero or multiple input assets, supply an explicit output target — both `outputAssetId` and `outputDatabaseId` — or configure the workflow as results-only (`outputTarget.locationType` `none`); otherwise the request is rejected. A results-only workflow rejects a supplied `outputAssetId`/`outputDatabaseId` as a contradiction. See [Output target](#output-target).
@@ -1965,6 +1971,8 @@ When `pipelineExecutionId` is supplied in truncated mode, the stored per-pipelin
     }
 }
 ```
+
+Every live read follows the Amazon CloudWatch Logs `nextToken` past pages that hold no events, because a `FilterLogEvents` page can be empty while a later page holds the run's events. The read stops at the first page that holds events or when no token remains, and is bounded to 10 pages per log source and to about six seconds for the follow-up reads of one request together. When the bound stops a read on an empty page, `nextToken` is returned so the caller can continue from there: an empty `events` list with a `nextToken` is an incomplete read, not an empty log.
 
 For the whole execution (no `pipelineExecutionId`), a full-mode response also includes `sfnHistoryEvents` — the Step Functions execution history rendered as a state-transition timeline. When `pipelineExecutionId` is supplied, `subProcessEvents` carries four kinds of log, merged and sorted by timestamp, and each event names its source by `logId` — a CloudWatch event carries the `logId` of the source it was read from, and a registered sub-state-machine's history line carries the `logId` of the log group that machine writes to (an empty string when it has no logging destination):
 

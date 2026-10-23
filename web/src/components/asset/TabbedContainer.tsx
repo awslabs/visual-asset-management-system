@@ -15,6 +15,7 @@ const AssetLinksTab = React.lazy(() => import("./tabs/AssetLinksTab"));
 const AssetExecutionsTab = React.lazy(() => import("./tabs/AssetExecutionsTab"));
 const CommentsTab = React.lazy(() => import("./tabs/CommentsTab"));
 const VersionsTab = React.lazy(() => import("./tabs/VersionsTab"));
+const ComplianceTab = React.lazy(() => import("./tabs/ComplianceTab"));
 
 interface TabbedContainerProps {
     assetName: string;
@@ -126,6 +127,21 @@ export const TabbedContainer: React.FC<TabbedContainerProps> = ({
                                             databaseId={databaseId}
                                             assetId={assetId}
                                             isActive={activeTabId === "versions"}
+                                        />
+                                    </Suspense>
+                                ),
+                            },
+                            {
+                                id: "compliance",
+                                label: "Compliance",
+                                content: (
+                                    <Suspense
+                                        fallback={<LoadingSpinner text="Loading Compliance..." />}
+                                    >
+                                        <ComplianceTab
+                                            databaseId={databaseId}
+                                            assetId={assetId}
+                                            isActive={activeTabId === "compliance"}
                                         />
                                     </Suspense>
                                 ),

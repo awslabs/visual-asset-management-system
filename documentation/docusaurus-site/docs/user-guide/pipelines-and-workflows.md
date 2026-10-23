@@ -286,14 +286,18 @@ A **Validation** panel reports what it found before and after saving, split by c
 -   **Warnings** do not block it. They flag a workflow that is saveable but may not be able to run as
     intended, most often because the workflow's own settings starve one of its pipelines:
 
-    | Warning                                                                  | Cause                                                                                                                                                                             |
-    | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | A pipeline's accepted file types do not overlap what the workflow allows | The workflow's **allow** list admits nothing the pipeline can process, so no selection can ever satisfy it.                                                                       |
-    | The workflow excludes a type the pipeline accepts                        | The allow lists may overlap perfectly and the **exclude** list still removes the file afterwards, because exclude is applied second. The warning names what is left, if anything. |
-    | A pipeline uses metadata the workflow has turned off                     | The pipeline will run without that metadata rather than fail.                                                                                                                     |
+    | Warning                                                                      | Cause                                                                                                                                                                                                                                                    |
+    | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | The first step's accepted file types do not overlap what the workflow allows | The workflow's **allow** list admits nothing the first step can process, so no selection can ever satisfy it.                                                                                                                                            |
+    | The workflow excludes a type the first step accepts                          | The allow lists may overlap perfectly and the **exclude** list still removes the file afterwards, because exclude is applied second. The warning names what is left, if anything.                                                                        |
+    | A single-file later step admits both the selected type and an earlier output | A step after the first receives the selected files plus every file the earlier steps wrote. When its filters admit both, it is handed two files once an earlier step writes such a file, and the run fails at that step. Narrow its filters to one type. |
+    | A pipeline uses metadata the workflow has turned off                         | The pipeline will run without that metadata rather than fail.                                                                                                                                                                                            |
+
+    The workflow's filters bound the files a run selects, so the first two describe the first step: a
+    later step can accept a type the workflow does not, when an earlier step writes it.
 
     Warnings are worth resolving before anyone tries to run the workflow: a mismatch here becomes a
-    rejected execution later, when the reason is less obvious.
+    rejected execution, or a step that fails partway through a run, when the reason is less obvious.
 
 ![Workflow editor with pipeline steps configured and visual graph](/img/workflow_editor_20260803_v2.6.png)
 
@@ -332,7 +336,9 @@ pre-fills that asset, and you can still switch to a different one.
 
 Only files the workflow accepts are offered. When its filters hide some of an asset's files, the picker
 says how many were hidden, so a file that is missing from the list reads as "this workflow does not take
-that type" rather than "it is not there".
+that type" rather than "it is not there". In a workflow of several steps, a file is offered when any step
+accepts it, and a step's own exclusion hides it only when every step that takes files excludes it — a
+later step that reads only what an earlier step writes does not hide the file the run starts from.
 A requirements strip under the dialog title shows how many files the workflow takes, the file
 types it accepts and where output goes, so what is being asked for is visible while you select.
 Anything still needed is listed under **To continue** once you start selecting or try to move on.
@@ -600,6 +606,7 @@ VAMS may include built-in pipelines depending on your deployment configuration. 
 -   **Point Cloud Processing** -- Processes point cloud data (for example, E57, LAS) for web visualization.
 -   **Metadata Extraction** -- Extracts metadata from file headers and content.
 -   **GenAI Labeling** -- Uses generative AI to automatically generate labels and descriptions.
+-   **Video SOP/BOM Extraction** -- Transcribes narrated teardown videos and derives a step-by-step procedure, a bill of materials, and a lab summary; select one to four video files of one asset explicitly.
 -   **Gaussian Splatting** -- Generates 3D Gaussian splats from image and video media files.
 -   **Physical AI Inference and Fine-Tuning** -- GPU-accelerated pipelines for NVIDIA world foundation models, vision language models (VLMs), and vision-language-action models (VLAs) including inference, simulation training, and model fine-tuning.
 

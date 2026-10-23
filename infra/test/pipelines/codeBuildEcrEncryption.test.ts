@@ -6,9 +6,10 @@
 /**
  * The Amazon ECR repositories of the CodeBuild-built pipelines follow `app.useKmsCmkEncryption`.
  *
- * With `useCodeBuild` on, five pipelines build their container image with AWS CodeBuild into a
+ * With `useCodeBuild` on, six pipelines build their container image with AWS CodeBuild into a
  * VAMS-owned repository: coordinate transform, Gaussian splat toolbox, NVIDIA Cosmos (one repository per
- * model family), NVIDIA GR00T and Isaac Lab training. With the CMK on, each repository is encrypted with
+ * model family), NVIDIA GR00T, Isaac Lab training and Video SOP/BOM Extraction. With the CMK on, each
+ * repository is encrypted with
  * the deployment's shared key; with it off, each stays on the Amazon ECR AES-256 default, which is no
  * `EncryptionConfiguration` at all. Both directions are asserted for every repository.
  *
@@ -16,8 +17,9 @@
  * property and turning the CMK on or off replaces every repository. Three things must hold for that
  * update to deploy and leave working pipelines, and none of them is visible in a single synth:
  *
- *   - The explicitly named coordinate transform repository changes its name with the encryption
- *     (`-kms`), because AWS CloudFormation cannot replace a custom-named resource under the same name.
+ *   - The explicitly named coordinate transform and Video SOP/BOM repositories change their names with
+ *     the encryption (`-kms`), because AWS CloudFormation cannot replace a custom-named resource under
+ *     the same name.
  *   - Every AWS Batch job definition references its repository, so it moves to the replacement.
  *   - The builds are start-only: the deployment does not wait for the image. The build-trigger custom
  *     resource is invoked only when one of its properties changes, so it must carry the repository;
@@ -52,10 +54,14 @@ const EXPECTED_REPOSITORIES = [
     "CosmosCodeBuildEcrRepocosmos3",
     "Gr00tCodeBuildEcrRepogr00tfinetune",
     "IsaacLabCodeBuildEcrRepotraining",
+    "VideoSopBomPipelineVideoSopBomCodeBuildEcrRepoVideoSopBom",
 ];
 
-/** The one repository with an explicit `repositoryName`. */
-const COORDINATE_TRANSFORM = EXPECTED_REPOSITORIES[0];
+/** The repositories with an explicit `repositoryName`, each with the name it ends in without the key. */
+const EXPLICITLY_NAMED: Record<string, string> = {
+    [EXPECTED_REPOSITORIES[0]]: "-coordtransform",
+    [EXPECTED_REPOSITORIES[8]]: "-videosopbom",
+};
 
 /**
  * Every pipeline config entry with a `useCodeBuild` key.
@@ -71,6 +77,7 @@ const EXPECTED_CODEBUILD_PIPELINES = [
     "useNvidiaCosmos",
     "useNvidiaCosmos3",
     "useNvidiaGr00t",
+    "useGenAiVideoSopBom",
 ];
 
 /**
@@ -102,6 +109,12 @@ const enableEveryCodeBuildPipeline = (c: any, cmkOn: boolean): string[] => {
     p.useNvidiaCosmos.modelsTransfer.transfer2B.enabled = true;
     p.useNvidiaCosmos3.modelsOmni.nano16B.enabled = true;
     p.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.enabled = true;
+    // The restricted templates ship the Video SOP/BOM model id empty (the commercial inference
+    // profiles do not exist there) and the construct requires one; a synth-only id with no
+    // partition-specific prefix, as containerImageReferenceLength.test.ts supplies.
+    if (!p.useGenAiVideoSopBom.bedrockModelId) {
+        p.useGenAiVideoSopBom.bedrockModelId = "synth-only-model";
+    }
     return enabled;
 };
 
@@ -284,18 +297,20 @@ describe.each(ALL_TEMPLATES)("%s: CodeBuild repositories follow useKmsCmkEncrypt
         );
     });
 
-    it("the coordinate transform repository name ends in -kms exactly when the CMK is on", () => {
-        const plain = repositoryByPrefix(off, COORDINATE_TRANSFORM).properties.RepositoryName;
-        expect(plain).toMatch(/-coordtransform$/);
-        expect(repositoryByPrefix(on, COORDINATE_TRANSFORM).properties.RepositoryName).toBe(
-            `${plain}-kms`
-        );
-    });
+    it.each(Object.entries(EXPLICITLY_NAMED))(
+        "the explicitly named repository %s ends in -kms exactly when the CMK is on",
+        (prefix, suffix) => {
+            const plain = repositoryByPrefix(off, prefix).properties.RepositoryName;
+            expect(plain.endsWith(suffix)).toBe(true);
+            expect(repositoryByPrefix(on, prefix).properties.RepositoryName).toBe(`${plain}-kms`);
+        }
+    );
 
     it("every other repository is auto-named, so its replacement gets a new generated name", () => {
+        const explicit = Object.keys(EXPLICITLY_NAMED);
         for (const s of [off, on]) {
             const named = repositories(s)
-                .filter((r) => !r.logicalId.startsWith(COORDINATE_TRANSFORM))
+                .filter((r) => !explicit.some((prefix) => r.logicalId.startsWith(prefix)))
                 .filter((r) => "RepositoryName" in r.properties)
                 .map((r) => r.logicalId);
             expect(named).toEqual([]);

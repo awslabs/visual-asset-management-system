@@ -780,13 +780,13 @@ v2.7 moves add-on code out of the core list files into add-on files beside them,
     ```bash
     aws codebuild batch-get-builds \
         --ids "$(aws codebuild list-builds-for-project --project-name <PROJECT_NAME> \
-            --max-items 1 --query 'ids[0]' --output text)" \
+            --no-paginate --query 'ids[0]' --output text)" \
         --query 'builds[0].buildStatus' --output text
     ```
 
     The AWS CloudFormation execution role needs `kms:CreateGrant`, `kms:DescribeKey` and `kms:RetireGrant` on the key, which the default CDK bootstrap role has; see [Amazon Elastic Container Registry](../architecture/aws-resources.md#amazon-elastic-container-registry). With the setting `false`, the repositories are unchanged, and each image is rebuilt once into its existing repository because the build trigger now carries the repository URI.
 
--   **A later key change needs one extra deployment for the coordinate transform repository.** Changing to a different key while the CMK stays on (for example, setting `optionalExternalCmkArn` on a deployment that uses the VAMS-generated key) replaces the repositories again, but the coordinate transform repository keeps its name, so that update fails. Deploy once with `app.pipelines.useConversionCoordinateTransform.useCodeBuild` set to `false`, which builds the image with local Docker for that deployment and removes the repository, then set it back to `true` and deploy again.
+-   **A later key change needs one extra deployment for the explicitly named repositories.** Changing to a different key while the CMK stays on (for example, setting `optionalExternalCmkArn` on a deployment that uses the VAMS-generated key) replaces the repositories again, but the coordinate transform and Video SOP/BOM Extraction repositories keep their names, so that update fails. Deploy once with `useCodeBuild` set to `false` on `app.pipelines.useConversionCoordinateTransform` and `app.pipelines.useGenAiVideoSopBom` (whichever is enabled), which builds the image with local Docker for that deployment and removes the repository, then set it back to `true` and deploy again.
 
 ## Breaking changes checklist
 

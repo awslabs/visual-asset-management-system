@@ -119,6 +119,45 @@ def orchestration_event_prefix(event_source_prefix: str, execution_id: str,
     return f"{event_source_prefix}.execution.{execution_id}.pipeline.{pipeline_execution_id}"
 
 
+# DetailType of the orchestration-bus event emitted once a workflow execution's main row holds a
+# terminal status. Consumers (the compliance workflow callback) match on this detail type and on
+# `Source` under the deployment's event source prefix.
+WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE = "workflow.execution.completed"
+
+
+def workflow_execution_completed_source(event_source_prefix: str, execution_id: str) -> str:
+    """EventBridge `Source` of a completion event: '<eventSourcePrefix>.execution.<executionId>'."""
+    return f"{event_source_prefix}.execution.{execution_id}"
+
+
+def workflow_execution_completed_event(
+    event_bus_arn: str, event_source_prefix: str, execution_id: str, workflow_database_id: str,
+    workflow_id: str, status: str, started_at: str, completed_at: str, execution_group_id: str = "",
+) -> dict:
+    """One `put_events` entry announcing a workflow execution's terminal status.
+
+    `status` is the terminal status string stored on the main execution row (SUCCEEDED / FAILED /
+    ABORTED / TIMED_OUT); the timestamps are ISO-8601 UTC. The detail carries identifiers only —
+    no template bodies, tag values, or file locations.
+    """
+    detail = {
+        "executionId": execution_id,
+        "workflowDatabaseId": workflow_database_id,
+        "workflowId": workflow_id,
+        "status": status,
+        "startedAt": started_at or "",
+        "completedAt": completed_at or "",
+    }
+    if execution_group_id:
+        detail["executionGroupId"] = execution_group_id
+    return {
+        "EventBusName": event_bus_arn,
+        "Source": workflow_execution_completed_source(event_source_prefix, execution_id),
+        "DetailType": WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE,
+        "Detail": json.dumps(detail),
+    }
+
+
 # Reserved S3 prefix literals (mirror common/s3PathPatterns.py; duplicated here
 # as plain strings to keep this module dependency-free).
 _PIPELINES_PREFIX = "pipelines/"
@@ -173,6 +212,29 @@ def pipeline_output_prefixes(first_pipeline_name: str, first_job_name: str, exec
         "metadata": base + _PIPELINE_OUTPUT_METADATA_SEGMENT + "/",
         "results": base + _PIPELINE_OUTPUT_RESULTS_SEGMENT + "/",
     }
+
+
+# Ceiling on the {{jobName}} tag value: the stored step job name's own cap, which is also the Step
+# Functions execution-name limit, so a template can name a sub-execution or an AWS Batch job with it.
+RUN_JOB_NAME_MAX_LENGTH = 80
+
+
+def run_job_name(step_job_name: str, pipeline_execution_id: str) -> str:
+    """The value the {{jobName}} template tag renders for one step of one execution:
+    '{stepJobName}-{pipelineExecutionId}', at most RUN_JOB_NAME_MAX_LENGTH characters.
+
+    step_job_name is the uuid-prefixed name the workflow's deploy stored in its jobNames. It is fixed
+    across runs, and two steps that share a pipeline or a job name usually carry the same one (one
+    deploy generates every step's uuid fragment within the same instant), so the pipeline execution
+    id, minted per step per run, is what makes the value distinct for every step of every execution.
+    The step job name is trimmed to fit, never the id. Both parts carry only the id character set
+    (letters, digits, '-', '_'), so the value is a single path segment with no '/', ':' or
+    whitespace.
+
+    The run-bucket output prefixes keep the stored step job name (pipeline_output_prefixes), because
+    the deployed state machine bakes that name into them."""
+    suffix = f"-{pipeline_execution_id}"
+    return step_job_name[:max(RUN_JOB_NAME_MAX_LENGTH - len(suffix), 0)] + suffix
 
 
 def aux_pipeline_prefix(pipeline_name: str, execution_id: str) -> str:

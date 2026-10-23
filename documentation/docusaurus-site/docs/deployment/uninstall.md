@@ -181,15 +181,15 @@ done
 
 VAMS creates the following S3 buckets. The asset, auxiliary, artefacts, access logs, and GPU model cache buckets use a `RETAIN` removal policy and require manual deletion. The web app bucket and its access logs bucket are emptied and deleted automatically during stack teardown, so they normally require manual deletion only if the stack deletion fails partway.
 
-| Bucket                     | Removal on teardown     | Blocks redeploy if left behind?     | Description                                                                                                                                                                 |
-| -------------------------- | ----------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Asset bucket(s)            | Retained (manual)       | No — auto-named                     | Stores uploaded asset files. One bucket per configuration (new bucket and/or external).                                                                                     |
-| Auxiliary bucket           | Retained (manual)       | No — auto-named                     | Stores auto-generated previews, pipeline working files, and viewer data.                                                                                                    |
-| Artefacts bucket           | Retained (manual)       | No — auto-named                     | Stores CDK deployment artefacts.                                                                                                                                            |
-| Access logs bucket         | Retained (manual)       | No — auto-named                     | Stores S3 server access logs.                                                                                                                                               |
-| Model cache bucket(s)      | Retained (manual)       | No — auto-named                     | Caches downloaded model weights for the NVIDIA Cosmos and NVIDIA GR00T pipelines. Present only when `useNvidiaCosmos`, `useNvidiaCosmos3`, or `useNvidiaGr00t` was enabled. |
-| Web app bucket             | Deleted (emptied first) | ALB only — fixed name (domain host) | Stores the built frontend static files (for both CloudFront and ALB deployments).                                                                                           |
-| Web app access logs bucket | Deleted (emptied first) | ALB only — fixed name (domain host) | Stores access logs for the web app bucket and ALB.                                                                                                                          |
+| Bucket                     | Removal on teardown     | Blocks redeploy if left behind?     | Description                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------- | ----------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Asset bucket(s)            | Retained (manual)       | No — auto-named                     | Stores uploaded asset files. One bucket per configuration (new bucket and/or external).                                                                                                                                                                                                                                                                                                                            |
+| Auxiliary bucket           | Retained (manual)       | No — auto-named                     | Stores auto-generated previews, pipeline working files, and viewer data. When the Video SOP/BOM Extraction pipeline is enabled, objects under the `pipelines/genai-video-sop-bom/` prefix (that pipeline's working files) expire 30 days after creation, their noncurrent versions one day after deletion, and their delete markers with them; the bucket itself, and everything outside that prefix, is retained. |
+| Artefacts bucket           | Retained (manual)       | No — auto-named                     | Stores CDK deployment artefacts.                                                                                                                                                                                                                                                                                                                                                                                   |
+| Access logs bucket         | Retained (manual)       | No — auto-named                     | Stores S3 server access logs.                                                                                                                                                                                                                                                                                                                                                                                      |
+| Model cache bucket(s)      | Retained (manual)       | No — auto-named                     | Caches downloaded model weights for the NVIDIA Cosmos and NVIDIA GR00T pipelines. Present only when `useNvidiaCosmos`, `useNvidiaCosmos3`, or `useNvidiaGr00t` was enabled.                                                                                                                                                                                                                                        |
+| Web app bucket             | Deleted (emptied first) | ALB only — fixed name (domain host) | Stores the built frontend static files (for both CloudFront and ALB deployments).                                                                                                                                                                                                                                                                                                                                  |
+| Web app access logs bucket | Deleted (emptied first) | ALB only — fixed name (domain host) | Stores access logs for the web app bucket and ALB.                                                                                                                                                                                                                                                                                                                                                                 |
 
 :::note[Retained does not mean it blocks a redeploy]
 The retained asset, auxiliary, artefacts, access logs, and model cache buckets are **auto-named** by AWS CloudFormation, so they can be left in place when redeploying with the same configuration name — they will not cause a name collision. Delete them only when you intend to permanently remove the stored data. By contrast, under ALB deployments the web app bucket and its access logs bucket carry fixed names derived from the configured domain host; if a teardown fails and leaves either behind, delete it before redeploying with the same domain host to avoid a bucket-name collision.
@@ -215,7 +215,7 @@ A model cache bucket holds the model weights the GPU pipelines download on first
 
 ## Step 3: Delete DynamoDB tables
 
-VAMS DynamoDB tables use a `RETAIN` removal policy, so they and their contents survive stack teardown and require manual deletion. This protects against accidental data loss. Every table is auto-named by AWS CloudFormation, so a retained table never blocks a redeploy with the same configuration name — delete the tables only when you intend to permanently remove the stored data.
+VAMS DynamoDB tables use a `RETAIN` removal policy, so they and their contents survive stack teardown and require manual deletion. This protects against accidental data loss. Every table is auto-named by AWS CloudFormation, so a retained table never blocks a redeploy with the same configuration name — delete the tables only when you intend to permanently remove the stored data. This includes the five compliance tables (`Compliance{Schema,AssetState,Evaluation,Cascade,Audit}StorageTable`), which follow the same retained, auto-named pattern.
 
 ```bash
 # List remaining VAMS tables
@@ -245,7 +245,7 @@ The key named log groups are:
 -   `/aws/vendedlogs/VAMSCloudTrailLogs-{hash}` — AWS CloudTrail logs (conditional on `addStackCloudTrailLogs`)
 -   `aws-waf-logs-vams-{hash}` — AWS WAF request logs, one per web ACL (conditional on `useWaf`). Outside the `/aws/vendedlogs/` namespace because AWS WAF requires the `aws-waf-logs-` prefix, and the CloudFront ACL's group is in us-east-1 rather than the deployment Region
 -   `/aws/vendedlogs/VAMSstateMachine-*-{hash}` — Per-pipeline state machine logs
--   `/aws/vendedlogs/Pipelines/*` — Per-pipeline container logs. The AWS Fargate job groups are `CoordTransform{hash}`, `Metadata3dLabelingBlenderRenderer{hash}`, `Preview3dThumbnail{hash}`, `PcPotreeViewerPDAL{hash}` and `PcPotreeViewerPotree{hash}` (conditional on the matching pipeline flag); the RapidPipeline and ModelOps groups are named for their container
+-   `/aws/vendedlogs/Pipelines/*` — Per-pipeline container logs. The AWS Fargate job groups are `CoordTransform{hash}`, `Metadata3dLabelingBlenderRenderer{hash}`, `Preview3dThumbnail{hash}`, `PcPotreeViewerPDAL{hash}`, `PcPotreeViewerPotree{hash}` and `VideoSopBom{hash}` (conditional on the matching pipeline flag); the RapidPipeline and ModelOps groups are named for their container
 
 The `/aws/codebuild/` build log groups of pipelines configured with `useCodeBuild: true` are not named by VAMS; the last command block below finds and deletes them.
 
@@ -345,17 +345,20 @@ VAMS log group names are deterministic (a hash of the stack name plus account ID
 
 A pipeline configured with `useCodeBuild: true` creates a private Amazon ECR repository for its container image. All of them use the `DESTROY` removal policy with `emptyOnDelete`, so a clean teardown removes both the repository and its images.
 
-Most are auto-named by AWS CloudFormation and cannot collide on a redeploy. The Coordinate Transform repository is the exception — it carries the explicit name `<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform`, or `<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform-kms` when `app.useKmsCmkEncryption.enabled` is `true` — so if a teardown fails and leaves it behind, delete it before redeploying with the same configuration name and account. The commands below show the name without the key; add `-kms` for a deployment with the CMK enabled. With the CMK enabled, the repositories are encrypted with the VAMS KMS key, and deleting one retires the grants Amazon ECR holds on the key, so the caller needs `kms:RetireGrant` on the key:
+Most are auto-named by AWS CloudFormation and cannot collide on a redeploy. The Coordinate Transform and Video SOP/BOM Extraction repositories are the exceptions — they carry the explicit names `<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform` and `<CONFIG_NAME>-<BASE_STACK_NAME>-videosopbom`, each with `-kms` appended when `app.useKmsCmkEncryption.enabled` is `true` — so if a teardown fails and leaves either behind, delete it before redeploying with the same configuration name and account. The commands below show the names without the key; add `-kms` for a deployment with the CMK enabled. With the CMK enabled, the repositories are encrypted with the VAMS KMS key, and deleting one retires the grants Amazon ECR holds on the key, so the caller needs `kms:RetireGrant` on the key:
 
 ```bash
-# Check for the explicitly named repository
+# Check for the explicitly named repositories
 aws ecr describe-repositories \
-    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform" \
+    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform" "<CONFIG_NAME>-<BASE_STACK_NAME>-videosopbom" \
     --query 'repositories[].repositoryName' --output text 2>/dev/null
 
-# Delete it, including any images it still holds
+# Delete each one that exists, including any images it still holds
 aws ecr delete-repository \
     --repository-name "<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform" \
+    --force
+aws ecr delete-repository \
+    --repository-name "<CONFIG_NAME>-<BASE_STACK_NAME>-videosopbom" \
     --force
 ```
 

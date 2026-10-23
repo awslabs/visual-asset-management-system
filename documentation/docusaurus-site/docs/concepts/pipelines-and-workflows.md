@@ -66,7 +66,7 @@ Pipelines can be scoped to a specific database or declared as `GLOBAL`.
 -   **GLOBAL pipelines** set `databaseId` to the literal string `GLOBAL`. They are available across all databases and are typically used for shared processing capabilities such as format conversion or thumbnail generation.
 
 :::tip[Built-in pipelines]
-VAMS includes several built-in pipelines that are auto-registered as `GLOBAL` during deployment. These include 3D model conversion, point cloud processing, Gaussian splatting, GenAI metadata labeling, and 3D preview thumbnail generation. Built-in pipelines are configured through the CDK deployment configuration. For details, see the [Pipelines](../pipelines/overview.md) section.
+VAMS includes several built-in pipelines that are auto-registered as `GLOBAL` during deployment. These include 3D model conversion, point cloud processing, Gaussian splatting, GenAI metadata labeling, video SOP/BOM extraction, and 3D preview thumbnail generation. Built-in pipelines are configured through the CDK deployment configuration. For details, see the [Pipelines](../pipelines/overview.md) section.
 :::
 
 :::warning[Built-in pipelines, workflows, and templates are schema-owned by the CDK]
@@ -135,7 +135,7 @@ Only the first step's name reaches the output path, and the generated portion of
 :::
 
 :::note[`jobName` the field versus `{{jobName}}` the tag]
-These are related but not interchangeable. The `jobName` **field** above is a fixed label you set on a pipeline reference and accepts no tags. The `{{jobName}}` **tag** is a system tag available in output path prefixes and template bodies, where it resolves to the generated job name of the step it renders for. Writing `{{jobName}}` into the `jobName` field is rejected.
+These are related but not interchangeable. The `jobName` **field** above is a fixed label you set on a pipeline reference and accepts no tags. The `{{jobName}}` **tag** is a system tag available in output path prefixes and template bodies, where it resolves to a per-run name for the step it renders for: the step's generated job name joined to that step's `pipelineExecutionId`, at most 80 characters of letters, numbers, hyphens, and underscores. The value differs on every execution and for every step of one execution, and is the same everywhere it renders within one step. Writing `{{jobName}}` into the `jobName` field is rejected.
 :::
 
 ### System configuration
@@ -196,22 +196,24 @@ A match-everything pattern (`*`, `**`, `*.*`, `/*`, `/**`) in an `exclude` list 
 
 #### The resolution chain
 
-Filters are declared at up to three levels, and a file must satisfy all of them to reach a pipeline:
+Filters are declared at up to three levels, and a selected file must satisfy all of them to reach a pipeline:
 
 ```
-workflow.systemConfig.inputFileFilters       the outer boundary for the whole execution
+workflow.systemConfig.inputFileFilters       the outer boundary for the files a run selects
   └── pipeline.systemConfig.inputFileFilters what that step accepts
         └── template.overrides.inputFileFilters  replaces the pipeline's, when the step uses a template
 ```
 
 Resolution reads down the chain, and an open list at one level defers to the next:
 
--   When the workflow's `allow` list names specific types, that list is the boundary for the execution. No pipeline can widen it — a file the workflow excludes never reaches any step.
+-   When the workflow's `allow` list names specific types, that list is the boundary for the execution's selection. No pipeline can widen it — a file the workflow excludes cannot be selected for any step.
 -   When the workflow's `allow` list is open, eligibility comes from the pipelines instead. A file is eligible when **any** step in the workflow accepts it, so a workflow combining a mesh pipeline and a point-cloud pipeline accepts both kinds of file.
 -   A chosen template's `overrides.inputFileFilters` replaces its pipeline's list entirely for that execution, which is how one pipeline supports several modes with different inputs.
--   `exclude` lists accumulate: an exclusion at any level removes the file.
+-   `exclude` lists accumulate down a step's chain: the workflow's exclusions remove a file from the whole selection, and a pipeline's or template's exclusions remove it from that step.
 
-Validation applies this order at execution time. The selected files are first narrowed by the workflow's filters, and each pipeline is then checked against **that** narrowed set. If any pipeline is left without the input it requires, the whole execution is rejected rather than launching a step that cannot run.
+Validation applies this order at execution time. The selected files are first narrowed by the workflow's filters, and the **first** step is then checked against **that** narrowed set. If the first step is left without the input it requires, or receives more files than its `inputFileArity` allows, the whole execution is rejected rather than launching a step that cannot run.
+
+From the second step on, a step's input is the selection together with every file the earlier steps wrote, so each later step is checked when the run reaches it rather than at launch. Its own filters and `inputFileArity` are applied to that combined set, which is what lets steps chain: a step that accepts only `*.glb` can follow a step that converts `*.obj` to glTF binary, and it receives the converted file. A later step that is left without input, or is handed more files than its arity allows, fails the execution at that step with a reason naming it, after the earlier steps have run. The usual cause is a single-file step whose filters admit both the selected type and the type an earlier step writes; the workflow editor warns about that combination when the workflow is saved. When the selected files alone already give a single-file later step two or more files its filters admit, that step cannot succeed whatever the earlier steps write, so the execution is rejected at launch instead. A later step's `assetScope` is also checked at launch, against the selected files that reach it.
 
 #### Seeing what a workflow accepts
 
@@ -254,9 +256,9 @@ The metadata gathered for one entity is bounded independently of every other, so
 ### Execution flow
 
 1. A user (or a trigger) submits input files to the workflow's execute endpoint.
-2. VAMS authorizes the workflow, every referenced pipeline, each input and output asset, and every asset and database the run gathers metadata from; resolves per-pipeline templates and validates their tags; then cross-validates input-file arity, asset scope, and file filters.
+2. VAMS authorizes the workflow, every referenced pipeline, each input and output asset, and every asset and database the run gathers metadata from; resolves per-pipeline templates and validates their tags; then cross-validates the selection's input-file arity, asset scope, and file filters against the workflow and the first step, every step's asset scope, and whether the selection alone gives a single-file later step two or more files.
 3. VAMS starts the workflow's AWS Step Functions state machine.
-4. Each pipeline step runs in sequence, receiving the input files, gathered metadata, and its rendered configuration.
+4. Each pipeline step runs in sequence, receiving its input files, gathered metadata, and its rendered configuration. The first step receives the selected files its filters admit; each later step receives the selected files plus every file the earlier steps wrote, narrowed by its own filters and checked against its `inputFileArity` before it starts.
 5. An end-state step collects pipeline outputs and, for an asset output target, writes them back to the output asset.
 
 ```mermaid
