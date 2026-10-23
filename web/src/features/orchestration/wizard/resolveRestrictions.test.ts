@@ -212,12 +212,41 @@ describe("resolveRestrictions", () => {
         expect(r.source).toBe("none");
     });
 
-    it("unions excludes across every level", () => {
+    it("keeps the workflow's excludes and those every file-consuming step shares", () => {
+        // A selected file reaches every step whose filters admit it (#715: launch judges the first
+        // step only; each later step narrows the selection when the run reaches it). A step's own
+        // exclusion therefore removes a file for that step alone, and only an exclusion every step
+        // that takes files shares — or the workflow's own — makes the file useless to the run.
         const r = resolveRestrictions(wf({ inputFileFilters: { exclude: ["*.tmp"] } }), [
+            { systemConfig: { inputFileFilters: { exclude: ["*.previewFile.*", "*.BAK"] } } },
+            { systemConfig: { inputFileFilters: { exclude: ["*.bak", "*.tmp"] } } },
+        ]);
+        expect(r.exclude.sort()).toEqual(["*.BAK", "*.tmp"]);
+    });
+
+    it("keeps a single step's excludes", () => {
+        const r = resolveRestrictions(wf(), [
             { systemConfig: { inputFileFilters: { exclude: ["*.previewFile.*"] } } },
+        ]);
+        expect(r.exclude).toEqual(["*.previewFile.*"]);
+    });
+
+    it("does not let a later step's exclude hide the file the first step converts (#715)", () => {
+        // obj -> glb, then a step that reads only the glb, spelled with an exclude list. The obj is
+        // what the run is launched on, so the pickers must still offer it.
+        const r = resolveRestrictions(wf(), [
+            { systemConfig: { inputFileFilters: { allow: ["*.obj"] } } },
+            { systemConfig: { inputFileFilters: { exclude: ["*.obj"] } } },
+        ]);
+        expect(r.exclude).toEqual([]);
+    });
+
+    it("ignores the excludes of a step that takes no input files", () => {
+        const r = resolveRestrictions(wf(), [
+            { systemConfig: { inputFileArity: "none", inputFileFilters: { exclude: ["*.glb"] } } },
             { systemConfig: { inputFileFilters: { exclude: ["*.tmp"] } } },
         ]);
-        expect(r.exclude.sort()).toEqual(["*.previewFile.*", "*.tmp"]);
+        expect(r.exclude).toEqual(["*.tmp"]);
     });
 
     it("lets a chosen template's overrides narrow the result", () => {
