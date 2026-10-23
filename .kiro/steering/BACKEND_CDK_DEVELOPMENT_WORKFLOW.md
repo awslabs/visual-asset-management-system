@@ -970,11 +970,13 @@ def handle_get_request(event):
         return internal_error(event=event)
 ```
 
-**An archived record is authorized on the database it belongs to.** Archiving an asset and deleting a
+**An archived record must pass on its stored id and on its database id.** Archiving an asset and deleting a
 database rewrite the record under the partition key `<databaseId>#deleted`; `CasbinEnforcerService.enforce`
-removes the suffix from the evaluated `databaseId`, so constraints match it exactly as they match the live
-record. Pass the stored record to `enforce()` unchanged; do not strip or add the suffix in a handler for
-authorization.
+allows such a record only when both the stored `databaseId` and the id with the suffix removed pass. A deny on
+the database therefore covers its archived records, and an allow written only as `databaseId equals <id>` does
+not reach them; to grant archived records, a rule must also name `<databaseId>#deleted` (for example
+`criteriaOr`: `equals <id>` OR `equals <id>#deleted`). Pass the stored record to `enforce()` unchanged; do not
+strip or add the suffix in a handler for authorization.
 
 **Compiled matcher expressions are cached per user enforcer, never decisions.**
 `ExpressionCachingEnforcer` (`handlers/authz/__init__.py`, the `FastEnforcer` subclass that

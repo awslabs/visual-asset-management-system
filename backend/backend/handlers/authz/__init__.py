@@ -60,7 +60,8 @@ DEFAULT_ROLE_NAME = os.environ.get("DEFAULT_ROLE_NAME", "").strip()
 POLICY_TEXT_DENY_ALL = "g,,\0,*,deny\np,,,*,deny"
 
 # Archived assets and deleted databases are stored under "<databaseId>#deleted". Authorization
-# evaluates the database id without it (CasbinEnforcerService._evaluated_database_id).
+# allows such a record only when it passes both on its stored id and on its database id
+# (CasbinEnforcerService.enforce, _evaluated_database_id).
 #
 ARCHIVED_DATABASE_ID_SUFFIX = "#deleted"
 
@@ -892,14 +893,15 @@ class CasbinEnforcerService:
 
         Archiving an asset and deleting a database both rewrite the record under the partition key
         ``<databaseId>#deleted``, and the listings and single-record reads that include archived
-        records hand that stored id to ``enforce()``. Constraint values name the database itself, and
-        the anchored operators (``equals`` -> ``^value\\Z``, ``ends_with``) never match the suffixed
-        id, so no rule written that way matched an archived record: a deny on its database did not
-        apply to it, and an allow scoped to its database did not reach it. Removing the suffix here,
-        where every object-level decision is evaluated, authorizes an archived record exactly like a
-        live record of the same database. Database ids cannot contain ``#`` (``id_pattern``), so the
-        suffix is unambiguous; every trailing occurrence is removed, so a repeated suffix is decided on
-        the same database. A copy is returned; the caller's object is not modified.
+        records hand that stored id to ``enforce()``. ``enforce()`` decides such a record in two
+        forms: the copy returned here, and the record as stored. It is allowed only when both are
+        allowed, so a rule on the database id (``equals dbX``) denies its archived records as it
+        denies its live ones, and a rule naming the stored id (``equals dbX#deleted``) still applies
+        to it. Granting archived records therefore takes an allow that covers both forms. Database
+        ids cannot contain ``#`` (``id_pattern``), so the suffix is unambiguous; every trailing
+        occurrence is removed, so a repeated suffix is decided on the same database. A copy is
+        returned and the caller's object is not modified; an object without the suffix is returned
+        unchanged (the same object).
         """
         database_id = obj.get("databaseId")
         if isinstance(database_id, str) and database_id.endswith(ARCHIVED_DATABASE_ID_SUFFIX):
@@ -932,8 +934,11 @@ class CasbinEnforcerService:
         # Ignore fields out of scope for this object's type so deprecated or foreign
         # fields cannot influence a match. Unknown/absent types are left unchanged.
         obj = self._scrub_object_fields(obj)
-        # An archived record is decided on the database it belongs to, not on its storage key.
-        obj = self._evaluated_database_id(obj)
+        # An archived record must also pass on the database it belongs to; the stored record is
+        # then decided below as for any other object.
+        evaluated = self._evaluated_database_id(obj)
+        if evaluated is not obj and not self.enforce(evaluated, act):
+            return False
 
         enhanced_object = PERMISSION_CONSTRAINT_FIELDS.copy()
         # Update with obj, but convert any None values to empty strings to prevent regex errors

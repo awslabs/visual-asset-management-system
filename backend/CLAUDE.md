@@ -815,10 +815,13 @@ Archived assets live under a `databaseId + "#deleted"` partition-key suffix. Arc
 rewrite items with the suffixed partition key; query archived items with
 `KeyConditionExpression=Key('databaseId').eq(f"{database_id}#deleted")`.
 
-Authorization evaluates an archived record (asset or deleted database) on the database it
-belongs to: `CasbinEnforcerService.enforce` removes the suffix from the evaluated
-`databaseId`, so constraints match it exactly as they match the live record. Pass the stored
-record to `enforce()` unchanged; do not strip or add the suffix in a handler for authorization.
+An archived record (asset or deleted database) is authorized in two forms:
+`CasbinEnforcerService.enforce` allows it only when it passes on its stored `databaseId`
+(`<databaseId>#deleted`) AND on its database id (the suffix removed). A deny on the database
+therefore covers its archived records, and an allow written only as `databaseId equals <id>`
+does not reach them; to grant archived records, a rule must also name `<databaseId>#deleted`
+(for example `criteriaOr`: `equals <id>` OR `equals <id>#deleted`). Pass the stored record to
+`enforce()` unchanged; do not strip or add the suffix in a handler for authorization.
 
 ### TypeDeserializer for Low-Level Responses
 

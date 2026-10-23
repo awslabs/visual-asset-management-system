@@ -1,23 +1,27 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Archived records are authorized on the database they belong to.
+"""An archived record is authorized on its stored id AND on the database it belongs to.
 
 Archiving an asset rewrites its record under the partition key ``<databaseId>#deleted``, and deleting
 a database rewrites the database record the same way. Every path that hands such a record to
 ``CasbinEnforcer.enforce`` -- the asset listings and the single-asset GET with ``showArchived``, the
 database listing and GET with ``showDeleted`` -- therefore evaluates a ``databaseId`` that carries the
 suffix. The ``equals`` operator compiles to ``^value\\Z`` and ``ends_with`` to ``(?s:.*)value\\Z``, so
-neither matched the suffixed id:
+a rule naming the database (``equals dbX``) never matched the suffixed id, and a deny on ``dbX`` did
+not apply to ``dbX``'s archived records.
 
-* a role that allows every database and denies ``dbX`` with ``equals`` did not apply that deny to
-  ``dbX``'s archived records, and
-* a role that allows ``dbX`` with ``equals`` did not reach ``dbX``'s archived records at all.
+``CasbinEnforcerService.enforce`` now decides an archived record in two forms, at the single point
+every object-level and route-probe decision passes through: the record with every trailing suffix
+removed from its ``databaseId``, and the record as stored. It is allowed only if both are allowed.
 
-The documented rule is that an archived asset is authorized on its own attributes exactly as before
-archiving (docs: deployment/update-the-solution.md, "Execution visibility"). ``CasbinEnforcerService
-.enforce`` now removes the suffix from the evaluated ``databaseId`` -- once, at the single point every
-object-level and route-probe decision passes through -- so each operator sees the real database id.
+* A deny on ``dbX`` applies to ``dbX#deleted`` (the stripped form is denied).
+* An allow written only as ``databaseId equals dbX`` does not reach archived records (the stored form
+  matches no allow), so a database-scoped role keeps not seeing them.
+* A rule that names the stored id (``equals dbX#deleted``, ``contains #deleted``) still matches it.
+  Granting archived records therefore takes an allow that covers both forms, for example ``equals
+  dbX`` OR ``equals dbX#deleted``.
+
 The stored record and the caller's dict are left unchanged, and no other field is rewritten.
 
 These tests run the REAL policy-text generation and the REAL enforcer construction
@@ -54,12 +58,12 @@ def _build_service(policies):
     return svc
 
 
-def _constraint(constraint_id, object_type, criteria, action="GET", effect="allow"):
+def _constraint(constraint_id, object_type, criteria, action="GET", effect="allow", criteria_or=()):
     return {
         "constraintId": constraint_id,
         "objectType": object_type,
         "criteriaAnd": criteria,
-        "criteriaOr": [],
+        "criteriaOr": list(criteria_or),
         "groupPermissions": [{"groupId": ROLE, "permission": action, "permissionType": effect}],
         "userPermissions": [],
     }
@@ -118,8 +122,8 @@ class TestDenyAppliesToArchivedRecords:
 
 
 @pytest.mark.unit
-class TestScopedAllowReachesArchivedRecords:
-    """A role scoped to one database with `equals` is decided the same for its archived rows."""
+class TestScopedAllowAndArchivedRecords:
+    """An allow decides an archived row only when it covers both the stored id and the database id."""
 
     @pytest.fixture
     def svc(self):
@@ -127,17 +131,52 @@ class TestScopedAllowReachesArchivedRecords:
             _constraint("allow-asset", "asset", [_crit("equals", DENIED_DB)]),
         ])
 
-    def test_an_archived_asset_in_the_scoped_database_is_allowed(self, svc):
-        assert svc.enforce(_asset(DENIED_DB + ARCHIVED), "GET") is True
+    @pytest.fixture
+    def svc_both_forms(self):
+        return _build_service([
+            _constraint("allow-asset", "asset", [], criteria_or=[
+                _crit("equals", DENIED_DB),
+                _crit("equals", DENIED_DB + ARCHIVED),
+            ]),
+        ])
+
+    def test_an_allow_naming_only_the_database_does_not_reach_its_archived_assets(self, svc):
+        assert svc.enforce(_asset(DENIED_DB + ARCHIVED), "GET") is False
+        assert svc.enforce(_asset(DENIED_DB), "GET") is True
 
     def test_an_archived_asset_outside_the_scope_is_still_denied(self, svc):
         assert svc.enforce(_asset(OTHER_DB + ARCHIVED), "GET") is False
         assert svc.enforce(_asset(OTHER_DB), "GET") is False
 
+    def test_an_allow_naming_both_forms_reaches_the_archived_asset(self, svc_both_forms):
+        assert svc_both_forms.enforce(_asset(DENIED_DB + ARCHIVED), "GET") is True
+        assert svc_both_forms.enforce(_asset(DENIED_DB), "GET") is True
+        assert svc_both_forms.enforce(_asset(OTHER_DB + ARCHIVED), "GET") is False
+
+    def test_an_allow_naming_only_the_stored_id_does_not_reach_the_archived_asset(self):
+        """The database-id form must pass too, so the suffixed value alone grants nothing."""
+        svc = _build_service([
+            _constraint("allow-asset", "asset", [_crit("equals", DENIED_DB + ARCHIVED)]),
+        ])
+
+        assert svc.enforce(_asset(DENIED_DB + ARCHIVED), "GET") is False
+
+    def test_a_deny_on_the_database_wins_over_an_allow_naming_both_forms(self):
+        svc = _build_service([
+            _constraint("allow-asset", "asset", [], criteria_or=[
+                _crit("equals", DENIED_DB),
+                _crit("equals", DENIED_DB + ARCHIVED),
+            ]),
+            _constraint("deny-asset", "asset", [_crit("equals", DENIED_DB)], effect="deny"),
+        ])
+
+        assert svc.enforce(_asset(DENIED_DB + ARCHIVED), "GET") is False
+        assert svc.enforce(_asset(DENIED_DB), "GET") is False
+
 
 @pytest.mark.unit
 class TestOtherOperatorsOnArchivedRecords:
-    """Every operator sees the real database id; the prefix and containment forms do not regress."""
+    """A rule on the database id covers its archived rows; a rule on the stored id still matches it."""
 
     @pytest.mark.parametrize("operator, value", [
         ("equals", DENIED_DB),
@@ -155,14 +194,32 @@ class TestOtherOperatorsOnArchivedRecords:
         assert svc.enforce(_asset(DENIED_DB), "GET") is False, operator
         assert svc.enforce(_asset(OTHER_DB + ARCHIVED), "GET") is True, operator
 
-    def test_a_rule_written_against_the_suffix_no_longer_matches(self):
-        """The suffix is a storage detail, not part of the database id a rule is written against."""
+    @pytest.mark.parametrize("operator, value", [
+        ("equals", DENIED_DB + ARCHIVED),
+        ("ends_with", ARCHIVED),
+    ])
+    def test_a_deny_written_against_the_stored_id_still_matches(self, operator, value):
         svc = _build_service([
             _allow_all("asset"),
-            _constraint("deny", "asset", [_crit("ends_with", ARCHIVED)], effect="deny"),
+            _constraint("deny", "asset", [_crit(operator, value)], effect="deny"),
         ])
 
-        assert svc.enforce(_asset(DENIED_DB + ARCHIVED), "GET") is True
+        assert svc.enforce(_asset(DENIED_DB + ARCHIVED), "GET") is False, operator
+        assert svc.enforce(_asset(DENIED_DB), "GET") is True, operator
+
+    def test_a_deny_containing_the_suffix_hides_every_archived_record(self):
+        svc = _build_service([
+            _allow_all("asset"),
+            _allow_all("database"),
+            _constraint("deny-asset", "asset", [_crit("contains", ARCHIVED)], effect="deny"),
+            _constraint("deny-db", "database", [_crit("contains", ARCHIVED)], effect="deny"),
+        ])
+
+        assert svc.enforce(_asset(DENIED_DB + ARCHIVED), "GET") is False
+        assert svc.enforce(_asset(OTHER_DB + ARCHIVED), "GET") is False
+        assert svc.enforce(_database(DENIED_DB + ARCHIVED), "GET") is False
+        assert svc.enforce(_asset(DENIED_DB), "GET") is True
+        assert svc.enforce(_database(DENIED_DB), "GET") is True
 
 
 @pytest.mark.unit
