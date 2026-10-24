@@ -38,7 +38,7 @@ flowchart LR
     H --> I[Optimized 3D model<br/>in Amazon S3]
 ```
 
-The Fargate task is bounded at 4 hours 45 minutes (17100 seconds) and the whole run, including the constructPipeline and pipelineEnd steps, at 5 hours (18000 seconds). A task still running at its bound fails the run with `States.Timeout`, and pipelineEnd sends the workflow the failure. The workflow waits up to 5.5 hours (19800 seconds) for the pipeline, 30 minutes longer than the run can take, so it is still waiting when the pipeline reports its outcome.
+The Fargate task is bounded at 4 hours 45 minutes (17100 seconds) and the whole run, including the constructPipeline and pipelineEnd steps, at 5 hours (18000 seconds). A task still running at its bound fails the run with `States.Timeout`. The state machine then stops the task, which it finds by the `startedBy` value the task is started with (the Step Functions execution name), and pipelineEnd sends the workflow the failure. Stopping the task is best-effort: if the stop call fails, pipelineEnd still sends the workflow the timeout. The state machine role holds `ecs:ListTasks` for this, limited to the pipeline's cluster by an `ecs:cluster` condition, and `ecs:StopTask` on that cluster's tasks. The workflow waits up to 5.5 hours (19800 seconds) for the pipeline, 30 minutes longer than the run can take, so it is still waiting when the pipeline reports its outcome.
 
 ### Amazon EKS deployment
 

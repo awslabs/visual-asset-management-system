@@ -509,7 +509,9 @@ export class RapidPipelineConstruct extends NestedStack {
             subnets: subnetSelection,
         })
             // Catchers match in order, and the general catch matches States.Timeout too, so the
-            // timeout catch comes first. Both keep the state input and add the error at $.error.
+            // timeout catch must render first. CDK renders a States.ALL catcher last whatever the
+            // addCatch order; ecsTimeoutStopTask.test.ts pins the emitted order. Both keep the state
+            // input and add the error at $.error.
             .addCatch(listTimedOutTask, {
                 errors: [sfn.Errors.TIMEOUT],
                 resultPath: "$.error",
