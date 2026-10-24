@@ -226,12 +226,28 @@ def test_search_defaults_to_relevance_ordering(searching_client):
     assert searching_client.api.search_query.call_args.args[0]["sort"] == ["_score"]
 
 
+@pytest.mark.parametrize("tool", ["search_assets", "search_files"])
 @pytest.mark.parametrize("descending,expected", [(True, "desc"), (False, "asc")])
-def test_search_orders_by_a_named_field(searching_client, descending, expected):
-    server.search_assets(query="x", sort_field="dateCreated", sort_desc=descending)
+def test_search_orders_by_a_named_field(searching_client, tool, descending, expected):
+    """The search API's request model takes a sort entry as a bare field name or as
+    `{field, order}` (SearchSortModel). The OpenSearch-native `{<field>: {order}}` this test used
+    to pin is rejected with 400 (`sort.0.field: field required`) before it reaches OpenSearch."""
+    getattr(server, tool)(query="x", sort_field="str_assetname", sort_desc=descending)
     assert searching_client.api.search_query.call_args.args[0]["sort"] == [
-        {"dateCreated": {"order": expected}}
+        {"field": "str_assetname", "order": expected}
     ]
+
+
+@pytest.mark.parametrize("descending", [True, False])
+def test_search_sort_matches_the_cli_request_shape(searching_client, descending):
+    """`vamscli search ... --sort-field` sends the shape the deployed API accepts. Pinning the server
+    to the CLI's own builder keeps a mocked API from hiding a shape the real one refuses."""
+    from vamscli.commands.search import _build_sort_config
+
+    server.search_assets(query="x", sort_field="str_assetname", sort_desc=descending)
+    assert searching_client.api.search_query.call_args.args[0]["sort"] == _build_sort_config(
+        "str_assetname", descending
+    )
 
 
 def test_search_negative_offset_is_clamped(searching_client):
