@@ -182,9 +182,9 @@ describe("EKS job timeout chain", () => {
             config.env.region = "us-west-2";
             config.env.account = "123456789012";
             config.app.baseStackName = "vamstest";
-            config.app.useGlobalVpc.enabled = true;
-            config.app.pipelines.useRapidPipeline.enabled = true;
-            config.app.pipelines.useRapidPipeline.useEks.enabled = true;
+            // A config getConfig() accepts in full, so a positive control below can assert that
+            // nothing at all is thrown rather than only that no jobTimeout error is.
+            enableEksPipeline(config);
             config.app.pipelines.useRapidPipeline.useEks.jobTimeout = jobTimeout;
             serveConfig(config);
             return () => Config.getConfig(newTestApp());
@@ -192,7 +192,7 @@ describe("EKS job timeout chain", () => {
 
         test("the shipped value is accepted", () => {
             // Positive control: the rules must not reject what every template ships.
-            expect(withJobTimeout(configuredTimeout())).not.toThrow(/jobTimeout/);
+            expect(withJobTimeout(configuredTimeout())).not.toThrow();
         });
 
         test("a timeout beyond the maximum is rejected and names it", () => {
@@ -204,9 +204,7 @@ describe("EKS job timeout chain", () => {
         test("exactly the maximum is accepted", () => {
             // The boundary. The longest run the maximum allows still fits in the state machine
             // timeout; eksTimeoutHeadroom.test.ts checks that on the emitted template.
-            expect(withJobTimeout(Config.RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS)).not.toThrow(
-                /jobTimeout/
-            );
+            expect(withJobTimeout(Config.RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS)).not.toThrow();
         });
 
         test("a non-positive or non-integer timeout is rejected", () => {
@@ -226,7 +224,7 @@ describe("EKS job timeout chain", () => {
             config.app.pipelines.useRapidPipeline.useEks.enabled = false;
             config.app.pipelines.useRapidPipeline.useEks.jobTimeout = 999999;
             serveConfig(config);
-            expect(() => Config.getConfig(newTestApp())).not.toThrow(/jobTimeout/);
+            expect(() => Config.getConfig(newTestApp())).not.toThrow();
         });
     });
 });
