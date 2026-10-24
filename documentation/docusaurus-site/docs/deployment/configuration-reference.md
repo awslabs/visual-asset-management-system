@@ -807,13 +807,15 @@ Nested stack: `infra/lib/nestedStacks/pipelines/multi/rapidPipelineEKS/rapidPipe
 | `app.pipelines.useRapidPipeline.useEks.minNodes`                              | number  | `1`                       | Minimum worker nodes in the auto-scaling group.                                        |
 | `app.pipelines.useRapidPipeline.useEks.maxNodes`                              | number  | `10`                      | Maximum worker nodes in the auto-scaling group.                                        |
 | `app.pipelines.useRapidPipeline.useEks.desiredNodes`                          | number  | `2`                       | Desired worker node count under normal operation.                                      |
-| `app.pipelines.useRapidPipeline.useEks.jobTimeout`                            | number  | `7200`                    | Maximum job runtime in seconds (default: 2 hours).                                     |
+| `app.pipelines.useRapidPipeline.useEks.jobTimeout`                            | number  | `7200`                    | Maximum job runtime in seconds, at most 14400 (default: 2 hours).                      |
 | `app.pipelines.useRapidPipeline.useEks.jobMemory`                             | string  | `16Gi`                    | Memory allocation per Kubernetes job pod.                                              |
 | `app.pipelines.useRapidPipeline.useEks.jobCpu`                                | string  | `2000m`                   | CPU allocation per Kubernetes job pod in millicores.                                   |
 | `app.pipelines.useRapidPipeline.useEks.jobBackoffLimit`                       | number  | `2`                       | Number of retries before marking a job as failed.                                      |
 | `app.pipelines.useRapidPipeline.useEks.jobTTLSecondsAfterFinished`            | number  | `600`                     | Seconds to retain completed job pods before cleanup.                                   |
 | `app.pipelines.useRapidPipeline.useEks.observability.enableControlPlaneLogs`  | boolean | `false`                   | Enables EKS control plane logging to Amazon CloudWatch. Incurs additional costs.       |
 | `app.pipelines.useRapidPipeline.useEks.observability.enableContainerInsights` | boolean | `false`                   | Enables Amazon CloudWatch Container Insights for the cluster. Incurs additional costs. |
+
+`jobTimeout` bounds the Kubernetes job. The pipeline's whole run (the job, the steps that prepare and submit it, the status checks while it runs and the step that reports the outcome) must fit in the pipeline's 21600-second (6-hour) state machine timeout, and synthesis rejects a `jobTimeout` whose longest run does not fit or that exceeds 14400. The registered pipeline's task timeout is 23400 seconds, 30 minutes longer than the state machine timeout, so the workflow is still waiting when the pipeline reports.
 
 ### ModelOps (`app.pipelines.useModelOps`)
 
