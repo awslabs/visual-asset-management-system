@@ -6,7 +6,7 @@ This page provides a comprehensive tour of the VAMS web interface, covering each
 
 ## Navigation Structure
 
-The VAMS interface uses a persistent side navigation panel on the left and a top navigation bar. The side panel groups pages into six sections: **Home**, **Manage**, **Orchestrate & Automate**, **Admin - Data**, **Admin - Auth**, and **User**. Pages within these sections are filtered based on your role permissions -- you will only see navigation items you are authorized to access.
+The VAMS interface uses a persistent side navigation panel on the left and a top navigation bar. The side panel groups pages into six sections: **Home**, **Manage**, **Orchestrate & Automate**, **Admin - Data**, **Admin - Auth**, and **User**. Pages within these sections are filtered based on your role permissions -- you will only see navigation items you are authorized to access. Add-ons a deployment enables can add navigation sections and pages of their own; see [Add-ons Overview](../developer/addons-overview.md).
 
 :::info
 If the navigation panel shows **No Access**, your account does not have any web route permissions assigned. Contact your administrator to request the necessary role assignments.

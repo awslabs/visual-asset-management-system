@@ -7,7 +7,8 @@ URLs are stored by this server; everything is read from the vamscli profile.
 
 Adds MCP-friendly helpers: auto-pagination for list endpoints, a raw request
 escape hatch for endpoints without a dedicated client method (e.g. listing
-assets in a database), and search-result trimming.
+assets in a database), search-result trimming, and the profile's feature-switch
+snapshot for tools that are feature-gated.
 """
 
 from __future__ import annotations
@@ -54,6 +55,10 @@ from vamscli.utils.profile import ProfileManager  # noqa: E402
 from .config import Config, ConfigError  # noqa: E402
 
 
+class FeatureDisabledError(Exception):
+    """The deployment has not enabled the feature a tool requires."""
+
+
 class VamsClient:
     """MCP-oriented facade over the vamscli APIClient, using the vamscli profile."""
 
@@ -95,6 +100,24 @@ class VamsClient:
 
         self.api_url = api_url
         self.api = APIClient(api_url, self._profile)
+
+    # --- Feature switches -------------------------------------------------
+
+    def has_feature(self, feature_name: str) -> bool:
+        """Whether the feature-switch snapshot the profile stored at its last ``vamscli auth login``
+        (or ``set-override``) carries ``feature_name``."""
+        return self._profile.has_feature_switch(feature_name)
+
+    def require_feature(self, feature_name: str, message: str) -> None:
+        """Raise ``FeatureDisabledError(message)`` unless the snapshot carries ``feature_name``.
+
+        The MCP counterpart of vamscli's ``requires_feature`` gate, and the first statement of a
+        feature-gated tool: a deployment without the feature is answered with ``message`` (the CLI's
+        own sentence) before any request. Without it the request meets API Gateway's 403 for a route
+        that was never created, which the client reports only as a request no deployed route matches.
+        """
+        if not self.has_feature(feature_name):
+            raise FeatureDisabledError(message)
 
     # --- Raw request escape hatch ----------------------------------------
 

@@ -1,0 +1,79 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import type { CatalogLeasePolicy, EdhOsFamily, WorkstationRecord } from "./types";
+
+/** The words shown for the OS family tokens the service stores. */
+export const OS_FAMILY_LABEL: Record<EdhOsFamily, string> = {
+    linux: "Linux",
+    windows: "Windows",
+};
+
+/** The OS family as shown to users; a token outside the map is shown as it is. */
+export const osFamilyLabel = (value: string | null | undefined): string =>
+    (value && OS_FAMILY_LABEL[value as EdhOsFamily]) || value || "—";
+
+/** An EDH session state (`running`, `pending`, …) as shown to users: EDH's own word, capitalised. */
+export const edhStateLabel = (value: string | null | undefined): string =>
+    value ? value.charAt(0).toUpperCase() + value.slice(1) : "—";
+
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+/** A span in the two largest units it covers: `2 d 4 h`, `3 h 20 min`, `40 min`. */
+const spanWords = (ms: number): string => {
+    if (ms >= DAY_MS) {
+        const days = Math.floor(ms / DAY_MS);
+        const hours = Math.floor((ms - days * DAY_MS) / HOUR_MS);
+        return hours > 0 ? `${days} d ${hours} h` : `${days} d`;
+    }
+    if (ms >= HOUR_MS) {
+        const hours = Math.floor(ms / HOUR_MS);
+        const minutes = Math.floor((ms - hours * HOUR_MS) / MINUTE_MS);
+        return minutes > 0 ? `${hours} h ${minutes} min` : `${hours} h`;
+    }
+    // A span under a minute still reads as a minute rather than as nothing.
+    return `${Math.max(1, Math.floor(ms / MINUTE_MS))} min`;
+};
+
+/** A number of hours with its unit: `1 hour`, `8 hours`. */
+export const hoursWord = (n: number): string => `${n} ${n === 1 ? "hour" : "hours"}`;
+
+const instant = (iso: string | null | undefined): number | null => {
+    if (!iso) return null;
+    const ms = new Date(iso).getTime();
+    return isNaN(ms) ? null : ms;
+};
+
+/** How the time a lease has left reads: an ordinary countdown, the last hour, or past the expiry. */
+export type LeaseRemainingTone = "normal" | "warning" | "expired";
+
+/**
+ * What is left of one workstation's lease at `now`, or null for a row no lease covers. Past the
+ * expiry the value tracks the removal instead: the desktop is stopped, then removed once the grace
+ * window measured from the stop has run out.
+ */
+export function leaseRemaining(
+    record: Pick<WorkstationRecord, "leaseExpiresAt" | "leaseStoppedAt">,
+    policy: Pick<CatalogLeasePolicy, "graceHours">,
+    now: number
+): { text: string; tone: LeaseRemainingTone } | null {
+    const expiresAt = instant(record.leaseExpiresAt);
+    if (expiresAt === null) return null;
+
+    const left = expiresAt - now;
+    if (left > 0) {
+        return { text: `in ${spanWords(left)}`, tone: left > HOUR_MS ? "normal" : "warning" };
+    }
+    if (!record.leaseStoppedAt) return { text: "Expired, stopping", tone: "expired" };
+
+    const stoppedAt = instant(record.leaseStoppedAt);
+    const removeAt = Math.max(expiresAt, stoppedAt ?? expiresAt) + policy.graceHours * HOUR_MS;
+    if (policy.graceHours <= 0 || removeAt <= now) {
+        return { text: "Expired, removing", tone: "expired" };
+    }
+    return { text: `Expired, removed in ${spanWords(removeAt - now)}`, tone: "expired" };
+}

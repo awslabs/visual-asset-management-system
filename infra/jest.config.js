@@ -19,7 +19,7 @@ module.exports = {
     // stops it leaking.
     setupFilesAfterEnv: ["aws-cdk-lib/testhelpers/jest-autoclean"],
     // Worker bound, sized by MEMORY rather than by cores. A full-app synth worker sits at ~2.1 GB, and
-    // 44 of these files synthesize the whole app, so Jest's default of one worker per core minus one put
+    // 56 of these files synthesize the whole app, so Jest's default of one worker per core minus one put
     // 31 such workers (~65 GB) on a 32-core / 63 GB host: one file that takes 66 s alone took 768 s, and
     // three full runs with no source change gave 14, 0 and 1 failures. Four GB per worker, capped at
     // four: the full suite measured 695 s at 2 workers, 577 s at 4 and 822 s at 8, so past four the

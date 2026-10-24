@@ -22,22 +22,39 @@ The files, list by list:
 | Lambda handlers                                               | `backend/backend/handlers/<domain>/`                        | `backend/backend/handlers/addon/`                    | `backend/backend/handlers/custom/`                 |
 | Request and response models                                   | `backend/backend/models/`                                   | `backend/backend/models/addon/`                      | `backend/backend/models/custom/`                   |
 | Permission object types, constraint fields, upload deny lists | `backend/backend/common/constants.py`                       | `backend/backend/common/addonConstants.py`           | `backend/backend/custom/customConstants.py`        |
+| Log-redaction keys                                            | `backend/backend/common/constants.py`                       | `backend/backend/common/addonConstants.py`           | `backend/backend/custom/customConstants.py`        |
+| Temporary session key name prefix                             | `backend/backend/common/constants.py`                       | none; key names extend the core prefix               | none; key names extend the core prefix             |
 | Resource-name keys (backend)                                  | `backend/backend/common/resourceNames.py`                   | `backend/backend/common/addonResourceNames.py`       | `backend/backend/custom/customResourceNames.py`    |
 | Resource-name keys (CDK)                                      | `infra/common/resourceParamKeys.ts`                         | `infra/common/addonResourceParamKeys.ts`             | `infra/common/customResourceParamKeys.ts`          |
 | Feature switches (CDK)                                        | `infra/common/vamsAppFeatures.ts`                           | `infra/common/addonAppFeatures.ts`                   | `infra/common/customAppFeatures.ts`                |
 | Feature switches (CLI)                                        | `tools/VamsCLI/vamscli/constants.py`                        | `tools/VamsCLI/vamscli/addon_constants.py`           | `tools/VamsCLI/vamscli/custom_constants.py`        |
 | CDK resources                                                 | the core nested stacks                                      | `infra/lib/nestedStacks/addon/` (`AddonBuilder`)     | `infra/lib/nestedStacks/custom/customResources.ts` |
+| CDK configuration                                             | `infra/config/config.ts`                                    | `infra/config/addon/addonConfig.ts`                  | `infra/config/custom/customConfig.json`            |
 | Content Security Policy sources                               | `infra/lib/helper/security.ts`                              | `infra/lib/nestedStacks/addon/addonCsp.ts`           | `infra/config/csp/cspAdditionalConfig.json`        |
-| Read-only role default routes                                 | `.../auth/constructs/dynamodb-authdefaults-ro-construct.ts` | `infra/lib/nestedStacks/addon/addonDefaultRoutes.ts` | none; a fork writes its own constraints            |
+| Read-only role default API and web routes                     | `.../auth/constructs/dynamodb-authdefaults-ro-construct.ts` | `infra/lib/nestedStacks/addon/addonDefaultRoutes.ts` | none; a fork writes its own constraints            |
+| Default constraints for add-on object types                   | `.../auth/constructs/` (admin and read-only)                | `.../nestedStacks/addon/addonDefaultConstraints.ts`  | none; a fork writes its own constraints            |
+| VPC interface endpoints                                       | `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`      | `infra/lib/nestedStacks/addon/addonVpcEndpoints.ts`  | none                                               |
+| AWS WAF rule exclusions                                       | `infra/lib/cf-waf-stack.ts`                                 | `infra/lib/nestedStacks/addon/addonWafExclusions.ts` | none                                               |
 | Web routes                                                    | `web/src/routes.tsx`                                        | `web/src/addons/addonRoutes.tsx`                     | `web/src/custom/customRoutes.tsx`                  |
 | Web navigation                                                | `web/src/layout/Navigation.tsx`                             | `web/src/addons/addonNavigation.ts`                  | `web/src/custom/customNavigation.ts`               |
+| Web navigation feature restriction                            | `web/src/layout/Navigation.tsx`                             | `featuresEnabledRestriction` on an entry             | `featuresEnabledRestriction` on an entry           |
+| Web feature names                                             | `web/src/common/constants/featuresEnabled.ts`               | `web/src/addons/addonFeatures.ts`                    | `web/src/custom/customFeatures.ts`                 |
 | Web API calls                                                 | `web/src/services/APIService.ts`                            | `web/src/services/addons/`                           | `web/src/custom/services/`                         |
 | Viewer configuration                                          | `web/src/visualizerPlugin/config/viewerConfig.json`         | `.../config/addonViewerConfig.json`                  | `.../config/customViewerConfig.json`               |
 | Viewer manifest                                               | `web/src/visualizerPlugin/viewers/manifest.ts`              | `.../viewers/addonManifest.ts`                       | `.../viewers/custom/customManifest.ts`             |
-| CLI commands                                                  | `tools/VamsCLI/vamscli/commands/`                           | none                                                 | `tools/VamsCLI/vamscli/commands/custom/`           |
-| MCP tools                                                     | `tools/VamsMCP/vams_mcp/server.py`                          | none                                                 | `tools/VamsMCP/vams_mcp/custom_tools.py`           |
+| CLI commands                                                  | `tools/VamsCLI/vamscli/commands/`                           | `tools/VamsCLI/vamscli/commands/addon/`              | `tools/VamsCLI/vamscli/commands/custom/`           |
+| CLI API client                                                | `tools/VamsCLI/vamscli/utils/api_client.py`                 | `tools/VamsCLI/vamscli/utils/addon_api_client.py`    | `tools/VamsCLI/vamscli/utils/custom_api_client.py` |
+| MCP tools                                                     | `tools/VamsMCP/vams_mcp/server.py`                          | `tools/VamsMCP/vams_mcp/addon_tools/`                | `tools/VamsMCP/vams_mcp/custom_tools.py`           |
+| ConfigBuilder fields, rules and presets                       | `.../src/components/ConfigBuilder/`                         | `.../ConfigBuilder/addon/`                           | none; it covers upstream settings only             |
+| Agent steering                                                | the `CLAUDE.md` files, `.kiro/steering/`                    | a `CLAUDE.md` beside the add-on's code               | none                                               |
 
 The add-on files hold upstream code that most deployments do not run, so it is kept off the path of every core change; [Add-ons Overview](addons-overview.md) defines an add-on and lists the current ones. The licensed VNTANA and VEERUM viewers are add-on viewers: they ship disabled in `addonViewerConfig.json`, and a deployment with a license enables one by setting `"enabled": true` on its entry there. Their plugin directories (`viewers/VntanaViewerPlugin/`, `viewers/VeerumViewerPlugin/`), their install scripts in `web/customInstalls/vntana/` and `web/customInstalls/veerum/`, and their `postinstall` entries are unchanged.
+
+Three of the lanes are not lists of entries:
+
+-   **Navigation feature restriction.** A navigation section, link or link group in any of the three navigation files can carry `featuresEnabledRestriction`, the feature switches that must all be enabled for the entry to show, with the same meaning as on a viewer entry. `Navigation.tsx` drops an entry unless every switch it lists is enabled.
+-   **Temporary session keys.** An API key whose name starts with the reserved prefix `temporary-session-` (`TEMPORARY_SESSION_KEY_NAME_PREFIX`) is a temporary session key: a short-lived key that a backend component mints for one session through a Lambda cross-call, named with the prefix followed by a sub-prefix of the component's own. A call authenticated with a temporary session key cannot create or update API keys (`403`), and a user-created key whose name carries the prefix is refused (`400`).
+-   **Agent steering.** An add-on's guidance for coding agents is a `CLAUDE.md` beside its code in each tree it touches, which loads only when an agent works in that tree, and one Kiro steering file, `.kiro/steering/ADDON_<ADDON>.md`, with `inclusion: fileMatch` on the add-on's paths.
 
 The core file splices the custom part in with a single line that does not change between releases. Every custom file opens with the same header:
 
@@ -61,6 +78,7 @@ The custom files are for **net-new** additions. Two other kinds of fork-friendly
 | Resource names (CDK)     | `infra/common/customResourceParamKeys.ts` (`CUSTOM_RESOURCE_PARAM_KEYS`)                                                    | published with `publishCustomResourceName()`                                             |
 | Permission object types  | `backend/backend/custom/customConstants.py` (`CUSTOM_CONSTRAINT_OBJECT_TYPE_FIELDS`, `CUSTOM_PERMISSION_CONSTRAINT_FIELDS`) | merged by `common/constants.py`; see [Permission object types](#permission-object-types) |
 | Upload deny lists        | `backend/backend/custom/customConstants.py` (`CUSTOM_UNALLOWED_FILE_EXTENSIONS`, `CUSTOM_UNALLOWED_MIME_TYPES`)             | merged by `common/constants.py`; see [Upload deny lists](#upload-deny-lists)             |
+| Log-redaction keys       | `backend/backend/custom/customConstants.py` (`CUSTOM_LOG_SENSITIVE_KEYS`)                                                   | merged by `common/constants.py`; see [Log-redaction keys](#log-redaction-keys)           |
 | CDK resources            | `infra/lib/nestedStacks/custom/customResources.ts` (`buildCustomResources`)                                                 | the `CustomBuilder` nested stack in `core-stack.ts`                                      |
 | Feature switches         | `infra/common/customAppFeatures.ts` (`CUSTOM_APP_FEATURES`)                                                                 | returned by `buildCustomResources()` and published through `/api/secure-config`          |
 | Fork settings            | `infra/config/custom/customConfig.json`                                                                                     | read with `loadCustomConfig()` in `customResources.ts`                                   |
@@ -99,6 +117,7 @@ An **exact duplicate** of a core name never replaces the core entry, whatever th
 | Feature switch value                       | Synthesis fails when `buildCustomResources()` returns a `VAMS_APP_FEATURES` or `ADDON_APP_FEATURES` value (`CustomBuilderNestedStack`)  |
 | Permission object type or constraint field | Every backend Lambda fails at import with an error that names `custom/customConstants.py` and the entry (`common/constants.py`)         |
 | Upload deny-list entry                     | The same import error: an entry can be added, never repeated                                                                            |
+| Log-redaction key                          | The same import error: a key can be added, never repeated                                                                               |
 | Viewer ID                                  | The custom viewer is skipped in the browser with a console error                                                                        |
 | CLI command name                           | `vamscli` fails at startup with an error that names the command (`vamscli/main.py`)                                                     |
 | `CustomAPIClientMixin` method              | The core `APIClient` method is called instead, because it comes first in the MRO; `tools/VamsCLI/tests/test_custom_api_client.py` fails |
@@ -147,7 +166,7 @@ CUSTOM_CONSTRAINT_OBJECT_TYPE_FIELDS = {
 
 A rule that is broken fails the import of `common/constants.py`, so every backend Lambda and the backend unit tests fail with an error that names the lane file and the entry. Nothing is skipped or loosened at runtime.
 
-**An extension type grants nothing until a constraint allows it, the admin role included.** VAMS seeds constraints only for the core types, so after deployment no role, admin or otherwise, can reach a widget. The fork writes the constraints that grant access, as in [step 4 of the example](#4-permissions). This follows two authorization principles: access decisions live in policy data that administrators manage, not in code a fork hard-codes, and nothing is granted by default.
+**An extension type grants nothing until a constraint allows it, the admin role included.** VAMS seeds constraints only for the core types and the types of an enabled add-on, so after deployment no role, admin or otherwise, can reach a widget. The fork writes the constraints that grant access, as in [step 4 of the example](#4-permissions). This follows two authorization principles: access decisions live in policy data that administrators manage, not in code a fork hard-codes, and nothing is granted by default.
 
 ### Upload deny lists
 
@@ -159,6 +178,16 @@ CUSTOM_UNALLOWED_MIME_TYPES = ["application/x-example"]
 ```
 
 An extension is lower-case with one leading dot (`.xyz`, not `xyz`, `.XYZ` or `.tar.gz`), and a MIME type is lower-case with no parameters. A lane entry is matched the same way as a core entry (see [Blocked File Types](../architecture/security.md#blocked-file-types)): the check lower-cases the file's extension and media type, so `.xyz` also blocks `model.XYZ`. An entry that is malformed or repeats a core entry, or one the other lane adds, fails the import with an error naming the file and the entry. The core entries always stay in the merged list, so there is no way for a lane to remove one.
+
+### Log-redaction keys
+
+The add-on and custom lanes can add key, header or field names whose values VAMS never logs; they cannot remove one. `common/constants.py` appends each lane's entries to both core lists: `LOG_SENSITIVE_KEYS`, which the structured logger redacts, and `LOG_TEXT_SENSITIVE_KEYS`, which the redactor of log text returned to a caller redacts. In `backend/backend/custom/customConstants.py`:
+
+```python
+CUSTOM_LOG_SENSITIVE_KEYS = ["widgetToken"]
+```
+
+A key matches `^[A-Za-z][A-Za-z0-9_-]{1,63}$`. A key that is malformed, or that repeats a core key or one the other lane adds in any letter case, fails the import with an error naming the file and the key.
 
 ## Worked Example: Widgets
 
@@ -904,7 +933,7 @@ The repository's own tests apply to the custom files once a fork fills them in, 
 | `infra/test/api/apiRouteBackendCdkParity.test.ts`        | every route registered with API Gateway is declared in a backend route list, and every declared route is registered  |
 | `infra/test/storage/resourceNamesMirror.test.ts`         | `customResourceParamKeys.ts` and `customResourceNames.py` declare the same keys, none equal to a core or add-on key  |
 | `backend/tests/common/test_custom_extension_points.py`   | custom routes reach `ALL_API_ROUTES` and repeat no core method and path; custom resource keys repeat no core key     |
-| `backend/tests/common/test_constants_extension_lanes.py` | the rules for object types, constraint fields and deny-list entries, applied to whatever the lanes hold              |
+| `backend/tests/common/test_constants_extension_lanes.py` | the rules for object types, constraint fields, deny-list entries and log keys, applied to whatever the lanes hold    |
 | `infra/test/addon/appFeatureLanes.test.ts`               | no feature-switch value is declared in two of `vamsAppFeatures.ts`, `addonAppFeatures.ts` and `customAppFeatures.ts` |
 | `tools/VamsCLI/tests/test_constants_contract.py`         | each custom CLI path is a declared route; each `FEATURE_*` in `custom_constants.py` matches `customAppFeatures.ts`   |
 | `tools/VamsCLI/tests/test_custom_api_client.py`          | no `CustomAPIClientMixin` method has the name of an `APIClient` method                                               |
@@ -917,7 +946,7 @@ The other checks run at every synthesis, backend import or CLI start rather than
 ## Known Limits
 
 -   **Existing behavior is not overridable through these seams.** A change to a core page, API, stack or default is a core edit.
--   **Extension object types start with no access.** A permission object type a fork or add-on registers is covered by no seeded constraint, so every role, admin included, is denied on it until the fork adds constraints (see [Permission object types](#permission-object-types)). The default constraints are not extended automatically.
+-   **Extension object types start with no access.** A permission object type a fork or add-on registers is covered by no seeded constraint, so every role, admin included, is denied on it until the fork adds constraints (see [Permission object types](#permission-object-types)). The default constraints are not extended automatically. The one exception is an add-on, which can seed default constraints for its own object types while it is enabled (`infra/lib/nestedStacks/addon/addonDefaultConstraints.ts`).
 -   **Non-admin roles are denied custom routes until a constraint allows them.** The default read-only role does not see custom routes or pages; this is fail-closed by design.
 -   **No anonymous custom routes.** An unauthenticated route also needs an entry in the authorizer's ignored-path list, which stays core-owned so that no fork file can widen the unauthenticated surface. A fork that needs one edits the core list and resolves that change on upgrade.
 -   **Shared API Gateway quota.** Custom routes add to the same REST API, so they count against its resources-per-API quota (300 by default, adjustable).

@@ -41,6 +41,7 @@ from .client import (  # noqa: E402
     SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
 )
 from .config import Config, ConfigError  # noqa: E402
+from .addon_tools import register_addon_tools  # noqa: E402
 from .custom_tools import register_custom_tools  # noqa: E402
 
 _force_logging_to_stderr()
@@ -2863,6 +2864,13 @@ if CONFIG.enable_destructive:
         recovered. The deletion is written to the audit trail as schema_deleted.
         """
         return CLIENT.api.delete_compliance_schema(schema_name)
+
+
+# =========================================================================
+# ADD-ON TOOLS (upstream add-on lane: vams_mcp/addon_tools/)
+# =========================================================================
+
+register_addon_tools(mcp, CLIENT, CONFIG, tool_result)
 
 
 # =========================================================================

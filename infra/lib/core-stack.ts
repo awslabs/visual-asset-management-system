@@ -308,9 +308,15 @@ export class CoreVAMSStack extends cdk.Stack {
                 isolatedSubnets: this.subnetsIsolated,
                 privateSubnets: this.subnetsPrivate,
                 registry: apiRouteRegistry,
+                // The API key service built in ApiBuilder; an add-on that mints temporary session
+                // keys invokes it.
+                apiKeyServiceFunction: apiBuilderNestedStack.apiKeyServiceFunction,
             });
             addonBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
             addonBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
+            // Add-on stacks invoke the API key service Lambda built in ApiBuilder. RestApi already
+            // depends on both, so the order stays ApiBuilder -> AddonBuilder -> RestApi.
+            addonBuilderNestedStack.addStackDependency(apiBuilderNestedStack);
 
             this.enabledFeatures.push(...addonBuilderNestedStack.enabledFeatures);
 

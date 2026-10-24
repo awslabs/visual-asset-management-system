@@ -212,17 +212,15 @@ The solution is usable only after `npx cdk deploy` reports success for every sta
 
 ### Find your application URL
 
-The web application URL is displayed in the CDK deployment output.
+The web application URL is the `WebsiteEndpointURLOutput` value that `cdk deploy` prints for the VAMS core stack, in the form `<core stack name>.WebsiteEndpointURLOutput = <URL>`.
 
 **CloudFront deployments:**
 
-Look for the output key `WebAppCloudFrontDistributionDomainName` in the deployment output. The URL format is `https://dXXXXXXXXXXXXX.cloudfront.net`.
-
-If you configured a custom domain, also look for `CloudFrontCustomDomainUrl`.
+The URL format is `https://dXXXXXXXXXXXXX.cloudfront.net`. If you configured a custom domain, the value is `https://` followed by `app.useCloudFront.customDomain.domainHost`.
 
 **ALB deployments:**
 
-Look for the output key `webDistributionUrl` in the deployment output. This is the ALB domain you configured in `app.useAlb.domainHost`.
+The value is `https://` followed by the ALB domain you configured in `app.useAlb.domainHost`.
 
 ### Sign in
 
@@ -332,7 +330,7 @@ Both buckets hold only the built frontend files and its access logs, so deleting
 
 ## Uninstalling
 
-To remove VAMS and all associated resources:
+Before destroying the stack, complete the pre-uninstall steps in [Uninstall the solution](uninstall.md), including the [pre-uninstall steps of each enabled add-on](uninstall.md#pre-uninstall-add-ons). To remove VAMS and all associated resources:
 
 ```bash
 cd infra
@@ -341,7 +339,7 @@ npx cdk destroy --all
 
 If the deployment was made with `-c configFile=<name>`, pass the same parameter (`npx cdk destroy --all -c configFile=<name>`); without it the command targets the stacks named in `config.json`.
 
-Some resources (Amazon S3 buckets, Amazon DynamoDB tables, pipeline stacks) may not be automatically deleted due to retention policies. Remove these manually through the AWS Management Console or AWS CLI.
+Some resources (Amazon S3 buckets, Amazon DynamoDB tables) may not be automatically deleted due to retention policies. Remove these manually through the AWS Management Console or AWS CLI; [Uninstall the solution](uninstall.md) lists the resources that remain and how to remove them.
 
 ## Next steps
 

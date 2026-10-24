@@ -298,7 +298,7 @@ The Potree Viewer and the Cesium 3D Tileset Viewer stream their files from the A
 | Message                                                                          | Cause and resolution                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Preview files not currently available, with the pipeline prompt                  | The point cloud has no Potree preview files. Run the Point Cloud Potree Viewer Pipeline on the file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `Request blocked by the deployment's AWS WAF web ACL (request ID ...)`           | A web ACL rule blocked the request. Find the request by its ID in the web ACL's log group to see the rule that matched (see [AWS WAF and Rate Limiting](../architecture/security.md#aws-waf-and-rate-limiting)).                                                                                                                                                                                                                                                                                                                                                                      |
+| `Request blocked by the deployment's AWS WAF web ACL (request ID ...)`           | A web ACL rule blocked the request. Find the request by its ID in the web ACL's log group to see the rule that matched (see [Requests the web ACL blocks](../architecture/security.md#requests-the-web-acl-blocks)).                                                                                                                                                                                                                                                                                                                                                                  |
 | `Unable to reach ...`                                                            | The request failed before VAMS answered it, so the browser reports no status: a network failure, Amazon API Gateway throttling of the browser's CORS preflight (`OPTIONS`) request, or an AWS WAF block of the preflight by a rule on the request's URI path or by the rate-based rule. Each file and tile request has its own preflight. Look for an `OPTIONS` request to the file's path at that time in the REST API access log group, where a `429` status is throttling (see [429 Rate Limiting](#429-rate-limiting)), and, when AWS WAF is enabled, in the web ACL's log group. |
 | `Unable to display ...`                                                          | The file downloads, but the Potree Viewer could not read it. Check the file, or run the Point Cloud Potree Viewer Pipeline on it again to regenerate the preview files.                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `Tileset loading failed for ...`                                                 | Cesium could not use the tileset for a reason other than a failed request, such as tileset JSON it cannot read. The text after the colon is Cesium's message. Check the tileset file.                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -331,7 +331,7 @@ Users may experience a login loop where the application repeatedly redirects to 
 
 ### 429 Rate Limiting
 
-VAMS applies API rate limiting through Amazon API Gateway throttling.
+A `429 Too Many Requests` comes from Amazon API Gateway stage throttling or, when `app.useWaf` is enabled, from the web ACL's rate-based rule.
 
 **Symptoms:**
 
@@ -340,20 +340,24 @@ VAMS applies API rate limiting through Amazon API Gateway throttling.
 
 **Resolution:**
 
-Increase the rate limits in `infra/config/config.json`:
+Increase the stage limits in `infra/config/config.json`:
 
 ```json
 {
     "app": {
         "api": {
-            "globalRateLimit": 100,
-            "globalBurstLimit": 200
+            "apiGatewayRest": {
+                "globalRateLimit": 100,
+                "globalBurstLimit": 200
+            }
         }
     }
 }
 ```
 
-The default values are `globalRateLimit: 50` requests per second and `globalBurstLimit: 100`. Redeploy after changing these values.
+The default values are `app.api.apiGatewayRest.globalRateLimit: 50` requests per second and `app.api.apiGatewayRest.globalBurstLimit: 100`. Every caller of the API shares them, and each browser CORS preflight request counts against them. Redeploy after changing these values.
+
+A `429` from the web ACL's rate-based rule carries `Retry-After: 1` and is recorded in the web ACL's log group; the stage limits do not affect it. Raise the rule's `limit`, the number of requests each IP address may make in a 5-minute window, in `infra/config/policy/wafPolicyConfig.json` (see [WAF rule policy](../deployment/configuration-reference.md#waf-rule-policy-configpolicywafpolicyconfigjson)).
 
 :::warning
 Increasing rate limits raises the potential cost of Amazon API Gateway usage and may affect downstream service limits. Monitor your Amazon CloudWatch metrics after adjustments.

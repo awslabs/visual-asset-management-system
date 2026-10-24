@@ -81,7 +81,7 @@ If you enable Garnet Framework integration on an existing VAMS deployment, use t
 
 The Physna Sync [add-on](../developer/addons-overview.md) performs a one-way synchronization of supported VAMS files, file attributes, file metadata, and asset metadata into a Physna tenant. It is intended for customers who want Physna's geometric and semantic 3D search to index their VAMS asset corpus.
 
-Phase 1 implements VAMS-to-Physna sync only. Future phases will add bidirectional sync and additional in-VAMS UI surfaces.
+The synchronization runs in one direction, from VAMS to Physna.
 
 The Physna add-on also includes a **Physna Viewer** plugin that embeds the Physna-hosted 3D/CAD viewer directly inside VAMS for files that have been synced. A VAMS-authorized endpoint applies both authorization tiers and returns a Physna viewer token to the browser, which loads the viewer directly from Physna; the Physna client credentials stay in AWS Secrets Manager and are never sent to the browser. That token carries no asset scope, so Physna-hosted viewer access is flat across every synced database — see [Physna Viewer](../developer/physna-integration.md#physna-viewer) in the developer guide for the limitation and its side effects.
 
@@ -105,6 +105,18 @@ VAMS uploads 3D/CAD geometry formats, documents (`txt`, `pdf`), and images (`gif
 
 :::tip[Learn more]
 See [Physna Integration](../developer/physna-integration.md) for configuration, architecture diagrams, metadata precedence rules, and troubleshooting guidance.
+:::
+
+### Cloud Workstations
+
+| Integration                                                   | Purpose                                                                                                                                             | License    | VAMS Component               |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------------------------- |
+| [EDH](https://github.com/awslabs/engineering-development-hub) | Launch, connect to, renew, stop and delete Amazon DCV desktops on an EDH cluster, build desktop AMIs with EC2 Image Builder, and run container jobs | Apache-2.0 | Addon (`useEdhWorkstations`) |
+
+The EDH Workstations [add-on](../developer/addons-overview.md) turns an EDH cluster in the same AWS account into a workstation provider for VAMS users, who launch Amazon DCV desktops from VAMS and open them in the browser. Administrators register desktop images and, with the add-on's optional features, build them from AMI recipes and run container jobs on the cluster.
+
+:::tip[Learn more]
+See [EDH Workstations Add-on](../developer/edh-workstations/overview.md) for how the add-on works, its architecture, permissions and limits.
 :::
 
 ---
@@ -158,7 +170,7 @@ The Veerum 3D Viewer provides advanced visualization for point cloud and 3D tile
 
 The following diagram illustrates how integrations connect to VAMS components:
 
-```
+```text
 VAMS Web Application
   |-- Viewer Plugins (Online 3D Viewer, CesiumJS, Potree, BabylonJS,
   |                    PlayCanvas, Needle Engine, Three.js, VNTANA, Veerum)
@@ -173,6 +185,7 @@ VAMS Backend
   |-- Addons
         |-- Amazon SQS --> Garnet Framework (Knowledge Graph)
         |-- Amazon SQS --> Physna Sync (Geometric 3D Search)
+        |-- HTTPS --> EDH Workstations (Amazon DCV Desktops)
 ```
 
 :::info

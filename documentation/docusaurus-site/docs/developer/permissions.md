@@ -10,7 +10,7 @@ For an introduction to how the authorization system works, see [Permissions Mode
 
 The following patterns cover the most common access configurations. VAMS provides pre-built permission templates for each of these patterns.
 
-The valid fields per object type, the criteria operators, the permissions, and the permission types can be retrieved from `GET /auth/constraints/permissionObjects` or `vamscli role constraint permission-objects`. This is the same mapping the backend validates constraints against. The object types it returns include any the deployment registers in its add-on or fork constants files; a template for such a type stays with the deployment that registers it, since the shipped templates cover the core types only ([Extending VAMS in a Fork](customizing-vams.md#4-permissions) has one).
+The valid fields per object type, the criteria operators, the permissions, and the permission types can be retrieved from `GET /auth/constraints/permissionObjects` or `vamscli role constraint permission-objects`. This is the same mapping the backend validates constraints against. The object types it returns include any the deployment registers in its add-on or fork constants files; the templates on this page cover the core types only, so a template for such a type is listed on the page of the add-on that registers it, or stays with the fork that registers it ([Extending VAMS in a Fork](customizing-vams.md#4-permissions) has one).
 
 ### Database administrator
 
@@ -434,14 +434,16 @@ VAMS includes pre-built permission templates that you can import to quickly set 
 
 ### Available templates
 
-| Template           | File                      | Variables                  | Description                                                                  |
-| ------------------ | ------------------------- | -------------------------- | ---------------------------------------------------------------------------- |
-| Database Admin     | `database-admin.json`     | `DATABASE_ID`, `ROLE_NAME` | Full management of a specific database (14 constraints)                      |
-| Database User      | `database-user.json`      | `DATABASE_ID`, `ROLE_NAME` | Standard user access with archive-only delete (17 constraints)               |
-| Database Read-Only | `database-readonly.json`  | `DATABASE_ID`, `ROLE_NAME` | View-only access to a specific database (13 constraints)                     |
-| Database Tag Admin | `database-tag-admin.json` | `DATABASE_ID`, `ROLE_NAME` | Database-scoped tag and tag type management with global read (6 constraints) |
-| Global Read-Only   | `global-readonly.json`    | `ROLE_NAME`                | Read-only access across all databases (13 constraints)                       |
-| Deny Tagged Assets | `deny-tagged-assets.json` | `ROLE_NAME`, `TAG_VALUE`   | Overlay: deny editing of assets with a specific tag (1 constraint)           |
+| Template            | File                       | Variables                  | Description                                                                                                                                     |
+| ------------------- | -------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database Admin      | `database-admin.json`      | `DATABASE_ID`, `ROLE_NAME` | Full management of a specific database (14 constraints)                                                                                         |
+| Database User       | `database-user.json`       | `DATABASE_ID`, `ROLE_NAME` | Standard user access with archive-only delete (17 constraints)                                                                                  |
+| Database Read-Only  | `database-readonly.json`   | `DATABASE_ID`, `ROLE_NAME` | View-only access to a specific database (13 constraints)                                                                                        |
+| Database Tag Admin  | `database-tag-admin.json`  | `DATABASE_ID`, `ROLE_NAME` | Database-scoped tag and tag type management with global read (6 constraints)                                                                    |
+| Global Read-Only    | `global-readonly.json`     | `ROLE_NAME`                | Read-only access across all databases (13 constraints)                                                                                          |
+| Deny Tagged Assets  | `deny-tagged-assets.json`  | `ROLE_NAME`, `TAG_VALUE`   | Overlay: deny editing of assets with a specific tag (1 constraint)                                                                              |
+| Compliance Admin    | `compliance-admin.json`    | `DATABASE_ID`, `ROLE_NAME` | Compliance administration for one database: schemas, evaluation and sweeps, quarantine release and exceptions, cascade approval (7 constraints) |
+| Compliance Readonly | `compliance-readonly.json` | `DATABASE_ID`, `ROLE_NAME` | View-only compliance access for one database: schemas, state, evaluation history, audit trail and cascade status (8 constraints)                |
 
 Templates are located in the `documentation/permissionsTemplates/` directory.
 

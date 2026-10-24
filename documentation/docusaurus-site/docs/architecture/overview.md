@@ -85,7 +85,7 @@ Every request is authorized at two levels. **Tier 1** checks whether the user's 
 
 ### Serverless-First Design
 
-All compute in VAMS runs on serverless services. AWS Lambda handles API request processing and event-driven logic. AWS Step Functions orchestrates multi-step pipeline workflows. AWS Batch with Fargate manages container-based processing tasks. This eliminates server management overhead and provides automatic scaling.
+Core VAMS compute runs on serverless and managed services. AWS Lambda handles API request processing and event-driven logic. AWS Step Functions orchestrates multi-step pipeline workflows. AWS Batch manages container-based processing tasks on AWS Fargate, or on Amazon EC2 GPU instances for the GPU pipelines. This eliminates server management overhead and provides automatic scaling.
 
 ### Event-Driven Data Flow
 
@@ -141,7 +141,7 @@ graph TD
     APIBuilder2["ApiBuilder2<br/>(Secondary API Route Wiring)"]
     Search["SearchBuilder<br/>(OpenSearch)"]
     Pipelines["PipelineBuilder<br/>(Processing Pipelines)"]
-    Addons["AddonBuilder<br/>(Garnet Framework, Physna Sync)"]
+    Addons["AddonBuilder<br/>(Garnet Framework, Physna Sync, EDH Workstations)"]
     API["RestApi<br/>(SpecRestApi + Authorizer)"]
     StaticWeb["StaticWeb<br/>(CloudFront or ALB, Conditional)"]
     Location["LocationService<br/>(Conditional)"]
@@ -166,6 +166,7 @@ graph TD
     APIBuilder2 --> Pipelines
     Storage --> Addons
     Names --> Addons
+    APIBuilder --> Addons
     Storage --> API
     Auth --> API
     APIBuilder --> API
@@ -177,7 +178,7 @@ graph TD
 ```
 
 :::tip[Stack Dependencies]
-Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the arrows from the root mark the stacks that declare none. The dotted arrow is a cross-stack reference that AWS CloudFormation orders implicitly: StaticWeb reads the REST API endpoint. CustomFeatureEnabledConfig declares no stack dependency; it reads the feature table and AWS KMS key from `storageResources`, so AWS CloudFormation orders it after StorageResourcesBuilder through those references. See [Nested Stack Dependency Chain](details.md#nested-stack-dependency-chain) for the stacks that are built only under certain configurations.
+Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the arrows from the root mark the stacks that declare none. The dotted arrow is a cross-stack reference that AWS CloudFormation orders implicitly: StaticWeb reads the REST API endpoint. AddonBuilder deploys after ApiBuilder because an add-on can invoke functions built there. CustomFeatureEnabledConfig declares no stack dependency; it reads the feature table and AWS KMS key from `storageResources`, so AWS CloudFormation orders it after StorageResourcesBuilder through those references. See [Nested Stack Dependency Chain](details.md#nested-stack-dependency-chain) for the stacks that are built only under certain configurations.
 :::
 
 ## Next Steps

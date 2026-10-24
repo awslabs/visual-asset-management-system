@@ -1,0 +1,131 @@
+{
+  "name": "virtual_desktops_list_active",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "GET",
+    "path": "/api/dcv/virtual_desktops/list",
+    "absolutePath": "/api/dcv/virtual_desktops/list",
+    "query": {
+      "is_active": "true"
+    },
+    "headers": {
+      "X-EDH-USER": "vspikeaaaaaaaaaa"
+    },
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": true,
+      "message": {
+        "7c1f2a3b-4d5e-4f60-a71b-2c3d4e5f6a7b": {
+          "session_uuid": "7c1f2a3b-4d5e-4f60-a71b-2c3d4e5f6a7b",
+          "session_name": "3f2c9d4e8a1b4c6d9e0f1a2b3c4d5e6f",
+          "session_owner": "vspikeaaaaaaaaaa",
+          "session_state": "running",
+          "session_project": "default",
+          "session_type": "virtual",
+          "created_on": "2026-09-10T12:00:00Z",
+          "session_state_latest_change_time": "2026-09-10T12:00:00Z",
+          "session_local_admin_password": "<redacted>",
+          "schedule": "{\"monday\": {\"start\": 480, \"stop\": 1140}, \"tuesday\": {\"start\": 480, \"stop\": 1140}, \"wednesday\": {\"start\": 480, \"stop\": 1140}, \"thursday\": {\"start\": 480, \"stop\": 1140}, \"friday\": {\"start\": 480, \"stop\": 1140}, \"saturday\": {\"start\": 0, \"stop\": 0}, \"sunday\": {\"start\": 0, \"stop\": 0}}",
+          "session_thumbnail": null,
+          "session_screenshot_url": null,
+          "session_id": "7c1f2a3b-4d5e-4f60-a71b-2c3d4e5f6a7b",
+          "session_token": "<redacted>",
+          "authentication_token": "<redacted>",
+          "instance_private_dns": "other.example.internal",
+          "instance_private_ip": "10.0.0.1",
+          "instance_id": "i-00000abcdefabcdef",
+          "instance_type": "m5.xlarge",
+          "instance_base_os": "amazonlinux2023",
+          "os_family": "linux",
+          "ssm_ping_status": "Online",
+          "last_event_type": null,
+          "last_checkpoint": null,
+          "recent_events": [],
+          "eta": null,
+          "support_hibernation": false,
+          "is_spot": false,
+          "stack_name": "vams-spike-stack",
+          "software_stack_id": 1,
+          "ami_arch": "x86_64",
+          "virtual_desktop_profile_id": 1,
+          "allowed_instance_types": [
+            "m5.2xlarge",
+            "m5.large",
+            "m5.xlarge"
+          ],
+          "url": "https://edh-api.example.internal/other.example.internal/",
+          "connection_string": "https://edh-api.example.internal/other.example.internal/?authToken=<redacted>#7c1f2a3b-4d5e-4f60-a71b-2c3d4e5f6a7b",
+          "sharing_enabled": false,
+          "allow_unsupervised_access": true,
+          "active_grants_count": 0,
+          "broker_session_id": "<redacted>",
+          "share_scope": "cluster"
+        },
+        "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b": {
+          "session_uuid": "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b",
+          "session_name": "b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6",
+          "session_owner": "vspikeaaaaaaaaaa",
+          "session_state": "running",
+          "session_project": "default",
+          "session_type": "console",
+          "created_on": "2026-09-10T12:00:00Z",
+          "session_state_latest_change_time": "2026-09-10T12:00:00Z",
+          "session_local_admin_password": "<redacted>",
+          "schedule": "{\"monday\": {\"start\": 480, \"stop\": 1140}, \"tuesday\": {\"start\": 480, \"stop\": 1140}, \"wednesday\": {\"start\": 480, \"stop\": 1140}, \"thursday\": {\"start\": 480, \"stop\": 1140}, \"friday\": {\"start\": 480, \"stop\": 1140}, \"saturday\": {\"start\": 0, \"stop\": 0}, \"sunday\": {\"start\": 0, \"stop\": 0}}",
+          "session_thumbnail": null,
+          "session_screenshot_url": null,
+          "session_id": "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b",
+          "session_token": "<redacted>",
+          "authentication_token": "<redacted>",
+          "instance_private_dns": "other.example.internal",
+          "instance_private_ip": "10.0.0.1",
+          "instance_id": "i-00000bcdefabcdefa",
+          "instance_type": "m5.2xlarge",
+          "instance_base_os": "windows2022",
+          "os_family": "windows",
+          "ssm_ping_status": "Online",
+          "last_event_type": null,
+          "last_checkpoint": null,
+          "recent_events": [],
+          "eta": null,
+          "support_hibernation": false,
+          "is_spot": false,
+          "stack_name": "vams-spike-stack-windows",
+          "software_stack_id": 2,
+          "ami_arch": "x86_64",
+          "virtual_desktop_profile_id": 1,
+          "allowed_instance_types": [
+            "m5.2xlarge",
+            "m5.large",
+            "m5.xlarge"
+          ],
+          "url": "https://edh-api.example.internal/other.example.internal/",
+          "connection_string": "https://edh-api.example.internal/other.example.internal/?username=vspikeaaaaaaaaaa#9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b",
+          "sharing_enabled": false,
+          "allow_unsupervised_access": true,
+          "active_grants_count": 0,
+          "broker_session_id": "<redacted>",
+          "share_scope": "cluster"
+        }
+      }
+    }
+  },
+  "expect": {
+    "count": 2
+  },
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/dcv/list_virtual_desktops.py",
+      "source/soca/cluster_manager/web_interface/models.py"
+    ]
+  }
+}

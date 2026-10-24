@@ -1,0 +1,37 @@
+{
+  "name": "software_stacks_dcv_delete",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "DELETE",
+    "path": "/api/dcv/virtual_desktops/software_stacks",
+    "absolutePath": "/api/dcv/virtual_desktops/software_stacks",
+    "query": {},
+    "headers": {
+      "X-EDH-USER": "vspikeaaaaaaaaaa"
+    },
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": {
+      "software_stack_id": "2"
+    }
+  },
+  "response": {
+    "status": 200,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": true,
+      "message": "Software Stack removed from SOCA"
+    }
+  },
+  "expect": {
+    "imageId": "2"
+  },
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/dcv/software_stacks.py"
+    ]
+  }
+}

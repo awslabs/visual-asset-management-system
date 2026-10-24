@@ -37,6 +37,8 @@ Check for common config mistakes:
 -   `coreStackName` containing spaces or special characters
 -   `region` not matching a valid AWS region pattern
 
+For each add-on enabled under `app.addons`, also run the checks in the "Deploy checks" section of that add-on's own `CLAUDE.md`, beside its nested stack under `infra/lib/nestedStacks/addon/<addon>/`, and report them under Config Validation.
+
 #### 2. CDK Synth
 
 ```bash
@@ -117,7 +119,7 @@ Perform these static checks without running commands:
 
 **API route completeness**: Verify that every route registered through an `attachFunctionToApi(` call under `infra/lib/` references a Lambda function that exists, and that each registered route has a matching `ApiRoute` constant in `backend/backend/common/apiRoutes.py` (in a category group array), in `common/addonApiRoutes.py` (`ADDON_ROUTES`) for an add-on route, or in `custom/customApiRoutes.py` (`CUSTOM_ROUTES`) for a route the custom stack registers. The calls are not confined to the two API builder stacks: the search stack and add-on stacks such as the Physna one register their own routes, and `rest-api-gateway-construct.ts` registers `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` asserts the same pairing against the synthesized REST API.
 
-**Resource name resolution**: Spot-check that non-pipeline handlers resolve table/bucket/log-group names via `get_table_name(ResourceKeys.*)` / `get_bucket_name` / `get_log_group_name` from `common.resourceNames` (not hardcoded names), and that any handler-specific env vars set in CDK Lambda builders match the `os.environ` calls in the corresponding Python handlers.
+**Resource name resolution**: Spot-check that non-pipeline handlers resolve table/bucket/log-group names via `get_table_name(ResourceKeys.*)` (`AddonResourceKeys.*` from `common.addonResourceNames` for an add-on handler) / `get_bucket_name` / `get_log_group_name` from `common.resourceNames` (not hardcoded names), and that any handler-specific env vars set in CDK Lambda builders match the `os.environ` calls in the corresponding Python handlers.
 
 **Config template consistency**: Verify any config fields present in the configuration file from check 1 also exist in all three templates (`config.template.commercial.json`, `config.template.govcloud.json`, `config.template.eusovereign.json`).
 

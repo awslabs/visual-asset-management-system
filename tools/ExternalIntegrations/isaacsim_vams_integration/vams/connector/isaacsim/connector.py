@@ -25,6 +25,7 @@ import contextlib
 import logging
 import os
 import re
+import shutil
 import tempfile
 import urllib.parse
 import urllib.request
@@ -91,12 +92,13 @@ def _prim_name(file_name: str) -> str:
     return sanitized or "imported"
 
 
-def _free_prim_path(stage, prim_path: str) -> str:
-    """``prim_path``, or the first of ``<prim_path>_1``, ``<prim_path>_2``, ... with no prim."""
-    candidate, suffix = prim_path, 0
+def _free_prim_path(stage, prim_path: str, first: int = 1) -> str:
+    """``prim_path``, or the first of ``<prim_path>_<first>``, ``<prim_path>_<first + 1>``, ... with
+    no prim."""
+    candidate, suffix = prim_path, first
     while stage.GetPrimAtPath(candidate).IsValid():
-        suffix += 1
         candidate = f"{prim_path}_{suffix}"
+        suffix += 1
     return candidate
 
 
@@ -116,11 +118,49 @@ def _default_prim_kept(stage):
 
 
 def _mjcf_imported_nothing(prim) -> bool:
-    """Whether an MJCF import left nothing from its file at ``prim``."""
+    """Whether an Isaac Sim 5.1 MJCF import left nothing from its file at ``prim``. Isaac Sim 6.x
+    imports are judged by the file the importer writes instead (see ``_import_as_reference``)."""
     if not prim.IsValid():
         return True
     return all(child.GetName() in _MJCF_EMPTY_IMPORT and not child.GetChildren()
                for child in prim.GetChildren())
+
+
+def _isaacsim6_importer(kind: str):
+    """Isaac Sim 6.x's importer and config classes for ``kind`` ("urdf" or "mjcf"), or None on an
+    Isaac Sim whose importer extension does not have them, such as 5.1. Isaac Sim 6.0 added
+    ``URDFImporter``/``MJCFImporter`` and removed the ``URDFParseAndImportFile`` command."""
+    import importlib
+
+    module = importlib.import_module(f"isaacsim.asset.importer.{kind}")
+    importer = getattr(module, f"{kind.upper()}Importer", None)
+    config = getattr(module, f"{kind.upper()}ImporterConfig", None)
+    return (importer, config) if importer is not None and config is not None else None
+
+
+def _warn_ignored_options(kind: str, options: Dict[str, Any]) -> None:
+    """Logs each option the Isaac Sim 6.x importer config has no field for, so a caller that set one
+    is not left to find out from the robot."""
+    for option, value in options.items():
+        logger.warning("%s import: %s=%s has no effect on Isaac Sim 6.x, whose importer has no "
+                       "such option", kind, option, value)
+
+
+def _xml_copy(local_file: str) -> str:
+    """A copy of ``local_file`` with the ``.xml`` extension Isaac Sim 6.x's MJCF importer requires,
+    in the same directory so the paths the file names relative to itself still resolve:
+    ``<name>.xml`` when that name is free, else a new ``<name>_<random>.xml``. The caller removes
+    it."""
+    directory = os.path.dirname(local_file)
+    stem = os.path.splitext(os.path.basename(local_file))[0]
+    try:
+        path = os.path.join(directory, f"{stem}.xml")
+        target = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        target, path = tempfile.mkstemp(prefix=f"{stem}_", suffix=".xml", dir=directory)
+    with os.fdopen(target, "wb") as copy, open(local_file, "rb") as source:
+        shutil.copyfileobj(source, copy)
+    return path
 
 
 def _referenced_prim_path(file_name: str, default_prim: str,
@@ -423,8 +463,9 @@ class IsaacVAMSConnector:
             True if the download succeeded.
 
         Raises:
-            VamsCliError: If the download failed; a ``VamsTransferError`` naming the error the
-                          download report gives for the file when it gives one.
+            VamsCliError: If the download failed; a ``VamsAccessDeniedError`` when VAMS refused the
+                          credential, and a ``VamsTransferError`` naming the error the download
+                          report gives for the file when it gives one.
         """
         try:
             return self._cli.download_file(local_path, database_id, asset_id, file_key)
@@ -863,6 +904,52 @@ class IsaacVAMSConnector:
         logger.info("Added reference %s%s at prim %s", local_file,
                     f"<{target}>" if target else "", prim_path)
 
+    def _import_as_reference(self, stage, kind: str, isaacsim6, local_file: str, prim_path: str,
+                             **options) -> Optional[str]:
+        """
+        Import ``local_file`` with Isaac Sim 6.x's importer, and reference the USD file it writes at
+        ``prim_path`` of ``stage``.
+
+        The 6.x importers convert a file into a USD file of their own and return its path; they do
+        not write into the open stage. The file is written to a new private temporary directory,
+        never next to the downloaded source, and a reference brings its default prim in at
+        ``prim_path``, as the importers' own "Add Reference to Stage" option does. The stage's
+        defaultPrim is left as it was.
+
+        Args:
+            stage: The open USD stage.
+            kind: ``"urdf"`` or ``"mjcf"``.
+            isaacsim6: The importer and config classes, from ``_isaacsim6_importer``.
+            local_file: The file to import.
+            prim_path: Where in ``stage`` to reference the result.
+            **options: Further importer config fields, such as ``fix_base``.
+
+        Returns:
+            ``prim_path``, or None, with the reason logged, when the import failed or wrote a file
+            with nothing a reference could bring in; the stage is then as it was, and the private
+            directory is removed.
+        """
+        importer_class, config_class = isaacsim6
+        label = kind.upper()
+        usd_dir = tempfile.mkdtemp(prefix=f"vams_{kind}_usd_")
+        logger.info("Importing %s from %s as %s", label, local_file, prim_path)
+        try:
+            config = config_class(**{f"{kind}_path": local_file, "usd_path": usd_dir}, **options)
+            with _default_prim_kept(stage):
+                output = getattr(importer_class(config), f"import_{kind}")()
+                if not output:
+                    raise VamsCliError("the importer returned no USD file")
+                self.add_reference_to_stage(stage, prim_path, output)
+        # The importer raises ValueError and FileNotFoundError for a file it refuses, and passes on
+        # whatever its converter raises; each is a failed import, reported as None.
+        except Exception as e:
+            shutil.rmtree(usd_dir, ignore_errors=True)
+            logger.error("%s import of %s failed: %s", label, local_file, e)
+            logger.debug("%s import of %s failed", label, local_file, exc_info=True)
+            return None
+        logger.info("Imported %s as prim %s, referencing %s", label, prim_path, output)
+        return prim_path
+
     def download_and_import_urdf(
         self,
         database_id: str,
@@ -878,16 +965,17 @@ class IsaacVAMSConnector:
         prim the stage's defaultPrim names (see ``import_urdf_file``).
 
         Requires the ``isaacsim.asset.importer.urdf`` extension to be enabled in
-        Isaac Sim.
+        Isaac Sim. Works on Isaac Sim 5.1 and 6.x; on 6.x the robot is converted to a USD file in a
+        private temporary directory and referenced at its prim.
 
         Args:
             database_id: The database ID.
             asset_id: The asset ID.
             file_key: File key of the ``.urdf`` file within the asset.
             local_dir: Local directory to download to. Uses temp dir if None.
-            fix_base: Create a fixed joint for the base link.
+            fix_base: Create a fixed joint for the base link (see ``import_urdf_file``).
             merge_fixed_joints: Consolidate links connected by fixed joints.
-            import_inertia_tensor: Import inertia tensor data from the URDF.
+            import_inertia_tensor: Import inertia tensor data from the URDF; no effect on 6.x.
 
         Returns:
             The prim path of the imported robot, or None on failure.
@@ -915,29 +1003,50 @@ class IsaacVAMSConnector:
         """
         Import a local URDF file into the current Isaac Sim stage.
 
-        The importer puts the robot under the prim the stage's defaultPrim names, or at the stage
-        root when it names none, and at ``<name>_0`` when ``<name>`` is taken. The stage's
+        The robot goes under the prim the stage's defaultPrim names, or at the stage root when it
+        names none, at ``<name>``, and at ``<name>_0`` when ``<name>`` is taken. The stage's
         defaultPrim is left as it was.
+
+        On Isaac Sim 6.x ``<name>`` is made from the file name as for ``import_mjcf_file``, and
+        ``<name>_1``, ``<name>_2``, ... follow ``<name>_0``. The importer converts the file into a
+        USD file of its own, written to a new private temporary directory, and that file is
+        referenced at the prim (see ``_import_as_reference``). Isaac Sim 5.1's importer names the
+        prim and writes the robot into the stage itself.
 
         Args:
             local_file: Local path of the ``.urdf`` file.
-            fix_base: Create a fixed joint for the base link.
+            fix_base: Create a fixed joint for the base link. On Isaac Sim 6.x, False also removes
+                      a fixed joint to the world that the file itself declares.
             merge_fixed_joints: Consolidate links connected by fixed joints.
-            import_inertia_tensor: Import inertia tensor data from the URDF.
+            import_inertia_tensor: Import inertia tensor data from the URDF. Isaac Sim 6.x's
+                                   importer has no such option; False is logged as a warning there.
 
         Returns:
-            The prim path of the imported robot, or None on failure.
+            The prim path of the imported robot, or None on failure, with the reason logged on
+            Isaac Sim 6.x.
 
         Raises:
             VamsCliError: If there is no active USD stage.
         """
-        import omni.kit.commands
         import omni.usd
-        from isaacsim.asset.importer.urdf import _urdf
 
+        isaacsim6 = _isaacsim6_importer("urdf")
         stage = omni.usd.get_context().get_stage()
         if stage is None:
             raise VamsCliError("No active USD stage in Isaac Sim")
+
+        if isaacsim6 is not None:
+            if not import_inertia_tensor:
+                _warn_ignored_options("URDF", {"import_inertia_tensor": import_inertia_tensor})
+            default_prim = stage.GetDefaultPrim()
+            parent = str(default_prim.GetPath()) if default_prim.IsValid() else ""
+            prim_path = _free_prim_path(stage, f"{parent}/{_prim_name(local_file)}", first=0)
+            return self._import_as_reference(stage, "urdf", isaacsim6, local_file, prim_path,
+                                             fix_base=bool(fix_base),
+                                             merge_fixed_joints=bool(merge_fixed_joints))
+
+        import omni.kit.commands
+        from isaacsim.asset.importer.urdf import _urdf
 
         import_config = _urdf.ImportConfig()
         import_config.set_fix_base(fix_base)
@@ -973,16 +1082,17 @@ class IsaacVAMSConnector:
         ``/World`` (see ``import_mjcf_file``).
 
         Requires the ``isaacsim.asset.importer.mjcf`` extension to be enabled in
-        Isaac Sim.
+        Isaac Sim. Works on Isaac Sim 5.1 and 6.x; on 6.x the model is converted to a USD file in a
+        private temporary directory and referenced at its prim.
 
         Args:
             database_id: The database ID.
             asset_id: The asset ID.
             file_key: File key of the ``.mjcf`` or ``.xml`` file within the asset.
             local_dir: Local directory to download to. Uses temp dir if None.
-            fix_base: Create a fixed joint for the base link.
-            merge_fixed_joints: Consolidate links connected by fixed joints.
-            import_inertia_tensor: Import inertia tensor data from the MJCF.
+            fix_base: Create a fixed joint for the base link (see ``import_mjcf_file``).
+            merge_fixed_joints: Consolidate links connected by fixed joints; no effect on 6.x.
+            import_inertia_tensor: Import inertia tensor data from the MJCF; no effect on 6.x.
 
         Returns:
             The prim path of the imported model, or None on failure.
@@ -1019,23 +1129,33 @@ class IsaacVAMSConnector:
         brings in nothing from the file is removed again, with the ``/World`` it created for it.
         The stage's defaultPrim is left as it was.
 
+        On Isaac Sim 6.x the importer converts the file into a USD file of its own, written to a new
+        private temporary directory, and that file is referenced at the prim (see
+        ``_import_as_reference``); an import that fails, or writes a file with nothing to
+        reference, leaves the stage as it was. That importer reads only ``.xml`` files, so a
+        ``.mjcf`` file is imported from a copy with the ``.xml`` extension, made beside it so its
+        relative mesh and include paths resolve, and removed again afterwards.
+
         Args:
             local_file: Local path of the ``.mjcf`` or ``.xml`` file.
-            fix_base: Create a fixed joint for the base link.
-            merge_fixed_joints: Consolidate links connected by fixed joints.
-            import_inertia_tensor: Import inertia tensor data from the MJCF.
+            fix_base: Create a fixed joint for the base link. On Isaac Sim 6.x, False also removes
+                      a fixed joint to the world that the file itself declares.
+            merge_fixed_joints: Consolidate links connected by fixed joints. Isaac Sim 6.x's
+                                importer has no such option; True is logged as a warning there.
+            import_inertia_tensor: Import inertia tensor data from the MJCF. Isaac Sim 6.x's
+                                   importer has no such option; False is logged as a warning there.
 
         Returns:
-            The prim path of the imported model, or None if the import brought in nothing.
+            The prim path of the imported model, or None if the import brought in nothing or, on
+            Isaac Sim 6.x, failed, with the reason logged.
 
         Raises:
             MalformedXmlError: If the file is not well-formed XML; the stage is not touched.
             VamsCliError: If there is no active USD stage.
         """
-        import omni.kit.commands
         import omni.usd
-        from isaacsim.asset.importer.mjcf import _mjcf
 
+        isaacsim6 = _isaacsim6_importer("mjcf")
         try:
             ElementTree.parse(local_file)
         except ElementTree.ParseError as e:
@@ -1043,6 +1163,25 @@ class IsaacVAMSConnector:
         stage = omni.usd.get_context().get_stage()
         if stage is None:
             raise VamsCliError("No active USD stage in Isaac Sim")
+
+        if isaacsim6 is not None:
+            _warn_ignored_options("MJCF", {
+                option: value for option, value, default in (
+                    ("merge_fixed_joints", merge_fixed_joints, False),
+                    ("import_inertia_tensor", import_inertia_tensor, True))
+                if bool(value) != default})
+            prim_path = _free_prim_path(stage, f"/World/{_prim_name(local_file)}")
+            xml_copy = None if local_file.lower().endswith(".xml") else _xml_copy(local_file)
+            try:
+                return self._import_as_reference(stage, "mjcf", isaacsim6, xml_copy or local_file,
+                                                 prim_path, fix_base=bool(fix_base))
+            finally:
+                if xml_copy is not None:
+                    with contextlib.suppress(OSError):
+                        os.remove(xml_copy)
+
+        import omni.kit.commands
+        from isaacsim.asset.importer.mjcf import _mjcf
 
         import_config = _mjcf.ImportConfig()
         import_config.set_fix_base(fix_base)

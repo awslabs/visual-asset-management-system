@@ -19,6 +19,7 @@ import omni.ui as ui
 from .connector import IsaacVAMSConnector, MalformedXmlError, _free_prim_path, _prim_name
 from .vams_cli_service import (
     PipelineTemplate,
+    VamsAccessDeniedError,
     VamsCliError,
     VamsNotInstalledError,
     VamsProfileNotSetupError,
@@ -40,6 +41,11 @@ HORIZONTAL_SPACING = 4
 _WF_TEXT_CHARS = 48
 _CHECK = "* "
 _NOCHECK = "  "
+# Leads the status of a refused call on a session the desktop signed in, so the ways to recover read
+# first; the CLI's own error follows.
+_SIGN_IN_PENDING = ("access refused - if this desktop was just started, its VAMS sign-in may not have "
+                    "completed; select Refresh Databases later. If the sign-in has expired, renew the "
+                    "workstation's lease in VAMS, or sign in under Authentication")
 # A run refused for a template tag with no value; the connector does not collect template tags.
 _TEMPLATE_TAG_REFUSAL = re.compile(r"tag '[^']*' is required")
 _CHOOSE_TEMPLATE = "Choose a template"
@@ -210,6 +216,8 @@ class VamsConnectorExtension(omni.ext.IExt):
         self._wf_problems = []
         self._export_name_model = ui.SimpleStringModel()
         self._export_desc_model = ui.SimpleStringModel()
+        # A session the CLI profile already held; shutting down leaves it signed in.
+        self._session_adopted = False
 
         # Frame / stack references (set during _build_window)
         self._auth_frame = None
@@ -227,23 +235,32 @@ class VamsConnectorExtension(omni.ext.IExt):
         self._wf_stack = None
         self._export_stack = None
 
-    def _check_existing_session(self):
+    def _adopt_existing_session(self):
+        """Takes over a session the CLI profile already holds, such as the one a workstation signs in
+        at desktop login. That sign-in can finish after the extension starts, so browsing checks for
+        one again until it is found."""
         try:
             status = self._connector.get_auth_status()
             if status.user_id and self._username_model:
                 self._username_model.set_value(status.user_id)
-            if status.authenticated and not status.is_expired:
-                self._connector._authenticated = True
-                self._set_status(f"Authenticated as {status.user_id}")
-                if self._auth_frame:
-                    self._auth_frame.collapsed = True
-                self._load_databases()
+            if not status.authenticated or status.is_expired:
+                return False
+            self._connector._authenticated = True
+            self._session_adopted = True
+            self._set_status(f"Authenticated as {status.user_id}")
+            if self._auth_frame:
+                self._auth_frame.collapsed = True
+            return True
         except Exception:
-            pass
+            return False
+
+    def _check_existing_session(self):
+        if self._adopt_existing_session():
+            self._load_databases()
 
     def on_shutdown(self):
         logger.info("VAMS Connector extension shutting down")
-        if self._connector and self._connector._authenticated:
+        if self._connector and self._connector._authenticated and not self._session_adopted:
             try:
                 self._connector.logout()
             except Exception:
@@ -355,7 +372,10 @@ class VamsConnectorExtension(omni.ext.IExt):
             self._status_label.tooltip = text
 
     def _failure_status(self, prefix, error):
-        """The status line for a failed call."""
+        """The status line for a failed call. A refusal of the session the desktop signed in usually
+        means that sign-in has not completed or has expired, so the line says how to recover."""
+        if self._session_adopted and isinstance(error, VamsAccessDeniedError):
+            return f"{prefix}: {_SIGN_IN_PENDING} ({error})"
         return f"{prefix}: {error}"
 
     # =========================================================================
@@ -370,6 +390,7 @@ class VamsConnectorExtension(omni.ext.IExt):
             return
         self._set_status("Authenticating...")
         if self._connector.login(username, credential):
+            self._session_adopted = False
             self._set_status(f"Authenticated as {username}")
             if self._auth_frame:
                 self._auth_frame.collapsed = True
@@ -385,6 +406,7 @@ class VamsConnectorExtension(omni.ext.IExt):
             return
         self._set_status("Authenticating with token override...")
         if self._connector.login_with_token(user_id, token):
+            self._session_adopted = False
             kind = "API key" if token.startswith("vams_") else "token"
             self._set_status(f"Authenticated as {user_id} ({kind})")
             if self._auth_frame:
@@ -395,6 +417,7 @@ class VamsConnectorExtension(omni.ext.IExt):
 
     def _on_logout(self):
         self._connector.logout()
+        self._session_adopted = False
         self._selected_db = None
         self._selected_asset = None
         self._selected_file = None
@@ -415,6 +438,8 @@ class VamsConnectorExtension(omni.ext.IExt):
     # =========================================================================
 
     def _load_databases(self):
+        if not self._connector._authenticated:
+            self._adopt_existing_session()
         self._set_status("Loading databases...")
         try:
             self._databases = self._connector.list_databases()

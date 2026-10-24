@@ -200,6 +200,11 @@ class VamsAuthenticationError(VamsCliError):
     pass
 
 
+class VamsAccessDeniedError(VamsCliError):
+    """Raised when VAMS refused the credential a call was made with (HTTP 401 or 403)."""
+    pass
+
+
 class VamsNotInstalledError(VamsCliError):
     """Raised when the vamscli executable is not found."""
     pass
@@ -223,6 +228,28 @@ class VamsTransferError(VamsCliError):
                  exit_code: int = 1):
         self.payload: Dict[str, Any] = payload or {}
         super().__init__(message, error_type="Transfer Failure", exit_code=exit_code)
+
+
+# The CLI exits with the same status for a refused credential as for any other failure, so a refusal
+# is recognised from the error it prints: the exception class a command names as the error type, the
+# heading the CLI's global handler puts on the message, or the CLI's own wording, which a command that
+# wraps the exception in a message of its own keeps.
+_ACCESS_DENIED_ERROR_TYPES = frozenset((
+    "PermissionDeniedError", "AuthenticationError", "OverrideTokenError", "TokenExpiredError"))
+_ACCESS_DENIED_HEADINGS = (
+    "Permission Denied:", "Authentication Error:", "Override Token Error:", "Token Expired:")
+_ACCESS_DENIED_WORDING = (
+    "Access forbidden.", "Authentication failed", "Override token authentication failed")
+
+
+def _cli_error(message: str, error_type: str, exit_code: int = 1) -> VamsCliError:
+    """The exception for an error document the CLI printed."""
+    text = str(message)
+    refused = (error_type in _ACCESS_DENIED_ERROR_TYPES
+               or text.startswith(_ACCESS_DENIED_HEADINGS)
+               or any(wording in text for wording in _ACCESS_DENIED_WORDING))
+    error_class = VamsAccessDeniedError if refused else VamsCliError
+    return error_class(message, error_type=error_type, exit_code=exit_code)
 
 
 @dataclass
@@ -483,6 +510,7 @@ class VamsCliService:
 
         Raises:
             VamsCliError: If the command exits with a non-zero code.
+            VamsAccessDeniedError: If VAMS refused the profile's credential.
             VamsTransferError: If a transfer command exited non-zero but still reported which
                                files failed.
         """
@@ -524,7 +552,7 @@ class VamsCliService:
         if result.returncode != 0:
             error_msg, error_type = self._try_parse_error(result.stdout)
             if error_msg:
-                raise VamsCliError(error_msg, error_type=error_type, exit_code=result.returncode)
+                raise _cli_error(error_msg, error_type, exit_code=result.returncode)
             # A transfer command emits its report on stdout and THEN exits non-zero when
             # overall_success is false. Falling straight through to stderr would discard that
             # report and turn a 900-of-1000-file download into an undiagnosable total failure;
@@ -544,7 +572,7 @@ class VamsCliService:
         # Check successful output for embedded error fields
         error_msg, error_type = self._try_parse_error(result.stdout)
         if error_msg:
-            raise VamsCliError(error_msg, error_type=error_type)
+            raise _cli_error(error_msg, error_type)
 
         return result.stdout
 

@@ -117,6 +117,20 @@ const sidebars: SidebarsConfig = {
                         "developer/addons-overview",
                         "developer/garnet-framework",
                         "developer/physna-integration",
+                        {
+                            type: "category",
+                            label: "EDH Workstations",
+                            collapsed: true,
+                            items: [
+                                "developer/edh-workstations/overview",
+                                "developer/edh-workstations/enable",
+                                "developer/edh-workstations/user-guide",
+                                "developer/edh-workstations/resources",
+                                "developer/edh-workstations/uninstall",
+                                "developer/edh-workstations/cli-commands",
+                                "developer/edh-workstations/cli-troubleshooting",
+                            ],
+                        },
                     ],
                 },
                 {

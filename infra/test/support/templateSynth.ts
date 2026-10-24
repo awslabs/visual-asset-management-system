@@ -41,6 +41,7 @@
 
 import * as cdk from "aws-cdk-lib";
 import * as cxapi from "aws-cdk-lib/cx-api";
+import { AwsSolutionsChecks } from "cdk-nag";
 import * as fs from "fs";
 import * as path from "path";
 import * as Config from "../../config/config";
@@ -70,7 +71,8 @@ const RAW: Record<TemplateName, unknown> = {
     eusovereign: eusovereignTemplate,
 };
 
-const ACCOUNT = "123456789012";
+/** The account every synthesized template is bound to; the region is each template's own. */
+export const ACCOUNT = "123456789012";
 
 export interface Resource {
     logicalId: string;
@@ -95,7 +97,11 @@ export class SynthResult {
         readonly region: string,
         readonly templates: Record<string, any>,
         readonly resources: Resource[],
-        readonly warnings: SynthWarning[] = []
+        readonly warnings: SynthWarning[] = [],
+        /** Error-level annotations; CDK Nag findings arrive here when the synth ran with `nag`. */
+        readonly errors: SynthWarning[] = [],
+        /** Info-level annotations; CDK Nag logs each suppressed finding here under `nag`. */
+        readonly infos: SynthWarning[] = []
     ) {}
 
     ofType(type: string): Resource[] {
@@ -154,8 +160,13 @@ function escapeRegExp(s: string): string {
     return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** A deployable Config from a shipped template, with the placeholders getConfig() would fill. */
-function buildConfig(name: TemplateName, mutate?: (c: any) => void): Config.Config {
+/**
+ * A deployable Config from a shipped template, with the placeholders getConfig() would fill: the
+ * config `synthTemplate` synthesizes, for a test that builds part of the app from it. The ALB's
+ * domain host and certificate ARN are replaced only when the shipped template enables the ALB, so
+ * a mutate that enables it on the commercial template keeps that template's placeholder values.
+ */
+export function buildTemplateConfig(name: TemplateName, mutate?: (c: any) => void): Config.Config {
     const t = TARGET[name];
     const config = JSON.parse(JSON.stringify(RAW[name])) as Config.Config;
     const stackName = `vams-t1-${name}`;
@@ -305,15 +316,28 @@ const cache = new Map<string, SynthResult>();
 /**
  * Synthesize one shipped config template and return every emitted resource.
  *
- * Results are cached per (template, mutation key) because a synth costs ~20 s. Pass `mutateKey` when
- * using `mutate`, or the cache will return a result built with different settings — a silent way to
- * assert against the wrong template.
+ * Results are cached per (template, mutation key, Nag flag, WAF ARNs) because a synth costs ~20 s.
+ * Pass `mutateKey` when using `mutate`, or the cache will return a result built with different
+ * settings — a silent way to assert against the wrong template.
+ *
+ * `nag` applies the AwsSolutions rule pack to the app before synthesis, the way `bin/infra.ts` does
+ * when `enableCdkNag` is on; the findings land in `SynthResult.errors` rather than failing the synth.
+ *
+ * `wafArns` hands the core stack a regional and a CloudFront web ACL ARN, the way `bin/infra.ts` does
+ * when the WAF stacks exist. Without it both are empty, as in a deployment with no WAF stacks.
  */
 export function synthTemplate(
     name: TemplateName,
-    opts: { mutate?: (c: any) => void; mutateKey?: string } = {}
+    opts: {
+        mutate?: (c: any) => void;
+        mutateKey?: string;
+        nag?: boolean;
+        wafArns?: { regional: string; cloudfront: string };
+    } = {}
 ): SynthResult {
-    const key = `${name}::${opts.mutateKey ?? (opts.mutate ? "UNKEYED" : "")}`;
+    const key = `${name}::${opts.mutateKey ?? (opts.mutate ? "UNKEYED" : "")}${
+        opts.nag ? "::nag" : ""
+    }${opts.wafArns ? `::waf:${opts.wafArns.regional}:${opts.wafArns.cloudfront}` : ""}`;
     if (opts.mutate && !opts.mutateKey) {
         throw new Error(
             "synthTemplate(): pass mutateKey alongside mutate, or two different mutations share a " +
@@ -327,7 +351,7 @@ export function synthTemplate(
     stubSplatToolboxSourceSync();
     resetGlobalRegistries();
     const t = TARGET[name];
-    const config = buildConfig(name, opts.mutate);
+    const config = buildTemplateConfig(name, opts.mutate);
     const stackName = config.env.coreStackName;
 
     const app = newTestApp({
@@ -359,14 +383,20 @@ export function synthTemplate(
     const stack = new Infra.CoreVAMSStack(app, stackName, {
         env: { account: ACCOUNT, region: t.region },
         stackName,
-        ssmWafArnRegional: "",
-        ssmWafArnCloudfront: "",
+        ssmWafArnRegional: opts.wafArns?.regional ?? "",
+        ssmWafArnCloudfront: opts.wafArns?.cloudfront ?? "",
         crossRegionBucketTopics: crossRegionBuckets.topics,
         config,
         description: `T1 synth assertion stack (${name})`,
     } as any);
     for (const crossRegionStack of crossRegionBuckets.stacks) {
         stack.addStackDependency(crossRegionStack);
+    }
+
+    if (opts.nag) {
+        cdk.Aspects.of(app).add(
+            new AwsSolutionsChecks({ verbose: true, logIgnores: true, reports: false })
+        );
     }
 
     const asm = app.synth();
@@ -402,11 +432,15 @@ export function synthTemplate(
     // own — so collecting from `asm.stacks` covers the whole app. These are what `cdk synth` and
     // `cdk deploy` print as "[Warning at /path]", and they appear in no *.template.json, so a check
     // that greps the templates cannot see them.
-    const warnings: SynthWarning[] = asm.stacks.flatMap((artifact) =>
-        artifact.messages
-            .filter((m) => m.level === cxapi.SynthesisMessageLevel.WARNING)
-            .map((m) => ({ path: m.id, message: String(m.entry.data) }))
-    );
+    const messagesAt = (level: cxapi.SynthesisMessageLevel): SynthWarning[] =>
+        asm.stacks.flatMap((artifact) =>
+            artifact.messages
+                .filter((m) => m.level === level)
+                .map((m) => ({ path: m.id, message: String(m.entry.data) }))
+        );
+    const warnings = messagesAt(cxapi.SynthesisMessageLevel.WARNING);
+    const errors = messagesAt(cxapi.SynthesisMessageLevel.ERROR);
+    const infos = messagesAt(cxapi.SynthesisMessageLevel.INFO);
 
     // Remove the on-disk assembly now that templates, resources and warnings are all in memory.
     // A T1 assembly is ~166 MB and one jest run performs a dozen synths, so waiting for the
@@ -422,7 +456,16 @@ export function synthTemplate(
         /* leaves a temp directory behind; never a test failure */
     }
 
-    const result = new SynthResult(name, t.partition, t.region, templates, resources, warnings);
+    const result = new SynthResult(
+        name,
+        t.partition,
+        t.region,
+        templates,
+        resources,
+        warnings,
+        errors,
+        infos
+    );
     cache.set(key, result);
     return result;
 }
@@ -475,6 +518,133 @@ export function expectAbsent(
         );
     }
     expect(found).toEqual([]);
+}
+
+/** The `Handler` string of a Lambda resource. */
+export const handlerOf = (r: Resource): string => SynthResult.flatten(r.properties.Handler);
+
+/** The one Lambda whose handler is `handler`; fails when there are none or several. */
+export function lambdaByHandler(s: SynthResult, handler: string): Resource {
+    const found = s.where("AWS::Lambda::Function", (r) => handlerOf(r) === handler);
+    expect(found).toHaveLength(1);
+    return found[0];
+}
+
+/** Actions of one IAM statement, normalised to an array of strings. */
+export const actionsOf = (statement: any): string[] =>
+    ([] as unknown[]).concat(statement.Action ?? []).map(String);
+
+/** Resources of one IAM statement, each flattened to a string. */
+export const resourcesOf = (statement: any): string[] =>
+    ([] as unknown[]).concat(statement.Resource ?? []).map((r) => SynthResult.flatten(r));
+
+/** Logical id of the role a Lambda (`Role`) or CodeBuild project (`ServiceRole`) runs as. */
+export function roleIdOf(resource: Resource, property = "Role"): string {
+    const role = resource.properties[property];
+    expect(role?.["Fn::GetAtt"]?.[1]).toBe("Arn");
+    return role["Fn::GetAtt"][0];
+}
+
+/** Inline and managed policies in `stack` attached to one role. */
+export function policiesAttachedTo(s: SynthResult, roleId: string, stack: string): Resource[] {
+    const attached = (r: Resource) =>
+        r.stack === stack &&
+        ((r.properties.Roles ?? []) as any[]).some((ref) => ref?.Ref === roleId);
+    return [
+        ...s.where("AWS::IAM::Policy", attached),
+        ...s.where("AWS::IAM::ManagedPolicy", attached),
+    ];
+}
+
+/**
+ * Every IAM statement attached to the function's execution role, from all three places CDK can put
+ * one: inline `AWS::IAM::Policy`, the `AWS::IAM::ManagedPolicy` overflow, and role-level policies.
+ */
+export function statementsOf(s: SynthResult, fn: Resource): any[] {
+    const roleId = roleIdOf(fn);
+    const out: any[] = policiesAttachedTo(s, roleId, fn.stack).flatMap(
+        (p) => (p.properties.PolicyDocument?.Statement ?? []) as any[]
+    );
+    const role = s
+        .ofType("AWS::IAM::Role")
+        .find((r) => r.stack === fn.stack && r.logicalId === roleId);
+    for (const p of role?.properties.Policies ?? []) {
+        out.push(...(p.PolicyDocument?.Statement ?? []));
+    }
+    return out;
+}
+
+/** Method+path pairs the synthesized REST API exposes, excluding the CORS preflight MOCKs. */
+export function restApiPairs(s: SynthResult): Set<string> {
+    const apis = s.ofType("AWS::ApiGateway::RestApi");
+    expect(apis).toHaveLength(1);
+    const body = apis[0].properties.Body;
+    expect(body?.paths).toBeDefined();
+    const pairs = new Set<string>();
+    for (const [routePath, ops] of Object.entries<any>(body.paths)) {
+        for (const method of Object.keys(ops)) {
+            // OPTIONS is the unauthenticated CORS MOCK the spec builder adds per path; it is not a
+            // backend route and apiRoutes.py correctly does not declare it.
+            if (method.toLowerCase() === "options") continue;
+            pairs.add(`${method.toUpperCase()} ${routePath}`);
+        }
+    }
+    return pairs;
+}
+
+/**
+ * The resource a property value in `fromStack` refers to.
+ *
+ * A resource in another nested stack is referenced through a parameter of this template, which the
+ * parent stack feeds from a nested-stack output — itself fed from the next level down for a resource
+ * under AddonBuilder. Two levels of nesting push the parameter's NAME past CloudFormation's limit and
+ * CDK truncates it to a hash that no longer carries the construct id, so a name match cannot identify
+ * the resource. Following parameter -> parent Parameters -> nested Output value until a `Fn::GetAtt
+ * [<resource>, Arn]` or a `Ref` to a resource of the current template appears resolves the value to
+ * the resource itself.
+ */
+export function resolveReference(
+    s: SynthResult,
+    fromStack: string,
+    reference: unknown
+): Resource | undefined {
+    let stack = fromStack;
+    let value: any = reference;
+    const resource = (logicalId: string) =>
+        s.resources.find((r) => r.stack === stack && r.logicalId === logicalId);
+    for (let hops = 0; hops < 8; hops++) {
+        if (value?.["Fn::GetAtt"]) {
+            const [logicalId, attribute] = value["Fn::GetAtt"] as [string, string];
+            if (attribute === "Arn") return resource(logicalId);
+            // `Outputs.<name>` of a nested stack; output names embed the construct path, so exactly one
+            // template carries each.
+            const outputName = attribute.replace(/^Outputs\./, "");
+            const nested = Object.entries<any>(s.templates).find(
+                ([, tpl]) => tpl.Outputs?.[outputName]
+            );
+            if (!nested) return undefined;
+            [stack, value] = [nested[0], nested[1].Outputs[outputName].Value];
+            continue;
+        }
+        if (value?.Ref) {
+            const ref: string = value.Ref;
+            if (s.templates[stack]?.Resources?.[ref]) return resource(ref);
+            // A parameter of this template: the parent's AWS::CloudFormation::Stack resource sets it.
+            const parent = s
+                .ofType("AWS::CloudFormation::Stack")
+                .find((r) => r.properties.Parameters?.[ref] !== undefined);
+            if (!parent) return undefined;
+            [stack, value] = [parent.stack, parent.properties.Parameters[ref]];
+            continue;
+        }
+        return undefined;
+    }
+    return undefined;
+}
+
+/** The Lambda an `AWS::Lambda::Permission` names, resolved across nested stacks. */
+export function invokedFunction(s: SynthResult, permission: Resource): Resource | undefined {
+    return resolveReference(s, permission.stack, permission.properties.FunctionName);
 }
 
 /** The restricted partitions, as a convenience for `test.each`. */

@@ -36,13 +36,13 @@ release: the source had the fix, the served bundle did not.
 
 ## Two kinds of spec — know which you are writing
 
-|           | **Core specs (tracked)**                               | **Ad-hoc specs (untracked)**                                |
-| --------- | ------------------------------------------------------ | ----------------------------------------------------------- |
-| Purpose   | Permanent smoke coverage of a page or shared component | Prove one specific change / fix works                       |
-| Lifetime  | Lives with the page; updated when the page changes     | Deleted or left untracked after the change ships            |
-| Data      | **Must not require specific data**                     | May target known seed data                                  |
-| Naming    | `orchestration.{page}.spec.ts`, `viewers.spec.ts`      | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
-| Committed | Yes                                                    | No — keep out of git                                        |
+|           | **Core specs (tracked)**                                                                       | **Ad-hoc specs (untracked)**                                |
+| --------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Purpose   | Permanent smoke coverage of a page or shared component                                         | Prove one specific change / fix works                       |
+| Lifetime  | Lives with the page; updated when the page changes                                             | Deleted or left untracked after the change ships            |
+| Data      | **Must not require specific data**                                                             | May target known seed data                                  |
+| Naming    | `orchestration.{page}.spec.ts`, `viewers.spec.ts`, `{addon}.{page}.spec.ts` for an add-on page | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
+| Committed | Yes                                                                                            | No — keep out of git                                        |
 
 **Add a core spec only when a new page or shared component is added.** A fix to existing behavior gets
 an ad-hoc spec, or a new assertion inside the relevant core spec if the behavior is permanent.
@@ -121,27 +121,29 @@ An ad-hoc spec may create and clean up its own throwaway data. A core spec may n
 ## Rule 3: Use the shared harness, don't re-derive selectors
 
 `support/fixtures.ts` holds the durable selector knowledge. Import from it rather than rewriting
-locators — the app's markup is not always guessable, and these were established empirically.
+locators — the app's markup is not always guessable, and these were established empirically. An
+add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 
-| Helper                                                        | Use for                                                                                    |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `gotoOrchestration(page, route, heading)`                     | Navigate + wait for first load (no data dependency)                                        |
-| `orchestrationRoot(page)`                                     | The `.orchestration-root` container that scopes selectors on orchestration pages           |
-| `searchBox(page)`                                             | The orchestration filter-bar search input                                                  |
-| `facet(page, label)`                                          | A native `<select>` filter                                                                 |
-| `firstCardId(page)`                                           | Id of the first card, or `null` when the list is empty                                     |
-| `openCardMenu(page, id)`                                      | Filter to a card and open its actions menu                                                 |
-| `tableRows(page)` / `expectTableRendered(page)`               | Table rows / "rendered in any environment" assertion                                       |
-| `menuSurface(items)`                                          | The open menu's own floating surface, from an item                                         |
-| `wizardRail(page)`                                            | The execute dialog's step rail (`navigation` "Execution steps")                            |
-| `rowValue(page, label)`                                       | The value cell of a label/value row in a detail panel                                      |
-| `collectPageErrors(page)`                                     | Uncaught page errors, for crash-regression assertions                                      |
-| `openAssetFile(page, databaseId, assetId, filename)`          | Open an asset's file in the File Visualizer through the File Manager, as a user does       |
-| `treeNode(page, name)`                                        | A File Manager tree row by name, in the visible tree, for files and folders alike          |
-| `chooseViewer(page, name)`                                    | Pick a File Visualizer viewer matching a RegExp, by keyboard, and confirm it applied       |
-| `chooseSelectOption(page, trigger, option, describeTrigger?)` | Choose a Cloudscape Select option matching a RegExp, by keyboard, from its trigger locator |
-| `apiContext(page)`                                            | The app's API base and Cognito ID token, for authenticated `page.request` calls            |
-| `findAssetFiles(page, extensions, options)`                   | First file per extension found via the API, or `null` without an API context               |
+| Helper                                                        | Use for                                                                                      |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `gotoOrchestration(page, route, heading)`                     | Navigate + wait for first load (no data dependency)                                          |
+| `cachedFeaturesEnabled(page)`                                 | The deployment's feature flags, read from the app's own cache; `test.skip` on an absent flag |
+| `orchestrationRoot(page)`                                     | The `.orchestration-root` container that scopes selectors on orchestration pages             |
+| `searchBox(page)`                                             | The orchestration filter-bar search input                                                    |
+| `facet(page, label)`                                          | A native `<select>` filter                                                                   |
+| `firstCardId(page)`                                           | Id of the first card, or `null` when the list is empty                                       |
+| `openCardMenu(page, id)`                                      | Filter to a card and open its actions menu                                                   |
+| `tableRows(page)` / `expectTableRendered(page)`               | Table rows / "rendered in any environment" assertion; takes the page's own empty-state regex |
+| `menuSurface(items)`                                          | The open menu's own floating surface, from an item                                           |
+| `wizardRail(page)`                                            | The execute dialog's step rail (`navigation` "Execution steps")                              |
+| `rowValue(page, label)`                                       | The value cell of a label/value row in a detail panel                                        |
+| `collectPageErrors(page)`                                     | Uncaught page errors, for crash-regression assertions                                        |
+| `openAssetFile(page, databaseId, assetId, filename)`          | Open an asset's file in the File Visualizer through the File Manager, as a user does         |
+| `treeNode(page, name)`                                        | A File Manager tree row by name, in the visible tree, for files and folders alike            |
+| `chooseViewer(page, name)`                                    | Pick a File Visualizer viewer matching a RegExp, by keyboard, and confirm it applied         |
+| `chooseSelectOption(page, trigger, option, describeTrigger?)` | Choose a Cloudscape Select option matching a RegExp, by keyboard, from its trigger locator   |
+| `apiContext(page)`                                            | The app's API base and Cognito ID token, for authenticated `page.request` calls              |
+| `findAssetFiles(page, extensions, options)`                   | First file per extension found via the API, or `null` without an API context                 |
 
 **Selector facts worth not rediscovering:**
 

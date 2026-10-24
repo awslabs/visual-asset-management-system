@@ -84,6 +84,10 @@ def mock_safe_logger(service=None, service_name=None):
 sys.modules['handlers'] = MagicMock()
 sys.modules['handlers.auth'] = MagicMock()
 sys.modules['handlers.auth'].request_to_claims = lambda event: {"tokens": ["test_token"]}
+# The authMethod values handlers compare a caller's claims with; tests/handlers/auth/
+# test_request_to_claims_authMethod.py pins the real module's values to these.
+sys.modules['handlers.auth'].AUTH_METHOD_JWT = "jwt"
+sys.modules['handlers.auth'].AUTH_METHOD_API_KEY = "apiKey"
 sys.modules['handlers.authz'] = MagicMock()
 sys.modules['handlers.authz'].CasbinEnforcer = MagicMock()
 sys.modules['common'] = MagicMock()
@@ -296,6 +300,18 @@ _addon_constants_spec = _s3mk_importlib_util.spec_from_file_location(
 _addon_constants_module = _s3mk_importlib_util.module_from_spec(_addon_constants_spec)
 _addon_constants_spec.loader.exec_module(_addon_constants_module)
 sys.modules['common.addonConstants'] = _addon_constants_module
+# The two log redactors (customLogging/logger.py, common/logRedaction.py) import their merged key
+# lists from common.constants at import. Under the MagicMock above that import reads a mock attribute,
+# which iterates as empty, so a test of the real redactor would redact nothing. Load constants.py
+# privately (it imports only the pure-data lane modules) and pin its merged log-key tuples on the mock.
+_log_keys_spec = _s3mk_importlib_util.spec_from_file_location(
+    '_real_common_constants_for_log_keys',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'constants.py')
+)
+_log_keys_module = _s3mk_importlib_util.module_from_spec(_log_keys_spec)
+_log_keys_spec.loader.exec_module(_log_keys_module)
+sys.modules['common.constants'].LOG_SENSITIVE_KEYS = _log_keys_module.LOG_SENSITIVE_KEYS
+sys.modules['common.constants'].LOG_TEXT_SENSITIVE_KEYS = _log_keys_module.LOG_TEXT_SENSITIVE_KEYS
 # The execution/pipeline/workflow helpers live in the common.workflows subpackage.
 # `common` is a MagicMock, so register a REAL package object for `common.workflows`
 # (and bind it as an attribute on the mock `common`) before loading its submodules,

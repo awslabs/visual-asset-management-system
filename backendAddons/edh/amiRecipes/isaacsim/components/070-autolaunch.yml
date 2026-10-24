@@ -1,0 +1,179 @@
+name: vams-isaacsim-autolaunch
+description: Starts Isaac Sim with the VAMS connector once the VAMS sign-in completes, or after 120 seconds without it, refusing a GPU driver Isaac Sim does not support, and installs a boot preflight that records the GPU driver status.
+schemaVersion: 1.0
+phases:
+    - name: build
+      steps:
+          - name: InstallLauncher
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - |
+                        cat > /usr/local/bin/vams-isaacsim-launch.sh <<'LAUNCH'
+                        #!/usr/bin/env bash
+                        # Waits for the federated VAMS session, refuses to start on a driver Isaac Sim does
+                        # not support, then starts Isaac Sim with the VAMS connector enabled.
+                        set -uo pipefail
+                        LOG=""
+                        notify() {
+                            command -v notify-send > /dev/null 2>&1 && notify-send "VAMS Isaac Sim" "$1"
+                            [ -z "${LOG}" ] || echo "$1" >>"${LOG}"
+                        }
+
+                        # Every desktop of a user mounts the same home directory, so the sign-in's markers,
+                        # this log and the connector's profile are this desktop's own.
+                        if ! INSTANCE_ID="$(/usr/local/bin/vams-instance-id)"; then
+                            notify "This desktop's instance id could not be read from the instance metadata service, so Isaac Sim was not started."
+                            exit 1
+                        fi
+                        HOST_DIR="${HOME}/.vams/hosts/${INSTANCE_ID}"
+                        LOG="${HOST_DIR}/isaacsim-launch.log"
+                        MARKER="${HOST_DIR}/session-ready"
+                        NO_SESSION="${HOST_DIR}/session-none"
+                        BOOT_ID="$(cat /proc/sys/kernel/random/boot_id)"
+                        PROFILE="edh-${INSTANCE_ID}"
+                        MIN_DRIVER_MAJOR=${PARAM_nvidiaDriverMinMajor}
+                        LAUNCHER="/opt/isaacsim/${PARAM_isaacSimLauncher}"
+                        # The folder that contains the connector extension; Kit treats each child of an
+                        # --ext-folder as an extension.
+                        EXT_PARENT=/opt/vams/isaacsim-connector
+                        mkdir -p "${HOST_DIR}"
+                        [ -r /etc/profile.d/vams-isaacsim.sh ] && . /etc/profile.d/vams-isaacsim.sh
+
+                        this_boot() { [ "$(cat "$1" 2>/dev/null)" = "${BOOT_ID}" ]; }
+
+                        # Autostart entries are not ordered against each other, so the launcher waits on the
+                        # marker the sign-in writes rather than assuming it ran first; a marker left by an
+                        # earlier boot does not count.
+                        for _ in $(seq 1 24); do
+                            if this_boot "${MARKER}" || this_boot "${NO_SESSION}"; then
+                                break
+                            fi
+                            sleep 5
+                        done
+                        if ! this_boot "${MARKER}" && ! this_boot "${NO_SESSION}"; then
+                            notify "The VAMS sign-in has not completed yet and is still being retried in the background; its log is ${HOST_DIR}/session-bootstrap.log. Isaac Sim starts now. Once the sign-in completes, select Refresh Databases in the VAMS Connector window."
+                        fi
+
+                        DRIVER="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>>"${LOG}" | head -n 1 | tr -d ' ')"
+                        if ! [[ "${DRIVER}" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+                            notify "nvidia-smi reported no usable NVIDIA driver version ('${DRIVER}'), so Isaac Sim was not started. The workstation installs the driver on its first boot; reboot, or check 'nvidia-smi'."
+                            exit 1
+                        fi
+                        if [ "${DRIVER%%.*}" -lt "${MIN_DRIVER_MAJOR}" ]; then
+                            notify "NVIDIA driver ${DRIVER} is older than the ${MIN_DRIVER_MAJOR} branch Isaac Sim needs, so Isaac Sim was not started."
+                            exit 1
+                        fi
+
+                        if [ ! -d "${EXT_PARENT}" ]; then
+                            notify "The VAMS connector is missing from ${EXT_PARENT}, so Isaac Sim was not started."
+                            exit 1
+                        fi
+                        # Autostart starts the launcher in the home directory, which every desktop of the
+                        # user shares. Kit runs instead from a directory created for this launch under the
+                        # session's runtime directory, private to the user, so nothing it resolves against
+                        # its working directory is read from the home and the importers can write their
+                        # intermediate files beside it.
+                        if ! WORK_DIR="$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/vams-isaacsim.XXXXXX" 2>>"${LOG}")" || ! cd "${WORK_DIR}"; then
+                            notify "A working directory for Isaac Sim could not be created in ${XDG_RUNTIME_DIR:-/tmp}, so Isaac Sim was not started."
+                            exit 1
+                        fi
+                        notify "Isaac Sim is starting. The first launch warms shaders for 5-10 minutes and the window stays black until that finishes."
+                        exec "${LAUNCHER}" \
+                            --ext-folder "${EXT_PARENT}" \
+                            --enable vams.connector.isaacsim \
+                            "--/exts/vams.connector.isaacsim/profile=${PROFILE}" >>"${LOG}" 2>&1
+                        LAUNCH
+                    - chmod 0755 /usr/local/bin/vams-isaacsim-launch.sh
+          - name: InstallPreflightUnit
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - |
+                        cat > /usr/local/bin/vams-isaacsim-preflight.sh <<'PREFLIGHT'
+                        #!/usr/bin/env bash
+                        # Records at boot whether this desktop has a GPU driver Isaac Sim can use, so the
+                        # answer is readable over SSM before anyone signs in to the desktop.
+                        set -uo pipefail
+                        LOG=/var/log/vams-isaacsim-preflight.log
+                        MIN_DRIVER_MAJOR=${PARAM_nvidiaDriverMinMajor}
+                        {
+                            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) vams-isaacsim-preflight"
+                            if ! command -v nvidia-smi > /dev/null 2>&1; then
+                                INSTALLER_LOG=/var/log/nvidia-installer.log
+                                if grep -q 'ERROR: Installation has failed' "${INSTALLER_LOG}" 2>/dev/null; then
+                                    if grep -q 'Nouveau kernel driver is currently in use' "${INSTALLER_LOG}"; then
+                                        echo "result=driver-install-failed reason=nouveau-loaded the NVIDIA driver install stopped because the nouveau driver was loaded; see ${INSTALLER_LOG}"
+                                    else
+                                        echo "result=driver-install-failed the NVIDIA driver install failed; see ${INSTALLER_LOG}"
+                                    fi
+                                    exit 1
+                                fi
+                                echo "result=no-driver nvidia-smi is not installed; EDH installs the driver on the first boot, so a reboot may be pending"
+                                exit 1
+                            fi
+                            DRIVER="$(timeout 60 nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>&1 | head -n 1 | tr -d ' ')"
+                            if ! [[ "${DRIVER}" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+                                echo "result=no-gpu nvidia-smi reported: ${DRIVER}"
+                                exit 1
+                            fi
+                            if [ "${DRIVER%%.*}" -lt "${MIN_DRIVER_MAJOR}" ]; then
+                                echo "result=driver-too-old driver=${DRIVER} minimum=${MIN_DRIVER_MAJOR}"
+                                exit 1
+                            fi
+                            echo "result=ok driver=${DRIVER} minimum=${MIN_DRIVER_MAJOR}"
+                            timeout 60 nvidia-smi
+                        } > "${LOG}" 2>&1
+                        PREFLIGHT
+                    - chmod 0755 /usr/local/bin/vams-isaacsim-preflight.sh
+                    - |
+                        cat > /etc/systemd/system/vams-isaacsim-preflight.service <<'UNIT'
+                        [Unit]
+                        Description=VAMS Isaac Sim GPU driver preflight
+                        After=basic.target
+
+                        [Service]
+                        Type=oneshot
+                        ExecStart=/usr/local/bin/vams-isaacsim-preflight.sh
+
+                        [Install]
+                        WantedBy=multi-user.target
+                        UNIT
+                    - chmod 0644 /etc/systemd/system/vams-isaacsim-preflight.service
+                    - systemctl enable vams-isaacsim-preflight.service
+          - name: InstallAutostartEntry
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -euo pipefail
+                    - mkdir -p /etc/xdg/autostart
+                    - |
+                        cat > /etc/xdg/autostart/vams-isaacsim.desktop <<'DESKTOP'
+                        [Desktop Entry]
+                        Type=Application
+                        Name=NVIDIA Isaac Sim
+                        Comment=Starts Isaac Sim with the VAMS connector enabled
+                        Exec=/usr/local/bin/vams-isaacsim-launch.sh
+                        Terminal=false
+                        X-GNOME-Autostart-enabled=true
+                        X-GNOME-Autostart-Phase=Applications
+                        DESKTOP
+                    - chmod 0644 /etc/xdg/autostart/vams-isaacsim.desktop
+    - name: validate
+      steps:
+          - name: LauncherInstalled
+            action: ExecuteBash
+            inputs:
+                commands:
+                    - set -eux
+                    - bash -n /usr/local/bin/vams-isaacsim-launch.sh
+                    - test -x /usr/local/bin/vams-isaacsim-launch.sh
+                    - grep -Fq -- '--enable vams.connector.isaacsim' /usr/local/bin/vams-isaacsim-launch.sh
+                    - grep -Fq -- '--/exts/vams.connector.isaacsim/profile=' /usr/local/bin/vams-isaacsim-launch.sh
+                    - test -x /usr/local/bin/vams-instance-id
+                    - grep -Fq 'Exec=/usr/local/bin/vams-isaacsim-launch.sh' /etc/xdg/autostart/vams-isaacsim.desktop
+                    - bash -n /usr/local/bin/vams-isaacsim-preflight.sh
+                    - test -x /usr/local/bin/vams-isaacsim-preflight.sh
+                    - test "$(systemctl is-enabled vams-isaacsim-preflight.service)" = enabled

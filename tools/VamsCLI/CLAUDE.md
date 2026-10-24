@@ -24,10 +24,10 @@ VamsCLI is a Python command-line interface built with the **Click** framework fo
 ```
 tools/VamsCLI/
   vamscli/
-    main.py                  # CLI entry point, @click.group, command registration (+ CUSTOM_COMMANDS)
+    main.py                  # CLI entry point, @click.group, command registration (+ ADDON_COMMANDS, CUSTOM_COMMANDS)
     version.py               # __version__ and CLI_VERSION
     constants.py             # All API endpoints, limits, config constants (re-exports addon_constants)
-    addon_constants.py       # Add-on FEATURE_* names (FEATURE_PHYSNA_ADDON), mirrors infra/common/addonAppFeatures.ts
+    addon_constants.py       # Add-on API_* paths, FEATURE_* names (mirror infra/common/addonAppFeatures.ts) and shared messages
     custom_constants.py      # FORK EXTENSION POINT: a fork's API_* paths + FEATURE_CUSTOM_* (shipped empty)
     auth/
       base.py                # BaseAuthenticator abstract class
@@ -58,6 +58,9 @@ tools/VamsCLI/
       user.py                # Cognito user management
       roleUserConstraints.py # Roles, constraints, user-role assignment
       compliance.py          # Compliance: schema sub-group, bind/unbind/bindings, evaluate/sweep/state/evaluations, quarantine + cascade sub-groups, audit
+      addon/
+        __init__.py          # Add-on lane: ADDON_COMMANDS, registered by main.py after the core commands
+        edh.py               # EDH Workstations add-on: workstation, catalog, admin (images, ami-recipe, instances, settings, capacity-reservation), container (job) sub-groups
       custom/__init__.py     # FORK EXTENSION POINT: CUSTOM_COMMANDS, registered on the root group by main.py
       industry/
         industry.py          # Industry command group
@@ -68,7 +71,11 @@ tools/VamsCLI/
         spatial/
           glb.py             # GLB file combination operations
     utils/
-      api_client.py          # APIClient class (HTTP, retries, error mapping); inherits CustomAPIClientMixin
+      api_client.py          # APIClient class (HTTP, retries, error mapping); inherits AddonAPIClientMixin, CustomAPIClientMixin
+      addon_api_client.py    # Add-on lane: AddonAPIClientMixin, aggregating one mixin per add-on
+      addon/
+        edh_api_client.py    # EdhAPIClientMixin (EDH Workstations add-on methods)
+        edh_exceptions.py    # EdhError family
       custom_api_client.py   # FORK EXTENSION POINT: CustomAPIClientMixin (shipped empty)
       profile.py             # ProfileManager (multi-profile, config dirs)
       exceptions.py          # Two-tier exception hierarchy (~140 classes)
@@ -88,11 +95,12 @@ tools/VamsCLI/
     conftest.py              # Shared fixtures (mock_logging, cli_runner, generic_command_mocks)
     test_*.py                # One file per command group or behavior area
     industry/                # Engineering BOM and PLM command tests (engineering/bom/, engineering/plm/)
+    addon/                   # Add-on command and client tests (test_edh.py, test_edh_client.py, test_edh_capacity_reservations.py, test_edh_start_status.py)
 ```
 
-### Command Groups (25 top-level)
+### Command Groups (25 core + add-on groups)
 
-All registered in `main.py` via `cli.add_command()`:
+The core groups are registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
@@ -100,6 +108,8 @@ tag, tag-type, metadata, metadata-schema, comment, subscription, features,
 search, sync, workflow, pipeline, execution, industry, user, role, api-key,
 compliance
 ```
+
+The add-on groups are registered from `commands/addon/` (`ADDON_COMMANDS`): `edh` (EDH Workstations). See [Add-on Commands](#add-on-commands).
 
 Sync has a nested sub-command group:
 
@@ -159,7 +169,7 @@ VamsCLIError (base)
     RetryExhaustedError
     RateLimitExceededError
   BusinessLogicError           --> handled by individual commands
-    APIError
+    APIError (+ InvalidRequestPathError)
     AssetError (+ 5 subclasses)
     DatabaseError (+ 5 subclasses)
     FileError (+ 14 subclasses)
@@ -177,6 +187,7 @@ VamsCLIError (base)
     ConstraintError (+ 5 subclasses)
     UserRoleError (+ 4 subclasses)
     ComplianceError (+ 3 subclasses: ComplianceSchemaNotFoundError, ComplianceCascadeNotFoundError, InvalidComplianceDataError)
+    EdhError (+ 14 subclasses; add-on, in utils/addon/edh_exceptions.py)
     ProfileAlreadyExistsError
 ```
 
@@ -235,6 +246,7 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
 -   Sets headers: `Content-Type: application/json`, `User-Agent: vamscli/{version}`
 -   Bearer token from `ProfileManager.load_auth_profile()`
 -   Pre-flight token validation for override tokens (checks expiry before request)
+-   Refuses an endpoint whose path has an empty, `.` or `..` segment (raw or percent-encoded) with `InvalidRequestPathError` before anything is sent: the URL join drops or resolves such a segment, so a path value carrying one would address another route (`tests/test_api_request_path.py`)
 -   HTTP 429: Exponential backoff with jitter, respects `Retry-After` header
 -   HTTP 401: Auto-refresh token (Cognito only), fails immediately for override tokens
 -   HTTP 403: Classified by the party that answered it (see the table below); only the authorizer's deny and an unclassified (`unknown`) 403 are refreshed and resent
@@ -262,7 +274,7 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
 1. Always pass `profile_manager` to `APIClient` constructor
 2. Never make raw `requests` calls -- always go through `APIClient`
 3. API endpoint constants are in `constants.py` as format strings (e.g., `API_DATABASE_ASSETS = "/database/{databaseId}/assets"`)
-4. New API methods go in `api_client.py`, not in command files
+4. New API methods go in `api_client.py` (an add-on's in its mixin under `utils/addon/`), not in command files
 5. In an `APIClient` method, every broad handler that raises -- a bare `except`, or one naming `Exception`, `BaseException` or `VamsCLIError` -- is preceded by `except GlobalInfrastructureError: raise` in the same `try`, and a handler naming `GlobalInfrastructureError` or a subclass re-raises with a bare `raise`; a handler that swallows the error or returns a value is exempt. The ratchet `tests/test_api_client_global_error_guards.py` fails otherwise. This keeps a web ACL block, a permission denial or an expired token typed through every `APIClient` method; `utils/upload_manager.py`, `utils/download_manager.py` and a few command wrappers still record one per file, upload sequence or item, with its message but without its heading or `json_fields`
 
 ### 4. JSON Output Contract
@@ -284,7 +296,7 @@ output_info("Hint text", json_output)          # Suppressed in JSON mode
 2. Never use `click.echo()` directly in commands that support `--json-output` -- it would pollute JSON output
 3. Status/warning/info messages are suppressed when `json_output=True`
 4. CLI mode uses colored output via `click.secho()` with `fg='green'`, `fg='red'`, etc.
-5. The JSON error object is `{"error", "error_type"}` plus the exception's `json_fields`, merged without replacing those two and only when it is a dict, whether it is set on the class or on the instance (any other value is left out) -- `RequestBlockedError` carries `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` on the instance; `tests/test_json_output_error_fields.py` holds `output_error` to that. A global error's document (`_global_error_data` in `utils/global_exceptions.py`) is `{"error": "<Heading>: <message>", "error_type", ...json_fields, "additional_info"?}`, also on stdout; in text mode its `✗ <Heading>: <message>` line goes to stderr and its `additional_info` lines to stdout. Both exit 1
+5. The JSON error object is `{"error", "error_type"}` plus the exception's `json_fields`, merged without replacing those two and only when it is a dict, whether it is set on the class or on the instance (any other value is left out) -- `RequestBlockedError` carries `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` on the instance, and an add-on's exceptions set theirs on the class ([Add-on Commands](#add-on-commands)); `tests/test_json_output_error_fields.py` holds `output_error` to that. A global error's document (`_global_error_data` in `utils/global_exceptions.py`) is `{"error": "<Heading>: <message>", "error_type", ...json_fields, "additional_info"?}`, also on stdout; in text mode its `✗ <Heading>: <message>` line goes to stderr and its `additional_info` lines to stdout. Both exit 1
 
 ### 5. Decorator Usage
 
@@ -385,7 +397,7 @@ API_ASSET_VERSION_UNARCHIVE = "/database/{databaseId}/assets/{assetId}/assetvers
 
 **Rules**:
 
-1. New endpoints go in `constants.py` (in a fork: `custom_constants.py`), never hardcoded in commands or api_client
+1. New endpoints go in `constants.py` (an add-on's in `addon_constants.py`; in a fork: `custom_constants.py`), never hardcoded in commands or api_client
 2. Upload/download limits are constants, not magic numbers
 3. Feature switch names are constants (e.g., `FEATURE_GOVCLOUD = "GOVCLOUD"`; in a fork, `FEATURE_CUSTOM_*` in `custom_constants.py`)
 4. Retry config defaults are constants, overridable via env vars
@@ -394,7 +406,8 @@ API_ASSET_VERSION_UNARCHIVE = "/database/{databaseId}/assets/{assetId}/assetvers
    only at runtime against a live deployment — API Gateway rejects an unmatched path before any
    handler runs, and neither import nor build catches it. `tests/test_constants_contract.py`
    cross-checks every constant against the `ApiRoute` declarations in
-   `backend/backend/common/apiRoutes.py`. Two such constants shipped in this release: one formatted
+   `backend/backend/common/apiRoutes.py` (and `common/addonApiRoutes.py` and `custom/customApiRoutes.py`
+   for the lane constants). Two such constants shipped in this release: one formatted
    by a live `APIClient` method, and one imported but never formatted, which read like working code.
    A constant used as a path **prefix** (concatenated at the call site rather than formatted) needs
    an entry in `_PREFIX_ONLY_CONSTANTS` naming why; prefer a format-string constant matching a
@@ -510,8 +523,8 @@ rather than at an audit. Redaction runs before truncation, so the length cut can
 **How the redactor decides:**
 
 -   **By key name** — a key whose normalized form (separators stripped, lowercased) contains `password`,
-    `passwd`, `secret`, `token`, `credential`, `apikey`, `authorization`, `signature`, `privatekey`, or
-    `cookie` is replaced. Applied recursively through dicts and sequences.
+    `passwd`, `secret`, `token`, `credential`, `apikey`, `authorization`, `signature`, `privatekey`,
+    `cookie`, or `connectionurl` is replaced. Applied recursively through dicts and sequences.
 -   **By descriptive suffix (an exception)** — a key that also _ends_ in `id`, `name`, `arn`, `type`,
     `count`, `expiry`, `expiration`, `enabled`, or `status` is treated as naming a credential rather than
     carrying one, so `apiKeyId`, `tokenType`, and `credentialsSecretArn` survive. `apiKeyHash` and
@@ -606,7 +619,7 @@ Treat a command whose output includes another command's output as this bug until
 ### Framework and Configuration
 
 -   **Framework**: pytest with Click's `CliRunner`
--   **Test files**: `tests/test_*.py`, one per command group or behavior area; the `industry engineering` (BOM, PLM) command tests are under `tests/industry/engineering/`
+-   **Test files**: `tests/test_*.py`, one per command group or behavior area; the `industry engineering` (BOM, PLM) command tests are under `tests/industry/engineering/`, and the add-on command and client tests under `tests/addon/`
 -   **Shared fixtures**: `tests/conftest.py`
 
 ### Key Fixtures (conftest.py)
@@ -656,7 +669,7 @@ The `generic_command_mocks(command_module)` context manager patches:
 **Rules**:
 
 1. Always use `generic_command_mocks` for command tests -- do not manually patch these 5 points
-2. The `command_module` parameter must match the filename in `commands/` (e.g., `'database'`, `'assets'`, `'tag_type'`)
+2. The `command_module` parameter must match the filename in `commands/` (e.g., `'database'`, `'assets'`, `'tag_type'`); an add-on module is named with its package (`'addon.edh'`)
 3. For nested modules like `roleUserConstraints`, use the actual module name: `'roleUserConstraints'`
 4. Use `no_setup_command_mocks` for testing setup-required error paths
 5. To disable the autouse `mock_logging`, mark the test: `@pytest.mark.no_mock_logging`
@@ -861,6 +874,31 @@ A fork adds commands without editing `main.py`, `constants.py` or `utils/api_cli
 -   A custom command never replaces a core one: `main.py` registers `CUSTOM_COMMANDS` after every core command and raises at import on a name that is already registered (`tests/test_custom_commands.py`).
 -   A `CustomAPIClientMixin` method with the name of an `APIClient` method is never called, because `APIClient` comes first in the MRO; `tests/test_custom_api_client.py` fails on such a name.
 -   Command names prefixed `custom-` are recommended, not enforced. Pattern 7 still applies: a custom command an agent should reach gets an MCP tool in `tools/VamsMCP/vams_mcp/custom_tools.py`.
+
+### Add-on Commands
+
+An add-on's commands use an add-on lane that mirrors the fork lane above. Upstream edits these files when it ships an add-on with commands; a fork does not:
+
+| What                                      | Add-on file                                                                                                                                    | Spliced in by                                                                                                                             |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Endpoint paths, switches, shared messages | `vamscli/addon_constants.py` (`API_*`, `FEATURE_*`, the messages the commands and MCP tools share)                                             | `constants.py` re-exports every name                                                                                                      |
+| API client methods                        | one mixin per add-on in `vamscli/utils/addon/<addon>_api_client.py`, aggregated by `vamscli/utils/addon_api_client.py` (`AddonAPIClientMixin`) | `class APIClient(AddonAPIClientMixin, CustomAPIClientMixin)`: a name resolves to the core method, then an add-on's, then a fork's         |
+| Exceptions                                | `vamscli/utils/addon/<addon>_exceptions.py`, `BusinessLogicError` subclasses                                                                   | imported by the add-on's commands and client mixin                                                                                        |
+| Command groups                            | `vamscli/commands/addon/<group>.py`, listed in `commands/addon/__init__.py` (`ADDON_COMMANDS`)                                                 | `main.py` registers them after every core command and before `CUSTOM_COMMANDS`, and raises at import on a name that is already registered |
+
+-   `commands/addon/__init__.py` imports each module whole (`from . import edh`), so `vamscli.commands.addon.edh` names the module that `generic_command_mocks('addon.edh')` patches rather than its command group.
+-   A client mixin imports from `..exceptions` and `...addon_constants`, never from `vamscli.commands`; a helper that needs a function of `api_client.py` imports it inside the function, since `api_client.py` imports the mixin.
+-   Guards: `tests/test_addon_commands.py` (registration; a core name refused; a custom command named like an add-on command refused), `tests/test_addon_api_client.py` (MRO order; no add-on method shadowed by a core one or shared with another add-on mixin or `CustomAPIClientMixin`), `tests/test_constants_contract.py` (add-on paths against `backend/backend/common/addonApiRoutes.py`, switches against `infra/common/addonAppFeatures.ts`), and `tests/test_api_client_global_error_guards.py`, which parses every class in `APIClient.__mro__`.
+
+#### EDH Workstations
+
+-   `edh` (`commands/addon/edh.py`) has the `workstation`, `catalog`, `admin` (`images`, `ami-recipe`, `instances`, `capacity`, `health`, `settings`, `capacity-reservation`) and `container` sub-groups. Every command stacks `@requires_feature(FEATURE_EDH_WORKSTATIONS, ...)` after `@requires_setup_and_auth` (`container` uses `FEATURE_EDH_CONTAINERS`, `admin ami-recipe` uses `FEATURE_EDH_AMI_RECIPES`); the switch is a login-time snapshot. The three refusal sentences (`EDH_*_DISABLED_MESSAGE` in `addon_constants.py`) are the ones the MCP server's EDH pre-flight reports.
+-   `EdhAPIClientMixin` (`utils/addon/edh_api_client.py`): every method passes `raise_http_errors=True`, because with the default `_make_request` converts a 404/400/5xx into a generic `APIError` before the method's own handler runs. `_edh_error` maps a 403 the methods read themselves to `PermissionDeniedError("Access forbidden. " + message)` and a 401 to `AuthenticationError`, and `_edh_session_id` checks a workstation id (one path segment, the service's `id_pattern`) before any request, as `_edh_capacity_reservation_id` checks a capacity reservation id (`cr-` and 17 hex digits). A 409 whose body carries `"code": "RESERVATION_FULL"` raises `EdhReservationFullError` (a launch's; a start answers 202 and the worker records a full reservation on the row). The list routes return every row in one `{"Items": [...]}` page, so the commands take no paging options.
+-   `utils/addon/edh_exceptions.py` holds the `EdhError` family; the class names are the `error_type` that `--json-output` and the MCP tools report. `EdhOutcomeUnknownError` carries `json_fields` `{"outcomeUnknown": True}`, `EdhStartInProgressError` `{"startInProgress": True}` and `EdhReservationFullError` `{"code": "RESERVATION_FULL"}` on the class, the fields the API's own error body sets. `EdhStartFailedError` (`{"waitOutcome": "failed"}`) and `EdhStartWaitTimeoutError` (`{"waitOutcome": "timedOut"}`) are raised by `start --wait` alone, and an instance adds the record's `state`, `activity`, `lastError` and `startFailure` to its `json_fields`.
+-   Start status: a start answers 202 and runs in the background. `state_label` gives the `list` State column (`STARTING`/`STOPPING` from the record's `activity`, else `state`), `format_workstation` prints `Activity:` and, for a STOPPED record whose start failed, `Start Failure:` with the sentence and the `AWS: <code> in <AZ>` line from `describe_start_failure`, and `start --wait` polls through `wait_for_start` every `START_WAIT_POLL_SECONDS` (10) for up to `START_WAIT_TIMEOUT_SECONDS` (600), exiting 0 only on ACTIVE with no activity; the tests replace the module's `_sleep` and `_monotonic`. The words match the web's badge and start-failure lines: `tests/addon/test_edh_start_status.py` reads the web's fixture `web/src/addons/edh/workstationStatusCases.json`, as the web test does.
+-   `edh workstation connect` prints only the DCV host in CLI mode; the `connectionUrl`, which carries a session auth token, is returned only with `--json-output`. `--show-windows-password` adds a Windows workstation's sign-in, which no MCP tool reads.
+-   `tests/addon/test_edh_client.py` holds the client to the backend: the route constants, the copied fields of `ami-recipe duplicate` (`_EDH_AMI_RECIPE_COPIED_FIELDS` against `AmiRecipeRequestModel`) and the 404 messages that tell a missing recipe from a missing build.
+-   Option semantics, output and error texts: `documentation/docusaurus-site/docs/developer/edh-workstations/cli-commands.md` and `cli-troubleshooting.md`.
 
 ### Adding a New Exception Class
 
@@ -1099,20 +1137,23 @@ publishes through `/secure-config`, and each lane must equal its enum in both di
 constant is a gate no command can name, and an extra one names a gate no deployment publishes.
 `tests/test_constants_contract.py` parses the three enums and fails on either drift.
 
-| Constant                                      | Value                             | Meaning                  |
-| --------------------------------------------- | --------------------------------- | ------------------------ |
-| `FEATURE_GOVCLOUD`                            | `"GOVCLOUD"`                      | Restricted partition     |
-| `FEATURE_ALLOWUNSAFEEVAL`                     | `"ALLOWUNSAFEEVAL"`               | CSP allows `unsafe-eval` |
-| `FEATURE_LOCATIONSERVICES`                    | `"LOCATIONSERVICES"`              | Location Service enabled |
-| `FEATURE_ALBDEPLOY`                           | `"ALBDEPLOY"`                     | ALB deployment mode      |
-| `FEATURE_CLOUDFRONTDEPLOY`                    | `"CLOUDFRONTDEPLOY"`              | CloudFront deployment    |
-| `FEATURE_NOOPENSEARCH`                        | `"NOOPENSEARCH"`                  | OpenSearch disabled      |
-| `FEATURE_AUTHPROVIDER_COGNITO`                | `"AUTHPROVIDER_COGNITO"`          | Cognito auth enabled     |
-| `FEATURE_AUTHPROVIDER_COGNITO_SAML`           | `"AUTHPROVIDER_COGNITO_SAML"`     | Cognito SAML auth        |
-| `FEATURE_AUTHPROVIDER_COGNITO_OIDC`           | `"AUTHPROVIDER_COGNITO_OIDC"`     | Cognito OIDC auth        |
-| `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP`       | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP       |
-| `FEATURE_PHYSNA_ADDON` (`addon_constants.py`) | `"PHYSNA_ADDON"`                  | Physna add-on features   |
-| `FEATURE_DEADLINECLOUD_PIPELINES`             | `"DEADLINECLOUD_PIPELINES"`       | Deadline Cloud exec type |
+| Constant                                          | Value                             | Meaning                  |
+| ------------------------------------------------- | --------------------------------- | ------------------------ |
+| `FEATURE_GOVCLOUD`                                | `"GOVCLOUD"`                      | Restricted partition     |
+| `FEATURE_ALLOWUNSAFEEVAL`                         | `"ALLOWUNSAFEEVAL"`               | CSP allows `unsafe-eval` |
+| `FEATURE_LOCATIONSERVICES`                        | `"LOCATIONSERVICES"`              | Location Service enabled |
+| `FEATURE_ALBDEPLOY`                               | `"ALBDEPLOY"`                     | ALB deployment mode      |
+| `FEATURE_CLOUDFRONTDEPLOY`                        | `"CLOUDFRONTDEPLOY"`              | CloudFront deployment    |
+| `FEATURE_NOOPENSEARCH`                            | `"NOOPENSEARCH"`                  | OpenSearch disabled      |
+| `FEATURE_AUTHPROVIDER_COGNITO`                    | `"AUTHPROVIDER_COGNITO"`          | Cognito auth enabled     |
+| `FEATURE_AUTHPROVIDER_COGNITO_SAML`               | `"AUTHPROVIDER_COGNITO_SAML"`     | Cognito SAML auth        |
+| `FEATURE_AUTHPROVIDER_COGNITO_OIDC`               | `"AUTHPROVIDER_COGNITO_OIDC"`     | Cognito OIDC auth        |
+| `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP`           | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP       |
+| `FEATURE_PHYSNA_ADDON` (`addon_constants.py`)     | `"PHYSNA_ADDON"`                  | Physna add-on features   |
+| `FEATURE_DEADLINECLOUD_PIPELINES`                 | `"DEADLINECLOUD_PIPELINES"`       | Deadline Cloud exec type |
+| `FEATURE_EDH_WORKSTATIONS` (`addon_constants.py`) | `"EDH_WORKSTATIONS"`              | EDH Workstations add-on  |
+| `FEATURE_EDH_CONTAINERS` (`addon_constants.py`)   | `"EDH_CONTAINERS"`                | EDH container jobs       |
+| `FEATURE_EDH_AMI_RECIPES` (`addon_constants.py`)  | `"EDH_AMI_RECIPES"`               | EDH AMI recipe builds    |
 
 ---
 

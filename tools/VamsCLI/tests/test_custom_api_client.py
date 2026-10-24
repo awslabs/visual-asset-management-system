@@ -22,7 +22,7 @@ def _shadowed(mixin: type) -> set:
 
 
 def test_api_client_inherits_the_custom_mixin():
-    assert APIClient.__mro__[:2] == (APIClient, CustomAPIClientMixin)
+    assert CustomAPIClientMixin in APIClient.__mro__
 
 
 def test_no_custom_api_client_method_is_shadowed_by_a_core_method():

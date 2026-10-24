@@ -528,6 +528,8 @@ Tags and tag types are database-namespaced. The partition key is the `databaseId
 | AppFeatureEnabledStorageTable | `featureName` | --                                                   |
 | S3AssetBucketsStorageTable    | `bucketId`    | `bucketName:baseAssetsPrefix` (GSI: `bucketNameGSI`) |
 
+An enabled add-on can add tables of its own; the add-on's page describes their schemas (see [Add-ons Overview](../developer/addons-overview.md)).
+
 ## Amazon S3 Bucket Organization
 
 ### Asset Buckets
@@ -601,7 +603,20 @@ Stores the built React frontend static assets. Served as an origin for Amazon Cl
 
 ### Artefacts Bucket
 
-Stores template notebooks and deployment artefacts. Populated at deploy time from `infra/lib/artefacts/`.
+Stores template notebooks and deployment artefacts. Populated at deploy time from `infra/lib/artefacts/`, with two prefixes that separate uploads write:
+
+```text
+{artefact files from infra/lib/artefacts/}
+vamsSchema/{registrationHash}/pipeline.json, workflow.json, templates/*.json
+addon/{addon}/...
+```
+
+Where:
+
+-   `vamsSchema/` holds the pipeline registration bundles, one prefix per registration
+-   `addon/` is reserved for the trees the add-on stacks upload, one prefix per add-on; an add-on's resources page describes its own (see [Add-ons](../developer/addons-overview.md))
+
+The upload of `infra/lib/artefacts/` owns the bucket root and prunes any object absent from that directory, but excludes both prefixes.
 
 ### Access Logs Bucket
 

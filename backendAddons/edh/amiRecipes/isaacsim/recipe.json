@@ -1,0 +1,73 @@
+{
+    "recipeId": "isaacsim",
+    "displayName": "NVIDIA Isaac Sim desktop",
+    "kind": "vdi",
+    "osFamily": "linux",
+    "baseOs": "ubuntu2404",
+    "architecture": "x86_64",
+    "parentImage": "ssm:/aws/service/canonical/ubuntu/server/24.04/stable/20260714/amd64/hvm/ebs-gp3/ami-id",
+    "buildInstanceType": ["m7i.xlarge", "m6i.xlarge", "m5.xlarge"],
+    "launchInstanceTypes": [
+        "g5.2xlarge",
+        "g5.4xlarge",
+        "g5.8xlarge",
+        "g5.12xlarge",
+        "g5.16xlarge",
+        "g5.24xlarge",
+        "g5.48xlarge",
+        "g6.2xlarge",
+        "g6.4xlarge",
+        "g6.8xlarge",
+        "g6.12xlarge",
+        "g6.16xlarge",
+        "g6.24xlarge",
+        "g6.48xlarge",
+        "gr6.4xlarge",
+        "gr6.8xlarge",
+        "g6e.xlarge",
+        "g6e.2xlarge",
+        "g6e.4xlarge",
+        "g6e.8xlarge",
+        "g6e.12xlarge",
+        "g6e.16xlarge",
+        "g6e.24xlarge",
+        "g6e.48xlarge",
+        "g7e.2xlarge",
+        "g7e.4xlarge",
+        "g7e.8xlarge",
+        "g7e.12xlarge",
+        "g7e.24xlarge",
+        "g7e.48xlarge"
+    ],
+    "rootSizeGb": 150,
+    "stackName": "VAMS Isaac Sim Desktop",
+    "profileId": 1,
+    "components": [
+        { "file": "components/010-kernel.yml" },
+        {
+            "arn": "arn:${AWS::Partition}:imagebuilder:${AWS::Region}:aws:component/update-linux/x.x.x"
+        },
+        { "file": "components/020-runtime-deps.yml" },
+        { "file": "components/030-isaacsim.yml" },
+        { "file": "components/040-vamscli.yml" },
+        { "file": "components/050-connector.yml" },
+        { "file": "components/060-session-bootstrap.yml" },
+        { "file": "components/065-profile-cleanup.yml" },
+        { "file": "components/066-no-screen-lock.yml" },
+        { "file": "components/070-autolaunch.yml" }
+    ],
+    "assets": [
+        { "id": "vamscli", "repoPath": "tools/VamsCLI" },
+        { "id": "connector", "repoPath": "tools/ExternalIntegrations/isaacsim_vams_integration" }
+    ],
+    "parameters": {
+        "isaacSimVersion": "6.2.0",
+        "isaacSimDownloadUrl": "https://downloads.isaacsim.nvidia.com/isaac-sim-standalone-6.2.0-linux-x86_64.zip",
+        "isaacSimSha256": "aac4f9065f36d56f56a6523931710fad3ea9c3e5eeb067b781fa53098fcf19f2",
+        "isaacSimLauncher": "isaac-sim.sh",
+        "nvidiaDriverMinMajor": "595"
+    },
+    "keepVersions": 3,
+    "recipeRevision": 1,
+    "description": "Ubuntu 24.04 with NVIDIA Isaac Sim 6.2, the VAMS CLI and the VAMS Isaac Sim connector; EDH installs Amazon DCV, the desktop and the GPU driver at the desktop's first boot."
+}

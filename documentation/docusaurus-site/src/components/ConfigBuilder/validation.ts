@@ -19,73 +19,35 @@
  * condition is active (warnings).
  *
  * Note on ordering: the builder runs `applyDerived()` before evaluating rules.
- * `applyDerived()` forces nothing (see `derived.ts`), so the config these rules read
- * is exactly what the operator entered and exactly what the serialized config.json
- * carries. Where config.ts rejects a configuration rather than adjusting it — the
- * VPC requirement is the worked example (config.ts: "Features that require a VPC") —
- * the rejection is mirrored here as an error rule, not applied as a mutation there.
+ * `applyDerived()` mirrors the normalizations `getConfig()` performs (see `derived.ts`), so the
+ * config these rules read is what `getConfig()` would validate. Where config.ts rejects a
+ * configuration rather than adjusting it — the VPC requirement is the worked example (config.ts:
+ * "Features that require a VPC") — the rejection is mirrored here as an error rule, not applied as
+ * a mutation there.
+ *
+ * Each add-on's rules live in its module under `addon/` and join `RULES` through `ADDON_RULES`; their
+ * anchors quote the add-on's configuration module under infra/config/addon/.
  */
 
 import type { ConfigShape, Rule } from "./types";
-import { getByPath } from "./pathUtils";
 import { isCidr, isVpceId } from "./fields/presignedUrlFormats";
 import { ipAddressFamily } from "./fields/ipAddressFormats";
-
-/** config.ts treats null / "" / "UNDEFINED" (and missing) all as unset. */
-function isUnset(value: unknown): boolean {
-    return value == null || value === "" || value === "UNDEFINED";
-}
-
-/**
- * True for the values `getConfig()`'s `== undefined` backfills treat as absent — null and undefined,
- * and nothing else. A field that is absent from `config.json` is filled with its default before the
- * matching check runs, so a rule guarded by this stays silent rather than reporting a value the
- * deployment would supply for itself. `""` is deliberately NOT absent: `getConfig()` does not backfill
- * it, so an empty string reaches the check and is rejected there.
- */
-function isAbsent(value: unknown): boolean {
-    return value == null;
-}
-
-/** HuggingFace token check also rejects whitespace-only (config.ts: the `huggingFaceToken.trim() === ""` checks). */
-function isBlank(value: unknown): boolean {
-    return isUnset(value) || (typeof value === "string" && value.trim() === "");
-}
-
-function g(cfg: ConfigShape, path: string): any {
-    return getByPath(cfg, path);
-}
+import {
+    g,
+    isAbsent,
+    isBlank,
+    isUnset,
+    isValidUrl,
+    PARTITION_DNS_SUFFIXES,
+    partitionForRegionName,
+    SECRETSMANAGER_ARN_PATTERN,
+} from "./ruleHelpers";
+import type { VpcRequiringFeature } from "./ruleHelpers";
+import { ADDON_RULES, ADDON_VPC_REQUIRING_FEATURES } from "./addon";
 
 // Regexes copied verbatim from config.ts.
 const CERT_ARN_PATTERN = /^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[a-f0-9-]+$/;
-/**
- * Region-name prefix to partition name and DNS suffix, matching what
- * `region_info.RegionInfo.get(region)` resolves at synth time (config.ts: "garnetIngestionQueueSqsUrl
- * must be a valid SQS URL" builds the pattern from that suffix). A region with no listed prefix is
- * commercial. Verified against every Region
- * aws-cdk-lib knows. Ordered longest-prefix-first so `us-isob-` is not shadowed by `us-iso-`.
- */
-const PARTITION_DNS_SUFFIXES: { prefix: string; partition: string; suffix: string }[] = [
-    { prefix: "us-gov-", partition: "aws-us-gov", suffix: "amazonaws.com" },
-    { prefix: "cn-", partition: "aws-cn", suffix: "amazonaws.com.cn" },
-    { prefix: "eusc-", partition: "aws-eusc", suffix: "amazonaws.eu" },
-    { prefix: "us-isob-", partition: "aws-iso-b", suffix: "sc2s.sgov.gov" },
-    { prefix: "us-isof-", partition: "aws-iso-f", suffix: "csp.hci.ic.gov" },
-    { prefix: "us-iso-", partition: "aws-iso", suffix: "c2s.ic.gov" },
-    { prefix: "eu-isoe-", partition: "aws-iso-e", suffix: "cloud.adc-e.uk" },
-];
 const COMMERCIAL_DNS_SUFFIX = "amazonaws.com";
-
-/**
- * The partition implied by `env.region`, or undefined when the region is unset — the deploy-time
- * region can still come from CDK context or the environment, which the browser cannot read, so the
- * partition is unknowable and partition-specific rules stay silent.
- */
-function partitionForRegionName(region: unknown): string | undefined {
-    if (isUnset(region) || typeof region !== "string") return undefined;
-    const match = PARTITION_DNS_SUFFIXES.find((entry) => region.startsWith(entry.prefix));
-    return match ? match.partition : "aws";
-}
 
 /**
  * The partition DNS suffix implied by `env.region`, or undefined when the region is unset — the
@@ -152,7 +114,6 @@ function isAllowedOcu(value: unknown): boolean {
     return n === 0 || n === 2 || n === 4 || n === 8 || (n >= 16 && n % 16 === 0);
 }
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SECRETSMANAGER_ARN_PATTERN = /^arn:aws[a-z-]*:secretsmanager:/;
 
 // Amazon Cognito's username limit, mirroring COGNITO_USERNAME_MAX_LENGTH in infra/config/config.ts.
 const COGNITO_USERNAME_MAX_LENGTH = 128;
@@ -201,18 +162,6 @@ function isFargateCpuMemory(vcpu: unknown, memoryGiB: unknown): boolean {
 // The API implementation types the deployment accepts, mirroring SUPPORTED_API_TYPES in
 // infra/config/config.ts.
 const SUPPORTED_API_TYPES = ["APIGATEWAY_REST"];
-
-/** True when a value looks like a valid URL (config.ts uses `new URL(...)`). */
-function isValidUrl(value: unknown): boolean {
-    if (typeof value !== "string" || value === "") return false;
-    try {
-        // eslint-disable-next-line no-new
-        new URL(value);
-        return true;
-    } catch {
-        return false;
-    }
-}
 
 /** Physna credentials supplied via an operator-managed secret ARN (config.ts: `hasSecretArn`). */
 function physnaHasSecretArn(cfg: ConfigShape): boolean {
@@ -589,12 +538,7 @@ function isIsoPartitionRegion(region: unknown): boolean {
  * are the fields the operator would change to clear the error. Adding a feature to the config.ts
  * collection means adding it here.
  */
-const VPC_REQUIRING_FEATURES: {
-    id: string;
-    label: string;
-    fieldPaths: string[];
-    appliesWhen: (cfg: ConfigShape) => boolean;
-}[] = [
+const VPC_REQUIRING_FEATURES: VpcRequiringFeature[] = [
     {
         id: "vpc-required-use-alb",
         label: "useAlb",
@@ -696,6 +640,7 @@ const VPC_REQUIRING_FEATURES: {
         fieldPaths: ["app.pipelines.useGenAiVideoSopBom.enabled"],
         appliesWhen: (c) => !!g(c, "app.pipelines.useGenAiVideoSopBom.enabled"),
     },
+    ...ADDON_VPC_REQUIRING_FEATURES,
 ];
 
 /** Partitions whose capability downgrades are gated on app.govCloud.enabled (config.ts: `restrictedPartitionRequiringFlag`). */
@@ -730,7 +675,7 @@ function createsRekognitionEndpoint(c: ConfigShape): boolean {
     );
 }
 
-export const RULES: Rule[] = [
+const CORE_RULES: Rule[] = [
     // ----- Restricted-partition flag agreement
     // (config.ts: "app.govCloud.enabled is the restricted-partition switch") -----
     {
@@ -2927,6 +2872,8 @@ export const RULES: Rule[] = [
             "app.compliance.autoLoadDefaultSchema is true but app.metadataSchema.autoLoadDefaultAssetSchema is false. The default compliance schema validates assets against the GLOBAL defaultAsset metadata schema, which only that flag seeds; without it the seeded rule checks nothing. Set autoLoadDefaultAssetSchema to true, or set autoLoadDefaultSchema to false.",
     },
 ];
+
+export const RULES: Rule[] = [...CORE_RULES, ...ADDON_RULES];
 
 /** Evaluate every rule against the config and return those that apply. */
 export function evaluateRules(config: ConfigShape): Rule[] {

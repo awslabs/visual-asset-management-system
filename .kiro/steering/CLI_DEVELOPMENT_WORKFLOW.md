@@ -2,7 +2,9 @@
 
 This document provides comprehensive guidelines for developing and extending VamsCLI. Follow these rules to ensure consistency, quality, and maintainability across all implementations.
 
-> **Steering Document Sync (bidirectional):** This document mirrors the Claude Code steering in `tools/VamsCLI/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Whenever you change a rule, pattern, or convention here, make the equivalent change in `tools/VamsCLI/CLAUDE.md` in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+> **Steering Document Sync (bidirectional):** This document mirrors the Claude Code steering in `tools/VamsCLI/CLAUDE.md` and, in its MCP propagation sections, `tools/VamsMCP/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Whenever you change a rule, pattern, or convention here, make the equivalent change in those `CLAUDE.md` files in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+
+> **Add-on steering:** an add-on's own steering lives in `.kiro/steering/ADDON_*.md` (`inclusion: fileMatch`), which loads when you edit that add-on's files; this document covers core and the lanes an add-on plugs into.
 
 ## 🏗️ **Architecture Overview**
 
@@ -11,10 +13,10 @@ This document provides comprehensive guidelines for developing and extending Vam
 ```
 tools/VamsCLI/
 ├── vamscli/
-│   ├── main.py              # CLI entry point with global options
+│   ├── main.py              # CLI entry point with global options (+ ADDON_COMMANDS, CUSTOM_COMMANDS)
 │   ├── version.py           # Version management
 │   ├── constants.py         # ALL API endpoints and configuration constants (re-exports addon_constants)
-│   ├── addon_constants.py   # Add-on FEATURE_* names (FEATURE_PHYSNA_ADDON), mirrors infra/common/addonAppFeatures.ts
+│   ├── addon_constants.py   # Add-on API_* paths, FEATURE_* names (mirror infra/common/addonAppFeatures.ts) and shared messages
 │   ├── custom_constants.py  # FORK EXTENSION POINT: a fork's API_* paths + FEATURE_CUSTOM_* (shipped empty)
 │   ├── auth/                # Authentication providers
 │   │   ├── __init__.py
@@ -23,21 +25,24 @@ tools/VamsCLI/
 │   ├── commands/            # Command implementations (one file per command group)
 │   │   ├── __init__.py
 │   │   ├── setup.py         # Setup commands
-│   │   └── auth.py          # Authentication commands
+│   │   ├── auth.py          # Authentication commands
+│   │   └── addon/           # Add-on lane: ADDON_COMMANDS (__init__.py) + one module per add-on (edh.py)
 │   └── utils/               # Shared utilities
 │       ├── __init__.py
-│       ├── api_client.py    # HTTP client and API methods
+│       ├── api_client.py    # HTTP client and API methods; inherits AddonAPIClientMixin, CustomAPIClientMixin
+│       ├── addon_api_client.py  # Add-on lane: AddonAPIClientMixin, aggregating one mixin per add-on
+│       ├── addon/           # One client mixin + exceptions module per add-on (edh_api_client.py, edh_exceptions.py)
 │       ├── profile.py       # Configuration and profile management
 │       └── exceptions.py    # Custom exception hierarchy
-├── tests/                   # Test files (mirror command structure)
+├── tests/                   # Test files (mirror command structure; add-on tests under tests/addon/)
 ├── setup.py                 # Package configuration
 ├── pyproject.toml          # Modern Python packaging
 └── README.md               # User documentation
 ```
 
-### **Command Groups (25 top-level)**
+### **Command Groups (25 core + add-on groups)**
 
-All registered in `main.py` via `cli.add_command()`:
+The core groups are registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
@@ -45,6 +50,8 @@ tag, tag-type, metadata, metadata-schema, comment, subscription, features,
 search, sync, workflow, pipeline, execution, industry, user, role, api-key,
 compliance
 ```
+
+The add-on groups are registered from `commands/addon/` (`ADDON_COMMANDS`): `edh` (EDH Workstations). See [Add-on Commands and MCP Tools](#add-on-commands-and-mcp-tools).
 
 Sync has a nested sub-command group:
 
@@ -91,7 +98,7 @@ Industry has nested sub-command groups:
 
 #### **Step 1: Constants & Configuration**
 
--   [ ] **Add API Endpoints**: Add all new API endpoints to `constants.py`
+-   [ ] **Add API Endpoints**: Add all new API endpoints to `constants.py` (an add-on's to `addon_constants.py`)
 -   [ ] **Add Configuration**: Add any new configuration constants
 -   [ ] **Add Feature Switch Constants**: Add feature switch constants if referencing features
 -   [ ] **Update Version**: Update version if this is a new release
@@ -106,7 +113,7 @@ Industry has nested sub-command groups:
 
 #### **Step 3: API Client Enhancement**
 
--   [ ] **Add API Methods**: Add new API methods to `utils/api_client.py`
+-   [ ] **Add API Methods**: Add new API methods to `utils/api_client.py` (an add-on's to its mixin under `utils/addon/`)
 -   [ ] **Follow Naming Convention**: Use descriptive method names (e.g., `call_login_profile`)
 -   [ ] **Include Error Handling**: Handle HTTP errors appropriately; map `401` to `AuthenticationError` and leave `403` to `_make_request`, which raises the typed 403s itself
 -   [ ] **Guard Global Errors**: Precede every broad handler that raises (a bare `except`, or one naming `Exception`, `BaseException` or `VamsCLIError`) with `except GlobalInfrastructureError: raise` in the same `try`; a handler naming a global type re-raises with a bare `raise` (ratchet: `tests/test_api_client_global_error_guards.py`)
@@ -123,7 +130,7 @@ Industry has nested sub-command groups:
 
 #### **Step 5: Main CLI Integration**
 
--   [ ] **Register Commands**: Add new commands to `main.py`
+-   [ ] **Register Commands**: Add new commands to `main.py` (an add-on's group to `ADDON_COMMANDS` in `commands/addon/__init__.py`)
 -   [ ] **Update Global Options**: Add any new global options if needed
 -   [ ] **Update Exception Handling**: Give a new `GlobalInfrastructureError` a branch in `utils/global_exceptions.py`
 
@@ -187,7 +194,8 @@ Three consumers sit **downstream of the CLI** and must be carried through in the
 **MCP server:**
 
 -   [ ] **Review MCP Impact**: Check whether `tools/VamsMCP/vams_mcp/server.py` calls the `APIClient` method you changed. A renamed method, new required parameter, or changed response shape breaks the MCP tool silently — it only surfaces at agent runtime.
--   [ ] **Add an MCP Tool**: If the new `APIClient` method is something agents should be able to call, add an `@mcp.tool()` + `@tool_result` function in the correct gate section (read at top, writes under `if CONFIG.enable_writes:`, destructive under `if CONFIG.enable_destructive:`). The tier is about STORED DATA, so `abort_execution` is write-tier even though it is irreversible; the compute risk is carried by the README's `autoApprove` caution and `tools/VamsMCP/CLAUDE.md` Rule 4, which name `execute_workflow`, `rerun_execution` and `abort_execution` together. A required-true request field is not a confirmation to re-expose: `delete_asset` sends `confirmPermanentDelete=True` because `DeleteAssetRequestModel` declares an `always=True` validator rejecting any other value, so surfacing it as a tool parameter would give the agent a boolean whose only non-erroring value is `True`.
+-   [ ] **Add an MCP Tool**: If the new `APIClient` method is something agents should be able to call, add an `@mcp.tool()` + `@tool_result` function in the correct gate section (read at top, writes under `if CONFIG.enable_writes:`, destructive under `if CONFIG.enable_destructive:`). The tier is about STORED DATA, so `abort_execution` is write-tier even though it is irreversible; the compute risk is carried by the README's `autoApprove` caution and `tools/VamsMCP/CLAUDE.md` Rule 4, which name `execute_workflow`, `rerun_execution` and `abort_execution` together. An add-on tool that starts, resumes, extends the lease of or interrupts billed compute stays out of `autoApprove` the same way, and its add-on's subsection of the MCP "Add-on Tools" names it. An add-on's tools go in its module under `tools/VamsMCP/vams_mcp/addon_tools/` instead of `server.py` (see [Add-on Commands and MCP Tools](#add-on-commands-and-mcp-tools)). A required-true request field is not a confirmation to re-expose: `delete_asset` sends `confirmPermanentDelete=True` because `DeleteAssetRequestModel` declares an `always=True` validator rejecting any other value, so surfacing it as a tool parameter would give the agent a boolean whose only non-erroring value is `True`.
+-   [ ] **Pre-flight a Feature-Gated Add-on Tool**: its first statement is `client.require_feature(<FEATURE_*>, <*_DISABLED_MESSAGE>)`, both names from `vamscli.addon_constants`: the MCP counterpart of the CLI's `@requires_feature`. It reads the profile's login-time feature-switch snapshot and raises `FeatureDisabledError` with the CLI's own sentence, which `@tool_result` returns as data. Without it, a deployment that never created the add-on's routes answers API Gateway's 403, which the client reports only as a request no deployed route matches, naming no feature switch.
 -   [ ] **Return Errors as Data, With Their Fields**: `@tool_result` returns a raised error as `{"error", "error_type"}` plus the exception's `json_fields`, merged without replacing those two, as the CLI's `--json-output` carries them: for example `blockedBy` (`waf`, or `waf-or-stage` for a bare API Gateway `Forbidden`) and `requestId` of a `RequestBlockedError`, a request the deployment's AWS WAF web ACL blocked before VAMS handled it. A new machine-readable fact belongs on the CLI exception's `json_fields`, so the CLI and every tool carry it alike.
 -   [ ] **Check Pagination Shape**: `VamsClient.paginate()` is driven by the list field name — whatever field the handler returns the list under, passed as `items_key` — and unwraps the legacy `message` envelope. Read the handler's response model rather than checking against a list of names: the names in use today are `Items`, `items`, `versions`, `metadata`, and the compliance `evaluations`/`entries`/`quarantinedAssets`. Confirm the `items_key` still matches the endpoint's response. **Three envelope variants exist and they are not interchangeable** — an unenveloped body (the asset/database and metadata-schema/api-key methods); `{"message": {"Items": [...], "NextToken": ...}}`, where the page is nested UNDER `message` so the envelope must be unwrapped before the items key applies (the subscriptions list); and `{"message": [row, ...]}`, a **bare array** with no items key and no token at all (both asset-scoped comment listings). Do **not** route the bare-array shape through `paginate()`: it finds no items key and returns zero rows on a perfectly successful 200. Lift the list and report the bound with `_bounded_message_list()` instead. The failure is silent in the worst direction — an empty result reads as "no comments exist".
 -   [ ] **Give the List Tool a `starting_token`, and State Its Bound**: `paginate()` stops at `max_items` or at `max_pages` (a per-call work bound on the server process, which a larger `max_items` deliberately does not raise), sets `truncated` with a `note` naming which fired — including the case where one page returned more rows than `max_items` and carried no token, which a token-only check misses — and returns the outstanding `NextToken`. Every paginated read tool takes a `starting_token` that forwards it as the first page's `startingToken`, and says so in its docstring. Without that pair the ceiling is a wall and the rows past it are unreachable through the server at all.
@@ -195,10 +203,10 @@ Three consumers sit **downstream of the CLI** and must be carried through in the
 -   [ ] **Repeat Filter-Pinned Query Parameters on Every Page**: Some continuation tokens are only valid alongside the filters that produced them — the paged execution-detail metadata read pins its token to the request's `collection` and `pipelineId`, and the handler answers a mismatch with a 400. `paginate()` sends only `pageSize` and `startingToken`, so merge those filters into the params inside the `fetch_page` callable rather than on the first request alone.
 -   [ ] **Carry Out-of-Band Bound Signals Through**: A handler can answer successfully while withholding rows, and it says so in a field alongside the items — a top-level `warnings` array, a `truncatedCollections` list, or an echoed filter window such as the executions list's `filterStartDate`. `paginate()` rebuilds its result from the accumulated items alone and drops all of them, so an agent reports an understated count or concludes an object does not exist. A `warnings` array can carry more than one entry, because more than one bound can shorten the same page (the global executions list reports both its distinct-asset permission-check cap and its per-request work budget), so collect every entry rather than the first, and do the same in the CLI's own `--auto-paginate` aggregate — it rebuilds its result from the items too. Use `server.py`'s `_paginate_with_page_metadata(fetch_page, passthrough_keys=...)` for a list endpoint that can report those, and `_unwrap_message_with_warnings()` for a single call whose `warnings` array is a sibling of `message` (the pipeline saves). Then say in the docstring what the flag means for the agent's conclusion, not merely that the field exists.
 -   [ ] **Forward Every Narrowing Parameter**: An omitted optional parameter silently pins the agent to the server default. `get_execution_logs` without `limit`/`next_token` caps a container's output at 100 events with no way past the first page; `list_workflows` without `include_archived` makes the archived id that `unarchive_workflow` requires undiscoverable. Read the matching `vamscli` command for the endpoint's full parameter set, and send a parameter only in the mode that acts on it (the log paging parameters go in `full` mode only — truncated mode returns one joined blob and no continuation token).
--   [ ] **Verify Placement and Uniqueness**: The tools are plain module-level `def`s, so both ways placement goes wrong leave a valid, importable module. A repeated tool name silently shadows the earlier definition, and a `def` past the `if __name__` entrypoint or outside its gate block is simply never executed — in both cases the tool is missing at run time with no error. `tests/test_server_tools.py` asserts against the source layout for exactly this; keep those checks passing.
--   [ ] **Update MCP Docs**: Add the tool to the `tools/VamsMCP/README.md` tool list, and to the `autoApprove` array of that README's sample MCP host config if it is a safe read — never a tool that returns a credential (`create_api_key`, `create_user_api_key` hand back the one-time key value; the presigned-URL tools hand back bearer URLs), one that returns credential inventory (the API-key reads), or one that starts or stops compute. Document a new environment variable in `tools/VamsMCP/.env.example` **and** in the README's `env` sample. That file is a reference list, not a dotenv template: nothing in the package loads a `.env` (and a cwd-upward search would not reliably find it, since a host spawns the console script from an arbitrary directory), so never write documentation telling a reader to copy it — a `.env` beside the server is silently ignored and the usual next step is to delete the gate guard in source. A tool whose parameters or response fields change also needs its README paragraph updated — that list is the only place the parameter set is documented outside the docstring.
+-   [ ] **Verify Placement and Uniqueness**: The tools are plain module-level `def`s, so both ways placement goes wrong leave a valid, importable module. A repeated tool name silently shadows the earlier definition, and a `def` past the `if __name__` entrypoint or outside its gate block is simply never executed — in both cases the tool is missing at run time with no error. `tests/test_server_tools.py` asserts against the source layout for exactly this, and `tests/test_addon_tools.py` holds the modules of `addon_tools/` to the same layout; keep those checks passing.
+-   [ ] **Update MCP Docs**: Add the tool to the `tools/VamsMCP/README.md` tool list, and to the `autoApprove` array of that README's sample MCP host config if it is a safe read — never a tool that returns a credential (`create_api_key`, `create_user_api_key` hand back the one-time key value; the presigned-URL tools hand back bearer URLs), one that returns credential inventory (the API-key reads), or one that starts or stops compute. An add-on's tools are listed in its subsection of the README's "Add-on tools", with its safe reads in that subsection's `autoApprove` addition, never in the core sample. Document a new environment variable in `tools/VamsMCP/.env.example` **and** in the README's `env` sample. That file is a reference list, not a dotenv template: nothing in the package loads a `.env` (and a cwd-upward search would not reliably find it, since a host spawns the console script from an arbitrary directory), so never write documentation telling a reader to copy it — a `.env` beside the server is silently ignored and the usual next step is to delete the gate guard in source. A tool whose parameters or response fields change also needs its README paragraph updated — that list is the only place the parameter set is documented outside the docstring.
 -   [ ] **Roll the MCP Version**: When the server's contract with the CLI changes, bump both `tools/VamsMCP/pyproject.toml` and `tools/VamsMCP/vams_mcp/__init__.py` alongside `tools/VamsCLI/vamscli/version.py`.
--   [ ] **Run MCP Tests**: `cd tools/VamsMCP && pytest`, using the server's own virtual environment (tests mock the client; no live deployment needed). The `mcp` SDK requires Pydantic v2 while the VAMS backend requires v1, so installing this server into a shared environment breaks the entire backend test suite at collection. Assert the params that reach the `APIClient`, not just that the call happened — a dropped optional parameter is a silent server-default that no assertion on the return value catches.
+-   [ ] **Run MCP Tests**: `cd tools/VamsMCP && pytest`, using the server's own virtual environment (tests mock the client; no live deployment needed; an add-on module's tests under `tests/addon/` pass a mocked client to its `register`). The `mcp` SDK requires Pydantic v2 while the VAMS backend requires v1, so installing this server into a shared environment breaks the entire backend test suite at collection. Assert the params that reach the `APIClient`, not just that the call happened — a dropped optional parameter is a silent server-default that no assertion on the return value catches.
 
 **External connectors** — required whenever a command name, subcommand, option/flag, or `--json-output` response shape changes. Nothing catches connector drift at build or import time: a renamed flag fails at connector runtime with a non-zero CLI exit, and a renamed or removed JSON key silently yields a blank field, which is worse.
 
@@ -256,9 +264,35 @@ A fork adds CLI commands and MCP tools without editing `main.py`, `constants.py`
 -   `vamscli/custom_constants.py` — the fork's `API_*` paths and `FEATURE_CUSTOM_*` names. It imports nothing from `vamscli`, so the files below can import it without a cycle. `tests/test_constants_contract.py` checks each path against the backend route lists (including `backend/backend/custom/customApiRoutes.py`) and each feature name against `infra/common/customAppFeatures.ts`.
 -   `vamscli/utils/custom_api_client.py` — `CustomAPIClientMixin`, which `APIClient` inherits; its methods get the core retry/backoff and typed errors and the MCP server reaches them as `CLIENT.api.<method>`. It must not import from `vamscli.commands`.
 -   `vamscli/commands/custom/__init__.py` — `CUSTOM_COMMANDS`; `main.py` registers each entry on the root `cli` group after every core command, and raises at import on a name that is already registered, so a custom command never replaces a core one (`tests/test_custom_commands.py`).
--   `tools/VamsMCP/vams_mcp/custom_tools.py` — `register_custom_tools(mcp, client, config, tool_result)`, called once by `server.py` after the destructive block; gate write/destructive tools on `config.enable_writes` / `config.enable_destructive`. A custom tool with a core tool's name is not registered: the MCP SDK keeps the core tool and logs `Tool already exists: <name>` (`tools/VamsMCP/tests/test_custom_tools.py`).
+-   `tools/VamsMCP/vams_mcp/custom_tools.py` — `register_custom_tools(mcp, client, config, tool_result)`, called once by `server.py` after the destructive block and after `register_addon_tools(...)`; gate write/destructive tools on `config.enable_writes` / `config.enable_destructive`. A custom tool with the name of a core or add-on tool is not registered: the MCP SDK keeps the first registration and logs `Tool already exists: <name>` (`tools/VamsMCP/tests/test_custom_tools.py` and `test_addon_tools.py`).
 
-A `CustomAPIClientMixin` method with the name of an `APIClient` method is never called, because `APIClient` comes first in the MRO; `tests/test_custom_api_client.py` fails on such a name. Names prefixed `custom-` (commands) and `custom_` (tools) are recommended, not enforced. Add-on feature-switch names live in `vamscli/addon_constants.py` (mirroring `infra/common/addonAppFeatures.ts`) and are re-exported from `constants.py`; the contract test checks core, add-on and custom constants against their enums in both directions. Walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+A `CustomAPIClientMixin` method with the name of an `APIClient` method is never called, because `APIClient` comes first in the MRO; `tests/test_custom_api_client.py` fails on such a name. Names prefixed `custom-` (commands) and `custom_` (tools) are recommended, not enforced. Add-on endpoint paths, feature-switch names and shared messages live in `vamscli/addon_constants.py` (the switches mirroring `infra/common/addonAppFeatures.ts`) and are re-exported from `constants.py`; the contract test checks core, add-on and custom constants against their route lists and enums in both directions. Walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
+#### **Add-on Commands and MCP Tools**
+
+An add-on's commands, client methods and MCP tools use an add-on lane that mirrors the fork lane above. Upstream edits these files when it ships an add-on with commands or tools; a fork does not:
+
+| What                                      | Add-on file                                                                                                                                    | Spliced in by                                                                                                                                        |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Endpoint paths, switches, shared messages | `vamscli/addon_constants.py` (`API_*`, `FEATURE_*`, the messages the commands and MCP tools share)                                             | `constants.py` re-exports every name                                                                                                                 |
+| API client methods                        | one mixin per add-on in `vamscli/utils/addon/<addon>_api_client.py`, aggregated by `vamscli/utils/addon_api_client.py` (`AddonAPIClientMixin`) | `class APIClient(AddonAPIClientMixin, CustomAPIClientMixin)`: a name resolves to the core method, then an add-on's, then a fork's                    |
+| Exceptions                                | `vamscli/utils/addon/<addon>_exceptions.py`, `BusinessLogicError` subclasses                                                                   | imported by the add-on's commands and client mixin                                                                                                   |
+| Command groups                            | `vamscli/commands/addon/<group>.py`, listed in `commands/addon/__init__.py` (`ADDON_COMMANDS`)                                                 | `main.py` registers them after every core command and before `CUSTOM_COMMANDS`, and raises at import on a name that is already registered            |
+| MCP tools                                 | one module per add-on in `tools/VamsMCP/vams_mcp/addon_tools/`, listed in `ADDON_TOOL_MODULES` (`addon_tools/__init__.py`)                     | `server.py` calls `register_addon_tools(mcp, CLIENT, CONFIG, tool_result)` once, after the destructive block and before `register_custom_tools(...)` |
+
+-   `commands/addon/__init__.py` imports each module whole (`from . import edh`), so `vamscli.commands.addon.edh` names the module that `generic_command_mocks('addon.edh')` patches rather than its command group.
+-   A client mixin imports from `..exceptions` and `...addon_constants`, never from `vamscli.commands`; a helper that needs a function of `api_client.py` imports it inside the function, since `api_client.py` imports the mixin.
+-   An add-on tool module's `register(mcp, client, config, tool_result)` defines each tool with `@mcp.tool()` then `@tool_result`: the reads directly in its body, write tools under `if config.enable_writes:` and destructive tools under `if config.enable_destructive:`. It calls `client.api.<method>`, whose add-on methods live in the CLI's add-on mixin. The MCP SDK keeps the first registration of a name, so a core tool wins over an add-on tool and an add-on tool over a custom one. A feature-gated tool opens with the `client.require_feature(...)` pre-flight (Step 9).
+-   Guards: `tests/test_addon_commands.py` (registration; a core name refused; a custom command named like an add-on command refused), `tests/test_addon_api_client.py` (MRO order; no add-on method shadowed by a core one or shared with another add-on mixin or `CustomAPIClientMixin`), `tests/test_constants_contract.py` (add-on paths against `backend/backend/common/addonApiRoutes.py`, switches against `infra/common/addonAppFeatures.ts`), `tests/test_api_client_global_error_guards.py`, which parses every class in `APIClient.__mro__`, and, in `tools/VamsMCP`, `tests/test_addon_tools.py`: the hook's placement and, for every module, each tool directly in `register` or directly under one of its two gates, the decorator order and the pre-flight as its first statement, no mutating `client.api` method, raw verb or `client.post_json` in the read section, every `client.api.<method>` present on `APIClient`, no name a core tool or another add-on uses, and the module listed in `ADDON_TOOL_MODULES`. These layout guards are durable; do not mark them temporary.
+
+##### **EDH Workstations**
+
+-   `edh` (`commands/addon/edh.py`) has the `workstation`, `catalog`, `admin` (`images`, `ami-recipe`, `instances`, `capacity`, `capacity-reservation`, `health`, `settings`) and `container` sub-groups. Every command stacks `@requires_feature(FEATURE_EDH_WORKSTATIONS, ...)` after `@requires_setup_and_auth` (`container` uses `FEATURE_EDH_CONTAINERS`, `admin ami-recipe` uses `FEATURE_EDH_AMI_RECIPES`); the switch is a login-time snapshot. The three refusal sentences (`EDH_*_DISABLED_MESSAGE` in `addon_constants.py`) are the ones the MCP server's EDH pre-flight reports.
+-   `EdhAPIClientMixin` (`utils/addon/edh_api_client.py`): every method passes `raise_http_errors=True`, because with the default `_make_request` converts a 404/400/5xx into a generic `APIError` before the method's own handler runs. `_edh_error` maps a 403 the methods read themselves to `PermissionDeniedError("Access forbidden. " + message)` and a 401 to `AuthenticationError`, and `_edh_session_id` checks a workstation id (one path segment, the service's `id_pattern`) before any request. The list routes return every row in one `{"Items": [...]}` page, so the commands take no paging options and the MCP tools use neither `paginate()` nor `unwrap_message()`.
+-   `utils/addon/edh_exceptions.py` holds the `EdhError` family; the class names are the `error_type` that `--json-output` and the MCP tools report. `EdhOutcomeUnknownError` carries `json_fields` `{"outcomeUnknown": True}` and `EdhStartInProgressError` `{"startInProgress": True}` on the class, the flags the API's own error body sets, which `@tool_result` passes through.
+-   `edh workstation connect` prints only the DCV host in CLI mode; the `connectionUrl`, which carries a session auth token, is returned only with `--json-output`. `--show-windows-password` adds a Windows workstation's sign-in, which no MCP tool reads.
+-   `addon_tools/edh.py` holds 18 read, 17 write and 8 destructive tools, pre-flighting `FEATURE_EDH_CONTAINERS` (container tools), `FEATURE_EDH_AMI_RECIPES` (AMI recipe tools) or `FEATURE_EDH_WORKSTATIONS` (the rest). The nine compute tools (`create_edh_workstation`, `renew_edh_workstation`, `start_edh_workstation`, `stop_edh_workstation`, `stop_edh_admin_instance`, `submit_edh_container_job`, `start_edh_ami_recipe_build`, `deactivate_edh_admin_instance`, `kill_edh_container_job`) stay out of `autoApprove`. `get_edh_workstation_connect` changes no stored data but issues the DCV `connectionUrl`, so it is the one read placed in the write tier (behind `VAMS_ENABLE_WRITES`) and never enters `autoApprove`. No tool calls `get_edh_workstation_windows_sign_in`.
+-   Tests: `tests/addon/test_edh.py` and `tests/addon/test_edh_client.py` (CLI), `tests/addon/test_edh_tools.py` (MCP). The command details and the add-on's other components: `.kiro/steering/ADDON_EDH_WORKSTATIONS.md`; option semantics, output and error texts: `documentation/docusaurus-site/docs/developer/edh-workstations/cli-commands.md` and `cli-troubleshooting.md`.
 
 ### **Command Implementation Standards**
 
@@ -701,9 +735,9 @@ def get_assets(self):
     return self.get("/api/user/assets")  # VIOLATION
 ```
 
-In a fork, the fork's paths go in `vamscli/custom_constants.py`, which the contract test below checks the same way.
+An add-on's paths go in `vamscli/addon_constants.py` and, in a fork, the fork's in `vamscli/custom_constants.py`; the contract test below checks both the same way.
 
-**Every `API_*` path constant must also name a route the backend actually registers.** `constants.py` is the authority a new consumer trusts, so a path the backend never declared is a trap that fails only at runtime against a live deployment: API Gateway rejects an unmatched path before any handler runs, so neither import nor build catches it, and API Gateway answers `403 Missing Authentication Token`, which the CLI reports as `No deployed API route matches <METHOD> <path>` rather than a permission failure. `tests/test_constants_contract.py` cross-checks every constant against the `ApiRoute` declarations in `backend/backend/common/apiRoutes.py`.
+**Every `API_*` path constant must also name a route the backend actually registers.** `constants.py` is the authority a new consumer trusts, so a path the backend never declared is a trap that fails only at runtime against a live deployment: API Gateway rejects an unmatched path before any handler runs, so neither import nor build catches it, and API Gateway answers `403 Missing Authentication Token`, which the CLI reports as `No deployed API route matches <METHOD> <path>` rather than a permission failure. `tests/test_constants_contract.py` cross-checks every constant against the `ApiRoute` declarations in `backend/backend/common/apiRoutes.py` (and `common/addonApiRoutes.py` and `custom/customApiRoutes.py` for the lane constants).
 
 Two such constants shipped in this release — one formatted by a live `APIClient` method (so the request really was rejected), and one imported but never formatted (dead, but reading like working code). A third case is a dead _name_ rather than a dead _path_: two constants holding the same registered path, one unused, differing by a single character. That one passes the cross-check by construction, so it stays a review concern rather than a mechanical one.
 
@@ -845,6 +879,7 @@ All CLI documentation lives in the Docusaurus documentation site at `documentati
 
 -   **Command changes** → Update the relevant page in `documentation/docusaurus-site/docs/cli/commands/`
 -   **New command group** → Create new page in `cli/commands/`, update `cli/command-reference.md`, and add to `sidebars.ts`
+-   **Add-on command group** → The add-on's own CLI commands and troubleshooting pages under `documentation/docusaurus-site/docs/developer/<addon>/` (see the `DOCUMENTATION_WORKFLOW.md` "New or reclassified add-on" row)
 -   **Installation/auth changes** → Update `cli/getting-started.md` and `cli/installation.md`
 -   **Automation patterns** → Update `cli/automation.md`
 -   **Troubleshooting changes** → Update the relevant page in `documentation/docusaurus-site/docs/cli/troubleshooting/` (CLI troubleshooting lives under the CLI section, not the top-level `troubleshooting/`)
@@ -1159,8 +1194,8 @@ This workflow document itself MUST be updated whenever system-wide standards, im
 When updating this workflow document, also update the corresponding files:
 
 1. Update `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`
-2. Update **all** affected CLAUDE.md files (root, web/, backend/, infra/, tools/VamsCLI/, documentation/)
-3. If the change affects other components, also update the relevant workflow files (BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, WEB_DEVELOPMENT_WORKFLOW.md, WEB_FRONTEND.md, DOCUMENTATION_WORKFLOW.md)
+2. Update **all** affected CLAUDE.md files (root, web/, backend/, infra/, tools/VamsCLI/, tools/VamsMCP/, documentation/)
+3. If the change affects other components, also update the relevant workflow files (`BACKEND_CDK_DEVELOPMENT_WORKFLOW.md`, `CDK_DEVELOPMENT_WORKFLOW.md`, `WEB_DEVELOPMENT_WORKFLOW.md`, `WEB_FRONTEND.md`, `DOCUMENTATION_WORKFLOW.md`), and the add-on's `ADDON_<ADDON>.md` file when the change touches an add-on
 4. Update any Claude Code skills in `.claude/commands/` that scaffold or reference the changed rule, pattern, checklist, or file path (see root `CLAUDE.md` Rule 12 for the skill-to-steering mapping)
 
 #### **Workflow Maintenance Responsibility:**
@@ -1178,7 +1213,7 @@ When referencing feature switches in commands or logic, these MUST be defined as
 
 #### **Feature Switch Requirements:**
 
--   [ ] **Add Feature Constants**: Add all feature switch names to `constants.py` (in a fork: `FEATURE_CUSTOM_*` in `custom_constants.py`)
+-   [ ] **Add Feature Constants**: Add all feature switch names to `constants.py` (an add-on's in `addon_constants.py`; in a fork: `FEATURE_CUSTOM_*` in `custom_constants.py`)
 -   [ ] **Import Feature Constants**: Import constants in command files
 -   [ ] **Use @requires_feature Decorator**: For commands that require specific features, passing a `FEATURE_*` constant (never a string literal). `vamscli features example-govcloud` and `vamscli features example-location` (`commands/features.py`) are the reference uses. The `user cognito` commands carry no feature gate: a deployment with Cognito disabled answers them with a `400`, which `APIClient` reports as `Cognito not enabled: ...` (`_is_cognito_unavailable` in `utils/api_client.py`)
 -   [ ] **Manual Feature Checks**: Use `is_feature_enabled()` for conditional logic
@@ -1260,7 +1295,7 @@ Feature switches are automatically fetched and stored during authentication:
 
 #### **Available Feature Switch Constants:**
 
-Available constants are in `infra/common/vamsAppFeatures.ts`
+Available constants are in `infra/common/vamsAppFeatures.ts`; the add-on switches are in `infra/common/addonAppFeatures.ts`, mirrored in `vamscli/addon_constants.py`
 
 #### **Feature Switch Development Workflow Location:**
 
@@ -1424,6 +1459,8 @@ def create(ctx: click.Context, ...):
 
 `RequestBlockedError` carries `json_fields` `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` (the marker body's request ID, else the first non-blank `x-amz-apigw-id`, `x-amz-cf-id` or `x-amzn-RequestId` header: the IDs the regional web ACL log, the CloudFront web ACL log and the API Gateway access log record), never clears stored credentials (`call_login_profile` re-raises global errors), and is printed under `Request Blocked`, ahead of the `AuthenticationError` branch, with `WAF_ADMIN_HINT` (`WAF_OR_STAGE_ADMIN_HINT`, which also names the stage-path check, when `confirmed` is false) and the request ID. Its texts carry no sign-in wording (`auth login`, `401`, `token has expired`, `Authentication failed`), which the IsaacSim connector would class as a credential failure; `tests/test_api_403_classification.py::TestBlockWording` holds them to that. `check_api_availability` raises `RequestBlockedError` for the marker and `APIUnavailableError` naming both causes for a bare `Forbidden`, and `requires_api_access` re-raises both, so a blocked version check stops `auth login`, `auth change-password` and `auth forgot-password` before any Cognito call; `setup` refuses a URL whose stage probe the web ACL blocked.
 
+Before anything is sent, `_make_request` refuses an endpoint whose path has an empty, `.` or `..` segment (raw or percent-encoded) with `InvalidRequestPathError`, an `APIError`: the URL join drops or resolves such a segment, so a path value carrying one would address another route (`tests/test_api_request_path.py`).
+
 A global error's `--json-output` document (`_global_error_data`) is `{"error": "<Heading>: <message>", "error_type", ...json_fields, "additional_info"?}` on stdout; in text mode its `✗ <Heading>: <message>` line goes to stderr and its `additional_info` lines to stdout. Both exit 1.
 
 Every broad handler that raises in an `APIClient` method -- a bare `except`, or one naming `Exception`, `BaseException` or `VamsCLIError` -- is preceded by `except GlobalInfrastructureError: raise` in the same `try`, and a handler naming `GlobalInfrastructureError` or a subclass re-raises with a bare `raise`; a handler that swallows the error or returns a value is exempt. The ratchet `tests/test_api_client_global_error_guards.py` fails otherwise, for every class in `APIClient.__mro__`. This keeps a web ACL block, a permission denial or an expired token typed through every `APIClient` method; `utils/upload_manager.py`, `utils/download_manager.py` and a few command wrappers still record one per file, upload sequence or item, with its message but without its heading or `json_fields`.
@@ -1432,6 +1469,7 @@ Every broad handler that raises in an `APIClient` method -- a bare `except`, or 
 
 -   `AssetNotFoundError`, `AssetAlreadyExistsError`, `DatabaseNotFoundError`
 -   `TagNotFoundError`, `FileUploadError`, `SearchQueryError`
+-   An add-on's `BusinessLogicError` subclasses, in `utils/addon/<addon>_exceptions.py`
 -   Any domain-specific validation or operation errors
 
 #### **Benefits of New Architecture:**
@@ -1956,7 +1994,7 @@ The three existing sinks are wired: `output_result` (`utils/json_output.py`), `l
 
 **How the redactor decides:**
 
--   **By key name** — a key whose normalized form (separators stripped, lowercased) contains `password`, `passwd`, `secret`, `token`, `credential`, `apikey`, `authorization`, `signature`, `privatekey`, or `cookie` is replaced. Applied recursively through dicts and sequences.
+-   **By key name** — a key whose normalized form (separators stripped, lowercased) contains `password`, `passwd`, `secret`, `token`, `credential`, `apikey`, `authorization`, `signature`, `privatekey`, `cookie`, or `connectionurl` is replaced. Applied recursively through dicts and sequences.
 -   **By descriptive suffix (an exception)** — a key that also _ends_ in `id`, `name`, `arn`, `type`, `count`, `expiry`, `expiration`, `enabled`, or `status` names a credential rather than carrying one, so `apiKeyId`, `tokenType`, and `credentialsSecretArn` survive. `apiKeyHash` and `passwordHash` deliberately do **not** survive.
 -   **By value shape** — `vams_…` keys, JWTs, `Bearer …`, and presigned-URL `X-Amz-Signature` / `X-Amz-Security-Token` parameters are scrubbed even when the key name gives no hint, covering a payload already rendered to a string.
 
@@ -2128,7 +2166,7 @@ class NewSpecificError(VamsCLIError):
     pass
 ```
 
-An exception whose `--json-output` error should carry a machine-readable field beside `error` and `error_type` declares it in the dict `json_fields`, which `output_error` merges without replacing those two: `RequestBlockedError` sets `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` on the instance. `json_fields` is merged only when it is a dict, whether it is set on the class or on the instance; any other value is left out and the error is reported without it (`tests/test_json_output_error_fields.py`). The global handler merges the same `json_fields`, by the same rule, into a global error's document when it is called with `exc=e`.
+An exception whose `--json-output` error should carry a machine-readable field beside `error` and `error_type` declares it in the dict `json_fields`, which `output_error` merges without replacing those two: `RequestBlockedError` sets `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` on the instance, and an add-on's exceptions set theirs on the class (see [Add-on Commands and MCP Tools](#add-on-commands-and-mcp-tools)). `json_fields` is merged only when it is a dict, whether it is set on the class or on the instance; any other value is left out and the error is reported without it (`tests/test_json_output_error_fields.py`). The global handler merges the same `json_fields`, by the same rule, into a global error's document when it is called with `exc=e`.
 
 #### **Step 2: Update Utils Init**
 

@@ -16,6 +16,7 @@
 
 import type { ConfigShape, FieldMeta, Section } from "./types";
 import { getByPath } from "./pathUtils";
+import { ADDON_FIELDS } from "./addon";
 
 export const SECTIONS: Section[] = [
     {
@@ -34,7 +35,7 @@ export const SECTIONS: Section[] = [
         id: "networking",
         label: "Networking (VPC)",
         description:
-            "VPC creation or import. Required by ALB, provisioned OpenSearch, a private OpenSearch Serverless collection, and the container pipelines.",
+            "VPC creation or import. Required by ALB, provisioned OpenSearch, a private OpenSearch Serverless collection, the container pipelines, and the add-ons that run in the VPC.",
         order: 3,
     },
     {
@@ -219,7 +220,7 @@ const cosmos3ModelFields: FieldMeta[] = [
     ),
 ];
 
-export const FIELDS: FieldMeta[] = [
+const CORE_FIELDS: FieldMeta[] = [
     // ===== Deployment basics =====
     {
         path: "name",
@@ -1804,6 +1805,8 @@ export const FIELDS: FieldMeta[] = [
         help: "When on, a quarantined asset cannot be downloaded unless it holds an active exception. When off, quarantine is informational only.",
     },
 ];
+
+export const FIELDS: FieldMeta[] = [...CORE_FIELDS, ...ADDON_FIELDS];
 
 /** Fields belonging to a section, in declaration order. */
 export function fieldsForSection(sectionId: string): FieldMeta[] {

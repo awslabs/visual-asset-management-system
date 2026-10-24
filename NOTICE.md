@@ -499,6 +499,29 @@ Applications using NVIDIA Cosmos models must include the attribution: **"Built o
 
 All six models listed above are gated on HuggingFace and require explicit license acceptance and access request before download. The Meta Llama-Guard-3-8B model requires separate acceptance of the Meta Llama 3 Community License.
 
+### EDH Workstations Add-on
+
+The EDH Workstations add-on integrates with [EDH](https://github.com/awslabs/engineering-development-hub)
+(Apache-2.0), an external platform the operator deploys and manages separately; VAMS ships no EDH
+code. EDH, not VAMS, installs Amazon DCV, the desktop environment and the NVIDIA GPU driver when a
+desktop first boots. The shipped AMI recipes under `backendAddons/edh/amiRecipes/` fetch their
+build-time components rather than redistributing them: operating system packages and updates
+(`dnf`, `apt` and Windows Update), the AWS CLI v2 from its AWS-published installer, and the Python
+dependencies of the VAMS CLI from PyPI, each under its own license terms.
+
+The `isaacsim` recipe (`backendAddons/edh/amiRecipes/isaacsim/`) downloads and installs NVIDIA Isaac
+Sim at image build time. No NVIDIA software is redistributed with VAMS; the build fetches the archive
+from NVIDIA's published download URL, which the recipe exposes as a parameter.
+
+| Component            | Version                      | License            | Usage                                                                                           |
+| -------------------- | ---------------------------- | ------------------ | ----------------------------------------------------------------------------------------------- |
+| NVIDIA Isaac Sim     | 6.2.0                        | NVIDIA Proprietary | Simulation application installed into the workstation image (NVIDIA Software License Agreement) |
+| NVIDIA Omniverse Kit | bundled with Isaac Sim 6.2.0 | NVIDIA Proprietary | Application framework Isaac Sim and the VAMS connector extension run on                         |
+
+Operators accept the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license)
+by building this recipe; the build answers NVIDIA's first-run licence and telemetry prompts
+non-interactively, which is a record of that acceptance, not a substitute for it.
+
 ---
 
 ## THIRD PARTY PAID COMPONENTS - BACKEND PIPELINES (AWS MARKETPLACE)

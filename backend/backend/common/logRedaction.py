@@ -18,23 +18,15 @@ intact.
 
 import re
 
-REDACTED = "<redacted>"
-
 # Sensitive key names — the credential keys in customLogging.logger.SENSITIVE_KEYS plus the two that
 # reach a caller only through returned log text: the security-token header, and a Step Functions task
 # token (an opaque capability to complete or fail the pending pipeline task that no IAM policy can
-# resource-scope). Matched case-insensitively. `TaskToken` is unanchored in the JSON rule below, so it
-# also covers the prefixed spellings the pipelines use (`externalSfnTaskToken`, `sfnExternalTaskToken`).
-SENSITIVE_KEYS = [
-    "authorization",
-    "idJwtToken",
-    "Credentials",
-    "AccessKeyId",
-    "SecretAccessKey",
-    "SessionToken",
-    "x-amz-security-token",
-    "TaskToken",
-]
+# resource-scope). Core + the add-on and fork lanes, merged in common/constants.py. Matched
+# case-insensitively. `TaskToken` is unanchored in the JSON rule below, so it also covers the prefixed
+# spellings the pipelines use (`externalSfnTaskToken`, `sfnExternalTaskToken`).
+from common.constants import LOG_TEXT_SENSITIVE_KEYS as SENSITIVE_KEYS
+
+REDACTED = "<redacted>"
 
 _KEYS_ALT = "|".join(re.escape(k) for k in SENSITIVE_KEYS)
 

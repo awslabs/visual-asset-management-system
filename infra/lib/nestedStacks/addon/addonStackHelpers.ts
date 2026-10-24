@@ -7,6 +7,9 @@
  * Helpers the add-on nested stacks share. Upstream-owned.
  */
 
+import { RemovalPolicy } from "aws-cdk-lib";
+import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import * as kms from "aws-cdk-lib/aws-kms";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import { Construct } from "constructs";
 import * as Config from "../../../config/config";
@@ -26,4 +29,33 @@ export function publishAddonResourceName(
     value: string
 ): ssm.StringParameter {
     return publishLaneResourceName("addon", scope, config, key, value);
+}
+
+/**
+ * The DynamoDB table properties an add-on table shares with the core tables in the storage stack:
+ * contributor insights off, point-in-time recovery on, RETAIN, on-demand billing, and the shared key
+ * when one is passed, else the AWS managed key. Pass the storage key imported by ARN into the add-on
+ * stack (kms.Key.fromKeyArn), so a grant on the table writes no statement into the storage key policy.
+ */
+export function addonDynamoDbTableDefaults(
+    kmsKey: kms.IKey | undefined
+): Pick<
+    dynamodb.TableProps,
+    | "contributorInsightsSpecification"
+    | "pointInTimeRecoverySpecification"
+    | "removalPolicy"
+    | "billingMode"
+    | "encryption"
+    | "encryptionKey"
+> {
+    return {
+        contributorInsightsSpecification: { enabled: false },
+        pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+        removalPolicy: RemovalPolicy.RETAIN,
+        billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+        encryption: kmsKey
+            ? dynamodb.TableEncryption.CUSTOMER_MANAGED
+            : dynamodb.TableEncryption.AWS_MANAGED,
+        encryptionKey: kmsKey,
+    };
 }

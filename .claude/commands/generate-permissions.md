@@ -9,7 +9,7 @@ You are generating a VAMS permission template JSON file. The VAMS system uses a 
 -   **Tier 1**: API route authorization (`api` and `web` objectTypes)
 -   **Tier 2**: Data entity authorization (`database`, `asset`, `pipeline`, `workflow`, `metadataSchema`, `tag`, `tagType`, `role`, `userRole`)
 
-A deployment can register more Tier 2 object types for its own entities (fork or add-on constants files: `backend/backend/custom/customConstants.py`, `common/addonConstants.py`). `GET /auth/constraints/permissionObjects` (or `vamscli role constraint permission-objects`) lists the types and fields a deployment accepts; generate constraints for an extension type only from that list. An extension type gets no seeded constraint, so even the `admin` role has no access to it until a template like the one you generate grants it. A template for an extension type is kept with the deployment that registers it, not under `documentation/permissionsTemplates/`, because a core deployment rejects the unknown type at import. See the "Permission object types" section of `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+A deployment can register more Tier 2 object types for its own entities (fork or add-on constants files: `backend/backend/custom/customConstants.py`, `common/addonConstants.py`). `GET /auth/constraints/permissionObjects` (or `vamscli role constraint permission-objects`) lists the types and fields a deployment accepts; generate constraints for an extension type only from that list. A fork's type gets no seeded constraint, so even the `admin` role has no access to it until a template like the one you generate grants it, and its template is kept with the fork, not under `documentation/permissionsTemplates/`, because a deployment without the fork rejects the unknown type at import. An add-on's types are registered in every upstream deployment; while the add-on is enabled, the admin and read-only roles get the default constraints `infra/lib/nestedStacks/addon/addonDefaultConstraints.ts` seeds for them, and the add-on's own templates ship in `documentation/permissionsTemplates/` (see Existing Templates). See the "Permission object types" section of `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 Both tiers must allow an action for it to succeed. This creates a defense-in-depth model where Tier 1 controls which API endpoints are reachable and Tier 2 controls which data entities can be acted upon.
 
@@ -266,6 +266,8 @@ Pre-built JSON templates are in `documentation/permissionsTemplates/`:
 | `compliance-admin.json`    | 7           | `DATABASE_ID`, `ROLE_NAME` | Compliance admin for one database: schema management, evaluate/sweep, quarantine release and exceptions, cascade approve/reject. Carries the `database` + `asset` constraints the bind routes enforce.                                                    |
 | `compliance-readonly.json` | 8           | `DATABASE_ID`, `ROLE_NAME` | Compliance read-only for one database: schemas, state, evaluation history, audit trail, cascade status. GET-only.                                                                                                                                         |
 
+The folder also holds add-on templates, named `<addon>-*.json`. They apply only where that add-on is enabled, since its routes and pages are deployed nowhere else, and are not listed here: read each one's `metadata.description`, and the add-on's own `CLAUDE.md` for its object types and what its templates leave out.
+
 ### Constraint Count Reference by Role Type
 
 When building a new template, use these as a guide for expected constraint counts:
@@ -296,6 +298,7 @@ When the user describes their permission requirements:
     - Any deny/exclusion rules needed (e.g., tag-based deny overlays)?
     - Should asset ingestion (`/ingest-asset`, `/assetIngestion` page) be accessible?
     - Should auth admin pages (`/auth/constraints`, `/auth/roles`, etc.) be accessible?
+    - Should the role reach an add-on's pages, routes or object types? Only in a deployment that enables that add-on; start from its `<addon>-*.json` templates and its own `CLAUDE.md`.
 
 3. **Generate the JSON template** following these structural guidelines:
 

@@ -35,6 +35,7 @@ The following options appear on nearly every command and are not repeated in ind
 | `user cognito`, `api-key`                                                        | Amazon Cognito user management and API key management                                            | [Users and API Keys](commands/users-and-keys.md)                     |
 | `compliance`, `compliance schema`, `compliance quarantine`, `compliance cascade` | Compliance schemas, bindings, evaluation, quarantine, cascades, and the audit trail              | [Compliance](commands/compliance.md)                                 |
 | `industry engineering bom`, `industry engineering plm`, `industry spatial`       | BOM assembly, PLM XML import, and spatial GLB combination                                        | [Industry](commands/industry.md)                                     |
+| `edh workstation`, `edh catalog`, `edh admin`, `edh container`                   | EDH Workstations add-on: workstations, images, administration, AMI recipes, and container jobs   | [EDH Workstations](../developer/edh-workstations/cli-commands.md)    |
 
 ---
 
