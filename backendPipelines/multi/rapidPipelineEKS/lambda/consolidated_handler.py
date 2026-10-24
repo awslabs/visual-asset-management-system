@@ -217,6 +217,33 @@ def run_ended_marker_present(k8s_job_name):
         return False
 
 
+# How many times RUN_JOB calls delete_job for a job created after its run ended. One call is one round
+# of with_retries (three requests); a round that fails is followed by another, as PIPELINE_END follows a
+# failed cleanup with a second delete.
+LATE_JOB_DELETE_ROUNDS = 2
+
+
+def delete_late_job(k8s_job_name):
+    """
+    Delete a job RUN_JOB created, or may have created, after its run ended. Nothing else deletes such a
+    job, so a failed delete is tried again. Never raises.
+
+    Returns:
+        bool: whether the job was deleted (or did not exist)
+    """
+    for round_number in range(1, LATE_JOB_DELETE_ROUNDS + 1):
+        try:
+            if delete_job(k8s_job_name, namespace=NAMESPACE):
+                return True
+        except Exception as e:
+            logger.warning(f"Deleting job {k8s_job_name} raised: {str(e)}")
+        logger.warning(f"Deleting job {k8s_job_name} failed (round {round_number} of "
+                       f"{LATE_JOB_DELETE_ROUNDS})")
+    logger.error(f"Could not delete job {k8s_job_name}, created after its run ended; it runs until "
+                 "activeDeadlineSeconds")
+    return False
+
+
 def validate_required_parameters(event, required_params, operation_name):
     """
     Utility function to validate required parameters for any operation.
@@ -986,7 +1013,7 @@ def handle_run_job(event):
         if run_ended_marker_present(job_name):
             logger.warning(f"The run of job {job_name} had already ended when the job was created, "
                            "deleting the job")
-            deleted = delete_job(job_name, namespace=NAMESPACE)
+            deleted = delete_late_job(job_name)
             outcome = "the job was deleted" if deleted else "deleting the job failed"
             return {
                 'statusCode': 409,
@@ -1013,6 +1040,18 @@ def handle_run_job(event):
 
     except Exception as e:
         logger.exception(f"Error creating job: {str(e)}")
+        # create_job raises when a create the API server applied is answered 409 and the job cannot
+        # then be read back, so the job can exist after a failed create. The attempt Step Functions is
+        # waiting on hands the manifest's job name to PIPELINE_END, which deletes it; a later attempt's
+        # result is not awaited, and when its run has already ended nothing else deletes the job. So the
+        # manifest's job name is checked for the run-ended marker here as well, as after a create, and
+        # the job is deleted when it is found (a job that was never created is reported deleted).
+        metadata = job_manifest.get('metadata')
+        manifest_job_name = metadata.get('name') if isinstance(metadata, dict) else None
+        if isinstance(manifest_job_name, str) and run_ended_marker_present(manifest_job_name):
+            logger.warning(f"The run of job {manifest_job_name} had already ended when its create "
+                           "failed, deleting the job in case the create was applied")
+            delete_late_job(manifest_job_name)
         return {
             'statusCode': 500,
             'body': {

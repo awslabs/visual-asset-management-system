@@ -112,9 +112,11 @@ class FakeJobsApi:
     409, as Kubernetes does, and reading or deleting a name that is not there is answered 404.
     """
 
-    def __init__(self, calls, jobs=None):
+    def __init__(self, calls, jobs=None, delete_failures=0):
         self.calls = calls
         self.jobs = dict(jobs or {})
+        # How many delete requests are answered 500 before deletes are served normally.
+        self.delete_failures = delete_failures
 
     def read_namespaced_job(self, name, namespace):
         if name not in self.jobs:
@@ -134,10 +136,37 @@ class FakeJobsApi:
 
     def delete_namespaced_job(self, name, namespace, body=None):
         self.calls.append(("k8s.delete", name))
+        if self.delete_failures > 0:
+            self.delete_failures -= 1
+            raise ApiException(status=500, reason="Internal Server Error")
         if name not in self.jobs:
             raise ApiException(status=404, reason="Not Found")
         del self.jobs[name]
         return {}
+
+
+class AppliedButUnreadableJobsApi(FakeJobsApi):
+    """A create the API server applies but answers 504, after which no job can be read back.
+
+    create_job then resends the create, which is answered 409, cannot read the conflicting job to
+    compare its job-id, and raises: RUN_JOB reports a failed create while the job exists.
+    """
+
+    def __init__(self, calls, jobs=None, delete_failures=0):
+        super().__init__(calls, jobs, delete_failures)
+        self.answered_504 = False
+
+    def read_namespaced_job(self, name, namespace):
+        raise ApiException(status=500, reason="Internal Server Error")
+
+    def create_namespaced_job(self, namespace, body):
+        name = body["metadata"]["name"]
+        if name in self.jobs or self.answered_504:
+            return super().create_namespaced_job(namespace, body)
+        self.calls.append(("k8s.create", name))
+        self.jobs[name] = body["metadata"]["labels"]["job-id"]
+        self.answered_504 = True
+        raise ApiException(status=504, reason="Gateway Timeout")
 
 
 def _manifest():
@@ -374,6 +403,91 @@ class TestALateCreateIsDeleted:
                          CREATE_JOB, HEAD_MARKER, DELETE_JOB]
         assert jobs.jobs == {}
         assert result["body"]["error"]["Error"] == "RunAlreadyEnded"
+
+
+@pytest.mark.unit
+class TestACreateReportedAsFailedIsCheckedToo:
+    """create_job raises after a create the API server applied when the job cannot be read back, so a
+    late RUN_JOB can report a failed create while its job runs. The marker is checked for the manifest's
+    job name on that path as well."""
+
+    def test_a_job_left_by_a_failed_create_after_the_run_ended_is_deleted(self, marker_bucket):
+        calls = []
+        jobs = AppliedButUnreadableJobsApi(calls)
+
+        result, _ = _invoke(_run_job_event(), calls, FakeS3(calls, objects=[(MARKER_BUCKET, MARKER_KEY)]),
+                            jobs)
+
+        assert calls == [CREATE_JOB, CREATE_JOB, HEAD_MARKER, DELETE_JOB]
+        assert jobs.jobs == {}
+        assert result["statusCode"] == 500
+        assert result["body"]["error"]["Error"] == "JobCreationError"
+        assert "k8sJobName" not in result["body"]
+
+    def test_without_a_marker_the_failed_create_is_reported_as_before(self, marker_bucket):
+        """The attempt Step Functions is waiting on: its PipelineEnd gets the manifest name (P1)."""
+        calls = []
+        jobs = AppliedButUnreadableJobsApi(calls)
+
+        result, _ = _invoke(_run_job_event(), calls, FakeS3(calls), jobs)
+
+        assert calls == [CREATE_JOB, CREATE_JOB, HEAD_MARKER]
+        assert list(jobs.jobs) == [JOB_NAME]
+        assert result["statusCode"] == 500
+        assert result["body"]["error"]["Error"] == "JobCreationError"
+
+    def test_a_manifest_without_a_job_name_is_not_checked(self, marker_bucket):
+        calls = []
+        event = _run_job_event()
+        del event["jobManifest"]["metadata"]["name"]
+
+        result, _ = _invoke(event, calls, FakeS3(calls, objects=[(MARKER_BUCKET, MARKER_KEY)]),
+                            FakeJobsApi(calls))
+
+        assert calls == []
+        assert result["statusCode"] == 500
+
+
+@pytest.mark.unit
+class TestTheLateJobDeleteIsRetried:
+    """A delete that fails is retried, as a whole, before RUN_JOB gives up on a job created late. One
+    delete_job call is one round of with_retries (three requests), so failing three requests makes the
+    first delete_job call report failure."""
+
+    def test_a_delete_that_fails_once_is_retried_after_a_create(self, marker_bucket):
+        calls = []
+        jobs = FakeJobsApi(calls, delete_failures=3)
+
+        result, _ = _invoke(_run_job_event(), calls, FakeS3(calls, objects=[(MARKER_BUCKET, MARKER_KEY)]),
+                            jobs)
+
+        assert calls[:2] == [CREATE_JOB, HEAD_MARKER]
+        assert calls[2:] == [DELETE_JOB] * 4
+        assert jobs.jobs == {}
+        assert result["body"]["error"]["Error"] == "RunAlreadyEnded"
+        assert "the job was deleted" in result["body"]["error"]["Cause"]
+
+    def test_a_delete_that_fails_once_is_retried_after_a_failed_create(self, marker_bucket):
+        calls = []
+        jobs = AppliedButUnreadableJobsApi(calls, delete_failures=3)
+
+        _invoke(_run_job_event(), calls, FakeS3(calls, objects=[(MARKER_BUCKET, MARKER_KEY)]), jobs)
+
+        assert calls[2:] == [HEAD_MARKER] + [DELETE_JOB] * 4
+        assert jobs.jobs == {}
+
+    def test_a_delete_that_keeps_failing_is_reported(self, marker_bucket):
+        calls = []
+        jobs = FakeJobsApi(calls, delete_failures=1000)
+
+        result, logger = _invoke(_run_job_event(), calls,
+                                 FakeS3(calls, objects=[(MARKER_BUCKET, MARKER_KEY)]), jobs)
+
+        assert len([c for c in calls if c == DELETE_JOB]) > 3
+        assert list(jobs.jobs) == [JOB_NAME]
+        assert result["body"]["error"]["Error"] == "RunAlreadyEnded"
+        assert "deleting the job failed" in result["body"]["error"]["Cause"]
+        assert _logged(logger.error, JOB_NAME)
 
 
 @pytest.mark.unit
