@@ -97,3 +97,36 @@ describe("Cesium viewer lifecycle", () => {
         expect(widgetDestroy).not.toHaveBeenCalled();
     });
 });
+
+describe("Cesium tileset authorization", () => {
+    const { getDualValidAccessToken } = jest.requireMock("../../../utils/authTokenUtils");
+
+    it("retries a denied tile request once with fresh headers on the request and the tileset", async () => {
+        render(<CesiumViewerComponent {...props} viewerMode="wide" />);
+        await waitFor(() => expect(resources).toHaveLength(1));
+        const root = resources[0];
+        expect(root.headers.Authorization).toBe("Bearer t");
+        expect(root.retryAttempts).toBe(1);
+
+        getDualValidAccessToken.mockResolvedValueOnce("t2");
+        const retried = { headers: { Authorization: "Bearer t" } };
+        await expect(root.retryCallback(retried, { statusCode: 403 })).resolves.toBe(true);
+        expect(retried.headers.Authorization).toBe("Bearer t2");
+        expect(root.headers.Authorization).toBe("Bearer t2");
+    });
+
+    it("retries a 401 and leaves other failures alone", async () => {
+        render(<CesiumViewerComponent {...props} viewerMode="wide" />);
+        await waitFor(() => expect(resources).toHaveLength(1));
+        const root = resources[0];
+
+        getDualValidAccessToken.mockResolvedValueOnce("t3");
+        await expect(root.retryCallback({ headers: {} }, { statusCode: 401 })).resolves.toBe(true);
+        expect(root.headers.Authorization).toBe("Bearer t3");
+
+        const untouched = { headers: { Authorization: "Bearer t3" } };
+        await expect(root.retryCallback(untouched, { statusCode: 404 })).resolves.toBe(false);
+        await expect(root.retryCallback(untouched, { statusCode: 500 })).resolves.toBe(false);
+        expect(untouched.headers.Authorization).toBe("Bearer t3");
+    });
+});

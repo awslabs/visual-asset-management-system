@@ -108,6 +108,28 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
         }
     }, []);
 
+    // Retry callback for a tileset resource. An expired ID token is refused with 403 (401 from
+    // some front doors), so on either status the fresh auth headers are copied into the retried
+    // request and into the tileset's root resource, which the later tile requests derive from.
+    const refreshAuthOnDenial = useCallback(
+        async (retried: any, error: any, root: any): Promise<boolean> => {
+            const status = error?.statusCode;
+            if (status !== 401 && status !== 403) return false;
+            const fresh = await getAuthHeaders();
+            if (!fresh.Authorization) return false;
+            for (const target of [retried, root]) {
+                if (!target) continue;
+                if (target.headers) {
+                    Object.assign(target.headers, fresh);
+                } else {
+                    target.headers = { ...fresh };
+                }
+            }
+            return true;
+        },
+        [getAuthHeaders]
+    );
+
     // Helper function to construct streaming URL
     const constructStreamingUrl = useCallback(
         (fileKey: string): string => {
@@ -1117,6 +1139,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 const resource = new Cesium.Resource({
                     url: streamingUrl,
                     headers: authHeaders,
+                    retryAttempts: 1,
+                    retryCallback: (retried: any, error: any) =>
+                        refreshAuthOnDenial(retried, error, resource),
                 });
 
                 // Create 3D Tileset using the authenticated resource
@@ -1183,6 +1208,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
         [
             config,
             getAuthHeaders,
+            refreshAuthOnDenial,
             constructStreamingUrl,
             configureCameraForTileset,
             createCameraOffset,
@@ -1222,6 +1248,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                     const resource = new Cesium.Resource({
                         url: streamingUrl,
                         headers: authHeaders,
+                        retryAttempts: 1,
+                        retryCallback: (retried: any, error: any) =>
+                            refreshAuthOnDenial(retried, error, resource),
                     });
 
                     // Create 3D Tileset using the authenticated resource
@@ -1294,6 +1323,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
         [
             config,
             getAuthHeaders,
+            refreshAuthOnDenial,
             constructStreamingUrl,
             configureCameraForTileset,
             createCameraOffset,
