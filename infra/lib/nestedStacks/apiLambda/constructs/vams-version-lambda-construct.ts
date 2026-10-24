@@ -64,6 +64,7 @@ export class VamsVersionLambdaConstruct extends Construct {
                 return {
                     headers: {
                         'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache, no-store',
                         // REST API returns the Lambda response verbatim (no auto-CORS); this
                         // anonymous endpoint can be fetched cross-origin under ALB fronting.
                         'Access-Control-Allow-Origin': '*'
