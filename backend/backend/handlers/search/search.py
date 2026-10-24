@@ -10,6 +10,7 @@ import os
 import boto3
 import json
 import re
+import time
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Set
 from boto3.dynamodb.conditions import Key
@@ -85,6 +86,58 @@ opensearch_endpoint = get_ssm_parameter_value(opensearch_endpoint_ssm_param)
 # Initialize DynamoDB tables
 asset_storage_table = dynamodb.Table(asset_storage_table_name)
 database_storage_table = dynamodb.Table(database_storage_table_name)
+
+# BatchGetItem accepts at most 100 keys per call.
+BATCH_GET_CHUNK_SIZE = 100
+# Attempts spent re-requesting a BatchGetItem's UnprocessedKeys (throttling / a response that hit the
+# 16 MB size limit) before the remaining keys are returned as unresolved. batch_get_item answers a
+# partially throttled request with HTTP 200 and an UnprocessedKeys map, which the botocore retry
+# config does not cover.
+BATCH_GET_MAX_RETRIES = 3
+# Base seconds for the exponential backoff between UnprocessedKeys retries.
+BATCH_GET_RETRY_BACKOFF_SECONDS = 0.05
+
+
+def batch_get_items(dynamodb_resource, table_name, keys):
+    """BatchGetItem `keys` (full primary-key dicts) from one table.
+
+    Deduplicates the keys (DynamoDB rejects a request that repeats one), chunks them at the per-call
+    limit and re-requests UnprocessedKeys with exponential backoff, up to BATCH_GET_MAX_RETRIES per
+    chunk. Returns (rows, unresolved_keys): a key absent from both is an item that does not exist; a
+    key in unresolved_keys is one whose read did not complete, which the caller reads individually so
+    a throttled read is never taken for a missing row. A failed call propagates.
+    """
+    unique_keys = []
+    seen = set()
+    for key in keys:
+        marker = tuple(sorted(key.items()))
+        if marker not in seen:
+            seen.add(marker)
+            unique_keys.append(key)
+
+    rows = []
+    unresolved_keys = []
+    for start in range(0, len(unique_keys), BATCH_GET_CHUNK_SIZE):
+        pending = unique_keys[start:start + BATCH_GET_CHUNK_SIZE]
+        attempt = 0
+        while True:
+            response = dynamodb_resource.batch_get_item(RequestItems={table_name: {'Keys': pending}})
+            rows.extend(response.get('Responses', {}).get(table_name, []))
+            pending = response.get('UnprocessedKeys', {}).get(table_name, {}).get('Keys', [])
+            if not pending:
+                break
+            attempt += 1
+            if attempt > BATCH_GET_MAX_RETRIES:
+                logger.info(f"Batch read of {table_name} left {len(pending)} keys unprocessed after "
+                            f"{BATCH_GET_MAX_RETRIES} retries")
+                unresolved_keys.extend(pending)
+                break
+            # Exponential backoff before resending the keys batch_get_item left unprocessed. Must be
+            # the last comment line before the call -- semgrep attaches `nosemgrep` to the next line
+            # only.
+            # nosemgrep: arbitrary-sleep
+            time.sleep(BATCH_GET_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+    return rows, unresolved_keys
 
 #######################
 # OpenSearch Client Management
@@ -1761,6 +1814,9 @@ class DualIndexResponseProcessor:
     def __init__(self, database_access_manager: DatabaseAccessManager):
         self.database_access_manager = database_access_manager
         self.field_classifier = FieldClassifier()
+        # Parent asset rows of file hits for this request, keyed (databaseId, assetId);
+        # None records a parent that exists in neither the live nor the archived partition.
+        self._parent_assets: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
     
     def process_dual_search_response(self, opensearch_response: Dict[str, Any], 
                                    request: SearchRequestModel, claims_and_roles: Dict[str, Any]) -> SearchResponseModel:
@@ -1768,6 +1824,10 @@ class DualIndexResponseProcessor:
         try:
             # Log the raw response for debugging
             logger.info(f"Processing response with {len(opensearch_response.get('hits', {}).get('hits', []))} hits")
+
+            # File documents carry no assetType, so each file hit is checked against its
+            # parent asset's row; read those rows once, before the per-hit checks
+            self._load_parent_assets(opensearch_response.get("hits", {}).get("hits", []))
             
             # Apply Casbin filtering to hits
             filtered_hits = []
@@ -1958,6 +2018,67 @@ class DualIndexResponseProcessor:
             logger.warning(f"[Sort] Error re-sorting filtered hits: {e}, returning unsorted")
             return hits
     
+    @staticmethod
+    def _is_file_hit(hit: Dict[str, Any]) -> bool:
+        """Whether a hit came from the file index."""
+        return hit.get("_index_type") == "file" or hit.get("_source", {}).get("str_rectype") == "file"
+
+    @staticmethod
+    def _parent_asset_key(hit: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+        """(databaseId, assetId) of a file hit's parent asset, or None when either is empty."""
+        source = hit.get("_source", {})
+        database_id = source.get("str_databaseid") or ""
+        asset_id = source.get("str_assetid") or ""
+        if not database_id or not asset_id or database_id.endswith("#deleted"):
+            return None
+        return database_id, asset_id
+
+    @staticmethod
+    def _read_asset_rows(keys: List[Dict[str, str]]) -> Dict[Tuple[str, str], Dict[str, Any]]:
+        """Asset rows for `keys`, keyed (databaseId, assetId) as stored.
+
+        Keys the batch read leaves unresolved are read one at a time, so a throttled read
+        neither drops a row nor reports it missing. A failed call propagates.
+        """
+        rows, unresolved = batch_get_items(dynamodb, asset_storage_table_name, keys)
+        for key in unresolved:
+            item = asset_storage_table.get_item(Key=key).get("Item")
+            if item:
+                rows.append(item)
+        return {(row.get("databaseId"), row.get("assetId")): row for row in rows}
+
+    def _load_parent_assets(self, hits: List[Dict[str, Any]]) -> None:
+        """Read the parent asset row of every file hit not yet in the request's memo.
+
+        A file document keeps its asset's live databaseId after the asset is archived, so
+        the live key is read first and the '{databaseId}#deleted' key only for parents with
+        no live row. Hits with an empty databaseId or assetId are not read: one empty key
+        attribute fails a whole BatchGetItem chunk.
+        """
+        wanted = []
+        for hit in hits:
+            if not self._is_file_hit(hit):
+                continue
+            key = self._parent_asset_key(hit)
+            if key and key not in self._parent_assets and key not in wanted:
+                wanted.append(key)
+        if not wanted:
+            return
+
+        live = self._read_asset_rows(
+            [{"databaseId": database_id, "assetId": asset_id} for database_id, asset_id in wanted]
+        )
+        missing = [key for key in wanted if key not in live]
+        archived = {}
+        if missing:
+            archived = self._read_asset_rows(
+                [{"databaseId": f"{database_id}#deleted", "assetId": asset_id} for database_id, asset_id in missing]
+            )
+        for database_id, asset_id in wanted:
+            self._parent_assets[(database_id, asset_id)] = (
+                live.get((database_id, asset_id)) or archived.get((f"{database_id}#deleted", asset_id))
+            )
+
     def _is_hit_authorized(self, hit: Dict[str, Any], claims_and_roles: Dict[str, Any]) -> bool:
         """Check if user is authorized to see this search hit"""
         try:
@@ -1968,13 +2089,28 @@ class DualIndexResponseProcessor:
                 return False
             
             # Build document for Casbin check
-            hit_document = {
-                "databaseId": source.get("str_databaseid", ""),
-                "assetName": source.get("str_assetname", ""),
-                "tags": source.get("list_tags", []),
-                "assetType": source.get("str_assettype", ""),
-                "object__type": "asset"  # For ABAC purposes, treat all as assets
-            }
+            if self._is_file_hit(hit):
+                # A file hit is checked as its parent asset: assetName, tags and assetType
+                # come from the asset row, databaseId from the hit. No parent row, no access.
+                parent_key = self._parent_asset_key(hit)
+                parent = self._parent_assets.get(parent_key) if parent_key else None
+                if not parent:
+                    return False
+                hit_document = {
+                    "databaseId": source.get("str_databaseid", ""),
+                    "assetName": parent.get("assetName", ""),
+                    "tags": parent.get("tags", []),
+                    "assetType": parent.get("assetType", ""),
+                    "object__type": "asset"
+                }
+            else:
+                hit_document = {
+                    "databaseId": source.get("str_databaseid", ""),
+                    "assetName": source.get("str_assetname", ""),
+                    "tags": source.get("list_tags", []),
+                    "assetType": source.get("str_assettype", ""),
+                    "object__type": "asset"  # For ABAC purposes, treat all as assets
+                }
             
             # Apply Casbin enforcement
             if len(claims_and_roles.get("tokens", [])) > 0:
