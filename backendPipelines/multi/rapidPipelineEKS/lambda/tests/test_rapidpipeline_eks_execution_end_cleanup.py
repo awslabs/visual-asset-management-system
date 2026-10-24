@@ -249,6 +249,7 @@ class TestConstructPipelineRecordsTheJob:
 
     @pytest.mark.parametrize("execution_name", [
         _OMITTED, "", None, "a/b", "has space", "x" * 81, "../escape", "name:with:colons",
+        f"{EXECUTION_NAME}\n",
     ])
     def test_no_record_without_a_usable_execution_name(self, deployed, execution_name):
         calls = []
@@ -333,9 +334,10 @@ class TestCleanupDeletesTheRunsJobs:
     def test_a_key_that_is_not_a_job_name_is_skipped(self, deployed):
         calls = []
         s3 = FakeS3(calls, objects=[_record(JOB_A), (BUCKET, f"{RECORD_PREFIX}{EXECUTION_NAME}/nested/x"),
-                                    (BUCKET, f"{RECORD_PREFIX}{EXECUTION_NAME}/Not_A_Job")])
+                                    (BUCKET, f"{RECORD_PREFIX}{EXECUTION_NAME}/Not_A_Job"),
+                                    (BUCKET, f"{RECORD_PREFIX}{EXECUTION_NAME}/{JOB_B}\n")])
 
-        result, _ = _invoke(_cleanup_event(), calls, s3, FakeJobsApi(calls, {JOB_A: "a"}))
+        result, _ = _invoke(_cleanup_event(), calls, s3, FakeJobsApi(calls, {JOB_A: "a", JOB_B: "b"}))
 
         assert calls == [_list(), _put_marker(JOB_A), _delete(JOB_A)]
         assert [j["k8sJobName"] for j in result["body"]["jobs"]] == [JOB_A]
@@ -412,6 +414,7 @@ class TestCleanupRejectsAnyOtherEvent:
         (EXECUTION_ARN + "/x", EXECUTION_NAME + "/x"),
         (None, EXECUTION_NAME),
         (EXECUTION_ARN, None),
+        (f"{EXECUTION_ARN}\n", f"{EXECUTION_NAME}\n"),
     ])
     def test_an_execution_that_is_not_this_state_machines_touches_nothing(self, deployed, execution_arn,
                                                                          execution_name):
@@ -478,3 +481,16 @@ class TestRecordLocation:
         assert handler.run_jobs_record_prefix(EXECUTION_NAME) == (
             "another-auxiliary-bucket", f"{RECORD_PREFIX}{EXECUTION_NAME}/")
         assert handler.EXECUTION_END_STATUSES == frozenset({"ABORTED", "TIMED_OUT", "FAILED"})
+
+    def test_a_name_with_a_trailing_newline_gets_no_record(self, deployed):
+        """The name checks match the whole name, so a trailing newline is not a usable name."""
+        calls = []
+        s3 = FakeS3(calls)
+        handler = _load_handler()
+
+        with patch.object(handler, "s3", s3), patch.object(handler, "logger", MagicMock()):
+            assert handler.run_jobs_record_prefix(f"{EXECUTION_NAME}\n") is None
+            assert handler.write_run_job_record(EXECUTION_NAME, f"{JOB_A}\n") is False
+            assert handler.write_run_job_record(f"{EXECUTION_NAME}\n", JOB_A) is False
+
+        assert calls == []

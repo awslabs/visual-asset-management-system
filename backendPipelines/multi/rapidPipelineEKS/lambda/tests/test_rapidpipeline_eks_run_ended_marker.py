@@ -387,9 +387,21 @@ class TestMarkerLocation:
 
     @pytest.mark.parametrize("name", [
         "", None, "unknown", "failure-before-creation", f"../{JOB_NAME}", "Rapid/Pipeline", "a" * 254,
+        f"{JOB_NAME}\n", f"\n{JOB_NAME}",
     ])
     def test_a_name_that_is_not_a_job_name_has_no_marker(self, marker_bucket, name):
         assert _load_handler().run_ended_marker_location(name) is None
+
+    def test_a_name_with_a_trailing_newline_gets_no_marker_and_no_check(self, marker_bucket):
+        """End to end: neither PIPELINE_END nor RUN_JOB's check touches S3 for such a name."""
+        calls = []
+        s3 = FakeS3(calls)
+
+        _invoke(_pipeline_end_event(error=True, k8s_job_name=f"{JOB_NAME}\n"), calls, s3, FakeJobsApi(calls))
+        present = _load_handler().run_ended_marker_present(f"{JOB_NAME}\n")
+
+        assert [c for c in calls if c[0].startswith("s3.")] == []
+        assert present is False
 
     def test_no_marker_without_a_configured_bucket(self, monkeypatch):
         monkeypatch.delenv("RUN_ENDED_MARKER_BUCKET", raising=False)
