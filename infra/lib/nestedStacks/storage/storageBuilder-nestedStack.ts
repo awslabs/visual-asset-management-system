@@ -915,6 +915,42 @@ export function storageResourcesBuilder(
                       },
                   ]
                 : []),
+            // The RapidPipeline EKS run-ended markers, one empty object per Kubernetes job, written by
+            // the pipeline's handler when a run ends. A marker only has to outlive a job-create
+            // invocation still running when it is written (the handler's 15-minute timeout), and the
+            // handler never deletes one, so a day is ample. Noncurrent versions and expired delete
+            // markers go with it, as above.
+            ...(config.app.pipelines.useRapidPipeline.useEks.enabled
+                ? [
+                      {
+                          enabled: true,
+                          prefix: "pipelines/rapid-pipeline-eks/run-ended/",
+                          expiration: Duration.days(1),
+                          noncurrentVersionExpiration: Duration.days(1),
+                      },
+                      {
+                          enabled: true,
+                          prefix: "pipelines/rapid-pipeline-eks/run-ended/",
+                          expiredObjectDeleteMarker: true,
+                      },
+                      // The run-jobs records, one empty object per job name the handler builds, kept
+                      // under the execution's name. The cleanup after a stopped execution reads them
+                      // at most the state machine timeout (6 hours), an hour of EventBridge delivery
+                      // and an hour of Lambda's asynchronous retries (both pinned in the RapidPipeline
+                      // EKS construct) after they are written, so a day is ample here too.
+                      {
+                          enabled: true,
+                          prefix: "pipelines/rapid-pipeline-eks/run-jobs/",
+                          expiration: Duration.days(1),
+                          noncurrentVersionExpiration: Duration.days(1),
+                      },
+                      {
+                          enabled: true,
+                          prefix: "pipelines/rapid-pipeline-eks/run-jobs/",
+                          expiredObjectDeleteMarker: true,
+                      },
+                  ]
+                : []),
         ],
         serverAccessLogsBucket: accessLogsBucket,
         serverAccessLogsPrefix: "assetAuxiliary-bucket-logs/",
