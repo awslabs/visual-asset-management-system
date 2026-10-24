@@ -168,7 +168,10 @@ class VamsClient:
 
         while True:
             pages += 1
-            params: Dict[str, Any] = {"pageSize": effective_page_size}
+            # The last page asks only for the rows still wanted, so the page's NextToken resumes
+            # right after the last row kept. A full page cut to max_items would hand back a token
+            # pointing past rows the caller never saw.
+            params: Dict[str, Any] = {"pageSize": max(1, min(effective_page_size, limit - len(items)))}
             if next_token:
                 params["startingToken"] = next_token
 
@@ -188,7 +191,9 @@ class VamsClient:
         # reports a clean count — the exact reading the `truncated` contract exists to prevent.
         if next_token or len(items) > limit:
             result["truncated"] = True
-            if next_token and pages >= self.config.max_pages and len(kept) < limit:
+            # With no max_items the only limit is the one derived from max_pages, so a walk the page
+            # bound stopped after full pages must not be reported as a limit the caller requested.
+            if next_token and pages >= self.config.max_pages and (max_items is None or len(kept) < limit):
                 reason = (
                     f"stopped after {pages} page(s), the max_pages work bound on this server "
                     f"(VAMS_MAX_PAGES={self.config.max_pages})"
