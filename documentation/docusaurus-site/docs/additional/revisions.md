@@ -125,6 +125,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **RapidPipeline EKS Kubernetes request settings** — Every Kubernetes API call the pipeline makes has a 30-second connect and 60-second read timeout and sends the `vams-eks-pipeline/1.0` user agent. The Kubernetes client resends a request only after a connection failure; the pipeline's retry wrapper handles throttling, server errors and timeouts. (issue #724)
 -   **RapidPipeline EKS job cleanup after a step error** — When the ConstructPipeline, RunJob or CheckJob step times out or fails, the pipeline reaches its end step with the name of the Kubernetes job that exists at that point, so a job that was already created is deleted rather than left running until its deadline, and the parent workflow is sent the failure without waiting for its task timeout. (issue #726)
 -   **RapidPipeline EKS job build errors** — When the ConstructPipeline step cannot build the Kubernetes job, the pipeline reaches its end step with that error, so the parent workflow is sent the failure without waiting for its task timeout. (issue #735)
+-   **RapidPipeline EKS long error messages** — The error name and cause the pipeline sends the parent workflow when a run fails are kept within the AWS Step Functions limits of 256 and 32,768 characters. A longer value keeps its beginning and is marked as truncated, so the parent workflow is sent the failure instead of waiting for its task timeout. (issue #737)
 
 **Other changes:**
 
