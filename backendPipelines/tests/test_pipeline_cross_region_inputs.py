@@ -19,7 +19,7 @@ container runs on Amazon Bedrock AgentCore outside the VPC, or on AWS Batch in p
 the Lambda-container pipelines are not gated: their compute has a route to Amazon S3 in the bucket
 Region.
 
-The fifteen `manifestHelper.py` copies are one file; byte identity is asserted first so an edit
+The sixteen `manifestHelper.py` copies are one file; byte identity is asserted first so an edit
 applied to one copy and not propagated fails here.
 """
 
