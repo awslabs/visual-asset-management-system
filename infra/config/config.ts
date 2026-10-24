@@ -89,8 +89,10 @@ export const API_ORIGIN_VERIFY_HEADER_NAME = "x-vams-origin-verify";
 // before the last rotation.
 export const API_ORIGIN_VERIFY_CURRENT_KEY = "current";
 export const API_ORIGIN_VERIFY_PREVIOUS_KEY = "previous";
-// Days between automatic rotations of the origin verification secret.
-export const API_ORIGIN_VERIFY_ROTATION_DAYS = 90;
+// Days between automatic rotations of the origin verification secret. A value stays accepted as
+// `previous` until the rotation after the one that replaced it, so each value is accepted for at
+// most two intervals: 45 days keeps that lifetime at about 90 days.
+export const API_ORIGIN_VERIFY_ROTATION_DAYS = 45;
 
 // The REST API integration timeout applied when a deployment names none, in seconds. 29 seconds is
 // the API Gateway default and the floor VAMS allows. Raising it above the default requires an

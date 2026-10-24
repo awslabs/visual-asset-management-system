@@ -212,7 +212,7 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 | `API_GATEWAY_STAGE_NAME`          | `"api"` (fixed; baked into VamsCLI endpoint constants and web `/api/*` fronting)                                                     |
 | `API_STAGE_PREFIXED_ROUTE_PATHS`  | `["/api/amplify-config", "/api/version"]` — the only routes registered under the stage's `/api/` prefix (CloudFront exact paths)     |
 | `API_ORIGIN_VERIFY_HEADER_NAME`   | `"x-vams-origin-verify"` — header CloudFront adds to forwarded API requests (mirrored in `common/auth/originVerify.py`, `logger.py`) |
-| `API_ORIGIN_VERIFY_ROTATION_DAYS` | `90` — automatic rotation interval of the origin verification secret                                                                 |
+| `API_ORIGIN_VERIFY_ROTATION_DAYS` | `45` — rotation interval of the origin verification secret; a value is accepted for at most two intervals (about 90 days)            |
 
 ### ConfigPublic Interface
 
