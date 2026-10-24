@@ -471,6 +471,44 @@ aws secretsmanager rotate-secret --secret-id <secret ARN>
 
 :::
 
+#### Check that rotation is working
+
+A failed rotation is not reported anywhere else, so check the secret's rotation state, for example after a deployment and every rotation interval. `describe-secret` returns the secret's metadata, never its value:
+
+```bash
+# The secret ARN: the AWS::SecretsManager::Secret resource of the origin verification stack
+aws cloudformation describe-stack-resources --stack-name <name>-origin-verify-<baseStackName> \
+    --query "StackResources[?ResourceType=='AWS::SecretsManager::Secret'].PhysicalResourceId" --output text
+
+aws secretsmanager describe-secret --secret-id <secret ARN>
+```
+
+Rotation is working when `RotationEnabled` is `true`, `NextRotationDate` is in the future, `LastRotatedDate` is at most 45 days ago (once the first rotation has run), and no version in `VersionIdsToStages` carries `AWSPENDING` without `AWSCURRENT`. The rotation function logs to the log group `/aws/lambda/<function name>`, where the function name is the last part of the `RotationLambdaARN` that `describe-secret` returns. Each step logs `<step>: start (version <version id>)`, followed by its error if it fails; the function logs no secret value.
+
+A failed rotation leaves its version labelled `AWSPENDING` only, for example when `createSecret` runs while the distribution is still deploying an earlier change (`Distribution <id> is InProgress`), or when a step lacks a permission. While that version exists, Secrets Manager rejects every later rotation, scheduled ones included, so the value stops rotating. Fix the cause, then look for the line `Updated <n> origin verification header(s) of distribution <id>` after that version's `setSecret: start` line:
+
+-   No such line: CloudFront still sends the current value. Remove the label from the failed version and rotate again:
+
+    ```bash
+    aws secretsmanager update-secret-version-stage --secret-id <secret ARN> \
+        --version-stage AWSPENDING --remove-from-version-id <pending version id>
+    aws secretsmanager rotate-secret --secret-id <secret ARN>
+    ```
+
+-   The line is present: CloudFront already sends the pending value, and removing the label would leave that value accepted nowhere but the regional web ACL. Complete the rotation instead, by moving `AWSCURRENT` to the pending version:
+
+    ```bash
+    aws secretsmanager update-secret-version-stage --secret-id <secret ARN> \
+        --version-stage AWSCURRENT --move-to-version-id <pending version id> \
+        --remove-from-version-id <current version id>
+    ```
+
+:::note[Restricted deployment and application roles]
+AWS CloudFormation resolves the secret's `{{resolve:secretsmanager:...}}` references in the regional web ACL stack and the core stack with the AWS CloudFormation execution role. The default CDK bootstrap role can read them. A custom execution role (`app.iamRoleConfig.useCustomBootstrapRoles`, or `cdk bootstrap --cloudformation-execution-policies`) must allow `secretsmanager:GetSecretValue` on the secret, and `kms:Decrypt` on its key when the secret uses a customer managed key; with `useCliCredentialsSynthesizer` set in `infra/config/policy/iamRoleConfig.json`, the deploying credentials must.
+
+With `app.iamRoleConfig.useCustomVamsStackRoles`, the IAM policy report lists the rotation function's role (construct path containing `/StaticWeb/apiOriginVerifyRotation/ServiceRole`), which needs its own `precreatedRoles` entry. The REST authorizer's role also needs `secretsmanager:GetSecretValue` on the secret, plus `kms:Decrypt` on the key with a customer managed key. Regenerate the report and update a pre-created authorizer role before deploying. See [Advanced IAM role customization](../deployment/configuration-reference.md#advanced-iam-role-customization-appiamroleconfig).
+:::
+
 ## AWS KMS
 
 Deployed when `useKmsCmkEncryption.enabled = true`:
@@ -618,7 +656,9 @@ role (`app.iamRoleConfig.useCustomBootstrapRoles`, or `cdk bootstrap --cloudform
 must allow them on the key; with `useCliCredentialsSynthesizer` set in `infra/config/policy/iamRoleConfig.json`,
 the deploying credentials must. An external key's policy must keep the statement that lets IAM policies in the
 account authorize use of the key. Amazon ECR encrypts and decrypts image layers through the grants it creates
-on the key, so the CodeBuild projects and the AWS Batch jobs get no permission on it.
+on the key, so the CodeBuild projects and the AWS Batch jobs get no permission on it. A custom execution role
+also needs read access to the API origin verification secret on a CloudFront deployment; see
+[Rotation of the API origin verification secret](#rotation-of-the-api-origin-verification-secret).
 :::
 
 ## AWS CloudTrail

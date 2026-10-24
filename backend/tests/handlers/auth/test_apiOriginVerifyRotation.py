@@ -693,3 +693,7 @@ class TestNoValueIsLogged:
         assert services["order"] == ["waf", "cloudfront"]
         assert messages
         assert all(OLD not in m and NEW not in m for m in messages)
+        # Each step names the version it works on, so a failed rotation's log lines can be matched
+        # to the AWSPENDING version it left behind.
+        for step in ("createSecret", "setSecret", "testSecret", "finishSecret"):
+            assert f"{step}: start (version {TOKEN})" in messages

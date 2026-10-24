@@ -327,5 +327,7 @@ def lambda_handler(event, context):
     if "AWSPENDING" not in stages:
         raise RotationError("The rotation version is not pending")
 
-    logger.info(f"{step}: start")
+    # The version id is not secret (DescribeSecret lists it), and naming it lets an operator match the
+    # log lines of a failed rotation to the AWSPENDING version it left behind.
+    logger.info(f"{step}: start (version {token})")
     _STEPS[step](secrets, secret_arn, token)
