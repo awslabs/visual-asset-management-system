@@ -91,6 +91,68 @@ export const API_GATEWAY_DEFAULT_TIMEOUT_SECONDS = 29;
 export const COSMOS3_NANO_GPU_COUNT = 4;
 export const COSMOS3_SUPER_GPU_COUNT = 8;
 
+// The RapidPipeline EKS timeout chain. Three clocks bound a run, each enforced by a different service,
+// and they must nest so that the parent workflow is still waiting when the run reports its outcome:
+//
+//   longest run useEks.jobTimeout allows  <=  state machine timeout  <  bundle taskTimeout
+//
+// `useEks.jobTimeout` is the Kubernetes job's activeDeadlineSeconds and sets the poll ceiling; the run
+// around the job adds ConstructPipeline, RunJob, the poll's margin and CheckJob calls, and PipelineEnd
+// (rapidPipelineEksWorstCaseRunSeconds). The bundle's taskTimeout, declared in
+// backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json, is how long the parent workflow's
+// pipeline task waits for the callback. That task starts before the state machine does (vamsExecute
+// and openPipeline run first, five minutes each at most), so the taskTimeout is 30 minutes longer than
+// the state machine timeout. An execution-level States.Timeout bypasses every Catch, so PipelineEnd
+// does not run and the parent is released by its own taskTimeout.
+//
+// The construct reads the state machine timeout, the ConstructPipeline timeout, the poll interval and
+// the poll ceiling from here. RunJob's timeout (the consolidated handler's 15 minutes plus one minute)
+// and PipelineEnd's are set in the construct, so the values below are the budget getConfig() counts
+// for them, and infra/test/pipelines/eksTimeoutHeadroom.test.ts fails if the emitted states exceed it.
+// The maximum and the CheckJob allowance are read only by getConfig(); the bundle taskTimeout is what
+// the tests compare pipeline.json and the state machine timeout with.
+export const RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS = 14400;
+export const RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS = 21600;
+export const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 23400;
+export const RAPID_PIPELINE_EKS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_EKS_RUN_JOB_TIMEOUT_SECONDS = 960;
+export const RAPID_PIPELINE_EKS_PIPELINE_END_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS = 10;
+// The poll outlives the pod deadline by this much, so it observes the terminated pod and reports the
+// pod's own failure rather than a poll timeout.
+export const RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS = 60;
+// CheckJob's own run time per poll attempt, as an average over the run. A CHECK_JOB invocation builds
+// a Kubernetes client and reads the job's status, plus a pod listing once the job has run two hours: a
+// handful of in-Region API requests. Three seconds is the largest whole second at which the maximum
+// job timeout fits the state machine timeout, and budgets 4341 s for the 1447 calls a run at the
+// maximum makes. The CheckJob task timeout is not used as the bound: a call that reaches it ends the
+// run through PipelineEnd, and 180 s for each of 1447 calls would budget more than 72 hours.
+export const RAPID_PIPELINE_EKS_CHECK_JOB_ALLOWANCE_SECONDS = 3;
+
+/** Status checks the RapidPipeline EKS poll makes before giving up on a job: its ceiling. */
+export function rapidPipelineEksJobCheckAttempts(jobTimeoutSeconds: number): number {
+    return Math.ceil(
+        (jobTimeoutSeconds + RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS) /
+            RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS
+    );
+}
+
+/**
+ * The longest a RapidPipeline EKS state machine run can take for `jobTimeoutSeconds`, without Lambda
+ * retries: ConstructPipeline, RunJob, a poll that reaches its ceiling (one wait per attempt and one
+ * more CheckJob call than waits, since the first check runs before the first wait), and PipelineEnd.
+ */
+export function rapidPipelineEksWorstCaseRunSeconds(jobTimeoutSeconds: number): number {
+    const attempts = rapidPipelineEksJobCheckAttempts(jobTimeoutSeconds);
+    return (
+        RAPID_PIPELINE_EKS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS +
+        RAPID_PIPELINE_EKS_RUN_JOB_TIMEOUT_SECONDS +
+        attempts * RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS +
+        (attempts + 1) * RAPID_PIPELINE_EKS_CHECK_JOB_ALLOWANCE_SECONDS +
+        RAPID_PIPELINE_EKS_PIPELINE_END_TIMEOUT_SECONDS
+    );
+}
+
 // ============================================================================================
 // Constants used only to check configuration
 //
@@ -112,11 +174,6 @@ export const COGNITO_USERNAME_MAX_LENGTH = 128;
 // app.authProvider.presignedUrlTimeoutSeconds would deploy and then fail every download, and
 // getConfig() warns about it at synthesis. Compared against, never assigned.
 export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
-
-// The taskTimeout the RapidPipeline EKS bundle declares
-// (backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json). The parent workflow waits this
-// long for the pipeline's task-token callback, so the Kubernetes job must not be allowed to run longer.
-export const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 14400;
 
 // Input caps of the Video SOP/BOM Extraction pipeline that are tied to its compute sizing rather than
 // being operator cost levers. The Fargate job's ephemeral volume has to hold every input video plus
@@ -2100,10 +2157,12 @@ export function getConfig(app: cdk.App): Config {
         // The job timeout sits in the middle of a three-link chain and every link is enforced somewhere
         // else, so an inconsistent value produces a wrong OUTCOME rather than an error: the state machine
         // derives its poll ceiling from this value, the Kubernetes pod's activeDeadlineSeconds is set
-        // from it, and the registered pipeline bundle declares a taskTimeout the parent workflow waits
-        // for. A pod allowed to outlive the poll makes the execution report FAILED while the pod keeps
-        // writing output; a pod allowed to outlive the parent's taskTimeout makes the parent give up on
-        // a job that is still running.
+        // from it, and the run it allows must fit in the state machine's own timeout, which the
+        // registered pipeline's taskTimeout (the parent workflow's wait) outlasts. A pod allowed to
+        // outlive the poll makes the execution report FAILED while the pod keeps writing output; a run
+        // allowed to outlive the state machine is stopped before PipelineEnd reports it, and the parent
+        // workflow then waits out its taskTimeout. The maximum sits below the largest value that fits,
+        // which leaves the run room for Lambda retries.
         const jobTimeout = config.app.pipelines.useRapidPipeline.useEks.jobTimeout;
         if (typeof jobTimeout !== "number" || !Number.isInteger(jobTimeout) || jobTimeout <= 0) {
             throw new Error(
@@ -2111,13 +2170,22 @@ export function getConfig(app: cdk.App): Config {
                     `integer number of seconds. Received: ${JSON.stringify(jobTimeout)}`
             );
         }
-        if (jobTimeout > RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS) {
+        const worstCaseRunSeconds = rapidPipelineEksWorstCaseRunSeconds(jobTimeout);
+        if (worstCaseRunSeconds > RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS) {
             throw new Error(
                 `Configuration Error: pipelines.useRapidPipeline.useEks.jobTimeout (${jobTimeout}s) ` +
-                    `exceeds the ${RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS}s taskTimeout the ` +
-                    `registered pipeline declares, so the parent workflow would stop waiting while the ` +
-                    `Kubernetes job is still allowed to run. Lower jobTimeout, or raise taskTimeout in ` +
-                    `backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json to match.`
+                    `lets a pipeline run take up to ${worstCaseRunSeconds}s, longer than the ` +
+                    `${RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS}s timeout of the pipeline's ` +
+                    `state machine, which would stop the run before it reports its outcome to the ` +
+                    `parent workflow. Lower jobTimeout to at most ` +
+                    `${RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS}.`
+            );
+        }
+        if (jobTimeout > RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS) {
+            throw new Error(
+                `Configuration Error: pipelines.useRapidPipeline.useEks.jobTimeout (${jobTimeout}s) ` +
+                    `exceeds the ${RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS}s maximum job runtime. ` +
+                    `Lower jobTimeout to at most ${RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS}.`
             );
         }
     }
