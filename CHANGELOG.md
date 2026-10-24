@@ -124,6 +124,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **MCP** `search_assets` and `search_files` sort by `sort_field` instead of failing every call with 400 (`sort.0.field: field required`): the server sends the `{field, order}` sort entry the search API accepts, and the tool descriptions name indexed fields as examples (`str_assetname`, `date_asset_version_createdate`, `date_lastmodified`). ([#760](https://github.com/awslabs/visual-asset-management-system/issues/760))
 -   **MCP** Resuming a paginated list tool with the `NextToken` of a result cut by `max_items` returns the rest of the list: the server asks the API for only the rows still wanted, so the token no longer skips the remainder of the last page. A result the `VAMS_MAX_PAGES` bound stopped says so in its `note` also when no `max_items` was given, instead of "stopped at the requested limit". ([#761](https://github.com/awslabs/visual-asset-management-system/issues/761), [#762](https://github.com/awslabs/visual-asset-management-system/issues/762))
 -   **Web** At window widths where the app shows its mobile toolbar, the header Settings menu's first item (Light Theme) is no longer drawn under the toolbar and can be clicked or tapped. The duplicated `#headerWrapper` rule that left the header at the toolbar's z-index is merged at 1002, and search notifications are raised above the header. ([#764](https://github.com/awslabs/visual-asset-management-system/issues/764))
+-   **Infra** The two unauthenticated bootstrap endpoints the web app reads at startup, `GET /api/amplify-config` and `GET /api/version`, return `Cache-Control: no-cache, no-store`, so after a deployment the web app reads the current API URL, Amazon Cognito configuration and version instead of a copy Amazon CloudFront cached for up to 24 hours. ([#742](https://github.com/awslabs/visual-asset-management-system/issues/742))
 
 ### Chores
 
@@ -133,6 +134,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Security** Dependency updates to resolve security advisories: `certifi` 2026.10.19 (the backend, the base and authorizer Lambda layers, and the RapidPipeline EKS pipeline Lambda layer) and `Pillow` 13.0.0 (the GenAI Metadata 3D Labeling pipeline Lambda layer). ([#570](https://github.com/awslabs/visual-asset-management-system/issues/570))
 -   **Documentation** The upload initialization rate limit is stated as 20 per user per minute everywhere. ([#658](https://github.com/awslabs/visual-asset-management-system/issues/658))
 -   **Documentation** The allowed-routes listing's handling of templated `{param}` path segments is documented in the API, CLI and MCP docs and the permissions model. ([#604](https://github.com/awslabs/visual-asset-management-system/issues/604))
+-   **Security** Dependency update to resolve security advisories: `dompurify` 3.4.17 (`web/`, the Cesium 3D Tileset viewer install in `web/customInstalls/cesium`, and the documentation site). ([#757](https://github.com/awslabs/visual-asset-management-system/pull/757))
 
 ### Known Outstanding Issues
 
