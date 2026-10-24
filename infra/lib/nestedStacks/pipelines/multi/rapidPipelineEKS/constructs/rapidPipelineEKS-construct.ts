@@ -7,6 +7,8 @@ import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as eks from "aws-cdk-lib/aws-eks";
+import * as events from "aws-cdk-lib/aws-events";
+import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
@@ -513,6 +515,13 @@ export class RapidPipelineEKSConstruct extends Construct {
             eksSecurityGroups
         );
 
+        // The state machine EXECUTION_END_CLEANUP accepts events for (see the rule below). Built from
+        // the name rather than read from the state machine, which depends on this function.
+        consolidatedHandler.addEnvironment(
+            "STATE_MACHINE_ARN",
+            `arn:${ServiceHelper.Partition()}:states:${region}:${account}:stateMachine:${stateMachineName}`
+        );
+
         // Kubernetes access for the pipeline Lambda, scoped to the jobs it runs.
         //
         // The handler was mapped into system:masters, which is cluster-admin — a single Lambda
@@ -627,6 +636,10 @@ export class RapidPipelineEKSConstruct extends Construct {
                 // subdirectory within the asset with it, so the converted file is written beside its
                 // source rather than at the asset root.
                 assetId: sfn.JsonPath.stringAt("$.assetId"),
+                // The execution's name, under which CONSTRUCT_PIPELINE records the job name it builds,
+                // so a cleanup started after a stopped execution can find the job. A context-object
+                // path is always present.
+                executionName: sfn.JsonPath.stringAt("$$.Execution.Name"),
             }),
             resultPath: "$.ConstructPipelineResult",
             outputPath: "$",
@@ -1102,6 +1115,59 @@ export class RapidPipelineEKSConstruct extends Construct {
             stateMachineName: stateMachineName,
             comment: "Enhanced EKS Pipeline with comprehensive error handling and monitoring",
         });
+
+        // 8b. Delete the Kubernetes job of an execution that ends without PipelineEnd.
+        //
+        // Stopping the execution (the VAMS execution abort, or a failure elsewhere in the workflow,
+        // which stops every registered sub-process), the state machine timeout, or an error no Catch
+        // routes, ends the run without PipelineEnd, the only state that deletes the job. Step Functions
+        // sends every status change of a standard execution to the default event bus. This rule passes
+        // this state machine's ABORTED, TIMED_OUT and FAILED ones to EXECUTION_END_CLEANUP, which finds
+        // the execution's jobs from the records CONSTRUCT_PIPELINE writes, writes their run-ended
+        // markers and deletes them. A SUCCEEDED run always went through PipelineEndSuccess, and a
+        // FAILED one that went through PipelineEnd finds its job already deleted.
+        //
+        // The target adds the handler's one resource-based permission: lambda:InvokeFunction for the
+        // EventBridge service principal, conditioned on SourceArn = this rule; SourceAccount is set
+        // below as well. Delivery is retried twice within an hour: the cleanup is idempotent, and a job
+        // left that long is near activeDeadlineSeconds. There is no dead-letter queue, so an event that
+        // cannot be delivered leaves the job running until its deadline.
+        const executionEndCleanupRule = new events.Rule(this, "ExecutionEndCleanupRule", {
+            description:
+                "Deletes the Kubernetes job of a RapidPipeline EKS execution that ended without PipelineEnd",
+            eventPattern: {
+                source: ["aws.states"],
+                detailType: ["Step Functions Execution Status Change"],
+                detail: {
+                    stateMachineArn: [stateMachine.stateMachineArn],
+                    status: ["ABORTED", "TIMED_OUT", "FAILED"],
+                },
+            },
+        });
+        executionEndCleanupRule.addTarget(
+            new eventsTargets.LambdaFunction(consolidatedHandler, {
+                event: events.RuleTargetInput.fromObject({
+                    operation: "EXECUTION_END_CLEANUP",
+                    executionArn: events.EventField.fromPath("$.detail.executionArn"),
+                    executionName: events.EventField.fromPath("$.detail.name"),
+                    stateMachineArn: events.EventField.fromPath("$.detail.stateMachineArn"),
+                    status: events.EventField.fromPath("$.detail.status"),
+                }),
+                retryAttempts: 2,
+                maxEventAge: Duration.hours(1),
+            })
+        );
+        // The target writes the permission as a child of the rule, with SourceArn and no
+        // SourceAccount.
+        const cleanupInvokePermissions = executionEndCleanupRule.node.children.filter(
+            (child): child is lambda.CfnPermission => child instanceof lambda.CfnPermission
+        );
+        if (cleanupInvokePermissions.length !== 1) {
+            throw new Error(
+                `ExecutionEndCleanupRule: expected the Lambda target to add one invoke permission, found ${cleanupInvokePermissions.length}`
+            );
+        }
+        cleanupInvokePermissions[0].sourceAccount = cdk.Aws.ACCOUNT_ID;
 
         // 9. Create separate openPipeline Lambda function using builder
         // This Lambda starts the state machine and is NOT referenced by the state machine

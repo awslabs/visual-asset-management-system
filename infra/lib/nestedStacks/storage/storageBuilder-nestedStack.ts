@@ -939,6 +939,21 @@ export function storageResourcesBuilder(
                           prefix: "pipelines/rapid-pipeline-eks/run-ended/",
                           expiredObjectDeleteMarker: true,
                       },
+                      // The run-jobs records, one empty object per job name the handler builds, kept
+                      // under the execution's name. The cleanup after a stopped execution reads them
+                      // at most the state machine timeout (6 hours) plus an hour of event delivery
+                      // after they are written, so a day is ample here too.
+                      {
+                          enabled: true,
+                          prefix: "pipelines/rapid-pipeline-eks/run-jobs/",
+                          expiration: Duration.days(1),
+                          noncurrentVersionExpiration: Duration.days(1),
+                      },
+                      {
+                          enabled: true,
+                          prefix: "pipelines/rapid-pipeline-eks/run-jobs/",
+                          expiredObjectDeleteMarker: true,
+                      },
                   ]
                 : []),
         ],

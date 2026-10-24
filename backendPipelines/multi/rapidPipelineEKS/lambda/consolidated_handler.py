@@ -76,7 +76,19 @@ RUN_ENDED_MARKER_PREFIX = "pipelines/rapid-pipeline-eks/run-ended/"
 # The k8sJobName values PIPELINE_END is handed when no job was created.
 NO_JOB_NAMES = frozenset({'failure-before-creation', 'unknown'})
 # A Kubernetes object name (a DNS subdomain), so a marker key stays a single segment under the prefix.
-K8S_OBJECT_NAME_PATTERN = re.compile(r'^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$')
+# Matched with fullmatch, so a trailing newline does not pass.
+K8S_OBJECT_NAME_PATTERN = re.compile(r'[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?')
+
+# The run-jobs records: one empty object per job name CONSTRUCT_PIPELINE puts in a manifest, under the
+# Step Functions execution's name, in the same bucket as the markers. They are how EXECUTION_END_CLEANUP
+# finds the jobs of an execution that ended without PIPELINE_END; their lifecycle rule expires them.
+RUN_JOBS_RECORD_PREFIX = "pipelines/rapid-pipeline-eks/run-jobs/"
+# The execution names a record is kept under: what VAMS starts executions with
+# (PipelineJobEKS_<timestamp>_<hex>), within Step Functions' 80-character limit, and never a key separator.
+EXECUTION_NAME_PATTERN = re.compile(r'[A-Za-z0-9_-]{1,80}')
+# The execution statuses EXECUTION_END_CLEANUP acts on. A SUCCEEDED run went through PipelineEndSuccess,
+# and a RUNNING one is still using its job.
+EXECUTION_END_STATUSES = frozenset({'ABORTED', 'TIMED_OUT', 'FAILED'})
 
 
 def run_ended_marker_location(k8s_job_name):
@@ -88,9 +100,70 @@ def run_ended_marker_location(k8s_job_name):
     """
     bucket = os.environ.get('RUN_ENDED_MARKER_BUCKET', '')
     if (not bucket or not isinstance(k8s_job_name, str) or k8s_job_name in NO_JOB_NAMES
-            or not K8S_OBJECT_NAME_PATTERN.match(k8s_job_name)):
+            or not K8S_OBJECT_NAME_PATTERN.fullmatch(k8s_job_name)):
         return None
     return bucket, f"{RUN_ENDED_MARKER_PREFIX}{k8s_job_name}"
+
+
+def run_jobs_record_prefix(execution_name):
+    """
+    The (bucket, key prefix) of an execution's run-jobs records, or None when no bucket is configured or
+    the name is not one a record is kept under.
+    """
+    bucket = os.environ.get('RUN_ENDED_MARKER_BUCKET', '')
+    if (not bucket or not isinstance(execution_name, str)
+            or not EXECUTION_NAME_PATTERN.fullmatch(execution_name)):
+        return None
+    return bucket, f"{RUN_JOBS_RECORD_PREFIX}{execution_name}/"
+
+
+def write_run_job_record(execution_name, k8s_job_name):
+    """
+    Record that this execution may create this Kubernetes job. Never raises: a record that cannot be
+    written is logged, and the run goes on (a stopped execution's job then runs until its deadline).
+
+    Returns:
+        bool: whether the record was written
+    """
+    location = run_jobs_record_prefix(execution_name)
+    if location is None or not K8S_OBJECT_NAME_PATTERN.fullmatch(str(k8s_job_name)):
+        logger.warning(f"No run-jobs record written for execution {execution_name}: "
+                       "RUN_ENDED_MARKER_BUCKET is not set or a name is not usable")
+        return False
+
+    bucket, prefix = location
+    key = f"{prefix}{k8s_job_name}"
+    try:
+        s3.put_object(Bucket=bucket, Key=key, Body=b"")
+        logger.info(f"Wrote run-jobs record s3://{bucket}/{key}")
+        return True
+    except Exception as e:
+        logger.error(f"Could not write run-jobs record s3://{bucket}/{key}: {str(e)}")
+        return False
+
+
+def list_run_job_names(execution_name):
+    """
+    The Kubernetes job names recorded for an execution. Raises if the records cannot be listed.
+    """
+    bucket, prefix = run_jobs_record_prefix(execution_name)
+    names = []
+    token = None
+    while True:
+        request = {'Bucket': bucket, 'Prefix': prefix}
+        if token:
+            request['ContinuationToken'] = token
+        page = s3.list_objects_v2(**request)
+        for entry in page.get('Contents') or []:
+            name = entry.get('Key', '')[len(prefix):]
+            if name not in NO_JOB_NAMES and K8S_OBJECT_NAME_PATTERN.fullmatch(name):
+                names.append(name)
+            else:
+                logger.warning(f"Skipping run-jobs record s3://{bucket}/{entry.get('Key', '')}: "
+                               "not a Kubernetes job name")
+        token = page.get('NextContinuationToken')
+        if not page.get('IsTruncated') or not token:
+            return names
 
 
 def write_run_ended_marker(k8s_job_name):
@@ -333,7 +406,8 @@ def lambda_handler(event, context):
         logger.info(f"Operation: {operation}")
 
         # Validate operation is supported
-        supported_operations = ['CONSTRUCT_PIPELINE', 'RUN_JOB', 'CHECK_JOB', 'PIPELINE_END']
+        supported_operations = ['CONSTRUCT_PIPELINE', 'RUN_JOB', 'CHECK_JOB', 'PIPELINE_END',
+                                'EXECUTION_END_CLEANUP']
         if operation not in supported_operations:
             error_msg = f"Unknown operation: {operation}. Supported operations: {', '.join(supported_operations)}"
             logger.error(error_msg)
@@ -360,6 +434,8 @@ def lambda_handler(event, context):
                 result = handle_check_job(event)
             elif operation == 'PIPELINE_END':
                 result = handle_pipeline_end(event)
+            elif operation == 'EXECUTION_END_CLEANUP':
+                result = handle_execution_end_cleanup(event)
             else:
                 # This should not happen due to validation above, but keeping for safety
                 error_msg = f"Unhandled operation: {operation}"
@@ -804,6 +880,16 @@ def handle_construct_pipeline(event):
         }
 
         logger.info(f"Created job manifest for {job_name}")
+
+        # Before the manifest is returned, so before any RUN_JOB can create the job: an execution that
+        # is stopped from here on finds this job in its records (see handle_execution_end_cleanup). A
+        # retried ConstructPipeline records the name each attempt drew. An event without the execution
+        # name (a direct invocation) records nothing.
+        execution_name = event.get('executionName')
+        if execution_name:
+            write_run_job_record(execution_name, job_manifest["metadata"]["name"])
+        else:
+            logger.info("No executionName in the event, so no run-jobs record is written")
 
         return {
             "jobName": job_name,
@@ -1419,3 +1505,84 @@ def handle_pipeline_end(event):
                 "errorType": type(e).__name__
             }
         }
+
+
+def handle_execution_end_cleanup(event):
+    """
+    Handler for a RapidPipeline EKS execution that ended ABORTED, TIMED_OUT or FAILED.
+
+    Stopping the execution (the VAMS execution abort, or a failure elsewhere in the workflow, which
+    stops every registered sub-process), its state machine timeout, or an error no Catch routes, ends
+    the run without PIPELINE_END, the only state that deletes the job. Amazon EventBridge invokes this
+    with that execution's status change, through a rule that matches only this pipeline's state
+    machine; the event is checked against it here as well, and against the statuses.
+
+    Every RUN_JOB that can create a job for the execution was started after CONSTRUCT_PIPELINE returned
+    the job's manifest, and CONSTRUCT_PIPELINE writes the job's run-jobs record before it returns. The
+    execution ended, and sent this event, after that RUN_JOB started, and Amazon S3 lists are strongly
+    consistent after a write, so the listing here finds every job a RUN_JOB was given. Each job gets its
+    run-ended marker before its delete, as in PIPELINE_END, so a RUN_JOB still running deletes a job it
+    creates after the delete (see handle_run_job). A FAILED run that went through PIPELINE_END finds its
+    job already deleted. Redriving a stopped execution is not supported: its RunJob would find the
+    marker and fail the run.
+    """
+    operation = "EXECUTION_END_CLEANUP"
+    logger.info("Starting EXECUTION_END_CLEANUP operation")
+
+    own_state_machine_arn = os.environ.get('STATE_MACHINE_ARN', '')
+    state_machine_arn = event.get('stateMachineArn')
+    if not own_state_machine_arn or state_machine_arn != own_state_machine_arn:
+        logger.error(f"Rejecting an execution-end event for state machine {state_machine_arn}: "
+                     f"this handler cleans up after {own_state_machine_arn or '(STATE_MACHINE_ARN not set)'}")
+        return create_error_response(403, operation, "The event is not for this pipeline's state machine")
+
+    status = event.get('status')
+    if status not in EXECUTION_END_STATUSES:
+        logger.warning(f"Ignoring an execution-end event with status {status}")
+        return create_error_response(
+            400, operation, f"Execution status {status} is not one of {sorted(EXECUTION_END_STATUSES)}")
+
+    execution_name = event.get('executionName')
+    execution_arn = event.get('executionArn')
+    own_execution_arn = (own_state_machine_arn.replace(':stateMachine:', ':execution:', 1)
+                         + f":{execution_name}")
+    if (not isinstance(execution_name, str) or not EXECUTION_NAME_PATTERN.fullmatch(execution_name)
+            or execution_arn != own_execution_arn):
+        logger.error(f"Rejecting an execution-end event for execution {execution_arn} ({execution_name})")
+        return create_error_response(400, operation,
+                                     "The event does not name an execution of this pipeline's state machine")
+
+    if run_jobs_record_prefix(execution_name) is None:
+        logger.error("RUN_ENDED_MARKER_BUCKET is not set, so the execution's jobs cannot be found")
+        return create_error_response(500, operation, "RUN_ENDED_MARKER_BUCKET is not set")
+
+    try:
+        job_names = list_run_job_names(execution_name)
+    except Exception as e:
+        logger.error(f"Could not list the run-jobs records of execution {execution_name}: {str(e)}")
+        return create_error_response(500, operation,
+                                     f"Could not list the jobs of execution {execution_name}: {str(e)}")
+
+    logger.info(f"Execution {execution_name} ended {status}; recorded jobs: {job_names}")
+    jobs = []
+    for k8s_job_name in job_names:
+        marker_written = write_run_ended_marker(k8s_job_name)
+        try:
+            deleted = bool(delete_job(k8s_job_name, namespace=NAMESPACE))
+        except Exception as e:
+            logger.error(f"Could not delete job {k8s_job_name}: {str(e)}")
+            deleted = False
+        jobs.append({"k8sJobName": k8s_job_name, "markerWritten": marker_written, "deleted": deleted})
+
+    all_deleted = all(job["deleted"] for job in jobs)
+    return {
+        'statusCode': 200 if all_deleted else 500,
+        'body': {
+            "status": "COMPLETED" if all_deleted else "FAILED",
+            "executionArn": execution_arn,
+            "executionStatus": status,
+            "jobs": jobs,
+            "message": ("Execution-end cleanup completed" if all_deleted
+                        else "One or more of the execution's jobs could not be deleted")
+        }
+    }
