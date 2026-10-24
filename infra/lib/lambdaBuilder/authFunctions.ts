@@ -26,7 +26,10 @@ import {
     setupSecurityAndLoggingEnvironmentAndPermissions,
     isCognitoMfaCheckEnabled,
 } from "../helper/security";
-import { ApiOriginVerifySecretRef } from "../helper/apiOriginVerify";
+import {
+    ApiOriginVerifySecretRef,
+    apiOriginVerifySecretKmsConditions,
+} from "../helper/apiOriginVerify";
 import { authResources } from "../nestedStacks/auth/authBuilder-nestedStack";
 import { CUSTOM_AUTHORIZER_IGNORED_PATHS } from "../../config/config";
 
@@ -431,11 +434,14 @@ export function buildApiGatewayAuthorizerRestFunction(
             })
         );
         if (apiOriginVerifySecret.kmsKeyArn) {
+            // Secrets Manager calls AWS KMS with the secret's ARN as encryption context, so the
+            // grant covers this secret only, also when the key encrypts other data.
             fun.addToRolePolicy(
                 new iam.PolicyStatement({
                     effect: iam.Effect.ALLOW,
                     actions: ["kms:Decrypt"],
                     resources: [apiOriginVerifySecret.kmsKeyArn],
+                    conditions: apiOriginVerifySecretKmsConditions(apiOriginVerifySecret),
                 })
             );
         }
@@ -518,11 +524,13 @@ export function buildApiOriginVerifyRotationFunction(
         })
     );
     if (target.secret.kmsKeyArn) {
+        // Limited to this secret through the encryption context Secrets Manager passes to AWS KMS.
         fun.addToRolePolicy(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
                 actions: ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey"],
                 resources: [target.secret.kmsKeyArn],
+                conditions: apiOriginVerifySecretKmsConditions(target.secret),
             })
         );
     }

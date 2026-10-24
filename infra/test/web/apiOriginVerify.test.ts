@@ -17,7 +17,8 @@
  *     about 90 days), does not rotate on deploy, and invokes a function
  *     whose permission names this account as its source;
  *   - the REST authorizer reads the secret by ARN;
- *   - with a customer managed key the secret is encrypted with it and both readers can decrypt;
+ *   - with a customer managed key the secret is encrypted with it and both readers can decrypt, for
+ *     this secret only (`kms:EncryptionContext:SecretARN`);
  *   - deployments without CloudFront (the GovCloud and EU Sovereign templates, both ALB-fronted)
  *     emit none of it.
  *
@@ -239,7 +240,7 @@ describe("API origin verification with a VAMS-generated customer managed key", (
         });
     });
 
-    test("the authorizer and the rotation function can use the key", () => {
+    test("the authorizer and the rotation function can use the key for this secret only", () => {
         const authorizer = lambdaByHandler(s(), AUTHORIZER_HANDLER);
         const decrypt = roleStatements(s(), authorizer).filter(
             (st) => actionsOf(st).length === 1 && actionsOf(st)[0] === "kms:Decrypt"
@@ -255,6 +256,24 @@ describe("API origin verification with a VAMS-generated customer managed key", (
             ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey"].sort()
         );
         expect(kms[0].Resource).toEqual(decrypt[0].Resource);
+
+        // Both grants are limited to the secret through the encryption context Secrets Manager
+        // passes to AWS KMS, and to the secret's own ARN (an import of the origin verification
+        // stack's export), with no other condition.
+        for (const statement of [decrypt[0], kms[0]]) {
+            expect(Object.keys(statement.Condition ?? {})).toEqual(["StringEquals"]);
+            const context = statement.Condition.StringEquals;
+            expect(Object.keys(context)).toEqual(["kms:EncryptionContext:SecretARN"]);
+            expect(SynthResult.flatten(context["kms:EncryptionContext:SecretARN"])).toMatch(
+                SECRET_ARN
+            );
+            expect(isImported(context["kms:EncryptionContext:SecretARN"])).toBe(true);
+        }
+        const authorizerSecretArn =
+            authorizer.properties.Environment.Variables.ORIGIN_VERIFY_SECRET_ARN;
+        expect(decrypt[0].Condition.StringEquals["kms:EncryptionContext:SecretARN"]).toEqual(
+            authorizerSecretArn
+        );
     });
 });
 

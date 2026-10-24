@@ -20,6 +20,19 @@ export interface ApiOriginVerifySecretRef {
 }
 
 /**
+ * IAM conditions that limit a grant on the secret's customer managed key to this secret.
+ *
+ * Secrets Manager calls AWS KMS with the encryption context `SecretARN` = the secret's full ARN, so a
+ * principal granted the key with this condition can use it only for this secret, even when the key
+ * (for example an external `useKmsCmkEncryption.optionalExternalCmkArn` key) encrypts other data.
+ */
+export function apiOriginVerifySecretKmsConditions(secret: ApiOriginVerifySecretRef): {
+    [operator: string]: { [key: string]: string };
+} {
+    return { StringEquals: { "kms:EncryptionContext:SecretARN": secret.secretArn } };
+}
+
+/**
  * A CloudFormation dynamic reference to the value CloudFront sends (the secret's `current` key).
  *
  * The template carries only `{{resolve:secretsmanager:...}}`; AWS CloudFormation resolves it when it
