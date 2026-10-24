@@ -342,7 +342,37 @@ def create_error_response(status_code, operation, error_message, details=None):
 
     return response
 
+class ExecutionEndCleanupIncomplete(Exception):
+    """An EXECUTION_END_CLEANUP that did not complete, raised out of lambda_handler (see there)."""
+
+
 def lambda_handler(event, context):
+    """
+    Lambda entry point: runs the operation the event names (see route_operation) and returns its result.
+
+    An EXECUTION_END_CLEANUP that did not complete (a 5xx result: the records could not be listed, a
+    job could not be deleted, or the handler failed) is raised as ExecutionEndCleanupIncomplete instead.
+    Amazon EventBridge invokes that operation asynchronously, and Lambda retries an asynchronous
+    invocation only when the function fails, so a returned error would end it with the job still
+    running. The cleanup is idempotent, so the retry runs all of it again. Its 403 and 400 rejections
+    are returned: a retry would be rejected the same way. The exception text carries only the status,
+    not the event. Every other operation is a Step Functions task, invoked synchronously, whose Catch
+    and Choice states read the returned body, so those results are always returned.
+    """
+    result = route_operation(event, context)
+    operation = event.get('operation') if isinstance(event, dict) else None
+    status = result.get('statusCode') if isinstance(result, dict) else None
+    if (isinstance(operation, str) and operation.strip().upper() == 'EXECUTION_END_CLEANUP'
+            and isinstance(status, int) and status >= 500):
+        logger.error(f"EXECUTION_END_CLEANUP returned status {status}; failing the invocation so that "
+                     "Lambda retries it")
+        raise ExecutionEndCleanupIncomplete(
+            f"EXECUTION_END_CLEANUP did not complete (status {status}); failed so that Lambda retries "
+            "the asynchronous invocation")
+    return result
+
+
+def route_operation(event, context):
     """
     Main handler that routes operations to the appropriate function with comprehensive error handling
     based on the 'operation' parameter in the event.

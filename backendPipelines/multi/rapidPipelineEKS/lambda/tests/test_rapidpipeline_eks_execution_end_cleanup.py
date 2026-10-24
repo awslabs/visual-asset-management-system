@@ -129,11 +129,15 @@ def _job(name, job_id):
 
 
 class FakeJobsApi:
-    """The BatchV1Api calls create_job and the job cleanup make; `jobs` maps a job name to its job-id."""
+    """The BatchV1Api calls create_job and the job cleanup make; `jobs` maps a job name to its job-id.
 
-    def __init__(self, calls, jobs=None):
+    The first `delete_failures` delete requests are answered 500.
+    """
+
+    def __init__(self, calls, jobs=None, delete_failures=0):
         self.calls = calls
         self.jobs = dict(jobs or {})
+        self.delete_failures = delete_failures
 
     def read_namespaced_job(self, name, namespace):
         if name not in self.jobs:
@@ -153,6 +157,9 @@ class FakeJobsApi:
 
     def delete_namespaced_job(self, name, namespace, body=None):
         self.calls.append(("k8s.delete", name))
+        if self.delete_failures > 0:
+            self.delete_failures -= 1
+            raise ApiException(status=500, reason="Internal Server Error")
         if name not in self.jobs:
             raise ApiException(status=404, reason="Not Found")
         del self.jobs[name]
@@ -172,8 +179,12 @@ def _load_handler():
     return importlib.import_module("consolidated_handler")
 
 
-def _invoke(event, calls, s3, jobs):
-    """Run the event through the lambda entry point with the stand-ins in place."""
+def _invoke(event, calls, s3, jobs, expect_retry=False):
+    """Run the event through the lambda entry point with the stand-ins in place.
+
+    With `expect_retry`, the entry point must raise ExecutionEndCleanupIncomplete, which is returned in
+    place of the result.
+    """
     handler = _load_handler()
     ku = sys.modules["kubernetes_utils"]
     logger = MagicMock()
@@ -181,8 +192,11 @@ def _invoke(event, calls, s3, jobs):
             patch.object(handler, "logger", logger), \
             patch.object(ku, "get_batch_v1_api", return_value=jobs), \
             patch("time.sleep", MagicMock()):
-        result = handler.lambda_handler(event, _context())
-    return result, logger
+        if not expect_retry:
+            return handler.lambda_handler(event, _context()), logger
+        with pytest.raises(handler.ExecutionEndCleanupIncomplete) as raised:
+            handler.lambda_handler(event, _context())
+    return raised.value, logger
 
 
 def _logged(mock_method, needle):
@@ -353,16 +367,96 @@ class TestCleanupDeletesTheRunsJobs:
         assert jobs.jobs == {}
         assert result["body"]["jobs"] == [{"k8sJobName": JOB_A, "markerWritten": False, "deleted": True}]
 
-    def test_a_listing_that_fails_deletes_nothing_and_reports_it(self, deployed):
+    def test_a_listing_that_fails_deletes_nothing_and_fails_the_invocation(self, deployed):
         calls = []
 
-        result, logger = _invoke(_cleanup_event(), calls,
+        raised, logger = _invoke(_cleanup_event(), calls,
                                  FakeS3(calls, list_error=_client_error("InternalError", "ListObjectsV2")),
-                                 FakeJobsApi(calls, {JOB_A: "a"}))
+                                 FakeJobsApi(calls, {JOB_A: "a"}), expect_retry=True)
 
         assert calls == [_list()]
-        assert result["statusCode"] >= 500
+        assert "status 500" in str(raised)
         assert _logged(logger.error, EXECUTION_NAME)
+
+
+@pytest.mark.unit
+class TestAFailedCleanupIsRetried:
+    """EventBridge invokes EXECUTION_END_CLEANUP asynchronously, and Lambda retries an asynchronous
+    invocation only when the function fails, so a cleanup that did not complete (a 5xx result) is raised
+    out of lambda_handler rather than returned. Its 403 and 400 rejections are returned, as the tests in
+    TestCleanupRejectsAnyOtherEvent show (they would fail on a raise). The other operations are Step
+    Functions tasks, whose states read the returned body."""
+
+    def test_a_delete_that_fails_fails_the_invocation(self, deployed):
+        calls = []
+        jobs = FakeJobsApi(calls, {JOB_A: "a"}, delete_failures=1000)
+
+        raised, logger = _invoke(_cleanup_event(), calls, FakeS3(calls, objects=[_record(JOB_A)]), jobs,
+                                 expect_retry=True)
+
+        assert calls[:2] == [_list(), _put_marker(JOB_A)]
+        assert set(calls[2:]) == {_delete(JOB_A)}
+        assert list(jobs.jobs) == [JOB_A]
+        assert "status 500" in str(raised)
+        assert _logged(logger.error, "EXECUTION_END_CLEANUP returned status 500")
+
+    def test_the_retried_invocation_finishes_the_cleanup(self, deployed):
+        """One delete_job call is one round of with_retries (three requests): the first invocation's
+        delete fails, and Lambda's retry, the same event, deletes the job."""
+        calls = []
+        s3 = FakeS3(calls, objects=[_record(JOB_A)])
+        jobs = FakeJobsApi(calls, {JOB_A: "a"}, delete_failures=3)
+
+        _invoke(_cleanup_event(), calls, s3, jobs, expect_retry=True)
+        assert list(jobs.jobs) == [JOB_A]
+        result, _ = _invoke(_cleanup_event(), calls, s3, jobs)
+
+        assert calls == ([_list(), _put_marker(JOB_A)] + [_delete(JOB_A)] * 3
+                         + [_list(), _put_marker(JOB_A), _delete(JOB_A)])
+        assert jobs.jobs == {}
+        assert result["statusCode"] == 200
+
+    def test_without_a_bucket_the_invocation_fails(self, monkeypatch):
+        monkeypatch.setenv("STATE_MACHINE_ARN", STATE_MACHINE_ARN)
+        monkeypatch.delenv("RUN_ENDED_MARKER_BUCKET", raising=False)
+        calls = []
+
+        raised, _ = _invoke(_cleanup_event(), calls, FakeS3(calls), FakeJobsApi(calls), expect_retry=True)
+
+        assert calls == []
+        assert "status 500" in str(raised)
+
+    def test_the_exception_text_carries_no_event_contents(self, deployed):
+        """A handler failure is turned into a 500 that names the failure; the raise names only the
+        status, so neither the execution nor the job names reach the function error."""
+        handler = _load_handler()
+        failure = RuntimeError(f"boom for {EXECUTION_ARN} and {JOB_A}")
+
+        with patch.object(handler, "handle_execution_end_cleanup", side_effect=failure), \
+                patch.object(handler, "logger", MagicMock()), \
+                pytest.raises(handler.ExecutionEndCleanupIncomplete) as raised:
+            handler.lambda_handler(_cleanup_event(), _context())
+
+        text = str(raised.value)
+        assert "status 500" in text
+        for event_value in (EXECUTION_ARN, EXECUTION_NAME, STATE_MACHINE_ARN, JOB_A, "ABORTED"):
+            assert event_value not in text
+
+    @pytest.mark.parametrize("operation, handler_name", [
+        ("CONSTRUCT_PIPELINE", "handle_construct_pipeline"),
+        ("RUN_JOB", "handle_run_job"),
+        ("CHECK_JOB", "handle_check_job"),
+        ("PIPELINE_END", "handle_pipeline_end"),
+    ])
+    def test_a_step_functions_operation_returns_its_server_error(self, deployed, operation, handler_name):
+        handler = _load_handler()
+        error = {"statusCode": 500, "body": {"message": "failed"}}
+
+        with patch.object(handler, handler_name, return_value=error), \
+                patch.object(handler, "logger", MagicMock()):
+            result = handler.lambda_handler({"operation": operation}, _context())
+
+        assert result == error
 
 
 @pytest.mark.unit

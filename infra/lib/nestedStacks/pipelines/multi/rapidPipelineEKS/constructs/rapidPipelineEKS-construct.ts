@@ -1135,9 +1135,12 @@ export class RapidPipelineEKSConstruct extends Construct {
         //
         // The target adds the handler's one resource-based permission: lambda:InvokeFunction for the
         // EventBridge service principal, conditioned on SourceArn = this rule; SourceAccount is set
-        // below as well. Delivery is retried twice within an hour: the cleanup is idempotent, and a job
-        // left that long is near activeDeadlineSeconds. There is no dead-letter queue, so an event that
-        // cannot be delivered leaves the job running until its deadline.
+        // below as well. EventBridge retries the delivery (the Invoke call) twice within an hour, and
+        // Lambda retries the asynchronous invocation itself twice within an hour (configured below):
+        // the handler fails an EXECUTION_END_CLEANUP that did not complete, so a listing or delete
+        // that fails runs again, and the cleanup is idempotent. A job left that long is near
+        // activeDeadlineSeconds. There is no dead-letter queue or destination, so an event whose
+        // delivery or retries are used up leaves the job running until its deadline.
         const executionEndCleanupRule = new events.Rule(this, "ExecutionEndCleanupRule", {
             description:
                 "Deletes the Kubernetes job of a RapidPipeline EKS execution that ended without PipelineEnd",
@@ -1174,6 +1177,15 @@ export class RapidPipelineEKSConstruct extends Construct {
             );
         }
         cleanupInvokePermissions[0].sourceAccount = cdk.Aws.ACCOUNT_ID;
+        // The handler's asynchronous invocations: Lambda's retries of a failed EXECUTION_END_CLEANUP,
+        // pinned rather than left at the defaults (2 retries, 6 hours), so a cleanup ends within the
+        // hour and the run-jobs records' lifetime covers it (storageBuilder). The rule is the only
+        // asynchronous caller: every Step Functions task above invokes the handler RequestResponse.
+        // No destination is set, so this adds no permission.
+        consolidatedHandler.configureAsyncInvoke({
+            retryAttempts: 2,
+            maxEventAge: Duration.hours(1),
+        });
 
         // 9. Create separate openPipeline Lambda function using builder
         // This Lambda starts the state machine and is NOT referenced by the state machine

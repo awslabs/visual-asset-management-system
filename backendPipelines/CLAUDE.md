@@ -632,7 +632,10 @@ job name under `$$.Execution.Name` in the auxiliary bucket, and an EventBridge r
 machine's own `ABORTED` / `TIMED_OUT` / `FAILED` status changes invokes the handler's
 `EXECUTION_END_CLEANUP`, which rejects any other state machine and deletes the recorded jobs. The rule's
 `targets.LambdaFunction` permission carries `SourceArn` only, so the construct adds `SourceAccount`
-(`infra/test/pipelines/eksExecutionEndCleanup.test.ts`).
+(`infra/test/pipelines/eksExecutionEndCleanup.test.ts`). The target's `retryAttempts` covers only
+EventBridge's delivery; a handler that returns an error body has succeeded as far as Lambda is concerned,
+so `lambda_handler` raises for a 5xx `EXECUTION_END_CLEANUP` result (never for its 400/403 rejections)
+and the construct pins Lambda's asynchronous retries with `configureAsyncInvoke` (no destination).
 
 ## Every boto3 Client Carries the Adaptive Retry Configuration
 

@@ -15,6 +15,9 @@
  * under the execution's name, and its order of operations is pinned by
  * `test_rapidpipeline_eks_execution_end_cleanup.py`.
  *
+ * A cleanup that did not complete fails the invocation, so Lambda's own retries of the handler's
+ * asynchronous invocations run it again; they are pinned by an EventInvokeConfig with no destination.
+ *
  * The rule's target is the one new resource-based permission: lambda:InvokeFunction for the
  * EventBridge service principal, conditioned on SourceArn = this rule and SourceAccount = the
  * deploying account. Asserted on every shipped partition's template, with the EKS pipeline switched
@@ -195,6 +198,44 @@ describe.each(TEMPLATES)("%s: EKS execution-end cleanup", (name) => {
             "Fn::GetAtt": [handlerRules()[0].logicalId, "Arn"],
         });
         expect(permission.SourceAccount).toEqual({ Ref: "AWS::AccountId" });
+    });
+
+    test("Lambda retries the handler's asynchronous invocations twice within an hour, with no destination", () => {
+        // The handler fails an EXECUTION_END_CLEANUP that did not complete, so these retries run the
+        // cleanup again. Pinned rather than left at Lambda's defaults (2 retries, 6 hours), and with
+        // no destination, which would add a permission to the handler's role.
+        const configs = synth
+            .ofType("AWS::Lambda::EventInvokeConfig")
+            .filter((c) => c.stack === sm.stack);
+        expect(configs).toHaveLength(1);
+        expect(configs[0].properties).toEqual({
+            FunctionName: { Ref: handlerId },
+            Qualifier: "$LATEST",
+            MaximumRetryAttempts: 2,
+            MaximumEventAgeInSeconds: 3600,
+        });
+        expect(configs[0].properties.DestinationConfig).toBeUndefined();
+    });
+
+    test("every Step Functions task invokes the handler synchronously, so the rule is its only asynchronous caller", () => {
+        const handlerTasks = Object.entries<any>(sm.definition.States).filter(
+            ([, state]) =>
+                state.Type === "Task" &&
+                String(state.Resource).includes(":lambda:invoke") &&
+                invokedFunctionId(state) === handlerId
+        );
+        expect(handlerTasks.map(([stateName]) => stateName).sort()).toEqual([
+            "CheckJob",
+            "ConstructPipeline",
+            "PipelineEnd",
+            "PipelineEndSuccess",
+            "RunJob",
+        ]);
+        for (const [, state] of handlerTasks) {
+            // lambda:invoke without .waitForTaskToken, and Invoke's default invocation type.
+            expect(state.Resource).toMatch(/:states:::lambda:invoke$/);
+            expect(state.Parameters.InvocationType ?? "RequestResponse").toBe("RequestResponse");
+        }
     });
 
     test("the handler names this state machine's ARN in this partition", () => {
