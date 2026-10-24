@@ -633,11 +633,18 @@ export class RapidPipelineEKSConstruct extends Construct {
             retryOnServiceExceptions: true, // Retry on transient AWS service errors
         });
 
-        // Submits Kubernetes job to EKS cluster
+        // Submits Kubernetes job to EKS cluster.
+        //
+        // The task timeout is the handler's own timeout (Lambda's 3 s default if unset) plus a margin,
+        // so a RunJob timeout, or an error the function itself returns, routes the run to
+        // PipelineEnd (which deletes the job by name) only after the RUN_JOB invocation has ended.
+        const runJobTimeout = (consolidatedHandler.timeout ?? Duration.seconds(3)).plus(
+            Duration.minutes(1)
+        );
         const runJobTask = new tasks.LambdaInvoke(this, "RunJob", {
             lambdaFunction: consolidatedHandler,
             integrationPattern: sfn.IntegrationPattern.REQUEST_RESPONSE,
-            timeout: Duration.minutes(10), // Add timeout for job creation
+            timeout: runJobTimeout,
             payload: sfn.TaskInput.fromObject({
                 operation: "RUN_JOB",
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
