@@ -124,12 +124,18 @@ describe.each(TEMPLATES)("%s: EKS execution-end cleanup", (name) => {
                     (r.properties.Targets ?? []).some((t: any) => isGetAttArn(t.Arn, handlerId))
             );
 
-    /** The resource-based permissions on the handler. */
+    /**
+     * The resource-based permissions on the handler, whatever form their FunctionName takes
+     * (`Fn::GetAtt` of any attribute, `Ref`, or an `Fn::Join` containing either): the value
+     * names the handler's logical id as a complete JSON string.
+     */
     const handlerPermissions = (): Resource[] =>
         synth
             .ofType("AWS::Lambda::Permission")
             .filter(
-                (p) => p.stack === sm.stack && isGetAttArn(p.properties.FunctionName, handlerId)
+                (p) =>
+                    p.stack === sm.stack &&
+                    JSON.stringify(p.properties.FunctionName).includes(JSON.stringify(handlerId))
             );
 
     test("[control] the EKS pipeline, its state machine and the handler it invokes are in this synth", () => {
