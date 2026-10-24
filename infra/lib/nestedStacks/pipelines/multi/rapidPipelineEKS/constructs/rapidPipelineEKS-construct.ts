@@ -614,7 +614,8 @@ export class RapidPipelineEKSConstruct extends Construct {
         // Transforms data input for Kubernetes job creation
         const constructPipelineTask = new tasks.LambdaInvoke(this, "ConstructPipeline", {
             lambdaFunction: consolidatedHandler,
-            timeout: Duration.minutes(5), // Add timeout for construct operation
+            // Counted in the run's worst case, which getConfig() checks against the state machine timeout.
+            timeout: Duration.seconds(Config.RAPID_PIPELINE_EKS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS),
             payload: sfn.TaskInput.fromObject({
                 operation: "CONSTRUCT_PIPELINE",
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
@@ -722,10 +723,13 @@ export class RapidPipelineEKSConstruct extends Construct {
         // End state: success
         const successState = new sfn.Succeed(this, "Success");
 
-        // End state: failure
+        // End state: failure. EndChoice routes here only when $.error is present, and every state
+        // that sets it either builds Error and Cause as strings or copies the error output of a Catch
+        // that wrote it to $.error. ErrorPath and CausePath must select string fields, and these two
+        // read the run's own error name and description from that object.
         const failState = new sfn.Fail(this, "Failure", {
-            cause: sfn.JsonPath.stringAt("$.error.Cause || 'Unknown error'"),
-            error: sfn.JsonPath.stringAt("$.error.Error || 'PipelineExecutionFailed'"),
+            errorPath: "$.error.Error",
+            causePath: "$.error.Cause",
         });
 
         // Error handlers for the three Lambda tasks. Each task gets its own pair, named
@@ -814,7 +818,7 @@ export class RapidPipelineEKSConstruct extends Construct {
         pipelineEndSuccessTask.next(endChoice);
 
         // Define variables for job monitoring with enhanced configuration
-        const jobCheckInterval = 10; // seconds between status checks
+        const jobCheckInterval = Config.RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS;
 
         // The poll ceiling is DERIVED from the configured job timeout, and deliberately outlives it.
         //
@@ -830,10 +834,10 @@ export class RapidPipelineEKSConstruct extends Construct {
         // terminated the pod and the outcome would again be reported as a timeout rather than as the
         // pod's own failure. One extra minute lets the poll observe the terminated pod and report what
         // actually happened.
-        const jobTimeoutSeconds = props.config.app.pipelines.useRapidPipeline.useEks.jobTimeout;
-        const pollMarginSeconds = 60;
-        const maxJobCheckAttempts = Math.ceil(
-            (jobTimeoutSeconds + pollMarginSeconds) / jobCheckInterval
+        //
+        // Computed in config.ts, where getConfig() counts the same attempts in the run's worst case.
+        const maxJobCheckAttempts = Config.rapidPipelineEksJobCheckAttempts(
+            props.config.app.pipelines.useRapidPipeline.useEks.jobTimeout
         );
 
         // Enhanced counter initialization with additional context
@@ -1105,7 +1109,9 @@ export class RapidPipelineEKSConstruct extends Construct {
         // 8. Create Step Function State Machine with enhanced configuration
         const stateMachine = new sfn.StateMachine(this, "StateMachine", {
             definition,
-            timeout: Duration.hours(6), // Increased timeout for large file processing
+            // The middle link of the timeout chain in config.ts: the longest run getConfig() accepts
+            // fits inside it, and the registered pipeline's taskTimeout outlasts it.
+            timeout: Duration.seconds(Config.RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS),
             logs: {
                 destination: stateMachineLogGroup,
                 includeExecutionData: true,

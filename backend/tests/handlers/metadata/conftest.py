@@ -73,18 +73,3 @@ def _install_real_common_and_logging():
 
 
 _install_real_common_and_logging()
-
-
-import pytest  # noqa: E402
-from unittest.mock import MagicMock, patch  # noqa: E402
-
-
-@pytest.fixture(autouse=True)
-def stamp_asset_change():
-    """A successful metadata write stamps the owning asset through `stamp_asset_change`, an
-    `update_item` on the module's real asset-table handle. Replaced for every test here so none
-    reaches AWS; tests that assert on the stamp patch it themselves."""
-    from backend.backend.handlers.metadata import metadataService
-    stamp = MagicMock(name="metadataService.stamp_asset_change")
-    with patch.object(metadataService, "stamp_asset_change", stamp):
-        yield stamp
