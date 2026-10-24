@@ -87,8 +87,10 @@ class TestAllowList:
 
     def test_allow_list_equals_the_catalog_minus_the_exclusions(self):
         # The viewer catalog, minus the exclusions, plus the formats admitted for their extracted content
-        # (the office formats for their text; the ffmpeg-decodable video containers no viewer plays).
-        assert set(fc.ALLOW_LIST) == (catalog_extensions() - fc.EXCLUDED_EXTENSIONS) | set(fc.ADDITIONAL_EXTENSIONS)
+        # (the office formats for their text; the ffmpeg-decodable video containers no viewer plays) and
+        # the point-cloud formats the 3D render image reads.
+        assert set(fc.ALLOW_LIST) == ((catalog_extensions() - fc.EXCLUDED_EXTENSIONS) | set(fc.ADDITIONAL_EXTENSIONS)
+                                      | set(fc.ADDITIONAL_POINTCLOUD_EXTENSIONS))
         assert {".avi", ".flv", ".wmv"} <= set(fc.ADDITIONAL_EXTENSIONS)
 
     def test_exclusions_are_empty_at_release(self):
@@ -108,6 +110,28 @@ class TestAllowList:
             (fc.CLASS_DOCUMENT, fc.BRANCH_MEDIA), (fc.CLASS_VIDEO, fc.BRANCH_MEDIA),
             (fc.CLASS_VIDEO, fc.BRANCH_MEDIA), (fc.CLASS_VIDEO, fc.BRANCH_MEDIA),
             (fc.CLASS_DATA, fc.BRANCH_MEDIA), (fc.CLASS_DATA, fc.BRANCH_MEDIA)]
+
+    def test_additional_point_cloud_extensions_render_on_the_3d_render_branch(self):
+        """PCD, PTX and XYZ are point clouds no viewer serves; the 3D render image reads all three without
+        Open3D, so they take RENDER3D like LAS/LAZ/E57 instead of falling to the MEDIA generic probe."""
+        assert fc.ADDITIONAL_POINTCLOUD_EXTENSIONS == (".pcd", ".ptx", ".xyz")
+        assert not set(fc.ADDITIONAL_POINTCLOUD_EXTENSIONS) & catalog_extensions()
+        assert not set(fc.ADDITIONAL_POINTCLOUD_EXTENSIONS) & set(fc.ADDITIONAL_EXTENSIONS)
+        for extension in fc.ADDITIONAL_POINTCLOUD_EXTENSIONS:
+            assert extension in fc.ALLOW_LIST
+            assert fc.classify(extension, lambda n: b"") == (fc.CLASS_POINTCLOUD, fc.BRANCH_RENDER3D)
+
+    def test_the_3d_render_image_reads_every_point_cloud_extension_routed_to_it(self):
+        """Every point-cloud extension the classifier sends to RENDER3D is one the image's analysis loads."""
+        analysis = os.path.join(h.REPO_ROOT, "backendPipelines", "preview", "3dThumbnail", "container",
+                                "preview_pipeline", "analysis", "analysis.py")
+        with open(analysis, encoding="utf-8") as handle:
+            source = handle.read()
+        declared = source.split("POINTCLOUD_EXTENSIONS = {", 1)[1].split("}", 1)[0]
+        image_extensions = {part.strip().strip('"') for part in declared.split(",") if part.strip()}
+        routed = {ext for ext, (cls, branch) in fc.EXTENSION_CLASSES.items()
+                  if cls == fc.CLASS_POINTCLOUD and branch == fc.BRANCH_RENDER3D}
+        assert routed <= image_extensions, sorted(routed - image_extensions)
 
     def test_allow_list_is_sorted_finite_and_dotted(self):
         assert fc.ALLOW_LIST == sorted(fc.ALLOW_LIST)
@@ -169,6 +193,8 @@ class TestClassifyMatrix:
         (".sldprt", (fc.CLASS_CAD, fc.BRANCH_NONE)), (".x_t", (fc.CLASS_CAD, fc.BRANCH_NONE)),
         (".las", (fc.CLASS_POINTCLOUD, fc.BRANCH_RENDER3D)), (".laz", (fc.CLASS_POINTCLOUD, fc.BRANCH_RENDER3D)),
         (".e57", (fc.CLASS_POINTCLOUD, fc.BRANCH_RENDER3D)),
+        (".pcd", (fc.CLASS_POINTCLOUD, fc.BRANCH_RENDER3D)), (".ptx", (fc.CLASS_POINTCLOUD, fc.BRANCH_RENDER3D)),
+        (".xyz", (fc.CLASS_POINTCLOUD, fc.BRANCH_RENDER3D)),
         (".spz", (fc.CLASS_SPLAT, fc.BRANCH_RENDER3D)), (".sog", (fc.CLASS_SPLAT, fc.BRANCH_RENDER3D)),
         (".splat", (fc.CLASS_SPLAT, fc.BRANCH_RENDER3D)), (".lcc", (fc.CLASS_SPLAT, fc.BRANCH_RENDER3D)),
         (".ifc", (fc.CLASS_IFC, fc.BRANCH_RENDER3D)), (".ifczip", (fc.CLASS_IFC, fc.BRANCH_RENDER3D)),

@@ -6,7 +6,8 @@
 ``ALLOW_LIST`` is every ``supportedExtensions`` entry of every viewer with ``enabled: true`` in
 ``web/src/visualizerPlugin/config/viewerConfig.json`` and ``addonViewerConfig.json`` — viewers gated by
 ``featuresEnabledRestriction`` included, the preview viewer's ``"*"`` wildcard excluded — minus ``EXCLUDED_EXTENSIONS``, plus
-``ADDITIONAL_EXTENSIONS`` (formats no viewer renders, admitted for their extracted content). It is stored
+``ADDITIONAL_EXTENSIONS`` (formats no viewer renders, admitted for their extracted content) and
+``ADDITIONAL_POINTCLOUD_EXTENSIONS`` (point-cloud formats no viewer renders, read by the 3D render image). It is stored
 here as an explicit sorted list because a Lambda cannot read the web catalog at run time; the test
 suite re-derives it from the catalog and fails when the two drift.
 
@@ -87,6 +88,10 @@ EXCLUDED_EXTENSIONS: Set[str] = set()
 # file's layer and data source; both data on the MEDIA branch).
 ADDITIONAL_EXTENSIONS = (".docx", ".xlsx", ".pptx", ".avi", ".flv", ".wmv", ".gpkg", ".lyrx")
 
+# Point-cloud formats no viewer renders that the 3D render image reads without Open3D (PCD in all three
+# encodings, PTX, ASCII XYZ): point cloud on the RENDER3D branch, like the viewer-served LAS/LAZ/E57.
+ADDITIONAL_POINTCLOUD_EXTENSIONS = (".pcd", ".ptx", ".xyz")
+
 # Leading bytes the two sniffed formats are decided from. A PLY header and a tileset root fit in
 # this window; a .json whose root does not fit is text as far as this pipeline is concerned.
 SNIFF_BYTES = 65536
@@ -104,10 +109,10 @@ ALLOW_LIST: List[str] = [
     ".catproduct", ".cfg", ".csv", ".dae", ".docx", ".e57", ".fbx", ".fcs", ".flac", ".flv", ".gif",
     ".glb", ".gltf", ".gpkg", ".htm", ".html", ".iam", ".ifc", ".ifczip", ".iges", ".igs", ".inf", ".ini",
     ".ipt", ".ipynb", ".jpeg", ".jpg", ".js", ".json", ".jt", ".las", ".laz", ".lcc", ".log", ".lyrx", ".m4a",
-    ".m4v", ".md", ".mkv", ".mov", ".mp3", ".mp4", ".obj", ".off", ".ogg", ".par", ".pdf", ".ply",
-    ".png", ".pptx", ".prt", ".ps1", ".py", ".sh", ".sldasm", ".sldprt", ".sog", ".splat", ".spz",
+    ".m4v", ".md", ".mkv", ".mov", ".mp3", ".mp4", ".obj", ".off", ".ogg", ".par", ".pcd", ".pdf", ".ply",
+    ".png", ".pptx", ".prt", ".ps1", ".ptx", ".py", ".sh", ".sldasm", ".sldprt", ".sog", ".splat", ".spz",
     ".sql", ".step", ".stl", ".stp", ".svg", ".toml", ".ts", ".txt", ".usd", ".usda", ".usdc", ".usdz",
-    ".wav", ".webm", ".wmv", ".wrl", ".x_b", ".x_t", ".xlsx", ".xml", ".yaml", ".yml",
+    ".wav", ".webm", ".wmv", ".wrl", ".x_b", ".x_t", ".xlsx", ".xml", ".xyz", ".yaml", ".yml",
 ]
 
 # Extension -> (fileClass, renderBranch) for every allow-listed extension the extension alone
@@ -141,7 +146,7 @@ for _extension in (".stp", ".step", ".iges", ".igs", ".brep"):
     EXTENSION_CLASSES[_extension] = (CLASS_CAD, BRANCH_RENDER3D)
 for _extension in PROPRIETARY_CAD_EXTENSIONS:
     EXTENSION_CLASSES[_extension] = (CLASS_CAD, BRANCH_NONE)
-for _extension in (".las", ".laz", ".e57"):
+for _extension in (".las", ".laz", ".e57") + ADDITIONAL_POINTCLOUD_EXTENSIONS:
     EXTENSION_CLASSES[_extension] = (CLASS_POINTCLOUD, BRANCH_RENDER3D)
 for _extension in (".spz", ".sog", ".splat", ".lcc"):
     EXTENSION_CLASSES[_extension] = (CLASS_SPLAT, BRANCH_RENDER3D)

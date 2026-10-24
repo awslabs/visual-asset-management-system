@@ -478,3 +478,12 @@ class TestS3Helpers:
         assert json_call.kwargs["ContentType"] == "application/json"
         assert json_call.kwargs["Body"] == b'{\n  "a": 1\n}'
         assert file_call.kwargs["ContentType"] == "image/png"
+
+
+@pytest.mark.unit
+class TestRuntimeLogLevel:
+    def test_importing_the_handler_sets_the_root_logger_to_info(self, handler):
+        """The Lambda runtime's root handler exists before import, which makes basicConfig a no-op and
+        would leave every INFO line (the render3d request and result lines) unwritten."""
+        import logging
+        assert logging.getLogger().getEffectiveLevel() <= logging.INFO

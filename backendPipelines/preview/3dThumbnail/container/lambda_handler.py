@@ -27,6 +27,7 @@ The size gate and the point cap are constructPipeline's; a file routed to this b
 """
 
 import dataclasses
+import logging
 import os
 from typing import List, Tuple
 
@@ -34,9 +35,12 @@ from preview_pipeline import dependencies, renderer
 from preview_pipeline.analysis import analysis, workdirs
 from preview_pipeline.utils import image_utils, manifest_io
 from preview_pipeline.utils import s3_utils as s3
-from preview_pipeline.utils.logging import get_logger
+from preview_pipeline.utils.logging import get_logger, set_log_level
 
 logger = get_logger()
+# The Lambda runtime installs its root handler before this module loads, so the package's
+# logging.basicConfig(level=INFO) is a no-op here and the root level stays WARNING; set it explicitly.
+set_log_level(logging.INFO)
 
 RENDER_BRANCH = "RENDER3D"
 MANIFEST_SCHEMA_VERSION = 1
