@@ -85,21 +85,20 @@ def _stored_database(**overrides):
 def _wire(monkeypatch, database_table, count, during_count=None):
     """Route the module's resource and client to the fakes.
 
-    The asset count comes back from the query paginator's `build_full_result`; `during_count` runs
-    there, which is where a concurrent writer lands between any read of the database record and the
+    The asset count comes back from the client's Select='COUNT' query; `during_count` runs there,
+    which is where a concurrent writer lands between any read of the database record and the
     recount's write.
     """
     resource = MagicMock()
     resource.Table.side_effect = lambda name: {DATABASE_TABLE: database_table}[name]
 
-    def build_full_result():
+    def query(**kwargs):
         if during_count is not None:
             during_count(database_table)
-        return {"Count": count, "Items": []}
+        return {"Count": count}
 
     client = MagicMock()
-    client.get_paginator.return_value.paginate.return_value.build_full_result.side_effect = (
-        build_full_result)
+    client.query.side_effect = query
     monkeypatch.setattr(count_module, "dynamodb", resource)
     monkeypatch.setattr(count_module, "dynamodb_client", client)
     # monkeypatch reaches the function only when it reads these names from its own globals.
@@ -142,11 +141,33 @@ class TestUpdateAssetCountTargetedWrite:
 
         count_module.update_asset_count(DATABASE_TABLE, ASSET_TABLE, {}, DATABASE_ID)
 
-        client.get_paginator.assert_called_with("query")
-        paginate_kwargs = client.get_paginator.return_value.paginate.call_args.kwargs
-        assert paginate_kwargs["TableName"] == ASSET_TABLE
-        assert paginate_kwargs["KeyConditions"]["databaseId"]["AttributeValueList"] == [
+        client.query.assert_called_once()
+        query_kwargs = client.query.call_args.kwargs
+        assert query_kwargs["TableName"] == ASSET_TABLE
+        assert query_kwargs["KeyConditions"]["databaseId"]["AttributeValueList"] == [
             {"S": DATABASE_ID}]
+        assert query_kwargs["Select"] == "COUNT"
+        assert "Limit" not in query_kwargs
+        client.get_paginator.assert_not_called()
+
+    def test_sums_the_count_of_every_page(self, monkeypatch):
+        """A partition larger than one 1 MB query page is counted to the end."""
+        table = FakeDatabaseTable(_stored_database())
+        client = _wire(monkeypatch, table, count=0)
+        last_key = {"databaseId": {"S": DATABASE_ID}, "assetId": {"S": "a-500"}}
+        client.query.side_effect = [
+            {"Count": 500, "LastEvaluatedKey": last_key},
+            {"Count": 123},
+        ]
+
+        count_module.update_asset_count(DATABASE_TABLE, ASSET_TABLE, {}, DATABASE_ID)
+
+        calls = client.query.call_args_list
+        assert len(calls) == 2
+        assert all(call.kwargs["Select"] == "COUNT" for call in calls)
+        assert "ExclusiveStartKey" not in calls[0].kwargs
+        assert calls[1].kwargs["ExclusiveStartKey"] == last_key
+        assert table.stored()["assetCount"] == "623"
 
     def test_deleted_database_is_not_recreated(self, monkeypatch):
         """Delete moves the record to `<id>#deleted`; a recount afterwards is a no-op, not a

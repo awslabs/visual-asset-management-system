@@ -482,6 +482,7 @@ walks the handler tree and fails on a route that does not normalize, which must 
 cd web && npm install
 cd web && npm run start                                    # Dev server
 cd web && npm run build                                    # Production build
+cd web && npm run typecheck                                # Type-check (tsc --noEmit; the build does not)
 
 # Backend (backend/)
 cd backend && python -m pytest                             # All tests

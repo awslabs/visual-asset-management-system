@@ -562,6 +562,16 @@ def lambda_handler(event, context):
             allowed = False
             asset_object = get_asset_object_from_id(None, event['body']["entityId"])
             if asset_object is None:
+                # A missing asset is checked as a provisional object built from the entityId (the
+                # route carries no databaseId), so the 404 is answered only when that check allows
+                if len(claims_and_roles["tokens"]) == 0:
+                    response['statusCode'] = 403
+                    response['body'] = json.dumps({"message": "Not Authorized"})
+                    return response
+                if not casbin_enforcer.enforce({"assetId": event['body']["entityId"], "object__type": "asset"}, "POST"):
+                    response['statusCode'] = 403
+                    response['body'] = json.dumps({"message": "Not Authorized"})
+                    return response
                 response['statusCode'] = 404
                 response['body'] = json.dumps({"message": "Asset not found"})
                 return response

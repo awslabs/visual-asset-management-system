@@ -547,10 +547,12 @@ export function generateContentSecurityPolicy(
     //
     // The list covers web/index.html only. This policy is a response header on
     // the whole distribution, so it governs every HTML document served from
-    // web/public as well; an inline block in one of those (the SuperSplat
-    // viewer's upstream service-worker registration) has no hash here and does
-    // not run. A served document that needs its own inline script needs its own
-    // hashes, taken from that document.
+    // web/public as well. The inline block in the SuperSplat viewer's
+    // index.html unregisters every service worker on the origin, including the
+    // root /coi-serviceworker.js that web/index.html registers for cross-origin
+    // isolation, so it must stay blocked: never add its hash here. A served
+    // document that needs its own inline script needs its own hashes, taken
+    // from that document.
     //
     // `'wasm-unsafe-eval'` permits WebAssembly compilation for the WASM-based
     // viewer plugins. It is not an inline-script keyword, so it neither relies

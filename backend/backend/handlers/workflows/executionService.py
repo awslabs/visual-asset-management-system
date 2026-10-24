@@ -50,12 +50,20 @@ from models.executions import (
     ListExecutionsRequestModel,
     RerunExecutionRequestModel,
     PermanentDeleteRequestModel,
+    TRIGGER_TYPE_TO_STORED,
 )
 
 logger = safeLogger(service="ExecutionService")
 
 # Claims/roles for the current request (set per-invocation in lambda_handler).
 claims_and_roles = {}
+
+
+def _stored_trigger_type(value) -> str:
+    """The triggerType filter in its stored spelling: 'manual' and 'fileUpload' map to 'Manual'
+    and 'File-Upload'; any other value is compared as given."""
+    value = (value or "").strip()
+    return TRIGGER_TYPE_TO_STORED.get(value, value)
 
 # Partition-key suffix an archived asset's row is moved under (assetService.archive_asset). Archiving
 # is reversible, so an archived asset is still authorized on its own row rather than on its database.
@@ -633,8 +641,9 @@ def get_asset_details(databaseId, assetId):
     (assetService.archive_asset), so a query of the active partition alone reports an archived asset as
     absent. Authorization treats an asset it cannot resolve as permanently gone and falls back to the
     asset's DATABASE, which is a weaker check — so resolving the archived row keeps an archived asset
-    authorized on its own attributes (assetName, assetType, tags) exactly as it was before archiving.
-    Only a genuinely deleted asset, whose row exists in neither partition, reaches the fallback.
+    authorized as an archived record: on its own attributes (assetName, assetType, tags), and on both
+    its stored database id and its database id (CasbinEnforcerService.enforce). Only a genuinely
+    deleted asset, whose row exists in neither partition, reaches the fallback.
 
     Returns the row (active first, then archived) or None when the asset exists in neither."""
     try:
@@ -1259,7 +1268,7 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             "workflowId": (query_params.get("workflowId") or "").strip(),
             "workflowDatabaseId": (query_params.get("workflowDatabaseId") or "").strip(),
             "status": (query_params.get("status") or "").strip(),
-            "triggerType": (query_params.get("triggerType") or "").strip(),
+            "triggerType": _stored_trigger_type(query_params.get("triggerType")),
             "groupId": (query_params.get("groupId") or "").strip(),
             "triggeredByUserId": (query_params.get("triggeredByUserId") or "").strip(),
         }
@@ -5084,7 +5093,7 @@ def get_global_executions(event, query_params):
         "workflowId": (query_params.get("workflowId") or "").strip(),
         "workflowDatabaseId": (query_params.get("workflowDatabaseId") or "").strip(),
         "status": (query_params.get("status") or "").strip(),
-        "triggerType": (query_params.get("triggerType") or "").strip(),
+        "triggerType": _stored_trigger_type(query_params.get("triggerType")),
         "groupId": (query_params.get("groupId") or "").strip(),
         "triggeredByUserId": (query_params.get("triggeredByUserId") or "").strip(),
     }

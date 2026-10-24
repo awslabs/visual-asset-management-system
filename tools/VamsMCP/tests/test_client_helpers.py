@@ -241,3 +241,17 @@ def test_trim_search_results_max_hits():
 def test_trim_search_results_empty():
     trimmed = VamsClient.trim_search_results({})
     assert trimmed == {"total": None, "returned": 0, "results": []}
+
+
+def test_search_enabled_follows_the_noopensearch_feature_switch():
+    from unittest.mock import MagicMock
+
+    client = _client()
+    client._profile = MagicMock()
+
+    client._profile.has_feature_switch.return_value = True
+    assert client.search_enabled() is False
+    client._profile.has_feature_switch.assert_called_with("NOOPENSEARCH")
+
+    client._profile.has_feature_switch.return_value = False
+    assert client.search_enabled() is True

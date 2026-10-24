@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 from datetime import datetime, timedelta, timezone
 from botocore.config import Config
+from botocore.utils import percent_encode
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -49,7 +50,9 @@ from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
     CompleteUploadRequestModel, CompleteUploadResponseModel, FileCompletionResult,
     CompleteExternalUploadRequestModel, ExternalFileModel,
-    AssetUploadTableModel
+    AssetUploadTableModel,
+    MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES, UPLOAD_PART_URL_FIXED_OVERHEAD_BYTES,
+    UPLOAD_RESPONSE_FILE_OVERHEAD_BYTES, UPLOAD_RESPONSE_BASE_OVERHEAD_BYTES,
 )
 
 # Configure AWS clients with retry configuration
@@ -138,7 +141,8 @@ def calculate_num_parts(file_size=None, num_parts=None, max_part_size=MAX_PART_S
 
 def check_user_rate_limit(user_id: str) -> bool:
     """
-    Check if user has exceeded rate limit of 5 upload initializations per minute.
+    Check if user has exceeded rate limit of MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE upload
+    initializations per minute.
     Uses UserIdGSI with STRING type for both UserId and createdAt fields.
     
     Args:
@@ -183,6 +187,18 @@ def generate_presigned_url(key, upload_id, part_number, bucket, expiration=token
         ExpiresIn=int(expiration)
     )
     return url
+
+def estimate_initialize_response_file_bytes(relative_key, temp_s3_key, num_parts):
+    """Upper bound on the bytes one file adds to the serialized upload-initialize response.
+
+    The relativeKey is serialized twice, into the JSON body and then into the Lambda proxy
+    envelope, so it is measured that way. Each part's presigned URL carries the temporary key
+    percent-encoded as botocore encodes it for the request path, so a key of non-ASCII
+    characters costs up to three times its UTF-8 length in every part.
+    """
+    part_bytes = UPLOAD_PART_URL_FIXED_OVERHEAD_BYTES + len(percent_encode(temp_s3_key, safe='/~'))
+    return (UPLOAD_RESPONSE_FILE_OVERHEAD_BYTES + len(json.dumps(json.dumps(relative_key)))
+            + num_parts * part_bytes)
 
 def get_database_details(databaseId):
     """Get database details from DynamoDB including file upload restrictions
@@ -383,8 +399,8 @@ def get_initialized_file_keys(upload_details, uploadId):
 
     Completion accepts a submitted relativeKey only if initialization recorded it. A record saved
     before the list was stored has no 'files' attribute; such an upload is completed without the
-    membership check (the blocklist checks still run) and the gap is logged. The table has no
-    TTL, so the gap is bounded by complete_upload refusing a record whose expiresAt has passed:
+    membership check (the blocklist checks still run) and the gap is logged. The gap is bounded
+    by complete_upload refusing a record whose expiresAt has passed:
     a record without the list is completed without the membership check until it expires, seven
     days after it was initialized. External (workflow-output) records never carry the list and
     are refused by complete_upload before this helper is consulted.
@@ -1028,15 +1044,22 @@ def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: 
         Tuple of (total_size, success, error_message)
     """
     try:
-        list_parts_response = s3.list_parts(
-            Bucket=bucket_name,
-            Key=key,
-            UploadId=upload_id
-        )
+        # ListParts returns at most 1,000 parts per call, so page with PartNumberMarker
+        uploaded_parts = []
+        list_parts_kwargs = {
+            'Bucket': bucket_name,
+            'Key': key,
+            'UploadId': upload_id
+        }
+        while True:
+            list_parts_response = s3.list_parts(**list_parts_kwargs)
+            uploaded_parts.extend(list_parts_response.get('Parts', []))
+            if not list_parts_response.get('IsTruncated'):
+                break
+            list_parts_kwargs['PartNumberMarker'] = list_parts_response['NextPartNumberMarker']
         
         # Calculate total size from all uploaded parts
         total_file_size = 0
-        uploaded_parts = list_parts_response.get('Parts', [])
         
         # Verify all requested parts are uploaded and calculate size
         uploaded_part_numbers = {part['PartNumber'] for part in uploaded_parts}
@@ -1116,6 +1139,8 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
     # the earlier files with multipart uploads already created in S3 and no upload record to find them
     # by, so they linger until the bucket lifecycle rule expires them.
     temp_s3_keys = []
+    file_num_parts = []
+    estimated_response_bytes = UPLOAD_RESPONSE_BASE_OVERHEAD_BYTES
     for file in request_model.files:
         if not validateUnallowedFileExtensionAndContentType(file.relativeKey, ""):
             raise VAMSGeneralErrorResponse(f"Files contain an unsupported file extension")
@@ -1150,7 +1175,18 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         if exceeds_s3_object_key_limit(final_s3_key) or exceeds_s3_object_key_limit(temp_s3_key):
             raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
 
+        num_parts = calculate_num_parts(file.file_size, file.num_parts)
+        estimated_response_bytes += estimate_initialize_response_file_bytes(
+            file.relativeKey, temp_s3_key, num_parts)
         temp_s3_keys.append(temp_s3_key)
+        file_num_parts.append(num_parts)
+
+    # The response carries one presigned URL per part, and each URL carries its file's key, so the
+    # total-parts cap alone does not keep the response under the Lambda response limit. Refuse a
+    # request whose estimated response is over the budget here, before any multipart upload exists,
+    # with a message that does not echo the keys.
+    if estimated_response_bytes > MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES:
+        raise VAMSGeneralErrorResponse("Upload request too large; split the files across several requests")
 
     # Additional business logic validation
     if uploadType == "assetPreview" and asset.get('previewLocation'):
@@ -1169,9 +1205,7 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
 
     # Every file has already passed validation above, so no rejection can occur once the first
     # multipart upload has been created.
-    for file, temp_s3_key in zip(request_model.files, temp_s3_keys):
-        # Calculate number of parts
-        num_parts = calculate_num_parts(file.file_size, file.num_parts)
+    for file, temp_s3_key, num_parts in zip(request_model.files, temp_s3_keys, file_num_parts):
         total_parts += num_parts
         
         # Handle zero-byte files differently - don't create them yet, just return special response
@@ -1831,12 +1865,12 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     if upload_details['uploadType'] != uploadType:
         raise VAMSGeneralErrorResponse(f"Upload type mismatch.")
 
-    # Refuse a record past its expiresAt. The table has no TTL, so without this an initialized
-    # record lives until a completion succeeds or the asset is deleted; in particular a record
-    # saved before the initialized file list was stored (no 'files' attribute) would stay
-    # completable without the membership check indefinitely. expiresAt is epoch seconds, set by
-    # every writer (initialize: 7 days; workflow output: 1 day); a missing or unreadable value
-    # counts as expired.
+    # Refuse a record past its expiresAt. The table's TTL on expiresAt removes an expired record
+    # only some time after it expires, so until then this check is what keeps it from completing;
+    # in particular a record saved before the initialized file list was stored (no 'files'
+    # attribute) is completable without the membership check only until it expires. expiresAt is
+    # epoch seconds, set by every writer (initialize: 7 days; workflow output: 1 day); a missing or
+    # unreadable value counts as expired.
     try:
         expires_at = int(upload_details.get('expiresAt', 0))
     except (TypeError, ValueError):
@@ -1963,8 +1997,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 
             temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
             
-            # Every branch below creates an object under final_s3_key -- the zero-byte and abandoned
-            # branches write one directly, the multipart branch completes one -- so the name-level
+            # The branches below can create an object under final_s3_key -- the zero-byte branch
+            # writes one directly, the multipart branch completes one -- so the name-level
             # blocklist and preview-extension rules run here, before any of them, on the submitted
             # name. The multipart branch additionally re-checks the completed object's content type.
             name_check_error = None
@@ -2041,11 +2075,11 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     has_failures = True
                     continue
             
-            # Handle abandoned uploads (no parts provided) - create empty file
+            # Cancelled uploads (a multipart upload completed with no parts): abort the
+            # multipart upload and store nothing, so an existing object at the key is untouched
             if not file.parts or len(file.parts) == 0:
-                logger.info(f"No parts provided for file {file.relativeKey}, creating empty file")
+                logger.info(f"No parts provided for file {file.relativeKey}, cancelling its upload")
                 
-                # Abort the existing multipart upload
                 try:
                     s3.abort_multipart_upload(
                         Bucket=bucket_name,
@@ -2053,34 +2087,16 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                         UploadId=file.uploadIdS3
                     )
                 except Exception as abort_error:
-                    logger.warning(f"Error aborting multipart upload for abandoned file: {abort_error}")
+                    logger.warning(f"Error aborting multipart upload for cancelled file: {abort_error}")
                 
-                # Create empty file in temporary location
-                if create_zero_byte_file(bucket_name, temp_s3_key, uploadId, databaseId, assetId, user_id):
-                    file_detail = {
-                        'relativeKey': file.relativeKey,
-                        'temp_s3_key': temp_s3_key,
-                        'final_s3_key': final_s3_key,
-                        'uploadIdS3': file.uploadIdS3
-                    }
-                    
-                    successful_files.append(file_detail)
-                    file_results.append(FileCompletionResult(
-                        relativeKey=file.relativeKey,
-                        uploadIdS3=file.uploadIdS3,
-                        success=True,
-                        largeFileAsynchronousHandling=False
-                    ))
-                    continue
-                else:
-                    file_results.append(FileCompletionResult(
-                        relativeKey=file.relativeKey,
-                        uploadIdS3=file.uploadIdS3,
-                        success=False,
-                        error="Failed to create empty file for abandoned upload"
-                    ))
-                    has_failures = True
-                    continue
+                file_results.append(FileCompletionResult(
+                    relativeKey=file.relativeKey,
+                    uploadIdS3=file.uploadIdS3,
+                    success=False,
+                    error="Upload cancelled: no parts were provided; nothing was stored"
+                ))
+                has_failures = True
+                continue
             
             # Regular multipart upload - first check file size before completing
             actual_parts = sorted([p.PartNumber for p in file.parts])

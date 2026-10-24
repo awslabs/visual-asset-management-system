@@ -137,8 +137,10 @@ describe("route table lanes", () => {
 
         renderAt("/addon-probe");
 
-        // "*" is always added back, so the unmatched path lands on the landing page.
-        await waitFor(() => expect(screen.getByTestId("landing-page")).toBeInTheDocument());
+        // A route the role does not allow shows the no-access panel, not the add-on page.
+        await waitFor(() =>
+            expect(screen.getByText("You do not have access to this page")).toBeInTheDocument()
+        );
         expect(screen.queryByTestId("addon-probe-page")).not.toBeInTheDocument();
     });
 
@@ -160,7 +162,7 @@ describe("navigation lanes", () => {
     }
 
     it("places the add-on section after the core sections and before the fork's", async () => {
-        allowRoutes("/databases/", "/addon-probe/", "/custom/probe/");
+        allowRoutes("/databases", "/addon-probe", "/custom/probe");
         const container = await renderNavigation();
         const nav = createWrapper(container).findSideNavigation();
 
@@ -171,7 +173,7 @@ describe("navigation lanes", () => {
     });
 
     it("filters the add-on section by the same web-route check", async () => {
-        allowRoutes("/databases/");
+        allowRoutes("/databases");
         const container = await renderNavigation();
         const nav = createWrapper(container).findSideNavigation();
 

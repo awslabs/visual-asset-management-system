@@ -737,7 +737,7 @@ export const CreateAssetVersionModal: React.FC<CreateAssetVersionModalProps> = (
                 </FormField>
 
                 <Alert type="info">
-                    <strong>Metadata Versioning:</strong> Creating this version will automatically
+                    <strong>Metadata Versioning:</strong> Creating this version will automatically{" "}
                     {`snapshot the current metadata and attributes of the ${Synonyms.asset} and all selected files.`}
                 </Alert>
 

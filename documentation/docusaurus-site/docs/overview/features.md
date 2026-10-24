@@ -49,7 +49,7 @@ For the complete list of supported file viewers and extensions, see [File Viewer
 -   **Amazon Cognito user management** -- Add, update, remove, and reset passwords for Amazon Cognito users directly from the web interface (no AWS Console required)
 -   **API key management** -- Create, update, and delete API keys with user ID impersonation for application-to-application integration
 -   **Role management** -- Create and manage roles with two-tier permission constraints
--   **Permission constraint management** -- Define, import, and manage ABAC/RBAC constraints with bulk JSON template import
+-   **Permission constraint management** -- Define and manage ABAC/RBAC constraints in the web interface; bulk JSON template import is available through the VAMS CLI ([`vamscli role constraint template import`](../cli/commands/permissions.md#role-constraint-template-import)) and the API
 -   **Pipeline management** -- Create, edit, and delete processing pipelines with execution type selection (Lambda, SQS, EventBridge, DeadlineCloud)
 -   **Workflow management** -- Design multi-step processing workflows with pipeline chaining
 -   **Metadata schema management** -- Define and manage metadata schemas for assets, files, databases, and asset links

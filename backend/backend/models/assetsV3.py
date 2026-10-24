@@ -42,12 +42,34 @@ MAX_PARTS_PER_FILE = 10000
 # Maximum number of files accepted in a single upload-initialize request.
 MAX_FILES_PER_UPLOAD_REQUEST = 1000
 # Maximum total parts across all files in a single upload-initialize request.
-# This bounds the init Lambda's time/memory AND keeps the presigned-URL response
-# payload under the AWS Lambda synchronous response limit (6 MB) and the API
-# Gateway payload limit: each part contributes one presigned URL to the response,
-# so this cap directly bounds the response size. Do not raise it without
-# re-checking the worst-case response-size math (parts x URL length).
-MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST = 5000
+# This bounds the init Lambda's time/memory AND the presigned-URL response payload,
+# which must stay under the AWS Lambda synchronous response limit (6 MB) and the API
+# Gateway payload limit: each part contributes one presigned URL to the response.
+# The cap alone does not bound the response, because each URL carries the file's S3
+# key percent-encoded, so initialize_upload also estimates the response from the
+# constants below and refuses a request over MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES.
+# With ordinary keys a request at this cap and MAX_FILES_PER_UPLOAD_REQUEST files is
+# about 4.5 MB; tests/models/test_assetsV3_upload_response_size.py holds that under
+# the budget. Do not raise it without re-checking that math.
+MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST = 1500
+
+# Budget for the serialized upload-initialize response (the Lambda proxy envelope with the JSON
+# body inside it). It leaves about 1 MB of headroom under the 6 MB Lambda response limit.
+MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES = 5 * 1024 * 1024
+# Bytes each part adds to the response, besides the S3 key its presigned URL carries: the
+# regional path-style host and bucket, the SigV4 query string (credential scope, date, expiry,
+# signature, session token, partNumber, uploadId) and the part's JSON wrapping. A
+# botocore-signed upload_part URL with a 1,300-character session token, a 63-character bucket,
+# a 256-character uploadId and a 7-day expiry measures at most 2,107 bytes this way, signed for
+# a Region of each partition (commercial, China, GovCloud, ISO). Rounded up so a longer session
+# token or uploadId stays inside it.
+UPLOAD_PART_URL_FIXED_OVERHEAD_BYTES = 2560
+# Bytes each file adds to the response besides its relativeKey: its JSON wrapping, numParts
+# and an uploadIdS3 of up to 256 characters (348 bytes measured), rounded up.
+UPLOAD_RESPONSE_FILE_OVERHEAD_BYTES = 512
+# Bytes the response carries once: the proxy envelope, its headers, the uploadId and the
+# message (351 bytes measured), rounded up.
+UPLOAD_RESPONSE_BASE_OVERHEAD_BYTES = 2048
 
 # Maximum file keys accepted in a single bulk download request. Each key
 # produces one presigned URL in the response, so this cap keeps the response
@@ -485,8 +507,8 @@ class CompleteUploadRequestModel(BaseModel, extra='ignore'):
                     logger.error(message)
                     raise ValueError(message)
             else:
-                # Regular files can have zero parts (abandoned upload - will create empty file)
-                # or normal parts for multipart upload
+                # Regular files can have zero parts (cancelled upload - the multipart upload is
+                # aborted and nothing is stored) or normal parts for multipart upload
                 pass
                 
         return values

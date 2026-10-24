@@ -84,11 +84,17 @@ describe("AssetDetailsPane distribution notice", () => {
         expect(screen.queryByText(/turned off for this/i)).not.toBeInTheDocument();
     });
 
-    it("treats an asset record without the field as distributable", async () => {
-        // Older records predate isDistributable; undefined must not read as "not distributable".
+    it("treats a fetched asset record without the field as not distributable", async () => {
+        // The download, stream and preview APIs refuse a record without isDistributable, so the
+        // pane does not offer the preview they would refuse.
         renderPane({ ...baseAsset });
 
-        await waitFor(() => expect(mockDownloadAsset).toHaveBeenCalled());
+        expect(await screen.findByText(/turned off for this/i)).toBeInTheDocument();
+        expect(mockDownloadAsset).not.toHaveBeenCalled();
+    });
+
+    it("shows no notice for the empty record held before the asset is fetched", () => {
+        renderPane({});
         expect(screen.queryByText(/turned off for this/i)).not.toBeInTheDocument();
     });
 });

@@ -58,7 +58,6 @@ import Synonyms from "../../synonyms";
 import onSubmit, { onUploadRetry, UploadExecutionProps } from "./onSubmit";
 import DragDropFileUpload from "../../components/form/DragDropFileUpload";
 import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUploadTable";
-import localforage from "localforage";
 import { fetchDatabase, fetchTagsForAsset, fetchTagTypesForAsset } from "../../services/APIService";
 import { buildTagOptionGroups } from "../../common/utils/tagOptions";
 import { fetchComplianceSchemas, bindSchemaToAsset } from "../../services/ComplianceService";
@@ -1459,7 +1458,7 @@ const AssetUploadReview = ({
                     </SpaceBetween>
                 </ColumnLayout>
             </Container>
-            <Container header={<Header variant="h2">Linked {Synonyms.Asset}s</Header>}>
+            <Container header={<Header variant="h2">Linked {Synonyms.Assets}</Header>}>
                 <ColumnLayout columns={3} variant="text-grid">
                     {assetDetailState.assetLinksFe && (
                         <>
@@ -1588,15 +1587,6 @@ const UploadForm = () => {
     useEffect(() => {
         if (assetDetailState.assetId && fileUploadTableItems.length > 0) {
             assetDetailDispatch({ type: "UPDATE_ASSET_FILES", payload: fileUploadTableItems });
-            localforage
-                .setItem(assetDetailState.assetId, {
-                    ...assetDetailState,
-                    Asset: fileUploadTableItems,
-                })
-                .then(() => {})
-                .catch(() => {
-                    console.error("Error setting item in localforage");
-                });
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [fileUploadTableItems]);

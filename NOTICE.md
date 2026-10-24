@@ -36,9 +36,6 @@ This software includes third party software subject to the following copyrights:
 | Package                             | Version       | License                 |
 | :---------------------------------- | :------------ | :---------------------- |
 | @aws-amplify/ui-react               | ^6.15.2       | Apache-2.0              |
-| @aws-sdk/client-s3                  | ^3.700.0      | Apache-2.0              |
-| @aws-sdk/lib-storage                | ^3.700.0      | Apache-2.0              |
-| @aws-sdk/s3-request-presigner       | ^3.700.0      | Apache-2.0              |
 | @badgateway/oauth2-client           | 2.4.2         | MIT                     |
 | @cloudscape-design/collection-hooks | ^1.0.19       | Apache-2.0              |
 | @cloudscape-design/components       | ^3.0.196      | Apache-2.0              |
@@ -47,7 +44,6 @@ This software includes third party software subject to the following copyrights:
 | @dnd-kit/core                       | ^6.3.1        | MIT                     |
 | @dnd-kit/sortable                   | ^10.0.0       | MIT                     |
 | @dnd-kit/utilities                  | ^3.2.2        | MIT                     |
-| @hookform/resolvers                 | ^3.9.0        | MIT                     |
 | @mapbox/mapbox-gl-draw              | ^1.4.1        | ISC                     |
 | @maplibre/maplibre-gl-geocoder      | ^1.5.0        | ISC                     |
 | @monaco-editor/react                | ^4.6.0        | MIT                     |
@@ -62,10 +58,7 @@ This software includes third party software subject to the following copyrights:
 | @rjsf/validator-ajv8                | ^5.21.2       | Apache-2.0              |
 | @tanstack/react-query               | ^5.59.0       | MIT                     |
 | @tanstack/react-table               | ^8.20.5       | MIT                     |
-| @turf/bbox                          | ^6.5.0        | MIT                     |
-| @turf/turf                          | ^6.5.0        | MIT                     |
 | @types/mapbox\_\_mapbox-gl-draw     | ^1.4.0        | MIT                     |
-| @types/styled-components            | ^5.1.21       | MIT                     |
 | @types/three                        | ^0.180.0      | MIT                     |
 | @types/wicg-file-system-access      | 2020.9.6      | MIT                     |
 | arraybuffer-to-buffer               | ^0.0.7        | MIT                     |
@@ -76,13 +69,10 @@ This software includes third party software subject to the following copyrights:
 | dompurify                           | ^3.4.11       | (MPL-2.0 OR Apache-2.0) |
 | fast-xml-parser                     | ^5.9.0        | MIT                     |
 | fcs                                 | ^0.1.2        | MIT                     |
-| file-system-access                  | 1.0.4         | MIT                     |
-| geojson                             | ^0.5.0        | MIT                     |
 | jodit                               | 4.13.10       | MIT                     |
 | jodit-react                         | ^5.3.21       | MIT                     |
 | localforage                         | ^1.10.0       | Apache-2.0              |
 | maplibre-gl                         | ^6.9.0        | BSD-3-Clause            |
-| moment                              | ^2.29.4       | MIT                     |
 | papaparse                           | ^5.4.1        | MIT                     |
 | postcss                             | ^8.4.47       | MIT                     |
 | prop-types                          | ^15.8.1       | MIT                     |
@@ -90,7 +80,6 @@ This software includes third party software subject to the following copyrights:
 | react-data-grid                     | 7.0.0-beta.16 | MIT                     |
 | react-diff-viewer-continued         | 4.4.0         | MIT                     |
 | react-dom                           | ^18.3.1       | MIT                     |
-| react-error-boundary                | ^4.0.9        | MIT                     |
 | react-hook-form                     | ^7.53.0       | MIT                     |
 | react-loading-icons                 | ^1.1.0        | MIT                     |
 | react-map-gl                        | ^8.1.3        | MIT                     |
@@ -102,12 +91,10 @@ This software includes third party software subject to the following copyrights:
 | reactflow                           | ^11.11.4      | MIT                     |
 | sanitize-html                       | ^2.11.0       | MIT                     |
 | semver                              | ^7.5.2        | ISC                     |
-| styled-components                   | ^5.3.3        | MIT                     |
 | tailwindcss                         | ^3.4.14       | MIT                     |
 | tough-cookie                        | ^4.1.3        | BSD-3-Clause            |
 | typescript                          | ^5.0.0        | Apache-2.0              |
 | vite                                | ^8.0.16       | MIT                     |
-| web-vitals                          | ^1.1.2        | Apache-2.0              |
 | zod                                 | ^3.23.8       | MIT                     |
 
 `jodit` is not declared directly — it arrives with `jodit-react` and the version shown is the one resolved in the lockfile. `fast-xml-parser` is carried transitively and pinned by the `overrides` block in `web/package.json`.

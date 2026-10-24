@@ -764,7 +764,8 @@ export const BulkEditMode: React.FC<BulkEditModeProps> = ({
                                 <strong>Example:</strong>
                                 <pre
                                     style={{
-                                        background: "#f5f5f5",
+                                        background: "var(--vams-bg-secondary)",
+                                        color: "var(--vams-text-primary)",
                                         padding: "8px",
                                         borderRadius: "4px",
                                         fontSize: "11px",

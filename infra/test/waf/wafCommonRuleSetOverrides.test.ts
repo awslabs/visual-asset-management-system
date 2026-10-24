@@ -9,7 +9,7 @@
  * protection) or narrows it (re-blocking ordinary VAMS file requests) fails here instead of at a
  * user's first `.log` file.
  *
- * Why these eight, and only these:
+ * Why these ten, and only these:
  *
  *   - SizeRestrictions_BODY / SizeRestrictions_QUERYSTRING — the two pre-existing overrides:
  *     multi-part upload bodies up to the API Gateway REST 10 MB cap, and the SuperSplat viewer's
@@ -25,6 +25,10 @@
  *     `../`. Every backend path validator rejects `..` segments (`common/validators.py`) and keys
  *     resolve against S3 object keys, not a local filesystem, so the rule blocks legitimate
  *     content without adding protection.
+ *   - GenericRFI_QUERYARGUMENTS / GenericRFI_BODY — fire on a URL that names an IPv4 address
+ *     (`http://10.0.0.1/x`) in query arguments or a body. Metadata values, search text and
+ *     pipeline parameters carry such URLs as data, and the backend never fetches or includes a
+ *     resource a request names, so the rule blocks ordinary writes without adding protection.
  *
  * Every other Common Rule Set rule, and every rule in the Known Bad Inputs and Amazon IP
  * Reputation List groups, keeps its block action — asserted below as "no overrides at all" on
@@ -59,6 +63,8 @@ const EXPECTED_COMMON_RULE_SET_COUNT_OVERRIDES = [
     "GenericLFI_URIPATH",
     "GenericLFI_QUERYARGUMENTS",
     "GenericLFI_BODY",
+    "GenericRFI_QUERYARGUMENTS",
+    "GenericRFI_BODY",
 ].sort();
 
 const shippedPolicy: WafPolicyConfig = JSON.parse(
@@ -92,7 +98,7 @@ describe("shipped WAF policy: Common Rule Set per-rule overrides", () => {
      * Positive control: all three managed groups must be present and in block mode. Without
      * this, deleting a group would satisfy every "carries no overrides" assertion vacuously,
      * and flipping `block` to false would relax the whole group while the override set still
-     * read as "exactly eight".
+     * read as "exactly ten".
      */
     test("the three shipped managed rule groups are present and in block mode", () => {
         expect(shippedGroups.map((g) => g.managedRuleGroupName).sort()).toEqual(
@@ -104,7 +110,7 @@ describe("shipped WAF policy: Common Rule Set per-rule overrides", () => {
         });
     });
 
-    test("the Common Rule Set overrides are exactly the eight expected rules", () => {
+    test("the Common Rule Set overrides are exactly the ten expected rules", () => {
         const overrides = groupByManagedName(COMMON_RULE_SET)?.ruleActionOverrides || [];
         const names = overrides.map((o) => o.name);
         // No duplicates: AWS WAF rejects a managed rule group statement that names the same
@@ -142,7 +148,7 @@ describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])(
             expect(getWebAcl(template).Properties.Scope).toBe(wafScope.toString());
         });
 
-        test("the Common Rule Set statement carries exactly the eight count overrides", () => {
+        test("the Common Rule Set statement carries exactly the ten count overrides", () => {
             const statement = getManagedRule(template, COMMON_RULE_SET).Statement
                 .ManagedRuleGroupStatement;
             const rendered: Array<{ Name: string; ActionToUse: any }> =

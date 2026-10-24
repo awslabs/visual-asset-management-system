@@ -42,6 +42,7 @@ from vamscli.constants import (  # noqa: E402,F401
     API_ASSETS,
     API_DATABASE_ASSETS,
     COMPLIANCE_AUDIT_DEFAULT_LIMIT,
+    FEATURE_NOOPENSEARCH,
     MAX_COMPLIANCE_AUDIT_PAGE_SIZE,
     MAX_COMPLIANCE_EVALUATIONS_PAGE_SIZE,
     MAX_COMPLIANCE_LIST_PAGE_SIZE,
@@ -49,6 +50,8 @@ from vamscli.constants import (  # noqa: E402,F401
     SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
 )
 from vamscli.utils.api_client import APIClient  # noqa: E402
+from vamscli.utils.exceptions import SearchDisabledError  # noqa: E402,F401
+from vamscli.utils.features import is_feature_enabled  # noqa: E402
 from vamscli.utils.profile import ProfileManager  # noqa: E402
 
 from .config import Config, ConfigError  # noqa: E402
@@ -95,6 +98,10 @@ class VamsClient:
 
         self.api_url = api_url
         self.api = APIClient(api_url, self._profile)
+
+    def search_enabled(self) -> bool:
+        """False on a deployment without OpenSearch (the profile's NOOPENSEARCH feature switch)."""
+        return not is_feature_enabled(FEATURE_NOOPENSEARCH, self._profile)
 
     # --- Raw request escape hatch ----------------------------------------
 

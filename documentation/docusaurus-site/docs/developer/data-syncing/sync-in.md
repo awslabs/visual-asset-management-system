@@ -264,8 +264,9 @@ Amazon S3 through presigned URLs, not through API Gateway:
    `{ relativeKey, file_size, num_parts }`. The response returns an `uploadId` and, per
    file, an `uploadIdS3` and a list of presigned `partUploadUrls`.
 2. **Upload parts** — `HTTP PUT` each part's bytes to its presigned `UploadUrl` and
-   capture the returned `ETag`. Send at most 200 parts per request; a zero-byte file has
-   no parts.
+   capture the returned `ETag`. Keep each request within the backend's
+   [upload request size limits](../../troubleshooting/known-limitations.md#upload-request-size-limits);
+   a zero-byte file has no parts.
 3. **Complete** — `POST /uploads/{uploadId}/complete` with a `files` array of
    `{ relativeKey, uploadIdS3, parts: [{ PartNumber, ETag }] }`.
 

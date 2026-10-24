@@ -50,7 +50,6 @@ web/
     config.ts               # Static config (VAMSConfig: APP_TITLE, DEV_API_ENDPOINT)
     synonyms.tsx            # Configurable display names (Asset, Database, Comment)
     index.tsx               # Entry point, createRoot
-    reportWebVitals.ts      # Web vitals reporting
     setupTests.ts           # Jest setup
 
     features/orchestration/ # Pipeline/workflow/execution management (Tailwind + Radix)
@@ -97,7 +96,7 @@ web/
       SignInFooter.tsx
 
     services/               # API and data services
-      APIService.ts         # Main API service (~900+ lines, 40+ exports)
+      APIService.ts         # Main API service (~3,500 lines, 110+ exports)
       AssetUploadService.ts # S3 multipart upload logic
       AssetVersionService.ts  # Includes updateAssetVersion, archiveAssetVersion, unarchiveAssetVersion
       FileOperationsService.ts
@@ -321,12 +320,14 @@ import SpaceBetween from "@cloudscape-design/components/space-between";
 // INCORRECT -- never import from the barrel export
 import { Button, Table } from "@cloudscape-design/components";
 
-// CORRECT (orchestration module)
-import { Button } from "@radix-ui/themes";
-<div className="flex gap-2">...</div>;
+// CORRECT (orchestration module: Radix primitives styled with Tailwind, as in components/Dialog.tsx)
+import * as RadixDialog from "@radix-ui/react-dialog";
+<RadixDialog.Content className="rounded-md bg-white p-4 shadow-lg">...</RadixDialog.Content>;
 ```
 
 **Always import individual Cloudscape components from their subpath**, not from the barrel export. This is critical for bundle size. In the orchestration module, use Tailwind utility classes and Radix primitives.
+
+This applies to new imports. A new file, or a Cloudscape component newly imported into an existing file, uses a subpath import, even in a file that already imports from the barrel. Existing barrel imports stay as they are; do not convert them.
 
 ### Rule 3: All API Calls Go Through Service Layer Files
 
@@ -498,19 +499,10 @@ Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples:
 export const fetchSomething = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/something`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            return false;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];
@@ -521,8 +513,8 @@ export const fetchSomething = async ({ databaseId }) => {
 Key patterns to follow:
 
 1. Use `apiClient` for all API calls (auth headers injected automatically)
-2. Error detection uses `response.message.indexOf("error") !== -1` (legacy pattern, maintain consistency)
-3. Return `[false, errorMessage]` on error, `[true, data]` on success, `false` for unknown failures
+2. Failure is decided by `response.success === false` or a thrown request (non-2xx), never by searching the message for "error": a success message can echo caller-chosen text such as an asset ID
+3. Return `[false, errorMessage]` on error and `[true, data]` on success
 4. Always log errors with `console.log` (NOT `console.error` -- match existing convention)
 5. A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message (`ViewFile.tsx`, `deleteAssetLink`, `deleteComment`)
 
@@ -634,6 +626,7 @@ const header = await getDualAuthorizationHeader();
 -   Custom `TokenProvider` is used for external OAuth token integration
 -   `appCache` replaces Amplify Cache for runtime config storage
 -   Hub event names changed: `signIn` -> `signedIn`, `signOut` -> `signedOut`
+-   Every sign-out path awaits `revokeSession()` (`utils/sessionManager.ts`; Amplify `signOut()`, bounded at 5 s) BEFORE `clearStoredSession()` and `clearLocalStore()`. Amplify reads the stored tokens to revoke the refresh token, so clearing localStorage first skips the revocation.
 
 ### 5.4 User State
 
@@ -659,7 +652,7 @@ This codebase uses NO global state library. State is managed through:
 2. **Component-local useState/useReducer** for component state
 3. **localStorage** for persistence across sessions
 4. **appCache** (`src/services/appCache.ts`) for runtime config and preferences
-5. **URL params** via React Router v6 `useParams()`
+5. **URL params** via React Router v7 `useParams()`
 
 ### 6.2 Context Pattern
 
@@ -970,7 +963,7 @@ export const VIEWER_COMPONENTS = {
 | `supportsMultiFile`          | boolean           | Can handle multiple files at once                    |
 | `canFullscreen`              | boolean           | Supports fullscreen mode                             |
 | `priority`                   | number            | Lower = listed first when multiple viewers match     |
-| `loadStrategy`               | "lazy" \| "eager" | When to load the component                           |
+| `loadStrategy`               | "lazy" \| "eager" | Not read; every viewer loads on first use            |
 | `category`                   | string            | Viewer category (3d, media, document, data, preview) |
 | `featuresEnabledRestriction` | string[]?         | Required feature flags                               |
 | `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
@@ -1059,6 +1052,11 @@ expires. Putting one in an iframe's **query string** writes it into CloudFront o
 are not treated as containing credentials and stay in the web app access-logs bucket until its
 lifecycle rule removes them (`WebAppAccessLogsBucket` in `staticWebBuilder-nestedStack.ts`): the bucket
 is versioned, so a log object expires after 30 days and its noncurrent version is deleted 30 days later.
+When `app.useWaf` is on, the query string and the `Referer` headers also reach the `aws-waf-logs-vams-*`
+log group of the web ACL in front of the site (`wafv2-basic-construct.ts`; in `us-east-1` for the
+CloudFront ACL), which keeps events for one year and redacts only the `authorization` header. The
+operator-facing account of both channels and their controls is in `troubleshooting/known-limitations.md`
+("SuperSplat Editor File URLs in Web Logs").
 
 `supersplat-viewer` currently does this (`SuperSplatViewerComponent.tsx` builds
 `?load=<presigned>&filename=…`) — one object, expiring, but logged. **Do not copy the pattern into a new
@@ -1103,6 +1101,11 @@ expires. Putting one in an iframe's **query string** writes it into CloudFront o
 are not treated as containing credentials and stay in the web app access-logs bucket until its
 lifecycle rule removes them (`WebAppAccessLogsBucket` in `staticWebBuilder-nestedStack.ts`): the bucket
 is versioned, so a log object expires after 30 days and its noncurrent version is deleted 30 days later.
+When `app.useWaf` is on, the query string and the `Referer` headers also reach the `aws-waf-logs-vams-*`
+log group of the web ACL in front of the site (`wafv2-basic-construct.ts`; in `us-east-1` for the
+CloudFront ACL), which keeps events for one year and redacts only the `authorization` header. The
+operator-facing account of both channels and their controls is in `troubleshooting/known-limitations.md`
+("SuperSplat Editor File URLs in Web Logs").
 
 `supersplat-viewer` currently does this (`SuperSplatViewerComponent.tsx` builds
 `?load=<presigned>&filename=…`) — one object, expiring, but logged. **Do not copy the pattern into a new
@@ -1164,6 +1167,8 @@ Configuration is loaded at startup in this order:
 2. `GET /api/secure-config` --> Additional config requiring auth
 3. Both are stored in `appCache.setItem("config", ...)` for runtime access
 
+When the cached config has no `featuresEnabled` (every sign-out clears it), `Auth.tsx` renders the deployment banner (`<GlobalHeader />`) and `<LoadingScreen />` instead of the app until secure-config has applied the feature switches, has given up after its last attempt, or has run past `SECURE_CONFIG_HOLD_MAX_MS` (10 seconds), because pages and the viewer registry read the switches once, when they mount.
+
 **Note:** `appCache` (from `src/services/appCache.ts`) replaces Amplify Cache:
 
 ```typescript
@@ -1221,8 +1226,7 @@ setError(`${Synonyms.Asset} not found`);
 1. **Cloudscape component props** -- Use Cloudscape's built-in styling props first
 2. **SCSS** -- Global styles in `src/styles/`, uses 7-1 SCSS architecture
 3. **CSS Modules** -- Scoped styles (e.g., `loginbox.module.css`)
-4. **styled-components** -- Used in some components
-5. **Inline styles** -- Acceptable for simple one-off styles
+4. **Inline styles** -- Acceptable for simple one-off styles
 
 ### 10.2 SCSS Structure
 
@@ -1280,7 +1284,7 @@ When adding new styles, use CSS custom properties from `theme.css` or Cloudscape
 -   **Framework:** Jest 30 (`jsdom` environment via `jest-environment-jsdom`), `@testing-library/react`
 -   **Config:** `web/jest.config.js`; jest-dom matchers registered via `setupFilesAfterEnv` -> `src/setupTests.ts`
 -   **Cloudscape preset:** `@cloudscape-design/jest-preset` (transforms Cloudscape CSS/JS)
--   **Coverage thresholds:** Very low (~1%, set in `jest.config.js`) — raise as coverage grows
+-   **Coverage thresholds:** the suite's measured global coverage rounded down to a whole percent (statements, lines and branches 28%, functions 30%; set in `jest.config.js`). CI runs `npx jest --ci --coverage`, so a change that drops coverage below them fails the build — raise them as coverage grows
 -   **Run tests:** `npm test` (with coverage) or `npx jest` for a faster run
 
 ### 11.2 Test File Conventions
@@ -1358,12 +1362,13 @@ npm install           # Install dependencies + runs postinstall (viewer installs
 npm run start         # Start dev server (port 3001)
 ```
 
-The dev server proxies API calls via Vite's proxy config. Set `DEV_API_ENDPOINT` in `config.ts` to point to a remote API or local backend.
+The dev server has no API proxy: `web/vite.config.ts` sets only port 3001 and the COOP/COEP headers. Set `DEV_API_ENDPOINT` in `src/config.ts` to point the dev server at a remote API or a local backend.
 
 ### 12.2 Build
 
 ```bash
 npm run build         # Production build (output: web/dist/)
+npm run typecheck     # Type-check only (tsc --noEmit); the Vite build does not type-check
 ```
 
 ### 12.3 Important: Postinstall Script
@@ -1388,9 +1393,9 @@ Before modifying any code:
 
 After modifying code:
 
--   [ ] No new TypeScript errors (`npm run build` or check IDE)
+-   [ ] No new TypeScript errors (`npm run typecheck`, or check IDE; `npm run build` does not type-check)
 -   [ ] No broken imports (check relative paths carefully)
--   [ ] Cloudscape components imported from subpaths (not barrel exports)
+-   [ ] Cloudscape components imported from subpaths (not barrel exports) (new imports; see Rule 2)
 -   [ ] API calls go through service-layer files (`src/services/`), NOT direct `apiClient` imports in components
 -   [ ] New routes added to `routeTable` in `routes.tsx` with `React.lazy`
 -   [ ] No hardcoded strings where `Synonyms` should be used
@@ -1399,7 +1404,7 @@ After modifying code:
 
 ## 13. Anti-Patterns
 
-### 13.1 Do NOT Import Cloudscape from Barrel Export
+### 13.1 Do NOT Import Cloudscape from Barrel Export (new imports; see Rule 2)
 
 ```typescript
 // INCORRECT -- causes entire library to be bundled
@@ -1494,7 +1499,7 @@ const token = await getDualValidAccessToken();
 // CORRECT -- use Synonyms for customizable display names
 import Synonyms from "../../synonyms";
 <Header>{Synonyms.Assets}</Header>
-<p>Select a {Synonyms.Database}</p>
+<p>{`Select the ${Synonyms.database} to continue`}</p>
 ```
 
 ### 13.8 Do NOT Over-Document or Narrate Changes in Comments
@@ -1505,23 +1510,32 @@ Match the comment density and style already present in the file. Describe **what
 
 ## 14. Key Dependencies
 
-| Package                         | Version              | Purpose                     |
-| ------------------------------- | -------------------- | --------------------------- |
-| `react`                         | 17.0.2               | UI framework (NOT React 18) |
-| `typescript`                    | 4.4.4                | Type system                 |
-| `vite`                          | ^6.0.0               | Build tooling               |
-| `aws-amplify`                   | v6 (latest)          | Auth integration (v6)       |
-| `@cloudscape-design/components` | ^3.0.196             | AWS Cloudscape UI           |
-| `@badgateway/oauth2-client`     | 2.4.2                | External OAuth2 PKCE flow   |
-| `react-router-dom`              | ^6.0.0               | Client-side routing         |
-| `styled-components`             | ^5.3.3               | CSS-in-JS (legacy usage)    |
-| `three`                         | (via customInstalls) | 3D rendering engine         |
-| `maplibre-gl`                   | ^6.9.0               | Map rendering               |
-| `react-pdf`                     | ^10.1.0              | PDF viewing                 |
-| `papaparse`                     | ^5.4.1               | CSV parsing                 |
-| `dompurify`                     | ^3.4.11              | HTML sanitization           |
-| `sanitize-html`                 | ^2.11.0              | HTML sanitization           |
-| `@dnd-kit/core`                 | ^6.3.1               | Drag and drop               |
+| Package                         | Version              | Purpose                              |
+| ------------------------------- | -------------------- | ------------------------------------ |
+| `react`                         | 18.3                 | UI framework (upgraded from 17.0.2)  |
+| `typescript`                    | ^5.0.0               | Type system (upgraded from 4.4.4)    |
+| `vite`                          | ^8.0.0               | Build tooling (upgraded from ^6)     |
+| `aws-amplify`                   | v6 (latest)          | Auth integration (v6)                |
+| `@cloudscape-design/components` | ^3.0.196             | AWS Cloudscape UI (existing pages)   |
+| `@tanstack/react-query`         | v5                   | Server-state (orchestration module)  |
+| `@tanstack/react-table`         | v8                   | Headless tables (orchestration)      |
+| `tailwindcss`                   | latest               | Utility-first CSS (orchestration)    |
+| `@radix-ui/*`                   | latest               | Headless primitives (orchestration)  |
+| `@rjsf/core`                    | v5                   | Dynamic tag forms (orchestration)    |
+| `@monaco-editor/react`          | latest               | Config editor (lazy-loaded)          |
+| `react-hook-form`               | v7                   | Form validation                      |
+| `zod`                           | latest               | Schema validation                    |
+| `reactflow`                     | v11                  | DAG preview (replaced v9 EOL)        |
+| `@badgateway/oauth2-client`     | 2.4.2                | External OAuth2 PKCE flow            |
+| `react-router-dom`              | ^7.18.2              | Client-side routing                  |
+| `three`                         | (via customInstalls) | 3D rendering engine                  |
+| `maplibre-gl`                   | ^6.9.0               | Map rendering                        |
+| `react-pdf`                     | ^10.1.0              | PDF viewing                          |
+| `papaparse`                     | ^5.4.1               | CSV parsing                          |
+| `dompurify`                     | ^3.4.11              | HTML sanitization                    |
+| `sanitize-html`                 | ^2.11.0              | HTML sanitization                    |
+| `@dnd-kit/core`                 | ^6.3.1               | Drag and drop                        |
+| `@testing-library/react`        | 14                   | Testing utilities (upgraded from 11) |
 
 ### 14.1 Key Service Files
 
@@ -1576,20 +1590,10 @@ import { apiClient } from "./apiClient";
 export const myServiceFunction = async ({ databaseId }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/myendpoint`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            // For list endpoints, data is typically in a named property
-            return response;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log(error);
         return [false, error?.message];
@@ -1648,7 +1652,7 @@ Environment variables use the `VITE_*` prefix instead of `REACT_APP_*`. Access t
 
 ### 18.3 Proxy
 
-Vite's `server.proxy` in `vite.config.ts` configures the development proxy. API calls to `/api/*` are proxied to the backend.
+`vite.config.ts` defines no `server.proxy`. In local development the web app calls the API at `DEV_API_ENDPOINT` (`src/config.ts`) directly.
 
 ### 18.4 COI Service Worker
 

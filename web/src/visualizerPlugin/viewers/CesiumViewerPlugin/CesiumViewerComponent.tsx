@@ -29,7 +29,6 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
     multiFileKeys,
     versionId,
     assetVersionId,
-    viewerMode,
     onViewerModeChange,
     onDeletePreview,
     isPreviewFile,
@@ -128,6 +127,31 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             return {};
         }
     }, []);
+
+    // Retry callback for a tileset resource. An expired ID token is refused with 403 (401 from
+    // some front doors), so on either status the fresh auth headers are copied into the retried
+    // request and into the tileset's root resource. Cesium copies a resource's headers when it
+    // derives one, so the fresh header reaches the retried request and the resources derived from
+    // the root after the refresh. A tile resource derived before the refresh keeps the earlier
+    // token: each of its requests goes out once with that token, is refused, and is retried once.
+    const refreshAuthOnDenial = useCallback(
+        async (retried: any, error: any, root: any): Promise<boolean> => {
+            const status = error?.statusCode;
+            if (status !== 401 && status !== 403) return false;
+            const fresh = await getAuthHeaders();
+            if (!fresh.Authorization) return false;
+            for (const target of [retried, root]) {
+                if (!target) continue;
+                if (target.headers) {
+                    Object.assign(target.headers, fresh);
+                } else {
+                    target.headers = { ...fresh };
+                }
+            }
+            return true;
+        },
+        [getAuthHeaders]
+    );
 
     // Helper function to construct streaming URL
     const constructStreamingUrl = useCallback(
@@ -361,7 +385,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 }
             }
         };
-    }, [viewerMode, customParameters, cesiumLoaded]);
+    }, [customParameters, cesiumLoaded]);
 
     // Helper function to configure camera for tileset viewing
     const configureCameraForTileset = useCallback((tileset: any, geolocated: boolean) => {
@@ -1193,6 +1217,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                 const resource = new Cesium.Resource({
                     url: streamingUrl,
                     headers: authHeaders,
+                    retryAttempts: 1,
+                    retryCallback: (retried: any, error: any) =>
+                        refreshAuthOnDenial(retried, error, resource),
                 });
 
                 // Create 3D Tileset using the authenticated resource
@@ -1259,6 +1286,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
         [
             config,
             getAuthHeaders,
+            refreshAuthOnDenial,
             constructStreamingUrl,
             configureCameraForTileset,
             createCameraOffset,
@@ -1300,6 +1328,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                     const resource = new Cesium.Resource({
                         url: streamingUrl,
                         headers: authHeaders,
+                        retryAttempts: 1,
+                        retryCallback: (retried: any, error: any) =>
+                            refreshAuthOnDenial(retried, error, resource),
                     });
 
                     // Create 3D Tileset using the authenticated resource
@@ -1383,6 +1414,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
         [
             config,
             getAuthHeaders,
+            refreshAuthOnDenial,
             constructStreamingUrl,
             configureCameraForTileset,
             createCameraOffset,
@@ -2044,11 +2076,16 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                                         ].map(({ color, name }) => (
                                             <button
                                                 key={color}
+                                                type="button"
+                                                aria-label={name}
+                                                aria-pressed={backgroundColor === color}
                                                 onClick={() => changeBackgroundColor(color)}
                                                 style={{
                                                     width: "32px",
                                                     height: "24px",
                                                     backgroundColor: color,
+                                                    // Keep the swatch colour in forced-colors mode
+                                                    forcedColorAdjust: "none",
                                                     border:
                                                         backgroundColor === color
                                                             ? "2px solid #4CAF50"
@@ -2061,6 +2098,7 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                                             >
                                                 {backgroundColor === color && (
                                                     <div
+                                                        aria-hidden="true"
                                                         style={{
                                                             position: "absolute",
                                                             top: "50%",
