@@ -108,8 +108,7 @@ def _run_recording_order():
         return {"overallSuccess": True,
                 "fileResults": [{"relativeKey": NEW_FILE, "success": True}]}
 
-    def _metadata(_bucket, s3_key, _mdpath, _db, _asset, file_path, metadata_type, _ctx,
-                  workflow_execution_id=None):
+    def _metadata(_bucket, s3_key, _mdpath, _db, _asset, file_path, metadata_type, _ctx):
         order.append((f"write_{metadata_type}", file_path or "/"))
         return [{"metadataKey": "k", "metadataValue": "v"}]
 
