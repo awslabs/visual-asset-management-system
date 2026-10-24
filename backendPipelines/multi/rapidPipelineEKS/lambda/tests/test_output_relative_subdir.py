@@ -162,12 +162,13 @@ def _split_top_level(body):
 
 def construct_pipeline_task_payload_spec():
     """The CONSTRUCT_PIPELINE task payload DECLARED IN THE CDK CONSTRUCT, as
-    ``{payloadKey: ("ref", statePath) | ("literal", value)}``.
+    ``{payloadKey: ("ref", statePath) | ("context", contextPath) | ("literal", value)}``.
 
     This is the production event shape: ``tasks.LambdaInvoke`` with an explicit ``payload`` sends
     exactly these keys, so a field the construct omits does not exist inside the operation no matter
     what openPipeline put in the state machine input. Parsed from the construct source rather than
-    restated here, so the two cannot drift.
+    restated here, so the two cannot drift. A ``"context"`` entry reads the Step Functions context
+    object (``$$.``), which describes the execution rather than its input and is always present.
     """
     source = open(_CONSTRUCT_TS, encoding="utf-8").read()
     task_start = source.index('new tasks.LambdaInvoke(this, "ConstructPipeline"')
@@ -194,8 +195,14 @@ def construct_pipeline_task_payload_spec():
         key = key.strip().strip('"')
         reference = re.fullmatch(r'sfn\.JsonPath\.stringAt\(\s*"\$\.([A-Za-z0-9_]+)"\s*\)',
                                  value.strip())
-        spec[key] = ("ref", reference.group(1)) if reference \
-            else ("literal", json.loads(value.strip()))
+        context = re.fullmatch(r'sfn\.JsonPath\.stringAt\(\s*"\$\$\.([A-Za-z0-9_.]+)"\s*\)',
+                               value.strip())
+        if reference:
+            spec[key] = ("ref", reference.group(1))
+        elif context:
+            spec[key] = ("context", context.group(1))
+        else:
+            spec[key] = ("literal", json.loads(value.strip()))
 
     # Positive control for the parser: a parse that silently matched nothing (or the wrong task)
     # would make every test below pass against an empty event, so the shape is asserted here.
@@ -206,18 +213,26 @@ def construct_pipeline_task_payload_spec():
     return spec
 
 
-def state_machine_construct_pipeline_event(sfn_input):
+def state_machine_construct_pipeline_event(sfn_input, execution_name):
     """The event the STATE MACHINE sends to CONSTRUCT_PIPELINE for a given Step Functions input:
-    the declared payload, resolved against that input.
+    the declared payload, resolved against that input and against the context object of the
+    execution openPipeline started under ``execution_name``.
 
     A declared path missing from the input is an error rather than an omission — Step Functions fails
     the task with States.Runtime when a Parameters path does not resolve — so it is asserted rather
-    than defaulted.
+    than defaulted. A context path this harness does not know is asserted the same way, so a new one
+    is resolved here deliberately rather than passed through as nothing.
     """
+    context_object = {"Execution.Name": execution_name}
     event = {}
     for key, (kind, value) in construct_pipeline_task_payload_spec().items():
         if kind == "literal":
             event[key] = value
+            continue
+        if kind == "context":
+            assert value in context_object, \
+                f"the task payload reads $$.{value}, which this harness does not resolve"
+            event[key] = context_object[value]
             continue
         assert value in sfn_input, \
             f"the task payload reads $.{value}, which openPipeline did not put in the SFN input"
@@ -364,6 +379,7 @@ class _Chain:
             response = open_mod.lambda_handler(open_event, _ctx())
         assert response["statusCode"] == 200, response
         sfn_input = json.loads(start.call_args.kwargs["input"])
+        execution_name = start.call_args.kwargs["name"]
 
         # Hop 3: the CONSTRUCT_PIPELINE operation emits the container command — from the event the
         # STATE MACHINE sends, which is its declared task payload resolved against that input, not
@@ -371,7 +387,7 @@ class _Chain:
         construct_mod = _load("consolidated_handler")
         with patch.object(construct_mod, "s3", self._s3(manifest, config)):
             out = construct_mod.lambda_handler(
-                state_machine_construct_pipeline_event(sfn_input), _ctx())
+                state_machine_construct_pipeline_event(sfn_input, execution_name), _ctx())
         assert "error" not in out, out
         container = out["jobManifest"]["spec"]["template"]["spec"]["containers"][0]
         return container["args"][0]
@@ -421,6 +437,18 @@ class TestTheStateMachineTaskPayloadCarriesWhatPlacesTheOutput(_Chain):
         assert referenced, "the payload declares no state references at all"
         assert referenced <= set(sfn_input), sorted(referenced - set(sfn_input))
         assert sfn_input["assetId"] == ASSET_ID
+
+    def test_the_only_context_path_the_payload_reads_is_the_execution_name(self):
+        """Context-object paths read the execution, not the state input, so openPipeline does not
+        supply them and the test above does not cover them. The one in use is named here, and the
+        event resolves it to the name openPipeline starts the execution with."""
+        spec = construct_pipeline_task_payload_spec()
+        context = {key: path for key, (kind, path) in spec.items() if kind == "context"}
+        assert context == {"executionName": "Execution.Name"}, context
+        event = state_machine_construct_pipeline_event(
+            {path: f"value-of-{path}" for kind, path in spec.values() if kind == "ref"},
+            "PipelineJobEKS_20260101_000000_000_ab12cd34")
+        assert event["executionName"] == "PipelineJobEKS_20260101_000000_000_ab12cd34"
 
 
 @pytest.mark.unit
