@@ -4,11 +4,11 @@
  */
 
 /**
- * The RapidPipeline EKS monitor has two failure exits, and only one of them has no Kubernetes job to
- * delete.
+ * The RapidPipeline EKS failure exits that bypass a task Catch differ in whether a Kubernetes job can
+ * exist to delete.
  *
- *   * `HandleRunJobError` — RUN_JOB itself reported a failure, so no job was ever created. The literal
- *     `failure-before-creation` is the truthful value there.
+ *   * `HandleConstructPipelineError` — CONSTRUCT_PIPELINE returned no manifest, so no job was ever
+ *     created. The literal `failure-before-creation` is the truthful value there.
  *   * `Timeout Job` — the poll reached its ceiling while a job was running. A job DOES exist, and its
  *     name is the only handle `handle_pipeline_end` has for deleting it: it reads `$.k8sJobName` and
  *     keys `cleanup_completed_job(...)` / `delete_job(...)` off exactly that value.
@@ -16,6 +16,8 @@
  * Carrying the placeholder through the timeout exit therefore asks Kubernetes to delete a job that
  * never existed. Both deletes fail, only a log line records it, and the real pod keeps running on its
  * node until `activeDeadlineSeconds` expires — billing a 2 vCPU / 16 GiB node for the remainder.
+ * (`HandleRunJobError` carries the manifest's job name for the same reason; eksRunEndedMarker.test.ts
+ * covers it.)
  *
  * Asserted on the emitted state machine definition rather than the TypeScript, because what matters is
  * that the field arrives at PipelineEnd as a JSONPath reference resolved by Step Functions. The
@@ -79,14 +81,16 @@ describe("EKS Timeout Job preserves the job name cleanup needs", () => {
             1
         );
         expect(states["Timeout Job"]).toBeDefined();
-        expect(states["HandleRunJobError"]).toBeDefined();
+        expect(states["HandleConstructPipelineError"]).toBeDefined();
     });
 
-    test("the run-job failure exit keeps the placeholder", () => {
+    test("the construct-failure exit keeps the placeholder", () => {
         // The positive control for the literal itself: it is still written somewhere in this ASL, so
         // its absence from the timeout state is a real difference rather than a search that matched
-        // nothing. Deleting the k8s job is meaningless here because RUN_JOB never created one.
-        expect(states["HandleRunJobError"].Parameters.k8sJobName).toBe(NO_JOB_PLACEHOLDER);
+        // nothing. Deleting the k8s job is meaningless here because no manifest was ever built.
+        expect(states["HandleConstructPipelineError"].Parameters.k8sJobName).toBe(
+            NO_JOB_PLACEHOLDER
+        );
     });
 
     test("the poll-timeout exit carries the real job name as a JSONPath reference", () => {

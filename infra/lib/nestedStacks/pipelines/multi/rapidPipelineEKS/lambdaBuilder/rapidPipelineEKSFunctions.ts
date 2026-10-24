@@ -301,6 +301,11 @@ export function buildConsolidatedHandlerFunction(
             // Allowed file extensions
             ALLOWED_INPUT_FILEEXTENSIONS: ".glb,.gltf,.fbx,.obj,.stl,.ply,.usd,.usdz,.dae,.abc",
 
+            // The bucket of the run-ended marker, which PIPELINE_END writes before it deletes the job
+            // and RUN_JOB checks after it creates one. The handler fixes the key prefix, which the
+            // auxiliary bucket's lifecycle rule for this pipeline expires; the grant below covers it.
+            RUN_ENDED_MARKER_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
+
             // Test mode
             TEST_MODE: "false",
 

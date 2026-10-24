@@ -339,7 +339,7 @@ class TestEachRunGetsItsOwnJobId:
 class TestRunJobReportsTheAdoptedJob:
     def test_run_job_returns_running_with_the_job_name_after_a_504_create(self, jobs_api):
         """RUN_JOB's body is what the state machine routes on: a RUNNING status carrying k8sJobName goes
-        on to poll the job, where a failure would set k8sJobName to failure-before-creation."""
+        on to poll the job, and a body without k8sJobName goes to HandleRunJobError instead."""
         handler = _load_handler()
         assert handler.create_job is ku.create_job, "the handler must call the kubernetes_utils patched here"
         server = jobs_api(create_outcomes=[(504, True, 0)])

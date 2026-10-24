@@ -728,24 +728,17 @@ export class RapidPipelineEKSConstruct extends Construct {
         //   * ConstructPipeline: no job has been created, and the literal says so.
         //   * RunJob: the job may have been created before the failure. Its name is metadata.name in
         //     the jobManifest RunJob's payload reads. PipelineEnd reports a job that was never
-        //     created as already deleted.
+        //     created as already deleted. A RUN_JOB invocation still running when the Catch fires (an
+        //     earlier attempt the retrier resent after a client-side error) deletes a job it creates
+        //     after PipelineEnd, because PipelineEnd writes the run-ended marker that RUN_JOB checks
+        //     after its create.
         //   * CheckJob: the job exists, and its payload reads $.k8sJobName.
         //
         // States.ALL is evaluated after States.Timeout, so the InvokeError handler receives every
         // other caught error, task failures included.
-        //
-        // RunJob's InvokeError handler also sets lateCreateCleanup. RunJob's retrier resends the
-        // invocation after Step Functions-side client errors, which can be raised while the earlier
-        // invocation is still running, so that invocation can create the job after PipelineEnd has
-        // deleted it. After PipelineEnd has sent the parent its callback, LateCreateCleanup? sends
-        // such a run through WaitForRunJobInvocations and LateCreateCleanup, which deletes the job
-        // again. RunJob's Timeout handler does not set it: every attempt started at least RunJob's
-        // TimeoutSeconds before the timeout, which is longer than the function can run.
-        const lateCreateCleanupField = "lateCreateCleanup";
         const addTaskErrorHandlers = (
             task: tasks.LambdaInvoke,
-            jobNameField: { k8sJobName: string } | { "k8sJobName.$": string },
-            invokeErrorFields: Record<string, unknown> = {}
+            jobNameField: { k8sJobName: string } | { "k8sJobName.$": string }
         ): void => {
             const errorContext = {
                 "timestamp.$": "$$.State.EnteredTime",
@@ -774,7 +767,6 @@ export class RapidPipelineEKSConstruct extends Construct {
                     "externalSfnTaskToken.$": "$.externalSfnTaskToken",
                     "error.$": "$.error",
                     errorContext,
-                    ...invokeErrorFields,
                 },
                 resultPath: "$",
             }).next(pipelineEndTask);
@@ -790,11 +782,9 @@ export class RapidPipelineEKSConstruct extends Construct {
         };
 
         addTaskErrorHandlers(constructPipelineTask, { k8sJobName: "failure-before-creation" });
-        addTaskErrorHandlers(
-            runJobTask,
-            { "k8sJobName.$": "$.ConstructPipelineResult.Payload.jobManifest.metadata.name" },
-            { [lateCreateCleanupField]: true }
-        );
+        addTaskErrorHandlers(runJobTask, {
+            "k8sJobName.$": "$.ConstructPipelineResult.Payload.jobManifest.metadata.name",
+        });
         addTaskErrorHandlers(checkJobTask, { "k8sJobName.$": "$.k8sJobName" });
 
         // End state evaluation: success or failure
@@ -802,39 +792,7 @@ export class RapidPipelineEKSConstruct extends Construct {
             .when(sfn.Condition.isPresent("$.error"), failState)
             .otherwise(successState);
 
-        // The second delete for RunJob's States.ALL path, described with the error handlers above.
-        // The Wait is RunJob's own timeout, the function's timeout plus a margin, and starts after
-        // PipelineEnd: every RUN_JOB invocation started before RunJob's Catch fired, so each one has
-        // ended when the Wait does. LateCreateCleanup passes no task token, so the parent workflow
-        // is not notified again. Its result, and the error if its own invocation fails, are kept out
-        // of $.error, so EndChoice ends the run at Failure with the error RunJob's Catch recorded.
-        const lateCreateCleanupTask = new tasks.LambdaInvoke(this, "LateCreateCleanup", {
-            lambdaFunction: consolidatedHandler,
-            timeout: Duration.minutes(5),
-            payload: sfn.TaskInput.fromObject({
-                operation: "PIPELINE_END",
-                jobName: sfn.JsonPath.stringAt("$.jobName"),
-                k8sJobName: sfn.JsonPath.stringAt("$.k8sJobName"),
-            }),
-            resultPath: "$.LateCreateCleanupResult",
-            outputPath: "$",
-            retryOnServiceExceptions: true,
-        });
-        lateCreateCleanupTask.addCatch(endChoice, {
-            errors: ["States.ALL"],
-            resultPath: "$.LateCreateCleanupError",
-        });
-        lateCreateCleanupTask.next(endChoice);
-
-        const waitForRunJobInvocations = new sfn.Wait(this, "WaitForRunJobInvocations", {
-            time: sfn.WaitTime.duration(runJobTimeout),
-        }).next(lateCreateCleanupTask);
-
-        const lateCreateCleanupChoice = new sfn.Choice(this, "LateCreateCleanup?")
-            .when(sfn.Condition.isPresent(`$.${lateCreateCleanupField}`), waitForRunJobInvocations)
-            .otherwise(endChoice);
-
-        pipelineEndTask.next(lateCreateCleanupChoice);
+        pipelineEndTask.next(endChoice);
 
         // Both PipelineEnd variants exit through the same Choice, so the state machine has one ending.
         // EndChoice tests IsPresent("$.error"), which the success path does not carry, so it resolves
@@ -910,7 +868,7 @@ export class RapidPipelineEKSConstruct extends Construct {
                 // observing it end -- and PipelineEnd's cleanup is keyed off this field, so the real
                 // name is what lets the pod be deleted instead of a name that never existed. Every
                 // state on the path to here (InitializeCounter, IncrementCounter, RecordJobStatus)
-                // re-emits it. Contrast HandleRunJobError below, where no job was created.
+                // re-emits it. Contrast HandleConstructPipelineError below, where no job was created.
                 "k8sJobName.$": "$.k8sJobName",
                 "externalSfnTaskToken.$": "$.externalSfnTaskToken",
                 status: "FAILED",
@@ -941,10 +899,16 @@ export class RapidPipelineEKSConstruct extends Construct {
         // missing field rather than the actual failure, and States.Runtime in a Pass state is raised
         // before the state is entered, so it is routed by no Catch and never reaches PipelineEnd —
         // leaving the parent workflow's task token unreleased until its taskTimeout hours later.
+        //
+        // A job can exist when RUN_JOB returns an error body: create_job raises when a create the API
+        // server applied is answered 409 and the job cannot then be read back, and an earlier RunJob
+        // attempt may still create it. So PipelineEnd gets the manifest's job name, which RunJob's
+        // payload read and which this state's input therefore carries, deletes that job, and writes
+        // the run-ended marker that makes a late create delete itself.
         const handleRunJobError = new sfn.Pass(this, "HandleRunJobError", {
             parameters: {
                 "jobName.$": "$.jobName",
-                k8sJobName: "failure-before-creation", // No Kubernetes job exists to clean up
+                "k8sJobName.$": "$.ConstructPipelineResult.Payload.jobManifest.metadata.name",
                 "externalSfnTaskToken.$": "$.externalSfnTaskToken",
                 status: "FAILED",
                 error: {

@@ -10,6 +10,7 @@ to route requests to the appropriate handler logic.
 import os
 import boto3
 import json
+import re
 import shlex
 import uuid
 import time
@@ -65,6 +66,83 @@ NAMESPACE = os.environ.get('KUBERNETES_NAMESPACE', 'default')
 REGION = os.environ.get('AWS_REGION', 'us-west-2')
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ.get('ALLOWED_INPUT_FILEEXTENSIONS',
                                              '.glb,.gltf,.fbx,.obj,.stl,.ply,.usd,.usdz,.dae,.abc')
+
+# The run-ended marker: an object PIPELINE_END writes before it deletes the run's Kubernetes job, and
+# RUN_JOB looks for after it creates one (see handle_run_job). It is keyed by the Kubernetes job name,
+# which CONSTRUCT_PIPELINE makes unique per run, so neither payload carries its location. The bucket is
+# the auxiliary bucket, named in RUN_ENDED_MARKER_BUCKET; its lifecycle rule for this prefix expires the
+# markers, so nothing here deletes them.
+RUN_ENDED_MARKER_PREFIX = "pipelines/rapid-pipeline-eks/run-ended/"
+# The k8sJobName values PIPELINE_END is handed when no job was created.
+NO_JOB_NAMES = frozenset({'failure-before-creation', 'unknown'})
+# A Kubernetes object name (a DNS subdomain), so a marker key stays a single segment under the prefix.
+K8S_OBJECT_NAME_PATTERN = re.compile(r'^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$')
+
+
+def run_ended_marker_location(k8s_job_name):
+    """
+    The (bucket, key) of the run-ended marker for a Kubernetes job.
+
+    Returns None when no marker bucket is configured, or when the name is a no-job placeholder or not
+    a Kubernetes object name.
+    """
+    bucket = os.environ.get('RUN_ENDED_MARKER_BUCKET', '')
+    if (not bucket or not isinstance(k8s_job_name, str) or k8s_job_name in NO_JOB_NAMES
+            or not K8S_OBJECT_NAME_PATTERN.match(k8s_job_name)):
+        return None
+    return bucket, f"{RUN_ENDED_MARKER_PREFIX}{k8s_job_name}"
+
+
+def write_run_ended_marker(k8s_job_name):
+    """
+    Record that the run of this Kubernetes job has ended. Never raises: a marker that cannot be written
+    is logged, and the caller still deletes the job.
+
+    Returns:
+        bool: whether the marker was written
+    """
+    location = run_ended_marker_location(k8s_job_name)
+    if location is None:
+        logger.warning(f"No run-ended marker written for job {k8s_job_name}: "
+                       "RUN_ENDED_MARKER_BUCKET is not set or the name is not a job name")
+        return False
+
+    bucket, key = location
+    try:
+        s3.put_object(Bucket=bucket, Key=key, Body=b"")
+        logger.info(f"Wrote run-ended marker s3://{bucket}/{key}")
+        return True
+    except Exception as e:
+        logger.error(f"Could not write run-ended marker s3://{bucket}/{key}: {str(e)}")
+        return False
+
+
+def run_ended_marker_present(k8s_job_name):
+    """
+    Whether PIPELINE_END has recorded that the run of this Kubernetes job has ended. A check that cannot
+    be made is logged and answered False, so the job is kept.
+    """
+    location = run_ended_marker_location(k8s_job_name)
+    if location is None:
+        logger.warning(f"Run-ended marker not checked for job {k8s_job_name}: "
+                       "RUN_ENDED_MARKER_BUCKET is not set or the name is not a job name")
+        return False
+
+    bucket, key = location
+    try:
+        s3.head_object(Bucket=bucket, Key=key)
+        return True
+    except ClientError as e:
+        if str(e.response.get('Error', {}).get('Code', '')) in ('404', 'NoSuchKey', 'NotFound'):
+            return False
+        logger.warning(f"Could not check run-ended marker s3://{bucket}/{key}, keeping job "
+                       f"{k8s_job_name}: {str(e)}")
+        return False
+    except Exception as e:
+        logger.warning(f"Could not check run-ended marker s3://{bucket}/{key}, keeping job "
+                       f"{k8s_job_name}: {str(e)}")
+        return False
+
 
 def validate_required_parameters(event, required_params, operation_name):
     """
@@ -781,6 +859,31 @@ def handle_run_job(event):
 
         logger.info(f"Successfully created job: {job_name}")
 
+        # RunJob's retrier resends this invocation after Step Functions-side client errors, which can
+        # be raised while an earlier invocation is still running, so that invocation can create the job
+        # after PIPELINE_END has deleted it. PIPELINE_END writes the run-ended marker before its delete,
+        # and Amazon S3 reads are strongly consistent after a write. A create that the delete did not
+        # remove therefore came after the delete, and this check, made after the create (a fresh one
+        # or the 409 adoption), finds the marker. A create before the delete is removed by the delete.
+        # The attempt Step Functions is waiting on never finds a marker: the run cannot reach
+        # PIPELINE_END until that attempt has ended.
+        if run_ended_marker_present(job_name):
+            logger.warning(f"The run of job {job_name} had already ended when the job was created, "
+                           "deleting the job")
+            deleted = delete_job(job_name, namespace=NAMESPACE)
+            outcome = "the job was deleted" if deleted else "deleting the job failed"
+            return {
+                'statusCode': 409,
+                'body': {
+                    "status": "FAILED",
+                    "error": {
+                        "Error": "RunAlreadyEnded",
+                        "Cause": f"The pipeline run had already ended when job {job_name} was "
+                                 f"created, so {outcome}"
+                    }
+                }
+            }
+
         return {
             'statusCode': 200,
             'body': {
@@ -1184,6 +1287,12 @@ def handle_pipeline_end(event):
         cleanup_message = "No cleanup needed"
 
         if k8s_job_name and k8s_job_name != 'unknown':
+            # Written before the delete and after the callback. RUN_JOB checks it after every create
+            # (see handle_run_job), so a job this delete does not remove because it is created later
+            # is deleted by the invocation that creates it.
+            if k8s_job_name not in NO_JOB_NAMES:
+                write_run_ended_marker(k8s_job_name)
+
             try:
                 logger.info(f"Starting cleanup for Kubernetes job: {k8s_job_name}")
 
