@@ -126,7 +126,10 @@ class TestTheParentIsToldOfTheTimeoutWhateverTheStopDid:
             pytest.param(
                 {
                     "timedOutTasks": {"TaskArns": [TASK_ARN]},
-                    "stopError": {"Error": "States.Timeout", "Cause": "StopTimedOutTask"},
+                    "stopError": {
+                        "Error": "Ecs.InvalidParameterException",
+                        "Cause": "The referenced task was not found.",
+                    },
                 },
                 id="stop-failed",
             ),
