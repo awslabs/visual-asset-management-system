@@ -299,6 +299,12 @@ Files are delivered to the SuperSplat editor via presigned Amazon S3 URLs passed
 
 The Robotics Data Viewer opens robotics logs in [Lichtblick](https://github.com/lichtblick-suite/lichtblick) (MPL-2.0), an open-source robotics visualization web app, embedded via iframe. VAMS builds Lichtblick v1.29.1 from source when the web application is installed and serves it from `/viewers/robotics/`. The app shows the recording on one shared timeline with its panels: plots, a 3D scene, images, raw messages, logs and the topic list. Layouts you arrange stay in your browser; VAMS does not store them.
 
+The viewer opens with the **Topics** tab of its left sidebar, which lists each topic in the recording with its message type, rate and message count.
+
+-   **Show a topic.** Drag the topic from the Topics list onto a panel that displays it, such as Raw Messages, Plot or 3D, or choose it in the panel's topic field or in the panel's settings. The gear icon in a panel's toolbar opens its settings in the sidebar's **Panel** tab.
+-   **Add a panel.** The **Add panel** button in the app bar adds a panel, such as Plot, to the layout.
+-   **ROS 2 bags.** Panels show the messages of a `.db3` recording during playback.
+
 | Format             | Extensions      | How the file is read                                    | Several files at once                  |
 | ------------------ | --------------- | ------------------------------------------------------- | -------------------------------------- |
 | MCAP               | `.mcap`         | HTTP Range requests against the presigned Amazon S3 URL | Yes, merged on one timeline            |

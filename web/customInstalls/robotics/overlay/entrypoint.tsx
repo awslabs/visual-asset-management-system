@@ -28,11 +28,18 @@
  *     (X-Amz-Signature, X-Amz-Credential, X-Amz-Security-Token) into the page's query, where they
  *     would stay for the life of the page.
  * `openIn=web` keeps the app from offering to hand the link to a desktop app.
+ *
+ * Every open starts with the left sidebar on the Topics tab, so the recording's topics are listed
+ * as soon as it loads (upstream opens on the Panel tab). The entrypoint supplies the workspace
+ * store (sidebars, dialogs, playback options) through AppContext's workspaceStoreCreator. The store
+ * is not persisted: upstream's own store keeps the sidebars in localStorage (key fox.workspace),
+ * so the tab chosen in one open would replace Topics in every later one.
  */
 
 import Alert from "@mui/material/Alert";
 import { useLayoutEffect } from "react";
 
+import type { WorkspaceContextStore } from "@lichtblick/suite-base/context/Workspace/WorkspaceContext";
 import { main } from "@lichtblick/suite-web";
 
 import { VamsDownloadDataSourceFactory } from "./VamsDownloadDataSourceFactory";
@@ -72,14 +79,31 @@ function ExtensionsUnavailable(): React.JSX.Element {
 
 void main(async () => {
     moveFragmentDeepLinkToQuery();
-    // Both modules are already loaded by the time main() calls this; importing them here keeps
+    // These modules are already loaded by the time main() calls this; importing them here keeps
     // them out of the entry chunk, as upstream's lazily imported WebRoot does.
-    const [suiteBase, appConfigurationModule] = await Promise.all([
+    const [suiteBase, appConfigurationModule, { createStore }] = await Promise.all([
         import("@lichtblick/suite-base"),
         import("@lichtblick/suite-web/src/services/LocalStorageAppConfiguration"),
+        import("zustand"),
     ]);
-    const { AppContext, AppSetting, SharedRoot, StudioApp } = suiteBase;
+    const { AppContext, AppSetting, SharedRoot, StudioApp, makeWorkspaceContextInitialState } =
+        suiteBase;
     const LocalStorageAppConfiguration = appConfigurationModule.default;
+
+    // Called once per open with the data-source dialog state the app starts with. Upstream's
+    // defaults, then that state, then the left sidebar open on Topics. No persist middleware: the
+    // store lives as long as the viewer frame and nothing of it is written to browser storage.
+    const workspaceStoreCreator = (initialState?: Partial<WorkspaceContextStore>) => {
+        const state: WorkspaceContextStore = {
+            ...makeWorkspaceContextInitialState(),
+            ...initialState,
+        };
+        state.sidebars = {
+            ...state.sidebars,
+            left: { item: "topics", open: true, size: undefined },
+        };
+        return createStore<WorkspaceContextStore>()(() => state);
+    };
 
     // What upstream's WebRoot renders, minus its extension loaders, its default data sources and
     // its `layout` / `workspace` query parameters (the VAMS deep link sets neither).
@@ -106,6 +130,7 @@ void main(async () => {
                         value={{
                             wrapPlayer: (player) => player,
                             extensionSettings: <ExtensionsUnavailable />,
+                            workspaceStoreCreator,
                         }}
                     />,
                     <ForgetDeepLink key="vams-forget-deep-link" />,

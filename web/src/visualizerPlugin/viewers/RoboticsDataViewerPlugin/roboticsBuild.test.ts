@@ -209,3 +209,40 @@ describe("the overlay entrypoint loads no Lichtblick extension", () => {
         expect(code).toMatch(/extensionSettings:\s*<ExtensionsUnavailable\s*\/>/);
     });
 });
+
+/**
+ * Every open starts with the left sidebar on Topics, so the recording's topics are listed as soon
+ * as it loads. Upstream opens on the Panel tab and keeps the last chosen tab in browser storage,
+ * which would override the default on every later open.
+ */
+describe("the overlay entrypoint opens the viewer on the Topics tab", () => {
+    const source = fs.readFileSync(
+        path.join(__dirname, "../../../../customInstalls/robotics/overlay/entrypoint.tsx"),
+        "utf8"
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+    it("hands the app its own workspace store through AppContext", () => {
+        expect(code).toMatch(
+            /<AppContext\.Provider[\s\S]*?value=\{\{[^}]*\bworkspaceStoreCreator,?\s*\}\}/
+        );
+    });
+
+    it("starts from upstream's defaults and the app's dialog state, then opens Topics", () => {
+        const defaults = code.search(
+            /\.\.\.makeWorkspaceContextInitialState\(\),\s*\.\.\.initialState,/
+        );
+        const topics = code.search(
+            /left:\s*\{\s*item:\s*"topics",\s*open:\s*true,\s*size:\s*undefined\s*\}/
+        );
+        expect(defaults).toBeGreaterThan(-1);
+        // The Topics default comes after the spreads, so neither can replace it.
+        expect(topics).toBeGreaterThan(defaults);
+    });
+
+    it("keeps the store out of browser storage, so no earlier choice replaces Topics", () => {
+        expect(code).toMatch(/createStore<WorkspaceContextStore>\(\)\(\(\) => state\)/);
+        expect(code).not.toMatch(/zustand\/middleware|\bpersist\b/);
+        expect(code).not.toMatch(/\b(?:sessionStorage|localStorage)\b/);
+    });
+});
