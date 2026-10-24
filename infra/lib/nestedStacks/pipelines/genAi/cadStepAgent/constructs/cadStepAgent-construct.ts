@@ -289,6 +289,7 @@ export class CadStepAgentConstruct extends Construct {
                 maxRunSeconds: cad.maxRunSeconds,
                 allowInternetResearch: cad.allowInternetResearch,
                 openAiEnabled,
+                bedrockModelId,
             },
             props.config,
             props.vpc,

@@ -1154,6 +1154,16 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
    quoting a typed tag would hand the container `"42"` where it expects `42`. Non-`json` formats
    (`yaml`, `xml`, `openjd`, `raw`) are stored verbatim and not shape-checked. A `tagKey` may not
    collide with a reserved system tag name or begin with the reserved `metadata_` prefix.
+   **Text the container renders itself — a GenAI prompt carried in a template body — places its
+   inputs as `[[TOKEN]]`, never `{{TOKEN}}`:** VAMS substitutes every declared and catalog `{{tag}}`
+   in the body before the pipeline sees it, so `{{…}}` stays the channel for operator values. **A
+   template never names a model:** a GenAI pipeline's model is one deployment setting whose IAM grant
+   is scoped to it at synth, so the pipeline refuses a body carrying a model key rather than widening
+   the grant (worked example: the Video SOP/BOM workload-profile templates, checked by
+   `genAi/videoSopBom/lambda/profileRules.py` before any AWS Batch job starts). A pipeline offering a
+   provider that needs no IAM grant may let a template name that provider's model: the CAD STEP
+   agent's `MODEL_ID` tag selects an OpenAI model, and its `constructPipeline` refuses a Bedrock model
+   id other than the deployment's before the run starts.
    **A workflow's `inputFileArity` is authored, not derived** — templates are chosen per execution, so
    set it to the MAXIMUM any pipeline/template combination in that workflow can require; a lower gate
    rejects a selection a template would have accepted.

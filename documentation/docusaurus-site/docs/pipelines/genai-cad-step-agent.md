@@ -24,7 +24,7 @@ Every tag has a default, so both workflows run with no arguments; the defaults p
 | `OUTPUT_FILENAME_PREFIX`  | string                   | `""`        | Prefix prepended to the resolved file name, so a modify run writes a separate file instead of a new version of the input.                           |
 | `ALLOW_INTERNET_RESEARCH` | boolean                  | `true`      | Registers the web search and page fetch tools for this run. Ignored when the deployment disables research (`allowInternetResearch: false`).         |
 | `MODEL_PROVIDER`          | enum `bedrock`, `openai` | `bedrock`   | The model provider for this run. `openai` requires the deployment's `openAi.apiKeySecretArn` and `openAi.modelId`.                                  |
-| `MODEL_ID`                | string                   | `""`        | Model id override for the chosen provider; empty uses the deployment default.                                                                       |
+| `MODEL_ID`                | string                   | `""`        | For `openai`, replaces `openAi.modelId`. For `bedrock`, leave empty: a model other than `bedrockModelId` is refused before the run.                 |
 | `MAX_ATTEMPTS`            | integer                  | `4`         | How many generated-script attempts the agent may make (1-10). Each attempt validates the produced STEP file and feeds the result back to the agent. |
 | `DESIGN_NAME`             | string (generate only)   | `""`        | Short name used for the generated file name, for example `Jetson Nano carrier board` becomes `jetson-nano-carrier-board-<timestamp>.step`.          |
 
@@ -141,7 +141,7 @@ Enable the pipeline in `infra/config/config.json`:
 
 Every option is described in the [Configuration Reference](../deployment/configuration-reference.md#genai-cad-step-agent-apppipelinesusegenaicadstepagent). Three points shape a deployment:
 
--   **Model.** Set `bedrockModelId` to a model available in the deployment's Region (an Anthropic Claude model by default). To offer OpenAI models, store the API key in AWS Secrets Manager (as a plain string or as JSON with an `apiKey` key) and set `openAi.apiKeySecretArn` and `openAi.modelId`; a run then selects it with the `MODEL_PROVIDER` tag.
+-   **Model.** Set `bedrockModelId` to a model available in the deployment's Region (an Anthropic Claude model by default). To offer OpenAI models, store the API key in AWS Secrets Manager (as a plain string or as JSON with an `apiKey` key) and set `openAi.apiKeySecretArn` and `openAi.modelId`; a run then selects it with the `MODEL_PROVIDER` tag. The container role's Amazon Bedrock grant names only `bedrockModelId`, so the `MODEL_ID` tag can override the OpenAI model but not the Bedrock one; to use another Bedrock model, change `bedrockModelId` and redeploy.
 -   **Guardrail.** Leave `bedrockGuardrail` empty and the deployment creates an Amazon Bedrock guardrail with a prompt-attack input filter (strength `LOW`) and applies it to every run; or name an existing guardrail's id and numbered version (or `DRAFT`) to apply your own, for example one that adds denied topics or word filters. The guardrail is applied whichever model provider a run uses.
 -   **Internet research.** `allowInternetResearch` is the deployment master switch. With it on, a run's `ALLOW_INTERNET_RESEARCH` tag decides; with it off, the search and fetch tools are never registered.
 

@@ -492,7 +492,10 @@ partition. Author it with the block for your execution type present but empty:
    is scoped to it at synth, so the pipeline refuses a body carrying a model key rather than widening
    the grant. The Video SOP/BOM workload-profile templates are the worked example; their rules live
    in `genAi/videoSopBom/lambda/profileRules.py`, a byte-identical copy of the container's, so
-   `constructPipeline` refuses a bad profile before any AWS Batch job starts.
+   `constructPipeline` refuses a bad profile before any AWS Batch job starts. A pipeline offering a
+   provider that needs no IAM grant may let a template name that provider's model: the CAD STEP
+   agent's `MODEL_ID` tag selects an OpenAI model, and its `constructPipeline` refuses a Bedrock model
+   id other than the deployment's before the run starts.
 9. **A workflow ref's `jobName` is an output-path segment, not a display label.** It becomes the
    `{jobName}` folder in `{baseAssetsPrefix}pipelines/{pipelineName}/{jobName}/output/{executionId}/files/`
    — relative to the area VAMS owns in the default asset bucket, which

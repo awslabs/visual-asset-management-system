@@ -39,6 +39,8 @@ export interface CadStepAgentRunSettings {
     maxRunSeconds: number;
     allowInternetResearch: boolean;
     openAiEnabled: boolean;
+    /** The Bedrock model the container role's grant names; a run may not name another one. */
+    bedrockModelId: string;
 }
 
 function vpcProps(config: Config.Config, vpc: ec2.IVpc, subnets: ec2.ISubnet[]) {
@@ -73,6 +75,7 @@ export function buildConstructPipelineFunction(
             MAX_RUN_SECONDS: settings.maxRunSeconds.toString(),
             ALLOW_INTERNET_RESEARCH: settings.allowInternetResearch ? "true" : "false",
             OPENAI_ENABLED: settings.openAiEnabled ? "true" : "false",
+            BEDROCK_MODEL_ID: settings.bedrockModelId,
         },
     });
 

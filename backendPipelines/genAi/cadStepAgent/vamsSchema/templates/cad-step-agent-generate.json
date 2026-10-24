@@ -52,7 +52,7 @@
             "required": false,
             "default": "",
             "label": "Model ID override",
-            "description": "Optional model id for the chosen provider; empty uses the deployment default."
+            "description": "Optional model id. With openai it replaces the deployment's OpenAI model. With bedrock leave it empty: the run uses the deployment's Bedrock model, and any other Bedrock model id is refused before the run starts."
         },
         {
             "tagKey": "MAX_ATTEMPTS",

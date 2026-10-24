@@ -468,6 +468,16 @@ describe("CAD STEP agent grants (either runtime)", () => {
         }
     });
 
+    test("constructPipeline holds a run's Bedrock model id to the one the grant names", () => {
+        const construct = pipelineLambdas(synth).find((f) =>
+            /constructPipeline/.test(f.logicalId)
+        )!;
+        expect(construct).toBeDefined();
+        expect((construct.properties as any).Environment.Variables.BEDROCK_MODEL_ID).toBe(
+            "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        );
+    });
+
     test("a cross-Region inference profile grants the foundation model in every Region, never regionless", () => {
         const bedrock = policyStatements(synth).filter((s) =>
             actionsOf(s.statement).includes("bedrock:InvokeModel")
@@ -557,6 +567,12 @@ describe("CAD STEP agent with a plain model id and an existing guardrail", () =>
             expect(flat).not.toMatch(/:bedrock:\*::/);
             expect(flat).not.toMatch(/foundation-model\/\*/);
         }
+        const construct = pipelineLambdas(synth).find((f) =>
+            /constructPipeline/.test(f.logicalId)
+        )!;
+        expect((construct.properties as any).Environment.Variables.BEDROCK_MODEL_ID).toBe(
+            "anthropic.claude-sonnet-4-5-20250929-v1:0"
+        );
     });
 
     test("no guardrail is created; the configured one is applied and handed to the container", () => {

@@ -28,6 +28,7 @@ _ENV = {
     "MAX_RUN_SECONDS": "3600",
     "ALLOW_INTERNET_RESEARCH": "true",
     "OPENAI_ENABLED": "false",
+    "BEDROCK_MODEL_ID": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
 }
 
 
@@ -377,6 +378,39 @@ class TestConstructPipeline:
         for cfg in (_config(modelProvider="anthropic-direct"), _config(mode="transmute")):
             _, send_failure, exc = self._run(mod, _construct_event(), cfg)
             assert exc is not None and send_failure.call_count == 1
+
+    def test_a_bedrock_model_other_than_the_deployments_is_refused_before_the_run(self):
+        # The container role's grant names only the deployment's model, so another Bedrock model would
+        # fail at InvokeModel after the run had started.
+        mod = _load("constructPipeline.py")
+        other = "us.anthropic.claude-opus-4-1-20250805-v1:0"
+        resp, send_failure, exc = self._run(mod, _construct_event(), _config(modelId=other))
+        assert resp is None and exc is not None
+        assert "deployment's Bedrock model" in str(exc) and other not in str(exc)
+        assert send_failure.call_count == 1
+        assert send_failure.call_args.kwargs["taskToken"] == _TOKEN
+        assert other not in send_failure.call_args.kwargs["cause"]
+
+    def test_the_deployments_own_bedrock_model_may_be_named(self):
+        mod = _load("constructPipeline.py")
+        own = " global.anthropic.claude-sonnet-4-5-20250929-v1:0 "
+        resp, send_failure, exc = self._run(mod, _construct_event(), _config(modelId=own))
+        assert exc is None and send_failure.call_count == 0
+        assert json.loads(resp["definition"][0])["agent"]["modelId"] == own.strip()
+
+    def test_an_openai_model_id_is_not_held_to_the_bedrock_model(self):
+        mod = _load("constructPipeline.py", {"OPENAI_ENABLED": "true"})
+        resp, _, exc = self._run(mod, _construct_event(), _config(modelProvider="openai", modelId="gpt-4.1"))
+        assert exc is None
+        assert json.loads(resp["definition"][0])["agent"]["modelId"] == "gpt-4.1"
+
+    def test_without_the_deployment_model_every_bedrock_override_is_refused(self):
+        mod = _load("constructPipeline.py", {"BEDROCK_MODEL_ID": ""})
+        _, send_failure, exc = self._run(
+            mod, _construct_event(), _config(modelId="global.anthropic.claude-sonnet-4-5-20250929-v1:0"))
+        assert exc is not None and send_failure.call_count == 1
+        resp, _, exc = self._run(mod, _construct_event(), _config(modelId=""))
+        assert exc is None and json.loads(resp["definition"][0])["agent"]["modelId"] == ""
 
     def test_deployment_master_switch_wins_over_the_run_tag(self):
         mod = _load("constructPipeline.py", {"ALLOW_INTERNET_RESEARCH": "false"})

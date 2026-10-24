@@ -31,6 +31,10 @@ sfn = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us
 MAX_RUN_SECONDS = int(os.environ.get("MAX_RUN_SECONDS", "3600"))
 ALLOW_INTERNET_RESEARCH = os.environ.get("ALLOW_INTERNET_RESEARCH", "true").strip().lower() == "true"
 OPENAI_ENABLED = os.environ.get("OPENAI_ENABLED", "false").strip().lower() == "true"
+# The deployment's bedrockModelId, the one Bedrock model the container role's IAM grant names. A run
+# may name it again but no other Bedrock model, which would fail at InvokeModel after the run had
+# started. An OpenAI model id needs no IAM grant, so the override stays open for that provider.
+BEDROCK_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "").strip()
 DEFAULT_MODEL_PROVIDER = "bedrock"
 MODEL_PROVIDERS = ("bedrock", "openai")
 DEFAULT_MAX_ATTEMPTS = 4
@@ -94,9 +98,9 @@ def agent_settings(input_configuration):
     """The validated agent settings of a run, from the resolved template configuration.
 
     The configuration is the template's json body with its tags substituted (spec section 6), so the
-    keys here are the body's keys. Values are clamped to the deployment's bounds and unknown provider
-    or mode values are refused: a wrong provider would otherwise be discovered only after the
-    container has started.
+    keys here are the body's keys. Values are clamped to the deployment's bounds; unknown provider or
+    mode values, and a Bedrock model id other than the deployment's, are refused: each would otherwise
+    be discovered only after the container has started.
     """
     cfg = input_configuration if isinstance(input_configuration, dict) else {}
 
@@ -116,6 +120,11 @@ def agent_settings(input_configuration):
     if provider == "openai" and not OPENAI_ENABLED:
         raise ValueError("The openai model provider is not configured for this deployment")
 
+    model_id = str(cfg.get("modelId", "") or "").strip()
+    if provider == "bedrock" and model_id and model_id != BEDROCK_MODEL_ID:
+        raise ValueError("A bedrock model id override must name the deployment's Bedrock model; "
+                         "leave the model id empty to use it, or choose the openai provider")
+
     max_attempts = _as_int(cfg.get("maxAttempts"), DEFAULT_MAX_ATTEMPTS)
     max_attempts = max(1, min(MAX_ATTEMPTS_CEILING, max_attempts))
 
@@ -128,7 +137,7 @@ def agent_settings(input_configuration):
         # The deployment master switch is ANDed with the run's choice.
         "allowInternetResearch": ALLOW_INTERNET_RESEARCH and _as_bool(cfg.get("allowInternetResearch"), True),
         "modelProvider": provider,
-        "modelId": str(cfg.get("modelId", "") or "").strip(),
+        "modelId": model_id,
         "maxAttempts": max_attempts,
         "maxRunSeconds": MAX_RUN_SECONDS,
         "scriptTimeoutSeconds": DEFAULT_SCRIPT_TIMEOUT_SECONDS,
