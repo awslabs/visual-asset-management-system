@@ -604,21 +604,6 @@ Nested stack: `infra/lib/nestedStacks/apiLambda/apiBuilder-nestedStack.ts` (`Api
 | `app.metadataSchema.autoLoadDefaultAssetSchema`      | boolean | `true`  | Creates a GLOBAL schema named `defaultAsset` with a Location field (LLA - Latitude/Longitude/Altitude).                                                                             |
 | `app.metadataSchema.autoLoadDefaultAssetFileSchema`  | boolean | `true`  | Creates a GLOBAL schema named `defaultAssetFile3dModel` with a `Polygon_Count` field and file type restrictions for common 3D formats (.glb, .usd, .obj, .fbx, .gltf, .stl, .usdz). |
 
-## Compliance (`app.compliance`)
-
-Compliance deploys with every VAMS deployment: five Amazon DynamoDB tables, nine AWS Lambda functions, and the `/compliance/*` API routes for schema management, automated evaluation, quarantine management, cascade execution, and audit logging. There is no enable switch; access to the routes is governed by permissions like every other page. These two fields tune its behavior.
-
-| Field                                     | Type    | Default | Description                                                                                                                                                                                                                                                                                     |
-| ----------------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.compliance.autoLoadDefaultSchema`    | boolean | `true`  | Deploys a default global compliance schema (`default-compliance-schema`) that validates a bound asset's metadata against the default asset metadata schema at the `warn` level. Set to `false` to skip.                                                                                         |
-| `app.compliance.quarantineBlocksDownload` | boolean | `false` | When `true`, the asset download, stream, export (presigned file URLs) and auxiliary-preview stream endpoints refuse a quarantined asset unless it has an active exception. When `false` (default), quarantine is informational only — the UI displays a warning but downloads proceed normally. |
-
-The default compliance schema's single rule validates assets against the GLOBAL `defaultAsset` metadata schema, which is created by `app.metadataSchema.autoLoadDefaultAssetSchema`. Deployment validation rejects a configuration that sets `app.compliance.autoLoadDefaultSchema` to `true` while `app.metadataSchema.autoLoadDefaultAssetSchema` is `false`: without the metadata schema the rule has no fields to check, so the seeded schema would report every asset compliant. Disable both flags to run without the default schemas, or keep both enabled.
-
-The default schema is written once: a redeploy leaves an existing `default-compliance-schema` row in place.
-
-**Authorization:** The default admin role is granted full access to all compliance operations. For non-admin users, use the `compliance-admin` or `compliance-readonly` permission templates (in `documentation/permissionsTemplates/`) to grant scoped access. Compliance uses three dedicated Casbin object types: `complianceSchema`, `complianceEvaluation`, and `complianceCascade`. See [Permissions Model: Compliance Routes](../concepts/permissions-model.md#compliance-routes) for details.
-
 ## Processing pipelines (`app.pipelines`)
 
 :::note[Implemented by]
@@ -822,13 +807,15 @@ Nested stack: `infra/lib/nestedStacks/pipelines/multi/rapidPipelineEKS/rapidPipe
 | `app.pipelines.useRapidPipeline.useEks.minNodes`                              | number  | `1`                       | Minimum worker nodes in the auto-scaling group.                                        |
 | `app.pipelines.useRapidPipeline.useEks.maxNodes`                              | number  | `10`                      | Maximum worker nodes in the auto-scaling group.                                        |
 | `app.pipelines.useRapidPipeline.useEks.desiredNodes`                          | number  | `2`                       | Desired worker node count under normal operation.                                      |
-| `app.pipelines.useRapidPipeline.useEks.jobTimeout`                            | number  | `7200`                    | Maximum job runtime in seconds (default: 2 hours).                                     |
+| `app.pipelines.useRapidPipeline.useEks.jobTimeout`                            | number  | `7200`                    | Maximum job runtime in seconds, at most 14400 (default: 2 hours).                      |
 | `app.pipelines.useRapidPipeline.useEks.jobMemory`                             | string  | `16Gi`                    | Memory allocation per Kubernetes job pod.                                              |
 | `app.pipelines.useRapidPipeline.useEks.jobCpu`                                | string  | `2000m`                   | CPU allocation per Kubernetes job pod in millicores.                                   |
 | `app.pipelines.useRapidPipeline.useEks.jobBackoffLimit`                       | number  | `2`                       | Number of retries before marking a job as failed.                                      |
 | `app.pipelines.useRapidPipeline.useEks.jobTTLSecondsAfterFinished`            | number  | `600`                     | Seconds to retain completed job pods before cleanup.                                   |
 | `app.pipelines.useRapidPipeline.useEks.observability.enableControlPlaneLogs`  | boolean | `false`                   | Enables EKS control plane logging to Amazon CloudWatch. Incurs additional costs.       |
 | `app.pipelines.useRapidPipeline.useEks.observability.enableContainerInsights` | boolean | `false`                   | Enables Amazon CloudWatch Container Insights for the cluster. Incurs additional costs. |
+
+`jobTimeout` bounds the Kubernetes job. The pipeline's whole run (the job, the steps that prepare and submit it, the status checks while it runs and the step that reports the outcome) must fit in the pipeline's 21600-second (6-hour) state machine timeout, and synthesis rejects a `jobTimeout` whose longest run does not fit or that exceeds 14400. The registered pipeline's task timeout is 23400 seconds, 30 minutes longer than the state machine timeout, so the workflow is still waiting when the pipeline reports.
 
 ### ModelOps (`app.pipelines.useModelOps`)
 

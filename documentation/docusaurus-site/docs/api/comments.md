@@ -70,7 +70,7 @@ Retrieves every comment on an asset, across all of its versions, newest first.
 | Status | Description                                                                   |
 | ------ | ----------------------------------------------------------------------------- |
 | `400`  | Invalid `assetId`, or an `assetId` that resolves to more than one live asset. |
-| `403`  | Not authorized to read this asset.                                            |
+| `403`  | Not authorized to call this route or to read this asset.                      |
 | `404`  | Asset not found.                                                              |
 | `405`  | Method not allowed.                                                           |
 | `500`  | Internal server error.                                                        |
@@ -102,7 +102,7 @@ Same shape as [List comments for an asset](#list-comments-for-an-asset), restric
 | Status | Description                                                                   |
 | ------ | ----------------------------------------------------------------------------- |
 | `400`  | Invalid `assetId`, or an `assetId` that resolves to more than one live asset. |
-| `403`  | Not authorized to read this asset.                                            |
+| `403`  | Not authorized to call this route or to read this asset.                      |
 | `404`  | Asset not found.                                                              |
 | `500`  | Internal server error.                                                        |
 
@@ -143,7 +143,7 @@ A comment that does not exist returns `200` with an empty `message` object rathe
 | Status | Description                                                               |
 | ------ | ------------------------------------------------------------------------- |
 | `400`  | Invalid `assetId` or comment ID, or a malformed composite path parameter. |
-| `403`  | Not authorized to read this asset.                                        |
+| `403`  | Not authorized to call this route or to read this asset.                  |
 | `404`  | Asset not found.                                                          |
 | `500`  | Internal server error.                                                    |
 
@@ -254,12 +254,12 @@ Soft-deletes a comment. Only the comment's owner can delete it.
 
 **Error Responses:**
 
-| Status | Description                                                                     |
-| ------ | ------------------------------------------------------------------------------- |
-| `400`  | Missing path parameters, or a malformed composite path parameter.               |
-| `403`  | Not authorized to delete on this asset, or the caller does not own the comment. |
-| `404`  | Asset not found, or the comment does not exist.                                 |
-| `500`  | Internal server error.                                                          |
+| Status | Description                                                                                           |
+| ------ | ----------------------------------------------------------------------------------------------------- |
+| `400`  | Missing path parameters, or a malformed composite path parameter.                                     |
+| `403`  | Not authorized to call this route or to delete on this asset, or the caller does not own the comment. |
+| `404`  | Asset not found, or the comment does not exist.                                                       |
+| `500`  | Internal server error.                                                                                |
 
 ---
 

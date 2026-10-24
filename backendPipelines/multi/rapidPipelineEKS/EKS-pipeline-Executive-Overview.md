@@ -115,7 +115,7 @@ User uploads 3D file → VAMS UI → Lambda → Step Functions → EKS Cluster �
 -   Visual workflow monitoring
 -   Built-in retry logic
 -   10-second polling for job status
--   4-hour maximum timeout protection
+-   6-hour maximum timeout protection
 -   Comprehensive error handling
 
 **States:** 15+ states with error handling at each step
@@ -162,7 +162,7 @@ User uploads 3D file → VAMS UI → Lambda → Step Functions → EKS Cluster �
 
 -   **States:** 15+ with error handling
 -   **Polling:** 10-second intervals
--   **Timeout:** 4 hours maximum
+-   **Timeout:** 6 hours for the state machine; the Kubernetes job is bounded by `useEks.jobTimeout`
 -   **Retries:** 2 attempts per job
 
 ### 5. Networking
