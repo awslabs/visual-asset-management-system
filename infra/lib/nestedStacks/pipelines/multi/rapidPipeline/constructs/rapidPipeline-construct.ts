@@ -376,9 +376,15 @@ export class RapidPipelineConstruct extends NestedStack {
         // const securityGroup = new cdk.aws_ec2.SecurityGroup(this, "RapidPipelineTaskRunSG", { vpc: props.vpc, allowAllOutbound: true });
         // securityGroup.addIngressRule(Peer.anyIpv4(), Port.tcp(443), "Allow HTTPS access");
 
-        // Step function task for ECS
+        // Step function task for ECS. The .sync pattern waits for the task to stop however long it
+        // runs, so the state carries a task-level timeout: a task that reaches it fails the state with
+        // States.Timeout, which the catch below routes to PipelineEndTask, and the run fits in the
+        // state machine timeout (the chain in config.ts).
         const runRapidPipelineJob = new tasks.EcsRunTask(this, "RapidPipelineRunFargate", {
             integrationPattern: sfn.IntegrationPattern.RUN_JOB,
+            taskTimeout: sfn.Timeout.duration(
+                Duration.seconds(Config.RAPID_PIPELINE_ECS_FARGATE_TASK_TIMEOUT_SECONDS)
+            ),
             cluster,
             taskDefinition,
             assignPublicIp: false,
@@ -441,7 +447,9 @@ export class RapidPipelineConstruct extends NestedStack {
             "RapidPipelineProcessing-StateMachine",
             {
                 definitionBody: sfn.DefinitionBody.fromChainable(sfnPipelineDefinition),
-                timeout: Duration.hours(5),
+                // The middle link of the timeout chain in config.ts: the Fargate task bound and the
+                // two Lambda steps fit inside it, and the registered pipeline's taskTimeout outlasts it.
+                timeout: Duration.seconds(Config.RAPID_PIPELINE_ECS_STATE_MACHINE_TIMEOUT_SECONDS),
                 logs: {
                     destination: stateMachineLogGroup,
                     includeExecutionData: true,

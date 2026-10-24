@@ -153,6 +153,33 @@ export function rapidPipelineEksWorstCaseRunSeconds(jobTimeoutSeconds: number): 
     );
 }
 
+// The RapidPipeline (Amazon ECS) timeout chain. The same three clocks bound a run and must nest the
+// same way, so that the parent workflow is still waiting when the run reports its outcome:
+//
+//   ConstructPipeline + Fargate task + PipelineEnd  <=  state machine timeout  <  bundle taskTimeout
+//
+// The Fargate task is a `.sync` ECS RunTask, which waits for the task to stop however long it runs,
+// so the construct gives that state a task-level timeout. A task-level States.Timeout is a state error
+// that the task's Catch routes to PipelineEnd, which reports the failure to the parent workflow; an
+// execution-level States.Timeout bypasses every Catch, so PipelineEnd would not run. ConstructPipeline
+// and PipelineEnd are bounded by their Lambda functions' timeouts, set in the pipeline's lambda
+// builder, so the CONSTRUCT_PIPELINE and PIPELINE_END values below are the budget counted for them,
+// and infra/test/pipelines/ecsTimeoutHeadroom.test.ts fails if the emitted functions exceed it. The
+// 17100 s task bound leaves 300 s of the 18000 s state machine timeout after both Lambda steps, which
+// covers the backoff of their service-exception retries. The bundle's taskTimeout, declared in
+// backendPipelines/multi/rapidPipeline/vamsSchema/pipeline.json, is 30 minutes longer than the state
+// machine timeout, because the parent's task starts before the state machine does: vamsExecute
+// invokes openPipeline and waits for it, openPipeline starts the execution, and vamsExecute's
+// five-minute timeout bounds both.
+//
+// The construct reads the state machine timeout and the Fargate task timeout from here; the bundle
+// taskTimeout is what the tests compare pipeline.json and the state machine timeout with.
+export const RAPID_PIPELINE_ECS_STATE_MACHINE_TIMEOUT_SECONDS = 18000;
+export const RAPID_PIPELINE_ECS_FARGATE_TASK_TIMEOUT_SECONDS = 17100;
+export const RAPID_PIPELINE_ECS_BUNDLE_TASK_TIMEOUT_SECONDS = 19800;
+export const RAPID_PIPELINE_ECS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_ECS_PIPELINE_END_TIMEOUT_SECONDS = 300;
+
 // ============================================================================================
 // Constants used only to check configuration
 //
