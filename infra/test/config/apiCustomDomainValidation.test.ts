@@ -268,7 +268,7 @@ describe("app.api.apiGatewayRest.customDomain validation", () => {
         const run = loadConfig(commercialTemplate, "us-east-1", (c) => {
             enable("aws", "us-east-1", { domainHost: c.app.useAlb.domainHost })(c);
         });
-        expect((commercialTemplate as any).app.useAlb.enabled).toBe(false);
+        expect(commercialTemplate.app.useAlb.enabled).toBe(false);
         expect(run).not.toThrow(ANY_CUSTOM_DOMAIN_ERROR);
     });
 
