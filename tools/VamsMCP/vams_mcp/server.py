@@ -475,8 +475,15 @@ def _build_search_request(
         "explainResults": False,
         "includeMetadataInSearch": True,
         # Relevance ordering by default; a named field replaces it so "the 10 most recent" is
-        # expressible at all.
-        "sort": [{sort_field: {"order": "desc" if sort_desc else "asc"}}] if sort_field else ["_score"],
+        # expressible at all. The entry is `{field, order}` (SearchSortModel in
+        # backend/backend/models/search.py), the shape the CLI's `_build_sort_config` sends; the
+        # search handler converts it to OpenSearch's native `{<field>: {order}}` itself, and the
+        # request model rejects the native form with 400.
+        "sort": (
+            [{"field": sort_field, "order": "desc" if sort_desc else "asc"}]
+            if sort_field
+            else ["_score"]
+        ),
     }
     if query:
         request["query"] = query
@@ -545,8 +552,10 @@ def search_assets(
       total, page on by re-issuing the same query with from_offset advanced by size rather than by
       raising size to swallow everything.
     - sort_field / sort_desc: order by an indexed field instead of relevance, e.g.
-      sort_field="dateCreated" for the most recent first. Call get_search_fields() for the field
-      names. Ordering by relevance (the default) cannot answer "the newest N".
+      sort_field="str_assetname", sort_desc=False for name order, or
+      sort_field="date_asset_version_createdate" for the most recently versioned first. Index
+      field names carry a type prefix; call get_search_fields() for them. Ordering by relevance
+      (the default) cannot answer "the newest N".
 
     Returns a compact list of hits (id, score, source fields). On a deployment without OpenSearch
     (NOOPENSEARCH) it returns an error and sends no request."""
@@ -577,7 +586,9 @@ def search_files(
     """Full-text / metadata / geospatial search across asset files (OpenSearch).
 
     Takes the same database_id, metadata_query, geo_search, paging (size / from_offset) and ordering
-    (sort_field / sort_desc) semantics as search_assets, and the same NOOPENSEARCH error."""
+    (sort_field / sort_desc) semantics as search_assets, and the same NOOPENSEARCH error. File
+    index fields differ from the asset index: e.g. sort_field="date_lastmodified" for the most
+    recently modified files first."""
     _require_search()
     request = _build_search_request(
         ["file"], query, database_id, metadata_query, size, include_archived, geo_search,
