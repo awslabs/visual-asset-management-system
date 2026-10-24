@@ -12,11 +12,10 @@ import { Stack, NestedStack } from "aws-cdk-lib";
 import { SecurityGroupGatewayPipelineConstruct } from "./constructs/securitygroup-gateway-pipeline-construct";
 import { PcPotreeViewerBuilderNestedStack } from "./preview/pcPotreeViewer/pcPotreeViewerBuilder-nestedStack";
 import { SplatToolboxBuilderNestedStack } from "./3dRecon/splatToolbox/splatToolboxBuilder-nestedStack";
-import { Metadata3dLabelingNestedStack } from "./genAi/metadata3dLabeling/metadata3dLabelingBuilder-nestedStack";
+import { SystemGenAiMetadataNestedStack } from "./system/genAiMetadata/systemGenAiMetadataBuilder-nestedStack";
 import { RapidPipelineNestedStack } from "./multi/rapidPipeline/rapidPipeline-nestedStack";
 import { RapidPipelineEKSNestedStack } from "./multi/rapidPipelineEKS/rapidPipelineEKS-nestedStack";
 import { Conversion3dBasicNestedStack } from "./conversion/3dBasic/conversion3dBasicBuilder-nestedStack";
-import { ConversionMeshCadMetadataExtractionNestedStack } from "./conversion/meshCadMetadataExtraction/conversionMeshCadMetadataExtractionBuilder-nestedStack";
 import { CoordinateTransformBuilderNestedStack } from "./conversion/coordinateTransform/coordinateTransformBuilder-nestedStack";
 import { VideoSopBomBuilderNestedStack } from "./genAi/videoSopBom/videoSopBomBuilder-nestedStack";
 import { ModelOpsNestedStack } from "./multi/modelOps/modelOps-nestedStack";
@@ -256,27 +255,26 @@ export class PipelineBuilderNestedStack extends NestedStack {
             }
         }
 
-        if (props.config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled) {
-            const conversionMeshCadMetadataExtractionPipelineNestedStack =
-                new ConversionMeshCadMetadataExtractionNestedStack(
-                    this,
-                    "ConversionMeshCadMetadataExtractionNestedStack",
-                    {
-                        ...props,
-                        config: props.config,
-                        storageResources: props.storageResources,
-                        vpc: props.vpc,
-                        pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
-                        pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
-                        lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                        importGlobalPipelineWorkflowV2FunctionName:
-                            props.importGlobalPipelineWorkflowV2FunctionName,
-                    }
-                );
+        if (props.config.app.pipelines.useSystemGenAiMetadata.enabled) {
+            const systemGenAiMetadataNestedStack = new SystemGenAiMetadataNestedStack(
+                this,
+                "SystemGenAiMetadataNestedStack",
+                {
+                    ...props,
+                    config: props.config,
+                    storageResources: props.storageResources,
+                    vpc: props.vpc,
+                    pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
+                    pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
+                }
+            );
 
             //Add function name to array for stack output
             this.pipelineVamsLambdaFunctionNames.push(
-                conversionMeshCadMetadataExtractionPipelineNestedStack.pipelineVamsLambdaFunctionName
+                systemGenAiMetadataNestedStack.pipelineVamsLambdaFunctionName
             );
         }
 
@@ -284,7 +282,6 @@ export class PipelineBuilderNestedStack extends NestedStack {
         if (
             props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
             props.config.app.pipelines.usePreview3dThumbnail.enabled ||
-            props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
             props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
             props.config.app.pipelines.useGenAiVideoSopBom?.enabled ||
             props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
@@ -381,29 +378,6 @@ export class PipelineBuilderNestedStack extends NestedStack {
                 //Add function name to array for stack output
                 this.pipelineVamsLambdaFunctionNames.push(
                     preview3dThumbnailPipelineNestedStack.pipelineVamsLambdaFunctionName
-                );
-            }
-
-            if (props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled) {
-                const genAiMetadata3dLabelingNestedStack = new Metadata3dLabelingNestedStack(
-                    this,
-                    "GenAiMetadata3dLabelingNestedStack",
-                    {
-                        ...props,
-                        config: props.config,
-                        storageResources: props.storageResources,
-                        lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                        vpc: props.vpc,
-                        pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
-                        pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
-                        importGlobalPipelineWorkflowV2FunctionName:
-                            props.importGlobalPipelineWorkflowV2FunctionName,
-                    }
-                );
-
-                //Add function name to array for stack output
-                this.pipelineVamsLambdaFunctionNames.push(
-                    genAiMetadata3dLabelingNestedStack.pipelineVamsLambdaFunctionName
                 );
             }
 

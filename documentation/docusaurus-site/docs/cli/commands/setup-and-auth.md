@@ -419,6 +419,7 @@ Output includes total count, list of enabled feature names, and last updated tim
 | `ALBDEPLOY`                     | Application Load Balancer deployment mode                                     |
 | `CLOUDFRONTDEPLOY`              | Amazon CloudFront deployment mode                                             |
 | `NOOPENSEARCH`                  | Disable Amazon OpenSearch Service functionality                               |
+| `VECTORSEARCH`                  | Natural-language (vector) search over files; enables `search nlp`             |
 | `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                        |
 | `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito user pool federated to a SAML identity provider                |
 | `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito user pool federated to an OIDC identity provider               |

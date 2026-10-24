@@ -9,12 +9,13 @@
  * create the endpoints the container calls: Batch, ECR (API and Docker), Amazon S3, CloudWatch Logs, Step
  * Functions (the task-token callback), Amazon Transcribe and Amazon Bedrock Runtime.
  *
- * The two Bedrock arms are the point of the file. Bedrock Runtime's endpoint used to be gated on
- * `useForAllLambdas && useGenAiMetadata3dLabeling.enabled`, a Lambda-centric condition; the container has
- * no NAT, so with that gate every Bedrock call from this pipeline would resolve the public hostname and
- * hang until the connect timeout. The gate is now the OR of two named booleans, and the control and the
- * negative arm pin that widening it for the container did not loosen the Lambda half: the labeling
- * pipeline still gets the endpoint only when its Lambda is in the VPC.
+ * The two Bedrock arms are the point of the file. Bedrock Runtime's Lambda-side gate is
+ * `useForAllLambdas && (useSystemGenAiMetadata.enabled || vectorSearch.enabled)`; the container has no
+ * NAT, so with that gate alone every Bedrock call from this pipeline would resolve the public hostname
+ * and hang until the connect timeout. The gate is the OR of named booleans, and the control and the
+ * negative arm pin that widening it for the container did not loosen the Lambda half: the SYSTEM GenAI
+ * metadata pipeline still gets the endpoint only when its Lambdas are in the VPC. Vector search is off
+ * in every synth here, so the search Lambda's placement does not contribute.
  */
 
 import { SynthResult, synthTemplate } from "../support/templateSynth";
@@ -29,6 +30,7 @@ function onlyPipeline(flag: string, useForAllLambdas: boolean) {
         // contribution entirely.
         c.app.useAlb.enabled = false;
         c.app.useCloudFront.enabled = true;
+        c.app.vectorSearch.enabled = false;
         for (const name of Object.keys(c.app.pipelines)) {
             const entry = c.app.pipelines[name];
             if (entry && typeof entry === "object" && "enabled" in entry) {
@@ -63,6 +65,13 @@ function endpointServices(synth: SynthResult): string[] {
     return synth
         .ofType("AWS::EC2::VPCEndpoint")
         .map((e) => SynthResult.flatten((e.properties as any).ServiceName));
+}
+
+/** The SYSTEM GenAI metadata pipeline's Lambda functions — the marker that its resources are in the synth. */
+function systemGenAiFunctions(synth: SynthResult) {
+    return synth
+        .ofType("AWS::Lambda::Function")
+        .filter((f) => f.logicalId.startsWith("SystemGenAiMetadata"));
 }
 
 /** The Fargate compute environments — the marker that a Fargate pipeline's resources are in the synth. */
@@ -122,18 +131,18 @@ describe("the video SOP/BOM pipeline runs in isolated subnets and reaches its se
     });
 });
 
-describe("[control] the labeling pipeline with in-VPC lambdas keeps Bedrock Runtime and gets no Transcribe", () => {
+describe("[control] the SYSTEM GenAI pipeline with in-VPC lambdas keeps Bedrock Runtime and gets no Transcribe", () => {
     let synth: SynthResult;
 
     beforeAll(() => {
         synth = synthTemplate("commercial", {
-            mutate: onlyPipeline("useGenAiMetadata3dLabeling", true),
-            mutateKey: "vpc-only-metadata-labeling-lambdas-in-vpc",
+            mutate: onlyPipeline("useSystemGenAiMetadata", true),
+            mutateKey: "vpc-only-system-genai-lambdas-in-vpc",
         });
     });
 
-    test("[control] the labeling pipeline's resources ARE in this synth", () => {
-        expect(fargateComputeEnvironments(synth).length).toBeGreaterThan(0);
+    test("[control] the SYSTEM GenAI pipeline's resources ARE in this synth", () => {
+        expect(systemGenAiFunctions(synth).length).toBeGreaterThan(0);
     });
 
     test("Bedrock Runtime is present and Transcribe is absent", () => {
@@ -143,22 +152,22 @@ describe("[control] the labeling pipeline with in-VPC lambdas keeps Bedrock Runt
     });
 });
 
-describe("the widened Bedrock gate leaves the labeling pipeline alone when lambdas are outside the VPC", () => {
+describe("the widened Bedrock gate leaves the SYSTEM GenAI pipeline alone when lambdas are outside the VPC", () => {
     let synth: SynthResult;
 
     beforeAll(() => {
         synth = synthTemplate("commercial", {
-            mutate: onlyPipeline("useGenAiMetadata3dLabeling", false),
-            mutateKey: "vpc-only-metadata-labeling-lambdas-outside-vpc",
+            mutate: onlyPipeline("useSystemGenAiMetadata", false),
+            mutateKey: "vpc-only-system-genai-lambdas-outside-vpc",
         });
     });
 
-    test("[control] the labeling pipeline's resources ARE in this synth", () => {
-        expect(fargateComputeEnvironments(synth).length).toBeGreaterThan(0);
+    test("[control] the SYSTEM GenAI pipeline's resources ARE in this synth", () => {
+        expect(systemGenAiFunctions(synth).length).toBeGreaterThan(0);
     });
 
     test("neither Bedrock Runtime nor Transcribe is created", () => {
-        // The labeling Lambda is outside the VPC here and reaches Bedrock over the public endpoint; an
+        // The analysis Lambdas are outside the VPC here and reach Bedrock over the public endpoint; an
         // interface endpoint would bill one ENI per AZ with no consumer.
         const services = endpointServices(synth);
         expect(services.filter((s) => /\.bedrock-runtime$/.test(s))).toEqual([]);

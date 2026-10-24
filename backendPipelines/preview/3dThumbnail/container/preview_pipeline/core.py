@@ -31,6 +31,7 @@ from . import geometry_budget
 from . import renderer
 from . import resources
 from .utils.timing import PhaseTimer
+from .analysis import workdirs
 
 logger = get_logger()
 
@@ -625,6 +626,10 @@ def _normalize_up_axis(pv_data, ext: str):
     return pv_data
 
 
+# Public name for callers outside the Fargate runner.
+normalize_up_axis = _normalize_up_axis
+
+
 def _rotate_z_up_to_y_up(pv_data):
     """
     Rotate data from Z-up to Y-up by applying a -90 degree rotation around the X-axis.
@@ -679,8 +684,9 @@ def _check_existing_preview(stage_input: StageInput, input_basename: str, localT
 
 
 def _create_dir(parts: list) -> str:
-    """Create a directory from path parts if it doesn't exist."""
-    dir_path = os.path.join(*parts)
+    """Create a directory from path parts if it doesn't exist. Relative parts resolve against the
+    runtime's work root: ``/tmp`` in Lambda, the cwd in the Fargate container."""
+    dir_path = os.path.join(workdirs.work_root(), *parts)
     if not os.path.exists(dir_path):
         Path(dir_path).mkdir(parents=True)
     return dir_path

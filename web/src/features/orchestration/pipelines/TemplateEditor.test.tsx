@@ -164,3 +164,31 @@ describe("TemplateEditor delete warnings", () => {
         expect(mockToast.warning).not.toHaveBeenCalled();
     });
 });
+
+/**
+ * Templates of a system pipeline can be edited (config body, tag schema) but neither added nor
+ * deleted — the backend refuses both with a 400, so the board withholds the controls.
+ */
+describe("TemplateEditor on a system pipeline", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    it("hides Create Template and Delete but keeps Edit", () => {
+        const { usePipeline } = require("../api/queries");
+        usePipeline.mockReturnValue({ data: { pipelineName: "P1", isSystem: true } });
+        setup([T_FREE]);
+        expect(screen.queryByRole("button", { name: "Create Template" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+        expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+        expect(screen.getByText(/System pipeline/)).toBeInTheDocument();
+    });
+
+    it("keeps every control for an ordinary pipeline", () => {
+        const { usePipeline } = require("../api/queries");
+        usePipeline.mockReturnValue({ data: { pipelineName: "P1", isSystem: false } });
+        setup([T_FREE]);
+        expect(screen.getByRole("button", { name: "Create Template" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+        expect(screen.queryByText(/System pipeline/)).toBeNull();
+    });
+});

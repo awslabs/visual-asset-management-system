@@ -154,7 +154,7 @@ function allFargatePipelinesWithCmk(c: any) {
     c.app.useKmsCmkEncryption.enabled = true;
     for (const flag of [
         "useConversionCoordinateTransform",
-        "useGenAiMetadata3dLabeling",
+        "useSystemGenAiMetadata",
         "usePreview3dThumbnail",
         "usePreviewPcPotreeViewer",
         "useGenAiVideoSopBom",
@@ -164,6 +164,8 @@ function allFargatePipelinesWithCmk(c: any) {
             c.app.pipelines[flag].autoRegisterWithVAMS = false;
         }
     }
+    // The system GenAI metadata pipeline builds its Fargate job definition on this sub-flag only.
+    c.app.pipelines.useSystemGenAiMetadata.useFargateRenderer = true;
     c.app.pipelines.useGenAiVideoSopBom.useCodeBuild = true;
 }
 
@@ -204,9 +206,9 @@ describe("every Fargate job definition logs to a VAMS-owned group", () => {
     });
 
     test("[control] the six Fargate job definitions are emitted in this synth", () => {
-        // Coordinate transform, Blender renderer, 3D thumbnail, PDAL and Potree, and the video SOP/BOM
-        // job. A lower count means a pipeline was left out of the mutate, and the loop below would then
-        // assert on nothing for it.
+        // Coordinate transform, the system GenAI metadata renderer, 3D thumbnail, PDAL and Potree,
+        // and the video SOP/BOM job. A lower count means a pipeline was left out of the mutate, and
+        // the loop below would then assert on nothing for it.
         expect(fargateJobDefinitions(synth)).toHaveLength(6);
     });
 

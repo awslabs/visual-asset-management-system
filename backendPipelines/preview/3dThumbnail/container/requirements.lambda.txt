@@ -1,0 +1,22 @@
+# Exact pins for the Lambda 3D render image, resolved for CPython 3.12 on manylinux (glibc 2.34, the
+# public.ecr.aws/lambda/python:3.12 base). Every package installs from a binary wheel; the image carries
+# no compiler.
+boto3==1.43.89
+botocore==1.43.89
+pyvista==0.49.0
+vtk==9.6.2
+trimesh==4.12.2
+numpy==2.4.6
+scipy==1.18.1
+laspy[lazrs]==2.7.0
+lazrs==0.8.2
+pye57==0.4.19
+cadquery==2.8.0
+cadquery-ocp==7.9.3.1.1
+Pillow==12.3.0
+DracoPy==1.7.0
+usd-core==25.11
+ezdxf==1.4.4
+ifcopenshell==0.8.5
+lxml==6.1.3
+networkx==3.6.1

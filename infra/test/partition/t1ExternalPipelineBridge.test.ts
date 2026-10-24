@@ -385,18 +385,20 @@ describe("SSM integration surface", () => {
         const canonical = Object.values(RESOURCE_PARAM_KEYS).flatMap((category) =>
             Object.values(category as Record<string, string>)
         );
-        // crOsReindexer is published only when the reindexer is built (search enabled), so it is the
-        // one canonical key allowed to be absent.
-        const required = canonical.filter(
-            (key) => key !== RESOURCE_PARAM_KEYS.lambdaFunctions.crOsReindexer
-        );
+        // The two reindexer names are published only when their function is built (OpenSearch or
+        // vector search enabled), so they are the canonical keys allowed to be absent.
+        const optional = new Set<string>([
+            RESOURCE_PARAM_KEYS.lambdaFunctions.crOsReindexer,
+            RESOURCE_PARAM_KEYS.lambdaFunctions.vectorReindexer,
+        ]);
+        const required = canonical.filter((key) => !optional.has(key));
         for (const key of required) {
             expect(names.filter((n) => n.endsWith(`/resourceNames/${key}`))).toHaveLength(1);
         }
-        // 71 registry parameters (ResourceNamesBuilder) + the two late-bound ones here, plus the
-        // reindexer when search is enabled.
-        expect(names.length).toBeGreaterThanOrEqual(73);
-        expect(names.length).toBeLessThanOrEqual(74);
+        // 73 registry parameters (ResourceNamesBuilder) + the two late-bound ones here, plus one
+        // reindexer name per enabled search engine.
+        expect(names.length).toBeGreaterThanOrEqual(75);
+        expect(names.length).toBeLessThanOrEqual(77);
     });
 
     test.each(ALL_TEMPLATES)("%s binds the workflow role ARN parameter to the role", (name) => {

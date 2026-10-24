@@ -65,6 +65,9 @@ export const RESOURCE_PARAM_KEYS = {
         pipelineTemplateTagSchemaStorage: "dynamoTables/pipelineTemplateTagSchemaStorage",
         workflowStorageV2: "dynamoTables/workflowStorageV2",
         workflowTriggersStorage: "dynamoTables/workflowTriggersStorage",
+        workflowExecutionLocksStorage: "dynamoTables/workflowExecutionLocksStorage",
+        // Vector search tables
+        vectorEmbeddingsStorage: "dynamoTables/vectorEmbeddingsStorage",
         // Compliance tables
         complianceSchemaStorage: "dynamoTables/complianceSchemaStorage",
         complianceAssetStateStorage: "dynamoTables/complianceAssetStateStorage",
@@ -85,6 +88,7 @@ export const RESOURCE_PARAM_KEYS = {
     // Lambda function names consumed by data-migration tooling and external bridge stacks
     lambdaFunctions: {
         crOsReindexer: "lambdaFunctions/crOsReindexer",
+        vectorReindexer: "lambdaFunctions/vectorReindexer",
         importGlobalPipelineWorkflow: "lambdaFunctions/importGlobalPipelineWorkflow",
     },
     // Integration surface an externally owned pipeline bridge stack resolves at deploy time

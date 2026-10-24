@@ -282,12 +282,12 @@ describe("deploy-time trigger enable across the pipeline constructs", () => {
 
     test("the scan reaches the Isaac Lab construct and the video SOP/BOM construct", () => {
         // Positive control for the exclusion below: a walk that found the wrong directory would report
-        // the Isaac Lab construct as passing no triggerEnabled without ever reading it. Seventeen
+        // the Isaac Lab construct as passing no triggerEnabled without ever reading it. Sixteen
         // `-construct.ts` files register a bundle; the video SOP/BOM construct is the one that registers
         // a bundle shipping no trigger, so it is named as well as counted.
         expect(registering).toContain("isaacLabTraining-construct.ts");
         expect(registering).toContain("videoSopBom-construct.ts");
-        expect(registering.length).toBeGreaterThanOrEqual(17);
+        expect(registering.length).toBeGreaterThanOrEqual(16);
     });
 
     test("the Isaac Lab construct wires no deploy-time trigger enable", () => {
@@ -296,15 +296,14 @@ describe("deploy-time trigger enable across the pipeline constructs", () => {
 
     test("the constructs that own a trigger still wire it", () => {
         expect(wiringTriggerEnabled).toEqual([
-            "conversionMeshCadMetadataExtraction-construct.ts",
             "coordinateTransform-construct.ts",
             "cosmos3-construct.ts",
             "cosmosPredict-construct.ts",
             "cosmosReason-construct.ts",
             "cosmosTransfer-construct.ts",
-            "metadata3dLabeling-construct.ts",
             "pcPotreeViewer-construct.ts",
             "preview3dThumbnail-construct.ts",
+            "systemGenAiMetadata-construct.ts",
         ]);
     });
 });

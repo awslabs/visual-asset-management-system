@@ -135,7 +135,8 @@ class TestLegitimateNamesStillAccepted:
         "RapidPipeline (EKS)",
         "Point Cloud Potree Viewer",
     )
-    BUILT_IN_CATEGORIES = ("3D Reconstruction", "Conversion", "GenAI", "Preview", "Simulation")
+    BUILT_IN_CATEGORIES = ("3D Reconstruction", "Conversion", "GenAI", "Preview", "Simulation",
+                           "SYSTEM - Preview", "SYSTEM - GenAI")
 
     @pytest.mark.parametrize("name", BUILT_IN_NAMES)
     def test_built_in_pipeline_names_accepted(self, name):

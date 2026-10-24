@@ -138,6 +138,9 @@ asymmetry other callers rely on):
    `revoke_quarantine_exception` is write-tier too, although it can put an asset back
    into quarantine (and notify its subscribers) — it only restores the asset's last
    recorded verdict.
+   The same three-place rule covers a read that BILLS on every call: `search_nlp`
+   embeds the query with Bedrock, so it stays out of `autoApprove` and its docstring
+   says so.
    The same three-place rule holds for the tools that RETURN a credential:
    `create_api_key` and `create_user_api_key` (write tier) hand back the one-time
    API key value, a bearer token with the acting user's permissions, so both stay out

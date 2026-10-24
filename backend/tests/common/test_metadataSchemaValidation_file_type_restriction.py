@@ -21,7 +21,7 @@ Two things this file exists to stop drifting:
 
 * **The returned form stays DOTTED** (`.glb`). It is compared at `get_aggregated_schemas` against
   `fileKeyTypeRestriction` entries, which the schema editor and the CLI both specify dotted. The
-  same-named helpers in `handlers/indexing/fileIndexer.py` and
+  same-named helpers in `handlers/osSemanticSearch/osFileIndexer.py` and
   `handlers/addon/garnetFramework/garnetDataIndexFile.py` return the UNDOTTED form (`glb`) because
   they feed the search index's `str_fileext` field. Unifying the three into one helper needs both
   forms; a verbatim copy of either into the other's place silently stops every stored restriction

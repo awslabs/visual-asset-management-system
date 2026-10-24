@@ -296,4 +296,62 @@ describe("PipelinesPage", () => {
         expect(screen.getByRole("menuitem", { name: "Edit" })).toBeInTheDocument();
         expect(screen.getByRole("menuitem", { name: "Archive" })).toBeInTheDocument();
     });
+
+    it("marks a system pipeline and offers View instead of Edit and Archive", async () => {
+        (queries.usePipelines as jest.Mock).mockReturnValue(
+            infinite([
+                {
+                    databaseId: "GLOBAL",
+                    pipelineId: "system-genai-metadata",
+                    pipelineName: "System GenAI Metadata",
+                    category: "SYSTEM - GenAI",
+                    enabled: true,
+                    archived: false,
+                    isSystem: true,
+                    executionConfig: { executionType: "Lambda" as const },
+                },
+            ])
+        );
+        (useAllowedRoutesModule.useAllowedRoutes as jest.Mock).mockReturnValue({
+            loading: false,
+            can: () => true,
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <PipelinesPage />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        expect(screen.getByText("System")).toBeInTheDocument();
+        await openActionsFor(userEvent.setup(), "System GenAI Metadata");
+        expect(screen.queryByRole("menuitem", { name: "Edit" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("menuitem", { name: "Archive" })).not.toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "Templates" })).toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "View" })).toBeInTheDocument();
+    });
+
+    it("shows no System badge and no View item for an ordinary pipeline", async () => {
+        (queries.usePipelines as jest.Mock).mockReturnValue(infinite([mockPipelines[0]]));
+        (useAllowedRoutesModule.useAllowedRoutes as jest.Mock).mockReturnValue({
+            loading: false,
+            can: () => true,
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <PipelinesPage databaseId="db1" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        expect(screen.queryByText("System")).not.toBeInTheDocument();
+        await openActionsFor(userEvent.setup(), "Pipeline One");
+        expect(screen.getByRole("menuitem", { name: "Edit" })).toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "Archive" })).toBeInTheDocument();
+        expect(screen.queryByRole("menuitem", { name: "View" })).not.toBeInTheDocument();
+    });
 });

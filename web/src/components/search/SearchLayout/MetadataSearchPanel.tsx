@@ -4,16 +4,14 @@
  */
 
 import React, { useState } from "react";
-import {
-    ExpandableSection,
-    SpaceBetween,
-    FormField,
-    Input,
-    Select,
-    Button,
-    Box,
-    Grid,
-} from "@cloudscape-design/components";
+import ExpandableSection from "@cloudscape-design/components/expandable-section";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import FormField from "@cloudscape-design/components/form-field";
+import Input from "@cloudscape-design/components/input";
+import Select from "@cloudscape-design/components/select";
+import Button from "@cloudscape-design/components/button";
+import Box from "@cloudscape-design/components/box";
+import Grid from "@cloudscape-design/components/grid";
 import { MetadataFilter } from "../types";
 
 interface MetadataSearchPanelProps {

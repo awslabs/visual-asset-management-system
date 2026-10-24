@@ -58,6 +58,17 @@ describe("Navigation", () => {
         expect(findNavLink(container, "#/auth/constraints/")).toBeFalsy();
     });
 
+    it("offers the single Assets and Files link at #/assets/ and no #/search/ item", async () => {
+        // routes.tsx points every search route's active href at #/assets/; that is the one nav item.
+        allowRoutes("/databases/", "/assets/", "/search/");
+        const container = await renderNavigation();
+
+        await waitFor(() => {
+            expect(findNavLink(container, "#/assets/")).toBeTruthy();
+        });
+        expect(findNavLink(container, "#/search/")).toBeFalsy();
+    });
+
     it("renders admin auth links when allowed", async () => {
         allowRoutes("/auth/constraints/", "/auth/roles/", "/auth/userroles/");
         const container = await renderNavigation();

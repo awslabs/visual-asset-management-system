@@ -4,7 +4,8 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { Box, Spinner } from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import Spinner from "@cloudscape-design/components/spinner";
 import { downloadAsset, fetchFileInfo } from "../../../services/APIService";
 import { previewFileFormats } from "../../../common/constants/fileFormats";
 import cacheManager from "./SearchCacheManager";
