@@ -6,7 +6,8 @@ The accepted values are ``current`` and ``previous`` of the secret's AWSCURRENT 
 ``current`` of an AWSPENDING version, read once per cache window. A value matching none of them
 re-reads the secret at most once per refresh interval, so a rotation is picked up without a cold
 start and a stream of wrong values does not become a stream of Secrets Manager calls. A read failure
-accepts nothing and never raises.
+accepts nothing and never raises, and the client's timeouts bound a read that cannot reach Secrets
+Manager to a few seconds.
 """
 import hmac
 import json
@@ -14,6 +15,7 @@ import sys
 
 import boto3
 import pytest
+from botocore.exceptions import ConnectTimeoutError, EndpointConnectionError, ReadTimeoutError
 from moto import mock_aws
 
 SECRET_ARN = "arn:aws:secretsmanager:us-east-1:123456789012:secret:vams-origin-verify-AbCdEf"
@@ -162,6 +164,61 @@ class TestReadFailure:
         _fetcher(monkeypatch, ov, RuntimeError("secret value newValue123 in an error"))
         ov.is_valid_origin_verify_value("newValue123")
         assert messages and all("newValue123" not in m for m in messages)
+
+
+class _UnreachableSecretsManager:
+    """A Secrets Manager client whose every call fails the way an unreachable endpoint does."""
+
+    def __init__(self, error):
+        self.error = error
+        self.calls = 0
+
+    def get_secret_value(self, **kwargs):
+        self.calls += 1
+        raise self.error
+
+
+@pytest.mark.unit
+class TestSecretsManagerClientBound:
+    """The secret read cannot outlast the authorizer: short timeouts, few retries, then fall back.
+
+    With botocore's defaults (60 s connect timeout, several attempts) a read from a VPC with no path
+    to Secrets Manager outlasts the authorizer's 60 s timeout, so the request fails instead of
+    falling back to the TCP peer.
+    """
+
+    AUTHORIZER_TIMEOUT_SECONDS = 60
+
+    def test_the_client_uses_short_timeouts_and_two_retries(self, ov):
+        config = ov.secrets_client.meta.config
+        assert config.connect_timeout == 2
+        assert config.read_timeout == 2
+        # botocore counts max_attempts as retries after the first request and normalises
+        # {"max_attempts": 2} to three attempts in total.
+        assert config.retries == {"mode": "standard", "total_max_attempts": 3}
+
+    def test_a_failed_read_is_bounded_well_inside_the_authorizer_timeout(self, ov):
+        config = ov.secrets_client.meta.config
+        per_attempt = config.connect_timeout + config.read_timeout
+        worst_case = config.retries["total_max_attempts"] * per_attempt
+        assert worst_case <= 12
+        assert worst_case < self.AUTHORIZER_TIMEOUT_SECONDS / 4
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            ConnectTimeoutError(endpoint_url="https://secretsmanager.us-east-1.amazonaws.com"),
+            EndpointConnectionError(endpoint_url="https://secretsmanager.us-east-1.amazonaws.com"),
+            ReadTimeoutError(endpoint_url="https://secretsmanager.us-east-1.amazonaws.com"),
+        ],
+        ids=["connect-timeout", "no-route", "read-timeout"],
+    )
+    def test_an_unreachable_endpoint_accepts_nothing_and_does_not_raise(self, ov, monkeypatch, error):
+        client = _UnreachableSecretsManager(error)
+        monkeypatch.setattr(ov, "secrets_client", client)
+        assert ov.is_valid_origin_verify_value("new") is False
+        # The AWSCURRENT read failed, so the AWSPENDING read is not attempted.
+        assert client.calls == 1
 
 
 @pytest.mark.unit

@@ -14,7 +14,8 @@ is recognised whichever value its CloudFront edge sends during a rotation. Compa
 constant-time. The accepted values are cached per execution environment for
 ``CACHE_TTL_SECONDS``; a value that matches none of them re-reads the secret at most once per
 ``MISMATCH_REFRESH_INTERVAL_SECONDS``, so a rotation is picked up without a cold start. When the
-secret cannot be read, no value is accepted. Nothing here logs a value or raises.
+secret cannot be read, no value is accepted; the client's short timeouts bound a read that cannot
+reach Secrets Manager to a few seconds. Nothing here logs a value or raises.
 
 The header name is mirrored in ``infra/config/config.ts`` (``API_ORIGIN_VERIFY_HEADER_NAME``) and
 in ``customLogging/logger.py`` ``SENSITIVE_KEYS``.
@@ -40,7 +41,15 @@ SECRET_ARN_ENV = "ORIGIN_VERIFY_SECRET_ARN"
 CACHE_TTL_SECONDS = 300
 MISMATCH_REFRESH_INTERVAL_SECONDS = 5
 
-retry_config = BotoConfig(retries={"max_attempts": 5, "mode": "adaptive"})
+# Short timeouts and few retries, so that when Secrets Manager cannot be reached (for example from a
+# VPC with no Secrets Manager endpoint or NAT route) a read fails within seconds and the caller falls
+# back to the TCP peer, well inside the REST authorizer's own timeout. botocore counts max_attempts as
+# retries after the first request: at most three attempts of 2 + 2 seconds each.
+retry_config = BotoConfig(
+    connect_timeout=2,
+    read_timeout=2,
+    retries={"max_attempts": 2, "mode": "standard"},
+)
 secrets_client = boto3.client("secretsmanager", config=retry_config)
 
 _cache = {"values": (), "fetched_at": None}

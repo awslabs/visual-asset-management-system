@@ -239,8 +239,10 @@ When importing a VPC, you may need to run an initial `cdk synth` with `loadConte
 
 When `useGlobalVpc.addVpcEndpoints = true`, VAMS creates VPC endpoints to enable AWS service access from isolated subnets without internet connectivity.
 
-:::warning[SSM endpoint required for operator-managed endpoints]
+:::warning[SSM and Secrets Manager endpoints required for operator-managed endpoints]
 When `useGlobalVpc.addVpcEndpoints = false` (operator-created endpoints) with `useForAllLambdas = true`, the AWS Systems Manager (SSM) interface endpoint must exist in the VPC. Every VAMS Lambda function resolves its DynamoDB table, S3 bucket, and audit log group names from SSM Parameter Store at cold start and fails to initialize without a path to SSM.
+
+On a CloudFront deployment with the same settings, the AWS Secrets Manager interface endpoint (or another route to Secrets Manager) must also exist. The REST authorizer reads the origin verification secret to recognise the requests CloudFront forwards. Without a path to Secrets Manager each read fails after several seconds, which delays the request that triggered it, and the authorizer treats every request as not forwarded by CloudFront: it uses the CloudFront edge address instead of the viewer's address for `allowedIpRanges` and the audit record.
 :::
 
 ### Gateway Endpoints (No Cost)

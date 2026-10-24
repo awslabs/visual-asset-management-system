@@ -17,6 +17,7 @@ CloudFront is configured with. Addresses are documentation ranges; the edge addr
 import sys
 
 import pytest
+from botocore.exceptions import ConnectTimeoutError
 
 from backend.backend.common.auth.clientIp import resolve_client_ip, is_ip_authorized
 
@@ -133,6 +134,25 @@ class TestOtherRequestsUseTheTcpPeer:
 
         monkeypatch.setattr(_origin_verify_module(), "_fetch_accepted_values", failing_fetch)
         assert resolve_client_ip(_cloudfront_event(CURRENT), fronted="cloudfront") == EDGE
+
+    def test_an_unreachable_secrets_manager_resolves_the_peer(self, monkeypatch):
+        """The real read path: a client that cannot reach Secrets Manager falls back to the TCP peer."""
+        module = _origin_verify_module()
+        calls = []
+
+        class Unreachable:
+            def get_secret_value(self, **kwargs):
+                calls.append(kwargs)
+                raise ConnectTimeoutError(endpoint_url="https://secretsmanager.us-east-1.amazonaws.com")
+
+        monkeypatch.setenv(module.SECRET_ARN_ENV, SECRET_ARN)
+        monkeypatch.setattr(module, "secrets_client", Unreachable())
+        monkeypatch.setitem(module._cache, "values", ())
+        monkeypatch.setitem(module._cache, "fetched_at", None)
+        client_ip = resolve_client_ip(_cloudfront_event(CURRENT), fronted="cloudfront")
+        assert client_ip == EDGE
+        assert is_ip_authorized(client_ip, ALLOWED) is False
+        assert calls == [{"SecretId": SECRET_ARN}]
 
     def test_no_configured_secret_resolves_the_peer(self, monkeypatch, origin_verify):
         monkeypatch.delenv(_origin_verify_module().SECRET_ARN_ENV)
