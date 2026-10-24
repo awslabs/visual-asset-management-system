@@ -101,8 +101,8 @@ class TestPermissionObjectsLanes:
         monkeypatch.setattr(authConstraintsService, "CONSTRAINT_OBJECT_TYPE_FIELDS",
                             CORE.CONSTRAINT_OBJECT_TYPE_FIELDS)
         assert _body() == _core_body()
-        # Control: the core body is the fourteen core types, not an empty listing.
-        assert len(_core_body()["objectTypes"]) == 14
+        # Control: the core body is the eleven core types, not an empty listing.
+        assert len(_core_body()["objectTypes"]) == 11
 
     def test_an_extension_type_is_listed_after_the_core_types(self, monkeypatch):
         merged = _load_constants(

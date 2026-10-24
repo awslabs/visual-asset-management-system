@@ -53,7 +53,6 @@ For the complete list of supported file viewers and extensions, see [File Viewer
 -   **Pipeline management** -- Create, edit, and delete processing pipelines with execution type selection (Lambda, SQS, EventBridge, DeadlineCloud)
 -   **Workflow management** -- Design multi-step processing workflows with pipeline chaining
 -   **Metadata schema management** -- Define and manage metadata schemas for assets, files, databases, and asset links
--   **Compliance management** -- Register compliance schemas, bind them to databases, review quarantined assets, approve cascades, and browse the compliance audit log; a per-database compliance overview and a per-asset Compliance tab show evaluation state
 
 ---
 
@@ -63,27 +62,26 @@ VAMS exposes a REST API through Amazon API Gateway, secured by a custom Lambda a
 
 ### Core API Capabilities
 
-| Domain           | Endpoints                                                | Description                                                                          |
-| ---------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Assets           | CRUD + download + stream                                 | Asset lifecycle management with version-aware operations                             |
-| Asset Versions   | Create, update, archive, unarchive                       | Version management with alias naming and metadata restoration                        |
-| Asset Links      | CRUD                                                     | Cross-database asset relationships                                                   |
-| Databases        | CRUD                                                     | Database lifecycle with metadata and Amazon S3 bucket management                     |
-| Files            | Upload, download, copy, move, delete                     | File operations with presigned URL generation                                        |
-| Metadata         | CRUD                                                     | Asset-level and file-level metadata with version support                             |
-| Metadata Schemas | CRUD                                                     | Schema definitions for structured metadata validation                                |
-| Tags             | CRUD                                                     | Tag assignment and management                                                        |
-| Tag Types        | CRUD                                                     | Custom tag type definitions                                                          |
-| Pipelines        | CRUD                                                     | Pipeline registration and configuration                                              |
-| Workflows        | CRUD + execute                                           | Workflow design and execution                                                        |
-| Compliance       | Schemas, bindings, evaluate, quarantine, cascades, audit | Schema-driven compliance evaluation, quarantine, cascade propagation and audit trail |
-| Search           | Query                                                    | Full-text and attribute-based search                                                 |
-| Comments         | CRUD                                                     | Asset-level comments                                                                 |
-| Subscriptions    | CRUD                                                     | Change notification subscriptions                                                    |
-| Auth             | Routes, constraints, roles, user-roles                   | Permission and authorization management                                              |
-| Cognito Users    | CRUD + reset password                                    | User management (Amazon Cognito mode only)                                           |
-| API Keys         | CRUD                                                     | API key lifecycle management                                                         |
-| Config           | Amplify config, secure config, version                   | Runtime configuration and feature flags                                              |
+| Domain           | Endpoints                              | Description                                                      |
+| ---------------- | -------------------------------------- | ---------------------------------------------------------------- |
+| Assets           | CRUD + download + stream               | Asset lifecycle management with version-aware operations         |
+| Asset Versions   | Create, update, archive, unarchive     | Version management with alias naming and metadata restoration    |
+| Asset Links      | CRUD                                   | Cross-database asset relationships                               |
+| Databases        | CRUD                                   | Database lifecycle with metadata and Amazon S3 bucket management |
+| Files            | Upload, download, copy, move, delete   | File operations with presigned URL generation                    |
+| Metadata         | CRUD                                   | Asset-level and file-level metadata with version support         |
+| Metadata Schemas | CRUD                                   | Schema definitions for structured metadata validation            |
+| Tags             | CRUD                                   | Tag assignment and management                                    |
+| Tag Types        | CRUD                                   | Custom tag type definitions                                      |
+| Pipelines        | CRUD                                   | Pipeline registration and configuration                          |
+| Workflows        | CRUD + execute                         | Workflow design and execution                                    |
+| Search           | Query                                  | Full-text and attribute-based search                             |
+| Comments         | CRUD                                   | Asset-level comments                                             |
+| Subscriptions    | CRUD                                   | Change notification subscriptions                                |
+| Auth             | Routes, constraints, roles, user-roles | Permission and authorization management                          |
+| Cognito Users    | CRUD + reset password                  | User management (Amazon Cognito mode only)                       |
+| API Keys         | CRUD                                   | API key lifecycle management                                     |
+| Config           | Amplify config, secure config, version | Runtime configuration and feature flags                          |
 
 ### API Security
 
@@ -129,11 +127,11 @@ For the full list of command groups and every command in each, see the [Command 
 
 -   **Two-tier ABAC/RBAC** -- Attribute-Based and Role-Based Access Control using Casbin policy enforcement
 -   **Tier 1 (API-level)** -- Controls access to API routes and web navigation paths
--   **Tier 2 (Object-level)** -- Controls access to specific data entities (databases, assets, pipelines, workflows, metadata schemas, tags, tag types, roles, user roles, compliance schemas, evaluations and cascades)
+-   **Tier 2 (Object-level)** -- Controls access to specific data entities (databases, assets, pipelines, workflows, metadata schemas, tags, tag types, roles and user roles)
 -   **GLOBAL keyword** -- Apply constraints across all databases or resources
 -   **Deny overlay** -- Layer deny constraints on top of allow constraints for exception-based access patterns
 -   **Extension object types** -- A deployment can register object types and constraint fields for the entities its own extensions add; a registered type starts with no access for any role, administrators included, until a constraint grants it
--   **Pre-built templates** -- Pre-built permission profiles in `documentation/permissionsTemplates/`: database-admin, database-user, database-readonly, database-tag-admin, global-readonly, deny-tagged-assets, compliance-admin, compliance-readonly; an add-on's own templates sit beside them (see each add-on's page)
+-   **Pre-built templates** -- Pre-built permission profiles in `documentation/permissionsTemplates/`: database-admin, database-user, database-readonly, database-tag-admin, global-readonly, deny-tagged-assets; an add-on's own templates sit beside them (see each add-on's page)
 
 ### Metadata System
 
@@ -147,14 +145,6 @@ For the full list of command groups and every command in each, see the [Command 
 -   **Amazon CloudWatch audit log groups** -- Nine dedicated audit log groups for authentication, authorization, file upload, file download, file download (streamed), auth changes, auth other, actions, and errors
 -   **AWS CloudTrail** -- Optional stack-level AWS CloudTrail logging (enabled by default)
 -   **Structured logging** -- AWS Lambda Powertools for consistent log formatting and correlation
-
-### Compliance
-
--   **Compliance schemas** -- Versioned `vams-rules-v1` rule sets with `metadata`, `relationship` and `pipeline` rule types and `quarantine`/`warn`/`inform` enforcement levels, scoped to a database or `GLOBAL`, with schema inheritance
--   **Evaluation** -- Automatic evaluation on asset create/update, on-demand evaluation, per-schema sweeps, and asynchronous pipeline rules that run a VAMS workflow and check its measurements against tolerances
--   **Quarantine** -- Quarantine of assets that fail `quarantine`-level rules, with release, documented exceptions, and an optional download block (`app.compliance.quarantineBlocksDownload`)
--   **Cascades** -- Approval-gated re-evaluation of an asset's downstream assets in dependency order
--   **Audit trail** -- Every compliance action recorded and queryable per asset, by event type and by time window
 
 ### Search Indexing
 

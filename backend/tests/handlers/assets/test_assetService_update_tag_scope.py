@@ -129,18 +129,15 @@ def _written_attributes(mock_asset_table):
     """The attributes an edit actually wrote, recovered from its targeted update expression.
 
     update_asset writes only the fields the request changed, so the written set is carried by
-    the UpdateExpression's name/value placeholders rather than by a whole-record Item. The
-    `REMOVE` clause an edit of the name, description or tags appends for its change provenance
-    sets nothing and is left out.
+    the UpdateExpression's name/value placeholders rather than by a whole-record Item.
     """
     kwargs = mock_asset_table.update_item.call_args.kwargs
     names = kwargs["ExpressionAttributeNames"]
     values = kwargs["ExpressionAttributeValues"]
     expression = kwargs["UpdateExpression"]
     assert expression.startswith("SET "), expression
-    set_clause = expression[len("SET "):].split(" REMOVE ")[0]
     written = {}
-    for assignment in set_clause.split(", "):
+    for assignment in expression[len("SET "):].split(", "):
         name_ref, value_ref = [part.strip() for part in assignment.split(" = ")]
         written[names[name_ref]] = values[value_ref]
     return written

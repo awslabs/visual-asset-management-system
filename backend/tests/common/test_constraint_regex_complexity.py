@@ -75,7 +75,6 @@ SHIPPED_CRITERION_VALUES = [
     '/buckets',
     '/check-subscription',
     '/comments',
-    '/compliance',
     '/database',
     '/database/',
     '/databases',
