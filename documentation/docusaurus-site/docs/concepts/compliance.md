@@ -497,17 +497,20 @@ Compliance operations use the two-tier Casbin ABAC/RBAC system described in the 
 
 **Tier 1** checks the caller's `api` constraints against the `/compliance/*` route, and `web` constraints against the compliance pages (`/compliance/*` and `/databases/*`), so the navigation entries and pages appear only to a role that grants them.
 
-**Tier 2** enforces one of three object types, with the object action mirroring the HTTP method:
+**Tier 2** enforces four compliance object types, with the object action mirroring the HTTP method:
 
 | Object type            | Constraint fields               | Governs                                                                                                                |
 | ---------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `complianceSchema`     | `complianceSchemaName`          | Schema registration, update and deletion, schema bindings at both levels, and sweeps                                   |
+| `complianceSchema`     | `complianceSchemaName`          | Schema registration, update and deletion, the schema named in a binding, and sweeps                                    |
+| `complianceBinding`    | `databaseId`                    | Binding (`PUT`) and unbinding (`DELETE`) a schema in a database, on the database itself or on one of its assets        |
 | `complianceEvaluation` | `databaseId`, `complianceState` | Evaluation, evaluation history, compliance state and overview, the quarantine listing and actions, and the audit trail |
 | `complianceCascade`    | `cascadeId`                     | Cascade creation, listing, detail, approval and rejection                                                              |
 
-Listings return only the items the caller may `GET`. The built-in admin role is seeded with an allow-all constraint on each of the three object types.
+Binding or unbinding a schema is authorized on the database's `complianceBinding` object, on the schema, and on a `GET` of the target `database` or `asset` object, so constraints on the target's attributes (an asset's tags, for example) still apply. A binding changes compliance records only, so it needs no write permission on the database or the asset. Reading a database's bindings is authorized on a `GET` of the database and of its bound schema.
 
-Two permission templates in `documentation/permissionsTemplates/` set up non-admin roles: `compliance-admin.json` (full schema management, evaluation and quarantine actions scoped to a `DATABASE_ID`, cascade approval, plus the web and API routes) and `compliance-readonly.json` (`GET` on the three object types, evaluations scoped to a `DATABASE_ID`). Constraint criteria narrow access further — for example `databaseId equals my-database` on a `complianceEvaluation` constraint, `complianceSchemaName equals my-schema` on a `complianceSchema` constraint, or `complianceState equals quarantined` to grant only the quarantine operations. See [Compliance (User Guide) — Permissions](../user-guide/compliance.md#permissions).
+Listings return only the items the caller may `GET`. The built-in admin role is seeded with an allow-all constraint on each of the four object types.
+
+Two permission templates in `documentation/permissionsTemplates/` set up non-admin roles: `compliance-admin.json` (full schema management, schema binding, evaluation and quarantine actions scoped to a `DATABASE_ID`, cascade approval, the web and API routes, and `GET` on that database and its assets, which binding a schema requires) and `compliance-readonly.json` (`GET` on every schema and cascade, and on the evaluations, the database entity and the assets of a `DATABASE_ID`). Constraint criteria narrow access further — for example `databaseId equals my-database` on a `complianceEvaluation` constraint, `complianceSchemaName equals my-schema` on a `complianceSchema` constraint, or `complianceState equals quarantined` to grant only the quarantine operations. See [Compliance (User Guide) — Permissions](../user-guide/compliance.md#permissions).
 
 ## Amazon DynamoDB tables
 

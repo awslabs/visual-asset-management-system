@@ -231,6 +231,7 @@ CORE_ALLOWED_CONSTRAINT_OBJECT_TYPES = [
     'complianceSchema',
     'complianceEvaluation',
     'complianceCascade',
+    'complianceBinding',
 ]
 
 ALLOWED_CONSTRAINT_OPERATORS = [
@@ -344,6 +345,8 @@ CORE_CONSTRAINT_OBJECT_TYPE_FIELDS = {
         {"label": "Compliance State", "value": "complianceState"}]},
     "complianceCascade": {"label": "Compliance Cascade", "fields": [
         {"label": "Cascade ID", "value": "cascadeId"}]},
+    "complianceBinding": {"label": "Compliance Binding", "fields": [
+        {"label": "Database ID", "value": "databaseId"}]},
 }
 
 _MERGED_CONSTRAINT_CONSTANTS = merge_constraint_extensions(

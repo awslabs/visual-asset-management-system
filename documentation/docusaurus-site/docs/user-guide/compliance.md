@@ -58,6 +58,8 @@ PUT /compliance/bind/{databaseId}
 { "schemaName": "survey-compliance", "complianceAutoEval": true }
 ```
 
+The database editor saves the database before it binds the schema, so binding there needs a role that may also update the database. A role that holds only compliance permissions, such as one built from the Compliance Admin template, binds with the API or with `vamscli compliance bind`. See [Permissions](#permissions).
+
 ### Removing a compliance schema
 
 1. Navigate to **Databases** and choose the database.
@@ -539,26 +541,29 @@ Controls which users can call the compliance API and open the compliance pages. 
 
 ### Tier 2: object-level access
 
-Controls which compliance resources a user can act on. Three object types govern compliance operations:
+Controls which compliance resources a user can act on. Four object types govern compliance operations:
 
-| Object type            | Controls                                              | Constraint fields               | Use case                                                       |
-| ---------------------- | ----------------------------------------------------- | ------------------------------- | -------------------------------------------------------------- |
-| `complianceSchema`     | Schema registration, update, deletion, binding, sweep | `complianceSchemaName`          | Restrict which schemas a user can view or manage               |
-| `complianceEvaluation` | Evaluate, state, quarantine, audit                    | `databaseId`, `complianceState` | Scope evaluations and quarantine actions to specific databases |
-| `complianceCascade`    | Cascade create, approve, reject                       | `cascadeId`                     | Control who can approve cascade propagations                   |
+| Object type            | Controls                                                       | Constraint fields               | Use case                                                       |
+| ---------------------- | -------------------------------------------------------------- | ------------------------------- | -------------------------------------------------------------- |
+| `complianceSchema`     | Schema registration, update, deletion, the schema bound, sweep | `complianceSchemaName`          | Restrict which schemas a user can view or manage               |
+| `complianceBinding`    | Bind (`PUT`) and unbind (`DELETE`) a schema in a database      | `databaseId`                    | Scope who can bind schemas to a database and its assets        |
+| `complianceEvaluation` | Evaluate, state, quarantine, audit                             | `databaseId`, `complianceState` | Scope evaluations and quarantine actions to specific databases |
+| `complianceCascade`    | Cascade create, approve, reject                                | `cascadeId`                     | Control who can approve cascade propagations                   |
+
+Binding a schema to a database or an asset, and removing the binding, also needs `GET` on that `database` or `asset` object. It needs no write permission on either, because a binding changes compliance records only.
 
 ### Default admin access
 
-The built-in admin role holds full access (GET, PUT, POST, DELETE) to all three compliance object types. No additional configuration is needed for administrators.
+The built-in admin role holds full access (GET, PUT, POST, DELETE) to all four compliance object types. No additional configuration is needed for administrators.
 
 ### Permission templates
 
 VAMS includes two permission templates for compliance roles:
 
-| Template            | File                       | Description                                                                                                                                                                                  |
-| ------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Compliance Admin    | `compliance-admin.json`    | Full schema management, evaluation and quarantine actions within one database, cascade approval, plus the compliance web and API routes and read access to the database's assets.            |
-| Compliance Readonly | `compliance-readonly.json` | View-only access: schemas, evaluation results and compliance state within one database, the quarantine list, pending cascades and the audit log. Cannot trigger evaluations or change state. |
+| Template            | File                       | Description                                                                                                                                                                                                                         |
+| ------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Compliance Admin    | `compliance-admin.json`    | Full schema management, schema binding on one database and its assets, evaluation and quarantine actions within that database, cascade approval, the compliance web and API routes, and read access to the database and its assets. |
+| Compliance Readonly | `compliance-readonly.json` | View-only access: schemas, evaluation results and compliance state within one database, the quarantine list, pending cascades and the audit log. Cannot trigger evaluations or change state.                                        |
 
 Both templates take `DATABASE_ID` and `ROLE_NAME` variables. Apply them through **Admin > Permissions > Constraints > Import Template** or the CLI.
 
@@ -580,7 +585,7 @@ The user views schemas, evaluation history, quarantine status and the audit log 
 If a user receives **Not Authorized** on compliance pages or calls, verify they hold both:
 
 1. `api` and `web` constraints allowing the `/compliance` routes (Tier 1)
-2. A `complianceSchema`, `complianceEvaluation`, or `complianceCascade` constraint matching the resource (Tier 2)
+2. A `complianceSchema`, `complianceBinding`, `complianceEvaluation`, or `complianceCascade` constraint matching the resource, and for a binding a `GET` on the target database or asset (Tier 2)
 
 Missing either tier results in a 403 response.
 :::

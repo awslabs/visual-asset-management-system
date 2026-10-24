@@ -15,9 +15,14 @@ A database binding lives on the database row (`complianceSchemaName`, `complianc
 database rebinding touches only rows with schemaSource "database", and removing an asset
 override falls the asset back to the database schema (or removes its row when there is none).
 
-Every path is authorized against two objects: the compliance schema being bound (or currently
-bound), and the target — the `database` row for database paths, the `asset` row for asset paths —
-so schema permissions alone never reach a database or asset the caller may not touch.
+Binding and unbinding are authorized on three objects: the `complianceBinding` object of the
+database (`PUT` binds, `DELETE` unbinds; an asset-level binding uses the asset's database), the
+compliance schema being bound (or currently bound), and a `GET` on the target — the `database` row
+for database paths, the `asset` row for asset paths — so ABAC constraints on the target's
+attributes still apply. A binding writes only compliance records, never the database or asset row,
+so it needs no write permission on either: a role that may edit a database's assets cannot bind a
+schema to them, and a role that may bind one cannot edit them. Reading the bindings is authorized on
+a `GET` of the database and of its bound schema.
 
 Only a schema whose body is a vams-rules-v1 document can be bound (both paths); a `legacy` row —
 one the schema listing reports with `schemaFormat: legacy` — is refused with LEGACY_SCHEMA_MESSAGE.
@@ -61,6 +66,7 @@ logger = safeLogger(service_name="ComplianceSchemaBindingService")
 claims_and_roles = {}
 
 COMPLIANCE_SCHEMA_OBJECT_TYPE = "complianceSchema"
+COMPLIANCE_BINDING_OBJECT_TYPE = "complianceBinding"
 DATABASE_OBJECT_TYPE = "database"
 ASSET_OBJECT_TYPE = "asset"
 SCHEMA_SOURCE_DATABASE = "database"
@@ -192,6 +198,18 @@ def _enforce(schema_name, action):
     }, action)
 
 
+def _enforce_binding(database_id, action):
+    """Tier-2 check on the `complianceBinding` object of a database: `PUT` binds a schema in it (to
+    the database or to one of its assets), `DELETE` unbinds one. Fails closed on an empty token
+    list."""
+    if len(claims_and_roles["tokens"]) == 0:
+        return False
+    return CasbinEnforcer(claims_and_roles).enforce({
+        "object__type": COMPLIANCE_BINDING_OBJECT_TYPE,
+        "databaseId": database_id or "",
+    }, action)
+
+
 def _enforce_database(db_item, database_id, action):
     """Tier-2 check on the database a binding targets. The stored row is annotated and evaluated as
     stored (so ABAC constraints on its attributes apply); when there is none, the requested id
@@ -282,10 +300,12 @@ def bind_schema_to_database(event, database_id, request: BindSchemaRequestModel)
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
+    if not _enforce_binding(database_id, "PUT"):
+        return authorization_error()
     if not _enforce(request.schemaName, "PUT"):
         return authorization_error()
     db_item = database_table.get_item(Key={"databaseId": database_id}).get("Item")
-    if not _enforce_database(db_item, database_id, "PUT"):
+    if not _enforce_database(db_item, database_id, "GET"):
         return authorization_error()
 
     refused = _schema_bindable(event, request.schemaName, database_id)
@@ -340,8 +360,10 @@ def unbind_schema_from_database(event, database_id):
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
+    if not _enforce_binding(database_id, "DELETE"):
+        return authorization_error()
     db_item = database_table.get_item(Key={"databaseId": database_id}).get("Item")
-    if not _enforce_database(db_item, database_id, "DELETE"):
+    if not _enforce_database(db_item, database_id, "GET"):
         return authorization_error()
     old_schema = (db_item or {}).get("complianceSchemaName")
     if not _enforce(old_schema or "", "DELETE"):
@@ -390,10 +412,13 @@ def bind_schema_to_asset(event, database_id, asset_id, request: BindSchemaReques
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
+    # The asset is read by (database_id, asset_id), so the path's database is the asset's database.
+    if not _enforce_binding(database_id, "PUT"):
+        return authorization_error()
     if not _enforce(request.schemaName, "PUT"):
         return authorization_error()
     asset_item = store.get_asset_item(database_id, asset_id)
-    if not _enforce_asset(asset_item, database_id, asset_id, "PUT"):
+    if not _enforce_asset(asset_item, database_id, asset_id, "GET"):
         return authorization_error()
 
     refused = _schema_bindable(event, request.schemaName, database_id)
@@ -442,8 +467,11 @@ def unbind_schema_from_asset(event, database_id, asset_id):
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
+    # The asset is read by (database_id, asset_id), so the path's database is the asset's database.
+    if not _enforce_binding(database_id, "DELETE"):
+        return authorization_error()
     asset_item = store.get_asset_item(database_id, asset_id)
-    if not _enforce_asset(asset_item, database_id, asset_id, "DELETE"):
+    if not _enforce_asset(asset_item, database_id, asset_id, "GET"):
         return authorization_error()
     existing = store.get_compliance_record(database_id, asset_id)
     current_schema = (existing or {}).get("schemaName", "")

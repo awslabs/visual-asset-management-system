@@ -9323,7 +9323,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/bind/{databaseId}:
         get:
             summary: "Get the schema bindings of a database."
-            description: "Returns the schema bound to a database and one page of the assets in the database that carry their own schema override; `assetOverrideCount` counts every override, and `NextToken` continues the page."
+            description: "Returns the schema bound to a database and one page of the assets in the database that carry their own schema override; `assetOverrideCount` counts every override, and `NextToken` continues the page. Requires GET on the database and on its bound schema."
             parameters:
                 - name: databaseId
                   in: path
@@ -9362,7 +9362,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         put:
             summary: "Bind a schema to a database."
-            description: "Binds a GLOBAL or database-scoped schema to a database. Every asset in the database without an asset-level override becomes `pending_evaluation` under the schema."
+            description: "Binds a GLOBAL or database-scoped schema to a database. Every asset in the database without an asset-level override becomes `pending_evaluation` under the schema. Requires PUT on the database's complianceBinding object, PUT on the schema, and GET on the database."
             parameters:
                 - name: databaseId
                   in: path
@@ -9405,7 +9405,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         delete:
             summary: "Remove the schema binding of a database."
-            description: "Removes the database binding and deletes the compliance records of the assets that inherited it. Asset-level overrides are kept."
+            description: "Removes the database binding and deletes the compliance records of the assets that inherited it. Asset-level overrides are kept. Requires DELETE on the database's complianceBinding object, GET on the database, and DELETE on the bound schema."
             parameters:
                 - name: databaseId
                   in: path
@@ -9443,7 +9443,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/bind/{databaseId}/{assetId}:
         put:
             summary: "Bind a schema to an asset."
-            description: "Binds a GLOBAL or database-scoped schema directly to an asset as an override of the database binding. The asset becomes `pending_evaluation` under the schema."
+            description: "Binds a GLOBAL or database-scoped schema directly to an asset as an override of the database binding. The asset becomes `pending_evaluation` under the schema. Requires PUT on the complianceBinding object of the asset's database, PUT on the schema, and GET on the asset."
             parameters:
                 - name: databaseId
                   in: path
@@ -9492,7 +9492,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         delete:
             summary: "Remove the schema override of an asset."
-            description: "Removes an asset-level schema override. The asset falls back to the database binding as `pending_evaluation`, or leaves compliance tracking when the database has no binding."
+            description: "Removes an asset-level schema override. The asset falls back to the database binding as `pending_evaluation`, or leaves compliance tracking when the database has no binding. Requires DELETE on the complianceBinding object of the asset's database, GET on the asset, and DELETE on the schema the asset is bound to."
             parameters:
                 - name: databaseId
                   in: path
@@ -10636,8 +10636,9 @@ components:
                     example: asset
                     description: >-
                         Type of object this constraint applies to. The core types are database,
-                        asset, api, web, tag, tagType, role, userRole, pipeline, workflow and
-                        metadataSchema; a deployment can register more (permission object types in
+                        asset, api, web, tag, tagType, role, userRole, pipeline, workflow,
+                        metadataSchema, complianceSchema, complianceEvaluation, complianceCascade
+                        and complianceBinding; a deployment can register more (permission object types in
                         the fork or add-on constants files), so the set is not fixed. GET
                         /auth/constraints/permissionObjects lists the types the deployment accepts,
                         with the fields valid on each. Any other value is rejected with 400.
@@ -10704,8 +10705,9 @@ components:
                     example: asset
                     description: >-
                         Type of object this constraint applies to. The core types are database,
-                        asset, api, web, tag, tagType, role, userRole, pipeline, workflow and
-                        metadataSchema; a deployment can register more (permission object types in
+                        asset, api, web, tag, tagType, role, userRole, pipeline, workflow,
+                        metadataSchema, complianceSchema, complianceEvaluation, complianceCascade
+                        and complianceBinding; a deployment can register more (permission object types in
                         the fork or add-on constants files), so the set is not fixed. GET
                         /auth/constraints/permissionObjects lists the types the deployment accepts,
                         with the fields valid on each. Any other value is rejected with 400.

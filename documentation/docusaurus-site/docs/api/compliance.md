@@ -5,7 +5,7 @@ The Compliance API registers compliance schemas, binds them to databases and ass
 All compliance endpoints live under the `/compliance` prefix. Identifiers follow the VAMS conventions: a `databaseId` or `schemaName` is 3-63 characters of letters, digits, hyphens and underscores (`GLOBAL` is accepted wherever a database is named), and an `assetId` follows the asset identifier rules.
 
 :::info[Authorization]
-All compliance endpoints require a valid credential in the `Authorization` header and are subject to two-tier authorization: API-level access to the `/compliance/*` route is checked first, followed by object-level Casbin enforcement on one of three object types. Schema, binding and sweep operations are enforced on a `complianceSchema` object (`complianceSchemaName`); evaluation, state, quarantine and audit operations on a `complianceEvaluation` object (`databaseId`, `complianceState`); cascade operations on a `complianceCascade` object (`cascadeId`). Operations that reach into a database or asset are additionally enforced on that target: binding, unbinding and reading a database's bindings on the `database` object, binding and unbinding an asset override on the `asset` object, a sweep on the `complianceEvaluation` object of each bound database (assets in databases the caller may not evaluate are skipped and counted), and creating, approving, rejecting or reading a cascade on the `complianceEvaluation` object of the triggering asset's database. The object action mirrors the HTTP method. Listings return only the items the caller may `GET`: the global audit trail and the pending-cascade listing return only rows whose database the caller may read, so a page can be empty while `NextToken` is present.
+All compliance endpoints require a valid credential in the `Authorization` header and are subject to two-tier authorization: API-level access to the `/compliance/*` route is checked first, followed by object-level Casbin enforcement on the compliance object types. Schema and sweep operations are enforced on a `complianceSchema` object (`complianceSchemaName`); binding and unbinding on the `complianceBinding` object of the database (`databaseId`; an asset override uses the asset's database) and on the `complianceSchema` object of the schema bound or removed; evaluation, state, quarantine and audit operations on a `complianceEvaluation` object (`databaseId`, `complianceState`); cascade operations on a `complianceCascade` object (`cascadeId`). Operations that reach into a database or asset are additionally enforced on that target: binding, unbinding and reading a database's bindings on a `GET` of the `database` object, binding and unbinding an asset override on a `GET` of the `asset` object, a sweep on the `complianceEvaluation` object of each bound database (assets in databases the caller may not evaluate are skipped and counted), and creating, approving, rejecting or reading a cascade on the `complianceEvaluation` object of the triggering asset's database. The object action mirrors the HTTP method, except on the `database` and `asset` targets of a binding, which are always checked with `GET`: a binding changes compliance records only. Listings return only the items the caller may `GET`: the global audit trail and the pending-cascade listing return only rows whose database the caller may read, so a page can be empty while `NextToken` is present.
 :::
 
 :::note[Error responses]
@@ -377,7 +377,7 @@ GET /compliance/bind/{databaseId}
 }
 ```
 
-`databaseSchema` is `null` when the database has no binding. `assetOverrideCount` counts every asset-level override of the database; `assetOverrides` is one page of them in `assetId` order, and `NextToken` is present while more remain. The request is authorized on the database and on the bound schema's name (an empty name when there is none).
+`databaseSchema` is `null` when the database has no binding. `assetOverrideCount` counts every asset-level override of the database; `assetOverrides` is one page of them in `assetId` order, and `NextToken` is present while more remain. The request is authorized on `GET` of the database and of the bound schema's name (an empty name when there is none).
 
 ### Error responses
 
@@ -391,7 +391,7 @@ GET /compliance/bind/{databaseId}
 
 ## Bind a schema to a database
 
-Binds a `GLOBAL` or database-scoped schema to a database. Every asset in the database that has no asset-level override becomes `pending_evaluation` under the schema; assets with an override are left as they are. Run a [sweep](#sweep-the-assets-bound-to-a-schema) or evaluate assets individually to produce verdicts.
+Binds a `GLOBAL` or database-scoped schema to a database. Every asset in the database that has no asset-level override becomes `pending_evaluation` under the schema; assets with an override are left as they are. Run a [sweep](#sweep-the-assets-bound-to-a-schema) or evaluate assets individually to produce verdicts. The request is authorized on `PUT` of the database's `complianceBinding` object, `PUT` of the schema, and `GET` of the database.
 
 ```
 PUT /compliance/bind/{databaseId}
@@ -431,7 +431,7 @@ PUT /compliance/bind/{databaseId}
 
 ## Remove the schema binding of a database
 
-Removes the database binding and deletes the compliance records of the assets that inherited it. Assets with an asset-level override keep their records.
+Removes the database binding and deletes the compliance records of the assets that inherited it. Assets with an asset-level override keep their records. The request is authorized on `DELETE` of the database's `complianceBinding` object, `GET` of the database, and `DELETE` of the bound schema's name (an empty name when there is none).
 
 ```
 DELETE /compliance/bind/{databaseId}
@@ -462,7 +462,7 @@ When the database has no binding the response is `200` with only `message` and `
 
 ## Bind a schema to an asset
 
-Binds a schema directly to one asset as an override of the database binding. The asset becomes `pending_evaluation` under the schema with `schemaSource` `asset`.
+Binds a schema directly to one asset as an override of the database binding. The asset becomes `pending_evaluation` under the schema with `schemaSource` `asset`. The request is authorized on `PUT` of the `complianceBinding` object of the asset's database, `PUT` of the schema, and `GET` of the asset.
 
 ```
 PUT /compliance/bind/{databaseId}/{assetId}
@@ -498,7 +498,7 @@ PUT /compliance/bind/{databaseId}/{assetId}
 
 ## Remove the schema override of an asset
 
-Removes an asset-level override. When the database has a binding the asset falls back to it as `pending_evaluation`; otherwise the asset's compliance record is deleted and the asset leaves compliance tracking.
+Removes an asset-level override. When the database has a binding the asset falls back to it as `pending_evaluation`; otherwise the asset's compliance record is deleted and the asset leaves compliance tracking. The request is authorized on `DELETE` of the `complianceBinding` object of the asset's database, `GET` of the asset, and `DELETE` of the name of the schema the asset is bound to (an empty name when it has no compliance record).
 
 ```
 DELETE /compliance/bind/{databaseId}/{assetId}

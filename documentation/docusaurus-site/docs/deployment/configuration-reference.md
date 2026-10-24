@@ -617,7 +617,7 @@ The default compliance schema's single rule validates assets against the GLOBAL 
 
 The default schema is written once: a redeploy leaves an existing `default-compliance-schema` row in place.
 
-**Authorization:** The default admin role is granted full access to all compliance operations. For non-admin users, use the `compliance-admin` or `compliance-readonly` permission templates (in `documentation/permissionsTemplates/`) to grant scoped access. Compliance uses three dedicated Casbin object types: `complianceSchema`, `complianceEvaluation`, and `complianceCascade`. See [Permissions Model: Compliance Routes](../concepts/permissions-model.md#compliance-routes) for details.
+**Authorization:** The default admin role is granted full access to all compliance operations. For non-admin users, use the `compliance-admin` or `compliance-readonly` permission templates (in `documentation/permissionsTemplates/`) to grant scoped access. Compliance uses four dedicated Casbin object types: `complianceSchema`, `complianceEvaluation`, `complianceCascade`, and `complianceBinding`. See [Permissions Model: Compliance Routes](../concepts/permissions-model.md#compliance-routes) for details.
 
 ## Processing pipelines (`app.pipelines`)
 

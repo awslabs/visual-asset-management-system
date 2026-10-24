@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """complianceSchemaBindingService: dispatch of the five method+path pairs, both authorization
-tiers (every path is enforced against the schema AND the database or asset it targets), input
+tiers (a bind or unbind is enforced on the database's `complianceBinding` object, the schema AND a
+GET of the database or asset it targets; a read on the database and its bound schema), input
 validation, the binding semantics (a database binding marks every asset without an override pending;
 an asset override wins; removing an override falls back to the database binding), and the paged
 asset-override listing."""
@@ -173,11 +174,11 @@ class TestAuthorization:
 
     @pytest.mark.parametrize("method,path,params,body", DB_PATHS)
     def test_schema_permission_alone_does_not_reach_the_database(self, method, path, params, body):
-        """The schema object grants; the database object denies: refused before any read of the
-        database's asset rows or any write."""
+        """The schema and binding objects grant; the database object denies: refused before any
+        read of the database's asset rows or any write."""
         response, tables = _run(
             rest_event(method, path, params, body=body),
-            casbin=enforcer_for_object_types("complianceSchema"),
+            casbin=enforcer_for_object_types("complianceSchema", "complianceBinding"),
             database_item=dict(DATABASE_ROW), asset_rows=[{"assetId": "a"}, {"assetId": "b"}],
             state_rows=[{"assetId": "a", "schemaSource": "database"}])
         assert response["statusCode"] == 403
@@ -189,7 +190,7 @@ class TestAuthorization:
     def test_schema_permission_alone_does_not_reach_the_asset(self, method, path, params, body):
         response, tables = _run(
             rest_event(method, path, params, body=body),
-            casbin=enforcer_for_object_types("complianceSchema"),
+            casbin=enforcer_for_object_types("complianceSchema", "complianceBinding"),
             database_item=dict(DATABASE_ROW),
             compliance_record={"schemaName": SCHEMA, "schemaSource": "asset"})
         assert response["statusCode"] == 403
@@ -199,7 +200,8 @@ class TestAuthorization:
     def test_database_permission_alone_does_not_reach_the_schema(self, method, path, params, body):
         response, tables = _run(
             rest_event(method, path, params, body=body),
-            casbin=enforcer_for_object_types("database"), database_item=dict(DATABASE_ROW))
+            casbin=enforcer_for_object_types("database", "complianceBinding"),
+            database_item=dict(DATABASE_ROW))
         assert response["statusCode"] == 403
         _assert_nothing_written(tables)
 
@@ -207,34 +209,58 @@ class TestAuthorization:
     def test_asset_permission_alone_does_not_reach_the_schema(self, method, path, params, body):
         response, tables = _run(
             rest_event(method, path, params, body=body),
-            casbin=enforcer_for_object_types("asset"), database_item=dict(DATABASE_ROW),
+            casbin=enforcer_for_object_types("asset", "complianceBinding"),
+            database_item=dict(DATABASE_ROW),
             compliance_record={"schemaName": SCHEMA, "schemaSource": "asset"})
         assert response["statusCode"] == 403
         _assert_nothing_written(tables)
 
     @pytest.mark.parametrize("method,path,params,body", DB_PATHS)
-    def test_both_grants_reach_the_operation(self, method, path, params, body):
+    def test_the_binding_schema_and_database_grants_reach_the_operation(
+            self, method, path, params, body):
         response, _ = _run(
             rest_event(method, path, params, body=body),
-            casbin=enforcer_for_object_types("complianceSchema", "database"),
+            casbin=enforcer_for_object_types("complianceSchema", "database", "complianceBinding"),
             database_item=dict(DATABASE_ROW))
         assert response["statusCode"] == 200, response
 
-    def test_binding_a_database_checks_the_schema_and_the_stored_database_row(self):
+    def test_binding_a_database_checks_the_binding_the_schema_and_the_stored_database_row(self):
         _, tables = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY),
                          database_item=dict(DATABASE_ROW))
         calls = [c.args for c in tables["casbin"].enforce.call_args_list]
         assert calls == [
+            ({"object__type": "complianceBinding", "databaseId": DB}, "PUT"),
             ({"object__type": "complianceSchema", "complianceSchemaName": SCHEMA}, "PUT"),
-            (dict(DATABASE_ROW, object__type="database"), "PUT"),
+            (dict(DATABASE_ROW, object__type="database"), "GET"),
         ]
 
-    def test_unbinding_a_database_checks_the_stored_row_and_the_currently_bound_schema(self):
+    def test_unbinding_a_database_checks_the_binding_the_stored_row_and_the_bound_schema(self):
         row = dict(DATABASE_ROW, complianceSchemaName="old-schema")
         _, tables = _run(rest_event("DELETE", DB_PATH, DB_PARAMS), database_item=row)
         calls = [c.args for c in tables["casbin"].enforce.call_args_list]
         assert calls == [
-            (dict(row, object__type="database"), "DELETE"),
+            ({"object__type": "complianceBinding", "databaseId": DB}, "DELETE"),
+            (dict(row, object__type="database"), "GET"),
+            ({"object__type": "complianceSchema", "complianceSchemaName": "old-schema"}, "DELETE"),
+        ]
+
+    def test_binding_an_asset_checks_the_binding_the_schema_and_the_stored_asset_row(self):
+        _, tables = _run(rest_event("PUT", ASSET_PATH, ASSET_PARAMS, body=BIND_BODY))
+        calls = [c.args for c in tables["casbin"].enforce.call_args_list]
+        assert calls == [
+            ({"object__type": "complianceBinding", "databaseId": DB}, "PUT"),
+            ({"object__type": "complianceSchema", "complianceSchemaName": SCHEMA}, "PUT"),
+            (dict(ASSET_ROW, object__type="asset"), "GET"),
+        ]
+
+    def test_unbinding_an_asset_checks_the_binding_the_stored_asset_row_and_the_bound_schema(self):
+        _, tables = _run(rest_event("DELETE", ASSET_PATH, ASSET_PARAMS),
+                         compliance_record={"schemaName": "old-schema", "schemaSource": "asset"},
+                         database_item={"databaseId": DB})
+        calls = [c.args for c in tables["casbin"].enforce.call_args_list]
+        assert calls == [
+            ({"object__type": "complianceBinding", "databaseId": DB}, "DELETE"),
+            (dict(ASSET_ROW, object__type="asset"), "GET"),
             ({"object__type": "complianceSchema", "complianceSchemaName": "old-schema"}, "DELETE"),
         ]
 
@@ -249,17 +275,18 @@ class TestAuthorization:
     @pytest.mark.parametrize("method,path,params,body", ASSET_PATHS)
     def test_asset_paths_check_the_stored_asset_row(self, method, path, params, body):
         """The asset object carries the row as stored (tags, assetType, assetName), so ABAC
-        constraints on those attributes apply, plus the `asset` annotation."""
+        constraints on those attributes apply, plus the `asset` annotation. The check is a GET:
+        a binding writes compliance records only, never the asset row."""
         _, tables = _run(rest_event(method, path, params, body=body),
                          compliance_record={"schemaName": SCHEMA, "schemaSource": "asset"},
                          database_item={"databaseId": DB})
         asset_calls = [c.args for c in tables["casbin"].enforce.call_args_list
                        if c.args[0].get("object__type") == "asset"]
-        assert asset_calls == [(dict(ASSET_ROW, object__type="asset"), method)]
+        assert asset_calls == [(dict(ASSET_ROW, object__type="asset"), "GET")]
 
     def test_a_missing_database_is_refused_before_its_absence_is_reported(self):
         response, _ = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY),
-                           casbin=enforcer_for_object_types("complianceSchema"))
+                           casbin=enforcer_for_object_types("complianceSchema", "complianceBinding"))
         assert response["statusCode"] == 403
 
     def test_a_missing_database_is_checked_by_its_requested_id(self):
@@ -269,14 +296,141 @@ class TestAuthorization:
 
     def test_a_missing_asset_is_refused_before_its_absence_is_reported(self):
         response, _ = _run(rest_event("PUT", ASSET_PATH, ASSET_PARAMS, body=BIND_BODY),
-                           casbin=enforcer_for_object_types("complianceSchema"), asset_exists=False)
+                           casbin=enforcer_for_object_types("complianceSchema", "complianceBinding"),
+                           asset_exists=False)
         assert response["statusCode"] == 403
 
     def test_a_missing_asset_is_checked_by_its_requested_ids(self):
         _, tables = _run(rest_event("PUT", ASSET_PATH, ASSET_PARAMS, body=BIND_BODY),
                          asset_exists=False)
-        assert tables["casbin"].enforce.call_args_list[1].args == (
-            {"databaseId": DB, "assetId": ASSET, "object__type": "asset"}, "PUT")
+        assert tables["casbin"].enforce.call_args_list[2].args == (
+            {"databaseId": DB, "assetId": ASSET, "object__type": "asset"}, "GET")
+
+
+def _enforcer_granting(grants):
+    """A CasbinEnforcer stand-in that passes Tier-1 and grants Tier-2 exactly the (object type,
+    action) pairs in `grants` ({object type: actions}), so a test can withhold one action on one
+    object while granting everything else."""
+    instance = enforcer()
+    instance.enforce.side_effect = (
+        lambda obj, action: action in grants.get(obj.get("object__type"), ()))
+    return instance
+
+
+ALL_ACTIONS = ("GET", "PUT", "POST", "DELETE")
+# The four write paths, each with its binding action and the kind of target it reads.
+BIND_PATHS = [
+    pytest.param("PUT", DB_PATH, DB_PARAMS, BIND_BODY, "database", id="bind-database"),
+    pytest.param("DELETE", DB_PATH, DB_PARAMS, None, "database", id="unbind-database"),
+    pytest.param("PUT", ASSET_PATH, ASSET_PARAMS, BIND_BODY, "asset", id="bind-asset"),
+    pytest.param("DELETE", ASSET_PATH, ASSET_PARAMS, None, "asset", id="unbind-asset"),
+]
+
+
+def _binding_grants(method, target):
+    """What a compliance administrator holds for the database: the binding action, every schema
+    action, and a read of the target."""
+    return {"complianceBinding": (method,), "complianceSchema": ALL_ACTIONS, target: ("GET",)}
+
+
+def _run_bind_path(method, path, params, body, casbin, tokens=(USER,)):
+    return _run(rest_event(method, path, params, body=body), casbin=casbin, tokens=tokens,
+                database_item=dict(DATABASE_ROW),
+                compliance_record={"schemaName": SCHEMA, "schemaSource": "asset"})
+
+
+@pytest.mark.unit
+class TestBindingPermission:
+    """Binding and unbinding authorize on the database's `complianceBinding` object plus a GET of
+    the target. Write permission on the database or asset neither suffices nor is needed."""
+
+    @pytest.mark.parametrize("method,path,params,body,target", BIND_PATHS)
+    def test_the_binding_action_the_schema_and_a_read_of_the_target_reach_the_operation(
+            self, method, path, params, body, target):
+        response, _ = _run_bind_path(method, path, params, body,
+                                     _enforcer_granting(_binding_grants(method, target)))
+        assert response["statusCode"] == 200, response
+
+    @pytest.mark.parametrize("method,path,params,body,target", BIND_PATHS)
+    def test_without_the_binding_action_the_operation_is_refused(
+            self, method, path, params, body, target):
+        grants = _binding_grants(method, target)
+        grants["complianceBinding"] = tuple(a for a in ALL_ACTIONS if a != method)
+        response, tables = _run_bind_path(method, path, params, body, _enforcer_granting(grants))
+        assert response["statusCode"] == 403
+        _assert_nothing_written(tables)
+
+    @pytest.mark.parametrize("method,path,params,body,target", BIND_PATHS)
+    def test_without_a_read_of_the_target_the_operation_is_refused(
+            self, method, path, params, body, target):
+        """Every action but GET on the target: the binding still needs the read, which keeps ABAC
+        constraints on the target's attributes (an asset's tags, say) in force."""
+        grants = _binding_grants(method, target)
+        grants[target] = ("PUT", "POST", "DELETE")
+        response, tables = _run_bind_path(method, path, params, body, _enforcer_granting(grants))
+        assert response["statusCode"] == 403
+        _assert_nothing_written(tables)
+
+    @pytest.mark.parametrize("method,path,params,body,target", BIND_PATHS)
+    def test_database_and_asset_write_grants_do_not_bind(self, method, path, params, body, target):
+        """A Database User or Database Admin grant (every action on the database and its assets)
+        plus every schema action, but no `complianceBinding`: refused, and nothing is written."""
+        grants = {"database": ALL_ACTIONS, "asset": ALL_ACTIONS, "complianceSchema": ALL_ACTIONS}
+        response, tables = _run_bind_path(method, path, params, body, _enforcer_granting(grants))
+        assert response["statusCode"] == 403
+        _assert_nothing_written(tables)
+
+    @pytest.mark.parametrize("method,path,params,body,target", BIND_PATHS)
+    def test_the_binding_is_checked_on_the_paths_database(self, method, path, params, body, target):
+        """An asset-level binding is checked on the asset's database, which the path names."""
+        _, tables = _run_bind_path(method, path, params, body, enforcer())
+        binding_calls = [c.args for c in tables["casbin"].enforce.call_args_list
+                         if c.args[0].get("object__type") == "complianceBinding"]
+        assert binding_calls == [({"object__type": "complianceBinding", "databaseId": DB}, method)]
+
+    @pytest.mark.parametrize("method,path,params,body,target", BIND_PATHS)
+    def test_a_binding_granted_on_another_database_does_not_reach_this_one(
+            self, method, path, params, body, target):
+        casbin = enforcer()
+        casbin.enforce.side_effect = lambda obj, action: (
+            obj.get("object__type") != "complianceBinding" or obj.get("databaseId") == "other-db")
+        response, tables = _run_bind_path(method, path, params, body, casbin)
+        assert response["statusCode"] == 403
+        _assert_nothing_written(tables)
+
+    @pytest.mark.parametrize("function,args", [
+        ("bind_schema_to_database", lambda: (DB, svc.BindSchemaRequestModel(schemaName=SCHEMA))),
+        ("unbind_schema_from_database", lambda: (DB,)),
+        ("bind_schema_to_asset",
+         lambda: (DB, ASSET, svc.BindSchemaRequestModel(schemaName=SCHEMA))),
+        ("unbind_schema_from_asset", lambda: (DB, ASSET)),
+    ])
+    def test_each_write_path_denies_empty_tokens_on_its_own(self, function, args):
+        """Reached with an empty token list (Tier 1 bypassed), each path refuses before any
+        Tier-2 check, read or write."""
+        args = args()
+        casbin = enforcer()
+        schema_table, database_table, state_table, asset_table = _tables(
+            database_item=dict(DATABASE_ROW))
+        with patch(f"{MOD}.claims_and_roles", {"tokens": [], "roles": []}), \
+                patch(f"{MOD}.CasbinEnforcer", return_value=casbin), \
+                patch(f"{MOD}.database_table", database_table), \
+                patch(f"{MOD}.asset_state_table", state_table), \
+                patch(f"{STORE}.get_asset_item") as get_asset, \
+                patch(f"{STORE}.update_asset_state") as update_state:
+            response = getattr(svc, function)(rest_event("PUT", DB_PATH, DB_PARAMS), *args)
+        assert response["statusCode"] == 403
+        casbin.enforce.assert_not_called()
+        database_table.get_item.assert_not_called()
+        get_asset.assert_not_called()
+        update_state.assert_not_called()
+
+    def test_the_binding_check_fails_closed_on_empty_tokens(self):
+        casbin = enforcer()
+        with patch(f"{MOD}.claims_and_roles", {"tokens": [], "roles": []}), \
+                patch(f"{MOD}.CasbinEnforcer", return_value=casbin):
+            assert svc._enforce_binding(DB, "PUT") is False
+        casbin.enforce.assert_not_called()
 
 
 @pytest.mark.unit

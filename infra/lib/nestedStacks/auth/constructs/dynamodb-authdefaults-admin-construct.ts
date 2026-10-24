@@ -1791,6 +1791,114 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     S: "complianceCascade",
                 },
             },
+            {
+                entityType: {
+                    S: "constraint",
+                },
+                sk: {
+                    S: "initial_admin_allow_all_compliancebindings",
+                },
+                constraintId: {
+                    S: "initial_admin_allow_all_compliancebindings",
+                },
+                criteriaAnd: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "databaseId",
+                                },
+                                id: {
+                                    S: "admin_all_compliancebindings",
+                                },
+                                operator: {
+                                    S: "contains",
+                                },
+                                value: {
+                                    S: ".*",
+                                },
+                            },
+                        },
+                    ],
+                },
+                description: {
+                    S: "Allow GET/PUT/POST/DELETE on all compliance bindings for admin",
+                },
+                groupPermissions: {
+                    L: [
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-get-all-compliancebindings",
+                                },
+                                permission: {
+                                    S: "GET",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-put-all-compliancebindings",
+                                },
+                                permission: {
+                                    S: "PUT",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-post-all-compliancebindings",
+                                },
+                                permission: {
+                                    S: "POST",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleNameAdmin,
+                                },
+                                id: {
+                                    S: "admin-allow-delete-all-compliancebindings",
+                                },
+                                permission: {
+                                    S: "DELETE",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                    ],
+                },
+                name: {
+                    S: "admin-allow-all-compliancebindings",
+                },
+                objectType: {
+                    S: "complianceBinding",
+                },
+            },
         ];
 
         let i = 0;

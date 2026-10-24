@@ -164,12 +164,12 @@ VAMS includes pre-built permission templates for common access patterns such as 
 
 Two templates set up compliance roles:
 
-| Template                | Description                                                                                                                                                                                    |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Compliance Admin**    | Full compliance management scoped to a database: create, update and delete schemas, trigger evaluations, release quarantines, approve cascades, plus read-only access to assets and databases. |
-| **Compliance Readonly** | View-only compliance access scoped to a database: view schemas, evaluation results, quarantine list, and audit logs. Cannot modify compliance state.                                           |
+| Template                | Description                                                                                                                                                                                                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Compliance Admin**    | Full compliance management scoped to a database: create, update and delete schemas, bind and unbind schemas on the database and its assets, trigger evaluations, release quarantines, approve cascades, plus read-only access to the database and its assets. |
+| **Compliance Readonly** | View-only compliance access scoped to a database: view schemas, evaluation results, quarantine list, and audit logs. Cannot modify compliance state.                                                                                                          |
 
-Both templates require `DATABASE_ID` and `ROLE_NAME` variables. For details on compliance permissions including the three compliance object types (`complianceSchema`, `complianceEvaluation`, `complianceCascade`), see [User Guide: Compliance > Permissions](compliance.md#permissions).
+Both templates require `DATABASE_ID` and `ROLE_NAME` variables. For details on compliance permissions including the four compliance object types (`complianceSchema`, `complianceBinding`, `complianceEvaluation`, `complianceCascade`), see [User Guide: Compliance > Permissions](compliance.md#permissions).
 
 For template details, JSON format, and instructions on applying templates via the CLI or API, see [Developer Guide: Permissions](../developer/permissions.md#permission-templates).
 

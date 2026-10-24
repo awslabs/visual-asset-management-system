@@ -1,7 +1,7 @@
 {
     "metadata": {
         "name": "Compliance Admin",
-        "description": "Administrative access for compliance operations. Can manage compliance schemas, trigger evaluations, release quarantined assets, grant exceptions, and approve/reject cascades. Scoped to a specific database.",
+        "description": "Administrative access for compliance operations. Can manage compliance schemas, bind and unbind them on the database and its assets, trigger evaluations, release quarantined assets, grant exceptions, and approve/reject cascades. Read-only on the database and its assets. Scoped to a specific database.",
         "version": "1.0"
     },
     "variables": [
@@ -84,9 +84,9 @@
             ]
         },
         {
-            "name": "{{ROLE_NAME}}-assets-compliance-binding",
-            "description": "Allow reading assets in {{DATABASE_ID}} and binding or unbinding a compliance schema override on them",
-            "objectType": "asset",
+            "name": "{{ROLE_NAME}}-compliance-bindings",
+            "description": "Allow binding and unbinding compliance schemas in {{DATABASE_ID}}, on the database and on its assets",
+            "objectType": "complianceBinding",
             "criteriaAnd": [
                 { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
             ],
@@ -98,18 +98,24 @@
             ]
         },
         {
-            "name": "{{ROLE_NAME}}-database-compliance-binding",
-            "description": "Allow reading the {{DATABASE_ID}} database entity and binding or unbinding its compliance schema",
+            "name": "{{ROLE_NAME}}-assets-readonly",
+            "description": "Allow read access to assets in {{DATABASE_ID}}, which binding a compliance schema to an asset requires",
+            "objectType": "asset",
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-database-readonly",
+            "description": "Allow read access to the {{DATABASE_ID}} database entity, which binding a compliance schema to it requires",
             "objectType": "database",
             "criteriaAnd": [
                 { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
             ],
             "criteriaOr": [],
-            "groupPermissions": [
-                { "action": "GET", "type": "allow" },
-                { "action": "PUT", "type": "allow" },
-                { "action": "DELETE", "type": "allow" }
-            ]
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
         }
     ]
 }
