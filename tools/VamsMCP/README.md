@@ -223,7 +223,11 @@ restore it with `unarchive_workflow`.
 
 Call `list_allowed_api_routes` first — it reports what the authenticated user is
 actually authorized to do, so an agent can scope its plan instead of discovering
-a 403 mid-task. `search_assets` and `search_files` accept a `geo_search` filter
+a 403 mid-task. It checks each `{param}` path segment as the placeholder
+`vams:any`, so when the user's `api` constraints name a concrete value in a
+parameter position (for example `starts_with` `/database/projA/`), a route can be
+left out although calls on those concrete paths are allowed, or listed although
+they are refused with 403; constraints on literal segments are reflected exactly. `search_assets` and `search_files` accept a `geo_search` filter
 (point + radius, bounding box, or GeoJSON) against the `geo_MD_location` field,
 plus `from_offset` for paging past `size` hits and `sort_field` / `sort_desc` for
 ordering by an indexed field instead of relevance (relevance order cannot answer
@@ -242,7 +246,7 @@ caller: the first returns every API route (`path`, `methods`, `category`,
 `objectTypes` (with the `fields` a criterion may test), `operators`,
 `permissions`, and `permissionTypes` as `{label, value}` pairs — send the
 `value`. Both are fixed per deployment. `list_allowed_api_routes` remains the
-one that says what this session may do.
+one that says what this session may do, within the templated-segment caveat above.
 
 `generate_download_urls_bulk` signs up to 1500 files of one asset in a single
 request. `file_keys` entries are either a relative path (latest version) or

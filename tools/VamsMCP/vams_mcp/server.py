@@ -210,7 +210,11 @@ def list_allowed_api_routes() -> Dict[str, Any]:
     """List the VAMS API routes and methods the authenticated user is authorized
     to call. Call this first to scope what this session can actually do — the
     user's two-tier permissions bound every other tool, and a route missing here
-    will be refused with a 403."""
+    will be refused with a 403. Exception: each {param} segment is checked as the
+    placeholder 'vams:any', so when the user's api constraints name a concrete
+    value in a parameter position (e.g. starts_with '/database/projA/'), a route
+    can be missing although calls on those concrete paths are allowed, or listed
+    although they are refused with 403."""
     return CLIENT.api.list_allowed_api_routes()
 
 
