@@ -250,6 +250,17 @@ reports a finished JOB's outcome carries the child's own output instead, so it b
 fit the 32768-character `cause` limit; `multi/rapidPipelineEKS`'s CHECK_JOB path is the example, and its
 `POD_LOG_TAIL_MAX_CHARS` is deliberately far larger than 256.
 
+A value over either `SendTaskFailure` limit (`error` 256 characters, `cause` 32768) is rejected by the
+service — botocore checks only the minimum length — and the rejection lands in the callback's own
+`except`, so the token goes unreported exactly as if no callback had been written. A route that forwards
+an error it did not compose (a `PipelineEnd` handler passing on the state's `$.error`) cannot know its
+size. `multi/rapidPipelineEKS/lambda/taskFailureBounds.py` is the pattern: every `send_task_failure` in
+that pipeline's `consolidated_handler.py` and `openPipeline.py` takes its `error` and `cause` from
+`bounded_task_failure`, which returns a value within its limit unchanged, keeps the head of a longer one
+(a Lambda error body puts the message first) with a `... [truncated from N characters]` marker inside the
+limit, and converts a non-string with `str()`. `tests/test_rapidpipeline_eks_task_failure_bounds.py`
+holds every call to that form with a syntax-tree guard; it is durable, not temporary.
+
 **On the SUCCESS path, report the outcome and not the job's output.** A `SendTaskSuccess` output and the
 lambda's own return value both land in the execution record, which is durable and readable by anyone who
 can read the execution — and on a run that worked, a third-party tool's stdout has no diagnostic value
@@ -472,6 +483,14 @@ partition. Author it with the block for your execution type present but empty:
    quoting a typed tag would hand the container `"42"` where it expects `42`. Non-`json` formats
    (`yaml`, `xml`, `openjd`, `raw`) are stored verbatim and not shape-checked. A `tagKey` may not
    collide with a reserved system tag name or start with the reserved `metadata_` prefix.
+   **Text the container renders itself — a GenAI prompt carried in a template body — places its
+   inputs as `[[TOKEN]]`, never `{{TOKEN}}`:** VAMS substitutes every declared and catalog `{{tag}}`
+   in the body before the pipeline sees it, so `{{…}}` stays the channel for operator values. **A
+   template never names a model:** a GenAI pipeline's model is one deployment setting whose IAM grant
+   is scoped to it at synth, so the pipeline refuses a body carrying a model key rather than widening
+   the grant. The Video SOP/BOM workload-profile templates are the worked example; their rules live
+   in `genAi/videoSopBom/lambda/profileRules.py`, a byte-identical copy of the container's, so
+   `constructPipeline` refuses a bad profile before any AWS Batch job starts.
 9. **A workflow ref's `jobName` is an output-path segment, not a display label.** It becomes the
    `{jobName}` folder in `{baseAssetsPrefix}pipelines/{pipelineName}/{jobName}/output/{executionId}/files/`
    — relative to the area VAMS owns in the default asset bucket, which
@@ -549,9 +568,10 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
      "sourceType": "batch", "label": "<Batch state name> container"}
     ```
 
-    Which group that is depends on the compute family. The five **Fargate** job definitions (coordinate
-    transform, Blender renderer, 3D thumbnail, PDAL, Potree) write through the `awslogs` driver to a
-    VAMS-owned, KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and register **that** group;
+    Which group that is depends on the compute family. The six **Fargate** job definitions (coordinate
+    transform, Blender renderer, 3D thumbnail, PDAL, Potree, video SOP/BOM extraction) write through the
+    `awslogs` driver to a VAMS-owned, KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and
+    register **that** group;
     the **GPU** Batch pipelines (NVIDIA Cosmos, GR00T, Isaac Lab, Splat Toolbox) set no log configuration,
     so theirs is AWS Batch's default `/aws/batch/job`. In both families the stream is
     `<jobDefinitionName>/default/<ecs-task-id>` — the Fargate construct sets `awslogs-stream-prefix` to the
@@ -646,12 +666,14 @@ so no suite there runs `--strict-markers` and an unregistered marker only warns.
 `unit` through a `pytest_configure` hook in their `conftest.py`; none registers `temporary`.
 
 **A rule that must hold for EVERY pipeline goes in `backendPipelines/tests/`.**
-`test_open_pipeline_extension_gates.py` is the worked example: it loads all seven `openPipeline.py`
+`test_open_pipeline_extension_gates.py` is the worked example: it loads all eight `openPipeline.py`
 handlers by path under per-pipeline module names and asserts each tests EXACT membership of its parsed
 `ALLOWED_INPUT_FILEEXTENSIONS` list. `in` against the joined env string is substring containment, which
 admits any prefix of a listed extension (`.us` passes for `.usd,.usda`), and the loose form spread by
-copying an existing pipeline — which is precisely what a per-pipeline test cannot catch. Two of seven
-were fixed and five were not, and no per-pipeline suite noticed.
+copying an existing pipeline — which is precisely what a per-pipeline test cannot catch. When the test
+was written it covered seven handlers: two had been fixed and five had not, and no per-pipeline suite
+noticed. The handler count is the `PIPELINES` tuple in that file — recompute it with
+`grep -c '^    ("[A-Za-z0-9]*", "backendPipelines/' backendPipelines/tests/test_open_pipeline_extension_gates.py`.
 
 **Give every test module a suite-private basename.** Pipelines are near-copies of one another, so their
 test files collide: `test_extension_gate.py`, `test_manifest_refactor.py`,
@@ -752,12 +774,15 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     exposes them as `inputBucketRegion` / `outputBucketRegion`, and `manifestHelper.s3_client_for_region()`
     builds the client that reads or writes there (adaptive retries, regional `us-east-1` endpoint, no
     `endpoint_url`). **A pipeline whose AWS Batch compute runs in the isolated subnets** (Potree viewer,
-    3D thumbnail, GenAI metadata labeling, coordinate transform) reaches Amazon S3 in the deployment
+    3D thumbnail, GenAI metadata labeling, coordinate transform, Video SOP/BOM) reaches Amazon S3 in the
+    deployment
     Region through the S3 gateway endpoint and in each cross-Region asset bucket's Region through the
     cross-Region S3 interface endpoint the VPC builder creates in those subnets
     (`app.useGlobalVpc.addCrossRegionS3Endpoints`), so its `vamsExecute` handler calls
-    `manifestHelper.enforce_inputs_in_region(resolved)` right after `enforce_single_input_file`, inside
-    the `try` that reports `SendTaskFailure`. The gate admits the deployment Region and the Regions in
+    `manifestHelper.enforce_inputs_in_region(resolved)` right after `enforce_single_input_file` (or, for
+    the multi-file Video SOP/BOM pipeline, right after the manifest resolves and before its own count and
+    HeadObject gates, so no head is sent to a Region the compute cannot reach), inside the `try` that
+    reports `SendTaskFailure`. The gate admits the deployment Region and the Regions in
     `CROSS_REGION_S3_ENDPOINT_REGIONS`, which the pipeline's lambda builder sets on the `vamsExecute`
     function from `Config.crossRegionS3EndpointRegions(config)` -- the same helper the VPC builder
     iterates to create the endpoints, so the two cannot drift -- and rejects any other Region with a
@@ -847,7 +872,7 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     - **Pipeline-only endpoint condition** (~line 651) — the `if` block that creates Batch, ECR API, and ECR Docker interface VPC endpoints in the isolated subnets. **Required for every pipeline, either placement.** Without it Batch jobs cannot pull container images.
     - **ECS endpoint condition** (~line 736) — the `needsEcsPrivate` variable. **Private-subnet pipelines only.** This is the ECS _control-plane_ endpoint that the ECS agent on an EC2-launch-type container instance needs; **Fargate tasks do not use it** (they need ECR, Amazon S3 and CloudWatch Logs, supplied by the block above). Each endpoint adds one ENI per AZ, ~$15/month.
 
-    Four Batch pipelines run in isolated subnets (Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; seven run in private subnets (Splat Toolbox, ModelOps, RapidPipeline ECS and EKS, NVIDIA Cosmos, NVIDIA Cosmos 3, NVIDIA GR00T) and appear in all three. Isaac Lab training runs its compute in private subnets and appears in the subnet-creation and endpoint conditions, with its ECS endpoint gated separately by `needsEcsIsolated`. The Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) use no Batch and appear in none. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
+    Which blocks a flag belongs in is derived from the source, not from a list kept here. Read the placement off `pipelineBuilder-nestedStack.ts`: a stack given `pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline` is an isolated-subnet pipeline (endpoint block only); one given `privateSubnets.pipeline`, or both `pipelineSubnetsPrivate` and `pipelineSubnetsIsolated`, is a private-subnet pipeline (all three). A containerized Lambda pipeline (3dBasic, CAD/mesh metadata extraction) is placed in isolated subnets but runs no Batch job, so it appears in no block. A pipeline whose container calls a service that has no interface endpoint yet also gets a service-endpoint gate beside the Bedrock Runtime / Rekognition `if` — the Bedrock Runtime endpoint is created when `bedrockRuntimeFromLambda` (`useForAllLambdas && useGenAiMetadata3dLabeling.enabled`) **or** `bedrockRuntimeFromContainer` (`useGenAiVideoSopBom.enabled`) holds, and the Transcribe endpoint when `bedrockRuntimeFromContainer` holds. Isaac Lab training is the one placement the derivation does not predict: its EC2 Batch compute is placed in `privateSubnets.pipeline` (its EFS in isolated subnets) and the flag appears in the subnet-creation and endpoint blocks, while its ECS endpoint is gated separately by `needsEcsIsolated` rather than `needsEcsPrivate`. Recompute the membership with `grep -n "pipelineSubnets" infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts` against `grep -n "subnetConfigurations.push(subnetPublicConfig)\|Pipeline-Only Required Endpoints\|const needsEcsPrivate\|bedrockRuntimeFromContainer" infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts` (no NAT for an isolated-subnet pipeline, NAT present for a private-subnet one) and `infra/test/pipelines/videoSopBomVpcPlacement.test.ts` (the service-endpoint gate widened for the container without widening the Lambda gate). `infra/test/security/vpcEndpointsAndAuthGrants.test.ts` asserts each flag's block membership from its `privateSubnetBatchFlags` / `isolatedSubnetBatchFlags` lists — add a new pipeline's flag to the matching list.
 
 11. **Pass through all output paths** in the `vamsExecute` lambda — never hardcode empty strings for `outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, or `outputS3AssetMetadataPath`. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for conventions.
 12. **Use the correct output path** in the `constructPipeline` lambda for the container's output target: `outputS3AssetFilesPath` for file-level outputs (including `.previewFile.X` thumbnails), `outputS3AssetPreviewPath` for asset-level previews only, `outputS3AssetMetadataPath` for metadata. Only use `inputOutputS3AssetAuxiliaryFilesPath` for temporary files or special non-versioned viewer data (e.g., Potree octree files).

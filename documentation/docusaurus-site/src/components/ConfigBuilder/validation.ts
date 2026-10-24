@@ -157,10 +157,42 @@ const SECRETSMANAGER_ARN_PATTERN = /^arn:aws[a-z-]*:secretsmanager:/;
 // Amazon Cognito's username limit, mirroring COGNITO_USERNAME_MAX_LENGTH in infra/config/config.ts.
 const COGNITO_USERNAME_MAX_LENGTH = 128;
 
-// The taskTimeout the RapidPipeline EKS bundle declares, mirroring
-// RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS in infra/config/config.ts. The parent workflow waits
-// this long for the pipeline's task-token callback, so the Kubernetes job must not outlive it.
-const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 14400;
+// The RapidPipeline EKS timeout chain, mirroring the RAPID_PIPELINE_EKS_* constants,
+// rapidPipelineEksJobCheckAttempts() and rapidPipelineEksWorstCaseRunSeconds() in
+// infra/config/config.ts. The longest run a jobTimeout allows (ConstructPipeline, RunJob, a poll that
+// reaches its ceiling with a CheckJob allowance per call, and PipelineEnd) must fit in the state
+// machine timeout, and jobTimeout must not exceed the maximum.
+const RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS = 14400;
+const RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS = 21600;
+const RAPID_PIPELINE_EKS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS = 300;
+const RAPID_PIPELINE_EKS_RUN_JOB_TIMEOUT_SECONDS = 960;
+const RAPID_PIPELINE_EKS_PIPELINE_END_TIMEOUT_SECONDS = 300;
+const RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS = 10;
+const RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS = 60;
+const RAPID_PIPELINE_EKS_CHECK_JOB_ALLOWANCE_SECONDS = 3;
+
+function rapidPipelineEksWorstCaseRunSeconds(jobTimeoutSeconds: number): number {
+    const attempts = Math.ceil(
+        (jobTimeoutSeconds + RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS) /
+            RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS
+    );
+    return (
+        RAPID_PIPELINE_EKS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS +
+        RAPID_PIPELINE_EKS_RUN_JOB_TIMEOUT_SECONDS +
+        attempts * RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS +
+        (attempts + 1) * RAPID_PIPELINE_EKS_CHECK_JOB_ALLOWANCE_SECONDS +
+        RAPID_PIPELINE_EKS_PIPELINE_END_TIMEOUT_SECONDS
+    );
+}
+
+/** The configured jobTimeout when it is a positive integer, which the other two rules then check. */
+function rapidPipelineEksJobTimeout(c: ConfigShape): number | undefined {
+    if (!g(c, "app.pipelines.useRapidPipeline.useEks.enabled")) return undefined;
+    const timeout = g(c, "app.pipelines.useRapidPipeline.useEks.jobTimeout");
+    return typeof timeout === "number" && Number.isInteger(timeout) && timeout > 0
+        ? timeout
+        : undefined;
+}
 
 // The 3D preview thumbnail compute tiers getConfig() fills in when a tier names none, mirroring
 // PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS in infra/config/config.ts.
@@ -690,6 +722,12 @@ const VPC_REQUIRING_FEATURES: {
         fieldPaths: ["app.pipelines.useConversionCoordinateTransform.enabled"],
         appliesWhen: (c) => !!g(c, "app.pipelines.useConversionCoordinateTransform.enabled"),
     },
+    {
+        id: "vpc-required-genai-video-sop-bom",
+        label: "pipelines.useGenAiVideoSopBom",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.enabled"],
+        appliesWhen: (c) => !!g(c, "app.pipelines.useGenAiVideoSopBom.enabled"),
+    },
 ];
 
 /** Partitions whose capability downgrades are gated on app.govCloud.enabled (config.ts: `restrictedPartitionRequiringFlag`). */
@@ -1042,9 +1080,11 @@ export const RULES: Rule[] = [
     // (config.ts: "The job timeout sits in the middle of a three-link chain") -----
     //
     // The state machine derives its poll ceiling from this value, the Kubernetes pod's
-    // activeDeadlineSeconds is set from it, and the registered pipeline bundle declares a taskTimeout
-    // the parent workflow waits for. An inconsistent value produces a wrong outcome rather than an
-    // error: a pod outliving the poll makes the execution report FAILED while it keeps writing output.
+    // activeDeadlineSeconds is set from it, and the run it allows must fit in the state machine's own
+    // timeout, which the registered pipeline's taskTimeout outlasts. An inconsistent value produces a
+    // wrong outcome rather than an error: a pod outliving the poll makes the execution report FAILED
+    // while it keeps writing output, and a run outliving the state machine is stopped before it
+    // reports. The maximum sits below the largest value that fits.
     {
         id: "rapidpipeline-eks-job-timeout",
         severity: "error",
@@ -1057,19 +1097,35 @@ export const RULES: Rule[] = [
         message: "useRapidPipeline.useEks.jobTimeout must be a positive integer number of seconds.",
     },
     {
-        id: "rapidpipeline-eks-job-timeout-exceeds-task-timeout",
+        id: "rapidpipeline-eks-job-timeout-exceeds-state-machine-timeout",
         severity: "error",
         fieldPaths: ["app.pipelines.useRapidPipeline.useEks.jobTimeout"],
-        appliesWhen: (c) =>
-            !!g(c, "app.pipelines.useRapidPipeline.useEks.enabled") &&
-            Number(g(c, "app.pipelines.useRapidPipeline.useEks.jobTimeout")) >
-                RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS,
+        appliesWhen: (c) => {
+            const timeout = rapidPipelineEksJobTimeout(c);
+            return (
+                timeout !== undefined &&
+                rapidPipelineEksWorstCaseRunSeconds(timeout) >
+                    RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS
+            );
+        },
+        message:
+            `useRapidPipeline.useEks.jobTimeout lets a pipeline run take longer than the ` +
+            `${RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS}s timeout of the pipeline's state ` +
+            `machine, which would stop the run before it reports its outcome to the parent workflow. ` +
+            `Lower jobTimeout to at most ${RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS}.`,
+    },
+    {
+        id: "rapidpipeline-eks-job-timeout-exceeds-maximum",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useRapidPipeline.useEks.jobTimeout"],
+        appliesWhen: (c) => {
+            const timeout = rapidPipelineEksJobTimeout(c);
+            return timeout !== undefined && timeout > RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS;
+        },
         message:
             `useRapidPipeline.useEks.jobTimeout exceeds the ` +
-            `${RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS}s taskTimeout the registered pipeline ` +
-            `declares, so the parent workflow would stop waiting while the Kubernetes job is still ` +
-            `allowed to run. Lower jobTimeout, or raise taskTimeout in ` +
-            `backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json to match.`,
+            `${RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS}s maximum job runtime. Lower jobTimeout ` +
+            `to at most ${RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS}.`,
     },
 
     // ----- 3D preview thumbnail compute tiers
@@ -2755,6 +2811,81 @@ export const RULES: Rule[] = [
         },
         message:
             'bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition. Use a model id offered in this partition (GovCloud uses the "us-gov." prefix).',
+    },
+    // The Video SOP/BOM Extraction pipeline's id goes through the same getConfig() helper
+    // (validateBedrockModelId), so the two rules above are restated for its path.
+    {
+        id: "video-sop-bom-bedrock-model-id-required",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.bedrockModelId"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useGenAiVideoSopBom.enabled") &&
+            isBlank(g(c, "app.pipelines.useGenAiVideoSopBom.bedrockModelId")),
+        message:
+            "useGenAiVideoSopBom requires a bedrockModelId available in this partition and Region; one model serves the pipeline's text and vision calls. The restricted-partition presets leave it empty because the commercial cross-Region inference profiles do not exist there.",
+    },
+    {
+        id: "video-sop-bom-bedrock-model-id-commercial-only-prefix",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.bedrockModelId", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiVideoSopBom.enabled")) return false;
+            const id = String(g(c, "app.pipelines.useGenAiVideoSopBom.bedrockModelId") ?? "");
+            return !isCommercialPartition(c) && (id.startsWith("global.") || id.startsWith("us."));
+        },
+        message:
+            'useGenAiVideoSopBom.bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition. Use a model id offered in this partition (GovCloud uses the "us-gov." prefix).',
+    },
+
+    // ----- Video SOP/BOM Extraction partition and limits
+    // (config.ts: "not validated outside the commercial and GovCloud partitions") -----
+    //
+    // The pipeline calls Amazon Transcribe and Amazon Bedrock from an isolated-subnet container through
+    // VPC interface endpoints; where the Transcribe endpoint is unverified a missing one hangs a run
+    // until its timeout rather than failing. Keyed on the partition the configured region resolves to,
+    // and silent while the region is unset.
+    {
+        id: "video-sop-bom-commercial-or-govcloud-only",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.enabled", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiVideoSopBom.enabled")) return false;
+            const partition = partitionForRegionName(g(c, "env.region"));
+            return partition !== undefined && partition !== "aws" && partition !== "aws-us-gov";
+        },
+        message:
+            "useGenAiVideoSopBom is not validated outside the commercial and GovCloud partitions: Amazon Transcribe endpoint availability is unverified and the service-helper has no row for this partition; a missing endpoint hangs a run until its timeout. Set app.pipelines.useGenAiVideoSopBom.enabled to false for this deployment Region.",
+    },
+    // The two operator-set caps reach the pipeline's Lambdas as environment variables; a value outside
+    // the range the pipeline can honour is refused at deploy time rather than at the first run. An
+    // absent leaf is backfilled by getConfig(), so it is not reported here.
+    {
+        id: "video-sop-bom-max-video-files-range",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiVideoSopBom.enabled")) return false;
+            const value = g(c, "app.pipelines.useGenAiVideoSopBom.limits.maxVideoFiles");
+            if (isAbsent(value)) return false; // backfilled to 4
+            return typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 4;
+        },
+        message:
+            "useGenAiVideoSopBom.limits.maxVideoFiles must be an integer from 1 to 4 (videos per run).",
+    },
+    {
+        id: "video-sop-bom-max-total-duration-range",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useGenAiVideoSopBom.enabled")) return false;
+            const value = g(c, "app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes");
+            if (isAbsent(value)) return false; // backfilled to 240
+            return (
+                typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 480
+            );
+        },
+        message:
+            "useGenAiVideoSopBom.limits.maxTotalDurationMinutes must be an integer from 1 to 480 (minutes of video per run; Amazon Transcribe accepts at most 28,800 seconds of audio per job).",
     },
 
     // ----- Physna outbound endpoints (config.ts: "must use https, or the credentials VAMS sends to it travel in cleartext") -----

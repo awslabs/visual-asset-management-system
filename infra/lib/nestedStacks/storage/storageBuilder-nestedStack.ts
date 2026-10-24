@@ -900,6 +900,27 @@ export function storageResourcesBuilder(
                 enabled: true,
                 abortIncompleteMultipartUploadAfter: Duration.days(14),
             },
+            // The video SOP/BOM pipeline's scratch objects (pipelines/<pipelineId>/<executionId>/...:
+            // definition document, extracted audio, Transcribe output, analysis artefacts). A run deletes
+            // its own on success and its pipelineEnd Lambda deletes them on failure; the objects a
+            // crashed run leaves behind expire here. The bucket is versioned, so a delete only writes a
+            // delete marker: the noncurrent expiry is what reclaims the storage, and the expired
+            // delete markers go with it. Other pipelines' working prefixes are untouched.
+            ...(config.app.pipelines.useGenAiVideoSopBom?.enabled
+                ? [
+                      {
+                          enabled: true,
+                          prefix: "pipelines/genai-video-sop-bom/",
+                          expiration: Duration.days(30),
+                          noncurrentVersionExpiration: Duration.days(1),
+                      },
+                      {
+                          enabled: true,
+                          prefix: "pipelines/genai-video-sop-bom/",
+                          expiredObjectDeleteMarker: true,
+                      },
+                  ]
+                : []),
         ],
         serverAccessLogsBucket: accessLogsBucket,
         serverAccessLogsPrefix: "assetAuxiliary-bucket-logs/",

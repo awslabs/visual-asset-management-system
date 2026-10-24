@@ -17,6 +17,7 @@ import sys
 from botocore.exceptions import ClientError
 
 from botocore.config import Config
+from taskFailureBounds import bounded_task_failure
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
 # runs against throttling-prone services (Step Functions, Amazon S3, EventBridge) for the length of
@@ -611,8 +612,10 @@ def handle_construct_pipeline(event):
                 f"s3://{inputOutput_s3_assetAuxiliary_files_bucket}/{inputOutput_s3_assetAuxiliary_files_key}/rp_config.json")
             processing_command = f"aws s3 cp {q_config_object} rp_config.json && {standard_command_with_config}"
 
-        # Generate unique job ID
-        job_id = str(uuid.uuid4())[:8]
+        # A random 128-bit job id, unique per run: create_job adopts an existing job with this name and
+        # job-id label as this run's own job. The name (51 characters) and the label value (32) stay
+        # within Kubernetes' 63-character limits.
+        job_id = uuid.uuid4().hex
 
         # Validate container image URI configuration
         if not CONTAINER_IMAGE_URI or CONTAINER_IMAGE_URI == "CONTAINER_IMAGE_PLACEHOLDER":
@@ -809,6 +812,9 @@ POD_LOG_TAIL_LINES = 80
 POD_LOG_TAIL_LINE_CHARS = 2000
 POD_LOG_TAIL_MAX_CHARS = 24000
 POD_LOG_TRUNCATION_MARKER = "[earlier log output omitted]\n"
+# The SendTaskFailure error and cause limits are taskFailureBounds.SEND_TASK_FAILURE_*_MAX_CHARS.
+# This tail is sized well inside the cause limit; bounded_task_failure is the final guard on every
+# failure callback, and it keeps the head of the cause.
 
 
 def bounded_log_tail(log_text):
@@ -950,10 +956,14 @@ def handle_check_job(event):
             if external_task_token:
                 logger.info(f"Calling Step Functions task failure for external token")
                 try:
+                    failure_error, failure_cause = bounded_task_failure(
+                        'JobExecutionFailed',
+                        f"Job failed after {counter + 1} status checks. Error details: {detailed_error_logs}"
+                    )
                     sfn.send_task_failure(
                         taskToken=external_task_token,
-                        error='JobExecutionFailed',
-                        cause=f"Job failed after {counter + 1} status checks. Error details: {detailed_error_logs}"
+                        error=failure_error,
+                        cause=failure_cause
                     )
                     logger.info(f"Successfully notified Step Functions of job failure")
                 except Exception as callback_error:
@@ -1040,10 +1050,14 @@ def handle_check_job(event):
         if external_task_token:
             logger.info(f"Calling Step Functions task failure for external token due to exception")
             try:
+                failure_error, failure_cause = bounded_task_failure(
+                    'JobCheckError',
+                    f"Failed to check job status after {counter + 1} attempts. Error: {str(e)}"
+                )
                 sfn.send_task_failure(
                     taskToken=external_task_token,
-                    error='JobCheckError',
-                    cause=f"Failed to check job status after {counter + 1} attempts. Error: {str(e)}"
+                    error=failure_error,
+                    cause=failure_cause
                 )
                 logger.info(f"Successfully notified Step Functions of job check error")
             except Exception as callback_error:
@@ -1107,8 +1121,9 @@ def handle_pipeline_end(event):
                     error_info = event.get("error", {})
                     error_type = error_info.get("Error", "PipelineExecutionFailed")
                     error_cause = error_info.get("Cause", "Unknown error in pipeline execution")
+                    failure_error, failure_cause = bounded_task_failure(error_type, error_cause)
 
-                    logger.info(f"Sending task failure notification - Error: {error_type}")
+                    logger.info(f"Sending task failure notification - Error: {failure_error}")
 
                     # Add retry logic for task failure notification
                     max_retries = 3
@@ -1116,8 +1131,8 @@ def handle_pipeline_end(event):
                         try:
                             sfn.send_task_failure(
                                 taskToken=external_sfn_task_token,
-                                error=error_type,
-                                cause=error_cause
+                                error=failure_error,
+                                cause=failure_cause
                             )
                             logger.info(f"Task failure notification sent successfully on attempt {attempt + 1}")
                             break
@@ -1270,10 +1285,14 @@ def handle_pipeline_end(event):
             external_sfn_task_token = event.get('externalSfnTaskToken') if isinstance(event, dict) else None
             if external_sfn_task_token and external_sfn_task_token.strip():
                 logger.info("Attempting emergency failure notification")
+                failure_error, failure_cause = bounded_task_failure(
+                    "PipelineEndError",
+                    f"Critical error in pipeline end handler: {str(e)}"
+                )
                 sfn.send_task_failure(
                     taskToken=external_sfn_task_token,
-                    error="PipelineEndError",
-                    cause=f"Critical error in pipeline end handler: {str(e)}"
+                    error=failure_error,
+                    cause=failure_cause
                 )
                 logger.info("Emergency failure notification sent")
         except Exception as notification_error:
