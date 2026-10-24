@@ -44,11 +44,11 @@ function enableEksPipeline(c: any) {
 }
 
 /**
- * The EKS pipeline's state machine states, parsed out of the emitted `DefinitionString`. The
+ * The EKS pipeline's state machine definition, parsed out of the emitted `DefinitionString`. The
  * definition is emitted as an `Fn::Join` of literal fragments around CloudFormation tokens, so the
  * fragments are concatenated with a placeholder standing in for each token before parsing.
  */
-function eksStates(synth: SynthResult): Record<string, any> {
+function eksDefinition(synth: SynthResult): any {
     const definitions = Object.values(synth.templates)
         .flatMap((t: any) => Object.values(t.Resources ?? {}))
         .filter((r: any) => r.Type === "AWS::StepFunctions::StateMachine")
@@ -57,13 +57,14 @@ function eksStates(synth: SynthResult): Record<string, any> {
     for (const definition of definitions) {
         const joined = SynthResult.flatten(definition);
         if (!joined.includes("Timeout Job")) continue;
-        return JSON.parse(joined).States;
+        return JSON.parse(joined);
     }
     throw new Error("no emitted state machine carries a 'Timeout Job' state");
 }
 
 describe("EKS Timeout Job preserves the job name cleanup needs", () => {
     let synth: SynthResult;
+    let definition: any;
     let states: Record<string, any>;
 
     beforeAll(() => {
@@ -71,7 +72,8 @@ describe("EKS Timeout Job preserves the job name cleanup needs", () => {
             mutate: enableEksPipeline,
             mutateKey: "eks-timeout-job-cleanup",
         });
-        states = eksStates(synth);
+        definition = eksDefinition(synth);
+        states = definition.States;
     });
 
     test("the pipeline IS in this synth and both failure exits were emitted", () => {
@@ -125,8 +127,19 @@ describe("EKS Timeout Job preserves the job name cleanup needs", () => {
     });
 
     test("the bundle taskTimeout still bounds the run", () => {
-        // Reached through the same construct, so a change to the timeout chain that removed the
-        // timeout exit entirely would be visible here rather than silently making this file vacuous.
-        expect(Config.RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS).toBeGreaterThan(0);
+        // The parent workflow's pipeline task starts before this state machine does (vamsExecute and
+        // openPipeline run first), so the bundle taskTimeout — the parent's wait, which pipeline.json
+        // declares as this constant (eksJobTimeoutChain.test.ts) — must STRICTLY outlast the state
+        // machine's own timeout: the parent is then still waiting when PipelineEnd reports, and its
+        // taskTimeout is what releases it if States.Timeout stops the state machine. That timeout is
+        // read from the definition this construct emitted, not from config.ts, so a construct that
+        // stopped setting it, or set a longer one, fails here.
+        const stateMachineTimeout = definition.TimeoutSeconds;
+        // The control: an absent timeout must not make the comparison below pass vacuously.
+        expect(typeof stateMachineTimeout).toBe("number");
+        expect(stateMachineTimeout).toBeGreaterThan(0);
+        expect(Config.RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS).toBeGreaterThan(
+            stateMachineTimeout
+        );
     });
 });
