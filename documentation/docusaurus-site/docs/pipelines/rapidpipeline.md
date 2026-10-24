@@ -13,7 +13,8 @@ The RapidPipeline pipeline integrates the DGG RapidPipeline 3D processing engine
 | **Compute (EKS)**            | Amazon EKS with Kubernetes                                                                         |
 | **Supported input formats**  | `.glb`, `.gltf`, `.fbx`, `.obj`, `.stl`, `.ply`, `.usd`, `.usdz`, `.dae`, `.abc`                   |
 | **Supported output formats** | `.glb`, `.gltf`                                                                                    |
-| **Timeout**                  | 5 hours                                                                                            |
+| **Timeout (ECS)**            | 5 hours                                                                                            |
+| **Timeout (EKS)**            | Job: `useEks.jobTimeout` (default 2 hours, at most 4 hours); whole run: 6 hours                    |
 
 :::warning[Licensed product]
 RapidPipeline is a commercial product by DGG that requires a valid subscription. The container image must be obtained through AWS Marketplace or provided as a private Amazon ECR image URI. Contact DGG for licensing information.
