@@ -37,6 +37,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Major changes:**
 
+-   Added the GenAI CAD STEP Agent pipeline, in which a Strands agent creates or modifies a CAD STEP file from a prompt, on Amazon Bedrock AgentCore Runtime or AWS Batch on Fargate.
 -   Added the Video SOP/BOM Extraction pipeline, which transcribes one to four narrated teardown videos with Amazon Transcribe and derives a step-by-step SOP, an `LCA-BOM-INPUT` bill of materials, a lab summary, and verification key frames with Amazon Bedrock.
 -   **Fork extension points** — A fork adds its own APIs, pages, CDK resources, permission object types, CLI commands, MCP tools and viewers in files upstream ships empty, and add-on code moves out of the core list files. (issue #456, issue #457)
 

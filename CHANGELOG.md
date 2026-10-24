@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Major Change Summary:
 
+-   New GenAI CAD STEP Agent Pipeline - A Strands agent creates or modifies a CAD STEP file from a prompt, on Amazon Bedrock AgentCore Runtime or AWS Batch on Fargate
 -   New Video SOP/BOM Extraction Pipeline - Transcribes 1-4 narrated teardown videos with Amazon Transcribe and derives a step-by-step SOP, an `LCA-BOM-INPUT` bill of materials, a lab summary, and verification key frames with Amazon Bedrock
 -   Fork extension points: a fork adds its own APIs, pages, CDK resources, permission object types, CLI commands, MCP tools and viewers in files upstream ships empty, and add-on code moves out of the core list files. ([#456](https://github.com/awslabs/visual-asset-management-system/issues/456), [#457](https://github.com/awslabs/visual-asset-management-system/issues/457))
 

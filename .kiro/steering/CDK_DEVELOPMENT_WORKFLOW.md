@@ -340,7 +340,7 @@ Six rules for writing one:
    `Template.fromStack(root)` sees ~17 resources out of ~600.
 4. **Flatten `Fn::Join` before matching a property value.** A raw substring search finds the literal prefix
    and then a token boundary, so the assertion passes while checking nothing. Use `SynthResult.flatten()`.
-5. **Enabling `useSplatToolbox` requires `useCodeBuild: true`.** Splat is the only one of the sixteen
+5. **Enabling `useSplatToolbox` requires `useCodeBuild: true`.** Splat is the only one of the seventeen
    pipeline Dockerfiles that is **not in the repository** (recompute as
    `git ls-files backendPipelines | grep -c Dockerfile` tracked files plus the one gitignored splat file;
    an on-disk `find` over-counts whenever a sync has left the splat file behind) —
@@ -582,7 +582,7 @@ imported by ARN (Amazon ECR creates its own grants on it, so the build and pull 
 Given `KMS` and no key, CDK creates no key for a repository, which then uses the AWS managed `aws/ecr` key
 instead of the VAMS key. A repository's encryption is immutable, so changing it replaces the repository, and
 AWS CloudFormation cannot replace an explicitly named resource under the same name: a custom `repositoryName`
-must change with the encryption (the coordinate transform and CAD STEP agent repositories add `-kms`), and a CodeBuild build
+must change with the encryption (the coordinate transform, Video SOP/BOM and CAD STEP agent repositories add `-kms`), and a CodeBuild build
 trigger that does not wait for the image carries the repository URI as a property, so the replacement re-fires
 the build into the new repository.
 
@@ -1003,6 +1003,11 @@ backendPipelines/
 │       ├── container/          # Container code (if needed)
 │       └── README.md           # Pipeline documentation
 ├── genAi/                      # Generative AI pipelines
+│   ├── cadStepAgent/           # GenAI CAD STEP agent (Strands; AgentCore Runtime or Batch Fargate)
+│   │   ├── lambda/
+│   │   ├── container/
+│   │   ├── evaluation/         # Quality harness (corpus, goldens, LLM judge)
+│   │   └── vamsSchema/
 │   ├── metadata3dLabeling/     # 3D metadata labeling
 │   │   ├── lambda/
 │   │   ├── container/
@@ -1227,9 +1232,10 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
      "sourceType": "batch", "label": "<Batch state name> container"}
     ```
 
-    Which group that is depends on the compute family. The six **Fargate** job definitions (coordinate
-    transform, Blender renderer, 3D thumbnail, PDAL, Potree, video SOP/BOM extraction) write through the
-    `awslogs` driver to a VAMS-owned, KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and
+    Which group that is depends on the compute family. The seven **Fargate** job definitions (coordinate
+    transform, Blender renderer, 3D thumbnail, PDAL, Potree, video SOP/BOM extraction, and the GenAI CAD
+    STEP agent on its `fargate` runtime) write through the `awslogs` driver to a VAMS-owned,
+    KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and
     register **that** group;
     the **GPU** Batch pipelines (NVIDIA Cosmos, GR00T, Isaac Lab, Splat Toolbox) set no log configuration,
     so theirs is AWS Batch's default `/aws/batch/job`. In both families the stream is

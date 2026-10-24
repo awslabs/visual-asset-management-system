@@ -184,7 +184,7 @@ The Deadline Cloud execution type requires `app.pipelines.deadlineCloudExecution
 
 ### Built-In Pipelines
 
-VAMS includes twenty-five built-in processing pipelines, each deployable through configuration flags. Pipeline families that ship several model variants register each variant as its own pipeline with its own flag.
+VAMS includes twenty-six built-in processing pipelines, each deployable through configuration flags. Pipeline families that ship several model variants register each variant as its own pipeline with its own flag.
 
 | Pipeline                                | Config Flag                                       | Description                                                                                                              | Default  |
 | --------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------- |

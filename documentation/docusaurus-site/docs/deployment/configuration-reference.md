@@ -312,6 +312,7 @@ VAMS provisions every subnet type across a fixed Availability Zone count (a base
 | ECS Telemetry                                   | `useIsaacLabTraining.enabled=true`                                                                         | Isolated                        |
 | Bedrock Runtime                                 | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true`, or `useGenAiVideoSopBom.enabled=true` | Isolated                        |
 | Rekognition                                     | `useGenAiMetadata3dLabeling.enabled=true` + `useForAllLambdas=true`                                        | Isolated                        |
+| Bedrock AgentCore                               | `useGenAiCadStepAgent.enabled=true` + `runtime: "agentcore"` + `useForAllLambdas=true`                     | Isolated                        |
 | Transcribe                                      | `useGenAiVideoSopBom.enabled=true`                                                                         | Isolated                        |
 | Amazon S3 (cross-Region, one per bucket Region) | `addCrossRegionS3Endpoints=true` + an external asset bucket outside the deployment Region                  | Isolated                        |
 
