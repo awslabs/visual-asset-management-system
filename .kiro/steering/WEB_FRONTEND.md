@@ -18,7 +18,7 @@ VAMS frontend is a **React 18.3 + TypeScript ^5.0.0** single-page application bu
 -   React Context API + useReducer for shared state
 -   Custom apiClient (fetch-based) for API calls, AWS Amplify v6 for authentication
 -   HashRouter (`#/` URLs) for all routing
--   Plugin-based 3D viewer architecture (19 viewer plugin directories)
+-   Plugin-based 3D viewer architecture (20 viewer plugin directories)
 -   React.lazy + Suspense for route-level code splitting
 
 ---

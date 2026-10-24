@@ -276,8 +276,8 @@ View-only access scoped to a single database. Can browse assets, view files, and
 
 Key differences from the admin and user roles: web routes are a narrower set of pages, and the UI respects the lack of write permissions. API routes only allow `GET` method, plus `POST` on non-mutating operations. Data constraints have only `GET` permission on all object types.
 
-:::note[Existing read-only roles keep the grants they were imported with]
-Importing a template creates constraints; it does not modify the constraints of an existing role, and each import creates new constraint identifiers. A role imported from an earlier version of this template holds a `<role>-user-api-keys` constraint that allows `POST`, `PUT` and `DELETE` on `/auth/user/api-keys`. To narrow it, edit that constraint to `GET` only (`vamscli role constraint update`) or delete it (`vamscli role constraint delete`); re-importing the template adds a second constraint alongside the first. A role imported before the template carried `<role>-api-routes-download` cannot request a file download, so most file viewers report that the file failed to download; add that one constraint from the template to the role (`vamscli role constraint create`). The same applies to the Global read-only template below.
+:::note[A role keeps the grants it was imported with]
+Importing a template creates constraints; it does not modify the constraints of an existing role, and each import creates new constraint identifiers, so re-importing the template adds a second constraint alongside the first. A read-only role whose `<role>-user-api-keys` constraint allows `POST`, `PUT` or `DELETE` on `/auth/user/api-keys` lets its users create, extend and delete their own API keys; to make it view-only, edit that constraint to `GET` only (`vamscli role constraint update`) or delete it (`vamscli role constraint delete`). A role without the `<role>-api-routes-download` constraint cannot request a file download, so most file viewers report that the file failed to download; add that one constraint from the template to the role (`vamscli role constraint create`). The same applies to the Global read-only template below.
 :::
 
 ### Global read-only
@@ -298,6 +298,40 @@ Tag and tag type management scoped to a single database, combined with unconstra
 -   `tagType` -- Allow GET, PUT, POST, DELETE where `databaseId equals {DATABASE_ID}`
 
 The split between the two constraint pairs is what makes the pattern work. Read is granted with a wildcard on the name field so it matches every tag and tag type, including global ones. Write is granted only on entities whose `databaseId` equals the scoped database, so global tags and tag types (those with no database scope, or `databaseId` equal to `GLOBAL`) stay read-only for the role. To let a role manage global tags as well, add an unconstrained `tag`/`tagType` write constraint.
+
+### Compliance administrator
+
+Compliance management for one database: schema management across the deployment, schema binding on the database and its assets, evaluation and sweeps, quarantine release and exceptions, and cascade approval.
+
+**Key constraints (8 constraints):**
+
+-   `web` -- Allow GET on paths starting with `/compliance` or `/databases` (the compliance pages and the database compliance overview)
+-   `api` -- Allow GET, PUT, POST, and DELETE on paths starting with `/compliance`, `/secure-config`, `/amplify-config`, `/auth/routes`, or `/auth/loginProfile` (one `criteriaOr` constraint)
+-   `complianceSchema` -- Allow GET, PUT, POST, DELETE where `complianceSchemaName contains .*`
+-   `complianceEvaluation` -- Allow GET, POST, DELETE where `databaseId equals {DATABASE_ID}`
+-   `complianceCascade` -- Allow GET, POST where `cascadeId contains .*`
+-   `complianceBinding` -- Allow GET, PUT, DELETE where `databaseId equals {DATABASE_ID}`
+-   `asset` -- Allow GET where `databaseId equals {DATABASE_ID}`
+-   `database` -- Allow GET where `databaseId equals {DATABASE_ID}`
+
+Binding a schema is authorized on the database's `complianceBinding` object (`PUT` binds and `DELETE` unbinds, on the database and on each of its assets), on the schema, and on a `GET` of the database or asset the binding targets. A binding changes compliance records only, so the `asset` and `database` constraints are read-only and the role adds no write on the database or its assets to any other role a user holds. The database editor in the web interface saves the database before it binds a schema, so a user who holds only this role binds with the API or `vamscli compliance bind`.
+
+### Compliance read-only
+
+Read-only compliance access: every schema, and the evaluation history, compliance state, quarantine list, cascades and audit trail of one database.
+
+**Key constraints (8 constraints):**
+
+-   `web` -- Allow GET on paths starting with `/compliance` or `/databases`
+-   `api` -- Allow GET on paths starting with `/compliance`, `/secure-config`, `/amplify-config`, `/auth/routes`, or `/auth/loginProfile`
+-   `api` -- Allow POST on paths starting with `/auth/routes` or `/auth/loginProfile` (non-mutating)
+-   `complianceSchema` -- Allow GET where `complianceSchemaName contains .*`
+-   `complianceEvaluation` -- Allow GET where `databaseId equals {DATABASE_ID}`
+-   `complianceCascade` -- Allow GET where `cascadeId contains .*`
+-   `asset` -- Allow GET where `databaseId equals {DATABASE_ID}`
+-   `database` -- Allow GET where `databaseId equals {DATABASE_ID}`
+
+Neither compliance template grants the `/database`, `/assets`, or `/search` API routes. To browse the database's assets and files, a user also needs a role that grants those routes, such as Database Read-Only.
 
 ### Multi-database access
 
@@ -434,14 +468,16 @@ VAMS includes pre-built permission templates that you can import to quickly set 
 
 ### Available templates
 
-| Template           | File                      | Variables                  | Description                                                                  |
-| ------------------ | ------------------------- | -------------------------- | ---------------------------------------------------------------------------- |
-| Database Admin     | `database-admin.json`     | `DATABASE_ID`, `ROLE_NAME` | Full management of a specific database (14 constraints)                      |
-| Database User      | `database-user.json`      | `DATABASE_ID`, `ROLE_NAME` | Standard user access with archive-only delete (17 constraints)               |
-| Database Read-Only | `database-readonly.json`  | `DATABASE_ID`, `ROLE_NAME` | View-only access to a specific database (13 constraints)                     |
-| Database Tag Admin | `database-tag-admin.json` | `DATABASE_ID`, `ROLE_NAME` | Database-scoped tag and tag type management with global read (6 constraints) |
-| Global Read-Only   | `global-readonly.json`    | `ROLE_NAME`                | Read-only access across all databases (13 constraints)                       |
-| Deny Tagged Assets | `deny-tagged-assets.json` | `ROLE_NAME`, `TAG_VALUE`   | Overlay: deny editing of assets with a specific tag (1 constraint)           |
+| Template            | File                       | Variables                  | Description                                                                                                                        |
+| ------------------- | -------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Database Admin      | `database-admin.json`      | `DATABASE_ID`, `ROLE_NAME` | Full management of a specific database (14 constraints)                                                                            |
+| Database User       | `database-user.json`       | `DATABASE_ID`, `ROLE_NAME` | Standard user access with archive-only delete (17 constraints)                                                                     |
+| Database Read-Only  | `database-readonly.json`   | `DATABASE_ID`, `ROLE_NAME` | View-only access to a specific database (13 constraints)                                                                           |
+| Database Tag Admin  | `database-tag-admin.json`  | `DATABASE_ID`, `ROLE_NAME` | Database-scoped tag and tag type management with global read (6 constraints)                                                       |
+| Global Read-Only    | `global-readonly.json`     | `ROLE_NAME`                | Read-only access across all databases (13 constraints)                                                                             |
+| Deny Tagged Assets  | `deny-tagged-assets.json`  | `ROLE_NAME`, `TAG_VALUE`   | Overlay: deny editing of assets with a specific tag (1 constraint)                                                                 |
+| Compliance Admin    | `compliance-admin.json`    | `DATABASE_ID`, `ROLE_NAME` | Compliance schema management, schema binding, evaluation, quarantine actions and cascade approval for one database (8 constraints) |
+| Compliance Readonly | `compliance-readonly.json` | `DATABASE_ID`, `ROLE_NAME` | Read-only compliance access for one database (8 constraints)                                                                       |
 
 Templates are located in the `documentation/permissionsTemplates/` directory.
 

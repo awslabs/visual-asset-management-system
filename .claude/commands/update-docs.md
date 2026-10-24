@@ -35,7 +35,8 @@ Update VAMS documentation based on recent code changes.
 -   `infra/lib/nestedStacks/storage/` → `docs/architecture/data-model.md`
 -   `web/src/visualizerPlugin/config/viewerConfig.json`, `addonViewerConfig.json` → `docs/additional/viewer-plugins.md`, `docs/developer/viewer-plugins.md`, `docs/concepts/viewers.md`
 -   Add-on and custom lane files (`backend/backend/common/addon*.py`, `backend/backend/custom/`, `backend/backend/models/addon/`, `infra/common/addon*.ts`, `infra/common/custom*.ts`, `infra/lib/nestedStacks/addon/`, `infra/lib/nestedStacks/custom/`, `web/src/addons/`, `web/src/custom/`, `tools/VamsCLI/vamscli/addon_constants.py`, `custom_constants.py`) → `docs/developer/customizing-vams.md` (the lane table) and `docs/developer/addons-overview.md` (the add-on definition and table)
--   `backend/backend/common/constants.py` object types and constraint fields → `docs/concepts/permissions-model.md`, `docs/api/auth.md` and the `objectType` schemas in `documentation/VAMS_API.yaml`
+-   `backend/backend/common/constants.py` object types and constraint fields → `docs/concepts/permissions-model.md`, `docs/api/auth.md`, the `objectType` schemas in `documentation/VAMS_API.yaml`, `docs/architecture/security.md` (Tier 2 list and Constraint Fields table), `docs/developer/backend.md` and `.claude/commands/generate-permissions.md` (the full list is the "New permission object type or constraint field" row in `documentation/CLAUDE.md`)
+-   `documentation/permissionsTemplates/` → the pages in the "New or changed permission template" row in `documentation/CLAUDE.md`
 -   `tools/VamsCLI/vamscli/commands/` → `docs/cli/commands/<group>.md`, `docs/cli/command-reference.md`
 -   `CHANGELOG.md` → `docs/additional/revisions.md`
 -   `backendPipelines/`, `infra/lib/nestedStacks/pipelines/` → `docs/pipelines/` pages (+ `docs/deployment/configuration-reference.md` for pipeline config options)

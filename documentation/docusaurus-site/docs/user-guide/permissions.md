@@ -50,7 +50,9 @@ administrative routes that `admin` holds: detailed execution logs
 (`GET /workflows/executions/{executionId}/logs`) and execution permanent delete
 (`DELETE /workflows/executions/{executionId}/permanent`). Because read access is granted through
 broad path prefixes such as `/workflows`, those two routes are withheld by explicit `deny` constraints,
-which override a matching `allow`.
+which override a matching `allow`. It holds no compliance constraint, so its users see no Compliance
+section in the navigation; grant compliance access with the `compliance-readonly` or
+`compliance-admin` template.
 
 In the web interface a user without execution-log access still sees the **Logs** tab on an execution,
 and the tab reports that the logs are not viewable.
@@ -158,7 +160,7 @@ For the complete list of web routes, see [Permissions Model: Web Route Reference
 
 ## Permission templates
 
-VAMS includes pre-built permission templates for common access patterns such as Database Admin, Database User, Database Read-Only, Global Read-Only, Deny Tagged Assets, Compliance Admin, and Compliance Readonly. Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+VAMS includes pre-built permission templates for common access patterns such as Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, Deny Tagged Assets, Compliance Admin, and Compliance Readonly. Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
 
 ### Compliance permission templates
 

@@ -81,14 +81,14 @@ Executions are workflow-keyed; asset and database linkage lives in the workflow/
 
 ### Authorization Tables
 
-| Table                    | Partition Key (PK) | Sort Key (SK) | GSIs                                                                                                                                                             | Purpose                                  |
-| ------------------------ | ------------------ | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| AuthEntitiesStorageTable | `entityType`       | `sk`          | --                                                                                                                                                               | Auth entity records                      |
-| ConstraintsStorageTable  | `constraintId`     | --            | `GroupPermissionsIndex` (PK: groupId, SK: objectType), `UserPermissionsIndex` (PK: userId, SK: objectType), `ObjectTypeIndex` (PK: objectType, SK: constraintId) | Permission constraints (Casbin policies) |
-| RolesStorageTable        | `roleName`         | --            | --                                                                                                                                                               | Role definitions                         |
-| UserRolesStorageTable    | `userId`           | `roleName`    | --                                                                                                                                                               | User-role assignments                    |
-| UserStorageTable         | `userId`           | --            | --                                                                                                                                                               | User profile records                     |
-| ApiKeyStorageTable       | `apiKeyId`         | --            | `apiKeyHashIndex` (PK: apiKeyHash), `userIdIndex` (PK: userId, SK: apiKeyId)                                                                                     | API key records                          |
+| Table                   | Partition Key (PK) | Sort Key (SK) | GSIs                                                                                                                                                             | Purpose                                  |
+| ----------------------- | ------------------ | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| AuthEntitiesTable       | `entityType`       | `sk`          | --                                                                                                                                                               | Auth entity records                      |
+| ConstraintsStorageTable | `constraintId`     | --            | `GroupPermissionsIndex` (PK: groupId, SK: objectType), `UserPermissionsIndex` (PK: userId, SK: objectType), `ObjectTypeIndex` (PK: objectType, SK: constraintId) | Permission constraints (Casbin policies) |
+| RolesStorageTable       | `roleName`         | --            | --                                                                                                                                                               | Role definitions                         |
+| UserRolesStorageTable   | `userId`           | `roleName`    | --                                                                                                                                                               | User-role assignments                    |
+| UserStorageTable        | `userId`           | --            | --                                                                                                                                                               | User profile records                     |
+| ApiKeyStorageTable      | `apiKeyId`         | --            | `apiKeyHashIndex` (PK: apiKeyHash), `userIdIndex` (PK: userId, SK: apiKeyId)                                                                                     | API key records                          |
 
 ### Compliance Tables
 

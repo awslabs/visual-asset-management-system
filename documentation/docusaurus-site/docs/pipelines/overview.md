@@ -148,22 +148,22 @@ This chart is the single source of truth for per-pipeline networking requirement
 
 All container pipelines share a common set of interface endpoints: **AWS Batch**, **Amazon ECR API**, and **Amazon ECR Docker** (created whenever any container pipeline is enabled). The **Additional VPC Interface Endpoints** column lists endpoints required _beyond_ that shared set.
 
-| Pipeline                                | VPC Required | Compute Target                     | Additional VPC Interface Endpoints                 |
-| :-------------------------------------- | :----------- | :--------------------------------- | :------------------------------------------------- |
-| 3D Basic Conversion                     | No           | AWS Lambda                         | — (runs outside VPC)                               |
-| CAD/Mesh Metadata Extraction            | No           | AWS Lambda                         | — (runs outside VPC)                               |
-| Coordinate Transform                    | Yes          | AWS Batch (Fargate)                | — (shared Batch/ECR endpoints only)                |
-| Potree Point Cloud Viewer               | Yes          | AWS Batch (Fargate)                | — (shared Batch/ECR endpoints only)                |
-| 3D Preview Thumbnail                    | Yes          | AWS Batch (Fargate)                | — (shared Batch/ECR endpoints only)                |
-| GenAI Metadata Labeling                 | Yes          | AWS Batch (Fargate)                | Amazon Bedrock Runtime, Amazon Rekognition¹        |
-| Video SOP/BOM Extraction                | Yes          | AWS Batch (Fargate)                | Amazon Bedrock Runtime, Amazon Transcribe³         |
-| Gaussian Splatting                      | Yes          | AWS Batch (GPU)                    | Amazon ECS                                         |
-| NVIDIA Cosmos (Predict/Reason/Transfer) | Yes          | AWS Batch (GPU)                    | Amazon EFS, Amazon ECS                             |
-| NVIDIA Cosmos 3                         | Yes          | AWS Batch (GPU)                    | Amazon EFS, Amazon ECS                             |
-| NVIDIA Gr00t Fine-Tuning                | Yes          | AWS Batch (GPU)                    | Amazon EFS, Amazon ECS                             |
-| NVIDIA Isaac Lab Training               | Yes          | AWS Batch (GPU)                    | Amazon ECS, Amazon ECS Agent, Amazon ECS Telemetry |
-| RapidPipeline                           | Yes          | Amazon ECS (Fargate) or Amazon EKS | Amazon ECS²                                        |
-| ModelOps                                | Yes          | Amazon ECS (Fargate)               | Amazon ECS²                                        |
+| Pipeline                                | VPC Required | Compute Target                     | Additional VPC Interface Endpoints                  |
+| :-------------------------------------- | :----------- | :--------------------------------- | :-------------------------------------------------- |
+| 3D Basic Conversion                     | No           | AWS Lambda                         | — (in the isolated subnets with `useForAllLambdas`) |
+| CAD/Mesh Metadata Extraction            | No           | AWS Lambda                         | — (in the isolated subnets with `useForAllLambdas`) |
+| Coordinate Transform                    | Yes          | AWS Batch (Fargate)                | — (shared Batch/ECR endpoints only)                 |
+| Potree Point Cloud Viewer               | Yes          | AWS Batch (Fargate)                | — (shared Batch/ECR endpoints only)                 |
+| 3D Preview Thumbnail                    | Yes          | AWS Batch (Fargate)                | — (shared Batch/ECR endpoints only)                 |
+| GenAI Metadata Labeling                 | Yes          | AWS Batch (Fargate)                | Amazon Bedrock Runtime, Amazon Rekognition¹         |
+| Video SOP/BOM Extraction                | Yes          | AWS Batch (Fargate)                | Amazon Bedrock Runtime, Amazon Transcribe³          |
+| Gaussian Splatting                      | Yes          | AWS Batch (GPU)                    | Amazon ECS                                          |
+| NVIDIA Cosmos (Predict/Reason/Transfer) | Yes          | AWS Batch (GPU)                    | Amazon EFS, Amazon ECS                              |
+| NVIDIA Cosmos 3                         | Yes          | AWS Batch (GPU)                    | Amazon EFS, Amazon ECS                              |
+| NVIDIA Gr00t Fine-Tuning                | Yes          | AWS Batch (GPU)                    | Amazon EFS, Amazon ECS                              |
+| NVIDIA Isaac Lab Training               | Yes          | AWS Batch (GPU)                    | Amazon ECS, Amazon ECS Agent, Amazon ECS Telemetry  |
+| RapidPipeline                           | Yes          | Amazon ECS (Fargate) or Amazon EKS | Amazon ECS²                                         |
+| ModelOps                                | Yes          | Amazon ECS (Fargate)               | Amazon ECS²                                         |
 
 ¹ For GenAI Metadata Labeling, the Amazon Bedrock Runtime and Amazon Rekognition endpoints are created only when the pipeline is enabled **and** all Lambda functions run in the VPC (`useGlobalVpc.useForAllLambdas`), because its Amazon Bedrock and Amazon Rekognition calls are made from a Lambda function. The Amazon Bedrock Runtime endpoint is also created, independently of `useForAllLambdas`, whenever Video SOP/BOM Extraction is enabled (³); the two conditions share one endpoint.
 

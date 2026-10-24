@@ -224,28 +224,29 @@ Review existing custom install scripts in `web/customInstalls/` for patterns. Vi
 
 ## Plugin Configuration Fields
 
-| Field                        | Type     | Required | Description                                                        |
-| ---------------------------- | -------- | -------- | ------------------------------------------------------------------ |
-| `id`                         | string   | Yes      | Unique plugin identifier                                           |
-| `name`                       | string   | Yes      | Display name in the viewer selector UI                             |
-| `description`                | string   | Yes      | Description shown to users                                         |
-| `componentPath`              | string   | Yes      | Path for manifest lookup (must match manifest.ts key)              |
-| `supportedExtensions`        | string[] | Yes      | File extensions this viewer handles (e.g., `[".obj", ".fbx"]`)     |
-| `supportsMultiFile`          | boolean  | Yes      | Whether the viewer can handle multiple files simultaneously        |
-| `canFullscreen`              | boolean  | Yes      | Whether the viewer supports fullscreen mode                        |
-| `priority`                   | number   | Yes      | Selection order (lower = listed first when multiple viewers match) |
-| `dependencies`               | string[] | Yes      | Required library names (informational)                             |
-| `loadStrategy`               | string   | Yes      | `"lazy"` (load on demand) or `"eager"` (load at startup)           |
-| `category`                   | string   | Yes      | Viewer category: `3d`, `media`, `document`, `data`, or `preview`   |
-| `enabled`                    | boolean  | Yes      | Whether the plugin is active                                       |
-| `dependencyManager`          | string   | No       | Path to the dependency manager module                              |
-| `dependencyManagerClass`     | string   | No       | Class name exported by the dependency module                       |
-| `dependencyManagerMethod`    | string   | No       | Static method to call for loading dependencies                     |
-| `dependencyCleanupMethod`    | string   | No       | Static method to call for cleanup                                  |
-| `featuresEnabledRestriction` | string[] | No       | Required feature flags (all must be enabled)                       |
-| `isPreviewViewer`            | boolean  | No       | `true` for the preview-only viewer                                 |
-| `requiresPreprocessing`      | boolean  | No       | `true` if the viewer needs a preprocessing pipeline                |
-| `customParameters`           | object   | No       | Viewer-specific configuration passed to the component              |
+| Field                        | Type     | Required | Description                                                                                                                                                                                                                                                                                                                        |
+| ---------------------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                         | string   | Yes      | Unique plugin identifier                                                                                                                                                                                                                                                                                                           |
+| `name`                       | string   | Yes      | Display name in the viewer selector UI                                                                                                                                                                                                                                                                                             |
+| `description`                | string   | Yes      | Description shown to users                                                                                                                                                                                                                                                                                                         |
+| `componentPath`              | string   | Yes      | Path for manifest lookup (must match manifest.ts key)                                                                                                                                                                                                                                                                              |
+| `supportedExtensions`        | string[] | Yes      | File extensions this viewer handles (e.g., `[".obj", ".fbx"]`)                                                                                                                                                                                                                                                                     |
+| `supportsMultiFile`          | boolean  | Yes      | Whether the viewer can handle multiple files simultaneously                                                                                                                                                                                                                                                                        |
+| `canFullscreen`              | boolean  | Yes      | Whether the viewer supports fullscreen mode                                                                                                                                                                                                                                                                                        |
+| `priority`                   | number   | Yes      | Selection order (lower = listed first when multiple viewers match)                                                                                                                                                                                                                                                                 |
+| `dependencies`               | string[] | Yes      | Required library names (informational)                                                                                                                                                                                                                                                                                             |
+| `loadStrategy`               | string   | Yes      | `"lazy"` (load on demand) or `"eager"` (load at startup)                                                                                                                                                                                                                                                                           |
+| `category`                   | string   | Yes      | Viewer category: `3d`, `media`, `document`, `data`, or `preview`                                                                                                                                                                                                                                                                   |
+| `enabled`                    | boolean  | Yes      | Whether the plugin is active                                                                                                                                                                                                                                                                                                       |
+| `dependencyManager`          | string   | No       | Path to the dependency manager module                                                                                                                                                                                                                                                                                              |
+| `dependencyManagerClass`     | string   | No       | Class name exported by the dependency module                                                                                                                                                                                                                                                                                       |
+| `dependencyManagerMethod`    | string   | No       | Static method to call for loading dependencies                                                                                                                                                                                                                                                                                     |
+| `dependencyCleanupMethod`    | string   | No       | Static method to call for cleanup                                                                                                                                                                                                                                                                                                  |
+| `featuresEnabledRestriction` | string[] | No       | Required feature flags (all must be enabled)                                                                                                                                                                                                                                                                                       |
+| `isPreviewViewer`            | boolean  | No       | `true` for the preview-only viewer                                                                                                                                                                                                                                                                                                 |
+| `requiresPreprocessing`      | boolean  | No       | `true` if the viewer needs a preprocessing pipeline                                                                                                                                                                                                                                                                                |
+| `customParameters`           | object   | No       | Viewer-specific configuration passed to the component                                                                                                                                                                                                                                                                              |
+| `compareMode`                | object   | No       | Compare capability: `enabled`, `minFiles` and `maxFiles` (the file-count window), `allowSameFileDifferentVersions`, `allowDifferentFiles`, `allowCrossAsset`, and `compareOnly` (offer the viewer only in compare mode). A compare-capable viewer receives the ordered files as `compareFiles`, index 0 being the left (base) file |
 
 ## Dependency Chain Loading
 
@@ -349,6 +350,8 @@ interface ViewerPluginProps {
     onDeletePreview?: () => void; // Callback to delete preview
     isPreviewFile?: boolean; // Whether this is a preview file
     customParameters?: Record<string, any>; // The entry's customParameters from viewerConfig.json
+    compareMode?: boolean; // True when the viewer is rendered in compare mode
+    compareFiles?: FileInfo[]; // Ordered files to compare (compare mode only); index 0 is the base
 }
 ```
 

@@ -526,7 +526,7 @@ Compliance operations are governed by the same two-tier access control as the re
 
 ### Tier 1: route access
 
-Controls which users can call the compliance API and open the compliance pages. Grant the API routes with an `api` constraint and the pages with a `web` constraint, both matching `/compliance`:
+Controls which users can call the compliance API and open the compliance pages. Grant the API routes with an `api` constraint matching `/compliance` and the methods the role needs: `GET` to view; `POST` to create schemas, evaluate, sweep, release, grant exceptions, and create, approve or reject cascades; `PUT` to update schemas and bind them; `DELETE` to delete schemas, unbind them and revoke exceptions. Grant the pages with a `web` constraint matching `/compliance` and `/databases` (the database compliance overview is `/databases/{databaseId}/compliance`):
 
 ```json
 {
@@ -534,7 +534,9 @@ Controls which users can call the compliance API and open the compliance pages. 
     "criteriaOr": [{ "field": "route__path", "operator": "starts_with", "value": "/compliance" }],
     "groupPermissions": [
         { "permission": "GET", "permissionType": "allow" },
-        { "permission": "POST", "permissionType": "allow" }
+        { "permission": "POST", "permissionType": "allow" },
+        { "permission": "PUT", "permissionType": "allow" },
+        { "permission": "DELETE", "permissionType": "allow" }
     ]
 }
 ```
@@ -565,7 +567,7 @@ VAMS includes two permission templates for compliance roles:
 | Compliance Admin    | `compliance-admin.json`    | Full schema management, schema binding on one database and its assets, evaluation and quarantine actions within that database, cascade approval, the compliance web and API routes, and read access to the database and its assets. |
 | Compliance Readonly | `compliance-readonly.json` | View-only access: schemas, evaluation results and compliance state within one database, the quarantine list, pending cascades and the audit log. Cannot trigger evaluations or change state.                                        |
 
-Both templates take `DATABASE_ID` and `ROLE_NAME` variables. Apply them through **Admin > Permissions > Constraints > Import Template** or the CLI.
+Both templates take `DATABASE_ID` and `ROLE_NAME` variables. Apply them with `vamscli role constraint template import`, the `tools/permissionsSetup/apply_template.py` script, or `POST /auth/constraintsTemplateImport`; see [Developer Guide: Permissions](../developer/permissions.md#applying-templates).
 
 ### Example: database-scoped compliance admin
 

@@ -77,11 +77,11 @@ VamsCLI prints Unicode status indicators (for example, `✓` and `✗`) and sets
 
 **Cause:**
 
-An older VamsCLI release left the output encoding to the operating system. On Windows that resolves to the ANSI code page (typically `cp1252`) whenever output is not going to a console, so redirecting or piping a command that printed a status indicator failed instead of producing output — `vamscli profile list > profiles.txt` wrote a single line naming a codec error.
+The installed VamsCLI leaves the output encoding to the operating system. On Windows that resolves to the ANSI code page (typically `cp1252`) whenever output is not going to a console, so redirecting or piping a command that prints a status indicator fails instead of producing output — `vamscli profile list > profiles.txt` writes a single line naming a codec error.
 
 **Resolution:**
 
-Upgrade to VamsCLI 2.6.0 or later, which sets the encoding itself. On an earlier release, set the encoding before invoking the CLI:
+Update VamsCLI to the release that matches your deployment (see [Updating VamsCLI](../installation.md#updating-vamscli)); it sets the encoding itself. Until you can update, set the encoding before invoking the CLI:
 
 ```bash
 export PYTHONIOENCODING=utf-8

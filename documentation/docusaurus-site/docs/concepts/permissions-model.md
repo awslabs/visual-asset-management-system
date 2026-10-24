@@ -71,7 +71,7 @@ authorization tiers. `basicReadOnly` grants GET on the read paths (assets, files
 pipelines, workflows, executions, tags, comments, subscriptions, metadata schemas), the non-mutating
 POST paths (`/auth/routes`, `/search`, `/check-subscription`), the file download request
 (`POST /database/{databaseId}/assets/{assetId}/download`, which the file viewers use), and management
-of the caller's own API keys.
+of the caller's own API keys. It holds no compliance constraint.
 
 Two routes are administrative and belong to `admin` alone: detailed execution logs
 (`GET /workflows/executions/{executionId}/logs`) and execution permanent delete
@@ -231,7 +231,7 @@ A common example denies `PUT`, `POST`, and `DELETE` on the `asset` object type w
 
 ## Common role patterns
 
-For detailed constraint tables, JSON examples, and design rationale for common roles (Database Admin, Database User, Database Read-Only, Global Read-Only, and Deny by Tag), see [Developer Guide: Permissions](../developer/permissions.md).
+For detailed constraint tables, JSON examples, and design rationale for common roles (Database Admin, Database User, Database Read-Only, Global Read-Only, Database Tag Admin, Compliance Administrator, Compliance Read-Only, Multi-Database Access, and Deny by Tag), see [Developer Guide: Permissions](../developer/permissions.md).
 
 :::warning[Archive versus permanent delete]
 The Database User role demonstrates a key pattern: the `asset` entity constraint grants DELETE (needed for archive operations), but the `api` route constraint uses the `contains` operator to only match paths containing `archiveAsset` or `archiveFile`. This blocks permanent delete paths (`deleteAsset`, `deleteFile`) at Tier 1 while allowing soft delete at Tier 2.
@@ -254,7 +254,7 @@ A common mistake is creating a `database` constraint and assuming it automatical
 
 ## Permission templates
 
-VAMS provides pre-built JSON templates for common permission profiles (Database Admin, Database User, Database Read-Only, Global Read-Only, and Deny Tagged Assets). Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
+VAMS provides pre-built JSON templates for common permission profiles (Database Admin, Database User, Database Read-Only, Database Tag Admin, Global Read-Only, Deny Tagged Assets, Compliance Admin, and Compliance Readonly). Templates automate the creation of the full constraint matrix and support variable substitution for database-scoped roles.
 
 For the complete list of templates, JSON format details, and instructions on applying templates via the CLI or API, see [Developer Guide: Permissions](../developer/permissions.md#permission-templates).
 
@@ -306,7 +306,6 @@ The following web routes can be checked via the `web` object type with the `rout
 | `/workflows`                                                         | Workflow listing                      |
 | `/workflows/create`                                                  | Create workflow                       |
 | `/compliance/schemas`                                                | Compliance schema listing             |
-| `/compliance/schemas/:schemaName`                                    | Schema detail and version history     |
 | `/compliance/quarantine`                                             | Quarantined assets listing            |
 | `/compliance/cascades`                                               | Cascade approval queue                |
 | `/compliance/audit`                                                  | Compliance audit log                  |

@@ -2,13 +2,13 @@
 
 VAMS includes a plugin-based viewer system that enables browser-based visualization of 3D models, point clouds, media files, documents, and data -- without requiring desktop software or specialized licenses. This page is the single source of truth for all built-in viewers and their supported file extensions.
 
-VAMS ships **20 built-in viewer plugins** across five categories. Fourteen are available in every deployment. The remaining six are conditional:
+VAMS ships **21 built-in viewer plugins** across five categories. Fifteen are available in every deployment. The remaining six are conditional:
 
 -   **Two licensed viewers** — VNTANA and VEERUM, both [add-ons](../developer/addons-overview.md) — ship disabled and require both a vendor license and enabling them in the viewer configuration.
 -   **Three viewers require `app.webUi.allowUnsafeEvalFeatures`** — Needle USD, the SuperSplat Editor, and ThatOpen IFC BIM. Their loaders use `eval`, so VAMS does not offer them at all when a deployment has not enabled that setting.
 -   **The Physna Viewer** appears only when the Physna Sync add-on is enabled.
 
-The [master viewer table](#master-viewer-table) lists all 20; any other page quoting a viewer count is checked against this one.
+The [master viewer table](#master-viewer-table) lists all 21; any other page quoting a viewer count is checked against this one.
 
 ## What are file viewers
 
@@ -23,6 +23,10 @@ The viewer system is built on a **plugin architecture**. Each viewer is an indep
 3. If exactly one viewer matches, VAMS opens the file in it.
 4. If multiple viewers match, the dropdown lists them with the **lowest priority number** first, and VAMS loads none of them until you choose one. You can then switch between them from the same dropdown.
 5. If the file has a preview image, the file page also offers a **Preview** option that shows the image in the **Preview Viewer**, including for a file whose extension no viewer matches.
+
+### Compare mode
+
+A viewer can also declare a compare mode, which shows two or more files side by side. **Compare Selected** in the search results, **Compare Selected Files** in the asset file manager and the **Compare** actions in the version lists open the file viewer in compare mode. Compare mode offers only the viewers whose compare settings admit the selection: the number of files, whether they are versions of one file or different files, and whether they belong to different assets. A compare-only viewer, such as the Text Diff Viewer, is offered only in compare mode. Each compare action appears only when a registered viewer admits the selection.
 
 ---
 
@@ -76,6 +80,7 @@ This table is the definitive reference for all built-in viewer plugins.
 | **PDF Viewer**                       | Document | `.pdf`                                                                                                                                                                           | 1        | No         | Navigation, zoom, and page management controls.                                                                                                                                                                                                                                                                                                                                                   |
 | **HTML Viewer**                      | Document | `.html`                                                                                                                                                                          | 1        | No         | Renders HTML presentations and documents.                                                                                                                                                                                                                                                                                                                                                         |
 | **Text Viewer**                      | Document | `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `.ini`, `.ipynb`, `.inf`, `.cfg`, `.md`, `.sh`, `.csv`, `.py`, `.log`, `.js`, `.ts`, `.sql`, `.ps1`          | 1        | No         | Syntax highlighting for 20+ text file types.                                                                                                                                                                                                                                                                                                                                                      |
+| **Text Diff Viewer**                 | Document | `.txt`, `.json`, `.xml`, `.html`, `.htm`, `.yaml`, `.yml`, `.toml`, `.ini`, `.ipynb`, `.inf`, `.cfg`, `.md`, `.sh`, `.csv`, `.py`, `.log`, `.js`, `.ts`, `.sql`, `.ps1`          | 1        | No         | Compare-only: compares two text files, or two versions of one file, side by side or inline, including files from different assets. Offered only in compare mode, never in the visualize viewer list.                                                                                                                                                                                              |
 | **Columnar Data Viewer**             | Data     | `.fcs`, `.csv`                                                                                                                                                                   | 2        | No         | Tabular data display with column headers.                                                                                                                                                                                                                                                                                                                                                         |
 | **Preview Viewer**                   | Preview  | `*` (all extensions)                                                                                                                                                             | 10       | No         | Displays a file's preview image when you choose the file page's **Preview** option, which appears only for a file that has one. Not offered in the **File** view.                                                                                                                                                                                                                                 |
 

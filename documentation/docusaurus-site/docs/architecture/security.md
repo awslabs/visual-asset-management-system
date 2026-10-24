@@ -276,6 +276,9 @@ The following fields can be used in ABAC policy rules:
 | `name`                     | Pipeline name or workflow name (the display name, not the identifier)         |
 | `metadataSchemaName`       | Metadata schema name                                                          |
 | `metadataSchemaEntityType` | Metadata entity type                                                          |
+| `complianceSchemaName`     | Compliance schema name                                                        |
+| `complianceState`          | Asset compliance state (for example `quarantined`)                            |
+| `cascadeId`                | Compliance cascade identifier                                                 |
 | `object__type`             | Entity type for Tier 2 enforcement                                            |
 | `route__path`              | API route path for Tier 1 enforcement                                         |
 

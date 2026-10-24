@@ -392,11 +392,10 @@ for P in $(aws ssm get-parameters-by-path \
 done
 ```
 
-:::note[An Amazon Location Service API key orphaned by an earlier release]
+:::note[A leftover Amazon Location Service API key]
 When Amazon Location Service is enabled, VAMS creates an API key named
-`vams-location-api-key-<name>-<baseStackName>` and deletes it with the stack. Earlier releases retained
-it, so a deployment that has ever had a failed-and-rolled-back deploy may still have a key left behind
-from that release. It costs nothing while unused, but its name is deterministic, so it conflicts with a
+`vams-location-api-key-<name>-<baseStackName>` and deletes it with the stack. A key that a stack did
+not delete when it was removed or rolled back can remain in the account. It costs nothing while unused, but its name is deterministic, so it conflicts with a
 redeploy that uses the same configuration name, stack name, and Region. List and remove any that remain:
 
 ```bash

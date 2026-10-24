@@ -108,7 +108,7 @@ The VamsCLI is a Python-based command line tool built on the Click framework. It
 
 ### Coverage
 
-The CLI covers the same ground as the web interface: setup and authentication, profiles, feature queries, databases, assets, asset versions, asset links, files, directory synchronization, tags and tag types, metadata and metadata schemas, search, pipelines and their configuration templates, workflows and triggers, executions, roles and permission constraints, Amazon Cognito users, API keys, and a set of industry-specific commands for bill-of-materials assembly, PLM XML import, and spatial GLB combination.
+The CLI covers the same ground as the web interface: setup and authentication, profiles, feature queries, databases, assets, asset versions, asset links, files, directory synchronization, tags and tag types, metadata and metadata schemas, search, pipelines and their configuration templates, workflows and triggers, executions, roles and permission constraints, Amazon Cognito users, API keys, compliance (schemas, bindings, evaluation, quarantine, cascades, and the audit trail), and a set of industry-specific commands for bill-of-materials assembly, PLM XML import, and spatial GLB combination.
 
 For the full list of command groups and every command in each, see the [Command Reference](../cli/command-reference.md).
 
@@ -150,7 +150,7 @@ For the full list of command groups and every command in each, see the [Command 
 
 ### Compliance
 
--   **Compliance schemas** -- Versioned `vams-rules-v1` rule sets with `metadata`, `relationship` and `pipeline` rule types and `quarantine`/`warn`/`inform` enforcement levels, scoped to a database or `GLOBAL`, with schema inheritance
+-   **Compliance schemas** -- Versioned `vams-rules-v1` rule sets with `pipeline`, `metadata`, `relationship`, `fileStructure`, `versionCoverage` and `assetAttributes` rule types and `quarantine`/`warn`/`inform` enforcement levels, scoped to a database or `GLOBAL`, with schema inheritance
 -   **Evaluation** -- Automatic evaluation on asset create/update, on-demand evaluation, per-schema sweeps, and asynchronous pipeline rules that run a VAMS workflow and check its measurements against tolerances
 -   **Quarantine** -- Quarantine of assets that fail `quarantine`-level rules, with release, documented exceptions, and an optional download block (`app.compliance.quarantineBlocksDownload`)
 -   **Cascades** -- Approval-gated re-evaluation of an asset's downstream assets in dependency order
