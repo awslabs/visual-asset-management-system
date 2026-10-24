@@ -739,7 +739,8 @@ migrate, and the two directions fail differently:
     existing stack of that name holds the regional ACL in the deployment Region. A stack cannot change
     Region, so the deployment attempts a new us-east-1 stack under a name already in use elsewhere and the
     old regional stack is left unmanaged.
--   **CloudFront → ALB.** `<name>-waf-regional-<base>` is no longer referenced and is left in place.
+-   **CloudFront → ALB.** `<name>-waf-regional-<base>` is no longer referenced and is left in place, and so is
+    `<name>-origin-verify-<base>`, the stack of the API origin verification secret.
 
 ##### Release the DNS record first
 

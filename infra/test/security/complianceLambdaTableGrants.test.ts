@@ -436,7 +436,15 @@ class TableResolver {
     private readonly paramKeys = resourceKeyParamKeys();
 
     constructor(private readonly synth: SynthResult) {
-        const rootKey = Object.keys(synth.templates).find((k) => !k.endsWith(".nested"))!;
+        // The core stack's root template: the top-level template that holds the nested stacks (a
+        // CloudFront deployment also emits the origin verification stack at the top level).
+        const rootKey = Object.keys(synth.templates).find(
+            (k) =>
+                !k.endsWith(".nested") &&
+                Object.values<any>(synth.templates[k].Resources ?? {}).some(
+                    (r) => r.Type === "AWS::CloudFormation::Stack"
+                )
+        )!;
         for (const resource of Object.values<any>(synth.templates[rootKey].Resources ?? {})) {
             if (resource.Type !== "AWS::CloudFormation::Stack") continue;
             for (const [name, value] of Object.entries<any>(

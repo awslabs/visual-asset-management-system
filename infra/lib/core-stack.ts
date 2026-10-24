@@ -34,6 +34,7 @@ import * as s3AssetBuckets from "./helper/s3AssetBuckets";
 import { Aspects } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { generateUniqueNameHash, suppressCdkNagLambdaFrameworkResources } from "./helper/security";
+import { ApiOriginVerifySecretRef } from "./helper/apiOriginVerify";
 import { CfnStack } from "aws-cdk-lib";
 
 export interface EnvProps {
@@ -45,6 +46,9 @@ export interface EnvProps {
     // CloudFront-scoped WAF web ACL ARN (us-east-1) — attaches to the CloudFront
     // distribution. Empty string when CloudFront or WAF is disabled.
     ssmWafArnCloudfront: string;
+    // The API origin verification secret (ApiOriginVerifyStack). Required when CloudFront is
+    // enabled; undefined otherwise.
+    apiOriginVerifySecret?: ApiOriginVerifySecretRef;
     // Notification topic ARNs for external asset buckets in other Regions, created by the
     // per-Region CrossRegionBucketNotificationsStack and keyed by bucket ARN + prefix. Empty
     // (or omitted) when every asset bucket is in the deployment Region.
@@ -335,6 +339,16 @@ export class CoreVAMSStack extends cdk.Stack {
             }
 
             // Build the API stack last (after all registrars have contributed routes).
+            //
+            // A CloudFront deployment forwards API requests with the origin verification header, which
+            // the REST authorizer and the regional web ACL read; both entry points (bin/infra.ts and the
+            // T1 harness) pass the secret through buildApiOriginVerifyStack.
+            if (props.config.app.useCloudFront.enabled && !props.apiOriginVerifySecret) {
+                throw new Error(
+                    "CoreVAMSStack: app.useCloudFront.enabled requires apiOriginVerifySecret, the " +
+                        "secret of the stack buildApiOriginVerifyStack() creates (lib/apiOriginVerify-stack.ts)."
+                );
+            }
             const apiNestedStack = new ApiNestedStack(this, "RestApi", {
                 ...props,
                 config: props.config,
@@ -346,6 +360,7 @@ export class CoreVAMSStack extends cdk.Stack {
                 subnets: this.subnetsIsolated,
                 vamsCreatedApiGatewayVpcEndpointId: this.apiGatewayVpcEndpointId,
                 wafArn: props.ssmWafArnRegional,
+                apiOriginVerifySecret: props.apiOriginVerifySecret,
             });
             apiNestedStack.addStackDependency(storageResourcesNestedStack);
             apiNestedStack.addStackDependency(authBuilderNestedStack);
@@ -371,6 +386,8 @@ export class CoreVAMSStack extends cdk.Stack {
                         ssmWafArnCloudfront: props.ssmWafArnCloudfront,
                         ssmWafArnRegional: props.ssmWafArnRegional,
                         authResources: authBuilderNestedStack.authResources,
+                        lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                        apiOriginVerifySecret: props.apiOriginVerifySecret,
                     }
                 );
                 staticWebBuilderNestedStack.addStackDependency(storageResourcesNestedStack);

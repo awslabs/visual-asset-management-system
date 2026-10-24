@@ -52,6 +52,10 @@ export const STACK_XREGION_DESCRIPTION =
     "(SO9299) (uksb-1608h3hqer) (VAMS-XREGION) (version:" +
     VAMS_VERSION +
     ") Cross-Region asset bucket notification components for the Visual Asset Management Systems";
+export const STACK_ORIGIN_VERIFY_DESCRIPTION =
+    "(SO9299) (uksb-1608h3hqer) (VAMS-ORIGINVERIFY) (version:" +
+    VAMS_VERSION +
+    ") API origin verification secret for the Visual Asset Management Systems";
 
 // Custom Authorizer Configuration
 export const CUSTOM_AUTHORIZER_IGNORED_PATHS = ["/api/amplify-config", "/api/version"];
@@ -73,6 +77,20 @@ export const API_GATEWAY_STAGE_NAME = "api";
 // CloudFront distribution forwards each of these exact paths with the stage as its origin path and
 // every other `/api/*` path without one, so no other route may begin with `/api/`.
 export const API_STAGE_PREFIXED_ROUTE_PATHS = ["/api/amplify-config", "/api/version"];
+
+// On a CloudFront deployment, CloudFront adds this header to every request it forwards to the REST
+// API, carrying the deployment's origin verification value (an AWS Secrets Manager secret). The
+// regional web ACL's rate-based rules and the REST authorizer's client-address resolution read it.
+// Lower-case, because AWS WAF matches a single header by its lower-case name. Mirrored in
+// backend/backend/common/auth/originVerify.py and in the SENSITIVE_KEYS of
+// backend/backend/customLogging/logger.py (test/security/apiOriginVerifyMirror.test.ts).
+export const API_ORIGIN_VERIFY_HEADER_NAME = "x-vams-origin-verify";
+// JSON keys of the origin verification secret: the value CloudFront sends, and the value it sent
+// before the last rotation.
+export const API_ORIGIN_VERIFY_CURRENT_KEY = "current";
+export const API_ORIGIN_VERIFY_PREVIOUS_KEY = "previous";
+// Days between automatic rotations of the origin verification secret.
+export const API_ORIGIN_VERIFY_ROTATION_DAYS = 90;
 
 // The REST API integration timeout applied when a deployment names none, in seconds. 29 seconds is
 // the API Gateway default and the floor VAMS allows. Raising it above the default requires an

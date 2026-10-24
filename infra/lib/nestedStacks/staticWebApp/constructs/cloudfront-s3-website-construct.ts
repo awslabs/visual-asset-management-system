@@ -320,18 +320,24 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
  *
  * Make sure APIs return the header `"Cache-Control" = "no-cache, no-store"` or CloudFront will cache
  * the bootstrap responses.
+ *
+ * `originCustomHeaders` (CloudFront deployments with an origin verification secret) is added to both
+ * origins. CloudFront sets an origin custom header on every request it forwards, replacing a viewer
+ * header of the same name; origin custom headers are not a CloudFront policy and use no policy quota.
  */
 export function addBehaviorToCloudFrontDistribution(
     scope: Construct,
     cloudFrontDistribution: cloudfront.Distribution,
     apiUrl: string,
     apiStageName: string,
-    apiGatewayTimeoutSeconds: number
+    apiGatewayTimeoutSeconds: number,
+    originCustomHeaders?: Record<string, string>
 ) {
     const stagePrefixedOrigin = new cloudfrontOrigins.HttpOrigin(apiUrl, {
         originSslProtocols: [cloudfront.OriginSslPolicy.TLS_V1_2],
         protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
         originPath: `/${apiStageName}`,
+        customHeaders: originCustomHeaders,
     });
     const stagePrefixedCachePolicy = new cloudfront.CachePolicy(scope, "ApiCachePolicy", {
         // required or CloudFront will strip the Authorization token from the request.
@@ -364,6 +370,7 @@ export function addBehaviorToCloudFrontDistribution(
             originSslProtocols: [cloudfront.OriginSslPolicy.TLS_V1_2],
             protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
             readTimeout: Duration.seconds(Math.min(apiGatewayTimeoutSeconds + 1, 60)),
+            customHeaders: originCustomHeaders,
         }),
         {
             cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,

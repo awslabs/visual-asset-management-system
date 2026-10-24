@@ -11,6 +11,7 @@ import * as Config from "../../../config/config";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
 import { authResources } from "../auth/authBuilder-nestedStack";
 import { RouteRegistry } from "./apiRouteRegistry";
+import { ApiOriginVerifySecretRef } from "../../helper/apiOriginVerify";
 import {
     IApiImplementation,
     RestApiGatewayConstruct,
@@ -26,6 +27,8 @@ export interface ApiNestedStackProps extends cdk.StackProps {
     subnets: ec2.ISubnet[];
     vamsCreatedApiGatewayVpcEndpointId?: string;
     wafArn?: string;
+    /** The API origin verification secret; set on CloudFront deployments only. */
+    apiOriginVerifySecret?: ApiOriginVerifySecretRef;
 }
 
 /**
@@ -60,6 +63,7 @@ export class ApiNestedStack extends NestedStack {
                 subnets: props.subnets,
                 vamsCreatedApiGatewayVpcEndpointId: props.vamsCreatedApiGatewayVpcEndpointId,
                 wafArn: props.wafArn,
+                apiOriginVerifySecret: props.apiOriginVerifySecret,
             });
         } else {
             throw new Error(

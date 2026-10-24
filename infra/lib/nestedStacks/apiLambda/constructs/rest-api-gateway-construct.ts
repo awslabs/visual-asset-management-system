@@ -22,6 +22,7 @@ import { RouteRegistry } from "../apiRouteRegistry";
 import { buildOpenApiSpec } from "./buildOpenApiSpec";
 import { buildApiGatewayAuthorizerRestFunction } from "../../../lambdaBuilder/authFunctions";
 import { generateUniqueNameHash } from "../../../helper/security";
+import { ApiOriginVerifySecretRef } from "../../../helper/apiOriginVerify";
 import { AmplifyConfigLambdaConstruct } from "./amplify-config-lambda-construct";
 import { VamsVersionLambdaConstruct } from "./vams-version-lambda-construct";
 import { samlSettings } from "../../../../config/saml-config";
@@ -60,6 +61,11 @@ export interface RestApiGatewayConstructProps {
     vamsCreatedApiGatewayVpcEndpointId?: string;
     /** Resolved WAF web ACL ARN ("" when WAF is disabled). */
     wafArn?: string;
+    /**
+     * The API origin verification secret (CloudFront deployments only). The REST authorizer reads it
+     * to recognise requests CloudFront forwarded.
+     */
+    apiOriginVerifySecret?: ApiOriginVerifySecretRef;
 }
 
 /**
@@ -119,7 +125,8 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             storageResources,
             config,
             props.vpc,
-            props.subnets
+            props.subnets,
+            props.apiOriginVerifySecret
         );
         if (config.app.authProvider.useCognito.enabled) {
             authorizerFn.addEnvironment("USER_POOL_ID", props.authResources.cognito.userPoolId);

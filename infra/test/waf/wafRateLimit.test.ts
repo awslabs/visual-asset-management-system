@@ -18,16 +18,28 @@ import {
     WafPolicyConfig,
 } from "../../lib/constructs/wafv2-basic-construct";
 import { newTestApp } from "../support/testApp";
+import * as Config from "../../config/config";
 
-const buildStack = (policy?: WafPolicyConfig, scope = WAFScope.REGIONAL): cdk.Stack => {
+const buildStack = (
+    policy?: WafPolicyConfig,
+    scope = WAFScope.REGIONAL,
+    originVerifySecretArn?: string
+): cdk.Stack => {
     const app = newTestApp();
     const stack = new cdk.Stack(app, "WafTestStack");
-    new Wafv2BasicConstruct(stack, "Waf", { wafScope: scope, wafPolicy: policy });
+    new Wafv2BasicConstruct(stack, "Waf", {
+        wafScope: scope,
+        wafPolicy: policy,
+        originVerifySecretArn,
+    });
     return stack;
 };
 
-const buildTemplate = (policy?: WafPolicyConfig, scope = WAFScope.REGIONAL): Template =>
-    Template.fromStack(buildStack(policy, scope));
+const buildTemplate = (
+    policy?: WafPolicyConfig,
+    scope = WAFScope.REGIONAL,
+    originVerifySecretArn?: string
+): Template => Template.fromStack(buildStack(policy, scope, originVerifySecretArn));
 
 const getWebAcl = (template: Template): any =>
     Object.values(template.findResources("AWS::WAFv2::WebACL"))[0];
@@ -283,5 +295,89 @@ describe("Wafv2BasicConstruct rate-based rule construction", () => {
             ],
         });
         expect(getWebAcl(template).Properties.CustomResponseBodies).toBeUndefined();
+    });
+});
+
+/**
+ * Issue #714: on a CloudFront deployment the REGIONAL ACL's rate-based rules count only requests that
+ * do not carry the origin verification value CloudFront adds. CloudFront-forwarded requests reach the
+ * regional ACL from CloudFront edge addresses, so without the scope-down every viewer behind one edge
+ * shares that edge's counter; the CLOUDFRONT-scoped ACL rate-limits them by viewer address instead.
+ * Direct execute-api and custom-domain requests carry no valid value and keep the regional limit.
+ */
+describe("REGIONAL rate rules on a CloudFront deployment (origin verification scope-down)", () => {
+    const SECRET_ARN = "arn:aws:secretsmanager:us-east-1:111111111111:secret:origin-verify-AbCdEf";
+    const withSecret = buildTemplate(shippedPolicy, WAFScope.REGIONAL, SECRET_ARN);
+    const withoutSecret = buildTemplate(shippedPolicy, WAFScope.REGIONAL);
+    const expectedReference = `{{resolve:secretsmanager:${SECRET_ARN}:SecretString:current::}}`;
+
+    const scopeDown = (template: Template, name: string): any =>
+        getRule(template, name).Statement.RateBasedStatement.ScopeDownStatement;
+
+    test("every shipped rate rule carries NOT (header == current OR header == current)", () => {
+        expect(shippedRateRules.length).toBeGreaterThan(0);
+        shippedRateRules.forEach((policyRule) => {
+            const statements = scopeDown(withSecret, policyRule.name).NotStatement.Statement
+                .OrStatement.Statements;
+            expect(statements).toHaveLength(2);
+            statements.forEach((s: any) => {
+                expect(s.ByteMatchStatement).toEqual({
+                    FieldToMatch: { SingleHeader: { Name: "x-vams-origin-verify" } },
+                    PositionalConstraint: "EXACTLY",
+                    SearchString: expectedReference,
+                    TextTransformations: [{ Priority: 0, Type: "NONE" }],
+                });
+            });
+        });
+    });
+
+    test("the header name is lower-case, as AWS WAF matches a single header", () => {
+        expect(Config.API_ORIGIN_VERIFY_HEADER_NAME).toBe(
+            Config.API_ORIGIN_VERIFY_HEADER_NAME.toLowerCase()
+        );
+    });
+
+    test("the scope-down carries a dynamic reference, never a value", () => {
+        const json = JSON.stringify(getWebAcl(withSecret));
+        const searchStrings = [...json.matchAll(/"SearchString":"([^"]*)"/g)].map((m) => m[1]);
+        expect(searchStrings.length).toBe(2 * shippedRateRules.length);
+        searchStrings.forEach((s) => expect(s).toMatch(/^\{\{resolve:secretsmanager:/));
+    });
+
+    test("the 429 response, its body and headers, and the IP aggregation are unchanged", () => {
+        shippedRateRules.forEach((policyRule) => {
+            const withRule = getRule(withSecret, policyRule.name);
+            const withoutRule = getRule(withoutSecret, policyRule.name);
+            expect(withRule.Action).toEqual(withoutRule.Action);
+            expect(withRule.VisibilityConfig).toEqual(withoutRule.VisibilityConfig);
+            const { ScopeDownStatement, ...statement } = withRule.Statement.RateBasedStatement;
+            expect(ScopeDownStatement).toBeDefined();
+            expect(statement).toEqual(withoutRule.Statement.RateBasedStatement);
+        });
+        expect(getWebAcl(withSecret).Properties.CustomResponseBodies).toEqual(
+            getWebAcl(withoutSecret).Properties.CustomResponseBodies
+        );
+    });
+
+    test("the managed rule groups are unchanged", () => {
+        const managed = (template: Template) =>
+            getWebAcl(template).Properties.Rules.filter(
+                (r: any) => r.Statement.ManagedRuleGroupStatement
+            );
+        expect(managed(withSecret).length).toBeGreaterThan(0);
+        expect(managed(withSecret)).toEqual(managed(withoutSecret));
+    });
+
+    test("without the secret no rule carries a scope-down", () => {
+        shippedRateRules.forEach((policyRule) => {
+            expect(scopeDown(withoutSecret, policyRule.name)).toBeUndefined();
+        });
+        expect(JSON.stringify(getWebAcl(withoutSecret))).not.toContain("x-vams-origin-verify");
+    });
+
+    test("the CLOUDFRONT-scoped ACL refuses the secret", () => {
+        expect(() => buildTemplate(shippedPolicy, WAFScope.CLOUDFRONT, SECRET_ARN)).toThrow(
+            /REGIONAL web ACL only/
+        );
     });
 });

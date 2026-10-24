@@ -32,6 +32,7 @@ backend/
 │   │   ├── auth/apiEvent.py                        #   normalize_event: REST→HTTP-API-v2 shape
 │   │   ├── auth/authorizerCore.py                  #   JWT/API-key/IP validation
 │   │   ├── auth/clientIp.py                        #   True client-IP resolution
+│   │   ├── auth/originVerify.py                    #   CloudFront origin verification value (secret, cache)
 │   │   ├── apiRoutes.py                            # MASTER API route registry: ApiRoute constants,
 │   │   │                                           #   category group arrays, ALL_API_ROUTES
 │   │   │                                           #   (core + ADDON_ROUTES + CUSTOM_ROUTES).
@@ -97,7 +98,8 @@ backend/
 │   │   ├── assets/                                 # assetService.py (GOLD STANDARD),
 │   │   │                                           #   assetVersions, assetHistory, etc.
 │   │   ├── auth/                                   # apiGatewayAuthorizerRest, apiKeyService,
-│   │   │                                           #   constraints, cognito, preTokenGen;
+│   │   │                                           #   constraints, cognito, preTokenGen,
+│   │   │                                           #   apiOriginVerifyRotation (secret rotation);
 │   │   │                                           #   __init__: request_to_claims() → claims
 │   │   ├── authz/__init__.py                       # CasbinEnforcer proxy (ABAC/RBAC)
 │   │   ├── compliance/                             # Compliance. API handlers (one Lambda each):
