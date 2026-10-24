@@ -57,6 +57,35 @@ const defaultProps: Partial<RapidPipelineConstructProps> = {
 };
 
 /**
+ * An EcsRunTask whose RunTask call also sets StartedBy to the Step Functions execution name.
+ *
+ * A Fargate task that reaches the state's task-level timeout is still running, and the timed-out
+ * state's error output carries no task ARN. ecs:ListTasks filters by startedBy, so tagging the task
+ * with the execution name is what lets the timeout route find it and stop it. aws-cdk-lib's
+ * EcsRunTask has no startedBy prop, so this adds the field to the rendered Parameters and leaves
+ * everything else EcsRunTask renders and grants as it is. openPipeline names each execution
+ * `PipelineJob_<timestamp>_<8 hex>`, which fits StartedBy's limit of 128 letters, digits, hyphens,
+ * underscores and forward slashes.
+ */
+class StartedByEcsRunTask extends tasks.EcsRunTask {
+    public toStateJson(topLevelQueryLanguage?: sfn.QueryLanguage): object {
+        const state = super.toStateJson(topLevelQueryLanguage) as {
+            Parameters?: Record<string, unknown>;
+        };
+        if (state.Parameters === undefined) {
+            // A JSONata state renders Arguments instead, which takes a different expression syntax.
+            throw new Error(
+                "RapidPipelineRunFargate rendered no Parameters; StartedBy needs the JSONPath query language"
+            );
+        }
+        return {
+            ...state,
+            Parameters: { ...state.Parameters, "StartedBy.$": "$$.Execution.Name" },
+        };
+    }
+}
+
+/**
  * Deploys a Step Function for ECS RunTask workflow
  * Creates:
  * - SFN
@@ -379,8 +408,9 @@ export class RapidPipelineConstruct extends NestedStack {
         // Step function task for ECS. The .sync pattern waits for the task to stop however long it
         // runs, so the state carries a task-level timeout: a task that reaches it fails the state with
         // States.Timeout, which the catch below routes to PipelineEndTask, and the run fits in the
-        // state machine timeout (the chain in config.ts).
-        const runRapidPipelineJob = new tasks.EcsRunTask(this, "RapidPipelineRunFargate", {
+        // state machine timeout (the chain in config.ts). The task is started with StartedBy set to the
+        // execution name, which is how the timeout route finds it to stop it.
+        const runRapidPipelineJob = new StartedByEcsRunTask(this, "RapidPipelineRunFargate", {
             integrationPattern: sfn.IntegrationPattern.RUN_JOB,
             taskTimeout: sfn.Timeout.duration(
                 Duration.seconds(Config.RAPID_PIPELINE_ECS_FARGATE_TASK_TIMEOUT_SECONDS)
