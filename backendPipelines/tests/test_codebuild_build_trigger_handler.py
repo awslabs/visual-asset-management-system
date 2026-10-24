@@ -9,7 +9,7 @@ framework reports to nothing, and to swallow every exception -- so a build that 
 returned normally and the framework reported SUCCESS, leaving the AWS Batch job definition pointing at
 an image tag that was never pushed. The framework reports FAILED only when the handler raises.
 
-The handler file is the one all six `*CodeBuild` constructs inline
+The handler file is the one every `*CodeBuild` construct inlines
 (`infra/lib/nestedStacks/pipelines/constructs/codeBuildTrigger.ts`); it is executed here with a
 stubbed CodeBuild client.
 """

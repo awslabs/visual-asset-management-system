@@ -44,8 +44,8 @@ _HANDLERS = sorted(
 )
 
 # The number in the tree today, and the number that use the accumulate-then-scan shape. The remaining
-# four return their failure response directly and have no loop to get wrong.
-_EXPECTED_HANDLERS = 15
+# six return their failure response directly and have no loop to get wrong.
+_EXPECTED_HANDLERS = 16
 _EXPECTED_WITH_SCAN = 10
 
 

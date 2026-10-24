@@ -133,6 +133,7 @@ const sidebars: SidebarsConfig = {
                         "pipelines/genai-cad-step-agent",
                         "pipelines/gaussian-splatting",
                         "pipelines/genai-labeling",
+                        "pipelines/video-sop-bom",
                         "pipelines/nvidia-isaac-lab",
                         "pipelines/nvidia-cosmos-predict",
                         "pipelines/nvidia-cosmos-reason",

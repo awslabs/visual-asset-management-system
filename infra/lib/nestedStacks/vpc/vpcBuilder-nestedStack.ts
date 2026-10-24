@@ -694,6 +694,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.usePreview3dThumbnail.enabled ||
                 props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
                 props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
+                props.config.app.pipelines.useGenAiVideoSopBom?.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useModelOps.enabled ||
@@ -748,14 +749,14 @@ export class VPCBuilderNestedStack extends NestedStack {
                 }
             }
 
-            //All Lambda and Metadata Generation Pipeline Required Endpoints
+            // Amazon Bedrock AgentCore data plane. The GenAI CAD STEP agent's invoke Lambda calls
+            // InvokeAgentRuntime from the isolated subnets when every Lambda is in the VPC; the agent
+            // itself runs on AgentCore outside the VPC, so only the `agentcore` runtime needs it.
             if (
                 props.config.app.useGlobalVpc.useForAllLambdas &&
                 props.config.app.pipelines.useGenAiCadStepAgent?.enabled &&
                 props.config.app.pipelines.useGenAiCadStepAgent.runtime === "agentcore"
             ) {
-                // The invoke Lambda calls InvokeAgentRuntime from the isolated subnets; the AgentCore
-                // data plane is reached through its own interface endpoint.
                 new ec2.InterfaceVpcEndpoint(this, "BedrockAgentCoreEndpoint", {
                     vpc: this.vpc,
                     privateDnsEnabled: true,
@@ -765,10 +766,18 @@ export class VPCBuilderNestedStack extends NestedStack {
                 });
             }
 
-            if (
+            // Amazon Bedrock Runtime has two in-VPC callers: the GenAI metadata-labeling Lambda, which
+            // is in the VPC only when every Lambda is, and the video SOP/BOM Batch container, which
+            // always runs in the isolated subnets. Amazon Rekognition has only the Lambda caller. A VPC
+            // allows one private-DNS endpoint per service, so the two callers share the BedrockEndpoint
+            // construct and only its condition is the union.
+            const bedrockRuntimeFromLambda =
                 props.config.app.useGlobalVpc.useForAllLambdas &&
-                props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled
-            ) {
+                props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled;
+            const bedrockRuntimeFromContainer =
+                props.config.app.pipelines.useGenAiVideoSopBom?.enabled === true;
+
+            if (bedrockRuntimeFromLambda || bedrockRuntimeFromContainer) {
                 // Create VPC endpoint for Bedrock Runtime
                 new ec2.InterfaceVpcEndpoint(this, "BedrockEndpoint", {
                     vpc: this.vpc,
@@ -777,12 +786,28 @@ export class VPCBuilderNestedStack extends NestedStack {
                     subnets: { subnets: this.isolatedSubnets },
                     securityGroups: [vpceSecurityGroup],
                 });
+            }
 
+            if (bedrockRuntimeFromLambda) {
                 // Create VPC endpoint for Rekognition
                 new ec2.InterfaceVpcEndpoint(this, "RekognitionEndpoint", {
                     vpc: this.vpc,
                     privateDnsEnabled: true,
                     service: ec2.InterfaceVpcEndpointAwsService.REKOGNITION,
+                    subnets: { subnets: this.isolatedSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                });
+            }
+
+            // Amazon Transcribe batch API (StartTranscriptionJob, GetTranscriptionJob,
+            // DeleteTranscriptionJob), called by the video SOP/BOM container from the isolated subnets.
+            // Standard endpoint only: the container resolves the default regional hostname, not the
+            // FIPS variant.
+            if (bedrockRuntimeFromContainer) {
+                new ec2.InterfaceVpcEndpoint(this, "TranscribeEndpoint", {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: ec2.InterfaceVpcEndpointAwsService.TRANSCRIBE,
                     subnets: { subnets: this.isolatedSubnets },
                     securityGroups: [vpceSecurityGroup],
                 });

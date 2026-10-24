@@ -15,8 +15,8 @@ const INLINE_CODE_MAX_BYTES = 4096;
 
 /**
  * The build-trigger handler as inline function code (handler `index.handler`). One source file
- * serves every *CodeBuild construct, so their triggers cannot drift; it stays inline so the trigger
- * function keeps its ZipFile code and no construct gains an asset.
+ * serves every pipeline *CodeBuild construct, so their triggers cannot drift; it stays inline so the trigger function
+ * keeps its ZipFile code and no construct gains an asset.
  */
 export function codeBuildTriggerCode(): lambda.Code {
     const source = fs.readFileSync(CODEBUILD_TRIGGER_HANDLER_PATH, "utf8");

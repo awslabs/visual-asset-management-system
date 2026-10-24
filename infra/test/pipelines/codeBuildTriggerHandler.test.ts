@@ -52,6 +52,7 @@ describe("CodeBuild build triggers", () => {
             "gr00tCodeBuild-construct.ts",
             "isaacLabCodeBuild-construct.ts",
             "splatToolboxCodeBuild-construct.ts",
+            "videoSopBomCodeBuild-construct.ts",
         ]);
     });
 

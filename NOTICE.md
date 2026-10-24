@@ -227,6 +227,7 @@ This software includes third party software subject to the following copyrights:
 | Blender         | [master-latest](https://github.com/blender)                                                                                                               | GENAI 3D METADATA GENERATION                                                       | GNU GPLv3        |
 | SplatToolbox    | [feature/batch-sogs-vggt](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | SPLAT TOOLBOX                                                                      | MIT              |
 | FFmpeg          | Ubuntu `ffmpeg` package (installed at image build time, not version-pinned)                                                                               | NVIDIA COSMOS PREDICT, COSMOS REASON, COSMOS TRANSFER, COSMOS 3, GR00T FINE-TUNING | GPL-2.0-or-later |
+| FFmpeg          | Debian trixie `ffmpeg` package (7.1.x, installed at build time; 7:7.1.5-0+deb13u1 in the reference build)                                                 | VIDEO SOP/BOM EXTRACTION                                                           | GPL-2.0-or-later |
 
 ### Preview 3D Thumbnail Pipeline
 
@@ -354,6 +355,26 @@ Open CASCADE Technology (OCCT), reached through the `cadquery-ocp` bindings, is 
 | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------ | :---------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [Adafruit_CAD_Parts](https://github.com/adafruit/Adafruit_CAD_Parts)                                                                                                          | branch `main`             | MIT, © 2016 Adafruit Industries                             | Fixtures X1, X4 and X6, and the golden `fm6-x4-largest-body.step` derived from X4. The license text is kept beside them as `fixtures/LICENSE-adafruit-MIT.txt`                                                                                                                        |
 | [NIST MBE PMI Validation and Conformance Testing STEP files](https://www.nist.gov/ctl/smart-connected-systems-division/smart-connected-manufacturing-systems-group/mbe-pmi-0) | `NIST-PMI-STEP-Files.zip` | Public domain (work of the U.S. Government, 17 U.S.C. §105) | Fixtures X2, X3 and X5, and the goldens `fm1-x2-four-corner-holes.stp`, `fm4-x3-centre-hole.stp`, `fm8-x7-edge-hole.stp` and `fm9-x9-solid-only.stp` derived from NIST files. `fixtures/PROVENANCE.md` and `goldens/GOLDENS.md` record each file's source, license and SHA-256 digest |
+
+### Video SOP/BOM Extraction Pipeline
+
+**Video SOP/BOM Extraction Pipeline Dependencies**
+
+| Name                         | Version                                                                                          | License          | Notes                                                                                                 |
+| :--------------------------- | :----------------------------------------------------------------------------------------------- | :--------------- | :---------------------------------------------------------------------------------------------------- |
+| FFmpeg (`ffmpeg`, `ffprobe`) | 7.1.x (Debian trixie package, installed at build time; 7:7.1.5-0+deb13u1 in the reference build) | GPL-2.0-or-later | Debian `ffmpeg` apt package: stream probing, audio extraction and FLAC encoding, key-frame extraction |
+| boto3                        | 1.43.93                                                                                          | Apache-2.0       | AWS SDK for Python (Amazon S3, Amazon Transcribe, Amazon Bedrock, AWS Step Functions)                 |
+| botocore                     | 1.43.93                                                                                          | Apache-2.0       | Low-level AWS service client library used by boto3                                                    |
+| jsonschema                   | 4.26.0                                                                                           | MIT              | Configuration and output schema validation                                                            |
+| Pillow                       | 13.0.0                                                                                           | HPND             | Key-frame scaling and JPEG encoding                                                                   |
+
+**Container Base Image**
+
+The Video SOP/BOM Extraction container uses the Debian-based `python:3.12-slim` image, pinned by digest, and installs the Debian trixie `ffmpeg` package from the distribution's package archive at image build time. The package is not version-pinned, so the shipped FFmpeg is whatever 7.1.x build the archive serves when the image is built; `7:7.1.5-0+deb13u1` is the version observed in the reference build, and `/usr/share/doc/ffmpeg/copyright` in the image records the build's license text.
+
+**FFmpeg License Notice**
+
+Debian builds FFmpeg with `--enable-gpl`, so the `ffmpeg` and `ffprobe` binaries in this image are licensed under the GNU General Public License version 2 or later (GPL-2.0-or-later). The pipeline runs them as separate processes over a command line and does not link against the FFmpeg libraries; the binaries are consumed unmodified from the Debian package. The GPL terms apply only when this optional pipeline (`app.pipelines.useGenAiVideoSopBom.enabled`) is enabled. Review the license requirements with your legal team before enabling it.
 
 ### Gaussian Splat Toolbox Pipeline
 

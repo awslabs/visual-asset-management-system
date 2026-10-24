@@ -91,6 +91,14 @@ The agent generates Python scripts at run time that import CadQuery. Those scrip
 
 The pipeline's evaluation harness (`backendPipelines/genAi/cadStepAgent/evaluation/`) commits third-party STEP files as test data; none of them is part of the container image. Fixtures X1, X4 and X6, and the golden `fm6-x4-largest-body.step` derived from X4, come from [Adafruit_CAD_Parts](https://github.com/adafruit/Adafruit_CAD_Parts) under the MIT license, © 2016 Adafruit Industries; the license text is kept beside them as `fixtures/LICENSE-adafruit-MIT.txt`. Fixtures X2, X3 and X5, and the goldens `fm1-x2-four-corner-holes.stp`, `fm4-x3-centre-hole.stp`, `fm8-x7-edge-hole.stp` and `fm9-x9-solid-only.stp` derived from NIST files, come from the [NIST MBE PMI Validation and Conformance Testing](https://www.nist.gov/ctl/smart-connected-systems-division/smart-connected-manufacturing-systems-group/mbe-pmi-0) project's STEP files, a work of the U.S. Government in the public domain (17 U.S.C. §105). `fixtures/PROVENANCE.md` and `goldens/GOLDENS.md` record each file's source, license and SHA-256 digest.
 
+### Video SOP/BOM Extraction Pipeline Library Notice
+
+The Video SOP/BOM Extraction pipeline container installs the Debian trixie `ffmpeg` package (FFmpeg 7.1.x) at image build time to probe video streams, extract and encode audio (FLAC), and extract key frames; the package is not version-pinned, and `7:7.1.5-0+deb13u1` is the version observed in the reference build. Debian builds FFmpeg with `--enable-gpl`, so the `ffmpeg` and `ffprobe` binaries are distributed under the GNU General Public License version 2 or later (GPL-2.0-or-later). The pipeline runs them as separate processes and does not link against the FFmpeg libraries. The pipeline's Python dependencies — boto3 and botocore (Apache-2.0), jsonschema (MIT), and Pillow (HPND) — are permissively licensed; the exact versions are in the repository's `NOTICE.md`.
+
+:::warning
+GPL-2.0-or-later terms apply only when this optional pipeline is enabled (`app.pipelines.useGenAiVideoSopBom.enabled`). Review the license requirements with your legal team before enabling it. See the [Video SOP/BOM Extraction pipeline](../pipelines/video-sop-bom.md#third-party-library-licenses) page.
+:::
+
 ### Gaussian Splat Toolbox Pipeline Model Notice
 
 The Gaussian Splat Toolbox container image ships the segmentation model weights its optional

@@ -286,6 +286,16 @@ const COMMERCIAL: ConfigShape = {
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: false,
             },
+            useGenAiVideoSopBom: {
+                enabled: false,
+                useCodeBuild: false,
+                autoRegisterWithVAMS: true,
+                bedrockModelId: "global.anthropic.claude-sonnet-5-5",
+                limits: {
+                    maxVideoFiles: 4,
+                    maxTotalDurationMinutes: 240,
+                },
+            },
             useSplatToolbox: {
                 enabled: false,
                 useCodeBuild: false,
@@ -439,6 +449,9 @@ function buildGovCloud(): ConfigShape {
     // partition when they enable the pipeline (it ships disabled).
     cfg.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId = "";
     cfg.app.pipelines.useGenAiMetadata3dLabeling.autoRegisterAutoTriggerOnFileUpload = true;
+    // The same reason: one model id serves this pipeline's text and vision calls, and the commercial
+    // default is a "global." inference profile.
+    cfg.app.pipelines.useGenAiVideoSopBom.bedrockModelId = "";
     // AgentCore Runtime is commercial-only, so the restricted presets ship the Fargate runtime with
     // the model id left for the operator, as for the labeling pipeline above.
     cfg.app.pipelines.useGenAiCadStepAgent.runtime = "fargate";

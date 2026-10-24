@@ -38,6 +38,8 @@ PIPELINES = (
     ("metadata3dLabeling", "backendPipelines/genAi/metadata3dLabeling",
      "infra/lib/nestedStacks/pipelines/genAi/metadata3dLabeling/constructs/"
      "metadata3dLabeling-construct.ts"),
+    ("videoSopBom", "backendPipelines/genAi/videoSopBom",
+     "infra/lib/nestedStacks/pipelines/genAi/videoSopBom/constructs/videoSopBom-construct.ts"),
     ("cadStepAgent", "backendPipelines/genAi/cadStepAgent",
      "infra/lib/nestedStacks/pipelines/genAi/cadStepAgent/constructs/cadStepAgent-construct.ts"),
     ("modelOps", "backendPipelines/multi/modelOps",
@@ -69,7 +71,7 @@ _LISTED = (".stl", ".obj", ".glb", ".STL", ".Obj")
 _TOKEN = "tok-extension-gate"
 
 # customLogging is a per-pipeline package with an identical logger in each. Stubbed once so loading
-# seven handlers does not depend on which pipeline's copy sys.path resolves first.
+# eight handlers does not depend on which pipeline's copy sys.path resolves first.
 if "customLogging" not in sys.modules:
     _cl_pkg = types.ModuleType("customLogging")
     _cl_logger = types.ModuleType("customLogging.logger")

@@ -6,26 +6,27 @@
 /**
  * The Amazon ECR repositories of the CodeBuild-built pipelines follow `app.useKmsCmkEncryption`.
  *
- * With `useCodeBuild` on, six pipelines build their container image with AWS CodeBuild into a
+ * With `useCodeBuild` on, seven pipelines build their container image with AWS CodeBuild into a
  * VAMS-owned repository: coordinate transform, Gaussian splat toolbox, NVIDIA Cosmos (one repository per
- * model family), NVIDIA GR00T, Isaac Lab training and the GenAI CAD STEP agent. With the CMK on, each
- * repository is encrypted with the deployment's shared key; with it off, each stays on the Amazon ECR
- * AES-256 default, which is no `EncryptionConfiguration` at all. Both directions are asserted for every
- * repository.
+ * model family), NVIDIA GR00T, Isaac Lab training, Video SOP/BOM Extraction and the GenAI CAD STEP
+ * agent. With the CMK on, each repository is encrypted with the deployment's shared key; with it off,
+ * each stays on the Amazon ECR AES-256 default, which is no `EncryptionConfiguration` at all. Both
+ * directions are asserted for every repository.
  *
  * Amazon ECR cannot change a repository's encryption, so `EncryptionConfiguration` is a REPLACEMENT
  * property and turning the CMK on or off replaces every repository. Three things must hold for that
  * update to deploy and leave working pipelines, and none of them is visible in a single synth:
  *
- *   - The explicitly named repositories (coordinate transform, GenAI CAD STEP agent) change their name
- *     with the encryption (`-kms`), because AWS CloudFormation cannot replace a custom-named resource
- *     under the same name.
+ *   - The explicitly named repositories (coordinate transform, Video SOP/BOM, GenAI CAD STEP agent)
+ *     change their names with the encryption (`-kms`), because AWS CloudFormation cannot replace a
+ *     custom-named resource under the same name.
  *   - Every consumer references its repository, so it moves to the replacement: an AWS Batch job
  *     definition, or the CAD STEP agent's Amazon Bedrock AgentCore Runtime on its `agentcore` runtime.
  *   - The build-trigger custom resource is invoked only when one of its properties changes, so it must
  *     carry the repository; otherwise the replacement stays empty and every consumer names an image that
- *     does not exist. (The Batch pipelines' builds are start-only; the CAD STEP agent's custom resource
- *     also waits for its build, so its consumers are updated once the image is in the replacement.)
+ *     does not exist. The Batch pipelines' builds are start-only: the deployment does not wait for the
+ *     image. The CAD STEP agent's custom resource also waits for its build, so its consumers are
+ *     updated once the image is in the replacement.
  *
  * These are asserted between a CMK-off and a CMK-on synth of each template. A repository's physical
  * identity is modelled as its logical id plus its replacement properties (`RepositoryName`,
@@ -56,20 +57,16 @@ const EXPECTED_REPOSITORIES = [
     "CosmosCodeBuildEcrRepocosmos3",
     "Gr00tCodeBuildEcrRepogr00tfinetune",
     "IsaacLabCodeBuildEcrRepotraining",
+    "VideoSopBomPipelineVideoSopBomCodeBuildEcrRepoVideoSopBom",
     "CadStepAgentPipelineCadStepAgentCodeBuildEcrRepoCadStepAgent",
 ];
 
-/**
- * The repositories with an explicit `repositoryName`, mapped to the suffix that name ends in with the
- * CMK off. Both are named because an auto-generated name at their nested-stack depth makes the image
- * reference exceed the 255-character cap.
- */
+/** The repositories with an explicit `repositoryName`, each with the name it ends in without the key. */
 const EXPLICITLY_NAMED: Record<string, string> = {
-    CoordinateTransformPipelineCoordTransformCodeBuildEcrRepoCoordTransform: "-coordtransform",
-    CadStepAgentPipelineCadStepAgentCodeBuildEcrRepoCadStepAgent: "-cadstepagent",
+    [EXPECTED_REPOSITORIES[0]]: "-coordtransform",
+    [EXPECTED_REPOSITORIES[8]]: "-videosopbom",
+    [EXPECTED_REPOSITORIES[9]]: "-cadstepagent",
 };
-const isExplicitlyNamed = (repository: Resource): boolean =>
-    Object.keys(EXPLICITLY_NAMED).some((prefix) => repository.logicalId.startsWith(prefix));
 
 /**
  * Every pipeline config entry with a `useCodeBuild` key.
@@ -85,6 +82,7 @@ const EXPECTED_CODEBUILD_PIPELINES = [
     "useNvidiaCosmos",
     "useNvidiaCosmos3",
     "useNvidiaGr00t",
+    "useGenAiVideoSopBom",
     "useGenAiCadStepAgent",
 ];
 
@@ -117,6 +115,12 @@ const enableEveryCodeBuildPipeline = (c: any, cmkOn: boolean): string[] => {
     p.useNvidiaCosmos.modelsTransfer.transfer2B.enabled = true;
     p.useNvidiaCosmos3.modelsOmni.nano16B.enabled = true;
     p.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.enabled = true;
+    // The restricted templates ship the Video SOP/BOM model id empty (the commercial inference
+    // profiles do not exist there) and the construct requires one; a synth-only id with no
+    // partition-specific prefix, as containerImageReferenceLength.test.ts supplies.
+    if (!p.useGenAiVideoSopBom.bedrockModelId) {
+        p.useGenAiVideoSopBom.bedrockModelId = "synth-only-model";
+    }
     return enabled;
 };
 
@@ -309,22 +313,25 @@ describe.each(ALL_TEMPLATES)("%s: CodeBuild repositories follow useKmsCmkEncrypt
         "the explicitly named repository %s ends in -kms exactly when the CMK is on",
         (prefix, suffix) => {
             const plain = repositoryByPrefix(off, prefix).properties.RepositoryName;
-            expect(plain).toMatch(new RegExp(`${suffix}$`));
+            expect(plain.endsWith(suffix)).toBe(true);
             expect(repositoryByPrefix(on, prefix).properties.RepositoryName).toBe(`${plain}-kms`);
         }
     );
 
     it("every other repository is auto-named, so its replacement gets a new generated name", () => {
+        const explicit = Object.keys(EXPLICITLY_NAMED);
         for (const s of [off, on]) {
             const named = repositories(s)
-                .filter((r) => !isExplicitlyNamed(r))
+                .filter((r) => !explicit.some((prefix) => r.logicalId.startsWith(prefix)))
                 .filter((r) => "RepositoryName" in r.properties)
                 .map((r) => r.logicalId);
             expect(named).toEqual([]);
             // Control: the explicitly named repositories are in this synth and do carry a name.
             expect(
                 repositories(s).filter(
-                    (r) => isExplicitlyNamed(r) && "RepositoryName" in r.properties
+                    (r) =>
+                        explicit.some((prefix) => r.logicalId.startsWith(prefix)) &&
+                        "RepositoryName" in r.properties
                 )
             ).toHaveLength(Object.keys(EXPLICITLY_NAMED).length);
         }
