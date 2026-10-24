@@ -121,6 +121,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** The columnar viewer grid follows the VAMS theme. ([#710](https://github.com/awslabs/visual-asset-management-system/issues/710))
 -   **Web** The Online3D viewer starts in and follows the VAMS theme. ([#711](https://github.com/awslabs/visual-asset-management-system/issues/711))
 -   **Web** The SuperSplat overlay text meets contrast in light mode. ([#712](https://github.com/awslabs/visual-asset-management-system/issues/712))
+-   **MCP** `search_assets` and `search_files` sort by `sort_field` instead of failing every call with 400 (`sort.0.field: field required`): the server sends the `{field, order}` sort entry the search API accepts, and the tool descriptions name indexed fields as examples (`str_assetname`, `date_asset_version_createdate`, `date_lastmodified`). ([#760](https://github.com/awslabs/visual-asset-management-system/issues/760))
+-   **MCP** Resuming a paginated list tool with the `NextToken` of a result cut by `max_items` returns the rest of the list: the server asks the API for only the rows still wanted, so the token no longer skips the remainder of the last page. A result the `VAMS_MAX_PAGES` bound stopped says so in its `note` also when no `max_items` was given, instead of "stopped at the requested limit". ([#761](https://github.com/awslabs/visual-asset-management-system/issues/761), [#762](https://github.com/awslabs/visual-asset-management-system/issues/762))
 
 ### Chores
 
