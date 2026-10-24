@@ -15,7 +15,7 @@ because the numeric comparison would otherwise be meaningless across families.
 import pytest
 
 from backend.backend.common.auth.clientIp import resolve_client_ip, is_ip_authorized
-
+from backend.tests.cloudFrontRangesStub import CLOUDFRONT_PEER_V4
 
 V4_RANGE = ["203.0.113.0", "203.0.113.255"]
 V6_RANGE = ["2001:db8::", "2001:db8::ffff"]
@@ -97,13 +97,13 @@ class TestEndToEndCloudFrontIpv6:
         }
 
     def test_bracketed_viewer_address_resolves_and_authorizes(self):
-        evt = self._evt("130.176.0.1", "[2001:db8::1]:50314")
+        evt = self._evt(CLOUDFRONT_PEER_V4, "[2001:db8::1]:50314")
         client_ip = resolve_client_ip(evt, fronted="cloudfront")
         assert client_ip == "2001:db8::1"
         assert is_ip_authorized(client_ip, [V6_RANGE]) is True
 
     def test_bracketed_viewer_address_outside_the_range_is_denied(self):
-        evt = self._evt("130.176.0.1", "[2001:db9::1]:50314")
+        evt = self._evt(CLOUDFRONT_PEER_V4, "[2001:db9::1]:50314")
         client_ip = resolve_client_ip(evt, fronted="cloudfront")
         assert client_ip == "2001:db9::1"
         assert is_ip_authorized(client_ip, [V6_RANGE]) is False

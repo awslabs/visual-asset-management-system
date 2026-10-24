@@ -1,5 +1,6 @@
 import pytest
 from backend.backend.common.auth.clientIp import resolve_client_ip, is_ip_authorized
+from backend.tests.cloudFrontRangesStub import CLOUDFRONT_PEER_V4
 
 
 def _evt(source_ip=None, headers=None):
@@ -17,29 +18,29 @@ class TestResolveClientIp:
 
     def test_cloudfront_prefers_viewer_address(self):
         # CloudFront-Viewer-Address is "ip:port"; the port must be stripped.
-        evt = _evt(source_ip="130.176.0.1",
+        evt = _evt(source_ip=CLOUDFRONT_PEER_V4,
                    headers={"CloudFront-Viewer-Address": "198.51.100.23:50314"})
         assert resolve_client_ip(evt, fronted="cloudfront") == "198.51.100.23"
 
     def test_cloudfront_viewer_address_ipv6(self):
         # IPv6 viewer address form is "[ipv6]:port".
-        evt = _evt(source_ip="130.176.0.1",
+        evt = _evt(source_ip=CLOUDFRONT_PEER_V4,
                    headers={"CloudFront-Viewer-Address": "[2001:db8::1]:50314"})
         assert resolve_client_ip(evt, fronted="cloudfront") == "2001:db8::1"
 
     def test_cloudfront_falls_back_to_rightmost_untrusted_xff(self):
         # No viewer-address header; XFF trailing hop is the CloudFront peer (sourceIp),
         # so the right-most untrusted entry (the client) is used.
-        evt = _evt(source_ip="70.132.0.5",
-                   headers={"X-Forwarded-For": "198.51.100.23, 70.132.0.5"})
+        evt = _evt(source_ip=CLOUDFRONT_PEER_V4,
+                   headers={"X-Forwarded-For": f"198.51.100.23, {CLOUDFRONT_PEER_V4}"})
         assert resolve_client_ip(evt, fronted="cloudfront") == "198.51.100.23"
 
     def test_spoofed_leftmost_xff_is_not_trusted(self):
         # Behind CloudFront, an attacker prepends a fake allowed IP; the real client is the
         # last untrusted hop (the entry adjacent to the trusted CloudFront peer), never the
         # spoofed left-most.
-        evt = _evt(source_ip="10.0.0.5",
-                   headers={"X-Forwarded-For": "192.168.1.1, 198.51.100.23, 10.0.0.5"})
+        evt = _evt(source_ip=CLOUDFRONT_PEER_V4,
+                   headers={"X-Forwarded-For": f"192.168.1.1, 198.51.100.23, {CLOUDFRONT_PEER_V4}"})
         assert resolve_client_ip(evt, fronted="cloudfront") == "198.51.100.23"
 
     # --- Non-CloudFront deployments: forwarding headers are NEVER trusted (anti-spoof) ---

@@ -2062,6 +2062,8 @@ backend/backend/handlers/auth/
 backend/backend/common/auth/
 ├── authorizerCore.py                # Shared auth logic (Cognito/external JWT, API key, IP)
 ├── clientIp.py                      # Trusted client-IP resolution + IP-range check
+├── cloudFrontOriginFacingRanges.py  # GENERATED CloudFront origin-facing prefixes (clientIp peer check)
+├── generateCloudFrontOriginFacingRanges.py  # Regenerates the snapshot from ip-ranges.json
 └── apiEvent.py                      # REST→canonical event normalization shim
 
 infra/config/config.ts

@@ -180,6 +180,18 @@ actually fire — is covered by `tests/test_pagingStub.py`. Change a check in `p
 file is the one to run first: a stub that rejects legitimate behaviour makes correct code look broken,
 which is how a real paging fix gets reverted.
 
+#### Authorizer tests use `tests/cloudFrontRangesStub.py` for CloudFront peers and stay offline
+
+`common/auth/clientIp.py` reads CloudFront's forwarding headers only when the TCP peer is a CloudFront
+origin-facing address, and refreshes that list from `ip-ranges.amazonaws.com` when a request carries the
+headers from a peer the bundled snapshot does not hold. `tests/common/auth/conftest.py` and
+`tests/handlers/auth/conftest.py` take that refresh offline with an autouse fixture
+(`cloudfront_refresh_offline`, from `isolate_refresh`), which patches every loaded copy of the module —
+found through `resolve_client_ip.__globals__` as well as by name, for the reason given above under
+"Patch the object the function's `__globals__` actually resolves". Use `CLOUDFRONT_PEER_V4` / `CLOUDFRONT_PEER_V6` from the stub for a CloudFront peer
+(they come from the snapshot, so regenerating it cannot strand a fixture) and the documentation ranges
+(`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, `2001:db8::/32`) for a direct one.
+
 The loop FORM is additionally guarded across the whole of `backend/backend` by
 `tests/common/test_paging_key_presence_form.py`, which walks the tree rather than carrying a module
 list. It fails on a new loop whose continuation decision reads the key's VALUE, and on a file that
