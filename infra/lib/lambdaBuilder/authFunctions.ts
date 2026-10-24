@@ -8,7 +8,7 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as path from "path";
 import { Construct } from "constructs";
-import { Duration } from "aws-cdk-lib";
+import { ArnFormat, Duration, Stack } from "aws-cdk-lib";
 import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -545,6 +545,22 @@ export function buildApiOriginVerifyRotationFunction(
                 resources: [target.regionalWebAclArn],
             })
         );
+        // UpdateWebACL is also authorized against each AWS managed rule group the web ACL
+        // references, so the function may name those rule groups in the update it submits.
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["wafv2:UpdateWebACL"],
+                resources: [
+                    Stack.of(scope).formatArn({
+                        service: "wafv2",
+                        resource: "regional",
+                        resourceName: "managedruleset/*/*",
+                        arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
+                    }),
+                ],
+            })
+        );
     }
     // UpdateDistribution resubmits the distribution's web ACL association (WebACLId) with the rest of
     // the configuration, so the function may read that web ACL.
@@ -570,6 +586,15 @@ export function buildApiOriginVerifyRotationFunction(
                 id: "AwsSolutions-IAM5",
                 reason: "secretsmanager:GetRandomPassword generates the new value and supports no resource-level permission.",
                 appliesTo: ["Resource::*"],
+            },
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "UpdateWebACL is authorized against each AWS managed rule group the regional web ACL references; the action is the only one granted on them.",
+                appliesTo: [
+                    {
+                        regex: "/^Resource::arn:.*:wafv2:.*:regional\\/managedruleset\\/\\*\\/\\*$/g",
+                    },
+                ],
             },
         ],
         true
