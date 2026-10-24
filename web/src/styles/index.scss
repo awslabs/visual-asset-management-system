@@ -68,16 +68,15 @@ code {
 //}
 
 #headerWrapper {
-    z-index: 1002;
-}
-
-#headerWrapper {
     display: block;
     position: sticky;
     top: 0;
     left: 0;
     right: 0;
-    z-index: 1000;
+    /* Above the Cloudscape AppLayout mobile toolbar (1000) and mobile drawers (1001). A menu opened
+       from the header paints inside this stacking context, so at an equal z-index the toolbar, later
+       in the document, covers the menu's first item. Cloudscape's demos use 1002 for this container. */
+    z-index: 1002;
     margin: 0;
     background: #232f3e;
     font-family: "Amazon Ember", "Helvetica Neue", Roboto, Arial, sans-serif;
