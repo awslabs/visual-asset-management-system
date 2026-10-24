@@ -733,9 +733,19 @@ export class RapidPipelineEKSConstruct extends Construct {
         //
         // States.ALL is evaluated after States.Timeout, so the InvokeError handler receives every
         // other caught error, task failures included.
+        //
+        // RunJob's InvokeError handler also sets lateCreateCleanup. RunJob's retrier resends the
+        // invocation after Step Functions-side client errors, which can be raised while the earlier
+        // invocation is still running, so that invocation can create the job after PipelineEnd has
+        // deleted it. After PipelineEnd has sent the parent its callback, LateCreateCleanup? sends
+        // such a run through WaitForRunJobInvocations and LateCreateCleanup, which deletes the job
+        // again. RunJob's Timeout handler does not set it: every attempt started at least RunJob's
+        // TimeoutSeconds before the timeout, which is longer than the function can run.
+        const lateCreateCleanupField = "lateCreateCleanup";
         const addTaskErrorHandlers = (
             task: tasks.LambdaInvoke,
-            jobNameField: { k8sJobName: string } | { "k8sJobName.$": string }
+            jobNameField: { k8sJobName: string } | { "k8sJobName.$": string },
+            invokeErrorFields: Record<string, unknown> = {}
         ): void => {
             const errorContext = {
                 "timestamp.$": "$$.State.EnteredTime",
@@ -764,6 +774,7 @@ export class RapidPipelineEKSConstruct extends Construct {
                     "externalSfnTaskToken.$": "$.externalSfnTaskToken",
                     "error.$": "$.error",
                     errorContext,
+                    ...invokeErrorFields,
                 },
                 resultPath: "$",
             }).next(pipelineEndTask);
@@ -779,9 +790,11 @@ export class RapidPipelineEKSConstruct extends Construct {
         };
 
         addTaskErrorHandlers(constructPipelineTask, { k8sJobName: "failure-before-creation" });
-        addTaskErrorHandlers(runJobTask, {
-            "k8sJobName.$": "$.ConstructPipelineResult.Payload.jobManifest.metadata.name",
-        });
+        addTaskErrorHandlers(
+            runJobTask,
+            { "k8sJobName.$": "$.ConstructPipelineResult.Payload.jobManifest.metadata.name" },
+            { [lateCreateCleanupField]: true }
+        );
         addTaskErrorHandlers(checkJobTask, { "k8sJobName.$": "$.k8sJobName" });
 
         // End state evaluation: success or failure
@@ -789,7 +802,39 @@ export class RapidPipelineEKSConstruct extends Construct {
             .when(sfn.Condition.isPresent("$.error"), failState)
             .otherwise(successState);
 
-        pipelineEndTask.next(endChoice);
+        // The second delete for RunJob's States.ALL path, described with the error handlers above.
+        // The Wait is RunJob's own timeout, the function's timeout plus a margin, and starts after
+        // PipelineEnd: every RUN_JOB invocation started before RunJob's Catch fired, so each one has
+        // ended when the Wait does. LateCreateCleanup passes no task token, so the parent workflow
+        // is not notified again. Its result, and the error if its own invocation fails, are kept out
+        // of $.error, so EndChoice ends the run at Failure with the error RunJob's Catch recorded.
+        const lateCreateCleanupTask = new tasks.LambdaInvoke(this, "LateCreateCleanup", {
+            lambdaFunction: consolidatedHandler,
+            timeout: Duration.minutes(5),
+            payload: sfn.TaskInput.fromObject({
+                operation: "PIPELINE_END",
+                jobName: sfn.JsonPath.stringAt("$.jobName"),
+                k8sJobName: sfn.JsonPath.stringAt("$.k8sJobName"),
+            }),
+            resultPath: "$.LateCreateCleanupResult",
+            outputPath: "$",
+            retryOnServiceExceptions: true,
+        });
+        lateCreateCleanupTask.addCatch(endChoice, {
+            errors: ["States.ALL"],
+            resultPath: "$.LateCreateCleanupError",
+        });
+        lateCreateCleanupTask.next(endChoice);
+
+        const waitForRunJobInvocations = new sfn.Wait(this, "WaitForRunJobInvocations", {
+            time: sfn.WaitTime.duration(runJobTimeout),
+        }).next(lateCreateCleanupTask);
+
+        const lateCreateCleanupChoice = new sfn.Choice(this, "LateCreateCleanup?")
+            .when(sfn.Condition.isPresent(`$.${lateCreateCleanupField}`), waitForRunJobInvocations)
+            .otherwise(endChoice);
+
+        pipelineEndTask.next(lateCreateCleanupChoice);
 
         // Both PipelineEnd variants exit through the same Choice, so the state machine has one ending.
         // EndChoice tests IsPresent("$.error"), which the success path does not carry, so it resolves
