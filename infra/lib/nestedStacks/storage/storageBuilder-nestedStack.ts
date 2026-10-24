@@ -935,8 +935,9 @@ export function storageResourcesBuilder(
                       },
                       // The run-jobs records, one empty object per job name the handler builds, kept
                       // under the execution's name. The cleanup after a stopped execution reads them
-                      // at most the state machine timeout (6 hours) plus an hour of event delivery
-                      // after they are written, so a day is ample here too.
+                      // at most the state machine timeout (6 hours), an hour of EventBridge delivery
+                      // and an hour of Lambda's asynchronous retries (both pinned in the RapidPipeline
+                      // EKS construct) after they are written, so a day is ample here too.
                       {
                           enabled: true,
                           prefix: "pipelines/rapid-pipeline-eks/run-jobs/",

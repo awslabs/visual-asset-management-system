@@ -516,10 +516,11 @@ export class RapidPipelineEKSConstruct extends Construct {
         );
 
         // The state machine EXECUTION_END_CLEANUP accepts events for (see the rule below). Built from
-        // the name rather than read from the state machine, which depends on this function.
+        // the name with the service helper rather than read from the state machine, which depends on
+        // this function.
         consolidatedHandler.addEnvironment(
             "STATE_MACHINE_ARN",
-            `arn:${ServiceHelper.Partition()}:states:${region}:${account}:stateMachine:${stateMachineName}`
+            ServiceHelper.IAMArn(stateMachineName).statemachine
         );
 
         // Kubernetes access for the pipeline Lambda, scoped to the jobs it runs.

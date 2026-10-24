@@ -309,9 +309,10 @@ describe("commercial: what the cleanup reads", () => {
         expect(markers[0].ExpirationInDays).toBeUndefined();
     });
 
-    test("a record outlives the longest execution plus the event's maximum age", () => {
+    test("a record outlives the longest execution plus the event's maximum ages", () => {
         // CONSTRUCT_PIPELINE writes the record when the run starts; the cleanup lists it at most the
-        // state machine timeout plus the target's maximum event age later.
+        // state machine timeout, the rule target's maximum event age (EventBridge's delivery) and the
+        // handler's maximum event age (Lambda's asynchronous retries) later.
         const expiry = auxiliaryRules().find(
             (rule) => rule.Prefix === RUN_JOBS_PREFIX && rule.ExpirationInDays !== undefined
         );
@@ -320,9 +321,17 @@ describe("commercial: what the cleanup reads", () => {
         const rule = synth
             .ofType("AWS::Events::Rule")
             .find((r) => (r.properties.EventPattern?.source ?? []).includes("aws.states"));
-        const maxEventAge = rule?.properties.Targets[0].RetryPolicy.MaximumEventAgeInSeconds;
-        expect(typeof maxEventAge).toBe("number");
-        expect(expiry.ExpirationInDays * 86400).toBeGreaterThan(timeoutSeconds + maxEventAge);
+        const deliveryAge = rule?.properties.Targets[0].RetryPolicy.MaximumEventAgeInSeconds;
+        expect(typeof deliveryAge).toBe("number");
+        const invokeConfigs = synth
+            .ofType("AWS::Lambda::EventInvokeConfig")
+            .filter((c) => c.stack === sm.stack);
+        expect(invokeConfigs).toHaveLength(1);
+        const asyncAge = invokeConfigs[0].properties.MaximumEventAgeInSeconds;
+        expect(typeof asyncAge).toBe("number");
+        expect(expiry.ExpirationInDays * 86400).toBeGreaterThan(
+            timeoutSeconds + deliveryAge + asyncAge
+        );
     });
 
     test("the handler reads what the construct sets, and handles the operation the target sends", () => {
