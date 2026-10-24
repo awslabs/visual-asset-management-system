@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import vamscli.commands.addon.edh as edh_commands
+import vamscli.utils.addon.edh_exceptions as edh_exceptions
 from vamscli.main import cli
 from vamscli.utils.addon.edh_exceptions import (
     EdhOperationError,
@@ -53,6 +54,13 @@ CAPACITY_SENTENCE = (
     "AWS had no capacity for g5.16xlarge in this workstation's Availability Zone (us-west-2b) when it "
     "was started. A stopped workstation keeps its disk and starts only in that zone, so it stays "
     "stopped; start it again later.")
+# A start EDH accepted and kept pending for 30 minutes: the session sweep records the stall on the
+# row, which stays CREATING (EDH may still finish), and the service derives no activity for it (D16).
+STALLED = {**BOOTING, "activity": None, "lastError": "START_STALLED",
+           "startFailure": {"availabilityZone": "us-west-2b", "observedAt": "2026-10-24T11:40:00Z"}}
+STALLED_SENTENCE = (
+    "EDH has not finished starting this workstation after 30 minutes. Stop it, then start it again; if "
+    "it stalls again, ask your administrator.")
 
 START_LINE = ("Start requested; the workstation is starting. Follow it with "
               "`vamscli edh workstation get s-1`.")
@@ -110,6 +118,10 @@ def test_the_shared_fixture_covers_every_state_activity_and_start_failure_code()
     assert {case["record"]["activity"] for case in CASES} == {"starting", "stopping", None}
     stopped_codes = {case["record"]["lastError"] for case in CASES if case["record"]["state"] == "STOPPED"}
     assert {"CAPACITY_UNAVAILABLE", "RESERVATION_FULL", "START_FAILED", "LEASE_EXPIRED", None} <= stopped_codes
+    # A start EDH accepted and never finished is a CREATING row the sweep marked stalled.
+    stalled = [case for case in CASES if case["record"]["lastError"] == "START_STALLED"]
+    assert stalled and all(case["record"]["state"] == "CREATING" for case in stalled)
+    assert {case["startFailureMessage"] for case in stalled} == {STALLED_SENTENCE}
 
 
 @pytest.mark.parametrize("case", CASES, ids=_ids(CASES))
@@ -119,8 +131,9 @@ def test_the_state_column_reads_as_the_web_badge_does(cli_runner, generic_comman
         result = cli_runner.invoke(cli, ['edh', 'workstation', 'list'])
         assert result.exit_code == 0, result.output
         assert _state_cell(result.output) == case["state"]
-        # The web's label, upper-cased: the two clients name the same phase.
-        assert case["state"] == case["badge"].upper()
+        # The web's label, its last word upper-cased: the two clients name the same phase, and the
+        # column keeps to one word (`Start stalled` prints STALLED).
+        assert case["state"] == case["badge"].split()[-1].upper()
 
 
 @pytest.mark.parametrize("case", CASES, ids=_ids(CASES))
@@ -196,8 +209,16 @@ class TestStartAccepted:
         text = ' '.join(result.output.split())
         assert '--wait' in text
         assert 'HTTP 202' in text
+        assert 'START_STALLED' in text
         assert edh_commands.START_WAIT_POLL_SECONDS == 10
         assert edh_commands.START_WAIT_TIMEOUT_SECONDS == 600
+
+    @pytest.mark.parametrize("command", ['list', 'get', 'stop'])
+    def test_the_list_get_and_stop_help_name_the_stalled_start(self, cli_runner, command):
+        result = cli_runner.invoke(cli, ['edh', 'workstation', command, '--help'])
+        assert result.exit_code == 0
+        text = ' '.join(result.output.split())
+        assert 'STALLED' in text, command
 
 
 # --- start --wait: every exit path ----------------------------------------------------------------
@@ -283,6 +304,52 @@ class TestStartWait:
             assert result.exit_code == 1, result.output
             assert f"the workstation is {ended['state']}" in result.output
 
+    def test_exits_non_zero_with_the_sentence_once_the_start_stalled(
+            self, cli_runner, generic_command_mocks, clock):
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].start_edh_workstation.return_value = START_ACCEPTED
+            mocks['api_client'].get_edh_workstation.side_effect = [BOOTING, STALLED]
+            result = cli_runner.invoke(cli, self.ARGS)
+            assert result.exit_code == 1, result.output
+            # The wait stops at the first read that shows the stall, well inside its 10 minutes.
+            assert mocks['api_client'].get_edh_workstation.call_count == 2
+            assert clock.sleeps == [10, 10]
+            lines = result.output.splitlines()
+            assert "  STALLED" in lines
+            assert "Workstation Start Stalled" in result.output
+            assert f"Workstation start stalled (START_STALLED): {STALLED_SENTENCE}" in result.output
+            assert f"  Start Failure:   {STALLED_SENTENCE}" in lines
+            assert "vamscli edh workstation stop s-1" in result.output
+            # EDH named no AWS error for a stall, so there is no detail line.
+            assert not any(line.strip().startswith("AWS:") for line in lines)
+            assert "Workstation started" not in result.output
+            assert "Workstation Start Failed" not in result.output
+
+    def test_json_output_on_a_stall_names_the_outcome(self, cli_runner, generic_command_mocks, clock):
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].start_edh_workstation.return_value = START_ACCEPTED
+            mocks['api_client'].get_edh_workstation.side_effect = [STALLED]
+            result = cli_runner.invoke(cli, self.ARGS + ['--json-output'])
+            assert result.exit_code == 1
+            body = json.loads(result.output)
+            assert body['error_type'] == 'EdhStartStalledError'
+            assert body['waitOutcome'] == 'stalled'
+            assert body['state'] == 'CREATING'
+            assert body['activity'] is None
+            assert body['lastError'] == 'START_STALLED'
+            assert body['startFailure'] == STALLED['startFailure']
+            assert STALLED_SENTENCE in body['error']
+
+    def test_a_start_still_under_way_on_a_creating_row_keeps_the_wait_going(
+            self, cli_runner, generic_command_mocks, clock):
+        # Control: a CREATING row with `activity` starting and no stall is not a stall.
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].start_edh_workstation.return_value = START_ACCEPTED
+            mocks['api_client'].get_edh_workstation.side_effect = [BOOTING, BOOTING, RUNNING]
+            result = cli_runner.invoke(cli, self.ARGS)
+            assert result.exit_code == 0, result.output
+            assert "STALLED" not in result.output
+
     def test_exits_non_zero_after_10_minutes_of_polling_every_10_seconds(
             self, cli_runner, generic_command_mocks, clock):
         with generic_command_mocks('addon.edh') as mocks:
@@ -331,3 +398,11 @@ class TestStartWait:
     def test_the_wait_errors_are_edh_errors_with_their_json_fields(self):
         assert EdhStartFailedError.json_fields == {"waitOutcome": "failed"}
         assert EdhStartWaitTimeoutError.json_fields == {"waitOutcome": "timedOut"}
+        stalled = edh_exceptions.EdhStartStalledError
+        assert stalled.json_fields == {"waitOutcome": "stalled"}
+        assert issubclass(stalled, edh_exceptions.EdhError)
+        # Its own class, so a caller that retries a failed start does not retry a stalled one.
+        assert not issubclass(stalled, EdhStartFailedError)
+        assert stalled("x", STALLED).json_fields == {
+            "waitOutcome": "stalled", "state": "CREATING", "activity": None,
+            "lastError": "START_STALLED", "startFailure": STALLED["startFailure"]}

@@ -1,5 +1,5 @@
 {
-    "description": "Workstation records covering every state x activity x lastError combination of the start-status contract (feature #536, D10/D11), each with what the web status badge shows (`badge`), what `vamscli edh workstation list` prints in its State column (`state`), and the start-failure sentence and detail line both the web and `vamscli edh workstation get` show (null when none). Read by web/src/addons/edh/components/WorkstationStatusBadge.cases.test.tsx and tools/VamsCLI/tests/addon/test_edh_start_status.py, so the two clients cannot drift apart.",
+    "description": "Workstation records covering every state x activity x lastError combination of the start-status contract (feature #536, D10/D11, and D16's stalled start), each with what the web status badge shows (`badge`), what `vamscli edh workstation list` prints in its State column (`state`, the badge's last word upper-cased: `Start stalled` prints `STALLED`), and the start-failure sentence and detail line both the web and `vamscli edh workstation get` show (null when none). Read by web/src/addons/edh/components/WorkstationStatusBadge.cases.test.tsx and tools/VamsCLI/tests/addon/test_edh_start_status.py, so the two clients cannot drift apart.",
     "cases": [
         {
             "name": "a stopped workstation whose start is in progress",
@@ -33,6 +33,45 @@
             "badge": "Starting",
             "state": "STARTING",
             "startFailureMessage": null,
+            "startFailureDetail": null
+        },
+        {
+            "name": "a start EDH accepted but has not finished after 30 minutes",
+            "record": {
+                "state": "CREATING",
+                "edhState": "pending",
+                "activity": null,
+                "lastError": "START_STALLED",
+                "startFailure": {
+                    "availabilityZone": "us-west-2b",
+                    "observedAt": "2026-10-24T11:40:00Z"
+                },
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Start stalled",
+            "state": "STALLED",
+            "startFailureMessage": "EDH has not finished starting this workstation after 30 minutes. Stop it, then start it again; if it stalls again, ask your administrator.",
+            "startFailureDetail": null
+        },
+        {
+            "name": "a stalled start EDH still lists as placing, its Availability Zone not read",
+            "record": {
+                "state": "CREATING",
+                "edhState": "placing",
+                "activity": null,
+                "lastError": "START_STALLED",
+                "startFailure": {
+                    "observedAt": "2026-10-24T11:40:00Z"
+                },
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Start stalled",
+            "state": "STALLED",
+            "startFailureMessage": "EDH has not finished starting this workstation after 30 minutes. Stop it, then start it again; if it stalls again, ask your administrator.",
             "startFailureDetail": null
         },
         {

@@ -318,7 +318,9 @@ class EdhAPIClientMixin:
                 disabled), the outcome of placing a fresh session key. The start runs in the
                 background; poll get_edh_workstation until it is ACTIVE with no activity. A start
                 EDH refuses leaves the record STOPPED with lastError CAPACITY_UNAVAILABLE,
-                RESERVATION_FULL or START_FAILED and the startFailure it recorded
+                RESERVATION_FULL or START_FAILED and the startFailure it recorded; one EDH accepts
+                and has not finished after 30 minutes stays CREATING with no activity and lastError
+                START_STALLED (stop it, then start it again)
 
         Raises:
             EdhWorkstationNotFoundError: When the workstation is not found or not the caller's

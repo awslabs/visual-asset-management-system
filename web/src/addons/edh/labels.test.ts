@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { hoursWord, leaseRemaining } from "./labels";
+import { hoursWord, isStartStalled, leaseRemaining } from "./labels";
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -126,5 +126,21 @@ describe("hoursWord", () => {
     it("reads a single hour in the singular", () => {
         expect(hoursWord(1)).toBe("1 hour");
         expect(hoursWord(8)).toBe("8 hours");
+    });
+});
+
+describe("isStartStalled", () => {
+    it.each([
+        ["CREATING", null, "START_STALLED", true],
+        ["CREATING", undefined, "START_STALLED", true],
+        // The service reports no activity on a stalled row; one that does is moving again.
+        ["CREATING", "starting", "START_STALLED", false],
+        ["CREATING", null, null, false],
+        ["CREATING", null, "START_FAILED", false],
+        // A stop or a running desktop moves the row out of CREATING and clears the code.
+        ["STOPPED", null, "START_STALLED", false],
+        ["ACTIVE", null, "START_STALLED", false],
+    ] as const)("%s, activity %s, lastError %s -> %s", (state, activity, lastError, expected) => {
+        expect(isStartStalled({ state, activity, lastError })).toBe(expected);
     });
 });

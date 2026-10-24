@@ -86,6 +86,20 @@ const capacityRefusedRow: WorkstationRecord = {
     },
 };
 
+const STALLED_SENTENCE =
+    "EDH has not finished starting this workstation after 30 minutes. Stop it, then start it again; if it stalls again, ask your administrator.";
+
+// A start EDH accepted and kept `pending` for 30 minutes: the sweep recorded the stall on the row,
+// which stays CREATING (EDH may still finish), and the service reports no activity for it.
+const stalledRow: WorkstationRecord = {
+    ...stoppedRow,
+    state: "CREATING",
+    edhState: "pending",
+    activity: null,
+    lastError: "START_STALLED",
+    startFailure: { availabilityZone: "us-west-2b", observedAt: "2026-10-24T11:40:00Z" },
+};
+
 const list = (rows: WorkstationRecord[]) => ({
     data: rows,
     isLoading: false,
@@ -311,5 +325,105 @@ describe("WorkstationsPage start status", () => {
         expect(screen.getByRole("alert")).toHaveTextContent(
             "Failed to start Render box: Workstation is not stopped"
         );
+    });
+});
+
+describe("WorkstationsPage stalled start", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        (useAllowedRoutesModule.useAllowedRoutes as jest.Mock).mockReturnValue({
+            loading: false,
+            can: () => true,
+        });
+        (queries.useWindowsSignIn as jest.Mock).mockReturnValue({
+            mutate: jest.fn(),
+            reset: jest.fn(),
+            data: undefined,
+            error: null,
+            isPending: false,
+        });
+        (queries.useWorkstationMutations as jest.Mock).mockReturnValue(mutations());
+        (queries.useWorkstations as jest.Mock).mockReturnValue(list([stalledRow]));
+    });
+
+    it("reads Start stalled with the sentence beneath the badge and no AWS line", () => {
+        renderPage();
+
+        const cell = statusCell("Render box");
+        expect(cell.getByText("Start stalled")).toBeInTheDocument();
+        expect(cell.queryByText("Starting")).not.toBeInTheDocument();
+        expect(cell.queryByText("Creating")).not.toBeInTheDocument();
+        expect(cell.getByText(STALLED_SENTENCE)).toBeInTheDocument();
+        expect(cell.getByTitle(STALLED_SENTENCE)).toHaveTextContent("Start stalled");
+        expect(cell.queryByText(/^AWS:/)).not.toBeInTheDocument();
+    });
+
+    it("offers Stop and Delete, keeps Start disabled, and leaves Connect inert", async () => {
+        const user = userEvent.setup();
+        renderPage();
+
+        // Connect stays inert until the desktop runs.
+        expect(statusCell("Render box").getByRole("button", { name: "Connect" })).toHaveAttribute(
+            "aria-disabled",
+            "true"
+        );
+        await openActionsFor(user, "Render box");
+        const stop = screen.getByRole("menuitem", { name: "Stop" });
+        expect(stop).not.toHaveAttribute("aria-disabled", "true");
+        expect(screen.getByRole("menuitem", { name: "Delete" })).not.toHaveAttribute(
+            "aria-disabled",
+            "true"
+        );
+        const start = screen.getByRole("menuitem", { name: "Start" });
+        expect(start).toHaveAttribute("aria-disabled", "true");
+        expect(start).toHaveAccessibleDescription("Only a stopped workstation can be started.");
+        expect(screen.queryByText(START_IN_PROGRESS_HINT)).not.toBeInTheDocument();
+    });
+
+    it("stops the stalled workstation when Stop is chosen", async () => {
+        const m = mutations();
+        (queries.useWorkstationMutations as jest.Mock).mockReturnValue(m);
+        const user = userEvent.setup();
+        renderPage();
+
+        await openActionsFor(user, "Render box");
+        await user.click(screen.getByRole("menuitem", { name: "Stop" }));
+
+        await waitFor(() =>
+            expect(m.stopWorkstation.mutateAsync).toHaveBeenCalledWith({ sessionId: "s-1" })
+        );
+        await waitFor(() =>
+            expect(mockToast.success).toHaveBeenCalledWith("Workstation stop requested", {
+                description: "Render box",
+            })
+        );
+        expect(m.startWorkstation.mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it("opens the delete confirmation when Delete is chosen", async () => {
+        const user = userEvent.setup();
+        renderPage();
+
+        await openActionsFor(user, "Render box");
+        await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+
+        expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    });
+
+    it("keeps Start, Stop and Delete disabled while the start is still under way (control)", async () => {
+        (queries.useWorkstations as jest.Mock).mockReturnValue(
+            list([{ ...stalledRow, lastError: null, startFailure: null, activity: "starting" }])
+        );
+        const user = userEvent.setup();
+        renderPage();
+
+        expect(statusCell("Render box").getByText("Starting")).toBeInTheDocument();
+        await openActionsFor(user, "Render box");
+        for (const label of ["Start", "Stop", "Delete"]) {
+            expect(screen.getByRole("menuitem", { name: label })).toHaveAttribute(
+                "aria-disabled",
+                "true"
+            );
+        }
     });
 });

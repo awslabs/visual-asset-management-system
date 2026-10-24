@@ -54,7 +54,7 @@ export interface EdhAdminInstance {
     lastError: string | null;
     /** The launch failure VAMS captured from EDH, from the joined VAMS row; null when there is none. */
     edhFailure?: EdhFailure | null;
-    /** Why the last start left the desktop STOPPED, from the joined VAMS row; null when it did not. */
+    /** Why the last start left the desktop STOPPED, or when it stalled, from the joined VAMS row; null when neither. */
     startFailure?: StartFailure | null;
     imageId: string | null;
     osFamily: string | null;

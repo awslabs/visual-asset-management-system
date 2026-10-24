@@ -1,9 +1,10 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""The EDH workstation start status in the MCP tools (feature #536, D10/D11): the start tool hands
+"""The EDH workstation start status in the MCP tools (feature #536, D10/D11, D16): the start tool hands
 back the record the route accepts the start with (HTTP 202, `activity` `starting`) unchanged, the
-workstation reads pass `activity` and `startFailure` through, and the descriptions say so. The gate
-each tool sits behind is held by `test_edh_tools.py`.
+workstation reads pass `activity` and `startFailure` through, a start EDH accepted but never finished
+(`lastError` START_STALLED) among them, and the descriptions say so. The gate each tool sits behind is
+held by `test_edh_tools.py`.
 """
 
 import types
@@ -115,3 +116,45 @@ def test_the_list_description_spells_out_the_two_fields(tools, fragment):
 def test_the_readme_states_the_asynchronous_start():
     for fragment in ("`activity`", "`startFailure`", "HTTP 202"):
         assert fragment in README_TEXT, fragment
+
+
+# --- D16: a start EDH accepts but never finishes --------------------------------------------------
+
+STALLED = {**ACCEPTED, "state": "CREATING", "edhState": "pending", "activity": None,
+           "lastError": "START_STALLED", "startFailure": {"observedAt": "2026-10-24T11:40:00Z"}}
+
+
+@pytest.mark.parametrize("tool", [
+    "list_edh_workstations", "get_edh_workstation", "list_edh_admin_instances",
+    "start_edh_workstation", "stop_edh_workstation",
+])
+def test_the_workstation_tool_descriptions_name_the_stalled_start(tools, tool):
+    assert "START_STALLED" in _doc(tools, tool), tool
+
+
+@pytest.mark.parametrize("fragment", ["START_STALLED", "30 minutes", "CREATING", "stop_edh_workstation"])
+def test_the_list_description_says_what_a_stalled_start_means(tools, fragment):
+    assert fragment in _doc(tools, "list_edh_workstations")
+
+
+def test_the_stop_description_accepts_a_stalled_start(tools):
+    doc = _doc(tools, "stop_edh_workstation")
+    assert "CREATING" in doc
+    assert "START_STALLED" in doc
+
+
+@pytest.mark.parametrize("tool,method,args", [
+    ("list_edh_workstations", "list_edh_workstations", ()),
+    ("get_edh_workstation", "get_edh_workstation", ("s-1",)),
+    ("list_edh_admin_instances", "list_edh_admin_instances", ()),
+])
+def test_the_workstation_reads_pass_a_stalled_start_through(client, tools, tool, method, args):
+    body = {"Items": [STALLED]} if tool.startswith("list") else dict(STALLED)
+    getattr(client.api, method).return_value = body
+    assert tools[tool](*args) == body
+
+
+def test_the_readme_names_the_stalled_start():
+    text = " ".join(README_TEXT.split())
+    assert "`START_STALLED`" in text
+    assert "30 minutes" in text

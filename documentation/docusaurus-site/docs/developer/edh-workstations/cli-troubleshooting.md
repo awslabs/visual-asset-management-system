@@ -13,12 +13,12 @@ This page covers common problems encountered with the VamsCLI `edh` commands, al
 
 With `--json-output`, an `edh` command error can carry these fields beside the ones the [JSON Error Format](../../cli/automation.md#json-error-format) lists:
 
-| Field             | Carried by                                                                                                                                                                                                                                                                                                                                                                         |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `outcomeUnknown`  | `EdhOutcomeUnknownError` (`true`): EDH may have carried out a request whose answer was lost; check the listing before sending it again (see [A Request Was Not Confirmed](#a-request-was-not-confirmed))                                                                                                                                                                           |
-| `startInProgress` | `EdhStartInProgressError` (`true`): another start of the workstation is in progress (see [Start Refused Because a Start Is in Progress](#start-refused-because-a-start-is-in-progress))                                                                                                                                                                                            |
-| `code`            | `EdhReservationFullError` (`RESERVATION_FULL`): the capacity reservation of a launch has no free slot (see [Launch Refused Because the Capacity Reservation Is Full](#launch-refused-because-the-capacity-reservation-is-full)); a start's full reservation is recorded on the workstation instead (see [Start Left the Workstation Stopped](#start-left-the-workstation-stopped)) |
-| `waitOutcome`     | `EdhStartFailedError` (`failed`) and `EdhStartWaitTimeoutError` (`timedOut`), raised by `edh workstation start --wait` alone, beside the record's `state`, `activity`, `lastError` and `startFailure` (see [Start Left the Workstation Stopped](#start-left-the-workstation-stopped) and [Waiting for a Start Timed Out](#waiting-for-a-start-timed-out))                          |
+| Field             | Carried by                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `outcomeUnknown`  | `EdhOutcomeUnknownError` (`true`): EDH may have carried out a request whose answer was lost; check the listing before sending it again (see [A Request Was Not Confirmed](#a-request-was-not-confirmed))                                                                                                                                                                                                                       |
+| `startInProgress` | `EdhStartInProgressError` (`true`): another start of the workstation is in progress (see [Start Refused Because a Start Is in Progress](#start-refused-because-a-start-is-in-progress))                                                                                                                                                                                                                                        |
+| `code`            | `EdhReservationFullError` (`RESERVATION_FULL`): the capacity reservation of a launch has no free slot (see [Launch Refused Because the Capacity Reservation Is Full](#launch-refused-because-the-capacity-reservation-is-full)); a start's full reservation is recorded on the workstation instead (see [Start Left the Workstation Stopped](#start-left-the-workstation-stopped))                                             |
+| `waitOutcome`     | `EdhStartFailedError` (`failed`), `EdhStartStalledError` (`stalled`) and `EdhStartWaitTimeoutError` (`timedOut`), raised by `edh workstation start --wait` alone, beside the record's `state`, `activity`, `lastError` and `startFailure` (see [Start Left the Workstation Stopped](#start-left-the-workstation-stopped), [Start Stalled](#start-stalled) and [Waiting for a Start Timed Out](#waiting-for-a-start-timed-out)) |
 
 ---
 
@@ -104,7 +104,7 @@ The launch runs asynchronously. Until VAMS reads the created desktop back from E
 
 **Cause:**
 
-Only a `STOPPED` workstation can be started. A running one is already available to `connect`; one that is `CREATING` — including one you have just started, whose `State` column reads `STARTING` (`activity` `starting`) until EDH reports it running — is still in transition.
+Only a `STOPPED` workstation can be started. A running one is already available to `connect`; one that is `CREATING` — including one you have just started, whose `State` column reads `STARTING` (`activity` `starting`) until EDH reports it running — is still in transition. One that reads `STALLED` is `CREATING` too: stop it, then start it again (see [Start Stalled](#start-stalled)).
 
 **Resolution:**
 
@@ -207,7 +207,31 @@ The `Last Error` and `Start Failure` lines stay until a start of the workstation
 
 **Resolution:**
 
-Follow the workstation with `vamscli edh workstation get SESSION_ID` until it reads `ACTIVE` with `Activity: none`, or `STOPPED` with a `Start Failure` line (see [Start Left the Workstation Stopped](#start-left-the-workstation-stopped)). Do not start it again while it reads `STARTING`: the start is refused with `Workstation start already in progress (409)`.
+Follow the workstation with `vamscli edh workstation get SESSION_ID` until it reads `ACTIVE` with `Activity: none`, or `STOPPED` with a `Start Failure` line (see [Start Left the Workstation Stopped](#start-left-the-workstation-stopped)). Do not start it again while it reads `STARTING`: the start is refused with `Workstation start already in progress (409)`. If it is still not running 30 minutes after the start, it reads `STALLED` (see [Start Stalled](#start-stalled)).
+
+### Start Stalled
+
+**Symptoms:**
+
+-   `edh workstation list` shows `STALLED` in the `State` column and `START_STALLED` under `Last Error`
+-   `edh workstation get SESSION_ID` shows `State: CREATING`, `Activity: none`, `EDH State: pending` (or `placing`) and:
+
+    ```text
+      Last Error:      START_STALLED
+      Start Failure:   EDH has not finished starting this workstation after 30 minutes. Stop it, then start it again; if it stalls again, ask your administrator.
+    ```
+
+-   `edh workstation start --wait` exits 1 with `Workstation Start Stalled: Workstation start stalled (START_STALLED): …`, and with `--json-output` an error object carrying `"error_type": "EdhStartStalledError"` and `"waitOutcome": "stalled"`
+
+**Cause:**
+
+EDH accepted the start of the stopped workstation but has not reported the desktop running: 30 minutes after the start was accepted, it still lists the desktop `pending`. A start normally reports running within minutes. The reconciler's sweep records the stall; it does not stop, delete or orphan the workstation, and keeps its session key, because EDH may still finish the start, in which case the workstation turns `ACTIVE` on its own and the stall is cleared. EDH reported no AWS error, so there is no `AWS:` line.
+
+**Resolution:**
+
+1. Stop the workstation with `vamscli edh workstation stop SESSION_ID`, and wait until `edh workstation list` shows it `STOPPED`.
+2. Start it again with `vamscli edh workstation start SESSION_ID --wait`.
+3. If it stalls again, give the `Start Failure` line and the session id to an administrator, who sees the same session on the web's **Sessions** tab and can check the cluster with `vamscli edh admin health`.
 
 ### The Image Is an Older Build or Shows Only Its Id
 

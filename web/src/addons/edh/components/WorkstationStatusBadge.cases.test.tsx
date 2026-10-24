@@ -60,6 +60,12 @@ describe("workstationStatusCases.json (shared with the CLI tests)", () => {
         ]) {
             expect(stoppedCodes).toContain(code);
         }
+        // A start EDH accepted and never finished is a CREATING row the sweep marked stalled.
+        const creatingCodes = new Set(
+            CASES.filter((c) => c.record.state === "CREATING").map((c) => c.record.lastError)
+        );
+        expect(creatingCodes).toContain("START_STALLED");
+        expect(CASES.filter((c) => c.badge === "Start stalled").length).toBeGreaterThanOrEqual(1);
     });
 
     it.each(table)("%s: the badge reads as agreed", (_name, c) => {

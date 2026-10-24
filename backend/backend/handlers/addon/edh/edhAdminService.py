@@ -76,8 +76,8 @@ from .common.edhLeasePolicy import LeaseValidationError, read_lease_policy, writ
 from .common.edhSessionState import (
     ACTIVITY_FIELD, EDH_CONNECTION_STRING_FIELD, EDH_SESSION_STATE_FIELD, EDH_SESSION_STATE_RUNNING,
     EXPIRES_AT_FIELD, IMAGE_NAME_FIELD, START_FAILURE_FIELD, STATE_CREATING, STATE_DELETED, STATE_ORPHANED,
-    STATE_STOPPED, STOP_REQUESTED_FIELD, deleted_row_expiry, start_stamp_cleared, state_for_edh_session_state,
-    workstation_activity, workstation_image,
+    STATE_STOPPED, STOP_REQUESTED_FIELD, deleted_row_expiry, start_accepted_cleared, start_stall_cleared,
+    start_stamp_cleared, state_for_edh_session_state, workstation_activity, workstation_image,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -998,9 +998,11 @@ def act_on_instance(event, action):
         new_state = STATE_DELETED
 
     if row is not None:
-        # A desktop that is stopped or gone cannot be connected to; the flag moves with the state. A start
-        # the row holds in progress is over: EDH stops a started desktop, and a deleted one cannot start.
-        written = {'state': new_state, 'connectionAvailable': False, **start_stamp_cleared(row)}
+        # A desktop that is stopped or gone cannot be connected to; the flag moves with the state. A start the row
+        # holds in progress is over: EDH stops a started desktop, and a deleted one cannot start. So is a start EDH
+        # accepted: its stamp goes, and a stop clears the code and failure of one that stalled.
+        accepted = start_stall_cleared(row) if new_state == STATE_STOPPED else start_accepted_cleared(row)
+        written = {'state': new_state, 'connectionAvailable': False, **start_stamp_cleared(row), **accepted}
         if row.get(ACTIVITY_FIELD):
             written[ACTIVITY_FIELD] = None
         if new_state == STATE_STOPPED:

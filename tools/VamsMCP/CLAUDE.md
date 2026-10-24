@@ -423,6 +423,9 @@ ships an add-on with tools; a fork does not.
     `activity` (`starting` | `stopping` | null) and `startFailure` (why the last start left a
     STOPPED row stopped, beside `lastError` `CAPACITY_UNAVAILABLE`, `RESERVATION_FULL` or
     `START_FAILED`); the tools pass both through, and the workstation tools' descriptions name them.
+    A CREATING row with `activity` null and `lastError` `START_STALLED` is a start EDH accepted and
+    has not finished after 30 minutes (D16); the list, get, admin-instances, start and stop
+    descriptions name the code, and stop's says it accepts that row.
 -   Image name: every workstation record and admin instance item also carries `imageName`,
     `recipeId`, `recipeDisplayName`, `recipeVersion`, `latestRecipeVersion` and `imageLatest`
     (`false` only when a newer AVAILABLE build of the recipe exists; each null when not known). The

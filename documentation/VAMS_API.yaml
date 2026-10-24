@@ -12876,7 +12876,7 @@ components:
                 lastError:
                     type: string
                     nullable: true
-                    description: "Why a launch ended ORPHANED, why a running workstation was stopped (`LEASE_EXPIRED`), or why the last start of a `STOPPED` workstation did not happen: `CAPACITY_UNAVAILABLE` (AWS had no capacity for the instance type in the workstation's Availability Zone, the one zone a stopped workstation starts in), `RESERVATION_FULL` (the capacity reservation it was launched into is full) or `START_FAILED` (EDH refused the start for another reason, or still reported the workstation stopped 10 minutes after the start). A start code stays while the workstation stays stopped and is cleared once a start is accepted; null otherwise."
+                    description: "Why a launch ended ORPHANED, why a running workstation was stopped (`LEASE_EXPIRED`), or why the last start of a `STOPPED` workstation did not happen: `CAPACITY_UNAVAILABLE` (AWS had no capacity for the instance type in the workstation's Availability Zone, the one zone a stopped workstation starts in), `RESERVATION_FULL` (the capacity reservation it was launched into is full) or `START_FAILED` (EDH refused the start for another reason, or still reported the workstation stopped 10 minutes after the start). A start code stays while the workstation stays stopped and is cleared once a start is accepted. `START_STALLED` on a `CREATING` workstation: EDH accepted the start of the stopped workstation but still reports it `pending` or `placing` 30 minutes later; `activity` is then null, the workstation is not stopped, deleted or orphaned for it, and the code stays until EDH reports the workstation in another state or the owner stops it (stop it, then start it again). Null otherwise."
                     enum:
                         - USER_NOT_PROVISIONED
                         - QUOTA_EXCEEDED
@@ -12888,6 +12888,7 @@ components:
                         - LEASE_EXPIRED
                         - RESERVATION_FULL
                         - START_FAILED
+                        - START_STALLED
                         - null
                 launchAttempts:
                     type: integer

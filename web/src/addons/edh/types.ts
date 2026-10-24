@@ -7,8 +7,9 @@ export type WorkstationState = "CREATING" | "ACTIVE" | "STOPPED" | "DELETED" | "
 export type EdhOsFamily = "linux" | "windows";
 
 /**
- * Why a launch ended ORPHANED, why the lease sweep stopped the desktop, or why a start of a stopped
- * desktop left it STOPPED. The service stores these codes and never EDH's own wording.
+ * Why a launch ended ORPHANED, why the lease sweep stopped the desktop, why a start of a stopped
+ * desktop left it STOPPED, or (`START_STALLED`, on a CREATING row) that EDH accepted a start and has
+ * not finished it after 30 minutes. The service stores these codes and never EDH's own wording.
  */
 export type WorkstationLastError =
     | "USER_NOT_PROVISIONED"
@@ -20,7 +21,8 @@ export type WorkstationLastError =
     | "CREATE_TIMED_OUT"
     | "LEASE_EXPIRED"
     | "RESERVATION_FULL"
-    | "START_FAILED";
+    | "START_FAILED"
+    | "START_STALLED";
 
 /**
  * What a workstation is doing, as the service derives it on every read, whatever `state` says:
@@ -32,7 +34,9 @@ export type WorkstationActivity = "starting" | "stopping";
 /**
  * Why a start of a stopped desktop left it STOPPED: the AWS error code EDH's refusal named (e.g.
  * `InsufficientInstanceCapacity`) and the Availability Zone the desktop's instance, and so its disk,
- * is in. Each is absent when it was not read. Kept until the next start is accepted.
+ * is in. Each is absent when it was not read. Kept until the next start is accepted. On a start the
+ * sweep found stalled (`lastError` `START_STALLED`) it carries `observedAt`, and the zone when read,
+ * but no `errorCode`: EDH reported none.
  */
 export interface StartFailure {
     errorCode?: string | null;
@@ -78,7 +82,7 @@ export interface WorkstationRecord {
     lastError?: string | null;
     /** The launch failure VAMS captured from EDH; null or absent when it captured none. */
     edhFailure?: EdhFailure | null;
-    /** Why the last start left the desktop STOPPED; null or absent when it did not. */
+    /** Why the last start left the desktop STOPPED, or when it stalled; null or absent when neither. */
     startFailure?: StartFailure | null;
     /** How many times the launch worker has started on this row. */
     launchAttempts?: number;

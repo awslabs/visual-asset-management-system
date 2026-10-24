@@ -52,9 +52,13 @@ def register(
         on a STOPPED row, why its last start left it stopped: CAPACITY_UNAVAILABLE (AWS had no
         capacity for the instance type in the desktop's Availability Zone), RESERVATION_FULL (its
         capacity reservation was full) or START_FAILED (any other refusal, or a start that never
-        took effect), kept until the next start is accepted; null otherwise), `startFailure` (for
-        those three, a map of `errorCode` (the AWS error code EDH's refusal named, e.g.
-        `InsufficientInstanceCapacity`), `availabilityZone` (the Availability Zone the desktop and
+        took effect), kept until the next start is accepted; on a CREATING row with `activity` null,
+        START_STALLED (EDH accepted a start and has not finished it after 30 minutes; the desktop is
+        not stopped for it, so stop it with stop_edh_workstation, then start it again), kept until EDH
+        moves the row out of CREATING; null otherwise), `startFailure` (for
+        those four, a map of `errorCode` (the AWS error code EDH's refusal named, e.g.
+        `InsufficientInstanceCapacity`; never on START_STALLED), `availabilityZone` (the
+        Availability Zone the desktop and
         its disk are in) and `observedAt` (when VAMS recorded it), the first two absent when not
         read; null otherwise),
         `edhFailure` (the launch failure VAMS captured from EDH's own record of a
@@ -93,8 +97,9 @@ def register(
         `bootstrapId` is reported as not found, so follow a launch with list_edh_workstations. A
         workstation owned by another user is reported as not found, not as forbidden. The record carries
         the fields of a list_edh_workstations row, `activity` (`starting`, `stopping` or null),
-        `lastError`, `startFailure` (why the last start left a STOPPED row stopped; null when it did
-        not) and `edhFailure` (the AWS error code and
+        `lastError`, `startFailure` (why the last start left a STOPPED row stopped, or when a start
+        stalled on a CREATING row with `lastError` START_STALLED; null when neither) and
+        `edhFailure` (the AWS error code and
         operation, or the setup checkpoint, VAMS captured from EDH for a failed launch; null when none
         was captured) among them. It carries the image fields `imageName`, `recipeId`,
         `recipeDisplayName`, `recipeVersion`, `latestRecipeVersion` and `imageLatest` as a
@@ -198,9 +203,10 @@ def register(
     def list_edh_admin_instances() -> Dict[str, Any]:
         """ADMIN: list EVERY user's EDH workstation sessions on the cluster, as `Items`. Each item joins
         the EDH session with its VAMS row and carries `activity` (`starting`, `stopping` or null,
-        derived as on a list_edh_workstations row) and that row's `lastError`, `startFailure` (why
-        the last start left the desktop stopped, shaped as on a list_edh_workstations row; null when
-        it did not) and `edhFailure` (the AWS
+        derived as on a list_edh_workstations row) and that row's `lastError` (START_STALLED among
+        its codes: a start EDH accepted and has not finished after 30 minutes), `startFailure` (why
+        the last start left the desktop stopped, or when it stalled, shaped as on a
+        list_edh_workstations row; null when neither) and `edhFailure` (the AWS
         error code and operation, or the setup checkpoint, VAMS captured from EDH for a failed launch,
         shaped as on a list_edh_workstations row; null for a session VAMS did not launch or captured
         no failure for). Each item also carries the image fields `imageName`, `recipeId`,
@@ -431,7 +437,10 @@ def register(
             the instance type in the desktop's Availability Zone; the desktop keeps its disk there,
             so start it again later), RESERVATION_FULL (its capacity reservation is full) or
             START_FAILED, and `startFailure` `{errorCode, availabilityZone, observedAt}`; the
-            desktop is never deleted for a refused start. An error whose `error_type` is
+            desktop is never deleted for a refused start. A start EDH accepts and has not finished
+            after 30 minutes leaves the row CREATING with `activity` null and `lastError`
+            START_STALLED (EDH never reported the desktop ready; the desktop is not stopped for it):
+            stop it with stop_edh_workstation, then start it again. An error whose `error_type` is
             `EdhOutcomeUnknownError` means the start was not confirmed and may still be under way:
             call list_edh_workstations before retrying. While EDH still lists the desktop stopped, a
             start is refused (409, `error_type` `EdhStartInProgressError`) when another start of it is
@@ -466,7 +475,9 @@ def register(
         @mcp.tool()
         @tool_result
         def stop_edh_workstation(session_id: str) -> Dict[str, Any]:
-            """Stop one of the authenticated user's ACTIVE EDH workstations; returns the updated record,
+            """Stop one of the authenticated user's ACTIVE EDH workstations, or a CREATING one whose
+            `lastError` is START_STALLED (a start EDH accepted and has not finished after 30 minutes;
+            start it again once it reads STOPPED); returns the updated record,
             whose `activity` reads `stopping` while EDH still stops the desktop (and whose
             `startFailure` is null). The record carries the image fields `imageName`, `recipeId`,
             `recipeDisplayName`, `recipeVersion`, `latestRecipeVersion` and `imageLatest` as a

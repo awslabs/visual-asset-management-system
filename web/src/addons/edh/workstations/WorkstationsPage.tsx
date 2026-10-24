@@ -42,6 +42,7 @@ import { useInFlight } from "../components/useInFlight";
 import WorkstationImageCell from "../components/WorkstationImageCell";
 import {
     hoursWord,
+    isStartStalled,
     leaseRemaining,
     type LeaseRemainingTone,
     osFamilyLabel,
@@ -114,9 +115,12 @@ const formatDate = (iso: string) => {
     return isNaN(date.getTime()) ? "—" : date.toLocaleString();
 };
 
-/** Whether Delete is offered: any settled row, or a session-less launch past the grace window. */
+/**
+ * Whether Delete is offered: any settled row, a start the sweep found stalled, or a session-less
+ * launch past the grace window.
+ */
 const isDeletable = (row: WorkstationRecord): boolean => {
-    if (row.state !== "CREATING") return true;
+    if (row.state !== "CREATING" || isStartStalled(row)) return true;
     if (row.sessionId) return false;
     const updatedAt = new Date(row.updatedAt).getTime();
     return !isNaN(updatedAt) && Date.now() - updatedAt > CREATING_DELETE_GRACE_MS;
@@ -218,17 +222,19 @@ const RowActions: React.FC<RowActionsProps> = ({
         row.state === "STOPPED" && row.edhState && row.edhState !== "stopped"
             ? `The workstation is still ${row.edhState}; it can be started once it has stopped.`
             : undefined;
+    // A start EDH accepted and has not finished after 30 minutes (`isStartStalled`) leaves the row
+    // CREATING; the service stops it like an active one, so Stop is offered, and Start is not until
+    // the stop has settled.
+    const stoppable = row.state === "ACTIVE" || isStartStalled(row);
     const items: ContextMenuItem[] = [
         {
             label: "Stop",
             onSelect: () => onStop(row),
             hidden: !canStop || !hasSession,
-            disabled: row.state !== "ACTIVE" || !!startingHint || !!inFlight,
+            disabled: !stoppable || !!startingHint || !!inFlight,
             hint:
                 startingHint ??
-                (row.state !== "ACTIVE"
-                    ? "Only an active workstation can be stopped."
-                    : inFlightHint),
+                (!stoppable ? "Only an active workstation can be stopped." : inFlightHint),
         },
         {
             label: "Start",

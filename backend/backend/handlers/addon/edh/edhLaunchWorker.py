@@ -21,7 +21,8 @@ The worker also runs the start of a stopped desktop (payload ``action`` ``start`
 service hands it once it has claimed the row and minted the desktop's key, because EDH answers a start only
 once its own capacity work is done, which can take minutes. The worker sends EDH's start at most once per
 start (the payload's ``startRequestedAt`` stamp, claimed on the row), under the ``start`` profile. A start EDH
-accepts moves the row to CREATING and finishes the credential as the service used to; a start EDH refuses
+accepts moves the row to CREATING, stamped with when it was accepted (``startAcceptedAt``, which the session
+sweep ages toward START_STALLED), and finishes the credential as the service used to; a start EDH refuses
 leaves the row STOPPED -- the desktop and its disk are never deleted, terminated or orphaned for it -- with a
 ``lastError`` (CAPACITY_UNAVAILABLE, RESERVATION_FULL or START_FAILED) and a ``startFailure``, and takes back
 the key; a start whose answer is lost is followed by reads of the desktop's state every 15 seconds, inside the
@@ -60,11 +61,11 @@ from .common.edhSessionState import (
     EDH_SESSION_STATE_FIELD, EDH_SESSION_STATE_PENDING,
     LAST_ERROR_CAPACITY_UNAVAILABLE, LAST_ERROR_EDH_REFUSED, LAST_ERROR_IMAGE_UNAVAILABLE, LAST_ERROR_LAUNCH_ERROR,
     LAST_ERROR_QUOTA_EXCEEDED, LAST_ERROR_RESERVATION_FULL, LAST_ERROR_START_FAILED, LAST_ERROR_USER_NOT_PROVISIONED,
-    MAX_LAUNCH_ATTEMPTS, START_FAILURE_FIELD, START_IN_PROGRESS_SECONDS, START_PAYLOAD_KEYS, START_SENT_FIELD,
-    STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED, STOP_REQUESTED_FIELD, WORKER_ACTION_START,
-    WORKER_PAYLOAD_KEYS,
+    MAX_LAUNCH_ATTEMPTS, START_ACCEPTED_FIELD, START_FAILURE_FIELD, START_IN_PROGRESS_SECONDS, START_PAYLOAD_KEYS,
+    START_SENT_FIELD, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED, STOP_REQUESTED_FIELD,
+    WORKER_ACTION_START, WORKER_PAYLOAD_KEYS,
     never_auto_start_schedule, observed_row_attributes, reservation_refusal_last_error, schedule_never_auto_starts,
-    start_failure, state_for_edh_session_state,
+    start_failure, start_stamp, state_for_edh_session_state,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -562,12 +563,15 @@ def _record_start_refused(audit_event, row, stamp, last_error, failure):
 def _record_start_accepted(audit_event, row, stamp, desktop=None):
     """Record the start EDH took -- on its answer, or as ``desktop``, a read of its state after a lost answer,
     shows it -- and finish the credential: the row is CREATING with ``edhState`` pending (or follows ``desktop``),
-    loses the start's stamp, the code and failure of an earlier start and the lease-stop stamp, the fresh secret
-    is bound to the instance the row last observed, and every other key of the bootstrap is deleted. A row
-    deleted, or stopped again, since the start keeps what was written to it."""
+    carries the stamp of the accepted start (``startAcceptedAt``, which the session sweep ages toward
+    START_STALLED, and which a ``desktop`` already past CREATING clears in the same write), loses the start's
+    stamp, the code and failure of an earlier start and the lease-stop stamp, the fresh secret is bound to the
+    instance the row last observed, and every other key of the bootstrap is deleted. A row deleted, or stopped
+    again, since the start keeps what was written to it."""
     attributes = {'state': STATE_CREATING, 'edhState': EDH_SESSION_STATE_PENDING, 'connectionAvailable': False,
                   ACTIVITY_FIELD: ACTIVITY_STARTING, 'startRequestedAt': None, 'lastError': None,
-                  START_FAILURE_FIELD: None, 'leaseStoppedAt': None, STOP_REQUESTED_FIELD: None}
+                  START_FAILURE_FIELD: None, 'leaseStoppedAt': None, STOP_REQUESTED_FIELD: None,
+                  START_ACCEPTED_FIELD: start_stamp(datetime.now(timezone.utc))}
     if desktop is not None:
         attributes.update(observed_row_attributes({**row, **attributes}, desktop))
     # A read of the desktop's state may already have moved the row to CREATING, clearing the stamp.

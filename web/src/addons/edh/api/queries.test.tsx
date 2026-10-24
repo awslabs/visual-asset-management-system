@@ -148,6 +148,28 @@ describe("computeWorkstationRefetchInterval", () => {
             ).toBe(WORKSTATION_POLL_STABLE_MS);
         }
     );
+
+    it("polls every 20 s for a creating row whose start the sweep found stalled: nothing moves until the user acts", () => {
+        const booting = row({
+            state: "CREATING",
+            edhState: "pending",
+            sessionId: "s-1",
+            connectionAvailable: false,
+        });
+        expect(computeWorkstationRefetchInterval([{ ...booting, activity: "starting" }])).toBe(
+            WORKSTATION_POLL_TRANSITIONAL_MS
+        );
+        expect(
+            computeWorkstationRefetchInterval([
+                {
+                    ...booting,
+                    activity: null,
+                    lastError: "START_STALLED",
+                    startFailure: { observedAt: "2026-10-24T11:40:00Z" },
+                },
+            ])
+        ).toBe(WORKSTATION_POLL_STABLE_MS);
+    });
 });
 
 describe("isTransitionalWorkstation", () => {
@@ -172,6 +194,20 @@ describe("isTransitionalWorkstation", () => {
         ["ORPHANED", false, false],
     ] as const)("%s with connectionAvailable=%s -> %s", (state, connectionAvailable, expected) => {
         expect(isTransitionalWorkstation({ state, connectionAvailable })).toBe(expected);
+    });
+
+    it("treats a stalled start as settled, and a creating row with any other code as transitional", () => {
+        const creating = { state: "CREATING", connectionAvailable: false, activity: null } as const;
+        expect(isTransitionalWorkstation({ ...creating, lastError: "START_STALLED" })).toBe(false);
+        expect(isTransitionalWorkstation({ ...creating, lastError: null })).toBe(true);
+        // The service reports no activity on a stalled row; were it to report one, the row moves.
+        expect(
+            isTransitionalWorkstation({
+                ...creating,
+                activity: "starting",
+                lastError: "START_STALLED",
+            })
+        ).toBe(true);
     });
 });
 

@@ -195,7 +195,8 @@ class WorkstationRecordModel(BaseModel, extra='ignore'):
     capacityReservationFallback: bool = False
     # What the workstation is doing between two states (``starting`` or ``stopping``), derived from the row when
     # the record is read, never taken from the row as stored; and what its last start that did not happen
-    # recorded, kept beside ``lastError`` while the row stays STOPPED.
+    # recorded, kept beside ``lastError`` while the row stays STOPPED, or, for a start EDH accepted that stalled
+    # (``START_STALLED``), while the row stays CREATING. The stamp of that accepted start is not declared.
     activity: Optional[str] = None
     startFailure: Optional[Dict[str, str]] = None
     # The image the workstation runs: the EDH image name and, for an image an AMI recipe build produced, the

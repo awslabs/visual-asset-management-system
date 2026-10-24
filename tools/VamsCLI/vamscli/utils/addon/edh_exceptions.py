@@ -82,6 +82,20 @@ class EdhStartFailedError(EdhOperationError):
         self.json_fields = _start_wait_fields("failed", record)
 
 
+class EdhStartStalledError(EdhOperationError):
+    """Raised by `edh workstation start --wait` when the session sweep recorded the start as stalled
+    (`lastError` START_STALLED): EDH accepted it and has not finished it after 30 minutes. The
+    workstation stays CREATING and is not stopped for it; stop it, then start it again. Not an
+    EdhStartFailedError, so a caller that starts a failed start again does not start this one."""
+    # Carried into --json-output beside the error; an instance adds the record's state, activity,
+    # lastError and startFailure.
+    json_fields = {"waitOutcome": "stalled"}
+
+    def __init__(self, message: str, record=None):
+        super().__init__(message)
+        self.json_fields = _start_wait_fields("stalled", record)
+
+
 class EdhStartWaitTimeoutError(EdhError):
     """Raised by `edh workstation start --wait` when the workstation was still starting when the
     wait ran out; the start may still complete."""

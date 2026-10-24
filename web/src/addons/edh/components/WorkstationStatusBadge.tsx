@@ -5,6 +5,7 @@
 
 import React from "react";
 import { RESERVATION_FULL_START_MESSAGE } from "../api/outcome";
+import { isStartStalled } from "../labels";
 import type {
     EdhFailure,
     StartFailure,
@@ -17,7 +18,8 @@ interface WorkstationStatusBadgeProps {
     state: WorkstationState;
     /** The raw EDH session state, shown as the badge title when EDH has reported one. */
     edhState?: string | null;
-    /** The failure code the row carries; titles the badge with its explanation. */
+    /** The failure code the row carries; titles the badge with its explanation. `START_STALLED` on a
+     * CREATING row with no `activity` reads Start stalled. */
     lastError?: string | null;
     /**
      * What the service says the workstation is doing. `starting` reads Starting and `stopping` reads
@@ -59,6 +61,8 @@ export const LAST_ERROR_COPY: Record<WorkstationLastError, string> = {
         "The capacity reservation had no free capacity and does not allow an on-demand launch. Launch again later, choose On-demand, or ask an administrator.",
     START_FAILED:
         "The workstation did not start; it is still stopped with its disk. Start it again, or ask an administrator.",
+    START_STALLED:
+        "EDH has not finished starting this workstation after 30 minutes. Stop it, then start it again; if it stalls again, ask your administrator.",
 };
 
 export const LAST_ERROR_FALLBACK_COPY = "The launch did not complete.";
@@ -107,12 +111,15 @@ export function capacityStartFailureMessage(
  * Why the last start left a STOPPED row stopped, as a sentence and the AWS detail line beneath it
  * (`AWS: <errorCode> in <Availability Zone>`, or the code alone; null when the start failure names
  * no code). Null for a row whose start did not fail, and while a new start of it runs: the badge then
- * reads Starting, and the earlier failure no longer describes it. Shared by My Workstations and the
- * admin Sessions tab, and by `vamscli edh workstation get` through workstationStatusCases.json.
+ * reads Starting, and the earlier failure no longer describes it. A CREATING row whose start the
+ * sweep found stalled (`isStartStalled`) gets the `START_STALLED` sentence and no detail line: EDH
+ * reported no AWS error. Shared by My Workstations and the admin Sessions tab, and by
+ * `vamscli edh workstation get` through workstationStatusCases.json.
  */
 export function describeStartFailure(
     row: StartFailureRow
 ): { message: string; detail: string | null } | null {
+    if (isStartStalled(row)) return { message: LAST_ERROR_COPY.START_STALLED, detail: null };
     if (row.state !== "STOPPED" || row.activity) return null;
     const code = row.lastError as WorkstationLastError | null | undefined;
     if (!code || !START_FAILURE_CODES.includes(code)) return null;
@@ -217,6 +224,15 @@ const statusConfig: Record<WorkstationState, StatusStyle> = {
     },
 };
 
+// A start EDH accepted and has not finished after 30 minutes: not in progress any more, so no moving
+// dot, and the warning colours with the warning sign. The words carry the meaning on their own.
+const startStalledStyle: StatusStyle = {
+    label: "Start stalled",
+    bgColor: "bg-yellow-100 dark:bg-yellow-900/30",
+    textColor: "text-yellow-800 dark:text-yellow-300",
+    icon: "⚠",
+};
+
 // States come from the session row, so a value outside the mapped set is possible after a data
 // migration. An unmapped state renders as a neutral badge carrying the raw value.
 const unknownStatusStyle = (state: string): StatusStyle => ({
@@ -235,20 +251,24 @@ const WorkstationStatusBadge: React.FC<WorkstationStatusBadgeProps> = ({
     instanceType,
     startFailure,
 }) => {
-    // The service's `activity` decides; a record without the field falls back to the state.
+    // A start the sweep found stalled reads Start stalled; otherwise the service's `activity` decides,
+    // and a record without the field falls back to the state.
+    const isStalled = isStartStalled({ state, activity, lastError });
     const isStarting =
         activity === undefined
             ? (state === "ACTIVE" && connectionAvailable === false) ||
               (state === "CREATING" && !!sessionId)
             : activity === "starting";
     const isStopping = activity === "stopping";
-    const config = isStarting
+    const config = isStalled
+        ? startStalledStyle
+        : isStarting
         ? { ...statusConfig.CREATING, label: "Starting" }
         : isStopping
         ? { ...statusConfig.STOPPED, label: "Stopping" }
         : statusConfig[state] || unknownStatusStyle(state as string);
-    // The non-terminal phases get a moving indicator, a pulsing dot.
-    const isMoving = state === "CREATING" || isStarting || isStopping;
+    // The non-terminal phases get a moving indicator, a pulsing dot; a stalled start is not moving.
+    const isMoving = !isStalled && (state === "CREATING" || isStarting || isStopping);
     const failedStart = describeStartFailure({
         state,
         activity,

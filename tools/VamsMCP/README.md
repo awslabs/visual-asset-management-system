@@ -646,6 +646,11 @@ ACTIVE row not yet connectable), `stopping` while EDH still stops the desktop, a
 null otherwise; and `startFailure`, why the last start left a STOPPED row stopped
 (`lastError` `CAPACITY_UNAVAILABLE`, `RESERVATION_FULL` or `START_FAILED`), as
 `{errorCode, availabilityZone, observedAt}`, null when it did not.
+A CREATING row with `activity` null and `lastError` `START_STALLED` is a start EDH
+accepted and has not finished after 30 minutes: EDH never reported the desktop
+ready, and VAMS does not stop it, so stop it with `stop_edh_workstation`, then
+start it again. Its `startFailure` carries `observedAt` (and `availabilityZone`
+when read) but no `errorCode`.
 They also name the image the workstation was launched from: `imageName` (the EDH
 image name), `recipeId` (the AMI recipe whose build produced it, null for a
 baseline image), `recipeDisplayName`, `recipeVersion` (the build it runs),

@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as workstationService from "./workstations";
 import * as catalogService from "./catalog";
 import { type EdhRequestError, mayHaveTakenEffect } from "./outcome";
+import { isStartStalled } from "../labels";
 import type {
     CapacityReservationView,
     CatalogLeasePolicy,
@@ -35,14 +36,15 @@ export const WORKSTATION_POLL_STABLE_MS = 20000;
 /**
  * A row still moving towards a steady state: one the service reports `starting` or `stopping`
  * (`activity`), a launch EDH has not reported back on, or an active desktop EDH does not yet report
- * connectable.
+ * connectable. A start the sweep found stalled (`isStartStalled`) is CREATING but not moving: nothing
+ * changes until the user stops it or EDH finishes, so it does not hold the list at the fast cadence.
  */
 export function isTransitionalWorkstation(
-    row: Pick<WorkstationRecord, "state" | "connectionAvailable" | "activity">
+    row: Pick<WorkstationRecord, "state" | "connectionAvailable" | "activity" | "lastError">
 ): boolean {
     return (
         !!row.activity ||
-        row.state === "CREATING" ||
+        (row.state === "CREATING" && !isStartStalled(row)) ||
         (row.state === "ACTIVE" && !row.connectionAvailable)
     );
 }

@@ -5,6 +5,7 @@
 
 import React from "react";
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import InstancesTab from "./InstancesTab";
 import * as adminQueries from "../api/adminQueries";
 import type { EdhAdminInstance } from "../api/admin";
@@ -102,5 +103,39 @@ describe("InstancesTab start status", () => {
         expect(
             row.getByText("AWS: InsufficientInstanceCapacity in us-west-2b")
         ).toBeInTheDocument();
+    });
+
+    it("shows a stalled start as Start stalled with the sentence, and offers Stop for it", async () => {
+        (adminQueries.useEdhAdminInstances as jest.Mock).mockReturnValue(
+            query([
+                session({
+                    state: "CREATING",
+                    edhState: "pending",
+                    activity: null,
+                    lastError: "START_STALLED",
+                    startFailure: { observedAt: "2026-10-24T11:40:00Z" },
+                }),
+            ])
+        );
+        render(<InstancesTab can={() => true} />);
+
+        const row = rowOf("Render box");
+        expect(row.getByText("Start stalled", { selector: "span" })).toBeInTheDocument();
+        expect(row.queryByText("Starting", { selector: "span" })).not.toBeInTheDocument();
+        expect(
+            row.getByText(
+                "EDH has not finished starting this workstation after 30 minutes. Stop it, then start it again; if it stalls again, ask your administrator."
+            )
+        ).toBeInTheDocument();
+        expect(row.queryByText(/^AWS:/)).not.toBeInTheDocument();
+        // The EDH state column keeps EDH's own word.
+        expect(row.getByText("Pending")).toBeInTheDocument();
+
+        screen.getByLabelText("Actions for Render box").focus();
+        await userEvent.setup().keyboard("{Enter}");
+        expect(await screen.findByRole("menuitem", { name: "Stop" })).not.toHaveAttribute(
+            "aria-disabled",
+            "true"
+        );
     });
 });

@@ -3,7 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { CatalogLeasePolicy, EdhOsFamily, WorkstationRecord } from "./types";
+import type {
+    CatalogLeasePolicy,
+    EdhOsFamily,
+    WorkstationActivity,
+    WorkstationRecord,
+} from "./types";
 
 /** The words shown for the OS family tokens the service stores. */
 export const OS_FAMILY_LABEL: Record<EdhOsFamily, string> = {
@@ -74,6 +79,19 @@ export const newerImageNotice = (
 /** An EDH session state (`running`, `pending`, …) as shown to users: EDH's own word, capitalised. */
 export const edhStateLabel = (value: string | null | undefined): string =>
     value ? value.charAt(0).toUpperCase() + value.slice(1) : "—";
+
+/**
+ * Whether a row is a start EDH accepted and has not finished: the session sweep found the desktop
+ * still `pending` 30 minutes after the start was accepted and recorded `lastError` `START_STALLED` on
+ * the row, which stays CREATING because EDH may still finish. The service reports no `activity` for
+ * it; one that does is moving again and not stalled. Shared by the badge, the row actions and the
+ * poll cadence, and mirrored by `vamscli edh workstation` (workstationStatusCases.json).
+ */
+export const isStartStalled = (row: {
+    state: string | null;
+    activity?: WorkstationActivity | null;
+    lastError?: string | null;
+}): boolean => row.state === "CREATING" && row.lastError === "START_STALLED" && !row.activity;
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;

@@ -20,7 +20,8 @@ from ...utils.json_output import output_status, output_result, output_error, out
 from ...utils.addon.edh_exceptions import (
     EdhError, EdhWorkstationNotFoundError, EdhImageNotFoundError, EdhContainerJobNotFoundError,
     EdhAmiRecipeNotFoundError, EdhAmiRecipeBuildNotFoundError, EdhReservationFullError,
-    EdhCapacityReservationNotFoundError, EdhStartFailedError, EdhStartWaitTimeoutError,
+    EdhCapacityReservationNotFoundError, EdhStartFailedError, EdhStartStalledError,
+    EdhStartWaitTimeoutError,
     EdhUnavailableError,
 )
 from ...utils.addon.edh_api_client import EDH_CAPACITY_RESERVATION_ID, EDH_CAPACITY_RESERVATION_ID_MESSAGE
@@ -78,17 +79,34 @@ RESERVATION_FULL_START_MESSAGE = (
 START_FAILED_MESSAGE = (
     "The workstation did not start; it is still stopped with its disk. Start it again, or ask an "
     "administrator.")
+# A start EDH accepted and has not finished after 30 minutes: the session sweep records lastError
+# START_STALLED on the row, which stays CREATING with no activity. The State column prints STALLED
+# (the web's badge reads Start stalled) and `get` prints the web's sentence (D16).
+START_STALLED_CODE = 'START_STALLED'
+STALLED_LABEL = 'STALLED'
+START_STALLED_MESSAGE = (
+    "EDH has not finished starting this workstation after 30 minutes. Stop it, then start it again; if "
+    "it stalls again, ask your administrator.")
 
 # The `get` record's label column: a continuation line of a value starts under the value.
 RECORD_VALUE_INDENT = ' ' * 19
 
 
+def is_start_stalled(record: Dict[str, Any]) -> bool:
+    """Whether the record is a start EDH accepted and has not finished: CREATING, with lastError
+    START_STALLED and no activity (one that reports an activity is moving again)."""
+    return (record.get('state') == 'CREATING' and record.get('lastError') == START_STALLED_CODE
+            and not record.get('activity'))
+
+
 def state_label(record: Dict[str, Any]) -> str:
     """What the State column prints for a workstation: STARTING or STOPPING while the record's
-    `activity` says so, otherwise its state."""
+    `activity` says so, STALLED for a start the sweep found stalled, otherwise its state."""
     activity = record.get('activity')
     if activity in ACTIVITY_LABELS:
         return ACTIVITY_LABELS[activity]
+    if is_start_stalled(record):
+        return STALLED_LABEL
     return str(record.get('state') or 'N/A')
 
 
@@ -106,7 +124,10 @@ def describe_start_failure(record: Dict[str, Any]) -> Optional[Tuple[str, Option
     """Why the last start left a STOPPED workstation stopped, as the sentence and the AWS detail line
     (`AWS: <errorCode> in <Availability Zone>`, or the code alone; None when the failure names no
     code) the web shows beneath its badge. None for a workstation whose start did not fail, and while a
-    new start of it runs."""
+    new start of it runs. A start the sweep found stalled (is_start_stalled) gets the START_STALLED
+    sentence and no detail line: EDH reported no AWS error."""
+    if is_start_stalled(record):
+        return START_STALLED_MESSAGE, None
     if record.get('state') != 'STOPPED' or record.get('activity'):
         return None
     code = record.get('lastError')
@@ -128,8 +149,9 @@ def describe_start_failure(record: Dict[str, Any]) -> Optional[Tuple[str, Option
 
 
 def start_wait_outcome(record: Any) -> Optional[str]:
-    """`active` once the workstation runs (ACTIVE with no activity), `failed` once the start is over
-    without it (STOPPED, DELETED or ORPHANED with no activity), None while it is still starting."""
+    """`active` once the workstation runs (ACTIVE with no activity), `stalled` once the sweep found
+    the start stalled (is_start_stalled), `failed` once the start is over without it (STOPPED, DELETED
+    or ORPHANED with no activity), None while it is still starting."""
     if not isinstance(record, dict):
         return None
     if record.get('activity'):
@@ -140,6 +162,8 @@ def start_wait_outcome(record: Any) -> Optional[str]:
         if 'activity' not in record and record.get('connectionAvailable') is False:
             return None
         return 'active'
+    if is_start_stalled(record):
+        return 'stalled'
     if state == 'CREATING':
         return None
     return 'failed'
@@ -501,7 +525,9 @@ def workstation():
 @requires_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
 def workstation_list(ctx: click.Context, json_output: bool):
     """List your EDH workstations. The State column reads STARTING or STOPPING while a workstation
-    is between states (its `activity`), otherwise its state. The Image column names the image the
+    is between states (its `activity`), STALLED for a start EDH accepted and has not finished after
+    30 minutes (Last Error START_STALLED; stop it, then start it again), otherwise its state. The
+    Image column names the image the
     workstation was launched from (the recipe's display name and build version, else the image name,
     else the image id) and, on an ACTIVE, STOPPED or CREATING workstation whose recipe has a newer
     available build, appends `(v<n> available)`; the workstation keeps its image, so launch a new one
@@ -626,7 +652,9 @@ def workstation_get(ctx: click.Context, session_id: str, json_output: bool):
     (the record's edhFailure), the AWS error code and operation, or the desktop setup checkpoint,
     under EDH failure. Activity is `starting` or `stopping` while the workstation is between states
     (none otherwise), and a start that left it STOPPED shows why under Start Failure, with the AWS
-    error and Availability Zone the start recorded (the record's startFailure). Image names the image
+    error and Availability Zone the start recorded (the record's startFailure); a start EDH accepted
+    and has not finished after 30 minutes (Last Error START_STALLED, `list` State STALLED) shows the
+    sentence there too, with no AWS line. Image names the image
     the workstation was launched from, as `list` does, beside Image ID; for an image an AMI recipe
     built, Recipe names the recipe and Recipe version the build it runs, followed by `(latest)` or
     `(latest <n>)` from the record's imageLatest and latestRecipeVersion.
@@ -657,7 +685,8 @@ def workstation_get(ctx: click.Context, session_id: str, json_output: bool):
 @click.argument('session_id')
 @click.option('--wait', is_flag=True,
               help=f'Follow the start: read the workstation every {START_WAIT_POLL_SECONDS} s until it is '
-                   f'ACTIVE (exit 0), the start left it stopped (exit 1, with the reason), or '
+                   f'ACTIVE (exit 0), the start left it stopped (exit 1, with the reason), the start '
+                   f'stalled (START_STALLED; exit 1, with the sentence), or '
                    f'{START_WAIT_TIMEOUT_SECONDS // 60} minutes pass (exit 1)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
@@ -671,8 +700,10 @@ def start(ctx: click.Context, session_id: str, wait: bool, json_output: bool):
     `starting`, and `edh workstation get` or `list` shows STARTING until the workstation is ACTIVE. A
     start EDH refuses leaves it STOPPED with the reason under Last Error and Start Failure (for lack
     of capacity, CAPACITY_UNAVAILABLE: the workstation keeps its disk in its Availability Zone; start
-    it again later). The workstation is never deleted for a refused start. --wait follows the start
-    and exits 0 only once the workstation is ACTIVE.
+    it again later). The workstation is never deleted for a refused start. A start EDH accepts and
+    has not finished after 30 minutes stays CREATING and reads STALLED (Last Error START_STALLED):
+    stop it, then start it again. --wait follows the start and exits 0 only once the workstation is
+    ACTIVE.
 
     Examples:
         vamscli edh workstation start SESSION_ID
@@ -706,6 +737,9 @@ def start(ctx: click.Context, session_id: str, wait: bool, json_output: bool):
                 f"Workstation still {state_label(record)} after {START_WAIT_TIMEOUT_SECONDS // 60} "
                 f"minutes; the start may still complete. Follow it with "
                 f"'vamscli edh workstation get {target}'.", record)
+        if outcome == 'stalled':
+            raise EdhStartStalledError(
+                f"Workstation start stalled ({START_STALLED_CODE}): {START_STALLED_MESSAGE}", record)
         failure = describe_start_failure(record)
         if failure:
             raise EdhStartFailedError(
@@ -714,6 +748,11 @@ def start(ctx: click.Context, session_id: str, wait: bool, json_output: bool):
             f"Workstation start did not complete: the workstation is {state_label(record)}.", record)
     except EdhStartWaitTimeoutError as e:
         output_error(e, json_output, error_type="Workstation Start Not Finished")
+        raise click.ClickException(str(e))
+    except EdhStartStalledError as e:
+        output_error(e, json_output, error_type="Workstation Start Stalled",
+                     helpful_message=f"Stop it with 'vamscli edh workstation stop {session_id}', then "
+                                     f"start it again.")
         raise click.ClickException(str(e))
     except EdhStartFailedError as e:
         output_error(e, json_output, error_type="Workstation Start Failed",
@@ -736,7 +775,9 @@ def start(ctx: click.Context, session_id: str, wait: bool, json_output: bool):
 @requires_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
 def stop(ctx: click.Context, session_id: str, json_output: bool):
     """Stop one of your running workstations. Start it again with `edh workstation start`. A launch
-    that has no EDH session yet is refused (HTTP 409).
+    that has no EDH session yet is refused (HTTP 409). A start EDH accepted and has not finished
+    after 30 minutes (`list` State STALLED, Last Error START_STALLED) is stopped the same way; start
+    it again once it reads STOPPED.
 
     Examples:
         vamscli edh workstation stop SESSION_ID

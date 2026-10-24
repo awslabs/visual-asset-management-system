@@ -89,14 +89,14 @@ from .common.edhSessionState import (
     EXPIRES_AT_FIELD,
     ACTIVITY_FIELD,
     ACTIVITY_STARTING,
-    LAST_ERROR_LAUNCH_ERROR,
     LAST_ERROR_LEASE_EXPIRED,
     LAST_ERROR_RESERVATION_FULL,
     START_IN_PROGRESS_SECONDS, STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED,
     STOP_REQUESTED_FIELD, WORKER_ACTION_START, WORKER_PAYLOAD_KEYS,
     credential_claim_stamp, deleted_row_expiry, edh_failure_attributes, edh_failure_read_due,
-    launch_image_snapshot, observed_row_attributes, session_row_live, start_in_progress, start_stamp,
-    start_stamp_cleared, state_for_edh_session_state, workstation_activity, workstation_image,
+    launch_image_snapshot, observed_row_attributes, orphaned_last_error, session_row_live, start_accepted_cleared,
+    start_in_progress, start_stall_cleared, start_stamp, start_stamp_cleared, state_for_edh_session_state,
+    workstation_activity, workstation_image,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -697,13 +697,14 @@ def _record_failed_launches(event, rows, unanswered):
     read left out, and take its credential back. EDH answers only the desktops it holds active and
     deactivates a desktop whose placement failed within minutes; a launch that never ran cannot be held
     out by Save and Resume (a desktop EDH continued under another id is answered, so is not in
-    ``unanswered``). A row deleted since it was read keeps what its deletion wrote; a revoke that fails is
-    left to the session sweep."""
+    ``unanswered``). A stalled start's code and stamp go with the move out of CREATING. A row deleted since it
+    was read keeps what its deletion wrote; a revoke that fails is left to the session sweep."""
     for row in rows:
         if row.get('state') != STATE_CREATING or str(row.get('sessionId') or '') not in unanswered:
             continue
-        if not _update_live_row(row, state=STATE_ORPHANED, connectionAvailable=False,
-                                lastError=row.get('lastError') or LAST_ERROR_LAUNCH_ERROR):
+        failed = {**start_stall_cleared(row), 'state': STATE_ORPHANED, 'connectionAvailable': False,
+                  'lastError': orphaned_last_error(row.get('lastError'))}
+        if not _update_live_row(row, **failed):
             logger.info(f"Bootstrap {row['bootstrapId']} was deleted since it was read; it is not recorded failed")
             continue
         logger.warning(f"EDH no longer has the desktop of launch {row['bootstrapId']}; recorded as a failed launch")
@@ -817,9 +818,10 @@ def _revoke_session_credential(event, row, *, delete_secret, every_key=True):
 
 def _record_deleted(event, row, **attributes):
     """Write DELETED (plus ``attributes``) onto the row and take back the credential the write left it
-    holding. A row that holds no credential to begin with is given the expiry together with the state."""
+    holding; the stamp of a start EDH accepted goes with the move out of CREATING. A row that holds no
+    credential to begin with is given the expiry together with the state."""
     expiry = {} if (row.get('apiKeyId') or row.get('secretName')) else {EXPIRES_AT_FIELD: deleted_row_expiry()}
-    _update_row_from_image(row, state=STATE_DELETED, **attributes, **expiry)
+    _update_row_from_image(row, state=STATE_DELETED, **start_accepted_cleared(row), **attributes, **expiry)
     _revoke_session_credential(event, row, delete_secret=True)
 
 
@@ -1222,9 +1224,10 @@ def stop_workstation(event, path):
         if _listed_state(desktop) != STATE_STOPPED:
             raise
     # The revoke follows the row as the write left it: a key a renew named since the read goes too. The stop's
-    # stamp lets a read that still finds the desktop running report it stopping.
+    # stamp lets a read that still finds the desktop running report it stopping. A start that stalled, which a stop
+    # is the owner's way out of, is over: its code, failure and stamp go, so the next start is not held by them.
     _update_row_from_image(row, state=STATE_STOPPED, connectionAvailable=False, **start_stamp_cleared(row),
-                           **{STOP_REQUESTED_FIELD: _utc_now()},
+                           **start_stall_cleared(row), **{STOP_REQUESTED_FIELD: _utc_now()},
                            **({ACTIVITY_FIELD: None} if row.get(ACTIVITY_FIELD) else {}))
     _revoke_session_credential(event, row, delete_secret=False)
     return success(body=_record(row))

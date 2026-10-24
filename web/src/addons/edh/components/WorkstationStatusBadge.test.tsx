@@ -89,6 +89,46 @@ describe("WorkstationStatusBadge", () => {
         );
     });
 
+    it("renders a start the sweep found stalled as Start stalled, in the warning colours, without the moving dot", () => {
+        render(
+            <WorkstationStatusBadge
+                state="CREATING"
+                edhState="pending"
+                activity={null}
+                lastError="START_STALLED"
+                sessionId="s-1"
+                instanceType="g5.16xlarge"
+                startFailure={{ observedAt: OBSERVED_AT }}
+            />
+        );
+        const label = screen.getByText("Start stalled");
+        const badge = label.parentElement as HTMLElement;
+        // The words carry the meaning; the colour and the icon only repeat it.
+        expect(badge).toHaveTextContent(/^⚠Start stalled$/);
+        expect(badge).toHaveClass("bg-yellow-100", "text-yellow-800");
+        expect(badge.querySelector(".animate-pulse")).toBeNull();
+        expect(label.previousSibling).toHaveAttribute("aria-hidden", "true");
+        expect(badge).toHaveAttribute("title", LAST_ERROR_COPY.START_STALLED);
+        expect(screen.queryByText("Starting")).not.toBeInTheDocument();
+        expect(describeLastError("START_STALLED")).toBe(
+            "EDH has not finished starting this workstation after 30 minutes. Stop it, then start it again; if it stalls again, ask your administrator."
+        );
+    });
+
+    it("reads Starting, not Start stalled, for a creating row whose start is still under way", () => {
+        render(
+            <WorkstationStatusBadge
+                state="CREATING"
+                edhState="pending"
+                activity="starting"
+                lastError={null}
+                sessionId="s-1"
+            />
+        );
+        expect(screen.getByText("Starting")).toBeInTheDocument();
+        expect(screen.queryByText("Start stalled")).not.toBeInTheDocument();
+    });
+
     it("renders an unmapped state as its raw value without throwing", () => {
         render(<WorkstationStatusBadge state={"RESIZING" as any} />);
         expect(screen.getByText("RESIZING")).toBeInTheDocument();
