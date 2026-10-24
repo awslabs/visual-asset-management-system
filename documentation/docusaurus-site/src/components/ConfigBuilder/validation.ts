@@ -62,6 +62,7 @@ const ACM_CERTIFICATE_ARN_PATTERN =
     /^arn:(aws[a-z-]*):acm:([a-z0-9-]+):\d{12}:certificate\/[a-f0-9-]+$/;
 const API_CUSTOM_DOMAIN_HOST_PATTERN =
     /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
 // config.ts API_CUSTOM_DOMAIN_PARTITIONS.
 const API_CUSTOM_DOMAIN_PARTITIONS = ["aws", "aws-us-gov"];
 /**
@@ -2260,6 +2261,50 @@ export const RULES: Rule[] = [
         },
         message:
             "app.api.apiGatewayRest.customDomain.domainHost must be a lowercase host name with no scheme, port or path (for example api.example.com).",
+    },
+    // (config.ts: "the API custom domain needs a host of its own")
+    {
+        id: "api-custom-domain-host-conflict",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.customDomain.domainHost"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.api.apiGatewayRest.customDomain.enabled")) return false;
+            const host = g(c, "app.api.apiGatewayRest.customDomain.domainHost");
+            const cert = g(c, "app.api.apiGatewayRest.customDomain.certificateArn");
+            // Checked once the host has passed the checks before it (config.ts order).
+            if (isUnset(host) || isUnset(cert)) return false;
+            if (typeof host !== "string" || !API_CUSTOM_DOMAIN_HOST_PATTERN.test(host))
+                return false;
+            const webAppHosts = [
+                g(c, "app.useCloudFront.enabled") && g(c, "app.useCloudFront.customDomain.enabled")
+                    ? g(c, "app.useCloudFront.customDomain.domainHost")
+                    : undefined,
+                g(c, "app.useAlb.enabled") ? g(c, "app.useAlb.domainHost") : undefined,
+            ];
+            return webAppHosts.some(
+                (webAppHost) =>
+                    !isUnset(webAppHost) && String(webAppHost).toLowerCase() === host.toLowerCase()
+            );
+        },
+        message:
+            "app.api.apiGatewayRest.customDomain.domainHost must differ from the web application's host (app.useCloudFront.customDomain.domainHost or app.useAlb.domainHost).",
+    },
+    // (config.ts: "customDomain.optionalHostedZoneId must be")
+    {
+        id: "api-custom-domain-hosted-zone-id-format",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.customDomain.optionalHostedZoneId"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.api.apiGatewayRest.customDomain.enabled")) return false;
+            const host = g(c, "app.api.apiGatewayRest.customDomain.domainHost");
+            const cert = g(c, "app.api.apiGatewayRest.customDomain.certificateArn");
+            if (isUnset(host) || isUnset(cert)) return false;
+            const zone = g(c, "app.api.apiGatewayRest.customDomain.optionalHostedZoneId");
+            if (isUnset(zone)) return false;
+            return typeof zone !== "string" || !ROUTE53_HOSTED_ZONE_ID_PATTERN.test(zone);
+        },
+        message:
+            "app.api.apiGatewayRest.customDomain.optionalHostedZoneId must be an Amazon Route 53 hosted zone ID such as Z0123456789ABCDEFGHIJ (no /hostedzone/ prefix), or empty.",
     },
     {
         id: "api-custom-domain-private-endpoint",

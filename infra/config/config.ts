@@ -143,6 +143,10 @@ export const API_CUSTOM_DOMAIN_HOST_PATTERN =
 export const ACM_CERTIFICATE_ARN_PATTERN =
     /^arn:(aws[a-z-]*):acm:([a-z0-9-]+):\d{12}:certificate\/[a-f0-9-]+$/;
 
+// An Amazon Route 53 hosted zone ID as the Route 53 API returns it, without the `/hostedzone/`
+// prefix: `Z` followed by uppercase letters and digits, at most 32 characters in total.
+export const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
+
 // Amazon Cognito's username limit. Used to reject an over-long app.adminUserId at synthesis rather
 // than letting CreateUser fail mid-deploy and roll the core stack back.
 export const COGNITO_USERNAME_MAX_LENGTH = 128;
@@ -3167,6 +3171,41 @@ export function getConfig(app: cdk.App): Config {
                 "Configuration Error: app.api.apiGatewayRest.customDomain.domainHost must be a " +
                     "lowercase host name with no scheme, port or path (for example api.example.com). " +
                     `Got: '${apiCustomDomain.domainHost}'.`
+            );
+        }
+        // The web application's own host (the CloudFront custom domain, or the ALB host) already
+        // points at the web front, so the API custom domain needs a host of its own.
+        const webAppHosts: [string, string | undefined][] = [
+            [
+                "app.useCloudFront.customDomain.domainHost",
+                config.app.useCloudFront.enabled && config.app.useCloudFront.customDomain.enabled
+                    ? config.app.useCloudFront.customDomain.domainHost
+                    : undefined,
+            ],
+            [
+                "app.useAlb.domainHost",
+                config.app.useAlb.enabled ? config.app.useAlb.domainHost : undefined,
+            ],
+        ];
+        for (const [webAppHostField, webAppHost] of webAppHosts) {
+            if (
+                !isUnsetValue(webAppHost) &&
+                String(webAppHost).toLowerCase() === apiCustomDomain.domainHost.toLowerCase()
+            ) {
+                throw new Error(
+                    "Configuration Error: app.api.apiGatewayRest.customDomain.domainHost must differ " +
+                        `from ${webAppHostField}, the web application's host. Got: '${apiCustomDomain.domainHost}' for both.`
+                );
+            }
+        }
+        if (
+            !isUnsetValue(apiCustomDomain.optionalHostedZoneId) &&
+            !ROUTE53_HOSTED_ZONE_ID_PATTERN.test(apiCustomDomain.optionalHostedZoneId)
+        ) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.optionalHostedZoneId must be " +
+                    "an Amazon Route 53 hosted zone ID such as Z0123456789ABCDEFGHIJ (no /hostedzone/ " +
+                    `prefix), or empty. Got: '${apiCustomDomain.optionalHostedZoneId}'.`
             );
         }
         if (apiGatewayRest.endpointType === "PRIVATE") {

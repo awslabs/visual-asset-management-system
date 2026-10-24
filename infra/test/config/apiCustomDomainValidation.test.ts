@@ -11,6 +11,9 @@
  * named instead of at deploy:
  *   * `domainHost` and `certificateArn` are required when the domain is enabled;
  *   * the host is a lowercase name with no scheme, port or path (API Gateway rejects uppercase);
+ *   * the host differs, in any letter case, from the web application's host: the CloudFront custom
+ *     domain's or the ALB's `domainHost`, each only while that front is enabled;
+ *   * `optionalHostedZoneId`, when set, is a Route 53 hosted zone ID without the `/hostedzone/` prefix;
  *   * a `PRIVATE` endpoint cannot take it — a private API is reached through its VPC endpoint;
  *   * the partition must be one where VAMS creates the domain (commercial and AWS GovCloud (US));
  *   * the certificate must be an ACM certificate in the deployment Region and partition, because a
@@ -222,12 +225,93 @@ describe("app.api.apiGatewayRest.customDomain validation", () => {
         const run = loadConfig(commercialTemplate, "eu-west-1", enable("aws", "eu-west-1"));
         expect(run).not.toThrow(ANY_CUSTOM_DOMAIN_ERROR);
     });
+
+    test("rejects the CloudFront custom domain's host, compared case-insensitively", () => {
+        const run = loadConfig(commercialTemplate, "us-east-1", (c) => {
+            enable("aws", "us-east-1")(c);
+            c.app.useCloudFront.customDomain = {
+                enabled: true,
+                domainHost: "API.Vams.Example.com",
+                certificateArn: certArn("aws", "us-east-1"),
+                optionalHostedZoneId: "",
+            };
+        });
+        expect(run).toThrow(
+            /customDomain\.domainHost must differ from app\.useCloudFront\.customDomain\.domainHost/
+        );
+    });
+
+    test("ignores the CloudFront custom domain's host while that domain is disabled (control)", () => {
+        const run = loadConfig(commercialTemplate, "us-east-1", (c) => {
+            enable("aws", "us-east-1")(c);
+            c.app.useCloudFront.customDomain = {
+                enabled: false,
+                domainHost: HOST,
+                certificateArn: "",
+                optionalHostedZoneId: "",
+            };
+        });
+        expect(run).not.toThrow(ANY_CUSTOM_DOMAIN_ERROR);
+    });
+
+    test("rejects the ALB's host", () => {
+        const run = loadConfig(
+            govcloudTemplate,
+            "us-gov-west-1",
+            enable("aws-us-gov", "us-gov-west-1", { domainHost: "vams.example.com" })
+        );
+        expect(run).toThrow(/customDomain\.domainHost must differ from app\.useAlb\.domainHost/);
+    });
+
+    test("ignores the ALB host while the ALB is disabled (control)", () => {
+        // The commercial template carries a placeholder ALB host with the ALB off.
+        const run = loadConfig(commercialTemplate, "us-east-1", (c) => {
+            enable("aws", "us-east-1", { domainHost: c.app.useAlb.domainHost })(c);
+        });
+        expect((commercialTemplate as any).app.useAlb.enabled).toBe(false);
+        expect(run).not.toThrow(ANY_CUSTOM_DOMAIN_ERROR);
+    });
+
+    test.each([
+        ["a typical ID", "Z0123456789ABCDEFGHIJ"],
+        ["a short ID", "Z1D633PJN98FT9"],
+        ["the longest ID", "Z" + "A".repeat(31)],
+        ["an empty value", ""],
+        ["UNDEFINED", "UNDEFINED"],
+    ])("accepts optionalHostedZoneId with %s", (_label, optionalHostedZoneId) => {
+        const run = loadConfig(
+            commercialTemplate,
+            "us-east-1",
+            enable("aws", "us-east-1", { optionalHostedZoneId })
+        );
+        expect(run).not.toThrow(ANY_CUSTOM_DOMAIN_ERROR);
+    });
+
+    test.each([
+        ["the /hostedzone/ prefix", "/hostedzone/Z0123456789ABCDEFGHIJ"],
+        ["lowercase letters", "z0123456789abcdefghij"],
+        ["no Z prefix", "A0123456789ABCDEFGHIJ"],
+        ["only the prefix", "Z"],
+        ["more than 32 characters", "Z" + "A".repeat(32)],
+        ["a domain name", "example.com"],
+    ])("rejects optionalHostedZoneId with %s", (_label, optionalHostedZoneId) => {
+        const run = loadConfig(
+            commercialTemplate,
+            "us-east-1",
+            enable("aws", "us-east-1", { optionalHostedZoneId })
+        );
+        expect(run).toThrow(
+            /customDomain\.optionalHostedZoneId must be an Amazon Route 53 hosted zone ID/
+        );
+    });
 });
 
 describe("the ConfigBuilder mirrors the customDomain rules", () => {
     const CUSTOM_DOMAIN_RULES = [
         "api-custom-domain-fields",
         "api-custom-domain-host-format",
+        "api-custom-domain-host-conflict",
+        "api-custom-domain-hosted-zone-id-format",
         "api-custom-domain-private-endpoint",
         "api-custom-domain-partition",
         "api-custom-domain-cert-region",
@@ -304,5 +388,44 @@ describe("the ConfigBuilder mirrors the customDomain rules", () => {
         expect(fired(cfg)).toEqual([]);
         cfg.app.api.apiGatewayRest.customDomain.certificateArn = "certificate-1234";
         expect(fired(cfg)).toEqual(["api-custom-domain-cert-region"]);
+    });
+
+    test("flags the CloudFront custom domain's host, compared case-insensitively", () => {
+        const cfg = builderConfig("commercial", "us-east-1", "aws");
+        cfg.app.useCloudFront.customDomain.enabled = true;
+        cfg.app.useCloudFront.customDomain.domainHost = "API.Vams.Example.com";
+        cfg.app.useCloudFront.customDomain.certificateArn = certArn("aws", "us-east-1");
+        expect(fired(cfg)).toEqual(["api-custom-domain-host-conflict"]);
+        cfg.app.useCloudFront.customDomain.enabled = false;
+        expect(fired(cfg)).toEqual([]);
+    });
+
+    test("flags the ALB's host only while the ALB is enabled", () => {
+        const cfg = builderConfig("govcloud", "us-gov-west-1", "aws-us-gov");
+        cfg.app.useAlb.domainHost = HOST;
+        expect(cfg.app.useAlb.enabled).toBe(true);
+        expect(fired(cfg)).toEqual(["api-custom-domain-host-conflict"]);
+        cfg.app.useAlb.enabled = false;
+        expect(fired(cfg)).not.toContain("api-custom-domain-host-conflict");
+    });
+
+    test("flags a malformed hosted zone ID and accepts a valid or empty one", () => {
+        expect(
+            fired(
+                builderConfig("commercial", "us-east-1", "aws", {
+                    optionalHostedZoneId: "/hostedzone/Z0123456789ABCDEFGHIJ",
+                })
+            )
+        ).toEqual(["api-custom-domain-hosted-zone-id-format"]);
+        expect(
+            fired(
+                builderConfig("commercial", "us-east-1", "aws", {
+                    optionalHostedZoneId: "Z0123456789ABCDEFGHIJ",
+                })
+            )
+        ).toEqual([]);
+        expect(
+            fired(builderConfig("commercial", "us-east-1", "aws", { optionalHostedZoneId: "" }))
+        ).toEqual([]);
     });
 });
