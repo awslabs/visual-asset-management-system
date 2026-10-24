@@ -27,7 +27,6 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from common.dynamodb import to_update_expr, query_all_items
-from common.assetProvenance import stamp_asset_version_provenance
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from models.assetsV3 import (
     AssetFileVersionItemModel, CreateAssetVersionRequestModel, RevertAssetVersionRequestModel,
@@ -1806,9 +1805,7 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
     if not metadata_saved:
         logger.warning(f"Failed to save metadata snapshot for version {new_assetVersionId}")
 
-    # Make the reserved version the asset's current version (with databaseId for GSI). The asset
-    # row is written back whole with the new version recorded as its latest change.
-    stamp_asset_version_provenance(asset)
+    # Make the reserved version the asset's current version (with databaseId for GSI)
     finalize_asset_version(asset, new_assetVersionId, databaseId=databaseId)
 
     #Send email for new version
@@ -1949,9 +1946,7 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
     else:
         logger.info(f"Successfully saved metadata snapshot for reverted version {new_assetVersionId}")
     
-    # Make the reserved version the asset's current version. The asset row is written back whole
-    # with the new version recorded as its latest change.
-    stamp_asset_version_provenance(asset)
+    # Make the reserved version the asset's current version
     finalize_asset_version(asset, new_assetVersionId, databaseId=databaseId)
 
     #Send email for asset version change
