@@ -12,6 +12,7 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import App from "./App";
+import { navigation } from "./utils/sessionManager";
 
 let mockUtilities: any[] = [];
 let mockIdentity: any;
@@ -37,13 +38,19 @@ jest.mock("./features/orchestration/components/ToastProvider", () => ({
 jest.mock("./hooks/useThemeSettings", () => ({
     useThemeSettings: () => ({ theme: "dark", setTheme: jest.fn(), density: "comfortable" }),
 }));
-jest.mock("aws-amplify/auth", () => ({ signOut: jest.fn().mockResolvedValue(undefined) }));
+const mockSignOut = jest.fn().mockResolvedValue(undefined);
+jest.mock("aws-amplify/auth", () => ({ signOut: (...a: any[]) => mockSignOut(...a) }));
 const mockLocalforageClear = jest.fn().mockResolvedValue(undefined);
 jest.mock("localforage", () => ({ clear: (...a: any[]) => mockLocalforageClear(...a) }));
+
+/** A key in the shape Amplify v6 stores the Cognito refresh token under. */
+const AMPLIFY_REFRESH_TOKEN_KEY = "CognitoIdentityServiceProvider.client-1.u1.refreshToken";
 
 describe("App shell", () => {
     beforeEach(() => {
         localStorage.clear();
+        mockSignOut.mockReset().mockResolvedValue(undefined);
+        mockLocalforageClear.mockReset().mockResolvedValue(undefined);
         // The shell portals its top navigation into this node.
         document.body.innerHTML = '<div id="headerWrapper"></div>';
     });
@@ -108,5 +115,75 @@ describe("App shell", () => {
             error.mockRestore();
             log.mockRestore();
         }
+    });
+
+    describe("header sign-out order", () => {
+        let redirect: jest.SpyInstance;
+        let error: jest.SpyInstance;
+        let log: jest.SpyInstance;
+
+        beforeEach(() => {
+            redirect = jest
+                .spyOn(navigation, "redirectToLogin")
+                .mockImplementation(() => undefined);
+            error = jest.spyOn(console, "error").mockImplementation(() => undefined);
+            log = jest.spyOn(console, "log").mockImplementation(() => undefined);
+            localStorage.setItem("user", JSON.stringify({ username: "u1" }));
+            localStorage.setItem(AMPLIFY_REFRESH_TOKEN_KEY, "refresh-1");
+        });
+
+        afterEach(() => {
+            redirect.mockRestore();
+            error.mockRestore();
+            log.mockRestore();
+        });
+
+        const clickSignOut = () => {
+            render(<App />);
+            const userMenu = mockUtilities.find((utility) => utility.text === "u1");
+            userMenu.onItemClick({ detail: { id: "signout" } });
+        };
+
+        it("lets Amplify read the stored tokens before any storage is cleared", async () => {
+            const order: string[] = [];
+            let seenByAmplify: string | null = "not read";
+            mockSignOut.mockImplementation(async () => {
+                order.push("signOut:start");
+                // Amplify loads the tokens asynchronously before it calls RevokeToken.
+                await Promise.resolve();
+                seenByAmplify = localStorage.getItem(AMPLIFY_REFRESH_TOKEN_KEY);
+                order.push("signOut:done");
+            });
+            mockLocalforageClear.mockImplementation(async () => {
+                order.push("localforage.clear");
+            });
+            redirect.mockImplementation(() => {
+                order.push("redirect");
+            });
+
+            clickSignOut();
+
+            await waitFor(() => expect(redirect).toHaveBeenCalledTimes(1));
+            expect(seenByAmplify).toBe("refresh-1");
+            expect(order).toEqual([
+                "signOut:start",
+                "signOut:done",
+                "localforage.clear",
+                "redirect",
+            ]);
+            expect(localStorage.getItem(AMPLIFY_REFRESH_TOKEN_KEY)).toBeNull();
+            expect(localStorage.getItem("user")).toBeNull();
+        });
+
+        it("still clears storage and redirects when Amplify sign-out fails", async () => {
+            mockSignOut.mockRejectedValue(new Error("network down"));
+
+            clickSignOut();
+
+            await waitFor(() => expect(redirect).toHaveBeenCalledTimes(1));
+            expect(localStorage.getItem("user")).toBeNull();
+            expect(localStorage.getItem(AMPLIFY_REFRESH_TOKEN_KEY)).toBeNull();
+            expect(mockLocalforageClear).toHaveBeenCalledTimes(1);
+        });
     });
 });
