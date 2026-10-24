@@ -38,10 +38,6 @@ jest.mock("../../services/APIService", () => ({
 jest.mock("../common/StatusMessage", () => ({
     useStatusMessage: () => ({ showMessage: jest.fn() }),
 }));
-// The compliance badge gates on this hook; keep it denied so the pane makes no compliance call.
-jest.mock("../../features/orchestration/permissions/useAllowedRoutes", () => ({
-    useAllowedRoutes: () => ({ loading: false, can: () => false }),
-}));
 
 describe("AssetDetailsPane synonyms", () => {
     it("labels the asset ID with the asset synonym", () => {

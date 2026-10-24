@@ -53,11 +53,9 @@ function routingHandlerModules(): string[] {
 
 /**
  * Modules in the list that are imported by other handlers rather than deployed as a Lambda of their
- * own: no `Handler` names them, so there is nothing to assert for them here. The compliance store's
- * S3 calls run in the Lambdas that evaluate (evaluate service, trigger, cascade executor), whose
- * shared `grantEvaluationEngineReads` grants read on the buckets table.
+ * own: no `Handler` names them, so there is nothing to assert for them here.
  */
-const LIBRARY_MODULES = new Set(["physnaCommon", "complianceEvaluationStore"]);
+const LIBRARY_MODULES = new Set(["physnaCommon"]);
 
 const synth = (): SynthResult =>
     synthTemplate("commercial", {

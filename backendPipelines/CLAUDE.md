@@ -27,8 +27,6 @@ Each pipeline step reads several S3 paths from its manifest (`manifestHelper.res
 
 **Key distinction:** `outputS3AssetFilesPath` is for file-level outputs including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is only for asset-level preview images that represent the asset as a whole. Most pipelines producing file previews should write to `outputS3AssetFilesPath`.
 
-**Compliance output:** a pipeline that backs a compliance pipeline rule reports its measurements as one `compliance-output.json` under the execution's `outputs.results` prefix (from the workflow manifest). `backendPipelines/common/compliance_output.py` (`write_compliance_output`, `build_compliance_output`) writes the document — `{"complianceOutput": true, "status": "success"|"error", "measurements": {...}, "errors": [], "pipelineMetadata": {}}` — whose `measurements` keys match the `outputField` of the rule's checks. The pipeline needs no evaluation id or compliance table access; the compliance workflow callback reads the file from the execution's `PipelineExecutionOutputResults` rows.
-
 **Rules for output path usage:**
 
 -   **Always pass through** all output paths resolved from the manifest in `vamsExecute` lambdas. Never hardcode empty strings for output paths — the workflow's process-output step relies on finding files at these locations.
@@ -249,6 +247,17 @@ implementations — that is a pre-invoke rejection, whose whole message is one s
 reports a finished JOB's outcome carries the child's own output instead, so it bounds that text itself to
 fit the 32768-character `cause` limit; `multi/rapidPipelineEKS`'s CHECK_JOB path is the example, and its
 `POD_LOG_TAIL_MAX_CHARS` is deliberately far larger than 256.
+
+A value over either `SendTaskFailure` limit (`error` 256 characters, `cause` 32768) is rejected by the
+service — botocore checks only the minimum length — and the rejection lands in the callback's own
+`except`, so the token goes unreported exactly as if no callback had been written. A route that forwards
+an error it did not compose (a `PipelineEnd` handler passing on the state's `$.error`) cannot know its
+size. `multi/rapidPipelineEKS/lambda/taskFailureBounds.py` is the pattern: every `send_task_failure` in
+that pipeline's `consolidated_handler.py` and `openPipeline.py` takes its `error` and `cause` from
+`bounded_task_failure`, which returns a value within its limit unchanged, keeps the head of a longer one
+(a Lambda error body puts the message first) with a `... [truncated from N characters]` marker inside the
+limit, and converts a non-string with `str()`. `tests/test_rapidpipeline_eks_task_failure_bounds.py`
+holds every call to that form with a syntax-tree guard; it is durable, not temporary.
 
 **On the SUCCESS path, report the outcome and not the job's output.** A `SendTaskSuccess` output and the
 lambda's own return value both land in the execution record, which is durable and readable by anyone who
