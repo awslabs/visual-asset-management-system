@@ -12824,6 +12824,12 @@ components:
                 - capacityReservationFallback
                 - activity
                 - startFailure
+                - imageName
+                - recipeId
+                - recipeDisplayName
+                - recipeVersion
+                - latestRecipeVersion
+                - imageLatest
             properties:
                 bootstrapId:
                     type: string
@@ -12930,6 +12936,30 @@ components:
                         - $ref: "#/components/schemas/edhStartFailure"
                     nullable: true
                     description: "What the last start that did not happen recorded, beside its `lastError`, while the workstation stays `STOPPED`; null otherwise."
+                imageName:
+                    type: string
+                    nullable: true
+                    description: "The EDH image name the workstation was launched from, stored at launch; for a workstation launched before VAMS stored it, the name of the EDH stack its AMI recipe build registered, when the build recorded one. Kept after a newer build retires the image from the catalog. Null when unknown; never a guess."
+                recipeId:
+                    type: string
+                    nullable: true
+                    description: "The AMI recipe whose build produced the image, stored at launch or, for a workstation launched before VAMS stored it, read from the AVAILABLE or RETIRED build that registered `imageId`; null for a baseline image."
+                recipeDisplayName:
+                    type: string
+                    nullable: true
+                    description: "The display name of `recipeId`, as stored at launch or, when resolved when the record is read, as the recipe has it then; null for a baseline image."
+                recipeVersion:
+                    type: integer
+                    nullable: true
+                    description: "The recipe build version the workstation runs; null for a baseline image."
+                latestRecipeVersion:
+                    type: integer
+                    nullable: true
+                    description: "The newest AVAILABLE build version of `recipeId`, derived when the record is read and never stored; null for a baseline image, an unknown or deleted recipe, a recipe with no AVAILABLE build, while `app.addons.useEdhWorkstations.amiBuilds.enabled` is false, and when the recipe table cannot be read."
+                imageLatest:
+                    type: boolean
+                    nullable: true
+                    description: "`true` when `recipeVersion` equals `latestRecipeVersion`; `false` only when a newer AVAILABLE build of the recipe exists (`latestRecipeVersion` greater than `recipeVersion`) -- the workstation keeps the image it was launched from, and a new launch gets the newer build; null whenever either version is null or `recipeVersion` is the greater."
         edhStartFailure:
             type: object
             description: "What VAMS recorded when a start of a stopped workstation did not happen. EDH's text is never returned."
@@ -13389,6 +13419,30 @@ components:
                 capacityReservationFallback:
                     type: boolean
                     description: "True when the joined VAMS record asked for a full capacity reservation and was launched on-demand instead."
+                imageName:
+                    type: string
+                    nullable: true
+                    description: "The EDH image name of the session: as the joined VAMS record stored it at launch, else the name EDH's own record of the session gives its software stack, else the name of the EDH stack the AMI recipe build that registered `imageId` recorded; null when none names it. The other image fields are the workstation record's, from the joined record or, without one, from the recipe build that registered `imageId`."
+                recipeId:
+                    type: string
+                    nullable: true
+                    description: "The AMI recipe whose build produced the image, stored at launch or, for a workstation launched before VAMS stored it, read from the AVAILABLE or RETIRED build that registered `imageId`; null for a baseline image."
+                recipeDisplayName:
+                    type: string
+                    nullable: true
+                    description: "The display name of `recipeId`, as stored at launch or, when resolved when the record is read, as the recipe has it then; null for a baseline image."
+                recipeVersion:
+                    type: integer
+                    nullable: true
+                    description: "The recipe build version the workstation runs; null for a baseline image."
+                latestRecipeVersion:
+                    type: integer
+                    nullable: true
+                    description: "The newest AVAILABLE build version of `recipeId`, derived when the record is read and never stored; null for a baseline image, an unknown or deleted recipe, a recipe with no AVAILABLE build, while `app.addons.useEdhWorkstations.amiBuilds.enabled` is false, and when the recipe table cannot be read."
+                imageLatest:
+                    type: boolean
+                    nullable: true
+                    description: "`true` when `recipeVersion` equals `latestRecipeVersion`; `false` only when a newer AVAILABLE build of the recipe exists (`latestRecipeVersion` greater than `recipeVersion`) -- the workstation keeps the image it was launched from, and a new launch gets the newer build; null whenever either version is null or `recipeVersion` is the greater."
                 stale:
                     type: boolean
                 staleReason:

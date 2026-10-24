@@ -79,7 +79,7 @@ export interface BuildEdhLambdaProps {
     secrets: EdhLambdaSecrets;
     /** Session-table access; a handler that never opens the table opts out. */
     sessionTable?: "readWrite" | "none";
-    /** AMI recipe-table access; the build Lambdas write it, the launch catalog only reads it. */
+    /** AMI recipe-table access; the build Lambdas write it, the launch catalog and the workstation and admin views only read it. */
     amiRecipeTable?: "readWrite" | "read" | "none";
 }
 
@@ -483,6 +483,8 @@ export function buildEdhAdminServiceFunction(
         config,
         network,
         secrets,
+        // The instance views name each session's image from the recipe builds; only with AMI builds on.
+        amiRecipeTable: config.app.addons.useEdhWorkstations.amiBuilds.enabled ? "read" : "none",
     });
     // The capacity reservation registry checks a reservation exists on register and lists each live.
     grantDescribeCapacityReservations(fun);

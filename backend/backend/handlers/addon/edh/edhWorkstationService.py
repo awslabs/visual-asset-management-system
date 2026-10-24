@@ -75,6 +75,7 @@ from .common.edhCatalogFields import (
 )
 from .common.edhIdentity import SYSTEM_USER_ID, edh_uid_for
 from .common import edhAmiRecipeStore as recipe_store
+from .common.edhAmiRecipeStore import latest_available_versions
 from .common import edhCapacityReservations as reservations
 from .common import edhSessionBootstrap as bootstrap
 from .common.edhLeasePolicy import (
@@ -94,8 +95,8 @@ from .common.edhSessionState import (
     START_IN_PROGRESS_SECONDS, STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED,
     STOP_REQUESTED_FIELD, WORKER_ACTION_START, WORKER_PAYLOAD_KEYS,
     credential_claim_stamp, deleted_row_expiry, edh_failure_attributes, edh_failure_read_due,
-    observed_row_attributes, session_row_live, start_in_progress, start_stamp,
-    start_stamp_cleared, state_for_edh_session_state, workstation_activity,
+    launch_image_snapshot, observed_row_attributes, session_row_live, start_in_progress, start_stamp,
+    start_stamp_cleared, state_for_edh_session_state, workstation_activity, workstation_image,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -424,18 +425,25 @@ def _update_live_row(row, **attributes):
     return True
 
 
-def _record(row, labels=None):
+def _record(row, labels=None, images=None):
     """The API shape of a session row, with the registry label of its capacity reservation joined in: from
     ``labels`` (id -> label) when the caller read them, else read for the row's own reservation (a row without
-    a reservation reads nothing), and ``activity`` derived from the row as it is now, never the stored mark."""
+    a reservation reads nothing); ``activity`` derived from the row as it is now, never the stored mark; and the
+    image fields (``workstation_image``) from ``images`` -- the recipe builds by EDH stack id and each recipe's
+    newest AVAILABLE version -- when the caller read them, else read for this row."""
     capacity_reservation_id = row.get('capacityReservationId')
     label = None
     if capacity_reservation_id:
         if labels is None:
             labels = reservations.labels_for([capacity_reservation_id])
         label = labels.get(capacity_reservation_id)
+    if images is None:
+        images = _registered_recipe_builds("workstation recorded with the image its row stored")
+    builds_by_stack, latest_versions = images
     return WorkstationRecordModel(**{**row, 'capacityReservationLabel': label,
-                                     ACTIVITY_FIELD: workstation_activity(row)}).dict()
+                                     ACTIVITY_FIELD: workstation_activity(row),
+                                     **workstation_image(row, row.get('imageId'), builds_by_stack,
+                                                         latest_versions)}).dict()
 
 
 def _natural_key(text):
@@ -530,6 +538,22 @@ def _recipe_builds_by_stack(consequence):
         code = err.response.get("Error", {}).get("Code") if isinstance(err, ClientError) else None
         logger.warning(f"AMI recipe builds not read; {consequence} ({code or type(err).__name__})")
         return {}
+
+
+def _registered_recipe_builds(consequence):
+    """(the AVAILABLE and RETIRED desktop AMI recipe builds keyed by the EDH dcv stack id they registered, each
+    recipe's newest AVAILABLE build version), from one scan, which names the image of a workstation record;
+    nothing when AMI builds are off, when the table is not read, or when the read fails, which is logged with
+    ``consequence`` as ``_recipe_builds_by_stack`` logs it, and the records are served with what their rows
+    stored."""
+    if not ami_builds_enabled:
+        return {}, {}
+    try:
+        return recipe_store.registered_builds_by_stack_id(IMAGE_KIND_VDI)
+    except Exception as err:
+        code = err.response.get("Error", {}).get("Code") if isinstance(err, ClientError) else None
+        logger.warning(f"AMI recipe builds not read; {consequence} ({code or type(err).__name__})")
+        return {}, {}
 
 
 def _recipe_launch_types(recipe):
@@ -754,7 +778,9 @@ def list_workstations(event):
         if enforcer and enforcer.enforce(auth_object, "GET"):
             allowed.append(row)
     labels = reservations.labels_for(row.get('capacityReservationId') for row in allowed)
-    return success(body={'Items': [_record(row, labels) for row in allowed]})
+    # One scan of the recipe table names the image of every record, and none is made for an empty list.
+    images = _registered_recipe_builds("workstations listed with the images their rows stored") if allowed else ({}, {})
+    return success(body={'Items': [_record(row, labels, images) for row in allowed]})
 
 
 def _worker_payload(row):
@@ -850,12 +876,12 @@ def _instance_type_runs_image(stack, instance_type):
     return any(ARCHITECTURE_FAMILIES.get(group, group) == family for group in groups)
 
 
-def _instance_type_offered_for_image(image_id, instance_type):
-    """False only when the AVAILABLE recipe build that registered the image belongs to a recipe whose
-    launch instance types leave ``instance_type`` out. True for an image no recipe build registered, a
-    recipe that lists none, and a recipe read that fails, which is logged: the catalog lists the image as
-    a baseline on the same failure, and the deployment's own checks and EDH's still apply."""
-    recipe_build = _recipe_builds_by_stack("launch instance type not checked against the image's recipe").get(image_id)
+def _instance_type_offered_for_image(recipe_build, instance_type):
+    """False only when the AVAILABLE recipe build that registered the image (``recipe_build``, its recipe and
+    build) belongs to a recipe whose launch instance types leave ``instance_type`` out. True for an image no
+    recipe build registered, a recipe that lists none, and a recipe read that failed, which was logged: the
+    catalog lists the image as a baseline on the same failure, and the deployment's own checks and EDH's still
+    apply."""
     if recipe_build is None:
         return True
     launch_types = _recipe_launch_types(recipe_build[0])
@@ -929,8 +955,12 @@ def create_workstation(event):
     if not _instance_type_runs_image(stack, request.instanceType):
         return validation_error(
             body={'message': "instanceType does not match the image's architecture"}, event=event)
-    # An image a recipe build registered launches only on the types its recipe offers, when it lists any.
-    if not _instance_type_offered_for_image(request.imageId, request.instanceType):
+    # An image a recipe build registered launches only on the types its recipe offers, when it lists any. The
+    # same read names the recipe build the row stores as its image, and the record's newest build.
+    recipe_builds = _recipe_builds_by_stack(
+        "launch instance type not checked against the image's recipe, and the image stored without it")
+    recipe_build = recipe_builds.get(request.imageId)
+    if not _instance_type_offered_for_image(recipe_build, request.instanceType):
         return validation_error(body={'message': 'instanceType is not offered for this image'}, event=event)
     # EDH raises an image's registered root size to its AMI's root volume, and a smaller disk cannot launch it.
     root_floor = _stack_root_size(stack)
@@ -962,6 +992,10 @@ def create_workstation(event):
         'updatedAt': now,
         'connectionAvailable': False,
     }
+    # The image the desktop runs, stored once: EDH's name for it and, for a recipe image, its recipe and build.
+    row.update(launch_image_snapshot(stack.get(EDH_FIELD_STACK_NAME), recipe_build))
+    # The record's newest build of the recipe comes from the same read: a launch scans the recipe table once.
+    images = (recipe_builds, latest_available_versions(recipe_builds.values()))
     if lease_expires_at is not None:
         row['leaseExpiresAt'] = lease_expires_at
         row['leaseHoursAtLaunch'] = lease_hours_at_launch
@@ -982,7 +1016,7 @@ def create_workstation(event):
                 "obj": {"object__type": WORKSTATION_OBJECT_TYPE, "bootstrapId": request.bootstrapId},
             })
             return general_error(status_code=409, body={'message': 'bootstrapId is already in use'}, event=event)
-        return success(body=_record(existing))
+        return success(body=_record(existing, images=images))
 
     # The credential is placed before the launch is handed over, so the secret exists before the
     # desktop's first boot. The worker payload is the row's identity and never carries it.
@@ -999,7 +1033,7 @@ def create_workstation(event):
         _revoke_session_credential(event, row, delete_secret=True)
         _release_row(request.bootstrapId)
         raise
-    return success(status_code=202, body={**_record(row), RESPONSE_FIELD_SESSION_BOOTSTRAP: outcome})
+    return success(status_code=202, body={**_record(row, images=images), RESPONSE_FIELD_SESSION_BOOTSTRAP: outcome})
 
 
 def _session_id_from(event, path):

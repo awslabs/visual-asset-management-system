@@ -198,6 +198,17 @@ class WorkstationRecordModel(BaseModel, extra='ignore'):
     # recorded, kept beside ``lastError`` while the row stays STOPPED.
     activity: Optional[str] = None
     startFailure: Optional[Dict[str, str]] = None
+    # The image the workstation runs: the EDH image name and, for an image an AMI recipe build produced, the
+    # recipe, its display name and the build version, as the launch stored them or, on a row stored without them,
+    # as the build that registered the image names them when the record is read; and the recipe's newest AVAILABLE
+    # build version with whether the workstation runs it (False only when a newer one exists), derived on every
+    # read and never stored. Each is None where it is not known, never a guess.
+    imageName: Optional[str] = None
+    recipeId: Optional[str] = None
+    recipeDisplayName: Optional[str] = None
+    recipeVersion: Optional[int] = None
+    latestRecipeVersion: Optional[int] = None
+    imageLatest: Optional[StrictBool] = None
 
     _project_edh_failure = validator('edhFailure', pre=True, allow_reuse=True)(edh_failure_projection)
     _project_start_failure = validator('startFailure', pre=True, allow_reuse=True)(start_failure_projection)

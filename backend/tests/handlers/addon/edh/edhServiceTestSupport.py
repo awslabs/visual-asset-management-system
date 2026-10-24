@@ -283,6 +283,7 @@ def install_service_fakes(monkeypatch, *, claims=None, edh=None, enforce=None):
 
     recipe_store = MagicMock()
     recipe_store.available_builds_by_stack_id.return_value = {}
+    recipe_store.registered_builds_by_stack_id.return_value = ({}, {})
 
     monkeypatch.setattr(service, "request_to_claims", claims_for)
     monkeypatch.setattr(service, "CasbinEnforcer", enforcer_factory)

@@ -36,8 +36,8 @@
  *     uploaded with the exclusions the bundle hash walker reads, and Image Builder grants bounded to
  *     the deployment prefix and the recipe tag — and emits none of them with the feature off;
  *   * the AMI recipe table is written by the build Lambdas and read, never written, by the
- *     workstation service for its launch catalog; no add-on Lambda holds a grant on it with the
- *     feature off;
+ *     workstation service for its launch catalog and its records and by the admin service for its
+ *     instance views; no add-on Lambda holds a grant on it with the feature off;
  *   * the REST API paths under the regional web ACL's AMI recipe exemption prefix are exactly the
  *     recipe routes the add-on stack registers.
  */
@@ -861,10 +861,12 @@ describe("EDH AMI builds", () => {
         );
     });
 
-    test("the workstation service reads the recipe table only with amiBuilds.enabled and writes none of it", () => {
+    test("the workstation and admin services read the recipe table only with amiBuilds.enabled and write none of it", () => {
         const granted = recipeTableActions(withAmiBuilds);
-        // The build Lambdas write recipe and build rows; the launch catalog only scans them.
+        // The build Lambdas write recipe and build rows; the launch catalog and the workstation and admin
+        // records only scan them.
         expect(Object.keys(granted).sort()).toEqual([
+            "edhAdminService",
             "edhAmiBuildRegistrar",
             "edhAmiRecipeService",
             "edhCatalogRegistration",
@@ -875,10 +877,12 @@ describe("EDH AMI builds", () => {
         expect(beyondReads(granted.edhAmiRecipeService)).toEqual(
             expect.arrayContaining(["dynamodb:PutItem", "dynamodb:UpdateItem"])
         );
-        expect(granted.edhWorkstationService).toEqual(
-            expect.arrayContaining(["dynamodb:Scan", "dynamodb:Query", "dynamodb:GetItem"])
-        );
-        expect(beyondReads(granted.edhWorkstationService)).toEqual([]);
+        for (const reader of ["edhWorkstationService", "edhAdminService"]) {
+            expect(granted[reader]).toEqual(
+                expect.arrayContaining(["dynamodb:Scan", "dynamodb:Query", "dynamodb:GetItem"])
+            );
+            expect(beyondReads(granted[reader])).toEqual([]);
+        }
         expectAbsent(
             "AMI recipe table grants with amiBuilds off",
             Object.keys(recipeTableActions(withoutAmiBuilds)),

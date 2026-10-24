@@ -299,19 +299,87 @@ def _identifier(item: Dict[str, Any]) -> str:
     return f"{item.get('bootstrapId', 'N/A')}*"
 
 
+# The states of a workstation that still exists and is not a failed launch: only these carry the
+# newer-image suffix, as only these carry the web's newer-image badge.
+NEWER_IMAGE_STATES = ('ACTIVE', 'STOPPED', 'CREATING')
+
+
+def _version(value: Any) -> Optional[int]:
+    """A build version the record carries, or None when it carries none (a bool is not a version)."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def workstation_image_name(record: Dict[str, Any]) -> str:
+    """The name shown for the image a workstation runs: the recipe's display name and the build version
+    (`Isaac Sim 6.2 v13`) when the record carries both, else the record's image name, else the image
+    id. The web shows the same name, falling back to its live catalog before the id
+    (web/src/addons/edh/workstationImageCases.json)."""
+    display_name = record.get('recipeDisplayName')
+    version = _version(record.get('recipeVersion'))
+    if isinstance(display_name, str) and display_name and version is not None:
+        return f"{display_name} v{version}"
+    image_name = record.get('imageName')
+    if isinstance(image_name, str) and image_name:
+        return image_name
+    return str(record.get('imageId') or 'N/A')
+
+
+def newer_image_suffix(record: Dict[str, Any]) -> str:
+    """` (v<latest> available)` for an ACTIVE, STOPPED or CREATING workstation whose recipe has a newer
+    AVAILABLE build than the one it runs (`imageLatest` false); empty otherwise. The web shows its
+    `Newer image: v<latest>` badge for the same records."""
+    if record.get('imageLatest') is not False or record.get('state') not in NEWER_IMAGE_STATES:
+        return ''
+    latest = _version(record.get('latestRecipeVersion'))
+    if latest is None or _version(record.get('recipeVersion')) is None:
+        return ''
+    return f" (v{latest} available)"
+
+
+def describe_recipe(record: Dict[str, Any]) -> Optional[str]:
+    """The `Recipe:` value of a workstation whose image an AMI recipe built: the recipe's display name
+    and id, the id alone without a display name; None for a baseline image or an unknown recipe."""
+    recipe_id = record.get('recipeId')
+    display_name = record.get('recipeDisplayName')
+    if not (isinstance(recipe_id, str) and recipe_id):
+        return display_name if isinstance(display_name, str) and display_name else None
+    if isinstance(display_name, str) and display_name:
+        return f"{display_name} ({recipe_id})"
+    return recipe_id
+
+
+def describe_recipe_version(record: Dict[str, Any]) -> Optional[str]:
+    """The `Recipe version:` value: the build version, followed by `(latest)` when it is the recipe's
+    newest AVAILABLE build or `(latest <m>)` when a newer one exists; the version alone when that is
+    not known. None when the record carries no build version."""
+    version = _version(record.get('recipeVersion'))
+    if version is None:
+        return None
+    latest = _version(record.get('latestRecipeVersion'))
+    if record.get('imageLatest') is True:
+        return f"{version} (latest)"
+    if record.get('imageLatest') is False and latest is not None:
+        return f"{version} (latest {latest})"
+    return str(version)
+
+
 def format_workstation_list(result: Dict[str, Any]) -> str:
     items = result.get('Items', []) if isinstance(result, dict) else []
     if not items:
         return "No workstations found."
+    images = [workstation_image_name(item) + newer_image_suffix(item) for item in items]
+    # The Image column is as wide as its longest value, so a long recipe name keeps the table aligned.
+    image_width = max(24, *(len(image) for image in images))
     header = (f"  {'Identifier':38s}  {'Name':24s}  {'State':10s}  {'Last Error':22s}  "
-              f"{'Instance':14s}  {'OS':8s}  Created")
+              f"{'Image':{image_width}s}  {'Instance':14s}  {'OS':8s}  Created")
     lines = [header, '-' * len(header)]
     session_less = False
-    for item in items:
+    for item, image in zip(items, images):
         session_less = session_less or not item.get('sessionId')
         lines.append(
             f"  {_identifier(item):38s}  {str(item.get('name', 'N/A')):24s}  "
             f"{state_label(item):10s}  {str(item.get('lastError') or '-'):22s}  "
+            f"{image:{image_width}s}  "
             f"{str(item.get('instanceType', 'N/A')):14s}  {str(item.get('osFamily', 'N/A')):8s}  "
             f"{item.get('createdAt', 'N/A')}"
         )
@@ -341,7 +409,14 @@ def format_workstation(result: Dict[str, Any]) -> str:
     if edh_failure:
         lines.append(edh_failure)
     lines.append(f"  Launch Attempts: {result.get('launchAttempts', 0)}")
+    lines.append(f"  Image:           {workstation_image_name(result)}")
     lines.append(f"  Image ID:        {result.get('imageId', 'N/A')}")
+    recipe = describe_recipe(result)
+    if recipe:
+        lines.append(f"  Recipe:          {recipe}")
+    recipe_version = describe_recipe_version(result)
+    if recipe_version:
+        lines.append(f"  Recipe version:  {recipe_version}")
     lines.append(f"  OS Family:       {result.get('osFamily', 'N/A')}")
     lines.append(f"  Instance Type:   {result.get('instanceType', 'N/A')}")
     capacity_text = describe_capacity(result)
@@ -426,7 +501,11 @@ def workstation():
 @requires_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
 def workstation_list(ctx: click.Context, json_output: bool):
     """List your EDH workstations. The State column reads STARTING or STOPPING while a workstation
-    is between states (its `activity`), otherwise its state.
+    is between states (its `activity`), otherwise its state. The Image column names the image the
+    workstation was launched from (the recipe's display name and build version, else the image name,
+    else the image id) and, on an ACTIVE, STOPPED or CREATING workstation whose recipe has a newer
+    available build, appends `(v<n> available)`; the workstation keeps its image, so launch a new one
+    to use that build.
 
     Examples:
         vamscli edh workstation list
@@ -547,7 +626,10 @@ def workstation_get(ctx: click.Context, session_id: str, json_output: bool):
     (the record's edhFailure), the AWS error code and operation, or the desktop setup checkpoint,
     under EDH failure. Activity is `starting` or `stopping` while the workstation is between states
     (none otherwise), and a start that left it STOPPED shows why under Start Failure, with the AWS
-    error and Availability Zone the start recorded (the record's startFailure).
+    error and Availability Zone the start recorded (the record's startFailure). Image names the image
+    the workstation was launched from, as `list` does, beside Image ID; for an image an AMI recipe
+    built, Recipe names the recipe and Recipe version the build it runs, followed by `(latest)` or
+    `(latest <n>)` from the record's imageLatest and latestRecipeVersion.
 
     Examples:
         vamscli edh workstation get SESSION_ID

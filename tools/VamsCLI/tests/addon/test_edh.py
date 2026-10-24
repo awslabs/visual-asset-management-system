@@ -316,8 +316,9 @@ class TestWorkstationList:
             assert 'InsufficientInstanceCapacity' not in result.output
             assert 'EDH failure' not in result.output
             orphan_row = next(line for line in result.output.splitlines() if 'b-orphan*' in line)
+            # The Image column (D14) names the image; a record without the image fields shows its id.
             assert orphan_row.split() == ['b-orphan*', 'Design', 'desk', 'ORPHANED', 'CAPACITY_UNAVAILABLE',
-                                          'g5.2xlarge', 'linux', '2026-09-08T10:00:00Z']
+                                          '12', 'g5.2xlarge', 'linux', '2026-09-08T10:00:00Z']
 
     def test_list_json_output_carries_the_edh_failure_unchanged(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('addon.edh') as mocks:

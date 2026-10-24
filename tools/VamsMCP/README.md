@@ -646,6 +646,14 @@ ACTIVE row not yet connectable), `stopping` while EDH still stops the desktop, a
 null otherwise; and `startFailure`, why the last start left a STOPPED row stopped
 (`lastError` `CAPACITY_UNAVAILABLE`, `RESERVATION_FULL` or `START_FAILED`), as
 `{errorCode, availabilityZone, observedAt}`, null when it did not.
+They also name the image the workstation was launched from: `imageName` (the EDH
+image name), `recipeId` (the AMI recipe whose build produced it, null for a
+baseline image), `recipeDisplayName`, `recipeVersion` (the build it runs),
+`latestRecipeVersion` (the recipe's newest AVAILABLE build, derived on each read)
+and `imageLatest` (`true` on that build, `false` only when a newer AVAILABLE build
+exists, null when that is not known), each null when not known. A workstation
+keeps the image it was launched from; launch a new workstation to use a newer
+build.
 The `admin` reads require the EDH admin routes;
 `get_edh_capacity` and `get_edh_health` are in the `autoApprove` addition below, while
 `list_edh_admin_instances` and `list_edh_stale_instances` name other users,

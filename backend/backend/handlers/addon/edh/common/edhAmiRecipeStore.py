@@ -49,6 +49,10 @@ STATUS_REGISTER_FAILED = "REGISTER_FAILED"
 STATUS_FAILED = "FAILED"
 STATUS_RETIRED = "RETIRED"
 ACTIVE_BUILD_STATUSES = frozenset({STATUS_BUILDING, STATUS_REGISTERING})
+# The statuses of a build whose row still names the EDH stack a desktop may have been launched from: the
+# AVAILABLE build the catalog offers, and a build retired since, whose stack left the catalog while the
+# desktops launched from it keep running.
+REGISTERED_BUILD_STATUSES = (STATUS_AVAILABLE, STATUS_RETIRED)
 
 SOURCE_CONFIG = "config"
 SOURCE_ADMIN = "admin"
@@ -223,15 +227,14 @@ def list_builds(recipe_id: str, *, consistent: bool = False) -> List[Dict[str, A
     return [public(r) for r in _partition(recipe_id, BUILD_SK_PREFIX, consistent=consistent)]
 
 
-def available_builds_by_stack_id(kind: str) -> Dict[str, Tuple[Dict[str, Any], Dict[str, Any]]]:
-    """Each AVAILABLE build of image ``kind`` that records its EDH stack id, with its recipe, keyed by
-    that id, from one scan. EDH numbers each kind's stacks apart, so a build counts under the kind it
-    registered as (``edhKind``), else its recipe's. Of two builds naming one stack the later version is
-    kept; a build without its recipe row is left out."""
+def _stack_builds(kind: str, status_condition) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """Each build matching ``status_condition`` of image ``kind`` that records its EDH stack id, with its
+    recipe, in version order, from one scan. EDH numbers each kind's stacks apart, so a build counts under
+    the kind it registered as (``edhKind``), else its recipe's; a build without its recipe row is left out."""
     recipes: Dict[str, Dict[str, Any]] = {}
     builds: List[Dict[str, Any]] = []
     kwargs: Dict[str, Any] = {"FilterExpression": Attr("sk").eq(RECIPE_SK) | (
-        Attr("sk").begins_with(BUILD_SK_PREFIX) & Attr("status").eq(STATUS_AVAILABLE))}
+        Attr("sk").begins_with(BUILD_SK_PREFIX) & status_condition)}
     while True:
         page = _table().scan(**kwargs)
         for item in page.get("Items", []):
@@ -243,12 +246,49 @@ def available_builds_by_stack_id(kind: str) -> Dict[str, Tuple[Dict[str, Any], D
         if "LastEvaluatedKey" not in page:
             break
         kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
-    by_stack: Dict[str, Tuple[Dict[str, Any], Dict[str, Any]]] = {}
+    pairs: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
     for build in sorted(builds, key=lambda b: int(b["version"])):
         recipe = recipes.get(build.get("recipeId"))
         if recipe and (build.get("edhKind") or recipe.get("kind")) == kind:
-            by_stack[str(build["edhStackId"])] = (recipe, build)
-    return by_stack
+            pairs.append((recipe, build))
+    return pairs
+
+
+def _by_stack_id(pairs) -> Dict[str, Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """The (recipe, build) pairs keyed by the build's EDH stack id; of two builds naming one stack the later
+    version, which follows in version order, is kept."""
+    return {str(build["edhStackId"]): (recipe, build) for recipe, build in pairs}
+
+
+def available_builds_by_stack_id(kind: str) -> Dict[str, Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """Each AVAILABLE build of image ``kind`` that records its EDH stack id, with its recipe, keyed by
+    that id, from one scan. EDH numbers each kind's stacks apart, so a build counts under the kind it
+    registered as (``edhKind``), else its recipe's. Of two builds naming one stack the later version is
+    kept; a build without its recipe row is left out."""
+    return _by_stack_id(_stack_builds(kind, Attr("status").eq(STATUS_AVAILABLE)))
+
+
+def latest_available_versions(pairs: Iterable[Tuple[Dict[str, Any], Dict[str, Any]]]) -> Dict[str, int]:
+    """The newest AVAILABLE build version of each recipe among the (recipe, build) ``pairs``; a recipe with
+    no AVAILABLE build among them has no entry."""
+    latest: Dict[str, int] = {}
+    for recipe, build in pairs:
+        if build.get("status") != STATUS_AVAILABLE:
+            continue
+        version = int(build["version"])
+        if version > latest.get(recipe["recipeId"], 0):
+            latest[recipe["recipeId"]] = version
+    return latest
+
+
+def registered_builds_by_stack_id(kind: str) -> Tuple[Dict[str, Tuple[Dict[str, Any], Dict[str, Any]]],
+                                                      Dict[str, int]]:
+    """(each AVAILABLE or RETIRED build of image ``kind`` that records its EDH stack id, with its recipe,
+    keyed by that id; the newest AVAILABLE build version of each recipe among them), from one scan. The
+    kind rules are those of ``available_builds_by_stack_id``. A desktop keeps the stack it was launched
+    from after a newer build retires the build that registered it, and the retired row still names it."""
+    pairs = _stack_builds(kind, Attr("status").is_in(list(REGISTERED_BUILD_STATUSES)))
+    return _by_stack_id(pairs), latest_available_versions(pairs)
 
 
 def latest_build(recipe_id: str) -> Optional[Dict[str, Any]]:

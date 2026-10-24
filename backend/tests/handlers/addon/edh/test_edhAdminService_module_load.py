@@ -3,7 +3,8 @@
 
 """Module-load contract of edhAdminService: configuration failures abort the cold start.
 
-A table name that cannot be resolved or a missing ``EDH_CLUSTER_ID`` must raise at import. Swallowed
+A table name that cannot be resolved or a missing ``EDH_CLUSTER_ID`` or ``EDH_AMI_BUILDS_ENABLED`` must raise at
+import. Swallowed
 into a default, the handler would import cleanly and every request would then fail inside a
 per-request ``except`` -- a 500 per call instead of a visible deployment fault.
 
@@ -32,7 +33,7 @@ _EDH_DIR = os.path.join(
 )
 _EDH_PACKAGE = "backend.backend.handlers.addon.edh"
 
-REQUIRED_ENV = ("EDH_CLUSTER_ID",)
+REQUIRED_ENV = ("EDH_CLUSTER_ID", "EDH_AMI_BUILDS_ENABLED")
 
 
 def _auth_stubs():
@@ -74,7 +75,9 @@ class TestModuleLoadFailsClosed:
     def test_import_succeeds_and_configuration_is_bound_when_names_resolve(self, monkeypatch):
         """Positive control for every case above: the same load with a good environment."""
         monkeypatch.setenv("EDH_CLUSTER_ID", "edh-test")
+        monkeypatch.setenv("EDH_AMI_BUILDS_ENABLED", "true")
         module = _load_fresh("ok")
         assert module.edh_session_table is not None
         assert module.edh_session_table_name is not None
         assert module.edh_cluster_id == "edh-test"
+        assert module.ami_builds_enabled is True

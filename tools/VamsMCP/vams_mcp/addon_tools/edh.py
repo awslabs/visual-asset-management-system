@@ -67,9 +67,17 @@ def register(
         QUOTA_EXCEEDED; EDH's own wording is never returned),
         `launchAttempts`, `imageId`, `osFamily`, `instanceType`, `rootSizeGb`, `createdAt`, `updatedAt`,
         `connectionAvailable`, and `leaseExpiresAt`, `leaseStoppedAt` and `leaseHoursAtLaunch` (null
-        when no lease applies). Every session tool takes `session_id` as the row's `sessionId`, or its
-        `bootstrapId` while the row has no session id. Follow a launch here, selecting the row by its
-        `bootstrapId`, which stays on the row after EDH assigns the `sessionId`. Another user's
+        when no lease applies). Each row also names the image it was launched from: `imageName` (the
+        EDH image name), `recipeId` (the AMI recipe whose build produced the image, null for a
+        baseline image), `recipeDisplayName`, `recipeVersion` (the build version it runs),
+        `latestRecipeVersion` (the recipe's newest AVAILABLE build version, derived on each read) and
+        `imageLatest` (true on that newest build, false only when a newer AVAILABLE build exists, null
+        for a baseline image, an unknown recipe or version, or a recipe with no AVAILABLE build), each
+        null when not known; a workstation keeps the image it was launched from, so launch a new
+        workstation to use a newer build. Every session tool takes `session_id` as the row's
+        `sessionId`, or its `bootstrapId` while the row has no session id. Follow a launch here,
+        selecting the row by its `bootstrapId`, which stays on the row after EDH assigns the
+        `sessionId`. Another user's
         workstations are never included, so an empty list says nothing about whether they exist.
         Reading it makes EDH issue no connection token; `connectionAvailable` is true while EDH reports
         the desktop running. Not paginated: the list is complete."""
@@ -88,7 +96,9 @@ def register(
         `lastError`, `startFailure` (why the last start left a STOPPED row stopped; null when it did
         not) and `edhFailure` (the AWS error code and
         operation, or the setup checkpoint, VAMS captured from EDH for a failed launch; null when none
-        was captured) among them. Reading it makes
+        was captured) among them. It carries the image fields `imageName`, `recipeId`,
+        `recipeDisplayName`, `recipeVersion`, `latestRecipeVersion` and `imageLatest` as a
+        list_edh_workstations row does. Reading it makes
         EDH issue no connection token; `connectionAvailable` is true while EDH reports the desktop
         running."""
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
@@ -193,7 +203,9 @@ def register(
         it did not) and `edhFailure` (the AWS
         error code and operation, or the setup checkpoint, VAMS captured from EDH for a failed launch,
         shaped as on a list_edh_workstations row; null for a session VAMS did not launch or captured
-        no failure for). Rows name the
+        no failure for). Each item also carries the image fields `imageName`, `recipeId`,
+        `recipeDisplayName`, `recipeVersion`, `latestRecipeVersion` and `imageLatest`, shaped as on a
+        list_edh_workstations row. Rows name the
         owning user, which is why this tool is not in the README's `autoApprove` sample. Not
         paginated."""
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
@@ -353,7 +365,10 @@ def register(
             """Launch a new EDH GPU workstation for the authenticated user. Returns the accepted session
             record (HTTP 202): `state` CREATING, `sessionId` null, `lastError` null, plus
             `sessionBootstrap` (provisioned|skipped|unavailable|disabled, the outcome of placing a
-            session key for the desktop). The launch itself runs asynchronously — poll
+            session key for the desktop). The record names the image the launch uses in the image
+            fields `imageName`, `recipeId`, `recipeDisplayName`, `recipeVersion`,
+            `latestRecipeVersion` and `imageLatest`, as a list_edh_workstations row does. The launch
+            itself runs asynchronously — poll
             list_edh_workstations and select the row by the returned `bootstrapId` until it reports
             ACTIVE and a `sessionId`; get_edh_workstation accepts the `bootstrapId` only while the row
             has no `sessionId`, and reports it not found once EDH assigns one. A launch EDH refuses ends
@@ -407,6 +422,9 @@ def register(
             (HTTP 202) and runs in the background: the tool returns the record at once, still
             STOPPED with `activity` `starting`, plus `sessionBootstrap`
             (provisioned|skipped|unavailable|disabled, the outcome of placing a fresh session key).
+            The record carries the image fields `imageName`, `recipeId`, `recipeDisplayName`,
+            `recipeVersion`, `latestRecipeVersion` and `imageLatest` as a list_edh_workstations row
+            does: a start keeps the image the workstation was launched from.
             Follow it with list_edh_workstations (or get_edh_workstation): the row reads `activity`
             `starting` until it is ACTIVE with `activity` null. A start EDH refuses leaves the row
             STOPPED with `activity` null, `lastError` CAPACITY_UNAVAILABLE (AWS had no capacity for
@@ -432,7 +450,9 @@ def register(
             """Renew one of the authenticated user's leased workstations: reset `leaseExpiresAt` to the
             full lease window from now and clear `leaseStoppedAt`. Returned record carries
             `leaseExpiresAt`, `leaseHoursAtLaunch`, `leaseStoppedAt` (null after a renewal), and
-            `activity` and `startFailure` as a list_edh_workstations row does. A renew
+            `activity` and `startFailure` as a list_edh_workstations row does. It carries the image
+            fields `imageName`, `recipeId`, `recipeDisplayName`, `recipeVersion`,
+            `latestRecipeVersion` and `imageLatest` as that row does too. A renew
             of an ACTIVE workstation with no start in progress also tries to re-issue the desktop's
             session key and reports the outcome in `sessionBootstrap`
             (provisioned|skipped|unavailable|disabled, as for a start); the field is absent when no
@@ -448,10 +468,12 @@ def register(
         def stop_edh_workstation(session_id: str) -> Dict[str, Any]:
             """Stop one of the authenticated user's ACTIVE EDH workstations; returns the updated record,
             whose `activity` reads `stopping` while EDH still stops the desktop (and whose
-            `startFailure` is null). Stopping interrupts whatever is running on the desktop's compute,
-            and is reversible with start_edh_workstation. An `EdhOutcomeUnknownError` error means EDH
-            did not confirm the stop; call list_edh_workstations before retrying. Confirm with the user
-            before calling it, and keep it out of `autoApprove`."""
+            `startFailure` is null). The record carries the image fields `imageName`, `recipeId`,
+            `recipeDisplayName`, `recipeVersion`, `latestRecipeVersion` and `imageLatest` as a
+            list_edh_workstations row does. Stopping interrupts whatever is running on the desktop's
+            compute, and is reversible with start_edh_workstation. An `EdhOutcomeUnknownError` error
+            means EDH did not confirm the stop; call list_edh_workstations before retrying. Confirm
+            with the user before calling it, and keep it out of `autoApprove`."""
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
             return client.api.stop_edh_workstation(session_id)
 
@@ -778,7 +800,9 @@ def register(
             and can be undone with start_edh_workstation. `session_id` may be the `bootstrapId` of a
             launch that never received a session id: an ORPHANED launch is deleted at once, a CREATING
             one only after 15 minutes without progress (younger → 409, returned as the error). The
-            returned record carries `activity` and `startFailure` as a list_edh_workstations row does.
+            returned record carries `activity` and `startFailure` as a list_edh_workstations row does,
+            and the image fields `imageName`, `recipeId`, `recipeDisplayName`, `recipeVersion`,
+            `latestRecipeVersion` and `imageLatest` as that row does.
             An `EdhOutcomeUnknownError` error means EDH did not confirm the delete; call
             list_edh_workstations before retrying."""
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)

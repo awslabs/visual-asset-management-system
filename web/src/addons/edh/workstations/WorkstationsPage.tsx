@@ -39,7 +39,14 @@ import DeleteWorkstationDialog from "../components/DeleteWorkstationDialog";
 import NotEnabledPanel from "../components/NotEnabledPanel";
 import { useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
-import { hoursWord, leaseRemaining, type LeaseRemainingTone, osFamilyLabel } from "../labels";
+import WorkstationImageCell from "../components/WorkstationImageCell";
+import {
+    hoursWord,
+    leaseRemaining,
+    type LeaseRemainingTone,
+    osFamilyLabel,
+    workstationImageName,
+} from "../labels";
 import ConnectLink, { connectUnavailableReason } from "./ConnectLink";
 import WindowsSignInDialog from "./WindowsSignInDialog";
 import LaunchWorkstationWizard, {
@@ -83,11 +90,15 @@ const REFRESH_CAPTION = `Refreshes every ${WORKSTATION_POLL_STABLE_MS / 1000} se
 // The rows shown before the first answer; one instance, so the search memo's dependency holds.
 const NO_WORKSTATIONS: WorkstationRecord[] = [];
 
-/** The row text the toolbar search matches: the words the table shows, and the ids a row is known by. */
-const searchableText = (row: WorkstationRecord, imageName: string | undefined) =>
+/**
+ * The row text the toolbar search matches: the words the table shows, and the ids a row is known by.
+ * The image reads as its cell shows it (`workstationImageName`), and by its id.
+ */
+const searchableText = (row: WorkstationRecord, catalogName: string | undefined) =>
     [
         row.name,
-        imageName ?? row.imageId,
+        workstationImageName(row, catalogName),
+        row.imageId,
         osFamilyLabel(row.osFamily),
         row.instanceType,
         row.state,
@@ -317,8 +328,10 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
     const leaseHours = leasePolicy?.leaseHours ?? 0;
     const leaseGraceHours = leasePolicy?.graceHours ?? 0;
 
-    // Names for the image ids the rows carry; a row stores the id only. Absent when the caller may
-    // not read the catalog, and an image since deleted from it falls back to its id.
+    // Catalog names for the image ids the rows carry, the fallback for a row whose record names no
+    // image (one launched before the service recorded the name, while the name cannot be resolved).
+    // Absent when the caller may not read the catalog; an image since retired from it is named by
+    // the record, else by its id.
     const { data: catalogImages } = useEdhCatalogImages(canReadCatalog);
     const imageNamesById = useMemo(() => {
         const names = new Map<string, string>();
@@ -474,19 +487,12 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
             {
                 accessorKey: "imageId",
                 header: "Image",
-                cell: ({ row }) => {
-                    const name = imageNamesById.get(row.original.imageId);
-                    return name ? (
-                        <div className="text-sm">
-                            <div>{name}</div>
-                            <div className="text-text-secondary font-mono text-xs">
-                                {row.original.imageId}
-                            </div>
-                        </div>
-                    ) : (
-                        <span className="font-mono text-xs">{row.original.imageId}</span>
-                    );
-                },
+                cell: ({ row }) => (
+                    <WorkstationImageCell
+                        row={row.original}
+                        catalogName={imageNamesById.get(row.original.imageId)}
+                    />
+                ),
             },
             {
                 accessorKey: "osFamily",

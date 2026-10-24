@@ -21,6 +21,7 @@ from functools import partial
 import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.config import Config
+from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.apiRoutes import (
@@ -68,13 +69,15 @@ from .common.edhClient import (
     edh_session_name, map_edh_error_to_response, outcome_unknown_fields,
 )
 from .common.edhIdentity import SYSTEM_USER_ID, edh_uid_for
+from .common import edhAmiRecipeStore as recipe_store
 from .common import edhCapacityReservations as reservations
 from .common import edhSessionBootstrap as bootstrap
 from .common.edhLeasePolicy import LeaseValidationError, read_lease_policy, write_lease_policy
 from .common.edhSessionState import (
     ACTIVITY_FIELD, EDH_CONNECTION_STRING_FIELD, EDH_SESSION_STATE_FIELD, EDH_SESSION_STATE_RUNNING,
-    EXPIRES_AT_FIELD, START_FAILURE_FIELD, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED,
-    STOP_REQUESTED_FIELD, deleted_row_expiry, start_stamp_cleared, state_for_edh_session_state, workstation_activity,
+    EXPIRES_AT_FIELD, IMAGE_NAME_FIELD, START_FAILURE_FIELD, STATE_CREATING, STATE_DELETED, STATE_ORPHANED,
+    STATE_STOPPED, STOP_REQUESTED_FIELD, deleted_row_expiry, start_stamp_cleared, state_for_edh_session_state,
+    workstation_activity, workstation_image,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -169,6 +172,9 @@ EDH_KIND_CALLS = {
 try:
     edh_session_table_name = get_table_name(AddonResourceKeys.EDH_SESSION_STORAGE_TABLE)
     edh_cluster_id = os.environ["EDH_CLUSTER_ID"]
+    # The recipe table names the image of each instance item only with AMI builds on; the Lambda holds a read
+    # grant on it then and none otherwise.
+    ami_builds_enabled = os.environ["EDH_AMI_BUILDS_ENABLED"] == "true"
 except Exception as e:
     logger.exception("Failed loading resource names and configuration")
     raise e
@@ -732,11 +738,22 @@ def _stack_id_from_label(label):
     return match.group(1) if match else None
 
 
+def _stack_name_from_label(label, image_id):
+    """The software-stack name inside a list_all record's "<name> (id: <n>)" label when the label names the image
+    ``image_id``; None for a label without a name or one that names another image."""
+    match = _STACK_LABEL_ID.search(str(label or ""))
+    if match is None or (image_id is not None and match.group(1) != str(image_id)):
+        return None
+    return str(label)[:match.start()].strip() or None
+
+
 def _instance_item(record, row):
     """One admin instance view: EDH's list_all record joined with the VAMS session row, carrying the row's
     captured launch-failure reason (``edhFailure``) or None, what its last start that did not happen recorded
-    (``startFailure``) or None, and ``activity``, derived as the workstation record derives it from the row with
-    EDH's live state and connectability laid over it."""
+    (``startFailure``) or None, ``activity``, derived as the workstation record derives it from the row with
+    EDH's live state and connectability laid over it, and the image fields (``workstation_image``) as the row
+    stored them, its image named by EDH's record when the row names none; ``_with_recipe_images`` resolves them
+    from the recipe builds."""
     record = record if isinstance(record, dict) else {}
     row = row or {}
 
@@ -755,6 +772,9 @@ def _instance_item(record, row):
     activity = workstation_activity({**row, 'state': state, 'edhState': edh_state if edh_state is not None
                                      else row.get('edhState'), 'connectionAvailable': connectable,
                                      'sessionId': record_str(EDH_FIELD_SESSION_UUID) or row.get('sessionId')})
+    image_id = str(image_id) if image_id is not None else None
+    stored_image = {**row, IMAGE_NAME_FIELD: row.get(IMAGE_NAME_FIELD)
+                    or _stack_name_from_label(record.get(EDH_FIELD_SESSION_SOFTWARE_STACK), image_id)}
     return {
         "sessionId": record_str(EDH_FIELD_SESSION_UUID) or row.get('sessionId'),
         "edhState": edh_state,
@@ -769,14 +789,42 @@ def _instance_item(record, row):
         "lastError": row.get('lastError'),
         "edhFailure": edh_failure_projection(row.get('edhFailure')),
         "startFailure": start_failure_projection(row.get(START_FAILURE_FIELD)),
-        "imageId": str(image_id) if image_id is not None else None,
+        "imageId": image_id,
         "osFamily": row.get('osFamily') or record_str(EDH_FIELD_SESSION_OS_FAMILY),
         "instanceType": row.get('instanceType') or record_str(EDH_FIELD_SESSION_INSTANCE_TYPE),
         # The reservation the launch was sent with; its label is joined by _with_reservation_labels.
         "capacityReservationId": row.get('capacityReservationId'),
         "capacityReservationLabel": None,
         "capacityReservationFallback": bool(row.get('capacityReservationFallback')),
+        **workstation_image(stored_image, image_id, {}, {}),
     }
+
+
+def _registered_recipe_builds(consequence):
+    """(the AVAILABLE and RETIRED desktop AMI recipe builds keyed by the EDH dcv stack id they registered, each
+    recipe's newest AVAILABLE build version), from one scan; nothing when AMI builds are off, when the table is
+    not read, or when the read fails, which is logged with ``consequence``, and the items keep what their rows
+    stored."""
+    if not ami_builds_enabled:
+        return {}, {}
+    try:
+        return recipe_store.registered_builds_by_stack_id(IMAGE_KIND_VDI)
+    except Exception as err:
+        code = err.response.get("Error", {}).get("Code") if isinstance(err, ClientError) else None
+        logger.warning(f"AMI recipe builds not read; {consequence} ({code or type(err).__name__})")
+        return {}, {}
+
+
+def _with_recipe_images(items):
+    """The items, each with its image fields resolved (``workstation_image``) from the recipe builds that
+    registered a desktop image, read once for every item and not at all for no item; what an item carries from
+    its row and EDH's record stands as the stored image."""
+    if not items:
+        return items
+    builds_by_stack, latest_versions = _registered_recipe_builds("instances listed with the images their rows stored")
+    for item in items:
+        item.update(workstation_image(item, item["imageId"], builds_by_stack, latest_versions))
+    return items
 
 
 def _with_reservation_labels(items):
@@ -844,7 +892,7 @@ def _filter_allowed_instances(items):
 def list_instances(event):
     client = EdhClient(profile="api")
     items, _missing = _joined_instances(event, client, "adminInstancesList")
-    return success(body={'Items': _with_reservation_labels(_filter_allowed_instances(items))})
+    return success(body={'Items': _with_reservation_labels(_with_recipe_images(_filter_allowed_instances(items)))})
 
 
 def _parse_timestamp(value):
@@ -895,7 +943,7 @@ def list_stale_instances(event):
     for row in missing_rows:
         stale.append({**_instance_item(None, row), "stale": True, "staleReason": STALE_REASON_MISSING})
 
-    return success(body={'Items': _with_reservation_labels(_filter_allowed_instances(stale)),
+    return success(body={'Items': _with_reservation_labels(_with_recipe_images(_filter_allowed_instances(stale))),
                          'idleMinutes': idle_minutes})
 
 
@@ -964,7 +1012,8 @@ def act_on_instance(event, action):
         # The revoke follows the row as the write left it: a key a renew named since the read goes too.
         _update_row_from_image(row, **written)
         _revoke_session_credential(event, row, delete_secret=(new_state == STATE_DELETED))
-    return success(body={**_with_reservation_labels([_instance_item(record, row)])[0], "state": new_state})
+    return success(body={**_with_reservation_labels(_with_recipe_images([_instance_item(record, row)]))[0],
+                         "state": new_state})
 
 
 # ---------------------------------------------------------------------------

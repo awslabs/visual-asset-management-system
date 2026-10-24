@@ -9,13 +9,15 @@ expiry a DELETED row leaves the table by, the form a start's stamp and a credent
 in and the windows they hold for, when a row's desktop may still be running on a key of its bootstrap,
 the launch worker's payload keys and attempt ceiling, and the EDH schedule VAMS gives every desktop. It
 also reads the reason EDH recorded for a failed launch out of the desktop's recent events, says which
-``lastError`` that reason implies, and when a row is due a read for one. A pure module: no AWS client, no
-environment read.
+``lastError`` that reason implies, and when a row is due a read for one, and it names the image a workstation
+runs: what a launch stores on its row, and the record's image fields resolved from the recipe builds. A pure
+module: no AWS client, no environment read.
 """
 
 import json
 import re
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Dict, Optional, Tuple
 
 # Session row states.
@@ -166,6 +168,23 @@ START_RESOLVE_SECONDS = 600
 # sweep revokes nothing on the row, and a renew or a start finds the row taken; a claim a crashed request
 # left ages out.
 CREDENTIAL_CLAIM_SECONDS = 300
+
+# The image a workstation runs, as its record names it: the EDH image name and, for an image an AMI recipe build
+# produced, the recipe, its display name and the build version. The launch stores these on the row once
+# (``launch_image_snapshot``) and they are never refreshed; a row stored without them, as every row launched
+# before they were is, takes them when read from the recipe build that registered its image. The recipe's
+# newest AVAILABLE build version, and whether the workstation runs it, are derived on every read and never stored.
+IMAGE_NAME_FIELD = "imageName"
+RECIPE_ID_FIELD = "recipeId"
+RECIPE_DISPLAY_NAME_FIELD = "recipeDisplayName"
+RECIPE_VERSION_FIELD = "recipeVersion"
+LATEST_RECIPE_VERSION_FIELD = "latestRecipeVersion"
+IMAGE_LATEST_FIELD = "imageLatest"
+# The recipe and build attributes the image is read from: the recipe's display name, the build's version and
+# the name of the EDH stack the build registered.
+RECIPE_DISPLAY_NAME_ATTRIBUTE = "displayName"
+BUILD_VERSION_ATTRIBUTE = "version"
+BUILD_STACK_NAME_ATTRIBUTE = "edhStackName"
 
 
 def deleted_row_expiry(now=None):
@@ -350,6 +369,88 @@ def workstation_activity(row, now=None) -> Optional[str]:
     if state == STATE_ACTIVE and not row.get('connectionAvailable'):
         return ACTIVITY_STARTING
     return None
+
+
+def _image_text(value) -> Optional[str]:
+    """A stored or recorded name as the record returns it: a string with something in it, else None."""
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _build_version(value) -> Optional[int]:
+    """A build version as a whole number, from the int or the Decimal DynamoDB hands back; None for anything else,
+    a bool or a fraction included."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, (float, Decimal)) and value == int(value):
+        return int(value)
+    return None
+
+
+def launch_image_snapshot(stack_name, recipe_build) -> Dict[str, object]:
+    """The image attributes a launch stores on the row it creates: the EDH image name, and, when an AVAILABLE AMI
+    recipe build registered the image (``recipe_build``, its recipe and build), the recipe, its display name and the
+    build version. A value the stack or the recipe does not state is left out rather than guessed."""
+    snapshot: Dict[str, object] = {}
+    name = _image_text(stack_name)
+    if name is not None:
+        snapshot[IMAGE_NAME_FIELD] = name
+    if recipe_build is not None:
+        recipe, build = recipe_build
+        snapshot[RECIPE_ID_FIELD] = recipe['recipeId']
+        display_name = _image_text(recipe.get(RECIPE_DISPLAY_NAME_ATTRIBUTE))
+        if display_name is not None:
+            snapshot[RECIPE_DISPLAY_NAME_FIELD] = display_name
+        version = _build_version(build.get(BUILD_VERSION_ATTRIBUTE))
+        if version is not None:
+            snapshot[RECIPE_VERSION_FIELD] = version
+    return snapshot
+
+
+def workstation_image(stored, image_id, builds_by_stack, latest_versions) -> Dict[str, object]:
+    """The image fields of a workstation's record. ``stored`` is what the row stored at launch; ``builds_by_stack``
+    the recipe builds that registered a desktop image (recipe and build, keyed by EDH stack id) and
+    ``latest_versions`` each recipe's newest AVAILABLE build version, both empty when the recipe table was not read.
+
+    The recipe, its display name and the build version are the stored ones when the row names a recipe, else the
+    build that registered ``image_id``'s; the image name is the stored one, else the name of the stack that build
+    registered. ``imageLatest`` is True when the workstation runs its recipe's newest AVAILABLE build, False only
+    when a newer one exists, and None when the recipe, the version or a newest build is unknown. Pure: the row is
+    never written and nothing is guessed."""
+    recipe_build = builds_by_stack.get(str(image_id)) if image_id is not None else None
+    recipe_id = _image_text(stored.get(RECIPE_ID_FIELD))
+    if recipe_id is not None:
+        display_name = _image_text(stored.get(RECIPE_DISPLAY_NAME_FIELD))
+        version = _build_version(stored.get(RECIPE_VERSION_FIELD))
+    elif recipe_build is not None:
+        recipe, build = recipe_build
+        recipe_id = recipe['recipeId']
+        display_name = _image_text(recipe.get(RECIPE_DISPLAY_NAME_ATTRIBUTE))
+        version = _build_version(build.get(BUILD_VERSION_ATTRIBUTE))
+    else:
+        display_name = version = None
+    name = _image_text(stored.get(IMAGE_NAME_FIELD))
+    if name is None and recipe_build is not None:
+        name = _image_text(recipe_build[1].get(BUILD_STACK_NAME_ATTRIBUTE))
+    latest = latest_versions.get(recipe_id) if recipe_id is not None else None
+    if version is None or latest is None:
+        image_latest = None
+    elif version == latest:
+        image_latest = True
+    elif latest > version:
+        image_latest = False
+    else:
+        # A newer build than the recipe's AVAILABLE one, which a retried older build retired: not behind.
+        image_latest = None
+    return {
+        IMAGE_NAME_FIELD: name,
+        RECIPE_ID_FIELD: recipe_id,
+        RECIPE_DISPLAY_NAME_FIELD: display_name,
+        RECIPE_VERSION_FIELD: version,
+        LATEST_RECIPE_VERSION_FIELD: latest,
+        IMAGE_LATEST_FIELD: image_latest,
+    }
 
 
 def start_resolve_due(row, now=None) -> bool:

@@ -15,6 +15,62 @@ export const OS_FAMILY_LABEL: Record<EdhOsFamily, string> = {
 export const osFamilyLabel = (value: string | null | undefined): string =>
     (value && OS_FAMILY_LABEL[value as EdhOsFamily]) || value || "—";
 
+/** The image fields of a workstation record, as the image name and the newer-image badge read them. */
+export type WorkstationImageFields = Pick<
+    WorkstationRecord,
+    | "state"
+    | "imageId"
+    | "imageName"
+    | "recipeId"
+    | "recipeDisplayName"
+    | "recipeVersion"
+    | "latestRecipeVersion"
+    | "imageLatest"
+>;
+
+const isVersion = (value: number | null | undefined): value is number =>
+    typeof value === "number" && Number.isFinite(value);
+
+/**
+ * The name shown for the image a workstation runs: the recipe's display name and the build version
+ * (`Isaac Sim 6.2 v13`) when the record carries both, else the record's image name, else the name
+ * the live catalog lists for the image id, else the id. `vamscli edh workstation` prints the same
+ * name without the catalog step (workstationImageCases.json).
+ */
+export const workstationImageName = (
+    record: WorkstationImageFields,
+    catalogName?: string | null
+): string => {
+    if (record.recipeDisplayName && isVersion(record.recipeVersion)) {
+        return `${record.recipeDisplayName} v${record.recipeVersion}`;
+    }
+    return record.imageName || catalogName || record.imageId;
+};
+
+// The states of a workstation that still exists and is not a failed launch.
+const NEWER_IMAGE_STATES: ReadonlySet<string> = new Set(["ACTIVE", "STOPPED", "CREATING"]);
+
+/**
+ * The newer-image badge of a workstation whose recipe has a newer AVAILABLE build than the one it
+ * runs: its words and the sentence its tooltip and screen-reader description carry. Null unless
+ * `imageLatest` is false on an ACTIVE, STOPPED or CREATING workstation.
+ */
+export const newerImageNotice = (
+    record: WorkstationImageFields
+): { label: string; description: string } | null => {
+    if (record.imageLatest !== false || !NEWER_IMAGE_STATES.has(record.state)) return null;
+    const { recipeVersion, latestRecipeVersion } = record;
+    if (!isVersion(recipeVersion) || !isVersion(latestRecipeVersion)) return null;
+    const recipe = record.recipeDisplayName || record.recipeId || "its recipe";
+    return {
+        label: `Newer image: v${latestRecipeVersion}`,
+        description:
+            `This workstation runs v${recipeVersion} of ${recipe}. v${latestRecipeVersion} is the ` +
+            "latest build. A workstation keeps the image it was launched from; launch a new " +
+            "workstation to use the latest build.",
+    };
+};
+
 /** An EDH session state (`running`, `pending`, …) as shown to users: EDH's own word, capitalised. */
 export const edhStateLabel = (value: string | null | undefined): string =>
     value ? value.charAt(0).toUpperCase() + value.slice(1) : "—";

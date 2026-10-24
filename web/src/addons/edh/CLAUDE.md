@@ -29,6 +29,8 @@ web/src/addons/edh/
                   #   (roving-tabindex tablist shared by both pages)
                   #   EdhFeatureTabs.tsx NotEnabledPanel.tsx (both pages' "not enabled" notice) useTextFilter.ts (the toolbar search
                   #   the three EDH lists share) useInFlight.ts (the synchronous double-submit guard every EDH mutation handler claims)
+                  #   WorkstationImageCell.tsx (My Workstations' Image cell: the name, the id and the Newer image badge, see
+                  #   Image Name)
   workstations/   # WorkstationsPage.tsx (one h1 above the Workstations / Simulations strip; the Simulations tab is selected from the
                   #   path; Remaining column and Renew lease action driven by useEdhCatalogLease and labels.ts leaseRemaining)
                   #   simulationsTab.ts (the page's route and the Simulations route beneath it)
@@ -43,11 +45,14 @@ web/src/addons/edh/
   containers/     # SimulationsTab.tsx: container catalog, job submit/list/kill per backend (EDH_CONTAINERS; eks experimental);
                   #   containerRoutes.ts (route templates)
   types.ts        # API shapes
-  labels.ts       # The words shown for the OS family and EDH state tokens
+  labels.ts       # The words shown for the OS family and EDH state tokens, a workstation's image name
+                  #   (workstationImageName) and its newer-image badge (newerImageNotice)
   capacityReservations.ts  # The Capacity rules: which reservations suit a launch, the option and Review text, the
                   #   preselection, and the row's Capacity text (describeCapacity)
   workstationStatusCases.json  # Test data shared with the CLI: records of every state x activity x lastError of the
                   #   start-status contract with the agreed badge, State column and start-failure lines (see Start Status)
+  workstationImageCases.json  # Test data shared with the CLI: records of the image fields with the agreed image name,
+                  #   badge and tooltip, CLI Image column and `get` recipe lines (see Image Name)
   edhLanes.test.tsx  # The module's lane entries, read through the real route table and side navigation
 ```
 
@@ -106,6 +111,16 @@ A start answers `202` and runs in the launch worker; the record carries `activit
 -   **Refused start.** `describeStartFailure` gives, for a STOPPED row with no `activity` whose `lastError` is `CAPACITY_UNAVAILABLE`, `RESERVATION_FULL` or `START_FAILED`, the sentence (`capacityStartFailureMessage` naming the instance type and `startFailure.availabilityZone`; `RESERVATION_FULL_START_MESSAGE` from `outcome.ts`; `LAST_ERROR_COPY.START_FAILED`) and the detail line `AWS: <errorCode> in <availabilityZone>` (the code alone without a zone, nothing without a code). `StartFailureNotice` renders both beneath the badge on My Workstations and the admin Sessions tab, and the badge takes the sentence as its title. A new start of the row (`activity` `starting`) hides them.
 -   **Start handler.** A 202 is reported as **Workstation start requested** and left to the list; the start path no longer maps `RESERVATION_FULL` (the launch path still does).
 -   **CLI parity.** `workstationStatusCases.json` lists records of every state x activity x lastError combination with the badge label, the CLI State column, and the sentence and detail line both clients show. `components/WorkstationStatusBadge.cases.test.tsx` and `tools/VamsCLI/tests/addon/test_edh_start_status.py` both read it; change the words in both clients and the file together.
+
+---
+
+## Image Name
+
+A workstation record carries `imageId` and, from the service, `imageName`, `recipeId`, `recipeDisplayName`, `recipeVersion` (snapshotted at launch, or resolved at read from the recipe builds for an older row), `latestRecipeVersion` and `imageLatest` (derived on every read); each is null when not known.
+
+-   **Name.** `workstationImageName(row, catalogName)` gives `<recipeDisplayName> v<recipeVersion>` when both are present, else `imageName`, else the name `useEdhCatalogImages` lists for the id, else the id. The record wins over the catalog, so a workstation launched from a build the catalog has since retired keeps its name, also for a caller who may not read the catalog. `WorkstationImageCell` shows the name with the id beneath it (the id once when nothing names the image), and the toolbar search matches the name and the id.
+-   **Badge.** `newerImageNotice` returns `Newer image: v<latestRecipeVersion>` and the sentence `This workstation runs v<recipeVersion> of <recipe>. v<latest> is the latest build. A workstation keeps the image it was launched from; launch a new workstation to use the latest build.` only for `imageLatest === false` on ACTIVE, STOPPED or CREATING; never for `true`, `null` or absent, nor on DELETED or ORPHANED. The cell renders the words as the badge's text, the sentence as its `title` and, through `aria-describedby`, as an `sr-only` description. The admin Sessions tab has no image column and shows none of this.
+-   **CLI parity.** `workstationImageCases.json` lists records with the name both clients show, the web's name with a catalog name, the badge and tooltip, the CLI Image column (the name plus ` (v<n> available)` where the web badges) and the `get` `Recipe:` and `Recipe version:` values. `components/WorkstationImageCell.cases.test.tsx` and `tools/VamsCLI/tests/addon/test_edh_workstation_image.py` both read it; change the words in both clients and the file together.
 
 ---
 

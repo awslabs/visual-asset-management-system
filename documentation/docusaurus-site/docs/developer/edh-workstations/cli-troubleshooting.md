@@ -209,6 +209,21 @@ The `Last Error` and `Start Failure` lines stay until a start of the workstation
 
 Follow the workstation with `vamscli edh workstation get SESSION_ID` until it reads `ACTIVE` with `Activity: none`, or `STOPPED` with a `Start Failure` line (see [Start Left the Workstation Stopped](#start-left-the-workstation-stopped)). Do not start it again while it reads `STARTING`: the start is refused with `Workstation start already in progress (409)`.
 
+### The Image Is an Older Build or Shows Only Its Id
+
+**Symptoms:**
+
+-   `edh workstation list` shows `(v<n> available)` after the image name in the `Image` column, and `edh workstation get` prints `Recipe version:` with `(latest <n>)`
+-   The `Image` column, and the `Image:` line of `get`, show only the image id
+
+**Cause:**
+
+A workstation keeps the image it was launched from. `(v<n> available)` means an administrator has built the workstation's AMI recipe again since its launch, and build `<n>` is available (`imageLatest` `false` in `--json-output`); stopping and starting the workstation does not change its image. An image id alone means VAMS cannot name the image: the workstation was launched before VAMS recorded the image name, and either its image was not built from an AMI recipe, the deployment has AMI builds turned off, the recipe has since been deleted, or VAMS could not read the recipes when it answered (the next read tries again). The web falls back to the name the image catalog lists, while the catalog still lists the image.
+
+**Resolution:**
+
+To use the newer build, launch a new workstation from it (`vamscli edh catalog images` lists it with its version in the `RECIPE` column), then delete the old workstation once you have moved your work. For an image shown by its id, `vamscli edh catalog images` names it while the catalog still lists it.
+
 ### The Connection URL Is Not Shown
 
 **Symptoms:**

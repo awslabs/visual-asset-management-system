@@ -71,6 +71,9 @@ tools/VamsMCP/
       test_edh_start_status_tools.py
                              # the asynchronous start: start's 202 record passed through unchanged,
                              # `activity` / `startFailure` passthrough, the descriptions and README
+      test_edh_image_tools.py
+                             # the image fields (`imageName` ... `imageLatest`) passed through by every
+                             # workstation tool, named in one sentence of each description and the README
 ```
 
 **No dotenv.** `config.py` reads `os.environ` only, and there is no `python-dotenv` dependency. That
@@ -420,6 +423,11 @@ ships an add-on with tools; a fork does not.
     `activity` (`starting` | `stopping` | null) and `startFailure` (why the last start left a
     STOPPED row stopped, beside `lastError` `CAPACITY_UNAVAILABLE`, `RESERVATION_FULL` or
     `START_FAILED`); the tools pass both through, and the workstation tools' descriptions name them.
+-   Image name: every workstation record and admin instance item also carries `imageName`,
+    `recipeId`, `recipeDisplayName`, `recipeVersion`, `latestRecipeVersion` and `imageLatest`
+    (`false` only when a newer AVAILABLE build of the recipe exists; each null when not known). The
+    tools pass them through, and each workstation tool's description (list, get, admin instances,
+    create, start, stop, renew, delete) names them in one sentence.
 -   Capacity reservations: `list_edh_catalog_capacity_reservations` (read, in the README's
     `autoApprove` addition) and `list_edh_admin_capacity_reservations` (read, admin),
     `register_edh_capacity_reservation` and `update_edh_capacity_reservation` (write) and

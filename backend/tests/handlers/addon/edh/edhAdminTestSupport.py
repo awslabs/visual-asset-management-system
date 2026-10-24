@@ -5,7 +5,8 @@
 
 The handler is driven through ``lambda_handler`` with its module attributes replaced:
 ``request_to_claims`` (runs the real ``normalize_event`` first so REST-shaped events are covered),
-``CasbinEnforcer``, ``EdhClient``, the session table handle and the ``log_actions`` audit hook.
+``CasbinEnforcer``, ``EdhClient``, the session table handle, the AMI recipe store and the ``log_actions``
+audit hook.
 ``FakeEdhClient`` answers each client wrapper from a script and records every call, so a test can
 assert that an EDH mutation was -- or was not -- attempted; its ``projects`` table answers the
 assignment that follows a registration.
@@ -243,12 +244,17 @@ def install_admin_fakes(monkeypatch, *, claims=None, edh=None, enforce=None, row
     client_factory = MagicMock(return_value=edh)
     table = _fake_table(rows)
     log_actions = MagicMock()
+    # The AMI recipe store, which names no recipe build unless a test installs its own: the instance views read it
+    # for their image fields.
+    recipe_store = MagicMock()
+    recipe_store.registered_builds_by_stack_id.return_value = ({}, {})
 
     monkeypatch.setattr(service, "request_to_claims", claims_for)
     monkeypatch.setattr(service, "CasbinEnforcer", enforcer_factory)
     monkeypatch.setattr(service, "EdhClient", client_factory)
     monkeypatch.setattr(service, "edh_session_table", table)
     monkeypatch.setattr(service, "log_actions", log_actions)
+    monkeypatch.setattr(service, "recipe_store", recipe_store)
     return SimpleNamespace(
         module=service,
         table=table,
@@ -258,6 +264,7 @@ def install_admin_fakes(monkeypatch, *, claims=None, edh=None, enforce=None, row
         client_factory=client_factory,
         edh=edh,
         log_actions=log_actions,
+        recipe_store=recipe_store,
     )
 
 

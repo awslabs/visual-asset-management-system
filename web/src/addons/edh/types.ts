@@ -84,6 +84,22 @@ export interface WorkstationRecord {
     launchAttempts?: number;
     name: string;
     imageId: string;
+    /** The EDH image name the workstation was launched from; null or absent when not known. */
+    imageName?: string | null;
+    /** The AMI recipe whose build produced the image; null or absent for a baseline image. */
+    recipeId?: string | null;
+    /** That recipe's display name. */
+    recipeDisplayName?: string | null;
+    /** The build version the workstation runs. */
+    recipeVersion?: number | null;
+    /** The recipe's newest AVAILABLE build version, derived on each read; null when none or unknown. */
+    latestRecipeVersion?: number | null;
+    /**
+     * Whether the workstation runs its recipe's newest build: false only when a newer AVAILABLE build
+     * exists; null for a baseline image, an unknown recipe or version, or a recipe with no AVAILABLE
+     * build.
+     */
+    imageLatest?: boolean | null;
     osFamily: EdhOsFamily;
     instanceType: string;
     createdAt: string;
