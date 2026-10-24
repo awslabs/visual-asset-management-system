@@ -752,6 +752,7 @@ export class VPCBuilderNestedStack extends NestedStack {
             // Amazon Bedrock AgentCore data plane. The GenAI CAD STEP agent's invoke Lambda calls
             // InvokeAgentRuntime from the isolated subnets when every Lambda is in the VPC; the agent
             // itself runs on AgentCore outside the VPC, so only the `agentcore` runtime needs it.
+            // Commercial partition only: getConfig() rejects the `agentcore` runtime elsewhere.
             if (
                 props.config.app.useGlobalVpc.useForAllLambdas &&
                 props.config.app.pipelines.useGenAiCadStepAgent?.enabled &&
