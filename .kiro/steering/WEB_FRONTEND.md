@@ -38,6 +38,7 @@ web/
     online3dviewer/
     playcanvas/
     potree/
+    robotics/                 # Lichtblick robotics data viewer, built from source with a VAMS overlay
     supersplat/
     thatopenwebifc/           # That Open Engine (web-ifc) IFC/BIM viewer bundle
     threejs/
@@ -232,6 +233,7 @@ web/
         PhysnaViewerPlugin/
         PlayCanvasGaussianSplatViewerPlugin/
         PotreeViewerPlugin/
+        RoboticsDataViewerPlugin/    # MCAP / ROS bag / PX4 ULog viewer (framed Lichtblick app)
         SuperSplatViewerPlugin/
         TextViewerPlugin/
         ThatOpenWebIfcViewerPlugin/  # IFC/BIM viewer (That Open Engine, web-ifc)
@@ -851,30 +853,33 @@ The 3D/media viewer system uses a plugin-based architecture:
 
 ### 8.2 Current Viewers (plugins)
 
-| ID                                 | Name                           | Category | Extensions                                                                                                                               | Status                                              |
-| ---------------------------------- | ------------------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `online3d-viewer`                  | Online 3D Viewer               | 3d       | .3dm, .amf, .bim, .off, .wrl                                                                                                             | enabled                                             |
-| `potree-viewer`                    | Potree Viewer                  | 3d       | .e57, .las, .laz, .ply                                                                                                                   | enabled                                             |
-| `image-viewer`                     | Image Viewer                   | media    | .png, .jpg, .jpeg, .svg, .gif                                                                                                            | enabled                                             |
-| `html-viewer`                      | HTML Viewer                    | document | .html                                                                                                                                    | enabled                                             |
-| `video-viewer`                     | Video Player                   | media    | .mp4, .webm, .mov, .mkv, .m4v                                                                                                            | enabled                                             |
-| `audio-viewer`                     | Audio Player                   | media    | .mp3, .wav, .ogg, .aac, .flac, .m4a                                                                                                      | enabled                                             |
-| `columnar-viewer`                  | Columnar Data Viewer           | data     | .fcs, .csv                                                                                                                               | enabled                                             |
-| `pdf-viewer`                       | PDF Viewer                     | document | .pdf                                                                                                                                     | enabled                                             |
-| `cesium-viewer`                    | Cesium 3D Tileset              | 3d       | .json                                                                                                                                    | enabled                                             |
-| `text-viewer`                      | Text Viewer                    | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc.                                                                          | enabled                                             |
-| `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat       | 3d       | .ply, .spz                                                                                                                               | enabled                                             |
-| `supersplat-viewer`                | SuperSplat Editor (PlayCanvas) | 3d       | .lcc, .ply, .sog, .splat                                                                                                                 | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
-| `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat      | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
-| `vntana-viewer`                    | VNTANA 3D Viewer               | 3d       | .glb                                                                                                                                     | **disabled** (licensed add-on)                      |
-| `veerum-viewer`                    | VEERUM 3D Viewer               | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed add-on)                      |
-| `needletools-usd-viewer`           | Needle USD Viewer              | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
-| `threejs-viewer`                   | Three.js Viewer                | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .igs, .brep                                                   | enabled                                             |
-| `physna-viewer`                    | Physna Viewer                  | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
-| `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer        | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
-| `preview-viewer`                   | Preview Viewer                 | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
+| ID                                 | Name                              | Category | Extensions                                                                                                                               | Status                                              |
+| ---------------------------------- | --------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `online3d-viewer`                  | Online 3D Viewer                  | 3d       | .3dm, .amf, .bim, .off, .wrl                                                                                                             | enabled                                             |
+| `potree-viewer`                    | Potree Viewer                     | 3d       | .e57, .las, .laz, .ply                                                                                                                   | enabled                                             |
+| `image-viewer`                     | Image Viewer                      | media    | .png, .jpg, .jpeg, .svg, .gif                                                                                                            | enabled                                             |
+| `html-viewer`                      | HTML Viewer                       | document | .html                                                                                                                                    | enabled                                             |
+| `video-viewer`                     | Video Player                      | media    | .mp4, .webm, .mov, .mkv, .m4v                                                                                                            | enabled                                             |
+| `audio-viewer`                     | Audio Player                      | media    | .mp3, .wav, .ogg, .aac, .flac, .m4a                                                                                                      | enabled                                             |
+| `columnar-viewer`                  | Columnar Data Viewer              | data     | .fcs, .csv                                                                                                                               | enabled                                             |
+| `pdf-viewer`                       | PDF Viewer                        | document | .pdf                                                                                                                                     | enabled                                             |
+| `cesium-viewer`                    | Cesium 3D Tileset                 | 3d       | .json                                                                                                                                    | enabled                                             |
+| `text-viewer`                      | Text Viewer                       | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc.                                                                          | enabled                                             |
+| `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat          | 3d       | .ply, .spz                                                                                                                               | enabled                                             |
+| `supersplat-viewer`                | SuperSplat Editor (PlayCanvas)    | 3d       | .lcc, .ply, .sog, .splat                                                                                                                 | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
+| `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat         | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
+| `vntana-viewer`                    | VNTANA 3D Viewer                  | 3d       | .glb                                                                                                                                     | **disabled** (licensed add-on)                      |
+| `veerum-viewer`                    | VEERUM 3D Viewer                  | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed add-on)                      |
+| `needletools-usd-viewer`           | Needle USD Viewer                 | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
+| `threejs-viewer`                   | Three.js Viewer                   | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .igs, .brep                                                   | enabled                                             |
+| `physna-viewer`                    | Physna Viewer                     | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
+| `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer           | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
+| `robotics-data-viewer`             | Robotics Data Viewer (Lichtblick) | data     | .mcap, .bag, .db3, .ulg, .ulog                                                                                                           | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
+| `preview-viewer`                   | Preview Viewer                    | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
 
 > Note: `supersplat-viewer` is a **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter (see 8.5 before copying that pattern). The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor.
+
+> Note: `robotics-data-viewer` is an **iframe-embedded** viewer — `web/customInstalls/robotics/roboticsViewerInstall.js` builds the Lichtblick web app (MPL-2.0, pinned tag and commit) from source with the VAMS overlay in `web/customInstalls/robotics/overlay/` into `public/viewers/robotics/`. The host component presigns each file under its own asset and hands the URLs over in the iframe's URL **fragment** (see 8.5). `.mcap` (several files on one timeline) and `.bag` are read with HTTP Range requests; `.db3` (one file or a ROS 2 split bag) and `.ulg`/`.ulog` are downloaded whole, limited to `customParameters.maxWholeFileBytes` (1 GiB) across the selection. No Lichtblick extension can be installed or loaded: an extension is code run in the framed document, which is same-origin with VAMS, so the overlay entrypoint renders upstream `SharedRoot` with an empty extension loader list instead of upstream `WebRoot` (which always adds IndexedDB loaders). The install's build check and `roboticsBuild.test.ts` fail if that changes. User Scripts stay available (they run in a web worker).
 
 ### 8.3 Adding a New Viewer Plugin
 
@@ -1091,6 +1096,22 @@ is not a substitute: it governs only the request that loads the framed page, not
 makes. A viewer that reads `location.hash` itself needs none of this, because a `Referer` never carries
 the fragment.
 
+`robotics-data-viewer` is the reference for the fragment pattern. `RoboticsDataViewerPlugin/roboticsDeepLink.ts`
+builds `<basePath>#ds=<source>&ds.url=<url>…` with one `encodeURIComponent` per value and nothing in the
+query. The framed Lichtblick app reads its deep link from `location.search`, so its VAMS entrypoint
+(`web/customInstalls/robotics/overlay/entrypoint.tsx`) moves the fragment into the query from inside the
+bundle rather than from a shim ahead of it: the move runs after the app has awaited its fonts, because a
+CSS font request sends the document URL as its `Referer` whatever the page's referrer policy. Once the app
+has read its deep link, the entrypoint replaces the document URL with one that carries no signed URL; the
+app's own address-bar sync rewrites the URL through `decodeURIComponent`, which would otherwise split each
+signed URL's `X-Amz-*` parameters into the page's query for the life of the page. The page still opens
+`<head>` with the `no-referrer` `<meta>` and loads its former inline script as `vams-init.js`
+(`web/customInstalls/robotics/postprocessIndexHtml.js`). A vendored app can also show or store the URL it
+was given: the robotics overlay names the player by file name (the app bar and document title showed the
+URL), takes the URLs out of the parameters the app saves as a recent source in IndexedDB, and rewrites
+upstream error text that quotes the URL. Check those surfaces for any framed viewer that receives a signed
+URL.
+
 Note the encoding interaction if you move an existing viewer: SuperSplat decodes `load` **twice**, so its
 value is deliberately double-encoded (see the comment in `SuperSplatViewerComponent.tsx`). Moving the
 same string to a fragment must preserve that double encoding byte-for-byte, or the presigned signature
@@ -1134,6 +1155,22 @@ at the top, and it is the only control that covers both distributions, because t
 is not a substitute: it governs only the request that loads the framed page, not the requests that page
 makes. A viewer that reads `location.hash` itself needs none of this, because a `Referer` never carries
 the fragment.
+
+`robotics-data-viewer` is the reference for the fragment pattern. `RoboticsDataViewerPlugin/roboticsDeepLink.ts`
+builds `<basePath>#ds=<source>&ds.url=<url>…` with one `encodeURIComponent` per value and nothing in the
+query. The framed Lichtblick app reads its deep link from `location.search`, so its VAMS entrypoint
+(`web/customInstalls/robotics/overlay/entrypoint.tsx`) moves the fragment into the query from inside the
+bundle rather than from a shim ahead of it: the move runs after the app has awaited its fonts, because a
+CSS font request sends the document URL as its `Referer` whatever the page's referrer policy. Once the app
+has read its deep link, the entrypoint replaces the document URL with one that carries no signed URL; the
+app's own address-bar sync rewrites the URL through `decodeURIComponent`, which would otherwise split each
+signed URL's `X-Amz-*` parameters into the page's query for the life of the page. The page still opens
+`<head>` with the `no-referrer` `<meta>` and loads its former inline script as `vams-init.js`
+(`web/customInstalls/robotics/postprocessIndexHtml.js`). A vendored app can also show or store the URL it
+was given: the robotics overlay names the player by file name (the app bar and document title showed the
+URL), takes the URLs out of the parameters the app saves as a recent source in IndexedDB, and rewrites
+upstream error text that quotes the URL. Check those surfaces for any framed viewer that receives a signed
+URL.
 
 Note the encoding interaction if you move an existing viewer: SuperSplat decodes `load` **twice**, so its
 value is deliberately double-encoded (see the comment in `SuperSplatViewerComponent.tsx`). Moving the
@@ -1186,7 +1223,7 @@ Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
--   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, and Three.js CAD formats (WASM loaders use eval)
+-   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, and Three.js CAD formats (WASM loaders use eval)
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)
