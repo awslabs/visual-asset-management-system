@@ -12,10 +12,14 @@
  * policy and endpoint access mode outside the GovCloud mode, and the TLS 1.2 policy inside it.
  * amplify-config returns the domain's URL to the web app and to `vamscli setup`, the web CSP allows
  * the domain next to the execute-api host, and two root outputs give the operator the URL and the DNS
- * target. An optional hosted zone gets A and AAAA alias records.
+ * target. An optional hosted zone gets A and AAAA alias records. Every Lambda configured by
+ * `globalLambdaEnvironmentsAndPermissions` (the API handlers and the REST authorizer) gets
+ * `API_CUSTOM_DOMAIN_NAME` and `API_CUSTOM_DOMAIN_BASE_PATH`, from which the backend makes a
+ * custom-domain request's path stage-relative.
  *
  * With the block disabled — every shipped template — none of this is emitted, and the amplify-config
- * function and CSP are unchanged: that is the T1 assertion across all three templates.
+ * function, CSP and Lambda environments are unchanged: that is the T1 assertion across all three
+ * templates.
  *
  * Durable (root CLAUDE.md Rule 13): every resource and value here can be written differently again.
  */
@@ -105,6 +109,30 @@ function albCsp(s: SynthResult): string {
 const deployedBytes = (value: string): number =>
     Buffer.byteLength(value.replace(/\$\{[^}]*\}/g, "x".repeat(10)), "utf8");
 
+const CUSTOM_DOMAIN_ENV = ["API_CUSTOM_DOMAIN_NAME", "API_CUSTOM_DOMAIN_BASE_PATH"];
+
+/** Every Lambda function's environment variables, keyed by logical id. */
+function lambdaEnvironments(s: SynthResult): Record<string, Record<string, unknown>> {
+    const out: Record<string, Record<string, unknown>> = {};
+    for (const fn of s.ofType("AWS::Lambda::Function")) {
+        out[`${fn.stack}/${fn.logicalId}`] = fn.properties.Environment?.Variables ?? {};
+    }
+    return out;
+}
+
+/**
+ * The functions configured by `globalLambdaEnvironmentsAndPermissions` — every API handler and the
+ * REST authorizer among them. The helper always sets `VAMS_RESOURCE_PARAM_PREFIX`, so that variable
+ * identifies them.
+ */
+function helperConfiguredEnvironments(s: SynthResult): Record<string, Record<string, unknown>> {
+    return Object.fromEntries(
+        Object.entries(lambdaEnvironments(s)).filter(
+            ([, env]) => env.VAMS_RESOURCE_PARAM_PREFIX !== undefined
+        )
+    );
+}
+
 describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
     "%s with the custom domain off (shipped template)",
     (name) => {
@@ -129,6 +157,16 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
             const source = amplifyConfigSource(s());
             expect(source).toContain('"api":""');
             expect(source).toContain('config.api = "https://" + host + stageSeg + "/";');
+        });
+
+        test("no Lambda function carries the custom-domain base-path environment", () => {
+            const environments = lambdaEnvironments(s());
+            expect(Object.keys(environments).length).toBeGreaterThan(0);
+            for (const [fn, env] of Object.entries(environments)) {
+                for (const key of CUSTOM_DOMAIN_ENV) {
+                    expect({ fn, key, value: env[key] }).toEqual({ fn, key, value: undefined });
+                }
+            }
         });
     }
 );
@@ -211,6 +249,23 @@ describe("commercial with the custom domain on", () => {
                 .properties.DistributionConfig.CacheBehaviors.map((b: any) => b.PathPattern);
         expect(patterns(commercialOn())).toEqual(patterns(synthTemplate("commercial")));
     });
+
+    test("API Lambdas get the domain and base path so they see the stage-relative path", () => {
+        // Through the domain a proxy event's `path` keeps the base path; common/auth/apiEvent.py
+        // strips it for events routed through this host, read from these two variables.
+        const s = commercialOn();
+        const environments = helperConfiguredEnvironments(s);
+        const names = Object.keys(environments);
+        expect(names.some((n) => /apiGatewayAuthorizerRest/.test(n))).toBe(true);
+        expect(names.some((n) => /databaseService/.test(n))).toBe(true);
+        for (const [fn, env] of Object.entries(environments)) {
+            expect({ fn, value: env.API_CUSTOM_DOMAIN_NAME }).toEqual({ fn, value: HOST });
+            expect({ fn, value: env.API_CUSTOM_DOMAIN_BASE_PATH }).toEqual({ fn, value: "api" });
+        }
+        // The base path is the one the mapping routes to the stage.
+        const mapping = single(s, "AWS::ApiGateway::BasePathMapping");
+        expect(mapping.properties.BasePath).toBe("api");
+    });
 });
 
 describe("govcloud with the custom domain on", () => {
@@ -223,6 +278,17 @@ describe("govcloud with the custom domain on", () => {
         );
         expect(domain.properties.SecurityPolicy).toBe("TLS_1_2");
         expect(domain.properties.EndpointAccessMode).toBeUndefined();
+    });
+
+    test("API Lambdas get the domain and base path", () => {
+        const environments = helperConfiguredEnvironments(govcloudOn());
+        expect(Object.keys(environments).some((n) => /apiGatewayAuthorizerRest/.test(n))).toBe(
+            true
+        );
+        for (const [fn, env] of Object.entries(environments)) {
+            expect({ fn, value: env.API_CUSTOM_DOMAIN_NAME }).toEqual({ fn, value: HOST });
+            expect({ fn, value: env.API_CUSTOM_DOMAIN_BASE_PATH }).toEqual({ fn, value: "api" });
+        }
     });
 
     test("the ALB CSP allows the domain and still fits the 1 KB listener attribute", () => {

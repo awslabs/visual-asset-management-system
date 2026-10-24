@@ -252,6 +252,19 @@ export function globalLambdaEnvironmentsAndPermissions(
             ? "true"
             : "false"
     );
+
+    // The optional REST API custom domain (app.api.apiGatewayRest.customDomain). Through it, a
+    // proxy event's `path` keeps the base path its mapping routes to the stage (`/api/database`,
+    // where execute-api delivers `/database`). common/auth/apiEvent.py removes that base path for
+    // an event whose requestContext.domainName is this host, so handlers and the authorizer see
+    // the stage-relative path on every host. The base path is the stage name
+    // (rest-api-gateway-construct BasePathMapping). Set only when the domain is enabled, so a
+    // deployment without it synthesizes unchanged.
+    const customDomainHost = Config.apiCustomDomainHost(config);
+    if (customDomainHost) {
+        lambdaFunction.addEnvironment("API_CUSTOM_DOMAIN_NAME", customDomainHost);
+        lambdaFunction.addEnvironment("API_CUSTOM_DOMAIN_BASE_PATH", Config.API_GATEWAY_STAGE_NAME);
+    }
 }
 
 /**
