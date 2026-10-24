@@ -73,7 +73,7 @@ This software includes third party software subject to the following copyrights:
 | aws-amplify                         | ^6.0.0        | Apache-2.0              |
 | axios                               | ^1.6.0        | MIT                     |
 | buffer                              | ^6.0.3        | MIT                     |
-| dompurify                           | ^3.4.11       | (MPL-2.0 OR Apache-2.0) |
+| dompurify                           | ^3.4.17       | (MPL-2.0 OR Apache-2.0) |
 | fast-xml-parser                     | ^5.9.0        | MIT                     |
 | fcs                                 | ^0.1.2        | MIT                     |
 | file-system-access                  | 1.0.4         | MIT                     |
