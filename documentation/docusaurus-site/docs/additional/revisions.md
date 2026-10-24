@@ -170,6 +170,7 @@ Edit `config.json` (remove the two retired pipeline keys; add `app.vectorSearch`
 -   **RapidPipeline EKS Kubernetes client** — The pipeline's Kubernetes Lambda layer installs the Kubernetes Python client 36.0.3, which matches the default EKS cluster version 1.36, and the pipeline Lambda's own requirements ask for the same release, so the two can be installed together. (issue #722)
 -   **RapidPipeline EKS Kubernetes request settings** — Every Kubernetes API call the pipeline makes has a 30-second connect and 60-second read timeout and sends the `vams-eks-pipeline/1.0` user agent. The Kubernetes client resends a request only after a connection failure; the pipeline's retry wrapper handles throttling, server errors and timeouts. (issue #724)
 -   **RapidPipeline EKS job cleanup after a step error** — When the ConstructPipeline, RunJob or CheckJob step times out or fails, the pipeline reaches its end step with the name of the Kubernetes job that exists at that point, so a job that was already created is deleted rather than left running until its deadline, and the parent workflow is sent the failure without waiting for its task timeout. (issue #726)
+-   **RapidPipeline EKS job build errors** — When the ConstructPipeline step cannot build the Kubernetes job, the pipeline reaches its end step with that error, so the parent workflow is sent the failure without waiting for its task timeout. (issue #735)
 
 **Documentation:**
 
