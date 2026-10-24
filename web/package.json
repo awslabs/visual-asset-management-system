@@ -34,7 +34,7 @@
         "aws-amplify": "^6.0.0",
         "axios": "^1.6.0",
         "buffer": "^6.0.3",
-        "dompurify": "^3.4.11",
+        "dompurify": "^3.4.17",
         "fcs": "^0.1.2",
         "jodit-react": "^5.3.21",
         "localforage": "^1.10.0",
@@ -70,7 +70,7 @@
         "follow-redirects": "^1.15.4",
         "@types/react": "^18.3.12",
         "react-router": "^7.18.2",
-        "dompurify": "^3.4.11",
+        "dompurify": "^3.4.17",
         "@istanbuljs/load-nyc-config": {
             "js-yaml": "^3.15.2"
         }
