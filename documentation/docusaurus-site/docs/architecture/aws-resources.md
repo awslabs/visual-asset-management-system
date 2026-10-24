@@ -458,6 +458,19 @@ The following secrets are created when the feature that uses them is enabled:
 
 The API origin verification secret is JSON: `current` is the value CloudFront sends, and `previous`, written by each rotation, the value it sent before. The regional web ACL stack and the core stack resolve it through `{{resolve:secretsmanager:...}}` dynamic references, which is why it has a stack of its own that deploys before both. It is encrypted with `useKmsCmkEncryption.optionalExternalCmkArn` when that is set; with `useKmsCmkEncryption.enabled` and no external key, with a key of the same stack (see [AWS KMS](#aws-kms)), because the VAMS-generated key is created by the core stack, which deploys after it; otherwise with the AWS managed `aws/secretsmanager` key.
 
+### Rotation of the API origin verification secret
+
+Secrets Manager runs the `apiOriginVerifyRotation` function every 45 days. Each rotation writes the new value as the `AWSPENDING` version, sets the regional web ACL to accept the new and the previous value, points the distribution's API origin headers at the new value, and then moves `AWSCURRENT` to the new version. Before it moves `AWSCURRENT`, it applies the web ACL and distribution changes again; when nothing has changed them since, this step changes nothing.
+
+:::warning[Do not deploy during a rotation]
+A stack update that lands while a rotation is in progress resolves the regional web ACL and the distribution to the version that is still `AWSCURRENT`, that is, the old value. The rotation corrects an update that has finished before its last step. An update that finishes after the rotation has completed can still leave the regional web ACL accepting only the old value while CloudFront sends the new one. Requests forwarded through CloudFront are then rate-limited per CloudFront edge address instead of per viewer, until the next rotation. Do not deploy while a rotation is in progress. If a deployment overlapped one, rotate again once the deployment has finished:
+
+```bash
+aws secretsmanager rotate-secret --secret-id <secret ARN>
+```
+
+:::
+
 ## AWS KMS
 
 Deployed when `useKmsCmkEncryption.enabled = true`:

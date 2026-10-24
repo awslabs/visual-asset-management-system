@@ -16,7 +16,9 @@ the four rotation steps:
   accept both.
 - ``testSecret``: no service-side check. Secrets Manager also runs this step on its own, against a
   test version it creates, when the rotation schedule is created or changed without rotating.
-- ``finishSecret``: move ``AWSCURRENT`` to the new version.
+- ``finishSecret``: apply the ``setSecret`` changes again (a stack update that landed during the
+  rotation resolves the web ACL and the distribution to the old value; with no such update nothing
+  changes), then move ``AWSCURRENT`` to the new version.
 
 A later stack update resolves the CloudFront header and the web ACL matches to ``AWSCURRENT``, which
 is the state this function leaves them in. Each step is idempotent, so a retried step does not repeat
@@ -255,6 +257,15 @@ def create_secret_step(secrets, secret_arn: str, token: str) -> None:
 
 def set_secret_step(secrets, secret_arn: str, token: str) -> None:
     new_value, old_value = _pending_values(secrets, secret_arn, token)
+    _apply_values(new_value, old_value)
+
+
+def _apply_values(new_value: str, old_value: str) -> None:
+    """Web ACL matches to [new, old], then (after the web ACL settles) the origin headers to new.
+
+    Both updates are idempotent: each reads the current state first and changes nothing when it
+    already holds the wanted values.
+    """
     if WEB_ACL_ARN and _update_web_acl((new_value, old_value)):
         time.sleep(WAF_SETTLE_SECONDS)
     _update_distribution(new_value)
@@ -274,6 +285,11 @@ def finish_secret_step(secrets, secret_arn: str, token: str) -> None:
                 return
             current_version = version
             break
+    # A stack update that lands between setSecret and this step resolves the web ACL matches and the
+    # origin headers to the version that is still AWSCURRENT, which puts them back on the old value.
+    # Apply the pending values again before promoting; this changes nothing when no update landed.
+    new_value, old_value = _pending_values(secrets, secret_arn, token)
+    _apply_values(new_value, old_value)
     secrets.update_secret_version_stage(
         SecretId=secret_arn,
         VersionStage="AWSCURRENT",

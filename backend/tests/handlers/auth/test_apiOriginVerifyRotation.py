@@ -11,6 +11,8 @@ The properties pinned here:
 - setSecret sets the regional web ACL's two origin verification matches to the new and the old
   value, waits for the change to settle, and only then points the distribution's origin headers at
   the new value. UpdateWebACL replaces the whole web ACL, so every other setting is passed back.
+- finishSecret applies the setSecret changes again before it moves AWSCURRENT, so a stack update
+  that landed during the rotation (and put either back on the old value) is undone first.
 - Every step is idempotent and no step logs a value.
 
 The CloudFront and AWS WAF clients are real botocore clients behind a Stubber, so every request
@@ -521,17 +523,113 @@ class TestTestAndFinishSecret:
         assert services["order"] == []
 
     def test_finish_moves_awscurrent_to_the_new_version(self, services):
-        fake = _use_secrets(
-            services,
-            FakeSecretsManager({"current": OLD}, pending_value=json.dumps({"current": NEW, "previous": OLD})),
-        )
+        fake = _pending_with_promotion_recorded(services)
+        _stub_finish_reads(services, waf=(NEW, OLD), origins=NEW)
         rotation.lambda_handler(_event("finishSecret"), None)
         assert "AWSCURRENT" in fake.versions[TOKEN]["stages"]
         assert "AWSCURRENT" not in fake.versions[CURRENT_TOKEN]["stages"]
+        # setSecret left both on the new values, so nothing is updated and nothing waits.
+        assert services["order"] == ["promote"]
+        assert services["sleeps"] == []
         # A repeated call finds the version current and changes nothing.
         before = list(fake.writes())
         rotation.lambda_handler(_event("finishSecret"), None)
         assert fake.writes() == before
+
+
+def _pending_with_promotion_recorded(services):
+    """A pending rotation whose AWSCURRENT move is recorded in services["order"]."""
+    fake = _use_secrets(
+        services,
+        FakeSecretsManager({"current": OLD}, pending_value=json.dumps({"current": NEW, "previous": OLD})),
+    )
+    promote = fake.update_secret_version_stage
+
+    def recorded(**kwargs):
+        services["order"].append("promote")
+        return promote(**kwargs)
+
+    fake.update_secret_version_stage = recorded
+    return fake
+
+
+def _stub_finish_reads(services, waf, origins, lock_token="lock-5", etag="E5"):
+    """The web ACL and distribution state finishSecret reads before it promotes the version."""
+    if waf is not None:
+        services["waf"].add_response(
+            "get_web_acl",
+            {"WebACL": _web_acl(*waf), "LockToken": lock_token},
+            {"Name": WEB_ACL_NAME, "Scope": "REGIONAL", "Id": WEB_ACL_ID},
+        )
+    services["cloudfront"].add_response(
+        "get_distribution_config",
+        {"DistributionConfig": _distribution_config(origins), "ETag": etag},
+        {"Id": DISTRIBUTION_ID},
+    )
+
+
+@pytest.mark.unit
+class TestFinishSecretAfterAnOverlappingDeploy:
+    """A stack update between setSecret and finishSecret resolves the templates to the version that is
+    still AWSCURRENT, so the web ACL matches and the origin headers can be back on the old value.
+    finishSecret applies the pending values again before it moves AWSCURRENT."""
+
+    def test_a_web_acl_reset_to_the_old_value_is_set_again_before_promotion(self, services):
+        fake = _pending_with_promotion_recorded(services)
+        _stub_finish_reads(services, waf=(OLD, OLD), origins=NEW)
+        services["waf"].add_response(
+            "update_web_acl", {"NextLockToken": "lock-6"}, _expected_update(_web_acl(NEW, OLD), "lock-5")
+        )
+        rotation.lambda_handler(_event("finishSecret"), None)
+        assert services["order"] == ["waf", "promote"]
+        assert services["sleeps"] == [rotation.WAF_SETTLE_SECONDS]
+        assert "AWSCURRENT" in fake.versions[TOKEN]["stages"]
+
+    def test_origins_reset_to_the_old_value_are_set_again_before_promotion(self, services):
+        fake = _pending_with_promotion_recorded(services)
+        _stub_finish_reads(services, waf=(NEW, OLD), origins=OLD)
+        services["cloudfront"].add_response(
+            "update_distribution",
+            _distribution("InProgress"),
+            {"Id": DISTRIBUTION_ID, "IfMatch": "E5", "DistributionConfig": _distribution_config(NEW)},
+        )
+        rotation.lambda_handler(_event("finishSecret"), None)
+        assert services["order"] == ["cloudfront", "promote"]
+        assert services["sleeps"] == []
+        assert "AWSCURRENT" in fake.versions[TOKEN]["stages"]
+
+    def test_both_reset_are_set_again_in_order_before_promotion(self, services):
+        _pending_with_promotion_recorded(services)
+        _stub_finish_reads(services, waf=(OLD, OLD), origins=OLD)
+        services["waf"].add_response(
+            "update_web_acl", {"NextLockToken": "lock-6"}, _expected_update(_web_acl(NEW, OLD), "lock-5")
+        )
+        services["cloudfront"].add_response(
+            "update_distribution",
+            _distribution("InProgress"),
+            {"Id": DISTRIBUTION_ID, "IfMatch": "E5", "DistributionConfig": _distribution_config(NEW)},
+        )
+        rotation.lambda_handler(_event("finishSecret"), None)
+        # The web ACL accepts the new value before CloudFront starts sending it.
+        assert services["order"] == ["waf", "cloudfront", "promote"]
+        assert services["sleeps"] == [rotation.WAF_SETTLE_SECONDS]
+
+    def test_without_a_web_acl_only_the_origins_are_checked(self, services, monkeypatch):
+        _pending_with_promotion_recorded(services)
+        monkeypatch.setattr(rotation, "WEB_ACL_ARN", "")
+        _stub_finish_reads(services, waf=None, origins=NEW)
+        rotation.lambda_handler(_event("finishSecret"), None)
+        assert services["order"] == ["promote"]
+
+    def test_a_failed_update_leaves_awscurrent_on_the_old_version(self, services):
+        fake = _pending_with_promotion_recorded(services)
+        _stub_finish_reads(services, waf=(NEW, OLD), origins=OLD)
+        services["cloudfront"].add_client_error("update_distribution", service_error_code="PreconditionFailed")
+        with pytest.raises(ClientError):
+            rotation.lambda_handler(_event("finishSecret"), None)
+        assert "promote" not in services["order"]
+        assert "AWSCURRENT" in fake.versions[CURRENT_TOKEN]["stages"]
+        assert "AWSCURRENT" not in fake.versions[TOKEN]["stages"]
 
 
 @pytest.mark.unit
@@ -587,8 +685,11 @@ class TestNoValueIsLogged:
             _distribution("InProgress"),
             {"Id": DISTRIBUTION_ID, "IfMatch": "E1", "DistributionConfig": _distribution_config(NEW)},
         )
+        # finishSecret reads both again and finds them already on the new values.
+        _stub_finish_reads(services, waf=(NEW, OLD), origins=NEW)
         for step in ("createSecret", "setSecret", "testSecret", "finishSecret"):
             rotation.lambda_handler(_event(step), None)
         assert "AWSCURRENT" in fake.versions[TOKEN]["stages"]
+        assert services["order"] == ["waf", "cloudfront"]
         assert messages
         assert all(OLD not in m and NEW not in m for m in messages)
