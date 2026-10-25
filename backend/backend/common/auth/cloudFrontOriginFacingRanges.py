@@ -8,8 +8,8 @@ regenerate it with that script from the repository root and commit the result.
 Source: https://ip-ranges.amazonaws.com/ip-ranges.json, service CLOUDFRONT_ORIGIN_FACING
 createDate: 2026-10-24-19-37-05
 
-``clientIp.py`` reads CloudFront's X-Forwarded-For only on a request whose TCP peer falls in one of
-these prefixes or in the list it refreshes from the source at run time.
+``clientIp.py`` uses CloudFront's X-Forwarded-For only for a request whose ``sourceIp`` falls in
+one of these prefixes or in the list it refreshes from the source at run time.
 """
 
 SOURCE_URL = "https://ip-ranges.amazonaws.com/ip-ranges.json"

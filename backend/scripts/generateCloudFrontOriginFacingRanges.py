@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Regenerate ``cloudFrontOriginFacingRanges.py`` from the published AWS IP address ranges.
 
-The REST authorizer reads Amazon CloudFront's ``X-Forwarded-For`` only on a request whose TCP peer is
-one of CloudFront's origin-facing addresses (``backend/backend/common/auth/clientIp.py``). It
+The REST authorizer uses Amazon CloudFront's ``X-Forwarded-For`` only for a request that Amazon API
+Gateway reports with one of CloudFront's origin-facing addresses as ``sourceIp``
+(``backend/backend/common/auth/clientIp.py``). It
 refreshes that list at run time when it can, and falls back to the snapshot this script writes when
 it cannot -- so the snapshot is what a deployment relies on when the authorizer has no route to the
 internet. Regenerate it when preparing a release and commit the result::
@@ -47,8 +48,8 @@ regenerate it with that script from the repository root and commit the result.
 Source: {source_url}, service {service}
 createDate: {create_date}
 
-``clientIp.py`` reads CloudFront's X-Forwarded-For only on a request whose TCP peer falls in one of
-these prefixes or in the list it refreshes from the source at run time.
+``clientIp.py`` uses CloudFront's X-Forwarded-For only for a request whose ``sourceIp`` falls in
+one of these prefixes or in the list it refreshes from the source at run time.
 """
 
 SOURCE_URL = "{source_url}"

@@ -55,10 +55,10 @@ the list, only when its ``sourceIp`` is a valid address the snapshot does not ho
 this execution environment's refresh window has elapsed (no attempt yet since the cold start,
 ``REFRESH_INTERVAL_SECONDS`` after a success, or the back-off wait after a failure). Traffic
 through the distribution, requests without such an ``X-Forwarded-For``, and every request on an
-ALB or unfronted deployment never start one. Even for an origin-facing peer, only the right-most
-*untrusted* forwarded address (the hop adjacent to the gateway, after stripping the proxy peer)
-is used, so a client-supplied left-most entry can never grant access, and a header value that
-does not parse as an IP address is not used.
+ALB or unfronted deployment never start one. Even when ``sourceIp`` is origin-facing, only the
+right-most *untrusted* forwarded address (the entry left of the trailing hop that equals
+``sourceIp``) is used, so a client-supplied left-most entry can never grant access, and a header
+value that does not parse as an IP address is not used.
 """
 import ipaddress
 import json
@@ -310,7 +310,7 @@ def resolve_client_ip(event: dict, *, fronted: str = "none") -> Optional[str]:
     source_ip = identity.get("sourceIp")
 
     # Only a CloudFront deployment has a reverse proxy that sets forwarding headers. On
-    # "alb"/"none" every header is client-controlled, so fall straight through to the TCP peer.
+    # "alb"/"none" every header is client-controlled, so fall straight through to ``sourceIp``.
     if fronted == "cloudfront" and source_ip:
         # Headers first, so a request that carries none never consults the address list.
         forwarded = _forwarded_client_ip(event, source_ip)
