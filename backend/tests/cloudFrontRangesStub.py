@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Test support for the CloudFront origin-facing address check in ``common/auth/clientIp.py``.
 
-The resolver reads ``X-Forwarded-For`` only when the TCP peer (``identity.sourceIp``) is a
+The resolver uses ``X-Forwarded-For`` only when ``identity.sourceIp`` is a
 CloudFront origin-facing address, so authorizer tests need three things:
 
 * **A peer inside the list.** ``CLOUDFRONT_PEER_V4`` / ``CLOUDFRONT_PEER_V6`` are taken from the

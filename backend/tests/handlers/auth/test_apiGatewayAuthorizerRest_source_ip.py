@@ -121,8 +121,8 @@ class TestAuditSourceIpAttribution:
         assert _audit_source_ip(recorder.event) == "198.51.100.42"
 
     def test_cloudfront_peer_request_records_the_forwarded_viewer(self):
-        # A request whose TCP peer is a CloudFront origin-facing address (the guard): the
-        # viewer is the X-Forwarded-For entry left of that peer.
+        # A request whose sourceIp is a CloudFront origin-facing address (the guard): the
+        # viewer is the X-Forwarded-For entry left of that address.
         event = _rest_event(
             source_ip=CLOUDFRONT_PEER_V4,
             headers={"X-Forwarded-For": f"198.51.100.10, {CLOUDFRONT_PEER_V4}"},
@@ -169,7 +169,7 @@ class TestAuditSourceIpAttribution:
 
     def test_direct_request_with_cloudfront_headers_records_the_connection_address(self):
         # A CloudFront deployment's execute-api endpoint is reachable directly. A request whose
-        # TCP peer is not a CloudFront origin-facing address is recorded by that address, so
+        # sourceIp is not a CloudFront origin-facing address is recorded by that address, so
         # the headers this direct caller sent name nobody.
         event = _rest_event(
             source_ip="198.51.100.42",

@@ -1,6 +1,6 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""``X-Forwarded-For`` counts only for a request whose TCP peer is a CloudFront origin-facing address.
+"""``X-Forwarded-For`` counts only for a request whose ``sourceIp`` is a CloudFront origin-facing address.
 
 Traffic through the deployment's own distribution does not take that step. API Gateway reports
 its viewer as ``identity.sourceIp`` and the edge appears only as the trailing ``X-Forwarded-For``

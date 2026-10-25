@@ -14,9 +14,9 @@ allow-list checks must work for all of them without breaking any:
 3. **Behind CloudFront** — CloudFront is a reverse proxy in the request path. For a request
    through the deployment's distribution, API Gateway reports the viewer (the address that
    connected to CloudFront) as ``sourceIp``, and the CloudFront edge appears only as the
-   trailing ``X-Forwarded-For`` hop: ``<entries the viewer sent>, <viewer>, <edge>``. API
-   Gateway takes the viewer from the entry CloudFront appended, not from anything the viewer
-   sent, so ``sourceIp`` is the real client here too. The trailing hop is the edge, not
+   trailing ``X-Forwarded-For`` hop: ``<entries the viewer sent>, <viewer>, <edge>``. The
+   address API Gateway reports is the entry CloudFront appended, not an entry the viewer sent,
+   so ``sourceIp`` is the real client here too. The trailing hop is the edge, not
    ``sourceIp``, so the header step below does not apply and the origin-facing list is not
    consulted.
 
@@ -28,9 +28,11 @@ broken.
 ``X-Forwarded-For`` is the only header read. ``CloudFront-Viewer-Address`` is not: the
 deployment's distribution does not forward it to the API origin.
 
-Header trust: ``X-Forwarded-For`` is read only as a guard for a request whose TCP peer is a
-CloudFront origin-facing address, which is not how traffic through the deployment's
-distribution arrives (case 3). Three conditions, all required:
+Header trust: ``X-Forwarded-For`` is used only as a guard for a request that API Gateway reports
+with a CloudFront origin-facing address as ``sourceIp``. AWS documents ``sourceIp`` as the source
+address of the immediate TCP connection; for traffic through the deployment's distribution that is
+the edge, but API Gateway reports the viewer (case 3), so that traffic does not take this step.
+Three conditions, all required:
 
 - the deployment is behind CloudFront (``fronted == "cloudfront"``). On ``"alb"`` and
   ``"none"`` deployments no reverse proxy sets the header, so it is ignored entirely and the
@@ -290,9 +292,10 @@ def resolve_client_ip(event: dict, *, fronted: str = "none") -> Optional[str]:
 
     ``fronted`` is a deploy-time hint of the configured front ("cloudfront", "alb", or
     "none"). ``X-Forwarded-For`` is read **only** when ``fronted == "cloudfront"`` AND
-    ``sourceIp`` is a CloudFront origin-facing address: a guard for a request whose TCP peer is
-    a CloudFront edge. Traffic through the deployment's distribution does not take that step,
-    because API Gateway already reports its viewer as ``sourceIp`` (module docstring, case 3).
+    ``sourceIp`` is a CloudFront origin-facing address: a guard for a request API Gateway
+    reports with a CloudFront edge as ``sourceIp``. Traffic through the deployment's
+    distribution does not take that step, because API Gateway already reports its viewer as
+    ``sourceIp`` (module docstring, case 3).
     Resolution order:
 
     1. (origin-facing ``sourceIp`` only) ``X-Forwarded-For`` whose trailing hop is

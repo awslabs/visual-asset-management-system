@@ -1,7 +1,7 @@
 """The IP allow-list matcher must be family-aware: an IPv6 range is expressible and matches.
 
 The resolver returns an IPv6 client address as readily as an IPv4 one (as `identity.sourceIp`, or
-from `X-Forwarded-For` when the TCP peer is a CloudFront origin-facing address), so the module reads
+from `X-Forwarded-For` when `identity.sourceIp` is a CloudFront origin-facing address), so the module reads
 as IPv6-aware. The matcher was not: it split on `.` and `int()`ed each part, so any IPv6 literal
 raised `ValueError`, was caught, and became a denial — with no configuration able to admit an IPv6
 caller, because the CDK validator accepted only IPv4 dotted quads.
@@ -90,7 +90,7 @@ class TestMalformedRangesFailClosed:
 class TestEndToEndCloudFrontIpv6:
     """The resolver already extracts an IPv6 viewer address; the matcher must now accept it.
 
-    The TCP peer here is a CloudFront origin-facing address, so the viewer comes from
+    ``sourceIp`` here is a CloudFront origin-facing address, so the viewer comes from
     ``X-Forwarded-For`` (the guard). Through the distribution an IPv6 viewer is reported as
     ``identity.sourceIp`` itself."""
 

@@ -17,7 +17,7 @@ class TestResolveClientIp:
         assert resolve_client_ip(evt, fronted="none") == "203.0.113.7"
 
     # --- CloudFront deployment, sourceIp a CloudFront origin-facing address ---
-    # These events test the guard for a request whose TCP peer is a CloudFront origin-facing
+    # These events test the guard for a request whose sourceIp is a CloudFront origin-facing
     # address: the trailing X-Forwarded-For hop equals sourceIp. Traffic through the
     # distribution arrives with the viewer as sourceIp and the edge as the trailing hop
     # instead; test_clientIp_cloudfront_peer.py::TestTrafficThroughCloudFront covers that.
