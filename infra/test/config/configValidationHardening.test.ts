@@ -199,7 +199,7 @@ describe("container image placeholder rejection (S1-INFRA-099)", () => {
                     c.app.pipelines.useRapidPipeline.useEks.ecrContainerImageURI = REAL_IMAGE_URI;
                     c.app.pipelines.useModelOps.ecrContainerImageURI = REAL_IMAGE_URI;
                 })
-            ).not.toThrow(/ecrContainerImageURI/);
+            ).not.toThrow();
         });
 
         test("an empty value is rejected too, and says so", () => {
