@@ -1430,6 +1430,16 @@ The file supports the following categories:
 -   **Empty arrays** -- Ignored; only default CSP sources are used for those categories.
 -   **Duplicate prevention** -- Additional sources are merged with existing ones, avoiding duplicates.
 
+**Example: a base map for the Robotics Data Viewer.** The viewer's Map panel draws its base map from map tile images, which the default policy blocks. To allow a tile server that your organization operates or licenses, add its origin to `imgSrc`:
+
+```json
+{
+    "imgSrc": ["https://tiles.example.com"]
+}
+```
+
+Map tiles are loaded as images, so `imgSrc` is the only category the panel needs. Choosing the tile layer in the panel is described in [Robotics data viewer](../concepts/viewers.md#robotics-data-viewer).
+
 :::warning[CSP security]
 Only add trusted domains to your CSP configuration. Avoid using wildcards (`*`) as they compromise security. Regularly audit your CSP configuration and test changes in a development environment before deploying to production.
 :::

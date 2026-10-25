@@ -44,7 +44,7 @@ The host component builds the iframe `src` (`roboticsDeepLink.ts`); every presig
 
 ## Content Security Policy
 
-Lichtblick needs `'unsafe-eval'` in `script-src`, so the viewer carries `featuresEnabledRestriction: ["ALLOWUNSAFEEVAL"]` and is offered only when the deployment sets `app.webUi.allowUnsafeEvalFeatures`. The build adds no CSP source: its inline script is moved to `vams-init.js`, its fonts are files, and it fetches only from its own origin and the presigned Amazon S3 URLs.
+Lichtblick needs `'unsafe-eval'` in `script-src`, so the viewer carries `featuresEnabledRestriction: ["ALLOWUNSAFEEVAL"]` and is offered only when the deployment sets `app.webUi.allowUnsafeEvalFeatures`. The build adds no CSP source: its inline script is moved to `vams-init.js`, its fonts are files, and it fetches only from its own origin and the presigned Amazon S3 URLs. The Map panel's base-map tiles are therefore blocked (`img-src`); the panel still draws GPS fixes and GeoJSON, and an operator who wants a base map adds a tile server's origin to `imgSrc` in `infra/config/csp/cspAdditionalConfig.json` and selects the panel's Custom tile layer.
 
 ## Upgrading Lichtblick
 
