@@ -291,7 +291,7 @@ def resolve_client_ip(event: dict, *, fronted: str = "none") -> Optional[str]:
     """Resolve the real client IP for an API request, adaptively per request.
 
     ``fronted`` is a deploy-time hint of the configured front ("cloudfront", "alb", or
-    "none"). ``X-Forwarded-For`` is read **only** when ``fronted == "cloudfront"`` AND
+    "none"). ``X-Forwarded-For`` is used **only** when ``fronted == "cloudfront"`` AND
     ``sourceIp`` is a CloudFront origin-facing address: a guard for a request API Gateway
     reports with a CloudFront edge as ``sourceIp``. Traffic through the deployment's
     distribution does not take that step, because API Gateway already reports its viewer as

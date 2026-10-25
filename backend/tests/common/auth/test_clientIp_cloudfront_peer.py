@@ -10,13 +10,13 @@ is used as reported, and the origin-facing list is not consulted (``TestTrafficT
 The step is a guard for a request whose ``identity.sourceIp`` is one of CloudFront's
 origin-facing addresses. A CloudFront deployment's execute-api endpoint is also reachable
 directly, and a direct request carries whatever headers its caller set, so ``resolve_client_ip``
-reads ``X-Forwarded-For`` only for such a peer (the bundled snapshot, united with a list
+uses ``X-Forwarded-For`` only for such a peer (the bundled snapshot, united with a list
 refreshed at run time) and otherwise evaluates the request by ``sourceIp``.
 ``CloudFront-Viewer-Address`` is never read, whatever the peer.
 
 Below, a *CloudFront peer* is a ``sourceIp`` that is a CloudFront origin-facing address
 (``CLOUDFRONT_PEER_V4`` / ``CLOUDFRONT_PEER_V6``); those fixtures test the guard, not traffic
-through the distribution. Every header case pairs a CloudFront peer (the header is read) with a
+through the distribution. Every header case pairs a CloudFront peer (the header is used) with a
 non-CloudFront peer (the same header is not), so an implementation that ignored the header
 outright fails here just as one that read it for everyone does. Non-CloudFront peers are
 documentation addresses, which ``test_cloudFrontOriginFacingRanges.py`` proves are outside the
