@@ -32,6 +32,11 @@ import Synonyms from "../../synonyms";
 // may list schemas and bind one to the database.
 const COMPLIANCE_SCHEMAS_API_ROUTE = "/compliance/schemas";
 const COMPLIANCE_BIND_DATABASE_API_ROUTE = "/compliance/bind/{databaseId}";
+// The bucket listing behind the default-bucket selector. It is an administrator route, so it is
+// read only once the modal opens and only when the caller may call it: the Databases page keeps
+// this component mounted (as the create modal and as the edit modal of a selected row) for
+// callers who may only list databases.
+const BUCKETS_API_ROUTE = "/buckets";
 
 interface CreateDatabaseProps {
     open: boolean;
@@ -163,7 +168,7 @@ export default function CreateDatabase({
     const [selectedOptions, setSelectedOptions] = useState<MultiselectProps.Option[]>([]);
     const [buckets, setBuckets] = useState<BucketOption[]>([]);
     const [selectedBucket, setSelectedBucket] = useState<SelectProps.Option | null>(null);
-    const [loadingBuckets, setLoadingBuckets] = useState(true);
+    const [loadingBuckets, setLoadingBuckets] = useState(false);
 
     const [groupOptions, setGroupOptions] = useState<MultiselectProps.Option[]>([]);
     const [loadingGroups, setLoadingGroups] = useState(true);
@@ -175,14 +180,17 @@ export default function CreateDatabase({
     const canBindComplianceSchema =
         canCallRoute("GET", COMPLIANCE_SCHEMAS_API_ROUTE) &&
         canCallRoute("PUT", COMPLIANCE_BIND_DATABASE_API_ROUTE);
+    const canListBuckets = canCallRoute("GET", BUCKETS_API_ROUTE);
     const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
     const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
     const [loadingSchemas, setLoadingSchemas] = useState(false);
 
     const [initialSchemaValue, setInitialSchemaValue] = useState<string | null>(null);
 
+    // Everything the form reads is loaded when the modal opens, not on mount: the component is
+    // mounted while closed.
     useEffect(() => {
-        if (!canBindComplianceSchema) return;
+        if (!open || !canBindComplianceSchema) return;
         const loadSchemas = async () => {
             setLoadingSchemas(true);
             const [success, result] = await fetchComplianceSchemas();
@@ -198,35 +206,49 @@ export default function CreateDatabase({
             setLoadingSchemas(false);
         };
         loadSchemas();
-    }, [canBindComplianceSchema]);
+    }, [open, canBindComplianceSchema]);
 
     // Load current schema binding when editing
     useEffect(() => {
-        if (!canBindComplianceSchema || !initState?.databaseId) return;
+        if (!open || !canBindComplianceSchema || !initState?.databaseId) return;
         const loadBinding = async () => {
             const [success, result] = await getDatabaseBindings(initState.databaseId);
-            if (success && typeof result !== "string" && result.databaseSchema) {
-                setSelectedSchema({ label: result.databaseSchema, value: result.databaseSchema });
-                setInitialSchemaValue(result.databaseSchema);
+            if (success && typeof result !== "string") {
+                const bound = result.databaseSchema || null;
+                setSelectedSchema(bound ? { label: bound, value: bound } : null);
+                setInitialSchemaValue(bound);
             }
         };
         loadBinding();
-    }, [canBindComplianceSchema, initState?.databaseId]);
+    }, [open, canBindComplianceSchema, initState?.databaseId]);
 
-    // Fetch buckets when component loads
+    // Fetch buckets the first time the modal opens
+    const [bucketsRequested, setBucketsRequested] = useState(false);
     useEffect(() => {
+        if (!open || !canListBuckets || bucketsRequested) return;
+        setBucketsRequested(true);
         const loadBuckets = async () => {
             setLoadingBuckets(true);
             try {
                 const bucketsData = await fetchBuckets();
                 if (bucketsData && bucketsData.Items) {
                     // API returns an object with Items array
-                    setBuckets(bucketsData.Items);
-                    console.log("Loaded buckets:", bucketsData.Items);
+                    const items: BucketOption[] = bucketsData.Items;
+                    setBuckets(items);
+                    console.log("Loaded buckets:", items);
 
-                    // If there's only one bucket, select it by default
-                    if (bucketsData.Items.length === 1) {
-                        const bucket = bucketsData.Items[0];
+                    // Show the bucket the database already uses as selected.
+                    const current = items.find(
+                        (bucket) => bucket.bucketId === formState.defaultBucketId
+                    );
+                    if (current) {
+                        setSelectedBucket({
+                            label: bucketOptionLabel(current),
+                            value: current.bucketId,
+                        });
+                    } else if (items.length === 1 && !formState.defaultBucketId) {
+                        // If there's only one bucket and none is set yet, select it by default
+                        const bucket = items[0];
                         const option = {
                             label: bucketOptionLabel(bucket),
                             value: bucket.bucketId,
@@ -249,7 +271,7 @@ export default function CreateDatabase({
         };
 
         loadBuckets();
-    }, []);
+    }, [open, canListBuckets, bucketsRequested, formState.defaultBucketId]);
 
     return (
         <Modal

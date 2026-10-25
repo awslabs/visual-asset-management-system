@@ -29,6 +29,7 @@ Each row lists the rules that failed as violations. A row flagged **Exception ap
 1. Navigate to **Databases** in the left sidebar.
 2. In the databases table, choose the **Compliance** link for the database you want to inspect.
 3. The overview page shows:
+    - A **Schema Binding** panel, for users who may list schemas and bind or unbind one, with the **Bound schema** selector and the **Bind**, **Change** and **Remove** actions. See [Binding schemas to databases](#binding-schemas-to-databases).
     - A summary row with counts for each state: Compliant, Non-Compliant, Quarantined, Exception, Pending Evaluation, and Unknown, plus an **Evaluation errors** tile counting the assets whose last evaluation produced no verdict. That tile is an overlay on the state counts, not a state of its own: each of those assets is also counted under the state it kept.
     - A compliance rate (compliant assets divided by tracked assets).
     - A table of tracked assets with Asset Name, Asset ID, compliance state (with the **Evaluation error** indicator beside it where the last evaluation errored), the **Bound schema** — the schema the asset is currently bound to, which is not necessarily the schema whose evaluation produced the state shown — and last evaluation time.
@@ -40,6 +41,14 @@ Only assets with a compliance record are counted; an asset that has never been b
 ## Binding schemas to databases
 
 ### Assigning a compliance schema
+
+On the database's compliance overview:
+
+1. Navigate to **Databases** and choose the **Compliance** link of the database.
+2. In the **Schema Binding** panel, select the schema in **Bound schema**. `GLOBAL` schemas and schemas scoped to this database are offered.
+3. Choose **Bind**, or **Change** when the database already has a schema.
+
+The page reports the outcome and reloads the binding and the overview. In the database editor:
 
 1. Navigate to **Databases** and choose the database you want to configure.
 2. Choose **Edit** to open the database editor.
@@ -58,16 +67,18 @@ PUT /compliance/bind/{databaseId}
 { "schemaName": "survey-compliance", "complianceAutoEval": true }
 ```
 
-The database editor saves the database before it binds the schema, so binding there needs a role that may also update the database. A role that holds only compliance permissions, such as one built from the Compliance Admin template, binds with the API or with `vamscli compliance bind`. See [Permissions](#permissions).
+The database editor saves the database before it binds the schema, so binding there needs a role that may also update the database. A role that holds only compliance permissions, such as one built from the Compliance Admin template, binds on the compliance overview, with the API or with `vamscli compliance bind`. See [Permissions](#permissions).
 
 ### Removing a compliance schema
+
+On the database's compliance overview, choose **Remove** in the **Schema Binding** panel and confirm. In the database editor:
 
 1. Navigate to **Databases** and choose the database.
 2. Choose **Edit** to open the database editor.
 3. In the **Compliance Schema** field, select **None (no compliance schema)**.
 4. Choose **Update Database**.
 
-The compliance records of every asset that inherited the database schema are removed, and the overview shows **No Compliance Schema Bound** until a schema is assigned again.
+The compliance records of every asset that inherited the database schema are removed, and the overview shows **No compliance schema bound** until a schema is assigned again.
 
 :::warning[Irreversible action]
 Removing a database's compliance schema deletes the compliance state of every asset that inherited it. Assets with an asset-level schema override keep their state.
@@ -562,10 +573,10 @@ The built-in admin role holds full access (GET, PUT, POST, DELETE) to all four c
 
 VAMS includes two permission templates for compliance roles:
 
-| Template            | File                       | Description                                                                                                                                                                                                                         |
-| ------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Compliance Admin    | `compliance-admin.json`    | Full schema management, schema binding on one database and its assets, evaluation and quarantine actions within that database, cascade approval, the compliance web and API routes, and read access to the database and its assets. |
-| Compliance Readonly | `compliance-readonly.json` | View-only access: schemas, evaluation results and compliance state within one database, the quarantine list, pending cascades and the audit log. Cannot trigger evaluations or change state.                                        |
+| Template            | File                       | Description                                                                                                                                                                                                                                                                    |
+| ------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Compliance Admin    | `compliance-admin.json`    | Full schema management, schema binding on one database and its assets, evaluation and quarantine actions within that database, cascade approval, the compliance web and API routes, the database list route (`GET /database`), and read access to the database and its assets. |
+| Compliance Readonly | `compliance-readonly.json` | View-only access: schemas, evaluation results and compliance state within one database, the quarantine list, pending cascades and the audit log. Cannot trigger evaluations or change state.                                                                                   |
 
 Both templates take `DATABASE_ID` and `ROLE_NAME` variables. Apply them with `vamscli role constraint template import`, the `tools/permissionsSetup/apply_template.py` script, or `POST /auth/constraintsTemplateImport`; see [Developer Guide: Permissions](../developer/permissions.md#applying-templates).
 

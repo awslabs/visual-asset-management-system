@@ -173,6 +173,59 @@ class TestTheComplianceAdminTemplate:
             assert enforcer.enforce(_binding(DB_A), action) is False, action
 
 
+def _api(route_path):
+    """The Tier-1 object `enforceAPI` builds for a request on `route_path`."""
+    return {"object__type": "api", "route__path": route_path}
+
+
+def _api_route_criteria(template_name):
+    """Every (operator, value, allowed actions) route criterion of the template's `api`
+    constraints."""
+    criteria = []
+    for constraint in _template(template_name)["constraints"]:
+        if constraint["objectType"] != "api":
+            continue
+        actions = sorted(p["action"] for p in constraint["groupPermissions"] if p["type"] == "allow")
+        for criterion in constraint.get("criteriaAnd", []) + constraint.get("criteriaOr", []):
+            if criterion["field"] == "route__path":
+                criteria.append((criterion["operator"], criterion["value"], actions))
+    return criteria
+
+
+@pytest.mark.unit
+class TestTheComplianceAdminListsItsDatabase:
+    """The Databases page lists databases through `GET /database`, and the database's compliance
+    page is linked from that list. Compliance Admin grants that one route by its exact path: a
+    `/database` prefix would also open every `GET /database/...` asset and file route, and
+    `/buckets` stays an administrator route (test_buckets_scoping)."""
+
+    def test_the_template_grants_get_on_the_exact_database_list_path(self):
+        database_criteria = [c for c in _api_route_criteria("compliance-admin.json")
+                             if c[1].startswith("/database")]
+        assert database_criteria == [("equals", "/database", ["GET"])]
+
+    def test_the_template_grants_no_buckets_route(self):
+        assert not [c for c in _api_route_criteria("compliance-admin.json")
+                    if c[1].startswith("/buckets")]
+
+    def test_the_role_may_call_the_list_route_and_no_route_below_it(self, roles_enforcer):
+        enforcer = roles_enforcer({"compliance": ("compliance-admin.json", DB_A)})
+        # Positive control: the exact list path is allowed, so the denials below are about the
+        # path and not about the role matching nothing.
+        assert enforcer.enforce(_api("/database"), "GET") is True
+        for action in ("PUT", "POST", "DELETE"):
+            assert enforcer.enforce(_api("/database"), action) is False, action
+        for path in ("/database/x/assets", f"/database/{DB_A}", f"/database/{DB_A}/assets",
+                     "/database/", "/databases", "/buckets"):
+            assert enforcer.enforce(_api(path), "GET") is False, path
+
+    def test_the_list_returns_only_the_role_database(self, roles_enforcer):
+        """The listing filters each row on the `database` object; the role reads its own."""
+        enforcer = roles_enforcer({"compliance": ("compliance-admin.json", DB_A)})
+        assert enforcer.enforce(_database(DB_A), "GET") is True
+        assert enforcer.enforce(_database(DB_B), "GET") is False
+
+
 @pytest.mark.unit
 class TestDatabaseRolesDoNotBind:
     """The database templates grant writes on the database and its assets, and no binding."""

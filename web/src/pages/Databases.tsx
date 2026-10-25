@@ -22,6 +22,10 @@ import { useAllowedRoutes } from "../features/orchestration/permissions/useAllow
 // The API route the database compliance page reads; the column linking to it is shown only
 // when the caller may call it.
 const COMPLIANCE_STATE_DATABASE_API_ROUTE = "/compliance/state/{databaseId}";
+// The routes behind the Create, Edit and Delete Selected actions. A caller who may only list
+// databases (for example the Compliance Admin template) sees the list without them.
+const DATABASE_API_ROUTE = "/database";
+const DATABASE_BY_ID_API_ROUTE = "/database/{databaseId}";
 
 export default function Databases() {
     usePageTitle(Synonyms.Databases);
@@ -33,6 +37,9 @@ export default function Databases() {
     const mapStyleUrl = config?.locationServiceApiUrl;
     const { can: canCallRoute } = useAllowedRoutes();
     const showCompliance = canCallRoute("GET", COMPLIANCE_STATE_DATABASE_API_ROUTE);
+    const canCreate = canCallRoute("POST", DATABASE_API_ROUTE);
+    const canEdit = canCallRoute("PUT", DATABASE_BY_ID_API_ROUTE);
+    const canDelete = canCallRoute("DELETE", DATABASE_BY_ID_API_ROUTE);
 
     const listDefinition = useMemo(
         () =>
@@ -67,7 +74,9 @@ export default function Databases() {
                 CreateNewElement={CreateDatabase || undefined}
                 fetchAllElements={fetchAllDatabases}
                 fetchElements={fetchAllDatabases}
-                editEnabled={true}
+                createEnabled={canCreate}
+                editEnabled={canEdit}
+                hideDeleteButton={!canDelete}
                 customFilterControls={mapThumbnailToggle}
             />
             <Modal

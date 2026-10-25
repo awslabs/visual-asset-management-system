@@ -251,6 +251,7 @@ A common mistake is creating a `database` constraint and assuming it automatical
 -   **Forgetting non-mutating POST routes for read-only roles** -- Routes like `/search` and `/auth/routes` use POST but do not modify data. Read-only roles must allow POST on these specific paths for the UI to function.
 -   **Using wildcards for GLOBAL access** -- When granting access to GLOBAL resources, use `databaseId equals GLOBAL` (not `databaseId contains .*`). A wildcard inadvertently matches all databases.
 -   **Missing compliance object types** -- Granting `/compliance` API routes alone is insufficient. Users also need `complianceSchema`, `complianceBinding`, `complianceEvaluation`, or `complianceCascade` object type constraints at Tier 2 to access specific resources. Use the `compliance-admin` or `compliance-readonly` templates for correct setup.
+-   **Granting a route prefix where one route is meant** -- `route__path starts_with /database` grants Tier 1 access to the database list and to every route below it, such as the asset and file routes (`/database/{databaseId}/assets`, ...). To grant one route, use `equals` with its exact path, as the Compliance Admin template does for the database list (`route__path equals /database`).
 
 ## Permission templates
 

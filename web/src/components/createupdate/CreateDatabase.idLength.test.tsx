@@ -24,9 +24,13 @@ jest.mock("../../services/APIService", () => ({
     fetchBuckets: jest.fn(),
 }));
 
-// The compliance binding fields gate on this hook; these tests exercise the name field only.
+// The compliance binding fields gate on this hook; these tests exercise the name field only. The
+// bucket listing is allowed so the form loads as an administrator's does.
 jest.mock("../../features/orchestration/permissions/useAllowedRoutes", () => ({
-    useAllowedRoutes: () => ({ loading: false, can: () => false }),
+    useAllowedRoutes: () => ({
+        loading: false,
+        can: (method: string, path: string) => method === "GET" && path === "/buckets",
+    }),
 }));
 
 const { fetchBuckets } = jest.requireMock("../../services/APIService");

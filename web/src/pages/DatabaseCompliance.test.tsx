@@ -21,6 +21,11 @@ jest.mock("../services/ComplianceService", () => ({
     sweepSchema: jest.fn(),
 }));
 
+// The schema-binding control gates on this hook; DatabaseCompliance.binding.test.tsx covers it.
+jest.mock("../features/orchestration/permissions/useAllowedRoutes", () => ({
+    useAllowedRoutes: () => ({ loading: false, can: () => false }),
+}));
+
 const service = () =>
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     require("../services/ComplianceService");
