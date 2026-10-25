@@ -7,7 +7,7 @@
  * The RapidPipeline (Amazon ECS) timeout chain. Three clocks bound a run, each enforced by a different
  * service, and they must nest:
  *
- *   ConstructPipeline + Fargate task TimeoutSeconds 17100 + stop route + PipelineEnd
+ *   ConstructPipeline + Fargate task TimeoutSeconds 17040 + stop route + PipelineEnd
  *     <=  state machine TimeoutSeconds 18000  <  bundle taskTimeout "19800"
  *
  * The Fargate task is the only step without a bound of its own: ConstructPipeline and PipelineEnd are
@@ -209,7 +209,7 @@ describe("RapidPipeline ECS timeout headroom", () => {
     });
 
     test("the Fargate task carries a task-level timeout, the config constant", () => {
-        expect(states[FARGATE].TimeoutSeconds).toBe(17100);
+        expect(states[FARGATE].TimeoutSeconds).toBe(17040);
         expect(states[FARGATE].TimeoutSeconds).toBe(
             Config.RAPID_PIPELINE_ECS_FARGATE_TASK_TIMEOUT_SECONDS
         );
@@ -232,7 +232,9 @@ describe("RapidPipeline ECS timeout headroom", () => {
         const catcher = timeoutCatcher();
         expect(catcher).toBeDefined();
         const stopRoute = routeWorstCaseSeconds(catcher.Next, states);
-        expect(stopRoute).toBeGreaterThan(0);
+        // ListTasks, DescribeTasks and one concurrent round of StopTask, 18 s each at worst: the
+        // stop-route worst case config.ts counts.
+        expect(stopRoute).toBe(54);
         const longestRun =
             lambdaStateBound(CONSTRUCT) + fargate + stopRoute + lambdaStateBound(END);
         expect(longestRun).toBeLessThanOrEqual(definition.TimeoutSeconds);
@@ -263,6 +265,16 @@ describe("RapidPipeline ECS timeout headroom", () => {
                 resultPath.startsWith("$.") &&
                 resultPath !== "$.error" &&
                 !resultPath.startsWith("$.error."));
+        // A JSONata state has no ResultPath. Its Output, and each of its catchers', must merge one
+        // field other than `error` into the state input: `$merge([$states.input, {'<field>': ...}])`.
+        const jsonataKeepsInputAndError = (output: unknown): boolean => {
+            if (typeof output !== "string") return false;
+            const merged =
+                /^\{% \$merge\(\[\$states\.input, \{'([A-Za-z][A-Za-z0-9]*)': .+\}\]\) %\}$/s.exec(
+                    output
+                );
+            return merged !== null && merged[1] !== "error";
+        };
         const reachedEnd: string[] = [];
         const walk = (name: string, visited: string[]): void => {
             if (name === END) {
@@ -280,6 +292,14 @@ describe("RapidPipeline ECS timeout headroom", () => {
                     break;
                 case "Task":
                 case "Map":
+                    if (state.QueryLanguage === "JSONata") {
+                        expect(jsonataKeepsInputAndError(state.Output)).toBe(true);
+                        expect(state.Assign).toBeUndefined();
+                        for (const c of state.Catch ?? []) {
+                            expect(jsonataKeepsInputAndError(c.Output)).toBe(true);
+                        }
+                        break;
+                    }
                     expect(state.InputPath ?? "$").toBe("$");
                     expect(state.OutputPath ?? "$").toBe("$");
                     expect(keepsInputAndError(state.ResultPath)).toBe(true);

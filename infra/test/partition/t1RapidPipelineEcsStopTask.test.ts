@@ -6,12 +6,13 @@
 /**
  * T1 tier: the RapidPipeline (Amazon ECS) timeout stop route, in every shipped partition.
  *
- * A Fargate task still running at its task-level timeout is found with ecs:ListTasks and stopped
- * with ecs:StopTask (test/pipelines/ecsTimeoutStopTask.test.ts covers the route itself). Both calls
- * are AWS SDK integrations whose `Resource` is a Step Functions ARN, and the StopTask grant is an ECS
- * task ARN; each is built from the deployment's partition. A commercial `arn:aws:` in GovCloud or
- * the EU Sovereign Cloud is accepted by CloudFormation and only fails when the route runs — at the
- * timeout, the one moment it is needed — so it is asserted here.
+ * A Fargate task still running at its task-level timeout is found with ecs:ListTasks and
+ * ecs:DescribeTasks and stopped with ecs:StopTask (test/pipelines/ecsTimeoutStopTask.test.ts covers
+ * the route itself). The three calls are AWS SDK integrations whose `Resource` is a Step Functions
+ * ARN, and the DescribeTasks and StopTask grants are ECS task ARNs; each is built from the
+ * deployment's partition. A commercial `arn:aws:` in GovCloud or the EU Sovereign Cloud is accepted
+ * by CloudFormation and only fails when the route runs — at the timeout, the one moment it is
+ * needed — so it is asserted here.
  *
  * No shipped template enables the ECS RapidPipeline, so every assertion runs against a HYBRID of each
  * template with it switched on (and the global VPC it requires). The absence assertion on the
@@ -54,6 +55,7 @@ interface StopRoute {
     states: Record<string, any>;
     clusterId: string;
     listTasks: any;
+    describeTasks: any;
     stopTask: any;
 }
 
@@ -91,16 +93,19 @@ const stopRoute = (s: SynthResult): StopRoute => {
         states,
         clusterId: clusters[0].logicalId,
         listTasks: bySid("ListTimedOutRapidPipelineTask"),
+        describeTasks: bySid("DescribeTimedOutRapidPipelineTask"),
         stopTask: bySid("StopTimedOutRapidPipelineTask"),
     };
 };
 
-/** Every ARN the stop route builds: the two SDK integration resources and the StopTask grant. */
+/** Every ARN the stop route builds: the three SDK integration resources and the task grants. */
 const stopRouteArns = (s: SynthResult): string[] => {
     const r = stopRoute(s);
     return [
         r.states.ListTimedOutTask.Resource,
+        r.states.DescribeTimedOutTasks.Resource,
         r.states.StopTimedOutTasks.ItemProcessor.States.StopTimedOutTask.Resource,
+        ...asList(r.describeTasks.Resource).map((v) => SynthResult.flatten(v)),
         ...asList(r.stopTask.Resource).map((v) => SynthResult.flatten(v)),
     ];
 };
@@ -109,6 +114,9 @@ describe("RapidPipeline ECS stop route across partitions", () => {
     test.each(ALL_TEMPLATES)("[control] %s with ECS enabled emits the stop route", (name) => {
         const r = stopRoute(ecsSynth(name));
         expect(r.states.RapidPipelineRunFargate.Catch[0].Next).toBe("ListTimedOutTask");
+        expect(r.states.RapidPipelineRunFargate.Parameters["Group.$"]).toBe("$$.Execution.Name");
+        expect(r.states.TimedOutTaskListed.Choices[0].Next).toBe("DescribeTimedOutTasks");
+        expect(r.states.DescribeTimedOutTasks.Next).toBe("StopTimedOutTasks");
         expect(r.states.StopTimedOutTasks.Type).toBe("Map");
     });
 
@@ -120,16 +128,20 @@ describe("RapidPipeline ECS stop route across partitions", () => {
             expect(r.states.ListTimedOutTask.Resource).toBe(
                 `arn:${s.partition}:states:::aws-sdk:ecs:listTasks`
             );
+            expect(r.states.DescribeTimedOutTasks.Resource).toBe(
+                `arn:${s.partition}:states:::aws-sdk:ecs:describeTasks`
+            );
             expect(r.states.StopTimedOutTasks.ItemProcessor.States.StopTimedOutTask.Resource).toBe(
                 `arn:${s.partition}:states:::aws-sdk:ecs:stopTask`
             );
             // The calls target this pipeline's cluster.
             expect(r.states.ListTimedOutTask.Parameters.Cluster).toBe(`\${${r.clusterId}.Arn}`);
+            expect(r.states.DescribeTimedOutTasks.Arguments.Cluster).toBe(`\${${r.clusterId}.Arn}`);
         }
     );
 
     test.each(ALL_TEMPLATES)(
-        "%s: ListTasks and StopTask are granted on this cluster in this partition",
+        "%s: ListTasks, DescribeTasks and StopTask are granted on this cluster in this partition",
         (name) => {
             const s = ecsSynth(name);
             const r = stopRoute(s);
@@ -139,11 +151,16 @@ describe("RapidPipeline ECS stop route across partitions", () => {
             expect(asList(r.listTasks.Action)).toEqual(["ecs:ListTasks"]);
             expect(r.listTasks.Resource).toBe("*");
             expect(r.listTasks.Condition).toEqual(condition);
-            expect(asList(r.stopTask.Action)).toEqual(["ecs:StopTask"]);
-            expect(asList(r.stopTask.Resource).map((v) => SynthResult.flatten(v))).toEqual([
-                `arn:${s.partition}:ecs:${s.region}:${ACCOUNT}:task/\${${r.clusterId}}/*`,
-            ]);
-            expect(r.stopTask.Condition).toEqual(condition);
+            for (const [statement, action] of [
+                [r.describeTasks, "ecs:DescribeTasks"],
+                [r.stopTask, "ecs:StopTask"],
+            ]) {
+                expect(asList(statement.Action)).toEqual([action]);
+                expect(asList(statement.Resource).map((v) => SynthResult.flatten(v))).toEqual([
+                    `arn:${s.partition}:ecs:${s.region}:${ACCOUNT}:task/\${${r.clusterId}}/*`,
+                ]);
+                expect(statement.Condition).toEqual(condition);
+            }
         }
     );
 
