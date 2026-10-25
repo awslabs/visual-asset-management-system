@@ -12,20 +12,23 @@ for all of them without breaking any:
    the client then calls API Gateway directly. This is effectively the direct case:
    ``sourceIp`` is the real client.
 3. **Behind CloudFront** — CloudFront is a true reverse proxy in the request path. The
-   immediate peer is a CloudFront IP, and the real client appears in the
-   ``CloudFront-Viewer-Address`` header (and is appended to ``X-Forwarded-For``).
+   immediate peer is a CloudFront IP, and CloudFront appends the real client to
+   ``X-Forwarded-For`` (API Gateway then appends the CloudFront peer).
 
 Resolution is therefore **per-request adaptive** rather than fixed at deploy time: if
-forwarding headers set by CloudFront are present on *this* request, the real client IP is
-taken from them; otherwise ``sourceIp`` is used. This means a deployment that has CloudFront
-or an ALB configured still authorizes direct execute-api callers correctly (they are judged
-by their own connection address), so existing direct integrations are never broken.
+CloudFront's ``X-Forwarded-For`` is present on *this* request, the real client IP is taken
+from it; otherwise ``sourceIp`` is used. This means a deployment that has CloudFront or an ALB
+configured still authorizes direct execute-api callers correctly (they are judged by their own
+connection address), so existing direct integrations are never broken.
 
-Header trust: forwarding headers are read **only for a request that arrived from CloudFront**.
+``X-Forwarded-For`` is the only header read. ``CloudFront-Viewer-Address`` is not: the
+deployment's distribution does not forward it to the API origin.
+
+Header trust: ``X-Forwarded-For`` is read **only for a request that arrived from CloudFront**.
 Two conditions, both required:
 
 - the deployment is behind CloudFront (``fronted == "cloudfront"``). On ``"alb"`` and
-  ``"none"`` deployments no reverse proxy sets these headers, so they are ignored entirely;
+  ``"none"`` deployments no reverse proxy sets the header, so it is ignored entirely;
 - the TCP peer (``identity.sourceIp``, which a client cannot choose) is one of CloudFront's
   origin-facing addresses. A CloudFront deployment's execute-api endpoint stays reachable
   directly, and on such a request every header is whatever the caller sent, so a request
@@ -209,18 +212,6 @@ def _is_ip(value: Optional[str]) -> bool:
     return True
 
 
-def _strip_port(addr: str) -> str:
-    """Strip the port from an ``ip:port`` value. Handles IPv6 ``[ip]:port`` bracket form."""
-    addr = addr.strip()
-    if addr.startswith("["):
-        # [IPv6]:port -> IPv6
-        return addr[1:].split("]", 1)[0]
-    # IPv4:port -> IPv4 (only strip when exactly one colon, else it's a bare IPv6)
-    if addr.count(":") == 1:
-        return addr.rsplit(":", 1)[0]
-    return addr
-
-
 def _rightmost_untrusted_xff(xff: str, trusted_peer: Optional[str]) -> Optional[str]:
     """Return the right-most X-Forwarded-For entry that we did not add (the real client).
 
@@ -240,25 +231,18 @@ def _rightmost_untrusted_xff(xff: str, trusted_peer: Optional[str]) -> Optional[
 
 
 def _forwarded_client_ip(event: dict, source_ip: str) -> Optional[str]:
-    """The client address CloudFront's forwarding headers name, or None if they name none.
+    """The client address CloudFront's ``X-Forwarded-For`` names, or None if it names none.
 
-    Says nothing about whether the headers are to be believed: the caller decides that from
-    the TCP peer. A value that does not parse as an IP address is passed over.
+    Says nothing about whether the header is to be believed: the caller decides that from
+    the TCP peer. Only a header whose trailing hop is the TCP peer (the CloudFront edge that
+    called the gateway) names a client, and a value that does not parse as an IP address is
+    passed over.
     """
     headers = event.get("headers", {}) or {}
     if not isinstance(headers, dict):
         return None
     lower = {k.lower(): v for k, v in headers.items() if isinstance(k, str)}
 
-    # 1) CloudFront-Viewer-Address: the viewer IP and source port, set by CloudFront.
-    viewer = lower.get("cloudfront-viewer-address")
-    if isinstance(viewer, str) and viewer:
-        resolved = _strip_port(viewer)
-        if _is_ip(resolved):
-            return resolved
-
-    # 2) X-Forwarded-For whose trailing hop is the TCP peer (the CloudFront edge that called
-    #    the gateway): the right-most untrusted hop.
     xff = lower.get("x-forwarded-for")
     if isinstance(xff, str) and xff:
         parts = [p.strip() for p in xff.split(",") if p.strip()]
@@ -273,15 +257,13 @@ def resolve_client_ip(event: dict, *, fronted: str = "none") -> Optional[str]:
     """Resolve the real client IP for an API request, adaptively per request.
 
     ``fronted`` is a deploy-time hint of the configured front ("cloudfront", "alb", or
-    "none"). Forwarding headers are read **only** when ``fronted == "cloudfront"`` AND the TCP
+    "none"). ``X-Forwarded-For`` is read **only** when ``fronted == "cloudfront"`` AND the TCP
     peer is a CloudFront origin-facing address, because only then did a CloudFront edge set
-    them. Resolution order:
+    it. Resolution order:
 
-    1. (CloudFront peer only) ``CloudFront-Viewer-Address`` header, if it holds an IP address
-       — use the viewer IP.
-    2. (CloudFront peer only) ``X-Forwarded-For`` whose trailing hop is the TCP peer — use the
+    1. (CloudFront peer only) ``X-Forwarded-For`` whose trailing hop is the TCP peer — use the
        right-most untrusted hop.
-    3. Otherwise ``identity.sourceIp`` — the TCP peer. Authoritative for direct execute-api
+    2. Otherwise ``identity.sourceIp`` — the TCP peer. Authoritative for direct execute-api
        callers (including direct callers of a CloudFront deployment) and ALB redirects, and a
        client cannot choose it, so a forwarding header a direct caller sets cannot stand in
        for an allow-listed IP.
@@ -297,7 +279,7 @@ def resolve_client_ip(event: dict, *, fronted: str = "none") -> Optional[str]:
         if forwarded and is_cloudfront_origin_facing(source_ip):
             return forwarded
 
-    # 3) The TCP peer: ALB redirects, direct callers of the execute-api URL on any deployment,
+    # 2) The TCP peer: ALB redirects, direct callers of the execute-api URL on any deployment,
     #    and any request whose peer is not CloudFront.
     return source_ip
 

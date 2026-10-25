@@ -129,11 +129,23 @@ class TestAuditSourceIpAttribution:
         _, recorder = _run(event, fronted="cloudfront")
         assert _audit_source_ip(recorder.event) == "198.51.100.10"
 
-    def test_cloudfront_viewer_address_header_records_the_viewer(self):
-        # CloudFront-Viewer-Address is preferred when forwarded; the port is stripped.
+    def test_cloudfront_viewer_address_header_alone_records_the_connection_address(self):
+        # CloudFront-Viewer-Address is not read, so without X-Forwarded-For the record keeps
+        # the TCP peer.
         event = _rest_event(
             source_ip=CLOUDFRONT_PEER_V4,
             headers={"CloudFront-Viewer-Address": "198.51.100.10:41234"},
+        )
+        _, recorder = _run(event, fronted="cloudfront")
+        assert _audit_source_ip(recorder.event) == CLOUDFRONT_PEER_V4
+
+    def test_cloudfront_request_with_both_headers_records_the_forwarded_for_viewer(self):
+        event = _rest_event(
+            source_ip=CLOUDFRONT_PEER_V4,
+            headers={
+                "CloudFront-Viewer-Address": "203.0.113.9:41234",
+                "X-Forwarded-For": f"198.51.100.10, {CLOUDFRONT_PEER_V4}",
+            },
         )
         _, recorder = _run(event, fronted="cloudfront")
         assert _audit_source_ip(recorder.event) == "198.51.100.10"

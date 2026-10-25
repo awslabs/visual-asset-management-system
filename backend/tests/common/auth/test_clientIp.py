@@ -16,21 +16,27 @@ class TestResolveClientIp:
         evt = _evt(source_ip="203.0.113.7")
         assert resolve_client_ip(evt, fronted="none") == "203.0.113.7"
 
-    def test_cloudfront_prefers_viewer_address(self):
-        # CloudFront-Viewer-Address is "ip:port"; the port must be stripped.
+    def test_cloudfront_viewer_address_alone_resolves_to_the_peer(self):
+        # CloudFront-Viewer-Address is not read; without X-Forwarded-For the peer is used.
         evt = _evt(source_ip=CLOUDFRONT_PEER_V4,
                    headers={"CloudFront-Viewer-Address": "198.51.100.23:50314"})
+        assert resolve_client_ip(evt, fronted="cloudfront") == CLOUDFRONT_PEER_V4
+
+    def test_cloudfront_both_headers_resolve_from_forwarded_for(self):
+        evt = _evt(source_ip=CLOUDFRONT_PEER_V4,
+                   headers={"CloudFront-Viewer-Address": "192.0.2.99:50314",
+                            "X-Forwarded-For": f"198.51.100.23, {CLOUDFRONT_PEER_V4}"})
         assert resolve_client_ip(evt, fronted="cloudfront") == "198.51.100.23"
 
-    def test_cloudfront_viewer_address_ipv6(self):
-        # IPv6 viewer address form is "[ipv6]:port".
+    def test_cloudfront_ipv6_viewer_in_forwarded_for(self):
+        # An IPv6 viewer address in X-Forwarded-For resolves like an IPv4 one.
         evt = _evt(source_ip=CLOUDFRONT_PEER_V4,
-                   headers={"CloudFront-Viewer-Address": "[2001:db8::1]:50314"})
+                   headers={"X-Forwarded-For": f"2001:db8::1, {CLOUDFRONT_PEER_V4}"})
         assert resolve_client_ip(evt, fronted="cloudfront") == "2001:db8::1"
 
     def test_cloudfront_falls_back_to_rightmost_untrusted_xff(self):
-        # No viewer-address header; XFF trailing hop is the CloudFront peer (sourceIp),
-        # so the right-most untrusted entry (the client) is used.
+        # XFF trailing hop is the CloudFront peer (sourceIp), so the right-most untrusted
+        # entry (the client) is used.
         evt = _evt(source_ip=CLOUDFRONT_PEER_V4,
                    headers={"X-Forwarded-For": f"198.51.100.23, {CLOUDFRONT_PEER_V4}"})
         assert resolve_client_ip(evt, fronted="cloudfront") == "198.51.100.23"

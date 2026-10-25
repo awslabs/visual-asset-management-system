@@ -1,12 +1,12 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""CloudFront forwarding headers count only for a request whose TCP peer is CloudFront.
+"""CloudFront's ``X-Forwarded-For`` counts only for a request whose TCP peer is CloudFront.
 
 A CloudFront deployment's execute-api endpoint is also reachable directly, and a direct request
-carries whatever headers its caller set. ``resolve_client_ip`` therefore reads
-``CloudFront-Viewer-Address`` / ``X-Forwarded-For`` only when ``identity.sourceIp`` is one of
-CloudFront's origin-facing addresses (the bundled snapshot, united with a list refreshed at run
-time), and otherwise evaluates the request by its connection address.
+carries whatever headers its caller set. ``resolve_client_ip`` therefore reads ``X-Forwarded-For``
+only when ``identity.sourceIp`` is one of CloudFront's origin-facing addresses (the bundled
+snapshot, united with a list refreshed at run time), and otherwise evaluates the request by its
+connection address. ``CloudFront-Viewer-Address`` is never read, whatever the peer.
 
 Every header case below pairs a CloudFront peer (the header is read) with a non-CloudFront peer
 (the same header is not), so an implementation that ignored the headers outright fails here just
@@ -36,6 +36,8 @@ DIRECT_PEER_V4 = "203.0.113.50"
 DIRECT_PEER_V6 = "2001:db8:ffff::50"
 VIEWER = "198.51.100.23"
 VIEWER_V6 = "2001:db8::1"
+# A different address in CloudFront-Viewer-Address, so a test can tell which header answered.
+OTHER_VIEWER = "203.0.113.77"
 # A prefix CloudFront might add after the snapshot was taken (a documentation range here).
 LATER_PREFIX = ipaddress.ip_network("192.0.2.0/24")
 LATER_PEER = "192.0.2.10"
@@ -81,9 +83,9 @@ def _downloads_failing():
 
 @pytest.mark.unit
 class TestHeadersCountOnlyFromCloudFrontPeers:
-    def test_viewer_address_from_a_cloudfront_peer_is_read(self):
+    def test_viewer_address_alone_from_a_cloudfront_peer_resolves_to_the_peer(self):
         evt = _evt(CLOUDFRONT_PEER_V4, {"CloudFront-Viewer-Address": f"{VIEWER}:50314"})
-        assert resolve_client_ip(evt, fronted="cloudfront") == VIEWER
+        assert resolve_client_ip(evt, fronted="cloudfront") == CLOUDFRONT_PEER_V4
 
     def test_viewer_address_from_a_direct_peer_is_not_read(self):
         evt = _evt(DIRECT_PEER_V4, {"CloudFront-Viewer-Address": f"{VIEWER}:50314"})
@@ -91,6 +93,16 @@ class TestHeadersCountOnlyFromCloudFrontPeers:
 
     def test_forwarded_for_from_a_cloudfront_peer_is_read(self):
         evt = _evt(CLOUDFRONT_PEER_V4, {"X-Forwarded-For": f"{VIEWER}, {CLOUDFRONT_PEER_V4}"})
+        assert resolve_client_ip(evt, fronted="cloudfront") == VIEWER
+
+    def test_both_headers_from_a_cloudfront_peer_resolve_from_forwarded_for(self):
+        evt = _evt(
+            CLOUDFRONT_PEER_V4,
+            {
+                "CloudFront-Viewer-Address": f"{OTHER_VIEWER}:443",
+                "X-Forwarded-For": f"{VIEWER}, {CLOUDFRONT_PEER_V4}",
+            },
+        )
         assert resolve_client_ip(evt, fronted="cloudfront") == VIEWER
 
     def test_forwarded_for_from_a_direct_peer_is_not_read(self):
@@ -110,15 +122,15 @@ class TestHeadersCountOnlyFromCloudFrontPeers:
         assert resolve_client_ip(evt, fronted="cloudfront") == DIRECT_PEER_V4
 
     def test_header_names_are_matched_case_insensitively(self):
-        evt = _evt(CLOUDFRONT_PEER_V4, {"cloudfront-viewer-address": f"{VIEWER}:1"})
+        evt = _evt(CLOUDFRONT_PEER_V4, {"x-FORWARDED-for": f"{VIEWER}, {CLOUDFRONT_PEER_V4}"})
         assert resolve_client_ip(evt, fronted="cloudfront") == VIEWER
 
 
 @pytest.mark.unit
 class TestIpv6Peers:
-    def test_viewer_address_from_an_ipv6_cloudfront_peer_is_read(self):
+    def test_viewer_address_alone_from_an_ipv6_cloudfront_peer_resolves_to_the_peer(self):
         evt = _evt(CLOUDFRONT_PEER_V6, {"CloudFront-Viewer-Address": f"[{VIEWER_V6}]:50314"})
-        assert resolve_client_ip(evt, fronted="cloudfront") == VIEWER_V6
+        assert resolve_client_ip(evt, fronted="cloudfront") == CLOUDFRONT_PEER_V6
 
     def test_forwarded_for_from_an_ipv6_cloudfront_peer_is_read(self):
         evt = _evt(CLOUDFRONT_PEER_V6, {"X-Forwarded-For": f"{VIEWER_V6}, {CLOUDFRONT_PEER_V6}"})
@@ -139,7 +151,7 @@ class TestMalformedHeaders:
         evt = _evt(CLOUDFRONT_PEER_V4, {"CloudFront-Viewer-Address": "not-an-address:443"})
         assert resolve_client_ip(evt, fronted="cloudfront") == CLOUDFRONT_PEER_V4
 
-    def test_unparseable_viewer_address_still_lets_forwarded_for_answer(self):
+    def test_unparseable_viewer_address_does_not_displace_forwarded_for(self):
         evt = _evt(
             CLOUDFRONT_PEER_V4,
             {
@@ -165,7 +177,7 @@ class TestMalformedHeaders:
         assert resolve_client_ip(evt, fronted="cloudfront") == CLOUDFRONT_PEER_V4
 
     def test_malformed_header_from_a_direct_peer_resolves_to_the_peer(self):
-        evt = _evt(DIRECT_PEER_V4, {"CloudFront-Viewer-Address": "[::zz]:1"})
+        evt = _evt(DIRECT_PEER_V4, {"X-Forwarded-For": f"[::zz], {DIRECT_PEER_V4}"})
         assert resolve_client_ip(evt, fronted="cloudfront") == DIRECT_PEER_V4
 
 
@@ -188,7 +200,7 @@ class TestOtherFrontsUnaffected:
 
     @pytest.mark.parametrize("fronted", ["alb", "none"])
     def test_the_address_list_is_never_consulted(self, fronted, cloudfront_refresh_offline):
-        evt = _evt(LATER_PEER, {"CloudFront-Viewer-Address": f"{VIEWER}:443"})
+        evt = _evt(LATER_PEER, {"X-Forwarded-For": f"{VIEWER}, {LATER_PEER}"})
         assert resolve_client_ip(evt, fronted=fronted) == LATER_PEER
         assert cloudfront_refresh_offline.attempted_urls == []
 
@@ -209,8 +221,13 @@ class TestAllowListDecision:
             return core.authenticate_request(evt, fronted="cloudfront")
 
     def test_allowed_viewer_behind_cloudfront_is_admitted(self):
-        res = self._decide(CLOUDFRONT_PEER_V4, {"CloudFront-Viewer-Address": f"{VIEWER}:443"})
+        res = self._decide(CLOUDFRONT_PEER_V4, {"X-Forwarded-For": f"{VIEWER}, {CLOUDFRONT_PEER_V4}"})
         assert res["authorized"] is True
+
+    def test_viewer_address_alone_behind_cloudfront_is_judged_by_the_peer(self):
+        res = self._decide(CLOUDFRONT_PEER_V4, {"CloudFront-Viewer-Address": f"{VIEWER}:443"})
+        assert res["authorized"] is False
+        assert res["reason"] == "IP address not authorized"
 
     def test_direct_caller_naming_an_allowed_address_is_judged_by_its_connection(self):
         res = self._decide(
@@ -235,14 +252,19 @@ class TestNoLookupWithoutHeaders:
         assert cloudfront_refresh_offline.attempted_urls == []
 
     def test_snapshot_peer_never_triggers_a_refresh(self, cloudfront_refresh_offline):
-        evt = _evt(CLOUDFRONT_PEER_V4, {"CloudFront-Viewer-Address": f"{VIEWER}:443"})
+        evt = _evt(CLOUDFRONT_PEER_V4, {"X-Forwarded-For": f"{VIEWER}, {CLOUDFRONT_PEER_V4}"})
         assert resolve_client_ip(evt, fronted="cloudfront") == VIEWER
         assert cloudfront_refresh_offline.attempted_urls == []
 
     def test_unknown_peer_with_headers_attempts_one_refresh(self, cloudfront_refresh_offline):
-        evt = _evt(DIRECT_PEER_V4, {"CloudFront-Viewer-Address": f"{VIEWER}:443"})
+        evt = _evt(DIRECT_PEER_V4, {"X-Forwarded-For": f"{VIEWER}, {DIRECT_PEER_V4}"})
         assert resolve_client_ip(evt, fronted="cloudfront") == DIRECT_PEER_V4
         assert cloudfront_refresh_offline.attempted_urls == [clientIp.ORIGIN_FACING_SOURCE_URL]
+
+    def test_viewer_address_alone_never_consults_the_list(self, cloudfront_refresh_offline):
+        evt = _evt(DIRECT_PEER_V4, {"CloudFront-Viewer-Address": f"{VIEWER}:443"})
+        assert resolve_client_ip(evt, fronted="cloudfront") == DIRECT_PEER_V4
+        assert cloudfront_refresh_offline.attempted_urls == []
 
 
 @pytest.mark.unit
@@ -290,7 +312,7 @@ class TestOriginFacingMembership:
     def test_a_peer_only_the_refresh_knows_has_its_headers_read(self, monkeypatch):
         download, _ = _downloads_serving({4: (LATER_PREFIX,), 6: ()})
         monkeypatch.setattr(clientIp, "_download_origin_facing", download)
-        evt = _evt(LATER_PEER, {"CloudFront-Viewer-Address": f"{VIEWER}:443"})
+        evt = _evt(LATER_PEER, {"X-Forwarded-For": f"{VIEWER}, {LATER_PEER}"})
         assert resolve_client_ip(evt, fronted="cloudfront") == VIEWER
 
     def test_a_refresh_is_reused_for_six_hours(self, monkeypatch):
