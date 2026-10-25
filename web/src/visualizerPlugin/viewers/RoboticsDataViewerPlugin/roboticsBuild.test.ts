@@ -208,6 +208,18 @@ describe("the overlay entrypoint loads no Lichtblick extension", () => {
     it("replaces the Extensions settings with a notice", () => {
         expect(code).toMatch(/extensionSettings:\s*<ExtensionsUnavailable\s*\/>/);
     });
+
+    it("answers a dropped or chosen .foxe file with a toast inside the app's providers", () => {
+        expect(code).toMatch(
+            /import \{ EXTENSIONS_UNAVAILABLE, refuseExtensionFiles \} from "\.\/vamsExtensionFiles";/
+        );
+        expect(code).toMatch(
+            /refuseExtensionFiles\(window,\s*\(message\)\s*=>\s*\{\s*enqueueSnackbar\(message/
+        );
+        expect(code).toMatch(
+            /extraProviders=\{\[[\s\S]*<RefuseExtensionFiles key=[^>]*\/>,\s*\]\}/
+        );
+    });
 });
 
 /**

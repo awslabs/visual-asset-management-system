@@ -12,10 +12,11 @@
  * No extension can be installed or loaded. Upstream's WebRoot always adds two IndexedDB extension
  * loaders, and an installed extension runs as code in this document, which is same-origin with
  * VAMS. So the entrypoint renders upstream's SharedRoot itself, as WebRoot would but with an empty
- * extension loader list: a dropped .foxe file installs nothing (the app reports that no extension
- * loader exists), an extension stored by an earlier build is never read, and the extension
- * databases are never opened. Settings > Extensions says extensions are unavailable instead of
- * listing the marketplace. User Scripts are not affected: they run in a worker.
+ * extension loader list: a dropped .foxe file installs nothing, an extension stored by an earlier
+ * build is never read, and the extension databases are never opened. Settings > Extensions says
+ * extensions are unavailable instead of listing the marketplace, and RefuseExtensionFiles answers a
+ * dropped or chosen .foxe file with the same (vamsExtensionFiles.ts) in place of upstream's "No
+ * extension loader found" error. User Scripts are not affected: they run in a worker.
  *
  * VAMS hands the presigned URLs over in the URL fragment, which no request carries. The app reads
  * its deep link from the query string when its root first renders, so:
@@ -37,6 +38,7 @@
  */
 
 import Alert from "@mui/material/Alert";
+import { useSnackbar } from "notistack";
 import { useLayoutEffect } from "react";
 
 import type { WorkspaceContextStore } from "@lichtblick/suite-base/context/Workspace/WorkspaceContext";
@@ -44,6 +46,7 @@ import { main } from "@lichtblick/suite-web";
 
 import { VamsDownloadDataSourceFactory } from "./VamsDownloadDataSourceFactory";
 import { VamsRemoteDataSourceFactory } from "./VamsRemoteDataSourceFactory";
+import { EXTENSIONS_UNAVAILABLE, refuseExtensionFiles } from "./vamsExtensionFiles";
 
 /** The document URL without the deep link, set when the deep link is moved into the query. */
 let urlWithoutDeepLink: string | undefined;
@@ -72,9 +75,25 @@ function ForgetDeepLink(props: React.PropsWithChildren): React.JSX.Element {
 function ExtensionsUnavailable(): React.JSX.Element {
     return (
         <Alert severity="info" data-testid="vams-extensions-unavailable">
-            Extensions are not available in the VAMS Robotics Data Viewer.
+            {EXTENSIONS_UNAVAILABLE}
         </Alert>
     );
+}
+
+/**
+ * Mounted inside the app's toast provider: answers a dropped or chosen .foxe file with a toast
+ * saying extensions are not available, before the app's own handlers see the file.
+ */
+function RefuseExtensionFiles(props: React.PropsWithChildren): React.JSX.Element {
+    const { enqueueSnackbar } = useSnackbar();
+    useLayoutEffect(
+        () =>
+            refuseExtensionFiles(window, (message) => {
+                enqueueSnackbar(message, { variant: "warning", preventDuplicate: true });
+            }),
+        [enqueueSnackbar]
+    );
+    return <>{props.children}</>;
 }
 
 void main(async () => {
@@ -134,6 +153,7 @@ void main(async () => {
                         }}
                     />,
                     <ForgetDeepLink key="vams-forget-deep-link" />,
+                    <RefuseExtensionFiles key="vams-refuse-extension-files" />,
                 ]}
             >
                 <StudioApp />

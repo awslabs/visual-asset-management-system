@@ -50,6 +50,7 @@ const OVERLAY_SOURCES = [
     "VamsDownloadDataSourceFactory.ts",
     "ScrubbedIterableSource.ts",
     "vamsSourceSafety.ts",
+    "vamsExtensionFiles.ts",
 ];
 const OVERLAY_WEBPACK_CONFIG = "vams.webpack.config.ts";
 
