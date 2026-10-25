@@ -149,7 +149,9 @@ describe("API origin verification (commercial, CloudFront)", () => {
         expect(schedules[0].stack).toMatch(/StaticWeb/);
         expect(props.RotationRules).toEqual({ ScheduleExpression: "rate(45 days)" });
         // A value stays accepted as `previous` for one more interval after it is rotated out, so
-        // its total lifetime is two intervals; that must stay within 90 days.
+        // its total lifetime is two intervals. Secrets Manager rotates at any time during the UTC
+        // day a rate() schedule falls due, so an interval is 44 to 46 days and two intervals are
+        // about 90 days (up to about 92), not a hard 90-day bound.
         expect(Config.API_ORIGIN_VERIFY_ROTATION_DAYS).toBe(45);
         expect(2 * Config.API_ORIGIN_VERIFY_ROTATION_DAYS).toBeLessThanOrEqual(90);
         expect(props.RotateImmediatelyOnUpdate).toBe(false);
