@@ -153,6 +153,50 @@ export function rapidPipelineEksWorstCaseRunSeconds(jobTimeoutSeconds: number): 
     );
 }
 
+// The RapidPipeline (Amazon ECS) timeout chain. The same three clocks bound a run and must nest the
+// same way, so that the parent workflow is still waiting when the run reports its outcome:
+//
+//   ConstructPipeline + Fargate task + PipelineEnd  <=  state machine timeout  <  bundle taskTimeout
+//
+// The Fargate task is a `.sync` ECS RunTask, which waits for the task to stop however long it runs,
+// so the construct gives that state a task-level timeout. A task-level States.Timeout is a state error
+// that the task's Catch routes to PipelineEnd, which reports the failure to the parent workflow; an
+// execution-level States.Timeout bypasses every Catch, so PipelineEnd would not run. ConstructPipeline
+// and PipelineEnd are bounded by their Lambda functions' timeouts, set in the pipeline's lambda
+// builder, so the CONSTRUCT_PIPELINE and PIPELINE_END values below are the budget counted for them,
+// and infra/test/pipelines/ecsTimeoutHeadroom.test.ts fails if the emitted functions exceed it. The
+// 17040 s task bound leaves 360 s of the 18000 s state machine timeout after both Lambda steps. That
+// covers the stop route below (54 s at worst) and the backoff of the two Lambda steps'
+// service-exception retries (126 s each, 252 s together), with 54 s to spare. The bundle's
+// taskTimeout, declared in backendPipelines/multi/rapidPipeline/vamsSchema/pipeline.json, is 30
+// minutes longer than the state machine timeout, because the parent's task starts before the state
+// machine does: vamsExecute invokes openPipeline and waits for it, openPipeline starts the
+// execution, and vamsExecute's five-minute timeout bounds both.
+//
+// The stop route. A task-level States.Timeout fails the state but does not stop the Fargate task,
+// so the timeout's Catch runs up to three AWS SDK calls before PipelineEnd. The Fargate task is
+// started with its group set to the execution name, and ecs:ListTasks cannot filter by group, so
+// ecs:ListTasks lists the cluster's running tasks (one page of STOP_ROUTE_PAGE_SIZE, the most
+// ListTasks returns and DescribeTasks accepts), ecs:DescribeTasks keeps the one whose group is the
+// execution name, and a Map calls ecs:StopTask on it. Each call is bounded by the STOP_CALL timeout
+// and retried STOP_CALL_RETRIES times on throttling and server errors (1 s, then 2 s), so one call
+// takes at most (1 + 2) x 5 + 1 + 2 = 18 s. The Map's iterations run concurrently, and the group is
+// unique to the execution, so the route takes at most three calls in sequence: 54 s. Any call's
+// failure is caught and goes on to PipelineEnd, so the parent workflow is told of the timeout
+// whether or not the stop succeeds.
+//
+// The construct reads the state machine timeout, the Fargate task timeout and the stop-call bounds
+// from here; the bundle taskTimeout is what the tests compare pipeline.json and the state machine
+// timeout with.
+export const RAPID_PIPELINE_ECS_STATE_MACHINE_TIMEOUT_SECONDS = 18000;
+export const RAPID_PIPELINE_ECS_FARGATE_TASK_TIMEOUT_SECONDS = 17040;
+export const RAPID_PIPELINE_ECS_BUNDLE_TASK_TIMEOUT_SECONDS = 19800;
+export const RAPID_PIPELINE_ECS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_ECS_PIPELINE_END_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_ECS_STOP_CALL_TIMEOUT_SECONDS = 5;
+export const RAPID_PIPELINE_ECS_STOP_CALL_RETRIES = 2;
+export const RAPID_PIPELINE_ECS_STOP_ROUTE_PAGE_SIZE = 100;
+
 // ============================================================================================
 // Constants used only to check configuration
 //
