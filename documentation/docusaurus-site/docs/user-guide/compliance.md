@@ -67,7 +67,7 @@ PUT /compliance/bind/{databaseId}
 { "schemaName": "survey-compliance", "complianceAutoEval": true }
 ```
 
-The database editor saves the database before it binds the schema, so binding there needs a role that may also update the database. A role that holds only compliance permissions, such as one built from the Compliance Admin template, binds on the compliance overview, with the API or with `vamscli compliance bind`. See [Permissions](#permissions).
+The database editor sends the database save only when a database field changed and the binding only when the schema selection changed, so a schema-only change needs no permission to update the database. A refused save sends no binding; a refused binding is reported in the editor, which stays open. A role that holds only compliance permissions, such as one built from the Compliance Admin template, binds on the compliance overview, with the API or with `vamscli compliance bind`. See [Permissions](#permissions).
 
 ### Removing a compliance schema
 
@@ -86,7 +86,7 @@ Removing a database's compliance schema deletes the compliance state of every as
 
 ### Overriding the schema of one asset
 
-An asset can be bound to a schema of its own, which takes precedence over the database binding:
+An asset can be bound to a schema of its own, which takes precedence over the database binding. In the asset view, choose **Edit**, select the schema in the **Compliance Schema** field of the **Update Asset** modal (or **Inherit from database** to remove the override), and choose **Update Asset**. As in the database editor, the asset save is sent only when an asset field changed and the binding only when the schema selection changed; a refused save sends no binding, and a refused binding is reported in the modal, which stays open. With the API:
 
 ```bash
 PUT /compliance/bind/{databaseId}/{assetId}

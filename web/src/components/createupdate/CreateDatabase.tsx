@@ -143,6 +143,22 @@ function validateFileExtensions(extensions: string): string | null {
     return null;
 }
 
+// The fields a database save sends, with an absent value written as its default, so a form and
+// the database it was loaded from compare equal when nothing was edited.
+function databaseFields(state: DatabaseFields) {
+    return {
+        databaseId: state.databaseId || "",
+        description: state.description || "",
+        defaultBucketId: state.defaultBucketId || "",
+        restrictMetadataOutsideSchemas: state.restrictMetadataOutsideSchemas || false,
+        restrictFileUploadsToExtensions: state.restrictFileUploadsToExtensions || "",
+    };
+}
+
+function sameDatabaseFields(a: DatabaseFields, b: DatabaseFields): boolean {
+    return JSON.stringify(databaseFields(a)) === JSON.stringify(databaseFields(b));
+}
+
 export default function CreateDatabase({
     open,
     setOpen,
@@ -161,6 +177,11 @@ export default function CreateDatabase({
         description: "",
         ...initState,
     });
+    // The database as last saved: the record being edited, or null until a create succeeds. A
+    // save is sent only when the form differs from it.
+    const [savedState, setSavedState] = useState<DatabaseFields | null>(
+        initState?.databaseId ? { ...initState } : null
+    );
 
     // eslint-disable-next-line no-mixed-operators
     const createOrUpdate = (initState && initState.databaseId && "Update") || "Create";
@@ -273,106 +294,117 @@ export default function CreateDatabase({
         loadBuckets();
     }, [open, canListBuckets, bucketsRequested, formState.defaultBucketId]);
 
+    // An empty create form for the next database; it keeps the selected bucket so the selector and
+    // the form agree.
+    const resetCreateForm = () => {
+        setFormState((prev) => ({
+            databaseId: "",
+            description: "",
+            defaultBucketId: prev.defaultBucketId,
+        }));
+        setSavedState(null);
+        setSelectedSchema(null);
+        setInitialSchemaValue(null);
+    };
+
+    // Cancel or dismiss: the unsaved edits are dropped, so an edit form reopens on the database as
+    // last saved and a create form reopens empty.
+    const closeModal = () => {
+        setOpen(false);
+        setFormError("");
+        if (!initState?.databaseId) {
+            resetCreateForm();
+            return;
+        }
+        if (savedState) {
+            setFormState(savedState);
+            const bucket = buckets.find((b) => b.bucketId === savedState.defaultBucketId);
+            setSelectedBucket(
+                bucket ? { label: bucketOptionLabel(bucket), value: bucket.bucketId } : null
+            );
+        }
+        setSelectedSchema(
+            initialSchemaValue ? { label: initialSchemaValue, value: initialSchemaValue } : null
+        );
+    };
+
+    // Sends the database save only when a database field changed and the schema binding only when
+    // the schema selection changed, in that order. A refused save sends no binding; any refusal
+    // keeps the modal open with the message, and the modal closes only when every request sent
+    // succeeded. With nothing changed it closes without sending anything.
+    const submit = async () => {
+        const selectedValue = (selectedSchema?.value as string | undefined) || null;
+        const sendSave = savedState === null || !sameDatabaseFields(formState, savedState);
+        const sendBinding = canBindComplianceSchema && selectedValue !== initialSchemaValue;
+        if (!sendSave && !sendBinding) {
+            closeModal();
+            return;
+        }
+
+        setInProgress(true);
+        setFormError("");
+        try {
+            if (sendSave) {
+                const fields = databaseFields(formState);
+                const res = savedState
+                    ? await updateDatabase(fields)
+                    : await createDatabase(fields);
+                if (!res || !res[0]) {
+                    // Display the actual error message from the API
+                    setFormError(
+                        (Array.isArray(res) && res[1]) ||
+                            `Unable to ${createOrUpdate} ${Synonyms.database}`
+                    );
+                    return;
+                }
+                setSavedState({ ...formState });
+                setReload(true);
+            }
+
+            if (sendBinding) {
+                const [bound, message] = selectedValue
+                    ? await bindSchemaToDatabase(formState.databaseId, selectedValue)
+                    : await unbindSchemaFromDatabase(formState.databaseId);
+                if (!bound) {
+                    setFormError(
+                        sendSave
+                            ? `${Synonyms.Database} saved, but the compliance schema binding failed: ${message}`
+                            : `The compliance schema binding failed: ${message}`
+                    );
+                    return;
+                }
+                setInitialSchemaValue(selectedValue);
+            }
+
+            // Every request sent succeeded. An edit form already holds what was saved.
+            setOpen(false);
+            if (!initState?.databaseId) resetCreateForm();
+        } catch (err: any) {
+            // Console logging only: a % specifier in the interpolated
+            // value can at most garble this one log line; nothing is
+            // executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
+            console.log(`${createOrUpdate} database error`, err);
+            setFormError(err?.message || `Unable to ${createOrUpdate} ${Synonyms.database}`);
+        } finally {
+            setInProgress(false);
+        }
+    };
+
     return (
         <Modal
-            onDismiss={() => {
-                setOpen(false);
-                setFormState({ databaseId: "", description: "" });
-                setFormError("");
-            }}
+            onDismiss={closeModal}
             visible={open}
             closeAriaLabel="Close modal"
             footer={
                 <Box float="right">
                     <SpaceBetween direction="horizontal" size="xs">
-                        <Button
-                            variant="link"
-                            onClick={() => {
-                                setOpen(false);
-                                setFormState({ databaseId: "", description: "" });
-                                setFormError("");
-                            }}
-                        >
+                        <Button variant="link" onClick={closeModal}>
                             Cancel
                         </Button>
                         <Button
                             variant="primary"
-                            onClick={() => {
-                                setInProgress(true);
-                                const isEdit = initState && initState.databaseId;
-
-                                const apiCall = isEdit
-                                    ? updateDatabase({
-                                          databaseId: formState.databaseId,
-                                          description: formState.description,
-                                          defaultBucketId: formState.defaultBucketId || "",
-                                          restrictMetadataOutsideSchemas:
-                                              formState.restrictMetadataOutsideSchemas || false,
-                                          restrictFileUploadsToExtensions:
-                                              formState.restrictFileUploadsToExtensions || "",
-                                      })
-                                    : createDatabase({
-                                          databaseId: formState.databaseId,
-                                          description: formState.description,
-                                          defaultBucketId: formState.defaultBucketId || "",
-                                          restrictMetadataOutsideSchemas:
-                                              formState.restrictMetadataOutsideSchemas || false,
-                                          restrictFileUploadsToExtensions:
-                                              formState.restrictFileUploadsToExtensions || "",
-                                      });
-
-                                apiCall
-                                    .then(async (res) => {
-                                        if (res && res[0]) {
-                                            if (canBindComplianceSchema) {
-                                                let bindResult: [boolean, string] | null = null;
-                                                if (selectedSchema?.value) {
-                                                    if (
-                                                        selectedSchema.value !== initialSchemaValue
-                                                    ) {
-                                                        bindResult = await bindSchemaToDatabase(
-                                                            formState.databaseId,
-                                                            selectedSchema.value
-                                                        );
-                                                    }
-                                                } else if (initialSchemaValue) {
-                                                    bindResult = await unbindSchemaFromDatabase(
-                                                        formState.databaseId
-                                                    );
-                                                }
-                                                if (bindResult && !bindResult[0]) {
-                                                    setReload(true);
-                                                    setFormError(
-                                                        `${Synonyms.Database} saved, but the compliance schema binding failed: ${bindResult[1]}`
-                                                    );
-                                                    return;
-                                                }
-                                            }
-                                            setOpen(false);
-                                            setReload(true);
-                                        } else {
-                                            // Display the actual error message from the API
-                                            const msg =
-                                                (res as any[])[1] ||
-                                                `Unable to ${createOrUpdate} ${Synonyms.database}`;
-                                            setFormError(msg);
-                                        }
-                                    })
-                                    .catch((err) => {
-                                        // Console logging only: a % specifier in the interpolated
-                                        // value can at most garble this one log line; nothing is
-                                        // executed, stored or returned from it.
-                                        // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
-                                        console.log(`${createOrUpdate} database error`, err);
-                                        const msg =
-                                            err.message ||
-                                            `Unable to ${createOrUpdate} ${Synonyms.database}`;
-                                        setFormError(msg);
-                                    })
-                                    .finally(() => {
-                                        setInProgress(false);
-                                    });
-                            }}
+                            onClick={submit}
                             disabled={
                                 inProgress ||
                                 !(
@@ -404,11 +436,7 @@ export default function CreateDatabase({
                         >
                             <Input
                                 value={formState.databaseId}
-                                disabled={
-                                    inProgress ||
-                                    (initState && initState.databaseId && true) ||
-                                    false
-                                }
+                                disabled={inProgress || savedState !== null}
                                 onChange={({ detail }) =>
                                     setFormState({ ...formState, databaseId: detail.value })
                                 }
@@ -500,7 +528,7 @@ export default function CreateDatabase({
                         {canBindComplianceSchema && (
                             <FormField
                                 label="Compliance Schema"
-                                description="Bind a compliance schema to this database. All assets in the database will inherit this schema unless overridden at the asset level."
+                                description={`Bind a compliance schema to this ${Synonyms.database}. All ${Synonyms.assets} in the ${Synonyms.database} inherit this schema unless overridden at the ${Synonyms.asset} level.`}
                                 constraintText="Optional. Schema can be changed later."
                             >
                                 <Select

@@ -11,7 +11,7 @@ import FormField from "@cloudscape-design/components/form-field";
 import Synonyms from "../../synonyms";
 import { buildTagOptionGroups, readCachedTagTypes } from "../../common/utils/tagOptions";
 import Input from "@cloudscape-design/components/input";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
@@ -50,14 +50,23 @@ const tags: any[] = [];
 let assetTags: any[] = [];
 let tagTypes: TagType[] = [];
 
+// The fields an asset save sends, with an absent value written as its default, so the form and the
+// asset it was loaded from compare equal when nothing was edited. Tag order is not a change.
+const assetFields = (asset: any) => ({
+    assetName: asset?.assetName || "",
+    description: asset?.description || "",
+    isDistributable: asset?.isDistributable === true,
+    tags: [...(asset?.tags || [])].sort(),
+});
+
+const assetFieldsChanged = (a: any, b: any): boolean =>
+    JSON.stringify(assetFields(a)) !== JSON.stringify(assetFields(b));
+
+// Saves the asset and resolves with the outcome; a refusal is reported through setError.
 const update = async (
     updatedAsset: any,
-    setError: (error: { isError: boolean; message: string }) => void,
-    setComplete: (complete: boolean) => void,
-    isFormValid: boolean
-) => {
-    if (!isFormValid) return; // Don't attempt to update if form is not valid
-
+    setError: (error: { isError: boolean; message: string }) => void
+): Promise<boolean> => {
     setError({ isError: false, message: "" });
     try {
         // Update asset metadata using the new API endpoint
@@ -85,16 +94,15 @@ const update = async (
                     (Array.isArray(result) && result[1]) ||
                     "An error occurred during the update process",
             });
-            return;
+            return false;
         }
-
-        // Mark as complete
-        setComplete(true);
+        return true;
     } catch (err: any) {
         setError({
             isError: true,
             message: err.message || "An error occurred during the update process",
         });
+        return false;
     }
 };
 
@@ -105,6 +113,11 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     // database's required tag types as constraints on this form.
     const tagScopeDatabaseId = asset?.databaseId || routeDatabaseId;
     const [assetDetail, setAssetDetail] = useState(asset);
+    // The asset as last saved; a save is sent only when the form differs from it.
+    const [savedAsset, setSavedAsset] = useState(asset);
+    // Set once a save lands while the modal is open, so closing it after a later refusal still
+    // refreshes the view with what was saved.
+    const savedWhileOpen = useRef(false);
     const [error, setError] = useState({ isError: false, message: "" });
     const [complete, setComplete] = useState(false);
     const [isValid, setIsValid] = useState(true);
@@ -132,7 +145,62 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
         setIsFormTouched(false);
         setError({ isError: false, message: "" });
         setInProgress(false);
-        props.onClose();
+        if (savedWhileOpen.current) {
+            savedWhileOpen.current = false;
+            props.onComplete();
+        } else {
+            props.onClose();
+        }
+    };
+
+    // Sends the asset save only when an asset field changed and the schema binding only when the
+    // schema selection changed, in that order. A refused save sends no binding; any refusal keeps
+    // the modal open with the message, and the update completes only when every request sent
+    // succeeded. With nothing changed the modal closes without sending anything.
+    const submit = async () => {
+        setIsFormTouched(true);
+        if (!isValid) return;
+        const selectedValue = (selectedSchema?.value as string | undefined) || null;
+        const sendSave = assetFieldsChanged(assetDetail, savedAsset);
+        const sendBinding =
+            canBindComplianceSchema &&
+            !!assetDetail.databaseId &&
+            !!assetDetail.assetId &&
+            selectedValue !== initialSchemaValue;
+        if (!sendSave && !sendBinding) {
+            close();
+            return;
+        }
+
+        setInProgress(true);
+        setError({ isError: false, message: "" });
+        if (sendSave) {
+            const saved = await update(assetDetail, setError);
+            if (!saved) return;
+            setSavedAsset(assetDetail);
+            savedWhileOpen.current = true;
+        }
+        if (sendBinding) {
+            const [bound, message] = selectedValue
+                ? await bindSchemaToAsset(
+                      assetDetail.databaseId,
+                      assetDetail.assetId,
+                      selectedValue
+                  )
+                : await unbindSchemaFromAsset(assetDetail.databaseId, assetDetail.assetId);
+            if (!bound) {
+                setError({
+                    isError: true,
+                    message: sendSave
+                        ? `${Synonyms.Asset} saved, but the compliance schema binding failed: ${message}`
+                        : `The compliance schema binding failed: ${message}`,
+                });
+                return;
+            }
+            setInitialSchemaValue(selectedValue);
+        }
+        savedWhileOpen.current = false;
+        setComplete(true);
     };
 
     const [selectedTags, setSelectedTags] = useState<OptionDefinition[]>([]);
@@ -149,6 +217,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
 
     useEffect(() => {
         setAssetDetail(asset);
+        setSavedAsset(asset);
         // Scope to global + the asset's database so tags from other databases are hidden.
         if (!tagScopeDatabaseId) return;
         fetchTagsForAsset({ databaseId: tagScopeDatabaseId }).then((res) => {
@@ -286,31 +355,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                         </Button>
                         <Button
                             variant="primary"
-                            onClick={async () => {
-                                setInProgress(true);
-                                setIsFormTouched(true);
-                                await update(assetDetail, setError, setComplete, isValid);
-                                if (
-                                    canBindComplianceSchema &&
-                                    isValid &&
-                                    assetDetail.databaseId &&
-                                    assetDetail.assetId
-                                ) {
-                                    const selectedValue = selectedSchema?.value || null;
-                                    if (selectedValue && selectedValue !== initialSchemaValue) {
-                                        await bindSchemaToAsset(
-                                            assetDetail.databaseId,
-                                            assetDetail.assetId,
-                                            selectedValue
-                                        );
-                                    } else if (!selectedValue && initialSchemaValue) {
-                                        await unbindSchemaFromAsset(
-                                            assetDetail.databaseId,
-                                            assetDetail.assetId
-                                        );
-                                    }
-                                }
-                            }}
+                            onClick={submit}
                             disabled={(inProgress && !error.isError) || !isValid}
                         >
                             {`Update ${Synonyms.Asset}`}

@@ -64,15 +64,16 @@ To modify an asset's properties:
 1. Select the **Edit** button in the details pane header.
 2. In the **Update Asset** modal, modify any of the following fields:
 
-| Field                | Description                                        |
-| -------------------- | -------------------------------------------------- |
-| **Asset Name**       | The display name of the asset.                     |
-| **Description**      | A description of the asset's contents or purpose.  |
-| **Asset Type**       | The file type classification.                      |
-| **Is Distributable** | Whether file downloads are enabled for this asset. |
-| **Tags**             | Add or remove tags to categorize the asset.        |
+| Field                 | Description                                                                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Asset Name**        | The display name of the asset.                                                                                                             |
+| **Description**       | A description of the asset's contents or purpose.                                                                                          |
+| **Asset Type**        | The file type classification.                                                                                                              |
+| **Is Distributable**  | Whether file downloads are enabled for this asset.                                                                                         |
+| **Tags**              | Add or remove tags to categorize the asset.                                                                                                |
+| **Compliance Schema** | The asset's own compliance schema, or **Inherit from database**. Shown to users who may list compliance schemas and bind one to the asset. |
 
-3. Select **Update** to save your changes. The page refreshes to display the updated properties.
+3. Select **Update Asset**. The asset is saved only when an asset field changed, and the compliance schema binding only when the schema changed. Once every request sent succeeds, the page refreshes to display the updated properties; a refused request is reported in the modal, which stays open.
 
 ---
 
