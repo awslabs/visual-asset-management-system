@@ -2559,6 +2559,18 @@ export const RULES: Rule[] = [
             "Cognito USER_PASSWORD_AUTH flow is enabled (non-SRP). This may be flagged as a security finding in some environments.",
     },
     {
+        id: "cognito-legacy-groups-attribute-unset-warn",
+        severity: "warning",
+        fieldPaths: ["app.authProvider.useCognito.retainLegacyGroupsAttribute"],
+        // config.ts: "app.authProvider.useCognito.retainLegacyGroupsAttribute is not set, so it
+        // defaults to true". getConfig() applies the default and warns only when Cognito is enabled.
+        appliesWhen: (c) =>
+            g(c, "app.authProvider.useCognito.enabled") &&
+            g(c, "app.authProvider.useCognito.retainLegacyGroupsAttribute") == undefined,
+        message:
+            "useCognito.retainLegacyGroupsAttribute is not set, so it defaults to true and the user pool keeps declaring the custom:groups attribute that existing deployments' user pools carry. Leave it unset or true for an existing deployment. A new deployment must set it to false, or creating the user pool fails with Amazon Cognito's attribute name error.",
+    },
+    {
         id: "external-vpc-context-warn",
         severity: "warning",
         fieldPaths: ["app.useGlobalVpc.optionalExternalVpcId", "env.loadContextIgnoreVPCStacks"],

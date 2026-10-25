@@ -360,6 +360,7 @@ const COMMERCIAL: ConfigShape = {
                 useOidc: false,
                 useUserPasswordAuthFlow: false,
                 credTokenTimeoutSeconds: 3600,
+                retainLegacyGroupsAttribute: false,
             },
             useExternalOAuthIdp: {
                 enabled: false,

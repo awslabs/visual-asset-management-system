@@ -746,6 +746,15 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
     },
     {
+        path: "app.authProvider.useCognito.retainLegacyGroupsAttribute",
+        label: "Retain legacy custom:groups user pool attribute",
+        input: "boolean",
+        section: "auth",
+        advanced: true,
+        help: "Keep true for an existing deployment, whose user pool already declares custom:groups (Amazon Cognito keeps a custom attribute for the life of the pool). Set false for a new deployment: Amazon Cognito rejects that attribute name when it creates a user pool. When the key is absent it resolves to true.",
+        visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
+    },
+    {
         path: "app.authProvider.useExternalOAuthIdp.enabled",
         label: "External OAuth IdP",
         input: "boolean",
