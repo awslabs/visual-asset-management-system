@@ -16,7 +16,6 @@ from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
 from common.dynamodb import to_update_expr
 from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource, register_bucket_region
-from common.assetProvenance import asset_change_provenance
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -365,8 +364,7 @@ def validate_preview_file_extension(file_path: str) -> bool:
     file_extension = os.path.splitext(file_path)[1].lower()
     return file_extension in allowed_preview_extensions
 
-def update_asset_after_file_processing(asset_id: str, database_id: str, bucket_name: str, final_s3_key: str,
-                                       workflow_execution_id: str = None):
+def update_asset_after_file_processing(asset_id: str, database_id: str, bucket_name: str, final_s3_key: str):
     """
     Update asset record after successful file processing.
     Simplified version of the logic from uploadFile.py.
@@ -397,10 +395,7 @@ def update_asset_after_file_processing(asset_id: str, database_id: str, bucket_n
         # If asset already has a type and asset_type is None, keep the existing type
 
         # Save updated asset
-        update_asset_attributes(database_id, asset_id, {
-            'assetType': asset['assetType'],
-            **asset_change_provenance(workflow_execution_id),
-        })
+        update_asset_attributes(database_id, asset_id, {'assetType': asset['assetType']})
 
         # Send notification to subscribers
         send_subscription_email(database_id, asset_id)
@@ -410,8 +405,7 @@ def update_asset_after_file_processing(asset_id: str, database_id: str, bucket_n
     except Exception as e:
         logger.exception(f"Error updating asset after file processing: {e}")
 
-def update_asset_preview_location(asset_id: str, database_id: str, final_s3_key: str,
-                                  workflow_execution_id: str = None):
+def update_asset_preview_location(asset_id: str, database_id: str, final_s3_key: str):
     """
     Update asset with preview location after successful preview file processing.
     
@@ -431,8 +425,7 @@ def update_asset_preview_location(asset_id: str, database_id: str, final_s3_key:
         update_asset_attributes(database_id, asset_id, {
             'previewLocation': {
                 'Key': final_s3_key
-            },
-            **asset_change_provenance(workflow_execution_id),
+            }
         })
 
         logger.info(f"Updated asset {asset_id} with preview location: {final_s3_key}")
@@ -837,11 +830,9 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
         
         # Update asset record if this is an assetFile upload
         if upload_type == "assetFile":
-            update_asset_after_file_processing(asset_id, database_id, bucket_name, final_s3_key,
-                                               file_info.get('workflowExecutionId'))
+            update_asset_after_file_processing(asset_id, database_id, bucket_name, final_s3_key)
         elif upload_type == "assetPreview":
-            update_asset_preview_location(asset_id, database_id, final_s3_key,
-                                          file_info.get('workflowExecutionId'))
+            update_asset_preview_location(asset_id, database_id, final_s3_key)
         
         logger.info(f"Successfully validated and moved file {relative_key}")
         return True

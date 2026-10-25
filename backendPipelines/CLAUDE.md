@@ -27,8 +27,6 @@ Each pipeline step reads several S3 paths from its manifest (`manifestHelper.res
 
 **Key distinction:** `outputS3AssetFilesPath` is for file-level outputs including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is only for asset-level preview images that represent the asset as a whole. Most pipelines producing file previews should write to `outputS3AssetFilesPath`.
 
-**Compliance output:** a pipeline that backs a compliance pipeline rule reports its measurements as one `compliance-output.json` under the execution's `outputs.results` prefix (from the workflow manifest). `backendPipelines/common/compliance_output.py` (`write_compliance_output`, `build_compliance_output`) writes the document — `{"complianceOutput": true, "status": "success"|"error", "measurements": {...}, "errors": [], "pipelineMetadata": {}}` — whose `measurements` keys match the `outputField` of the rule's checks. The pipeline needs no evaluation id or compliance table access; the compliance workflow callback reads the file from the execution's `PipelineExecutionOutputResults` rows.
-
 **Rules for output path usage:**
 
 -   **Always pass through** all output paths resolved from the manifest in `vamsExecute` lambdas. Never hardcode empty strings for output paths — the workflow's process-output step relies on finding files at these locations.
@@ -625,6 +623,19 @@ Producer tests (`lambda/tests/test_manifest_refactor.py`, `test_batch_job_regist
 keys and that the emitted `logGroupArn` passes `CLOUDWATCH_LOG_GROUP_ARN` and `logStreamPrefix` passes
 `LOG_STREAM_NAME`. Run each pipeline's `tests/` in its own pytest process (module-name collision across
 pipelines).
+
+**Work a stopped execution leaves running.** Abort and a failure elsewhere in the workflow stop a
+registered `stepFunctionsExecution`, and a stopped execution runs no further states, so anything its
+states started outside a Step Functions `.sync` integration keeps running unless the pipeline cleans it
+up itself. `multi/rapidPipelineEKS` is the example for its Kubernetes job: CONSTRUCT_PIPELINE records each
+job name under `$$.Execution.Name` in the auxiliary bucket, and an EventBridge rule on the state
+machine's own `ABORTED` / `TIMED_OUT` / `FAILED` status changes invokes the handler's
+`EXECUTION_END_CLEANUP`, which rejects any other state machine and deletes the recorded jobs. The rule's
+`targets.LambdaFunction` permission carries `SourceArn` only, so the construct adds `SourceAccount`
+(`infra/test/pipelines/eksExecutionEndCleanup.test.ts`). The target's `retryAttempts` covers only
+EventBridge's delivery; a handler that returns an error body has succeeded as far as Lambda is concerned,
+so `lambda_handler` raises for a 5xx `EXECUTION_END_CLEANUP` result (never for its 400/403 rejections)
+and the construct pins Lambda's asynchronous retries with `configureAsyncInvoke` (no destination).
 
 ## Every boto3 Client Carries the Adaptive Retry Configuration
 
