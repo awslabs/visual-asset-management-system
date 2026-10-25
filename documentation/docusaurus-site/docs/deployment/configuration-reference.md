@@ -140,7 +140,7 @@ The number of web ACLs depends on the front-end distribution:
 
 AWS WAF scopes are not interchangeable, so a **CloudFront deployment requires two web ACLs**. A web ACL associated with a CloudFront distribution is `CLOUDFRONT`-scoped, lives in `us-east-1`, and — per AWS WAF — cannot be associated with any other resource type. API Gateway and ALB require a `REGIONAL`-scoped web ACL in the deployment Region. This holds even when the deployment Region is `us-east-1`: the CloudFront ACL and the regional ACL are different scopes, so a single ACL cannot cover both the distribution and the API Gateway. Both web ACLs are built from the same `wafPolicyConfig.json` policy, so their rule sets are identical.
 
-The two web ACLs are created as separate CloudFormation stacks. The regional stack is named `{name}-waf-{baseStackName}` when CloudFront is disabled, or `{name}-waf-regional-{baseStackName}` when CloudFront is enabled; the CloudFront stack (when present) is named `{name}-waf-{baseStackName}` and deployed to `us-east-1`.
+The two web ACLs are created as separate CloudFormation stacks. The regional stack is named `{name}-waf-{baseStackName}-{region}` when CloudFront is disabled, or `{name}-waf-regional-{baseStackName}-{region}` when CloudFront is enabled; the CloudFront stack (when present) is named `{name}-waf-{baseStackName}-{region}` and deployed to `us-east-1`. `{region}` is the deployment Region in all three names.
 
 #### WAF rule policy (`config/policy/wafPolicyConfig.json`)
 

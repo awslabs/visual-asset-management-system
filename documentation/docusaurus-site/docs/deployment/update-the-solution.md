@@ -725,22 +725,23 @@ what ties the group to the stack resource.
 #### Switching between CloudFront and ALB distribution
 
 Changing `app.useCloudFront.enabled` on an existing deployment renames the regional AWS WAF stack, because
-the two distributions need differently-scoped web ACLs and a CloudFront-scoped ACL must live in us-east-1:
+the two distributions need differently-scoped web ACLs and a CloudFront-scoped ACL must live in us-east-1.
+`<region>` is the deployment Region in every name, including the CloudFront stack's:
 
-| `useCloudFront.enabled` | Regional WAF stack           | CloudFront WAF stack (us-east-1) |
-| ----------------------- | ---------------------------- | -------------------------------- |
-| `false`                 | `<name>-waf-<base>`          | not created                      |
-| `true`                  | `<name>-waf-regional-<base>` | `<name>-waf-<base>`              |
+| `useCloudFront.enabled` | Regional WAF stack                    | CloudFront WAF stack (us-east-1) |
+| ----------------------- | ------------------------------------- | -------------------------------- |
+| `false`                 | `<name>-waf-<base>-<region>`          | not created                      |
+| `true`                  | `<name>-waf-regional-<base>-<region>` | `<name>-waf-<base>-<region>`     |
 
 The naming keeps an in-place update for a deployment that never changes distribution. Switching does not
 migrate, and the two directions fail differently:
 
--   **ALB → CloudFront.** `<name>-waf-<base>` is redefined as the CloudFront stack in us-east-1 while the
+-   **ALB → CloudFront.** `<name>-waf-<base>-<region>` is redefined as the CloudFront stack in us-east-1 while the
     existing stack of that name holds the regional ACL in the deployment Region. A stack cannot change
     Region, so the deployment attempts a new us-east-1 stack under a name already in use elsewhere and the
     old regional stack is left unmanaged.
--   **CloudFront → ALB.** `<name>-waf-regional-<base>` is no longer referenced and is left in place, and so is
-    `<name>-origin-verify-<base>`, the stack of the API origin verification secret.
+-   **CloudFront → ALB.** `<name>-waf-regional-<base>-<region>` is no longer referenced and is left in place,
+    and so is `<name>-origin-verify-<base>-<region>`, the stack of the API origin verification secret.
 
 ##### Release the DNS record first
 
