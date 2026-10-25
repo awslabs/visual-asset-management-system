@@ -36,7 +36,7 @@ logger = safeLogger(service_name="OriginVerify")
 ORIGIN_VERIFY_HEADER_NAME = "x-vams-origin-verify"
 CURRENT_KEY = "current"
 PREVIOUS_KEY = "previous"
-SECRET_ARN_ENV = "ORIGIN_VERIFY_SECRET_ARN"
+SECRET_ARN_ENV = "ORIGIN_VERIFY_SECRET_ARN"  # nosec B105 - environment variable name, not a secret
 
 CACHE_TTL_SECONDS = 300
 MISMATCH_REFRESH_INTERVAL_SECONDS = 5
@@ -81,7 +81,7 @@ def _fetch_accepted_values(secret_arn: str) -> Tuple[str, ...]:
     try:
         pending = secrets_client.get_secret_value(SecretId=secret_arn, VersionStage="AWSPENDING")
         values.extend(values_from_secret_string(pending.get("SecretString"), (CURRENT_KEY,)))
-    except Exception:
+    except Exception:  # nosec B110 - the AWSPENDING read is optional; AWSCURRENT values stand alone
         # No rotation in progress (ResourceNotFoundException), or the pending read failed: the
         # AWSCURRENT values stand on their own.
         pass
