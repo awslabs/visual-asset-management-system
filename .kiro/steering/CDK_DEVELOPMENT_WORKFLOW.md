@@ -64,12 +64,11 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 71 SSM resource-name parameters)
+  |     +-- ResourceNamesBuilder (publishes 66 SSM resource-name parameters)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
-  |     |    the pipeline / pipeline template / workflow / workflow trigger / execution routes,
-  |     |    and the compliance routes + trigger / workflow-callback Lambdas)
+  |     |    and the pipeline / pipeline template / workflow / workflow trigger / execution routes)
   |     |                                                    -> storage, resourceNames, ApiBuilder
   |     +-- SearchBuilder (OpenSearch)                       -> storage, resourceNames
   |     +-- PipelineBuilder (all use-case pipelines)         -> storage, ApiBuilder2
@@ -133,7 +132,7 @@ interface storageResources {
         errors: logs.LogGroup;
     };
     dynamo: {
-        // 53 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
+        // 48 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
@@ -185,18 +184,11 @@ interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table; // PK tagSchemaId, SK pipelineDatabaseId:pipelineId:templateId; GSI TagSchemaByTemplateGSI
         workflowStorageTableV2: dynamodb.Table; // PK databaseId, SK workflowId; GSIs WorkflowsByDatabaseGSI / WorkflowsByCategoryGSI / WorkflowsByDateGSI
         workflowTriggersStorageTable: dynamodb.Table; // PK workflowDatabaseId:workflowId, SK triggerType; GSI TriggersByBaseTypeGSI (PK triggerBaseType — the BARE type)
-
-        // Compliance tables
-        complianceSchemaStorageTable: dynamodb.Table; // PK schemaName, SK internalVersion; GSI DatabaseIdIndex
-        complianceAssetStateStorageTable: dynamodb.Table; // PK databaseId, SK assetId; GSIs SchemaNameIndex, ComplianceStateIndex (PK complianceState, SK databaseId — paged quarantine list)
-        complianceEvaluationStorageTable: dynamodb.Table; // PK evaluationId; GSIs AssetIndex, ExecutionIdIndex (PK executionId — pipeline-rule workflow callback)
-        complianceCascadeStorageTable: dynamodb.Table; // PK cascadeId; GSI StateIndex
-        complianceAuditStorageTable: dynamodb.Table; // PK entryId; GSIs AssetIndex, EventTypeIndex, AuditByDateGSI (PK allListPartition — unfiltered newest-first listing)
     };
 }
 ```
 
-The `*ByDateGSI` indexes on the pipeline, workflow, and workflow-execution V2 tables and on the compliance audit table are partitioned on a constant `allListPartition` attribute, which is what makes the global (all-databases) list endpoints a query rather than a table scan. Every write path — including the data-migration transforms — must set that attribute, or the row is invisible to those lists. For the audit table every row is built by `common/compliance/auditRecord.py::build_audit_item`, which sets it; a guard test fails any `put_item` into that table that bypasses the builder.
+The `*ByDateGSI` indexes on the pipeline, workflow, and workflow-execution V2 tables are partitioned on a constant `allListPartition` attribute, which is what makes the global (all-databases) list endpoints a query rather than a table scan. Every write path — including the data-migration transforms — must set that attribute, or the row is invisible to those lists.
 
 **`authResources`** (defined in `authBuilder-nestedStack.ts`):
 
@@ -432,8 +424,6 @@ const featureEnabled = true; // BAD - should be configurable
 
 #### **Rule 2: Feature Switches Must Be Defined**
 
-New features get a switch in `vamsAppFeatures.ts` and are gated by config in the core stack. The one accepted carve-out (root `CLAUDE.md` Rule 6): a feature that is inert until an operator configures it at runtime — none of its behavior applies until a record is written through its own API (an event-driven Lambda of the feature may run per event and no-op without that record), nothing beyond idle storage and those no-op invocations is billed, and access is governed by Casbin like every other route — may deploy without a switch. Compliance is the example: its tables, Lambdas and `/compliance/*` routes always deploy; the trigger and the workflow callback run per event and no-op without a binding, so no compliance behavior applies until a schema is bound. A feature that does work on its own (a poller, a scheduled job, an event consumer that acts on every event) does not qualify.
-
 ```typescript
 // ✅ CORRECT - Add to vamsAppFeatures.ts
 export enum VAMS_APP_FEATURES {
@@ -650,8 +640,6 @@ Verify before deploying: a cycle is invisible to `cdk synth` and appears only at
 and confirm the storage nested stack takes no parameter fed from another nested stack's output. Regression
 coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`, and `infra/test/pipelines/codeBuildEcrEncryption.test.ts`
 for the CodeBuild repositories and their CMK flip.
-
-A Lambda's DynamoDB grants follow the tables its handler (and the shared modules it imports) resolves through `ResourceKeys`; `infra/test/security/complianceLambdaTableGrants.test.ts` derives those needs from the compliance handler source and asserts the synthesized role policy covers each table (read, plus write where the module writes), so a missing grant fails the suite instead of surfacing as an `AccessDeniedException` 500 in production. The three compliance Lambdas that run evaluations (`complianceEvaluateService`, `complianceTrigger`, `complianceCascadeExecutor`) share `grantEvaluationEngineReads` in `complianceFunctions.ts`: read on the asset, asset-links, asset-file-metadata, file-attribute, asset-links-metadata, asset-file-versions, metadata-schema, workflow, pipeline, pipeline-template and asset-buckets tables, plus every asset bucket. The metadata service and the two asset-link Lambdas (`createAssetLink`, `assetLinksService`) hold `dynamodb:UpdateItem` alone on the asset table (`table.grant(fun, "dynamodb:UpdateItem")`, not `grantWriteData`) for the change stamp a metadata write or link change records on the asset row; `infra/test/security/handlerGrantScopingWave.test.ts` pins that no other write action reaches the asset table from them.
 
 ### **Dependency Management Standards**
 
@@ -925,6 +913,17 @@ conditional on a token being present — a direct invoke carries none. The abort
 256 characters, which suits a one-sentence pre-invoke rejection; a handler reporting a finished JOB's outcome
 carries the child's own output and bounds that text itself to fit the 32768-character limit, as
 `backendPipelines/multi/rapidPipelineEKS`'s CHECK_JOB path does.
+
+A value over either `SendTaskFailure` limit (`error` 256 characters, `cause` 32768) is rejected by the
+service — botocore checks only the minimum length — and the rejection lands in the callback's own `except`,
+so the token goes unreported as if no callback existed. A route that forwards an error it did not compose (a
+`PipelineEnd` handler passing on `$.error`) cannot know its size.
+`backendPipelines/multi/rapidPipelineEKS/lambda/taskFailureBounds.py` is the pattern: every
+`send_task_failure` in that pipeline's `consolidated_handler.py` and `openPipeline.py` takes its `error` and
+`cause` from `bounded_task_failure`, which returns a value within its limit unchanged, keeps the head of a
+longer one with a `... [truncated from N characters]` marker inside the limit, and converts a non-string
+with `str()`. A durable syntax-tree guard in `tests/test_rapidpipeline_eks_task_failure_bounds.py` holds
+every call to that form.
 
 **On the SUCCESS path, report the outcome and not the job's output.** A `SendTaskSuccess` output and the
 lambda's own return value both land in the execution record, which is durable and readable by anyone who can
@@ -1274,6 +1273,19 @@ Producer tests (`lambda/tests/test_manifest_refactor.py`, `test_batch_job_regist
 keys and that the emitted `logGroupArn` passes `CLOUDWATCH_LOG_GROUP_ARN` and `logStreamPrefix` passes
 `LOG_STREAM_NAME`. Run each pipeline's `tests/` in its own pytest process (module-name collision across
 pipelines).
+
+**Work a stopped execution leaves running.** Abort and a failure elsewhere in the workflow stop a
+registered `stepFunctionsExecution`, and a stopped execution runs no further states, so anything its
+states started outside a Step Functions `.sync` integration keeps running unless the pipeline cleans it
+up itself. `multi/rapidPipelineEKS` is the example for its Kubernetes job: CONSTRUCT_PIPELINE records each
+job name under `$$.Execution.Name` in the auxiliary bucket, and an EventBridge rule on the state
+machine's own `ABORTED` / `TIMED_OUT` / `FAILED` status changes invokes the handler's
+`EXECUTION_END_CLEANUP`, which rejects any other state machine and deletes the recorded jobs. The rule's
+`targets.LambdaFunction` permission carries `SourceArn` only, so the construct adds `SourceAccount`
+(`infra/test/pipelines/eksExecutionEndCleanup.test.ts`). The target's `retryAttempts` covers only
+EventBridge's delivery; a handler that returns an error body has succeeded as far as Lambda is concerned,
+so `lambda_handler` raises for a 5xx `EXECUTION_END_CLEANUP` result (never for its 400/403 rejections)
+and the construct pins Lambda's asynchronous retries with `configureAsyncInvoke` (no destination).
 
 ### **Pipeline Configuration Management**
 

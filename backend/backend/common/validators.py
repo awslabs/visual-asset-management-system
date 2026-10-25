@@ -493,10 +493,7 @@ backreference_pattern = r'\\[1-9]|\\g<|\(\?P='
 backreference_regex = re.compile(backreference_pattern)
 
 # The longest subject a stored rule is matched against: OBJECT_NAME permits 256 characters, and the
-# entity name / category fields the Casbin rule builder compares against are bounded by it. It is
-# the default subject length of the backtracking estimate; a caller whose patterns run against
-# longer values passes its own (`validate_regex(subject_length=...)`, or `subjectLength` in a
-# `REGEX` spec), as a compliance path pattern does for an S3 key (MAX_S3_OBJECT_KEY_BYTES).
+# entity name / category fields the Casbin rule builder compares against are bounded by it.
 MAX_REGEX_SUBJECT_LENGTH = 256
 # Ceiling on the estimated worst-case backtracking search space of a criterion value, measured rather
 # than guessed. Against a 256-character subject, three unbounded quantifiers separated by literals
@@ -506,54 +503,11 @@ MAX_REGEX_SUBJECT_LENGTH = 256
 # The clause is re-evaluated per policy line per authorization decision, so the budget is set where
 # one evaluation stays in the tens of milliseconds.
 MAX_REGEX_SEARCH_SPACE = 10 * 1000 * 1000
+# comb() peaks at half the subject length and falls away after it, so the quantifier count is clamped
+# there — an even longer chain must not estimate LOWER than the peak.
+_MAX_COUNTED_QUANTIFIERS = MAX_REGEX_SUBJECT_LENGTH // 2
 
 _QUANTIFIER_BRACE = re.compile(r'\{(\d*)(,?)(\d*)\}')
-# A global inline-flag group at the start of a pattern, e.g. '(?i)'.
-_LEADING_INLINE_FLAGS = re.compile(r'\(\?([aiLmsux]+)\)')
-
-
-def _anchored_at_start(pattern):
-    """Whether every match of `pattern` must begin at the start of the subject, so `re.search` tries
-    no other start position.
-
-    True when, after any leading global inline-flag groups, the pattern opens with '^' or '\\A' and
-    has no '|' outside a group or character class (an alternative that could start anywhere).
-    Conservative: MULTILINE ('m', under which '^' also matches after a newline) and VERBOSE ('x',
-    whose comments this walk does not read) count as unanchored, as does any shape not shown to be
-    anchored."""
-    i = 0
-    while True:
-        flags = _LEADING_INLINE_FLAGS.match(pattern, i)
-        if not flags:
-            break
-        if 'm' in flags.group(1) or 'x' in flags.group(1):
-            return False
-        i = flags.end()
-    if not (pattern.startswith('^', i) or pattern.startswith('\\A', i)):
-        return False
-    depth = 0
-    while i < len(pattern):
-        character = pattern[i]
-        if character == '\\':
-            i += 2
-            continue
-        if character == '[':
-            # A ']' first in the class (after an optional '^') is a literal, not its end.
-            i += 1
-            if pattern.startswith('^', i):
-                i += 1
-            if pattern.startswith(']', i):
-                i += 1
-            while i < len(pattern) and pattern[i] != ']':
-                i += 2 if pattern[i] == '\\' else 1
-        elif character == '(':
-            depth += 1
-        elif character == ')':
-            depth -= 1
-        elif character == '|' and depth == 0:
-            return False
-        i += 1
-    return True
 
 
 def _quantifier_at(pattern, index):
@@ -584,18 +538,15 @@ def _quantifier_at(pattern, index):
     return width, max(1, int(high) - int(low or 0) + 1)
 
 
-def _backtracking_search_space(pattern, subject_length=MAX_REGEX_SUBJECT_LENGTH, searched=False):
-    """Estimated worst-case number of ways a subject of `subject_length` characters can be divided
-    among a pattern's quantifiers.
+def _backtracking_search_space(pattern):
+    """Estimated worst-case number of ways a subject can be divided among a pattern's quantifiers.
 
     Unbounded quantifiers share one subject, so k of them contribute comb(subject_length, k) — the
     ways to choose where each hands off to the next. A bounded quantifier contributes its own
-    repetition range. A `searched` pattern (`re.search`) is retried at every start position unless it
-    is anchored there (`_anchored_at_start`), and the start position divides the subject like one
-    more unbounded quantifier. Walks the pattern rather than matching it, so an escaped
-    metacharacter, a character class, a group-extension marker and a lazy or possessive modifier are
-    not read as structure."""
-    unbounded = 1 if searched and not _anchored_at_start(pattern) else 0
+    repetition range. Walks the pattern rather than matching it, so an escaped metacharacter, a
+    character class, a group-extension marker and a lazy or possessive modifier are not read as
+    structure."""
+    unbounded = 0
     bounded_product = 1
     ceiling = MAX_REGEX_SEARCH_SPACE + 1
     in_class = False
@@ -631,9 +582,7 @@ def _backtracking_search_space(pattern, subject_length=MAX_REGEX_SUBJECT_LENGTH,
             i += 1
         if bounded_product > MAX_REGEX_SEARCH_SPACE:
             return ceiling
-    # comb() peaks at half the subject length and falls away after it, so the quantifier count is
-    # clamped there — an even longer chain must not estimate LOWER than the peak.
-    shared = math.comb(subject_length, min(unbounded, subject_length // 2))
+    shared = math.comb(MAX_REGEX_SUBJECT_LENGTH, min(unbounded, _MAX_COUNTED_QUANTIFIERS))
     return min(shared * bounded_product, ceiling)
 
 
@@ -685,12 +634,7 @@ def _repeats_a_repeating_group(pattern):
     return False
 
 
-def validate_regex(name, value, subject_length=MAX_REGEX_SUBJECT_LENGTH, searched=False):
-    """Check `value` as a regular expression a stored rule evaluates against values of at most
-    `subject_length` characters: it compiles, repeats no group that itself repeats or alternates,
-    uses no backreference, and stays within MAX_REGEX_SEARCH_SPACE at that subject length — counting
-    the start positions `re.search` tries when `searched` (a Casbin criterion is matched, anchored
-    by the rule builder, so it is not)."""
+def validate_regex(name, value):
     try:
         re.compile(value)
     except re.error:
@@ -698,7 +642,7 @@ def validate_regex(name, value, subject_length=MAX_REGEX_SUBJECT_LENGTH, searche
     if backreference_regex.search(value) or _repeats_a_repeating_group(value):
         return (False, name + " is invalid. Cannot repeat a group that itself repeats or"
                               " alternates, and cannot use a backreference.")
-    if _backtracking_search_space(value, subject_length, searched) > MAX_REGEX_SEARCH_SPACE:
+    if _backtracking_search_space(value) > MAX_REGEX_SEARCH_SPACE:
         return (False, name + " is invalid. Too many open-ended quantifiers (*, +, ?, {n,}) to"
                               " evaluate safely; simplify the expression.")
     return (True, '')
@@ -840,8 +784,7 @@ _VALIDATOR_DISPATCH = {
     'OBJECT_NAME_ARRAY': lambda k, v: validate_objectName_array(k, v['value']),
     'EMAIL': lambda k, v: validate_email(k, v['value']),
     'USERID': lambda k, v: validate_userid(k, v['value']),
-    'REGEX': lambda k, v: validate_regex(k, v['value'], _spec_subject_length(v, k),
-                                         _spec_bool_flag(v, 'searched', k)),
+    'REGEX': lambda k, v: validate_regex(k, v['value']),
     'NUMBER': lambda k, v: validate_number(k, v['value']),
     'BOOL': lambda k, v: validate_bool(k, v['value']),
     'ISO8601_UTC': lambda k, v: validate_iso8601_utc(k, v['value']),
@@ -869,19 +812,6 @@ def _spec_bool_flag(spec, flag, name):
     if not isinstance(spec[flag], bool):
         raise Exception("The " + flag + " field in validator for " + name + " field must be of type bool")
     return spec[flag]
-
-
-def _spec_subject_length(spec, name):
-    """Read a REGEX spec's optional `subjectLength` — the longest value the pattern is evaluated
-    against — defaulting to MAX_REGEX_SUBJECT_LENGTH, and reject a value that is not a positive int
-    the way validate() rejects a malformed modifier."""
-    if 'subjectLength' not in spec:
-        return MAX_REGEX_SUBJECT_LENGTH
-    subject_length = spec['subjectLength']
-    if isinstance(subject_length, bool) or not isinstance(subject_length, int) or subject_length < 1:
-        raise Exception("The subjectLength field in validator for " + name
-                        + " field must be a positive integer")
-    return subject_length
 
 
 def validate(values):

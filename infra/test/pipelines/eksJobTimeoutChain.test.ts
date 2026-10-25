@@ -6,14 +6,15 @@
 /**
  * The RapidPipeline EKS job timeout is one value in a three-link chain, and every link must agree.
  *
- *   poll ceiling (Step Functions)  >  pod deadline (activeDeadlineSeconds)  <=  bundle taskTimeout
+ *   poll ceiling (Step Functions)  >  pod deadline (activeDeadlineSeconds)
+ *   longest run the pod deadline allows  <=  state machine timeout  <  bundle taskTimeout
  *
  * Each link is enforced in a different place, which is why a mismatch produced a wrong OUTCOME rather
  * than an error:
  *
  *   * The poll ceiling was a hardcoded 360 attempts at 10-second intervals — 60 minutes.
  *   * The pod deadline was a hardcoded 7200 seconds — 2 hours.
- *   * The registered bundle declares taskTimeout 14400 — 4 hours.
+ *   * The registered bundle declared taskTimeout 14400 — 4 hours.
  *   * `useEks.jobTimeout`, the configuration field that exists for exactly this, was read by NOTHING.
  *
  * A job running between 60 and 120 minutes was therefore reported FAILED to the parent workflow through
@@ -25,6 +26,11 @@
  * instant Kubernetes terminated the pod and the outcome would again be reported as a poll timeout rather
  * than as the pod's own failure. That is the same trap as the Cosmos 3 state-machine timeout
  * (S33-CDK-001), reached from the other direction.
+ *
+ * The second line is the run as a whole: the job plus ConstructPipeline, RunJob, the poll's margin and
+ * CheckJob calls, and PipelineEnd must fit in the state machine timeout, and the parent workflow's
+ * taskTimeout outlasts the state machine. This file checks the job timeout's bounds in getConfig();
+ * eksTimeoutHeadroom.test.ts checks the chain on a template synthesized at the maximum job timeout.
  *
  * Asserted on the emitted state machine definition and the emitted Lambda environment rather than on the
  * TypeScript, because the derivation is arithmetic and an off-by-one in it is invisible in source.
@@ -151,9 +157,9 @@ describe("EKS job timeout chain", () => {
         expect(source).toContain("EKS_JOB_TIMEOUT_SECONDS");
     });
 
-    test("the configured timeout does not exceed the bundle's taskTimeout", () => {
-        // The third link. The parent workflow stops waiting for the callback at taskTimeout, so a pod
-        // allowed to run longer leaves the parent giving up on a job that is still going.
+    test("the configured timeout is within the maximum and the bundle declares the config constant", () => {
+        // The shipped value must be one getConfig() accepts, and the bundle's taskTimeout is the value
+        // eksTimeoutHeadroom.test.ts compares with the state machine timeout.
         const bundle = JSON.parse(
             realReadFileSync(
                 path.resolve(
@@ -165,7 +171,9 @@ describe("EKS job timeout chain", () => {
         );
         const taskTimeout = Number(bundle.executionConfig.taskTimeout);
         expect(taskTimeout).toBe(Config.RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS);
-        expect(configuredTimeout()).toBeLessThanOrEqual(taskTimeout);
+        expect(configuredTimeout()).toBeLessThanOrEqual(
+            Config.RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS
+        );
     });
 
     describe("getConfig() rejects a timeout that would break the chain", () => {
@@ -174,9 +182,9 @@ describe("EKS job timeout chain", () => {
             config.env.region = "us-west-2";
             config.env.account = "123456789012";
             config.app.baseStackName = "vamstest";
-            config.app.useGlobalVpc.enabled = true;
-            config.app.pipelines.useRapidPipeline.enabled = true;
-            config.app.pipelines.useRapidPipeline.useEks.enabled = true;
+            // A config getConfig() accepts in full, so a positive control below can assert that
+            // nothing at all is thrown rather than only that no jobTimeout error is.
+            enableEksPipeline(config);
             config.app.pipelines.useRapidPipeline.useEks.jobTimeout = jobTimeout;
             serveConfig(config);
             return () => Config.getConfig(newTestApp());
@@ -184,21 +192,19 @@ describe("EKS job timeout chain", () => {
 
         test("the shipped value is accepted", () => {
             // Positive control: the rules must not reject what every template ships.
-            expect(withJobTimeout(configuredTimeout())).not.toThrow(/jobTimeout/);
+            expect(withJobTimeout(configuredTimeout())).not.toThrow();
         });
 
-        test("a timeout beyond the bundle taskTimeout is rejected and names both", () => {
-            expect(
-                withJobTimeout(Config.RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS + 1)
-            ).toThrow(/exceeds the \d+s taskTimeout/);
+        test("a timeout beyond the maximum is rejected and names it", () => {
+            expect(withJobTimeout(Config.RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS + 1)).toThrow(
+                /jobTimeout \(\d+s\) exceeds the \d+s maximum job runtime/
+            );
         });
 
-        test("exactly the bundle taskTimeout is accepted", () => {
-            // The boundary. Equal is fine for this link: the parent waits at least as long as the pod
-            // may run.
-            expect(
-                withJobTimeout(Config.RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS)
-            ).not.toThrow(/jobTimeout/);
+        test("exactly the maximum is accepted", () => {
+            // The boundary. The longest run the maximum allows still fits in the state machine
+            // timeout; eksTimeoutHeadroom.test.ts checks that on the emitted template.
+            expect(withJobTimeout(Config.RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS)).not.toThrow();
         });
 
         test("a non-positive or non-integer timeout is rejected", () => {
@@ -218,7 +224,7 @@ describe("EKS job timeout chain", () => {
             config.app.pipelines.useRapidPipeline.useEks.enabled = false;
             config.app.pipelines.useRapidPipeline.useEks.jobTimeout = 999999;
             serveConfig(config);
-            expect(() => Config.getConfig(newTestApp())).not.toThrow(/jobTimeout/);
+            expect(() => Config.getConfig(newTestApp())).not.toThrow();
         });
     });
 });

@@ -269,6 +269,7 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                 return {
                     headers: {
                         'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache, no-store',
                         // REST API returns the Lambda response verbatim (no auto-CORS). Under
                         // ALB fronting this endpoint is fetched cross-origin (the ALB
                         // 302-redirects /api/* to the execute-api host), so the response must

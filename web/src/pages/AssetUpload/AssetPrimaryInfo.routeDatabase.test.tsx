@@ -21,10 +21,6 @@ jest.mock("../../services/APIService", () => ({
     fetchAllDatabases: jest.fn().mockResolvedValue([]),
     fetchDatabase: jest.fn(),
 }));
-// The compliance schema field gates on this hook; a deny keeps these route-database tests focused.
-jest.mock("../../features/orchestration/permissions/useAllowedRoutes", () => ({
-    useAllowedRoutes: () => ({ loading: false, can: () => false }),
-}));
 jest.mock("../../components/metadataV2", () => ({ MetadataContainer: () => null }));
 jest.mock("../../components/selectors/DatabaseSelector", () => ({
     __esModule: true,

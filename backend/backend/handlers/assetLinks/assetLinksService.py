@@ -11,7 +11,6 @@ from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
-from common.assetProvenance import ASSET_CHANGE_SOURCE_LINK_CHANGE, stamp_asset_change
 from common.dynamodb import batch_get_items
 from common.validators import validate
 from handlers.auth import request_to_claims
@@ -697,14 +696,6 @@ def delete_asset_link(asset_link_id: str, claims_and_roles: dict) -> DeleteAsset
         )
         
         logger.info(f"Deleted asset link {asset_link_id} between {link_item['fromAssetId']} and {link_item['toAssetId']}")
-
-        # Record the removed link on both assets (best-effort: the link is deleted), so the
-        # compliance trigger re-evaluates the relationship and links-scope metadata rules of each.
-        # An end whose asset was permanently deleted has no live row and is not stamped.
-        for database_id, asset_id in ((link_item['fromAssetDatabaseId'], link_item['fromAssetId']),
-                                      (link_item['toAssetDatabaseId'], link_item['toAssetId'])):
-            stamp_asset_change(asset_storage_table, database_id, asset_id,
-                               ASSET_CHANGE_SOURCE_LINK_CHANGE)
         
         return DeleteAssetLinkResponseModel(
             message="Asset link deleted successfully"

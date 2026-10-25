@@ -63,9 +63,6 @@ export function buildMetadataService(
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
-    // The change-provenance stamp a metadata write records on the asset row
-    // (common/assetProvenance.stamp_asset_change): one targeted UpdateItem, no other write.
-    storageResources.dynamo.assetStorageTable.grant(fun, "dynamodb:UpdateItem");
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
