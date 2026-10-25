@@ -16,26 +16,32 @@ class TestResolveClientIp:
         evt = _evt(source_ip="203.0.113.7")
         assert resolve_client_ip(evt, fronted="none") == "203.0.113.7"
 
-    def test_cloudfront_viewer_address_alone_resolves_to_the_peer(self):
+    # --- CloudFront deployment, sourceIp a CloudFront origin-facing address ---
+    # These events test the guard for a request whose TCP peer is a CloudFront origin-facing
+    # address: the trailing X-Forwarded-For hop equals sourceIp. Traffic through the
+    # distribution arrives with the viewer as sourceIp and the edge as the trailing hop
+    # instead; test_clientIp_cloudfront_peer.py::TestTrafficThroughCloudFront covers that.
+
+    def test_cloudfront_peer_viewer_address_alone_resolves_to_the_peer(self):
         # CloudFront-Viewer-Address is not read; without X-Forwarded-For the peer is used.
         evt = _evt(source_ip=CLOUDFRONT_PEER_V4,
                    headers={"CloudFront-Viewer-Address": "198.51.100.23:50314"})
         assert resolve_client_ip(evt, fronted="cloudfront") == CLOUDFRONT_PEER_V4
 
-    def test_cloudfront_both_headers_resolve_from_forwarded_for(self):
+    def test_cloudfront_peer_both_headers_resolve_from_forwarded_for(self):
         evt = _evt(source_ip=CLOUDFRONT_PEER_V4,
                    headers={"CloudFront-Viewer-Address": "192.0.2.99:50314",
                             "X-Forwarded-For": f"198.51.100.23, {CLOUDFRONT_PEER_V4}"})
         assert resolve_client_ip(evt, fronted="cloudfront") == "198.51.100.23"
 
-    def test_cloudfront_ipv6_viewer_in_forwarded_for(self):
+    def test_cloudfront_peer_ipv6_viewer_in_forwarded_for(self):
         # An IPv6 viewer address in X-Forwarded-For resolves like an IPv4 one.
         evt = _evt(source_ip=CLOUDFRONT_PEER_V4,
                    headers={"X-Forwarded-For": f"2001:db8::1, {CLOUDFRONT_PEER_V4}"})
         assert resolve_client_ip(evt, fronted="cloudfront") == "2001:db8::1"
 
     def test_cloudfront_falls_back_to_rightmost_untrusted_xff(self):
-        # XFF trailing hop is the CloudFront peer (sourceIp), so the right-most untrusted
+        # XFF trailing hop is the origin-facing peer (sourceIp), so the right-most untrusted
         # entry (the client) is used.
         evt = _evt(source_ip=CLOUDFRONT_PEER_V4,
                    headers={"X-Forwarded-For": f"198.51.100.23, {CLOUDFRONT_PEER_V4}"})

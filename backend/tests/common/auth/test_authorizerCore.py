@@ -35,7 +35,8 @@ class TestAuthenticateRequest:
         assert res["authorized"] is False
 
     def test_ip_check_uses_client_ip_when_fronted(self):
-        # sourceIp is the CloudFront hop (disallowed); real client (allowed) is in XFF.
+        # sourceIp is a CloudFront origin-facing address (disallowed); the client (allowed) is
+        # the XFF entry left of it.
         evt = _evt(source_ip=CLOUDFRONT_PEER_V4,
                    headers={"X-Forwarded-For": f"203.0.113.7, {CLOUDFRONT_PEER_V4}"},
                    auth=None)

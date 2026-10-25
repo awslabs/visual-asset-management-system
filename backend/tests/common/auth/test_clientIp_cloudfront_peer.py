@@ -1,17 +1,26 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""CloudFront's ``X-Forwarded-For`` counts only for a request whose TCP peer is CloudFront.
+"""``X-Forwarded-For`` counts only for a request whose TCP peer is a CloudFront origin-facing address.
 
-A CloudFront deployment's execute-api endpoint is also reachable directly, and a direct request
-carries whatever headers its caller set. ``resolve_client_ip`` therefore reads ``X-Forwarded-For``
-only when ``identity.sourceIp`` is one of CloudFront's origin-facing addresses (the bundled
-snapshot, united with a list refreshed at run time), and otherwise evaluates the request by its
-connection address. ``CloudFront-Viewer-Address`` is never read, whatever the peer.
+Traffic through the deployment's own distribution does not take that step. API Gateway reports
+its viewer as ``identity.sourceIp`` and the edge appears only as the trailing ``X-Forwarded-For``
+hop (``<caller-supplied>, <viewer>, <edge>``), so the trailing hop is not ``sourceIp``, the viewer
+is used as reported, and the origin-facing list is not consulted (``TestTrafficThroughCloudFront``).
 
-Every header case below pairs a CloudFront peer (the header is read) with a non-CloudFront peer
-(the same header is not), so an implementation that ignored the headers outright fails here just
-as one that read them for everyone does. Non-CloudFront peers are documentation addresses, which
-``test_cloudFrontOriginFacingRanges.py`` proves are outside the snapshot.
+The step is a guard for a request whose ``identity.sourceIp`` is one of CloudFront's
+origin-facing addresses. A CloudFront deployment's execute-api endpoint is also reachable
+directly, and a direct request carries whatever headers its caller set, so ``resolve_client_ip``
+reads ``X-Forwarded-For`` only for such a peer (the bundled snapshot, united with a list
+refreshed at run time) and otherwise evaluates the request by ``sourceIp``.
+``CloudFront-Viewer-Address`` is never read, whatever the peer.
+
+Below, a *CloudFront peer* is a ``sourceIp`` that is a CloudFront origin-facing address
+(``CLOUDFRONT_PEER_V4`` / ``CLOUDFRONT_PEER_V6``); those fixtures test the guard, not traffic
+through the distribution. Every header case pairs a CloudFront peer (the header is read) with a
+non-CloudFront peer (the same header is not), so an implementation that ignored the header
+outright fails here just as one that read it for everyone does. Non-CloudFront peers are
+documentation addresses, which ``test_cloudFrontOriginFacingRanges.py`` proves are outside the
+snapshot.
 """
 import ipaddress
 import json
@@ -27,7 +36,11 @@ from backend.backend.common.auth.clientIp import (
     resolve_client_ip,
 )
 from backend.backend.common.auth import authorizerCore as core
-from backend.tests.cloudFrontRangesStub import CLOUDFRONT_PEER_V4, CLOUDFRONT_PEER_V6
+from backend.tests.cloudFrontRangesStub import (
+    CLOUDFRONT_PEER_V4,
+    CLOUDFRONT_PEER_V6,
+    record_origin_facing_checks,
+)
 
 # The real downloader, bound before the autouse fixture can stand anything in for it.
 _REAL_DOWNLOAD = clientIp._download_origin_facing
@@ -38,6 +51,8 @@ VIEWER = "198.51.100.23"
 VIEWER_V6 = "2001:db8::1"
 # A different address in CloudFront-Viewer-Address, so a test can tell which header answered.
 OTHER_VIEWER = "203.0.113.77"
+# An entry a viewer puts in its own X-Forwarded-For before CloudFront appends to it.
+CALLER_SUPPLIED = "192.0.2.77"
 # A prefix CloudFront might add after the snapshot was taken (a documentation range here).
 LATER_PREFIX = ipaddress.ip_network("192.0.2.0/24")
 LATER_PEER = "192.0.2.10"
@@ -108,6 +123,47 @@ def _expect_next_attempt_after(clock, attempts, wait):
 
 
 @pytest.mark.unit
+class TestTrafficThroughCloudFront:
+    """A request through the distribution, as API Gateway reports it: ``identity.sourceIp`` is
+    the viewer and the edge is the trailing ``X-Forwarded-For`` hop. The viewer is used as
+    reported, and the origin-facing list is not consulted, so no refresh is attempted."""
+
+    @pytest.mark.parametrize(
+        "viewer, xff",
+        [
+            # The viewer sent its own entry; CloudFront appended the viewer, then the edge.
+            (VIEWER, f"{CALLER_SUPPLIED}, {VIEWER}, {CLOUDFRONT_PEER_V4}"),
+            # The viewer sent none.
+            (VIEWER, f"{VIEWER}, {CLOUDFRONT_PEER_V4}"),
+            # An IPv6 viewer through an IPv6 edge, with a caller-supplied entry.
+            (VIEWER_V6, f"{CALLER_SUPPLIED}, {VIEWER_V6}, {CLOUDFRONT_PEER_V6}"),
+            # An IPv6 viewer through an IPv4 edge.
+            (VIEWER_V6, f"{VIEWER_V6}, {CLOUDFRONT_PEER_V4}"),
+        ],
+    )
+    def test_the_reported_viewer_is_used_without_consulting_the_list(
+        self, viewer, xff, monkeypatch, cloudfront_refresh_offline
+    ):
+        checked = record_origin_facing_checks(monkeypatch)
+        evt = _evt(viewer, {"X-Forwarded-For": xff})
+        assert resolve_client_ip(evt, fronted="cloudfront") == viewer
+        assert checked == [], "the origin-facing list was consulted"
+        assert cloudfront_refresh_offline.attempted_urls == []
+
+    def test_the_recorder_sees_the_check_a_direct_caller_triggers(
+        self, monkeypatch, cloudfront_refresh_offline
+    ):
+        # Positive control: the same recorder sees the check a direct caller that sends its own
+        # X-Forwarded-For triggers (API Gateway appended its address), so the empty record above
+        # is not an artefact of the recorder.
+        checked = record_origin_facing_checks(monkeypatch)
+        evt = _evt(DIRECT_PEER_V4, {"X-Forwarded-For": f"{CALLER_SUPPLIED}, {DIRECT_PEER_V4}"})
+        assert resolve_client_ip(evt, fronted="cloudfront") == DIRECT_PEER_V4
+        assert checked == [DIRECT_PEER_V4]
+        assert cloudfront_refresh_offline.attempted_urls == [clientIp.ORIGIN_FACING_SOURCE_URL]
+
+
+@pytest.mark.unit
 class TestHeadersCountOnlyFromCloudFrontPeers:
     def test_viewer_address_alone_from_a_cloudfront_peer_resolves_to_the_peer(self):
         evt = _evt(CLOUDFRONT_PEER_V4, {"CloudFront-Viewer-Address": f"{VIEWER}:50314"})
@@ -133,7 +189,8 @@ class TestHeadersCountOnlyFromCloudFrontPeers:
 
     def test_forwarded_for_from_a_direct_peer_is_not_read(self):
         # The caller sent one entry and API Gateway appended the TCP peer, so the trailing hop
-        # matches sourceIp exactly as it does behind CloudFront. Only the peer tells them apart.
+        # matches sourceIp exactly as it does for a CloudFront peer. Only the peer tells them
+        # apart.
         evt = _evt(DIRECT_PEER_V4, {"X-Forwarded-For": f"{VIEWER}, {DIRECT_PEER_V4}"})
         assert resolve_client_ip(evt, fronted="cloudfront") == DIRECT_PEER_V4
 
@@ -246,12 +303,27 @@ class TestAllowListDecision:
              patch.object(core, "IGNORED_PATHS", ["/database"]):
             return core.authenticate_request(evt, fronted="cloudfront")
 
-    def test_allowed_viewer_behind_cloudfront_is_admitted(self):
+    def test_allowed_viewer_from_a_cloudfront_peer_is_admitted(self):
         res = self._decide(CLOUDFRONT_PEER_V4, {"X-Forwarded-For": f"{VIEWER}, {CLOUDFRONT_PEER_V4}"})
         assert res["authorized"] is True
 
-    def test_viewer_address_alone_behind_cloudfront_is_judged_by_the_peer(self):
+    def test_viewer_address_alone_from_a_cloudfront_peer_is_judged_by_the_peer(self):
         res = self._decide(CLOUDFRONT_PEER_V4, {"CloudFront-Viewer-Address": f"{VIEWER}:443"})
+        assert res["authorized"] is False
+        assert res["reason"] == "IP address not authorized"
+
+    def test_allowed_viewer_through_cloudfront_is_admitted(self):
+        # Through the distribution API Gateway reports the viewer as sourceIp.
+        res = self._decide(
+            VIEWER, {"X-Forwarded-For": f"{CALLER_SUPPLIED}, {VIEWER}, {CLOUDFRONT_PEER_V4}"}
+        )
+        assert res["authorized"] is True
+
+    def test_viewer_outside_the_range_through_cloudfront_is_denied_whatever_it_sent(self):
+        # The caller-supplied entry is inside the range; the viewer API Gateway reports is not.
+        res = self._decide(
+            DIRECT_PEER_V4, {"X-Forwarded-For": f"{VIEWER}, {DIRECT_PEER_V4}, {CLOUDFRONT_PEER_V4}"}
+        )
         assert res["authorized"] is False
         assert res["reason"] == "IP address not authorized"
 

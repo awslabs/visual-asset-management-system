@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """The bundled CloudFront origin-facing snapshot is well formed and is what its generator writes.
 
-``clientIp.py`` reads CloudFront's forwarding headers only for a peer in this snapshot (or in the
-list it refreshes at run time), so the snapshot is the whole answer wherever the refresh cannot
-run. Two ways it could quietly stop being one:
+``clientIp.py`` reads ``X-Forwarded-For`` only for a TCP peer in this snapshot (or in the list it
+refreshes at run time), so the snapshot is the whole answer wherever the refresh cannot run. Two
+ways it could quietly stop being one:
 
-* it stops parsing, or a family empties, so every request through an edge is judged by the edge
-  address -- covered by the parse checks below;
+* it stops parsing, or a family empties, so every request whose TCP peer is a CloudFront
+  origin-facing address is judged by that peer address -- covered by the parse checks below;
 * it is edited by hand into a shape the generator no longer produces, so the next regeneration is
   an unreviewable diff -- covered by regenerating it from its own data and comparing the text.
 

@@ -1,10 +1,10 @@
 """The IP allow-list matcher must be family-aware: an IPv6 range is expressible and matches.
 
-The resolver returns an IPv6 client address as readily as an IPv4 one (an IPv6 viewer behind
-CloudFront arrives in `X-Forwarded-For`), so the module reads as IPv6-aware. The matcher was not: it
-split on `.` and `int()`ed each part, so any IPv6 literal raised `ValueError`, was caught, and became
-a denial — with no configuration able to admit an IPv6 caller, because the CDK validator accepted
-only IPv4 dotted quads.
+The resolver returns an IPv6 client address as readily as an IPv4 one (as `identity.sourceIp`, or
+from `X-Forwarded-For` when the TCP peer is a CloudFront origin-facing address), so the module reads
+as IPv6-aware. The matcher was not: it split on `.` and `int()`ed each part, so any IPv6 literal
+raised `ValueError`, was caught, and became a denial — with no configuration able to admit an IPv6
+caller, because the CDK validator accepted only IPv4 dotted quads.
 
 Every case below pairs a match with a non-match of the same family, so a matcher that simply started
 allowing everything fails here just as a family-blind one does. The cross-family cases are the ones
@@ -88,7 +88,11 @@ class TestMalformedRangesFailClosed:
 
 @pytest.mark.unit
 class TestEndToEndCloudFrontIpv6:
-    """The resolver already extracts an IPv6 viewer address; the matcher must now accept it."""
+    """The resolver already extracts an IPv6 viewer address; the matcher must now accept it.
+
+    The TCP peer here is a CloudFront origin-facing address, so the viewer comes from
+    ``X-Forwarded-For`` (the guard). Through the distribution an IPv6 viewer is reported as
+    ``identity.sourceIp`` itself."""
 
     def _evt(self, source_ip, viewer):
         return {

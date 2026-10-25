@@ -182,15 +182,21 @@ which is how a real paging fix gets reverted.
 
 #### Authorizer tests use `tests/cloudFrontRangesStub.py` for CloudFront peers and stay offline
 
-`common/auth/clientIp.py` reads CloudFront's forwarding headers only when the TCP peer is a CloudFront
+`common/auth/clientIp.py` reads the `X-Forwarded-For` header only when the TCP peer is a CloudFront
 origin-facing address, and refreshes that list from `ip-ranges.amazonaws.com` when a request carries the
-headers from a peer the bundled snapshot does not hold. `tests/common/auth/conftest.py` and
-`tests/handlers/auth/conftest.py` take that refresh offline with an autouse fixture
+header (trailing hop equal to `identity.sourceIp`) from a peer the bundled snapshot does not hold.
+`tests/common/auth/conftest.py` and `tests/handlers/auth/conftest.py` take that refresh offline with
+an autouse fixture
 (`cloudfront_refresh_offline`, from `isolate_refresh`), which patches every loaded copy of the module —
 found through `resolve_client_ip.__globals__` as well as by name, for the reason given above under
-"Patch the object the function's `__globals__` actually resolves". Use `CLOUDFRONT_PEER_V4` / `CLOUDFRONT_PEER_V6` from the stub for a CloudFront peer
+"Patch the object the function's `__globals__` actually resolves". Use `CLOUDFRONT_PEER_V4` / `CLOUDFRONT_PEER_V6` from the stub for a TCP peer that is a CloudFront origin-facing address
 (they come from the snapshot, so regenerating it cannot strand a fixture) and the documentation ranges
 (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, `2001:db8::/32`) for a direct one.
+A fixture with `CLOUDFRONT_PEER_*` as `identity.sourceIp` tests that guard; it is not what traffic
+through the distribution looks like. Model that as API Gateway reports it: `identity.sourceIp` is the
+viewer and `X-Forwarded-For` is `<caller-supplied>, <viewer>, <edge>`. `record_origin_facing_checks`
+from the stub records every address any clientIp copy checks against the list, so a test can assert
+the list was not consulted.
 `tests/common/auth/test_cloudFrontOriginFacingRanges.py` renders the snapshot with its generator,
 `backend/scripts/generateCloudFrontOriginFacingRanges.py` (imported as `backend.scripts`, outside the
 Lambda asset tree), and compares the text, so a hand edit to the snapshot fails it.

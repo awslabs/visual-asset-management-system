@@ -18,7 +18,7 @@ import pytest
 from unittest.mock import patch
 
 from backend.backend.handlers.auth import apiGatewayAuthorizerRest as rest
-from backend.tests.cloudFrontRangesStub import CLOUDFRONT_PEER_V4
+from backend.tests.cloudFrontRangesStub import CLOUDFRONT_PEER_V4, record_origin_facing_checks
 
 METHOD_ARN = "arn:aws:execute-api:us-east-1:123456789012:abc123/prod/GET/database/db1"
 
@@ -120,8 +120,9 @@ class TestAuditSourceIpAttribution:
         _, recorder = _run(event, fronted="alb")
         assert _audit_source_ip(recorder.event) == "198.51.100.42"
 
-    def test_cloudfront_request_records_the_viewer_not_the_edge(self):
-        # Behind CloudFront the peer is an edge IP and the viewer is the left-hand XFF entry.
+    def test_cloudfront_peer_request_records_the_forwarded_viewer(self):
+        # A request whose TCP peer is a CloudFront origin-facing address (the guard): the
+        # viewer is the X-Forwarded-For entry left of that peer.
         event = _rest_event(
             source_ip=CLOUDFRONT_PEER_V4,
             headers={"X-Forwarded-For": f"198.51.100.10, {CLOUDFRONT_PEER_V4}"},
@@ -129,7 +130,23 @@ class TestAuditSourceIpAttribution:
         _, recorder = _run(event, fronted="cloudfront")
         assert _audit_source_ip(recorder.event) == "198.51.100.10"
 
-    def test_cloudfront_viewer_address_header_alone_records_the_connection_address(self):
+    def test_request_through_cloudfront_records_the_viewer_api_gateway_reports(
+        self, monkeypatch, cloudfront_refresh_offline
+    ):
+        # Through the distribution API Gateway reports the viewer as identity.sourceIp and the
+        # edge is the trailing X-Forwarded-For hop, after any entry the viewer sent itself.
+        checked = record_origin_facing_checks(monkeypatch)
+        event = _rest_event(
+            source_ip="198.51.100.10",
+            headers={"X-Forwarded-For": f"192.0.2.77, 198.51.100.10, {CLOUDFRONT_PEER_V4}"},
+        )
+        _, recorder = _run(event, fronted="cloudfront")
+        assert _audit_source_ip(recorder.event) == "198.51.100.10"
+        assert recorder.event["requestContext"]["identity"]["sourceIp"] == "198.51.100.10"
+        assert checked == [], "the origin-facing list was consulted"
+        assert cloudfront_refresh_offline.attempted_urls == []
+
+    def test_cloudfront_peer_with_viewer_address_header_alone_records_the_peer(self):
         # CloudFront-Viewer-Address is not read, so without X-Forwarded-For the record keeps
         # the TCP peer.
         event = _rest_event(
@@ -139,7 +156,7 @@ class TestAuditSourceIpAttribution:
         _, recorder = _run(event, fronted="cloudfront")
         assert _audit_source_ip(recorder.event) == CLOUDFRONT_PEER_V4
 
-    def test_cloudfront_request_with_both_headers_records_the_forwarded_for_viewer(self):
+    def test_cloudfront_peer_with_both_headers_records_the_forwarded_for_viewer(self):
         event = _rest_event(
             source_ip=CLOUDFRONT_PEER_V4,
             headers={
@@ -152,8 +169,8 @@ class TestAuditSourceIpAttribution:
 
     def test_direct_request_with_cloudfront_headers_records_the_connection_address(self):
         # A CloudFront deployment's execute-api endpoint is reachable directly. A request whose
-        # TCP peer is not a CloudFront origin-facing address did not come through CloudFront,
-        # so the headers it carries name nobody and the record keeps the connection address.
+        # TCP peer is not a CloudFront origin-facing address is recorded by that address, so
+        # the headers this direct caller sent name nobody.
         event = _rest_event(
             source_ip="198.51.100.42",
             headers={
