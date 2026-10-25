@@ -26,6 +26,11 @@ const COMPLIANCE_STATE_DATABASE_API_ROUTE = "/compliance/state/{databaseId}";
 // databases (for example the Compliance Admin template) sees the list without them.
 const DATABASE_API_ROUTE = "/database";
 const DATABASE_BY_ID_API_ROUTE = "/database/{databaseId}";
+// The routes the database's assets page lists from: search, or the database's asset listing when
+// the deployment runs without OpenSearch. A caller who may call neither gets the database name
+// linked to the compliance page instead, or not linked.
+const SEARCH_API_ROUTE = "/search";
+const DATABASE_ASSETS_API_ROUTE = "/database/{databaseId}/assets";
 
 export default function Databases() {
     usePageTitle(Synonyms.Databases);
@@ -40,6 +45,11 @@ export default function Databases() {
     const canCreate = canCallRoute("POST", DATABASE_API_ROUTE);
     const canEdit = canCallRoute("PUT", DATABASE_BY_ID_API_ROUTE);
     const canDelete = canCallRoute("DELETE", DATABASE_BY_ID_API_ROUTE);
+    const useNoOpenSearch = config?.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH);
+    const canOpenAssets = useNoOpenSearch
+        ? canCallRoute("GET", DATABASE_ASSETS_API_ROUTE)
+        : canCallRoute("POST", SEARCH_API_ROUTE);
+    const nameLinkTarget = canOpenAssets ? "assets" : showCompliance ? "compliance" : "none";
 
     const listDefinition = useMemo(
         () =>
@@ -49,8 +59,9 @@ export default function Databases() {
                 MapThumbnailComponent: DatabaseMapThumbnail,
                 mapStyleUrl,
                 showCompliance,
+                nameLinkTarget,
             }),
-        [showMapThumbnails, useMapView, mapStyleUrl, showCompliance]
+        [showMapThumbnails, useMapView, mapStyleUrl, showCompliance, nameLinkTarget]
     );
 
     const mapThumbnailToggle =

@@ -8,7 +8,9 @@
  * grants `GET /database` and no other database route: the page lists the role's database with the
  * Compliance column link, offers no Create, Edit or Delete Selected action the caller cannot call,
  * and never requests the administrator-only bucket listing (`GET /buckets`), which the
- * create/edit modal reads only once it is opened.
+ * create/edit modal reads only once it is opened. The database name links to the database's
+ * assets page only when the caller may call the route that page lists from; otherwise it links
+ * to the compliance page, or is not a link.
  */
 import React from "react";
 import { render, screen, waitFor, fireEvent, within, act } from "@testing-library/react";
@@ -29,7 +31,9 @@ jest.mock("../services/ComplianceService", () => ({
     bindSchemaToDatabase: jest.fn(),
     unbindSchemaFromDatabase: jest.fn(),
 }));
-jest.mock("../services/appCache", () => ({ appCache: { getItem: () => null } }));
+// The runtime configuration the page reads; null is a deployment with OpenSearch.
+let mockConfig: any = null;
+jest.mock("../services/appCache", () => ({ appCache: { getItem: () => mockConfig } }));
 jest.mock("../components/metadataV2/MetadataContainer", () => ({
     MetadataContainer: () => null,
 }));
@@ -53,7 +57,10 @@ const ADMINISTRATOR = [
     "PUT /database/{databaseId}",
     "DELETE /database/{databaseId}",
     "GET /buckets",
+    "POST /search",
 ];
+
+const nameCell = () => screen.getByText("db1");
 
 const mount = () =>
     render(
@@ -76,6 +83,7 @@ const pageCreateButtons = () =>
 
 beforeEach(() => {
     jest.clearAllMocks();
+    mockConfig = null;
     jest.spyOn(console, "log").mockImplementation(() => undefined);
     fetchAllDatabases.mockResolvedValue([
         { databaseId: "db1", description: "compliance database", defaultBucketId: "b1" },
@@ -120,6 +128,44 @@ describe(`${Synonyms.Databases} page for a caller who may only list ${Synonyms.d
             await new Promise((resolve) => setTimeout(resolve, 0));
         });
         expect(fetchBuckets).not.toHaveBeenCalled();
+    });
+
+    it("links the database name to the compliance page, not the assets page it cannot list", async () => {
+        mount();
+        await screen.findByText("db1");
+        expect(nameCell().closest("a")).toHaveAttribute("href", "#/databases/db1/compliance");
+    });
+
+    it("leaves the database name unlinked when the compliance page is not allowed either", async () => {
+        mockAllowed = ["GET /database"];
+        mount();
+        await screen.findByText("db1");
+        expect(nameCell().closest("a")).toBeNull();
+    });
+});
+
+describe(`${Synonyms.Databases} page name link to the ${Synonyms.assets} page`, () => {
+    it("links to the assets page when the caller may search", async () => {
+        mockAllowed = [...LIST_ONLY, "POST /search"];
+        mount();
+        await screen.findByText("db1");
+        expect(nameCell().closest("a")).toHaveAttribute("href", "#/databases/db1/assets/");
+    });
+
+    it("links to the assets page without OpenSearch when the caller may list the database's assets", async () => {
+        mockConfig = { featuresEnabled: ["NOOPENSEARCH"] };
+        mockAllowed = [...LIST_ONLY, "GET /database/{databaseId}/assets"];
+        mount();
+        await screen.findByText("db1");
+        expect(nameCell().closest("a")).toHaveAttribute("href", "#/databases/db1/assets/");
+    });
+
+    it("does not count search as access to the assets page without OpenSearch", async () => {
+        mockConfig = { featuresEnabled: ["NOOPENSEARCH"] };
+        mockAllowed = [...LIST_ONLY, "POST /search"];
+        mount();
+        await screen.findByText("db1");
+        expect(nameCell().closest("a")).toHaveAttribute("href", "#/databases/db1/compliance");
     });
 });
 

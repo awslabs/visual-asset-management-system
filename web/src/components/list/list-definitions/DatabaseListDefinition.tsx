@@ -17,6 +17,8 @@ import Synonyms from "../../../synonyms";
  * @param {React.ComponentType} options.MapThumbnailComponent - Component to render map thumbnails
  * @param {string} options.mapStyleUrl - Map style URL for thumbnails
  * @param {boolean} options.showCompliance - Whether to show the compliance page link column
+ * @param {"assets" | "compliance" | "none"} options.nameLinkTarget - Page the database name links
+ *   to: the database's assets (the default), its compliance page, or no link
  */
 export const createDatabaseListDefinition = (options: any = {}) => {
     const {
@@ -25,6 +27,7 @@ export const createDatabaseListDefinition = (options: any = {}) => {
         MapThumbnailComponent,
         mapStyleUrl,
         showCompliance,
+        nameLinkTarget = "assets",
     } = options;
 
     const columnDefinitions = [
@@ -33,6 +36,16 @@ export const createDatabaseListDefinition = (options: any = {}) => {
             header: "Name",
             cellWrapper: (props: any) => {
                 const { item } = props;
+                if (nameLinkTarget === "compliance") {
+                    return (
+                        <Link href={`#/databases/${item.databaseId}/compliance`}>
+                            {props.children}
+                        </Link>
+                    );
+                }
+                if (nameLinkTarget === "none") {
+                    return <>{props.children}</>;
+                }
                 return (
                     <Link href={`#/databases/${item.databaseId}/assets/`}>{props.children}</Link>
                 );

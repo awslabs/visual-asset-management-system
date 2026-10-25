@@ -34,7 +34,7 @@ The **Databases** page displays all databases you have access to in a searchable
 | **Column sorting**  | Select any column header to sort the table in ascending or descending order.                                                                                    |
 | **Pagination**      | Navigate through large database lists using pagination controls.                                                                                                |
 
-**Create Database**, **Edit** and **Delete Selected** appear only to users whose role may call the matching API route (`POST /database`, `PUT /database/{databaseId}` and `DELETE /database/{databaseId}`). A role that may only list databases, such as one built from the Compliance Admin template, sees the list with its **Compliance** links. The editor reads the bucket list (`GET /buckets`, an administrator route) only when it opens.
+**Create Database**, **Edit** and **Delete Selected** appear only to users whose role may call the matching API route (`POST /database`, `PUT /database/{databaseId}` and `DELETE /database/{databaseId}`). A role that may only list databases, such as one built from the Compliance Admin template, sees the list with its **Compliance** links. The editor reads the bucket list (`GET /buckets`, an administrator route) only when it opens. A database name opens the database's assets page when the role may call the route that page lists from (`POST /search`, or `GET /database/{databaseId}/assets` in a deployment without OpenSearch); otherwise it opens the database's compliance page, or is not a link when that page is not allowed either.
 
 ### Database Properties
 
