@@ -13,7 +13,7 @@ lazrs==0.8.2
 pye57==0.4.19
 cadquery==2.8.0
 cadquery-ocp==7.9.3.1.1
-Pillow==12.3.0
+Pillow==13.0.0
 DracoPy==1.7.0
 usd-core==25.11
 ezdxf==1.4.4
