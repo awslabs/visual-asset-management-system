@@ -181,11 +181,6 @@ export class CognitoWebNativeConstructStack extends Construct {
                 requireSymbols: true,
                 tempPasswordValidity: Duration.days(3),
             },
-            customAttributes: {
-                "custom:groups": new cognito.StringAttribute({
-                    mutable: true,
-                }),
-            },
         });
 
         const cfnUserPool = userPool.node.defaultChild as cognito.CfnUserPool;
