@@ -5,6 +5,7 @@ import os
 import boto3
 import json
 from customLogging.logger import safeLogger
+import executionLogKeys
 from botocore.config import Config
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
@@ -28,6 +29,10 @@ def lambda_handler(event, context):
     Reports the parent workflow's task token: success unless the machine recorded an error.
     A caught Bedrock failure is recorded through execution.status.json and is not an error here.
     """
+
+    # VAMS reads this function's shared log group for the run's execution ids, so they go on every
+    # line; the previous invocation's ids are removed first (see executionLogKeys).
+    executionLogKeys.bind_execution_ids(logger, event)
 
     # Identifiers only: the state carries externalSfnTaskToken, so it is never rendered whole.
     logger.info("Event Input", jobName=event.get("jobName", ""), assetId=event.get("assetId", ""),

@@ -24,6 +24,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from containerLogger import safeLogger
+import executionLogKeys
 from formatUnits import declared_units
 from meshAttributes import apply_declared_units, compute_trimesh_attributes, merge_scene_facts
 
@@ -411,6 +412,9 @@ def write_analysis_manifest(bucket, key, manifest):
 
 
 def lambda_handler(event, context):
+    # VAMS reads this function's shared log group for the run's execution ids, so they go on every
+    # line; the previous invocation's ids are removed first (see executionLogKeys).
+    executionLogKeys.bind_execution_ids(logger, event)
     logger.info({"message": "BLENDER render branch invoked", "fileClass": event.get("fileClass"),
                  "relativePath": event.get("relativePath"), "assetId": event.get("assetId")})
     missing = [key for key in REQUIRED_EVENT_KEYS if not event.get(key)]

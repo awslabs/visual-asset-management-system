@@ -35,11 +35,11 @@ _IMPORT_TO_DISTRIBUTION = {
     "docx": "python-docx", "pptx": "python-pptx", "openpyxl": "openpyxl",
 }
 _LOCAL_PACKAGES = {"media_extractors", "customLogging", "handler", "videoSegments", "contentChunks",
-                   "bedrockGuardrail", "vectorsearch", "segment_handler"}
+                   "bedrockGuardrail", "vectorsearch", "segment_handler", "executionLogKeys"}
 _LAMBDA_DIR = os.path.join(_REPO_ROOT, "backendPipelines", "system", "genAiMetadata", "lambda")
 # Modules copied into the image from lambda/ because the build context cannot reach it; each is pinned
 # byte-identical to its source.
-_VENDORED_FROM_LAMBDA = ("videoSegments.py", "contentChunks.py", "bedrockGuardrail.py")
+_VENDORED_FROM_LAMBDA = ("videoSegments.py", "contentChunks.py", "bedrockGuardrail.py", "executionLogKeys.py")
 _PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([A-Za-z0-9][A-Za-z0-9._!+-]*)$")
 _PINNED_BASE = re.compile(
     r"^FROM\s+--platform=linux/amd64\s+public\.ecr\.aws/lambda/python:3\.12@sha256:[0-9a-f]{64}\s*$")

@@ -35,6 +35,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from customLogging.logger import safeLogger
+import executionLogKeys
 from PIL import Image
 
 import bedrockGuardrail
@@ -502,6 +503,9 @@ def lambda_handler(event, context):
 
     segment = event["segment"]
     state = event["state"]
+    # VAMS reads this function's shared log group for the run's execution ids, so they go on every
+    # line; the previous invocation's ids are removed first (see executionLogKeys).
+    executionLogKeys.bind_execution_ids(logger, state)
     # Sign each asset bucket's requests for its own Region before any S3 call.
     register_bucket_regions(state.get("bucketRegions"))
     segment_key = segment["segmentKey"]

@@ -7,6 +7,7 @@ import os
 import boto3
 from botocore.config import Config
 from customLogging.logger import safeLogger
+import executionLogKeys
 import manifestHelper
 import fileClassifier
 import analysisCommon as common
@@ -181,6 +182,10 @@ def lambda_handler(event, context):
     Classifies the input file, applies the Lambda limits, writes the analysis manifest with sys_file,
     and returns the pipeline state the render branches and the analysis steps read.
     """
+
+    # VAMS reads this function's shared log group for the run's execution ids, so they go on every
+    # line; the previous invocation's ids are removed first (see executionLogKeys).
+    executionLogKeys.bind_execution_ids(logger, event)
 
     # Identifiers only: the state carries externalSfnTaskToken, so it is never rendered whole.
     logger.info("Event", jobName=event.get("jobName", ""), assetId=event.get("assetId", ""),

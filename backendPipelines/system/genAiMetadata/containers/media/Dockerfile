@@ -46,6 +46,7 @@ COPY media_extractors ${LAMBDA_TASK_ROOT}/media_extractors
 COPY videoSegments.py ${LAMBDA_TASK_ROOT}/videoSegments.py
 COPY contentChunks.py ${LAMBDA_TASK_ROOT}/contentChunks.py
 COPY bedrockGuardrail.py ${LAMBDA_TASK_ROOT}/bedrockGuardrail.py
+COPY executionLogKeys.py ${LAMBDA_TASK_ROOT}/executionLogKeys.py
 COPY segment_handler.py ${LAMBDA_TASK_ROOT}/segment_handler.py
 COPY vectorsearch ${LAMBDA_TASK_ROOT}/vectorsearch
 

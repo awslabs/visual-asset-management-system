@@ -7,6 +7,7 @@ import json
 import datetime
 import uuid
 from customLogging.logger import safeLogger
+import executionLogKeys
 import manifestHelper
 from botocore.config import Config
 
@@ -45,6 +46,28 @@ BATCH_JOB_LOG_GROUP_ARN = os.environ.get("BATCH_JOB_LOG_GROUP_ARN", "")
 BATCH_JOB_DEFINITION_NAME = os.environ.get("BATCH_JOB_DEFINITION_NAME", "")
 # The Batch state of this pipeline's state machine (its CDK construct id).
 BATCH_STATE_NAME = "FargateRenderJob"
+# The Lambdas the state machine runs, by the state that runs them (each a CDK construct id, so a key of
+# the machine's States; the segment Lambda runs inside the Map state). The CDK passes each one's function
+# name in ANALYSIS_FUNCTION_NAMES, a JSON object keyed by these names; their log groups are registered as
+# log sources, which VAMS reads for the lines that carry this run's execution ids (executionLogKeys).
+CONSTRUCT_PIPELINE_STATE_NAME = "ConstructPipelineTask"
+BLENDER_RENDER_STATE_NAME = "BlenderRenderTask"
+RENDER_THREE_D_STATE_NAME = "Render3dTask"
+MEDIA_EXTRACT_STATE_NAME = "MediaExtractTask"
+GENERATE_METADATA_STATE_NAME = "GenerateMetadataTask"
+GENERATE_EMBEDDING_STATE_NAME = "GenerateEmbeddingTask"
+VIDEO_SEGMENT_STATE_NAME = "VideoSegmentMap"
+PIPELINE_END_STATE_NAME = "PipelineEndTask"
+LAMBDA_STATE_NAMES = (
+    CONSTRUCT_PIPELINE_STATE_NAME, BLENDER_RENDER_STATE_NAME, RENDER_THREE_D_STATE_NAME, MEDIA_EXTRACT_STATE_NAME,
+    GENERATE_METADATA_STATE_NAME, GENERATE_EMBEDDING_STATE_NAME, VIDEO_SEGMENT_STATE_NAME,
+    PIPELINE_END_STATE_NAME,
+)
+ANALYSIS_FUNCTION_NAMES = os.environ.get("ANALYSIS_FUNCTION_NAMES", "")
+# This function's own name, set by the Lambda runtime; its group is registered beside the states'.
+OPEN_PIPELINE_FUNCTION_NAME = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "")
+LAMBDA_LOG_GROUP_PREFIX = "/aws/lambda/"
+OPEN_PIPELINE_LOG_LABEL = "openPipeline Lambda"
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 SUB_EXECUTION_LABEL = "GenAI metadata processing"
 STATE_MACHINE_LOG_LABEL = "GenAI metadata state machine"
@@ -90,6 +113,47 @@ def batch_container_log_entry(job_definition_name, state_name):
     }
 
 
+def _analysis_function_names():
+    """{state name: function name} from ANALYSIS_FUNCTION_NAMES; {} when unset or not a JSON object."""
+    try:
+        names = json.loads(ANALYSIS_FUNCTION_NAMES or "{}")
+    except ValueError:
+        logger.warning("ANALYSIS_FUNCTION_NAMES is not JSON; the Lambda log sources are not registered")
+        return {}
+    return names if isinstance(names, dict) else {}
+
+
+def lambda_log_entry(function_name, state_name, label):
+    """The log source for one Lambda: its /aws/lambda/<function> group, in the account, Region and partition
+    of the state machine's group. Every run shares the group, so VAMS reads it for this run's execution ids.
+    None without a function name."""
+    if not isinstance(function_name, str) or not function_name:
+        return None
+    group_name = LAMBDA_LOG_GROUP_PREFIX + function_name
+    arn_prefix, separator, _ = STATE_MACHINE_LOG_GROUP_ARN.partition(":log-group:")
+    entry = {
+        "logGroupArn": arn_prefix + separator + group_name if separator else "",
+        "logGroupName": group_name,
+        "logStreamName": "",
+        "logStreamPrefix": "",
+        "sourceType": "lambda",
+        "label": label,
+    }
+    # openPipeline runs before the machine, so its entry names no state.
+    if state_name:
+        entry["stageName"] = state_name
+    return entry
+
+
+def lambda_log_entries():
+    """openPipeline's own group, then each state's Lambda in the order the machine can run them."""
+    entries = [lambda_log_entry(OPEN_PIPELINE_FUNCTION_NAME, "", OPEN_PIPELINE_LOG_LABEL)]
+    names = _analysis_function_names()
+    for state_name in LAMBDA_STATE_NAMES:
+        entries.append(lambda_log_entry(names.get(state_name), state_name, f"{state_name} Lambda"))
+    return [entry for entry in entries if entry]
+
+
 def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
                            sub_execution_arn, state_machine_arn):
     """Best-effort: report this sub-SFN execution + its log sources to the orchestration bus;
@@ -122,6 +186,7 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
     container_log = batch_container_log_entry(BATCH_JOB_DEFINITION_NAME, BATCH_STATE_NAME)
     if container_log:
         logs.append(container_log)
+    logs.extend(lambda_log_entries())
     if logs:
         detail["logs"] = logs
     try:
@@ -141,6 +206,10 @@ def lambda_handler(event, context):
     OpenPipeline
     Gates the input extension and starts the analysis state machine with the complete pipeline state.
     """
+
+    # VAMS reads this function's shared log group for the run's execution ids, so they go on every
+    # line; the previous invocation's ids are removed first (see executionLogKeys).
+    executionLogKeys.bind_execution_ids(logger, event)
 
     # Identifiers only: the event carries the parent workflow's task token, so it is never rendered
     # whole into a log line.

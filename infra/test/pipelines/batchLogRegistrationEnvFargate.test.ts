@@ -239,6 +239,51 @@ describe("system/genAiMetadata openPipeline registration environment", () => {
         );
     });
 
+    test("names each Lambda state's function under that state's name", () => {
+        // openPipeline registers /aws/lambda/<function> for every key of this map, under the key as the
+        // stage name, so the keys must be its declared Lambda state names and each value a function of
+        // this stack. A missing or misnamed key leaves that branch's log out of the run's log view.
+        const env = registeringLambdaEnv(template, "openPipeline.lambda_handler");
+        const value = env.ANALYSIS_FUNCTION_NAMES;
+        const parts: any[] =
+            typeof value === "string" ? [value] : (value["Fn::Join"] as [string, any[]])[1];
+        const tokens: any[] = [];
+        const text = parts
+            .map((p) => {
+                if (typeof p === "string") return p;
+                tokens.push(p);
+                return `__TOKEN_${tokens.length - 1}__`;
+            })
+            .join("");
+        const names: Record<string, string> = JSON.parse(text);
+        const producer = path.join(
+            PRODUCERS,
+            "system",
+            "genAiMetadata",
+            "lambda",
+            "openPipeline.py"
+        );
+        const lambdaStates = declaredStageNames(producer).filter((n) => n !== "FargateRenderJob");
+        expect(lambdaStates.length).toBe(8);
+        expect(Object.keys(names).sort()).toEqual([...lambdaStates].sort());
+        const functions = template.findResources("AWS::Lambda::Function");
+        for (const placeholder of Object.values(names)) {
+            const match = /^__TOKEN_(\d+)__$/.exec(placeholder);
+            expect(match).not.toBeNull();
+            const ref = tokens[Number(match![1])].Ref;
+            expect(functions[ref]).toBeDefined();
+        }
+        // The map covers every Lambda the state machine invokes, so no branch is left unregistered.
+        const asl = parseAsl(singleStateMachine(template));
+        const invoked = Object.entries(asl.States)
+            .filter(([, s]: [string, any]) => s.Resource?.toString().includes("lambda:invoke"))
+            .map(([n]) => n);
+        expect(invoked.length).toBeGreaterThan(0);
+        for (const state of invoked) {
+            expect(Object.keys(names)).toContain(state);
+        }
+    });
+
     test("without the Fargate renderer the registering lambda names no container group", () => {
         const h = makePipelineHarness("SystemGenAiMetadataLambdaOnlyEnvStack", (c) => {
             c.app.pipelines.useSystemGenAiMetadata.enabled = true;

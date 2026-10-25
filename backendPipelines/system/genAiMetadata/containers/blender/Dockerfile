@@ -77,7 +77,7 @@ RUN mkdir -p /tmp/build-home && HOME=/tmp/build-home blender --background -noaud
     "import bpy, bmesh; from pxr import Usd, UsdGeom; [getattr(bpy.ops.wm, n).get_rna_type() for n in ('obj_import', 'stl_import', 'ply_import', 'usd_import', 'collada_import', 'alembic_import')]; bpy.ops.import_scene.fbx.get_rna_type(); bpy.ops.import_scene.gltf.get_rna_type(); print('importers ok', bpy.app.version_string)" \
     && rm -rf /tmp/build-home
 
-COPY handler.py meshAttributes.py formatUnits.py containerLogger.py renderScene.py GPL3-license.txt ${LAMBDA_TASK_ROOT}/
+COPY handler.py meshAttributes.py formatUnits.py containerLogger.py executionLogKeys.py renderScene.py GPL3-license.txt ${LAMBDA_TASK_ROOT}/
 
 # Lambda runs the image under its own least-privileged default user regardless of USER, so every runtime
 # file is made world-readable; the explicit non-root USER covers any other runtime of this image. Blender's

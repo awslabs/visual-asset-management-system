@@ -275,6 +275,7 @@ export function buildOpenPipelineFunction(
     orchestrationBus: events.IEventBus,
     stateMachineLogGroup: logs.ILogGroup,
     batchLogs: OpenPipelineBatchLogProps | undefined,
+    analysisFunctions: Record<string, lambda.IFunction>,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "openPipeline";
@@ -302,6 +303,14 @@ export function buildOpenPipelineFunction(
                       BATCH_JOB_DEFINITION_NAME: batchLogs.jobDefinitionName,
                   }
                 : {}),
+            // The function each Lambda state runs, keyed by the state's name; openPipeline registers
+            // their /aws/lambda/<name> groups as this run's log sources (openPipeline.py
+            // LAMBDA_STATE_NAMES). Names only: the ARNs are derived from the state machine's group.
+            ANALYSIS_FUNCTION_NAMES: cdk.Stack.of(scope).toJsonString(
+                Object.fromEntries(
+                    Object.entries(analysisFunctions).map(([state, fn]) => [state, fn.functionName])
+                )
+            ),
         },
     });
 

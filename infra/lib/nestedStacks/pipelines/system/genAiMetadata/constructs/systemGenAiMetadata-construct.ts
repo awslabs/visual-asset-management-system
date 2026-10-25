@@ -608,6 +608,18 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
                       logGroup: renderLogGroup,
                   }
                 : undefined,
+            // Each Lambda state's function, keyed by the state's construct id (its ASL state name);
+            // the segment Lambda runs inside VideoSegmentMap.
+            {
+                ConstructPipelineTask: constructPipelineFunction,
+                BlenderRenderTask: blenderRenderFunction,
+                Render3dTask: render3dFunction,
+                MediaExtractTask: mediaExtractFunction,
+                GenerateMetadataTask: generateMetadataFunction,
+                GenerateEmbeddingTask: generateEmbeddingFunction,
+                VideoSegmentMap: segmentAnalyzeFunction,
+                PipelineEndTask: pipelineEndFunction,
+            },
             kmsKey
         );
 

@@ -51,6 +51,66 @@ RENDER_VIEWS_KEY = "renderViews"
 # The keys this branch merges into the returned state; the state machine passes the whole payload on.
 BRANCH_RESULT_KEYS = ("analysisManifestS3Location", "renderBranch", "fileClass", "renderSkipped",
                       "renderImageCount", "warningCount")
+# The run's ids, on every line this function logs. VAMS reads the function's log group, which every run
+# shares, for the lines that contain both ids. The format handlers log through the root logger, whose
+# Lambda runtime handler writes plain text, so the ids are appended to each line by a handler filter.
+EXECUTION_ID_KEYS = ("workflowExecutionId", "pipelineExecutionId")
+# The orchestration event prefix is <source>.execution.<executionId>.pipeline.<pipelineExecutionId>.
+_PIPELINE_MARKER = ".pipeline."
+
+
+class ExecutionIdFilter(logging.Filter):
+    """Appends ``[workflowExecutionId=... pipelineExecutionId=...]`` to each record's message while ids are
+    bound. A record is tagged once, however many root handlers carry the filter."""
+
+    def __init__(self):
+        super().__init__()
+        self.suffix = ""
+
+    def filter(self, record):
+        if self.suffix and not getattr(record, "vamsExecutionIds", False):
+            try:
+                message = record.getMessage()
+            except Exception:  # nosec B110 - a malformed record is left for the formatter to report
+                return True
+            record.msg = f"{message} {self.suffix}"
+            record.args = ()
+            record.vamsExecutionIds = True
+        return True
+
+
+EXECUTION_ID_FILTER = ExecutionIdFilter()
+
+
+def execution_ids(state) -> dict:
+    """The non-empty workflow and pipeline execution ids the state carries; the pipeline execution id
+    falls back to the one orchestrationEventPrefix ends in."""
+    if not isinstance(state, dict):
+        return {}
+    ids = {}
+    workflow_execution_id = state.get("workflowExecutionId")
+    if isinstance(workflow_execution_id, str) and workflow_execution_id:
+        ids["workflowExecutionId"] = workflow_execution_id
+    pipeline_execution_id = state.get("pipelineExecutionId")
+    if not (isinstance(pipeline_execution_id, str) and pipeline_execution_id):
+        prefix = state.get("orchestrationEventPrefix")
+        index = prefix.rfind(_PIPELINE_MARKER) if isinstance(prefix, str) else -1
+        pipeline_execution_id = prefix[index + len(_PIPELINE_MARKER):] if index >= 0 else ""
+    if pipeline_execution_id:
+        ids["pipelineExecutionId"] = pipeline_execution_id
+    return ids
+
+
+def bind_execution_ids(state) -> dict:
+    """Replace the ids on this invocation's log lines with the ones the state carries. A reused execution
+    environment keeps the filter, so a state without ids clears the previous run's."""
+    ids = execution_ids(state)
+    EXECUTION_ID_FILTER.suffix = ("[" + " ".join(f"{key}={ids[key]}" for key in EXECUTION_ID_KEYS if key in ids)
+                                  + "]") if ids else ""
+    for handler in logging.getLogger().handlers:
+        if EXECUTION_ID_FILTER not in handler.filters:
+            handler.addFilter(EXECUTION_ID_FILTER)
+    return ids
 
 
 @dataclasses.dataclass
@@ -185,6 +245,7 @@ def _upload_frames(frames, bucket: str, prefix: str, local_dir: str) -> list:
 
 def lambda_handler(event, context):
     body = event.get("body", event) if isinstance(event, dict) else event
+    bind_execution_ids(body)
     request = parse_request(body)
     options, option_warnings = load_render_options(request.input_configuration_s3_location)
     n_views = options[RENDER_VIEWS_KEY]

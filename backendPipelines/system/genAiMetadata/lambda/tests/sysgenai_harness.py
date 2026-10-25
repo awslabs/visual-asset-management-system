@@ -45,7 +45,7 @@ def catalog_viewers():
 # load so the copy under LAMBDA_DIR answers, not a same-named module another pipeline's suite loaded.
 _LOCAL_MODULES = ("manifestHelper", "fileClassifier", "analysisCommon", "metadataCatalog",
                   "classificationVocabulary", "bedrockGuardrail", "videoSegments", "contentChunks", "vectorsearch",
-                  "vectorsearch.embeddings")
+                  "vectorsearch.embeddings", "executionLogKeys")
 
 DEFAULT_ENV = {
     "AWS_DEFAULT_REGION": "us-east-1",

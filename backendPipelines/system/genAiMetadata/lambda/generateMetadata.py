@@ -40,6 +40,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from customLogging.logger import safeLogger
+import executionLogKeys
 import manifestHelper
 import analysisCommon as common
 import bedrockGuardrail
@@ -553,6 +554,10 @@ def lambda_handler(event, context):
     template's vocabulary, writes the descriptive genai_* metadata, and records the outcome on the
     results prefix.
     """
+
+    # VAMS reads this function's shared log group for the run's execution ids, so they go on every
+    # line; the previous invocation's ids are removed first (see executionLogKeys).
+    executionLogKeys.bind_execution_ids(logger, event)
 
     # Identifiers only: the state carries externalSfnTaskToken, so it is never rendered whole.
     logger.info("Event", jobName=event.get("jobName", ""), assetId=event.get("assetId", ""),

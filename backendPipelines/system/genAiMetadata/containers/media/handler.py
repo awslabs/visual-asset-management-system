@@ -18,6 +18,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from customLogging.logger import safeLogger
+import executionLogKeys
 
 from media_extractors import audio, data, documents, generic, gis, images, office, svg, text, video
 from media_extractors.common import (
@@ -325,6 +326,9 @@ def write_segment_plan(plan: dict, aux_bucket: str, aux_prefix: str) -> dict:
 
 def lambda_handler(event, context):
     payload = read_event(event)
+    # VAMS reads this function's shared log group for the run's execution ids, so they go on every
+    # line; the previous invocation's ids are removed first (see executionLogKeys).
+    executionLogKeys.bind_execution_ids(logger, payload)
     # Sign each asset bucket's requests for its own Region before any S3 call.
     register_bucket_regions(payload.get("bucketRegions"))
     bucket, key = s3_location(payload, "inputS3AssetFilePath")

@@ -1237,6 +1237,15 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
     whichever state was listed first. The 3D thumbnail pipeline's standard and large tiers are the case
     in the tree (`preview/3dThumbnail/lambda/openPipeline.py`).
 
+-   **A state machine that runs Lambda tasks registers each task's `/aws/lambda/<function>` group** with
+    `sourceType: "lambda"` and `stageName` = the state that runs it (the Map state for a function inside a
+    Map), and those functions put BOTH the workflow and the pipeline execution id on every line they log.
+    Every run shares the group, and a registered shared group is read with both ids as required terms, so
+    a line without them is not shown and an unregistered group is not read at all. `system/genAiMetadata`
+    is the example: `openPipeline` takes the function names from `ANALYSIS_FUNCTION_NAMES` and derives
+    each ARN from the state machine group's, and every handler calls
+    `executionLogKeys.bind_execution_ids` before it logs (the 3D render image uses a root-handler filter).
+
 CDK rules for those env values (`infra/lib/nestedStacks/pipelines/**`):
 
 -   The registering lambda's environment spreads one of the two helpers in
@@ -1270,7 +1279,9 @@ CDK rules for those env values (`infra/lib/nestedStacks/pipelines/**`):
     string literal, never built at runtime, or the test cannot see it.
 -   A `lambda` entry uses `` `/aws/lambda/${fn.functionName}` `` with `IAMArn(name).loggroup`; never read
     `fn.logGroup` on a function without an explicit log group (it synthesizes a `Custom::LogRetention`
-    resource).
+    resource). A producer registering many functions may take only their names in one JSON env value and
+    derive each ARN from its state machine group's ARN, as `system/genAiMetadata` does, which keeps the
+    function inside the 4 KB Lambda environment limit.
 
 Producer tests (`lambda/tests/test_manifest_refactor.py`, `test_batch_job_registration.py`) assert the new
 keys and that the emitted `logGroupArn` passes `CLOUDWATCH_LOG_GROUP_ARN` and `logStreamPrefix` passes

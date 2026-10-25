@@ -9,6 +9,7 @@ import os
 import boto3
 import json
 from customLogging.logger import safeLogger
+import executionLogKeys
 import manifestHelper
 from botocore.config import Config
 
@@ -99,6 +100,9 @@ def abort_external_workflow(error, task_token):
 
 
 def lambda_handler(event, context):
+    # VAMS reads this function's log group for the lines that carry the run's workflow execution id;
+    # the previous invocation's ids are removed before anything is logged (see executionLogKeys).
+    executionLogKeys.bind_execution_ids(logger, None)
     # The body carries the workflow's task token; log the envelope's shape, not its content.
     logger.info("Event", eventKeys=sorted(event) if isinstance(event, dict) else [],
                 hasBody=bool(isinstance(event, dict) and event.get("body")))
@@ -126,6 +130,7 @@ def lambda_handler(event, context):
             data = json.loads(event['body'])
         else:
             data = event['body']
+        executionLogKeys.bind_execution_ids(logger, data)
 
         # Get external task token if passed
         if 'TaskToken' in data:
