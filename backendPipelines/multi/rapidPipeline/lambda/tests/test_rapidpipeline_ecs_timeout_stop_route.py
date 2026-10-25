@@ -6,19 +6,23 @@
 When the ``RapidPipelineRunFargate`` state reaches its task-level ``TimeoutSeconds``, its first catch
 adds ``States.Timeout`` at ``$.error`` and runs the stop route before ``PipelineEndTask``:
 
-*   ``ListTimedOutTask`` (``ecs:listTasks`` filtered by ``StartedBy`` = the execution name) adds its
-    response at ``$.timedOutTasks``;
-*   a Map of ``ecs:stopTask`` discards its results;
+*   ``ListTimedOutTask`` (``ecs:listTasks``, the cluster's running tasks) adds its response at
+    ``$.timedOutTasks``;
+*   when it listed a task, ``DescribeTimedOutTasks`` (``ecs:describeTasks``) adds the ARNs of the
+    described tasks whose ``group`` is the execution name at ``$.timedOutTaskArns``;
+*   a Map of ``ecs:stopTask`` over those ARNs discards its results;
 *   a failed call is caught into ``$.stopError`` and the run still reaches ``PipelineEndTask``.
 
-So ``pipelineEnd`` can receive ``$.timedOutTasks`` and ``$.stopError`` beside ``$.error``. What it
-reports to the parent workflow must be the timeout, whatever happened to the stop: the stop is
-best-effort, and the parent needs to know its run failed, not why a cleanup call did.
+So ``pipelineEnd`` can receive ``$.timedOutTasks``, ``$.timedOutTaskArns`` and ``$.stopError`` beside
+``$.error``. What it reports to the parent workflow must be the timeout, whatever happened to the
+stop: the stop is best-effort, and the parent needs to know its run failed, not why a cleanup call
+did.
 
-The route finds the task through ``StartedBy``, which the Fargate state sets to ``$$.Execution.Name``.
-That is the ``name`` openPipeline passes to ``start_execution``. ECS rejects a ``startedBy`` that is
-longer than 128 characters or holds anything but letters, numbers, hyphens, underscores and forward
-slashes, and a rejected ``RunTask`` fails every run, so openPipeline's name must always fit.
+The route finds the task through its task group, which the Fargate state sets to
+``$$.Execution.Name``. That is the ``name`` openPipeline passes to ``start_execution``. The Amazon ECS
+Developer Guide limits a task group name to 255 characters (the RunTask API reference documents no
+limit of its own), and a group that does not match one execution alone could stop another run's task
+or none, so openPipeline's name must fit and be unique per execution.
 
 The event shapes come from the state machine in
 ``infra/lib/nestedStacks/pipelines/multi/rapidPipeline/constructs/rapidPipeline-construct.ts``.
@@ -56,10 +60,18 @@ for k, v in {
 
 TASK_TOKEN = "tok-123"
 TASK_ARN = "arn:aws:ecs:us-east-1:111122223333:task/rapid-cluster/0123456789abcdef"
+OTHER_TASK_ARN = "arn:aws:ecs:us-east-1:111122223333:task/rapid-cluster/fedcba9876543210"
 
-# RunTask's startedBy: "Up to 128 letters (uppercase and lowercase), numbers, hyphens (-), forward
-# slash (/), and underscores (_) are allowed."
-STARTED_BY = re.compile(r"^[A-Za-z0-9_/-]{1,128}$")
+# The Amazon ECS Developer Guide, "Group related Amazon ECS tasks": "A task group name must be 255 or
+# fewer characters." The RunTask API reference documents no length or character limit for group.
+TASK_GROUP_MAX_LENGTH = 255
+# The group names ECS gives a task by default: standalone tasks get "family:<task definition
+# family>", service tasks "service:<service name>". A label in either form could match another task.
+DEFAULT_TASK_GROUP = re.compile(r"^(family|service):")
+
+
+def _is_valid_task_group(name):
+    return 1 <= len(name) <= TASK_GROUP_MAX_LENGTH and not DEFAULT_TASK_GROUP.match(name)
 
 
 def _load(file_name, module_name):
@@ -97,7 +109,7 @@ def _timed_out_event(**route_fields):
         "status": "STARTING",
         "error": {
             "Error": "States.Timeout",
-            "Cause": "The task timed out after 17100 seconds.",
+            "Cause": "The task timed out after 17040 seconds.",
         },
     }
     event.update(route_fields)
@@ -117,8 +129,18 @@ class TestTheParentIsToldOfTheTimeoutWhateverTheStopDid:
     @pytest.mark.parametrize(
         "route_fields",
         [
-            pytest.param({"timedOutTasks": {"TaskArns": [TASK_ARN]}}, id="task-listed-and-stopped"),
+            pytest.param(
+                {
+                    "timedOutTasks": {"TaskArns": [TASK_ARN, OTHER_TASK_ARN]},
+                    "timedOutTaskArns": [TASK_ARN],
+                },
+                id="task-matched-and-stopped",
+            ),
             pytest.param({"timedOutTasks": {"TaskArns": []}}, id="no-task-running-any-more"),
+            pytest.param(
+                {"timedOutTasks": {"TaskArns": [OTHER_TASK_ARN]}, "timedOutTaskArns": []},
+                id="no-running-task-is-this-runs",
+            ),
             pytest.param(
                 {"stopError": {"Error": "Ecs.AccessDeniedException", "Cause": "not authorized"}},
                 id="list-failed",
@@ -126,6 +148,17 @@ class TestTheParentIsToldOfTheTimeoutWhateverTheStopDid:
             pytest.param(
                 {
                     "timedOutTasks": {"TaskArns": [TASK_ARN]},
+                    "stopError": {
+                        "Error": "States.DataLimitExceeded",
+                        "Cause": "The state/task returned a result with a size exceeding the maximum.",
+                    },
+                },
+                id="describe-failed",
+            ),
+            pytest.param(
+                {
+                    "timedOutTasks": {"TaskArns": [TASK_ARN]},
+                    "timedOutTaskArns": [TASK_ARN],
                     "stopError": {
                         "Error": "Ecs.InvalidParameterException",
                         "Cause": "The referenced task was not found.",
@@ -172,22 +205,24 @@ def _started_execution_names(runs):
 
 
 @pytest.mark.unit
-class TestTheExecutionNameIsAValidStartedBy:
-    def test_every_execution_name_fits_started_by(self):
+class TestTheExecutionNameIsAValidTaskGroup:
+    def test_every_execution_name_fits_a_task_group(self):
         names = _started_execution_names(runs=50)
         assert len(names) == 50
         for name in names:
-            assert STARTED_BY.match(name), f"{name!r} is not a valid ECS startedBy"
+            assert _is_valid_task_group(name), f"{name!r} is not a valid ECS task group label"
 
     def test_the_names_are_unique_per_execution(self):
-        """ListTasks filters by startedBy, so two executions sharing a name could stop each other's
-        task. Step Functions already refuses a reused execution name, and the name carries a random
-        suffix; this pins that the suffix is there."""
+        """DescribeTimedOutTasks keeps the tasks whose group equals the execution name, so two
+        executions sharing a name could stop each other's task. Step Functions already refuses a
+        reused execution name, and the name carries a random suffix; this pins that the suffix is
+        there."""
         names = _started_execution_names(runs=50)
         assert len(set(names)) == len(names)
 
-    def test_the_pattern_rejects_what_ecs_rejects(self):
-        """Control for the pattern itself, so a loosened regex cannot make the test above vacuous."""
-        assert STARTED_BY.match("PipelineJob_20261024_200000_000_0123abcd")
-        for bad in ["", "a" * 129, "Pipeline Job", "PipelineJob:1", "PipelineJob.1"]:
-            assert not STARTED_BY.match(bad), bad
+    def test_the_check_rejects_what_cannot_label_one_run(self):
+        """Control for the check itself, so a loosened check cannot make the tests above vacuous."""
+        assert _is_valid_task_group("PipelineJob_20261024_200000_000_0123abcd")
+        assert _is_valid_task_group("a" * TASK_GROUP_MAX_LENGTH)
+        for bad in ["", "a" * (TASK_GROUP_MAX_LENGTH + 1), "family:rapidpipeline", "service:web"]:
+            assert not _is_valid_task_group(bad), bad
