@@ -31,7 +31,7 @@ backend/
 │   ├── common/                                     # Shared utilities (no AWS bootstrap)
 │   │   ├── auth/apiEvent.py                        #   normalize_event: REST→HTTP-API-v2 shape
 │   │   ├── auth/authorizerCore.py                  #   JWT/API-key/IP validation
-│   │   ├── auth/clientIp.py                        #   True client-IP resolution (CloudFront headers only from CloudFront peers)
+│   │   ├── auth/clientIp.py                        #   True client-IP resolution (X-Forwarded-For only from CloudFront origin-facing peers)
 │   │   ├── auth/cloudFrontOriginFacingRanges.py    #   GENERATED CloudFront origin-facing prefix snapshot;
 │   │   │                                           #   regenerate with scripts/generateCloudFrontOriginFacingRanges.py
 │   │   ├── apiRoutes.py                            # MASTER API route registry: ApiRoute constants,

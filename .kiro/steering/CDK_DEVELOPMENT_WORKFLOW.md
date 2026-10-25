@@ -642,6 +642,7 @@ backend/
 │   ├── customLogging/           # Logging utilities
 │   └── models/                  # Data models and schemas
 ├── lambdaLayers/                # Reusable Lambda layers
+├── scripts/                     # Developer/release tools, NOT packaged into any Lambda
 ├── tests/                       # Backend unit and integration tests
 └── requirements.txt             # Python dependencies
 ```
