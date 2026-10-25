@@ -13,7 +13,7 @@ The RapidPipeline pipeline integrates the DGG RapidPipeline 3D processing engine
 | **Compute (EKS)**            | Amazon EKS with Kubernetes                                                                         |
 | **Supported input formats**  | `.glb`, `.gltf`, `.fbx`, `.obj`, `.stl`, `.ply`, `.usd`, `.usdz`, `.dae`, `.abc`                   |
 | **Supported output formats** | `.glb`, `.gltf`                                                                                    |
-| **Timeout (ECS)**            | 5 hours                                                                                            |
+| **Timeout (ECS)**            | Fargate task: 4 hours 44 minutes; whole run: 5 hours                                               |
 | **Timeout (EKS)**            | Job: `useEks.jobTimeout` (default 2 hours, at most 4 hours); whole run: 6 hours                    |
 
 :::warning[Licensed product]
@@ -37,6 +37,8 @@ flowchart LR
     G --> H[pipelineEnd Lambda]
     H --> I[Optimized 3D model<br/>in Amazon S3]
 ```
+
+The Fargate task is bounded at 4 hours 44 minutes (17040 seconds) and the whole run, including the constructPipeline and pipelineEnd steps, at 5 hours (18000 seconds). A task still running at its bound fails the run with `States.Timeout`. The state machine then stops the task and pipelineEnd sends the workflow the failure. The task is started with its ECS task group set to the Step Functions execution name; to find it, the state machine lists the running tasks on the pipeline's cluster, describes them, and stops the one in that group. Stopping the task is best-effort: if a stop call fails, pipelineEnd still sends the workflow the timeout. The state machine looks at one page of up to 100 running tasks. If more than 100 tasks are running on the cluster and this run's task is not among the first 100 listed, or the descriptions of the listed tasks exceed the AWS Step Functions 256 KiB payload quota, the task is not stopped and runs until its container exits; the workflow is still sent the timeout. The state machine role holds `ecs:ListTasks` for this, limited to the pipeline's cluster by an `ecs:cluster` condition, and `ecs:DescribeTasks` and `ecs:StopTask` on that cluster's tasks. The workflow waits up to 5.5 hours (19800 seconds) for the pipeline, 30 minutes longer than the run can take, so it is still waiting when the pipeline reports its outcome.
 
 ### Amazon EKS deployment
 
