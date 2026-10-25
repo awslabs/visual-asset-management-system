@@ -56,7 +56,9 @@ const FileUploadTableColumnDefinitions = [
         cell: (item: FileUploadTableItem) => (
             <StatusIndicator type={getStatusIndicator(item.status)}>
                 {" "}
-                {item.status}{" "}
+                {item.status}
+                {/* A failed file says why, e.g. the reason the server refused it at completion. */}
+                {item.status === "Failed" && item.error ? `: ${item.error}` : ""}{" "}
             </StatusIndicator>
         ),
         sortingField: "status",
