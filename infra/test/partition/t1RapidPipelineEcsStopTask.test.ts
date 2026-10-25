@@ -40,8 +40,6 @@ const ecsSynth = (name: TemplateName): SynthResult =>
         mutateKey: "rapidpipeline-ecs-stop-task",
         mutate: (c: any) => {
             c.app.useGlobalVpc.enabled = true;
-            c.app.pipelines.useRapidPipeline.enabled = true;
-            c.app.pipelines.useRapidPipeline.autoRegisterWithVAMS = false;
             c.app.pipelines.useRapidPipeline.useEcs.enabled = true;
             c.app.pipelines.useRapidPipeline.useEcs.ecrContainerImageURI = IMAGE_URI;
             c.app.pipelines.useRapidPipeline.useEcs.autoRegisterWithVAMS = false;
