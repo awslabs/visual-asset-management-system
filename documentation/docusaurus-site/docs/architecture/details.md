@@ -286,12 +286,13 @@ Configuration values resolve through a four-tier fallback chain:
 | `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito with SAML federation                                                  |
 | `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito with OIDC federation                                                  |
 | `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                                     |
-| `PHYSNA_ADDON`                  | Physna add-on frontend features enabled                                              |
 | `DEADLINECLOUD_PIPELINES`       | AWS Deadline Cloud pipeline execution type enabled                                   |
+
+An enabled add-on adds feature flags of its own, which are listed on the add-on's pages. See [Add-ons Overview](../developer/addons-overview.md).
 
 ## Nested Stack Dependency Chain
 
-The following diagram shows the nested stacks that `CoreVAMSStack` builds and the deployment order declared between them. Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the stacks the root points at declare no dependency. RestApi renders the routes that ApiBuilder, ApiBuilder2, SearchBuilder, and AddonBuilder register into a single Amazon API Gateway REST API, so it deploys after each of them.
+The following diagram shows the nested stacks that `CoreVAMSStack` builds and the deployment order declared between them. Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the stacks the root points at declare no dependency. RestApi renders the routes that ApiBuilder, ApiBuilder2, SearchBuilder, and AddonBuilder register into a single Amazon API Gateway REST API, so it deploys after each of them. AddonBuilder also deploys after ApiBuilder, because an add-on can invoke functions built there.
 
 Stacks also read each other's outputs (the Lambda layers, `storageResources`, `authResources`, and the VPC), and AWS CloudFormation orders each such reference implicitly. The dotted arrow marks the one that places StaticWeb: it reads the REST API endpoint, so it deploys after RestApi. When `env.loadContextIgnoreVPCStacks` is `true`, ApiBuilder, ApiBuilder2, SearchBuilder, PipelineBuilder, AddonBuilder, RestApi, and StaticWeb are not built.
 
@@ -325,6 +326,7 @@ graph TD
 
     SRB --> Addon["AddonBuilder"]
     RNB --> Addon
+    APIBuild --> Addon
 
     SRB --> REST["RestApi"]
     AB --> REST

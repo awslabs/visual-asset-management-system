@@ -4,6 +4,8 @@ This document provides comprehensive guidelines for developing and extending the
 
 > **Steering Document Sync (bidirectional):** This document (together with `WEB_FRONTEND.md`) mirrors the Claude Code steering in `web/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Its testing sections are also the Kiro counterpart for `web/e2e/CLAUDE.md`. Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
 
+> **Add-on steering:** an add-on's own steering lives in `.kiro/steering/ADDON_*.md` (`inclusion: fileMatch`), which loads when you edit that add-on's files; this document covers core and the lanes an add-on plugs into.
+
 ## 🏗️ **Architecture Overview**
 
 ### **Technology Stack**
@@ -12,10 +14,10 @@ This document provides comprehensive guidelines for developing and extending the
 | ---------------- | -------------------------------------------------------------- |
 | React            | 18.3 (upgraded from 17.0.2)                                    |
 | TypeScript       | ^5.0.0 (upgraded from 4.4.4)                                   |
-| Vite             | ^8.0.0 (upgraded from ^6.0.0)                                  |
+| Vite             | ^8.0.16 (upgraded from ^6.0.0)                                 |
 | UI Library       | AWS Cloudscape Design System (`@cloudscape-design/components`) |
 | Auth             | AWS Amplify v6 + `@badgateway/oauth2-client` (dual-mode)       |
-| Routing          | React Router v6 with HashRouter                                |
+| Routing          | React Router v7 with HashRouter                                |
 | State Management | React Context API + useReducer (NO global state libraries)     |
 | API Client       | Custom fetch-based apiClient with auto auth headers            |
 | Package Manager  | npm 11.10.0+ (NEVER yarn)                                      |
@@ -60,8 +62,9 @@ web/
     FedAuth/                # Authentication orchestrator
       Auth.tsx              # Dual-mode auth: Cognito OR External OAuth2
 
-    services/               # API and data services (with features/orchestration/api/ and, in a
-                            #   fork, custom/services/, the ONLY places apiClient is imported)
+    services/               # API and data services (with features/orchestration/api/, an add-on
+                            #   module's own api/ directory and, in a fork, custom/services/, the
+                            #   ONLY places apiClient is imported)
       APIService.ts         # Main API service (~900+ lines, 40+ exports)
       apiClient.ts          # Custom fetch wrapper (internal, never import from components)
       appCache.ts           # localStorage cache (replaces Amplify Cache)
@@ -73,14 +76,17 @@ web/
       MetadataSchemaService.ts
       addons/               # Add-on API calls (physnaAPIService.ts)
 
-    addons/                 # Add-on web lane (shipped empty): addonRoutes.tsx, addonNavigation.ts
-                            #   — see WEB_FRONTEND.md 7.5
+    addons/                 # Add-on web lane: addonRoutes.tsx, addonNavigation.ts, addonFeatures.ts
+                            #   (add-on feature-switch names) — see WEB_FRONTEND.md 7.5
+      edh/                  #   EDH Workstations add-on module (Tailwind + Radix, pages/ route shells)
+                            #   — see .kiro/steering/ADDON_EDH_WORKSTATIONS.md
     custom/                 # FORK EXTENSION POINT (shipped empty): customRoutes.tsx, customNavigation.ts,
                             #   customFeatures.ts, services/, pages/ — see WEB_FRONTEND.md 7.5
 
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
       AssetDetailContext.ts  # useReducer-based context
+      RuntimeConfigContext.ts # Live runtime config from Auth (useFeaturesEnabled); falls back to appCache outside the provider
 
     components/             # Domain/feature components
       asset/                # Asset viewing (ViewAsset.tsx is the main detail page)
@@ -120,6 +126,7 @@ web/
     visualizerPlugin/       # 3D/media viewer plugin system
       core/
         PluginRegistry.ts   # Singleton registry
+        streamFailure.ts    # Names why a streamed file failed to load
         types.ts
       config/
         viewerConfig.json   # Plugin configuration
@@ -208,7 +215,7 @@ web/
 
 ### **Rule 1: All API Calls Go Through Service Layer Files**
 
-Components and pages MUST NEVER import `apiClient` directly. Only service files in `src/services/` (including `src/services/addons/` for add-on calls), `src/features/orchestration/api/` and, in a fork, `src/custom/services/` may import `apiClient`.
+Components and pages MUST NEVER import `apiClient` directly. Only service files in `src/services/` (including `src/services/addons/` for add-on calls), `src/features/orchestration/api/`, an add-on module's own `api/` directory under `src/addons/<addon>/` and, in a fork, `src/custom/services/` may import `apiClient`.
 
 ```typescript
 // CORRECT -- import from a service file
@@ -221,7 +228,7 @@ import { apiClient } from "../../services/apiClient";
 const response = await fetch("/api/databases");
 ```
 
-When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern.
+When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. An add-on's calls go in `services/addons/`, or in its module's `api/` directory when it ships a module of its own, never in `APIService.ts`.
 
 ### **Rule 2: Use Cloudscape Components (with orchestration exception)**
 
@@ -229,7 +236,7 @@ The EXISTING app uses AWS Cloudscape Design System. The NEW orchestration module
 
 -   **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
 -   **`features/orchestration/**`\*\* (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
--   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind scoped to `src/features/orchestration/**` content glob).
+-   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind's content glob covers `src/features/orchestration/**`, each Tailwind add-on module under `src/addons/<addon>/**`, and the nine orchestration route shells in `src/pages/`, each named individually rather than as `src/pages/**` or `src/addons/**`). A new orchestration shell or Tailwind add-on module must be added to that list in `web/tailwind.config.js` or its Tailwind classes are not emitted; a Cloudscape page must **not** be added.
 -   **Tailwind's UTILITY CSS is global, even though its content glob is not.** The glob decides which files Tailwind _scans_ for class names; every utility it emits lands in one stylesheet loaded on every page. A Cloudscape page that happens to use a class named like a Tailwind utility therefore picks up Tailwind's rule. **Never name a plain layout div after a Tailwind utility** — `container`, `hidden`, `block`, `flex`, `grid`, `fixed` (verified present in the built CSS; the emitted set depends on what the orchestration module uses, so treat this as examples rather than a closed list). Outside the orchestration module use a VAMS-defined class or no class at all.
 
     Real instance: `<div className="container">` wrapped the asset-view comment editor. VAMS defines no `.container` rule, so the only match was Tailwind's `.container` utility and its responsive max-widths (640/768/1024/1280/1536px), which capped the comment box on any wide viewport. The component's own styles gave no hint — the editor filled its parent correctly and the parent was the clamped element — so it was only findable by measuring the rendered DOM. When a width or spacing problem has no explanation in the component's own styles, walk the ancestors' computed `max-width` in the browser before changing the component.
@@ -276,7 +283,7 @@ import MyPage from "./pages/MyPage";
 
 ### **Rule 5: No Global State Libraries (TanStack Query for orchestration server state)**
 
-This codebase uses NO global state library (no Redux, Zustand, MobX, Recoil, Jotai). Use React Context API + `useReducer` for shared state. The orchestration module (`features/orchestration/`) uses **TanStack Query v5** for server-state management (caching, background refetch, smart polling via `computeRefetchInterval` that keeps polling active only while non-terminal executions are visible).
+This codebase uses NO global state library (no Redux, Zustand, MobX, Recoil, Jotai). Use React Context API + `useReducer` for shared state. The Tailwind modules (`features/orchestration/` and the add-on modules under `addons/`) use **TanStack Query v5** for server-state management (caching, background refetch, smart polling via `computeRefetchInterval` that keeps polling active only while non-terminal executions are visible); each module has its own `qk` key factory.
 
 ```typescript
 // CORRECT
@@ -454,6 +461,8 @@ When system-wide frontend standards change (new rules, new patterns, new convent
 2. `.kiro/steering/WEB_FRONTEND.md` -- Kiro mirror of `web/CLAUDE.md`
 3. `.kiro/steering/WEB_DEVELOPMENT_WORKFLOW.md` -- this file
 
+A change to an add-on module's own conventions goes in that module's `CLAUDE.md` (`src/addons/<addon>/CLAUDE.md`) and its `.kiro/steering/ADDON_*.md` file instead.
+
 ### **Rule 18: Regenerate the CSP Hashes After Editing an Inline Script in `index.html`**
 
 `web/index.html` carries inline `<script>` blocks (the `__publicField` polyfill, the `SharedArrayBuffer` probe, the pre-render theme application). The CDK Content-Security-Policy allows them by **SHA-256 hash** rather than by `'unsafe-inline'`, so an injected inline script is still blocked.
@@ -602,6 +611,10 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
     // Enable map features
 }
 ```
+
+A surface that stays mounted across a login (the side navigation) or that gates whole pages reads the flags through `useFeaturesEnabled()` from `context/RuntimeConfigContext.ts` instead: the cached config carries no `featuresEnabled` until the secure config lands after the first login, and only the context re-renders a mounted consumer when it does.
+
+Any side-navigation entry (a section, link or group in the core, add-on or custom lists) may carry `featuresEnabledRestriction: string[]`, the field name and all-of meaning the viewer config uses: `layout/Navigation.tsx` drops the entry until every listed switch is enabled, re-runs the web-route check when the switches arrive, and strips the field before the items reach `SideNavigation`. An add-on's switch names live in `addons/addonFeatures.ts` (`addonFeaturesEnabled`), each one declared in `infra/common/addonAppFeatures.ts` (`addons/addonFeatures.test.ts`); a fork's live in `custom/customFeatures.ts`.
 
 ---
 
@@ -842,6 +855,8 @@ Do **not** label a test whose forbidden construct is still writable: a CSP that 
 `'unsafe-inline'`, a component that must not import `apiClient` directly, a div that must not be named after
 a Tailwind utility. Those must keep holding. Full criterion: root `CLAUDE.md` Rule 13; Claude Code
 counterpart: `web/CLAUDE.md` section 11.4.1.
+
+**End-to-end specs** (`web/e2e/`, Playwright against a deployed stack; full guide: `web/e2e/CLAUDE.md`). A core spec gives a page or shared component permanent smoke coverage, must not require specific data, and is named `orchestration.{page}.spec.ts`, `viewers.spec.ts`, or `{addon}.{page}.spec.ts` for an add-on page. Import locators from `support/fixtures.ts` rather than rewriting them: `cachedFeaturesEnabled(page)` reads the deployment's feature flags from the app's own cache, so a spec can `test.skip` on an absent flag, and `expectTableRendered(page, emptyState?)` takes the page's own empty-state regex when its copy does not read "No … found". An add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 
 **Lint and format (from project root):**
 

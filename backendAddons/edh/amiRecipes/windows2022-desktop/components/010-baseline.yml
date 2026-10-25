@@ -1,0 +1,19 @@
+name: vams-windows2022-baseline
+description: Image-release marker for VAMS EDH desktops built from Windows Server 2022.
+schemaVersion: 1.0
+phases:
+    - name: build
+      steps:
+          - name: WriteImageRelease
+            action: ExecutePowerShell
+            inputs:
+                commands:
+                    - New-Item -ItemType Directory -Force -Path 'C:\ProgramData\VAMS' | Out-Null
+                    - "@{ recipe = 'windows2022-desktop'; builtOn = (Get-Date).ToUniversalTime().ToString('o') } | ConvertTo-Json | Set-Content -Path 'C:\\ProgramData\\VAMS\\image-release.json' -Encoding UTF8"
+    - name: validate
+      steps:
+          - name: ReleaseFilePresent
+            action: ExecutePowerShell
+            inputs:
+                commands:
+                    - if (-not (Test-Path 'C:\ProgramData\VAMS\image-release.json')) { throw 'image-release.json missing' }

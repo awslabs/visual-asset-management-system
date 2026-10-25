@@ -13,7 +13,8 @@
  *     block, the web ACL log group the administrator searches, and the JSON error documents the
  *     automation page shows.
  * Each assertion derives the expected value from the source that produces it and reads it back out of
- * the page, so a page that drifts fails here instead of shipping.
+ * the page, so a page that drifts fails here instead of shipping. An add-on's WAF exemption is held by
+ * the guard tests of its pages under infra/test/addon/<addon>/docs/.
  *
  * Durable (root CLAUDE.md Rule 13): every name and text below can change again with the next
  * response, heading, field or message, and every forbidden wording can be written again.

@@ -1,0 +1,368 @@
+{
+    "description": "Workstation records covering every state x activity x lastError combination of the start-status contract (feature #536, D10/D11, and D16's stalled start), each with what the web status badge shows (`badge`), what `vamscli edh workstation list` prints in its State column (`state`, the badge's last word upper-cased: `Start stalled` prints `STALLED`), and the start-failure sentence and detail line both the web and `vamscli edh workstation get` show (null when none). Read by web/src/addons/edh/components/WorkstationStatusBadge.cases.test.tsx and tools/VamsCLI/tests/addon/test_edh_start_status.py, so the two clients cannot drift apart.",
+    "cases": [
+        {
+            "name": "a stopped workstation whose start is in progress",
+            "record": {
+                "state": "STOPPED",
+                "edhState": "stopped",
+                "activity": "starting",
+                "lastError": null,
+                "startFailure": null,
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Starting",
+            "state": "STARTING",
+            "startFailureMessage": null,
+            "startFailureDetail": null
+        },
+        {
+            "name": "a stopped desktop EDH has accepted and is booting",
+            "record": {
+                "state": "CREATING",
+                "edhState": "pending",
+                "activity": "starting",
+                "lastError": null,
+                "startFailure": null,
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Starting",
+            "state": "STARTING",
+            "startFailureMessage": null,
+            "startFailureDetail": null
+        },
+        {
+            "name": "a start EDH accepted but has not finished after 30 minutes",
+            "record": {
+                "state": "CREATING",
+                "edhState": "pending",
+                "activity": null,
+                "lastError": "START_STALLED",
+                "startFailure": {
+                    "availabilityZone": "us-west-2b",
+                    "observedAt": "2026-10-24T11:40:00Z"
+                },
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Start stalled",
+            "state": "STALLED",
+            "startFailureMessage": "EDH has not finished starting this workstation after 30 minutes. Stop it, then start it again; if it stalls again, ask your administrator.",
+            "startFailureDetail": null
+        },
+        {
+            "name": "a stalled start EDH still lists as placing, its Availability Zone not read",
+            "record": {
+                "state": "CREATING",
+                "edhState": "placing",
+                "activity": null,
+                "lastError": "START_STALLED",
+                "startFailure": {
+                    "observedAt": "2026-10-24T11:40:00Z"
+                },
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Start stalled",
+            "state": "STALLED",
+            "startFailureMessage": "EDH has not finished starting this workstation after 30 minutes. Stop it, then start it again; if it stalls again, ask your administrator.",
+            "startFailureDetail": null
+        },
+        {
+            "name": "an active desktop that is not connectable yet",
+            "record": {
+                "state": "ACTIVE",
+                "edhState": "pending",
+                "activity": "starting",
+                "lastError": null,
+                "startFailure": null,
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Starting",
+            "state": "STARTING",
+            "startFailureMessage": null,
+            "startFailureDetail": null
+        },
+        {
+            "name": "a desktop EDH reports stopping",
+            "record": {
+                "state": "STOPPED",
+                "edhState": "stopping",
+                "activity": "stopping",
+                "lastError": null,
+                "startFailure": null,
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Stopping",
+            "state": "STOPPING",
+            "startFailureMessage": null,
+            "startFailureDetail": null
+        },
+        {
+            "name": "a desktop stopped through VAMS that EDH still reports running",
+            "record": {
+                "state": "STOPPED",
+                "edhState": "running",
+                "activity": "stopping",
+                "lastError": null,
+                "startFailure": null,
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Stopping",
+            "state": "STOPPING",
+            "startFailureMessage": null,
+            "startFailureDetail": null
+        },
+        {
+            "name": "a desktop the lease sweep stopped that EDH still reports stopping",
+            "record": {
+                "state": "STOPPED",
+                "edhState": "stopping",
+                "activity": "stopping",
+                "lastError": "LEASE_EXPIRED",
+                "startFailure": null,
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Stopping",
+            "state": "STOPPING",
+            "startFailureMessage": null,
+            "startFailureDetail": null
+        },
+        {
+            "name": "a running desktop",
+            "record": {
+                "state": "ACTIVE",
+                "edhState": "running",
+                "activity": null,
+                "lastError": null,
+                "startFailure": null,
+                "sessionId": "s-1",
+                "connectionAvailable": true,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Active",
+            "state": "ACTIVE",
+            "startFailureMessage": null,
+            "startFailureDetail": null
+        },
+        {
+            "name": "a stopped desktop",
+            "record": {
+                "state": "STOPPED",
+                "edhState": "stopped",
+                "activity": null,
+                "lastError": null,
+                "startFailure": null,
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Stopped",
+            "state": "STOPPED",
+            "startFailureMessage": null,
+            "startFailureDetail": null
+        },
+        {
+            "name": "a launch EDH has not created a desktop for yet",
+            "record": {
+                "state": "CREATING",
+                "edhState": null,
+                "activity": null,
+                "lastError": null,
+                "startFailure": null,
+                "sessionId": null,
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Creating",
+            "state": "CREATING",
+            "startFailureMessage": null,
+            "startFailureDetail": null
+        },
+        {
+            "name": "a start EDH refused for on-demand capacity",
+            "record": {
+                "state": "STOPPED",
+                "edhState": "stopped",
+                "activity": null,
+                "lastError": "CAPACITY_UNAVAILABLE",
+                "startFailure": {
+                    "errorCode": "InsufficientInstanceCapacity",
+                    "availabilityZone": "us-west-2b",
+                    "observedAt": "2026-10-23T15:19:30Z"
+                },
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Stopped",
+            "state": "STOPPED",
+            "startFailureMessage": "AWS had no capacity for g5.16xlarge in this workstation's Availability Zone (us-west-2b) when it was started. A stopped workstation keeps its disk and starts only in that zone, so it stays stopped; start it again later.",
+            "startFailureDetail": "AWS: InsufficientInstanceCapacity in us-west-2b"
+        },
+        {
+            "name": "a start refused for capacity whose Availability Zone could not be read",
+            "record": {
+                "state": "STOPPED",
+                "edhState": "stopped",
+                "activity": null,
+                "lastError": "CAPACITY_UNAVAILABLE",
+                "startFailure": {
+                    "errorCode": "InsufficientInstanceCapacity",
+                    "observedAt": "2026-10-23T15:19:30Z"
+                },
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Stopped",
+            "state": "STOPPED",
+            "startFailureMessage": "AWS had no capacity for g5.16xlarge in this workstation's Availability Zone when it was started. A stopped workstation keeps its disk and starts only in that zone, so it stays stopped; start it again later.",
+            "startFailureDetail": "AWS: InsufficientInstanceCapacity"
+        },
+        {
+            "name": "a start refused because the workstation's capacity reservation is full",
+            "record": {
+                "state": "STOPPED",
+                "edhState": "stopped",
+                "activity": null,
+                "lastError": "RESERVATION_FULL",
+                "startFailure": {
+                    "errorCode": "ReservationCapacityExceeded",
+                    "availabilityZone": "us-west-2b",
+                    "observedAt": "2026-10-23T15:19:30Z"
+                },
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Stopped",
+            "state": "STOPPED",
+            "startFailureMessage": "The capacity reservation has no free capacity; the workstation stays stopped. Start it again once a slot is free, or ask an administrator.",
+            "startFailureDetail": "AWS: ReservationCapacityExceeded in us-west-2b"
+        },
+        {
+            "name": "a start EDH refused for another reason, naming no AWS error",
+            "record": {
+                "state": "STOPPED",
+                "edhState": "stopped",
+                "activity": null,
+                "lastError": "START_FAILED",
+                "startFailure": {
+                    "availabilityZone": "us-west-2b",
+                    "observedAt": "2026-10-23T15:19:30Z"
+                },
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Stopped",
+            "state": "STOPPED",
+            "startFailureMessage": "The workstation did not start; it is still stopped with its disk. Start it again, or ask an administrator.",
+            "startFailureDetail": null
+        },
+        {
+            "name": "a start the sweep resolved as failed",
+            "record": {
+                "state": "STOPPED",
+                "edhState": "stopped",
+                "activity": null,
+                "lastError": "START_FAILED",
+                "startFailure": null,
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Stopped",
+            "state": "STOPPED",
+            "startFailureMessage": "The workstation did not start; it is still stopped with its disk. Start it again, or ask an administrator.",
+            "startFailureDetail": null
+        },
+        {
+            "name": "a new start of a workstation whose last start was refused for capacity",
+            "record": {
+                "state": "STOPPED",
+                "edhState": "stopped",
+                "activity": "starting",
+                "lastError": "CAPACITY_UNAVAILABLE",
+                "startFailure": {
+                    "errorCode": "InsufficientInstanceCapacity",
+                    "availabilityZone": "us-west-2b",
+                    "observedAt": "2026-10-23T15:19:30Z"
+                },
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Starting",
+            "state": "STARTING",
+            "startFailureMessage": null,
+            "startFailureDetail": null
+        },
+        {
+            "name": "a desktop the lease sweep stopped",
+            "record": {
+                "state": "STOPPED",
+                "edhState": "stopped",
+                "activity": null,
+                "lastError": "LEASE_EXPIRED",
+                "startFailure": null,
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Stopped",
+            "state": "STOPPED",
+            "startFailureMessage": null,
+            "startFailureDetail": null
+        },
+        {
+            "name": "a launch EDH refused for capacity",
+            "record": {
+                "state": "ORPHANED",
+                "edhState": null,
+                "activity": null,
+                "lastError": "CAPACITY_UNAVAILABLE",
+                "startFailure": null,
+                "sessionId": null,
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Orphaned",
+            "state": "ORPHANED",
+            "startFailureMessage": null,
+            "startFailureDetail": null
+        },
+        {
+            "name": "a deleted workstation",
+            "record": {
+                "state": "DELETED",
+                "edhState": null,
+                "activity": null,
+                "lastError": null,
+                "startFailure": null,
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Deleted",
+            "state": "DELETED",
+            "startFailureMessage": null,
+            "startFailureDetail": null
+        }
+    ]
+}

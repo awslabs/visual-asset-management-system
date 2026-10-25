@@ -423,8 +423,9 @@ Output includes total count, list of enabled feature names, and last updated tim
 | `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito user pool federated to a SAML identity provider                |
 | `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito user pool federated to an OIDC identity provider               |
 | `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                              |
-| `PHYSNA_ADDON`                  | Physna add-on frontend features                                               |
 | `DEADLINECLOUD_PIPELINES`       | AWS Deadline Cloud pipeline execution type                                    |
+
+An enabled add-on adds feature switches of its own, which `vamscli features list` also shows and which are listed on the add-on's pages. See [Add-ons Overview](../../developer/addons-overview.md).
 
 ---
 

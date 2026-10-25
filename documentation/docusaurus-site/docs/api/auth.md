@@ -409,6 +409,8 @@ GET /auth/routes/api
 
 Retrieves the API routes (and the HTTP methods on each) that the requesting user is authorized to call, evaluated against the user's authorization constraints. Routes with no allowed methods are omitted.
 
+The route is itself authorized at the API tier. The web interface calls it to decide which actions to enable on pages such as Pipelines, Workflows, and Executions, and on the pages an add-on contributes, and treats a refused call as no allowed routes. A web-interface user therefore needs `GET` on it through one of their roles, for example through a `starts_with /auth/routes` criterion as in the `database-user.json` template.
+
 ```
 GET /auth/routes/api/allowed
 ```
@@ -837,6 +839,8 @@ The `/auth/api-keys` routes are the administrative variant of these endpoints. T
 :::warning[Administrative routes]
 Because `POST /auth/api-keys` accepts any `userId`, including an administrator's, a role that can call it can issue a credential that acts as any user in the deployment. Access to the `/auth/api-keys` routes is therefore equivalent to full administrative access. Grant them only to administrator roles, and give other users the self-service `/auth/user/api-keys` routes for managing their own keys.
 :::
+
+API-key create and update — `POST` and `PUT` in both the administrative and the self-service scope — refuse a caller that authenticates with a temporary session key (an API key whose name starts with the reserved prefix `temporary-session-`, minted on a user's behalf by a VAMS component) with `403` `API keys cannot be created or updated with a temporary session key`, so a session credential cannot mint or extend a key. The refusal runs after the route's own authorization; a caller whose own key record cannot be read is answered the generic `500 Internal Server Error`, not that refusal. Because the prefix is reserved, a create request whose `apiKeyName` starts with `temporary-session-` is refused with `400` `API key names starting with the temporary session key prefix are reserved. Please choose a different name.`
 
 ### List API keys
 

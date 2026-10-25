@@ -39,7 +39,8 @@ vamscli setup https://<your-api-id>.execute-api.<region>.amazonaws.com
 vamscli auth login -u you@example.com
 ```
 
-> Use the **API Gateway** URL, not the CloudFront web URL.
+> `vamscli setup` takes the web application URL or the API Gateway URL. Either way the profile
+> stores the API Gateway invoke URL, which the MCP server reads.
 
 > If the deployment authenticates through an external identity provider, or through an Amazon
 > Cognito user pool federated to SAML or OIDC, the user has no password in the pool. Sign in with a
@@ -67,13 +68,13 @@ All configuration is via environment variables — none are required. Set them i
 of your MCP host's server entry (see the `mcpServers` sample below); no `.env` file is read.
 `.env.example` lists every supported variable for reference.
 
-| Variable                  | Description                                                          |
-| ------------------------- | -------------------------------------------------------------------- |
-| `VAMS_PROFILE`            | vamscli profile to use (default: active profile)                     |
-| `VAMS_ENABLE_WRITES`      | `true` to expose create/update tools (default off)                   |
-| `VAMS_ENABLE_DESTRUCTIVE` | `true` to expose archive/delete tools (needs writes on; default off) |
-| `VAMS_MAX_PAGES`          | Max pages auto-followed for list endpoints (default 20)              |
-| `VAMS_PAGE_SIZE`          | Page size per paginated call (default 100, clamped to 1000)          |
+| Variable                  | Description                                                                          |
+| ------------------------- | ------------------------------------------------------------------------------------ |
+| `VAMS_PROFILE`            | vamscli profile to use (default: active profile)                                     |
+| `VAMS_ENABLE_WRITES`      | `true` to expose create/update tools and tools that issue a credential (default off) |
+| `VAMS_ENABLE_DESTRUCTIVE` | `true` to expose archive/delete tools (needs writes on; default off)                 |
+| `VAMS_MAX_PAGES`          | Max pages auto-followed for list endpoints (default 20)                              |
+| `VAMS_PAGE_SIZE`          | Page size per paginated call (default 100, clamped to 1000)                          |
 
 ## Register with Kiro / Claude Desktop
 
@@ -435,6 +436,347 @@ and is the better first move.
     caller's own API-key route permissions.
 -   The server persists nothing; revoking access is just `vamscli auth logout`
     (or letting your session expire).
+
+## Add-on tools
+
+The optional add-ons' tools are part of this server, in `vams_mcp/addon_tools/`. They are
+registered whether or not the deployment enables the add-on, under the same `VAMS_ENABLE_WRITES`
+and `VAMS_ENABLE_DESTRUCTIVE` gates as the tools above. Each one first checks the feature switches
+the vamscli profile recorded at its last `vamscli auth login`, and on a deployment that has not
+enabled the add-on answers the sentence the CLI prints, with `error_type` `FeatureDisabledError`,
+without making a request; log in again if the add-on was enabled since. The `autoApprove` sample
+above names no add-on tool: each add-on below lists the reads that are safe to add to it.
+
+### EDH Workstations
+
+The EDH Workstations add-on's tools manage its GPU virtual desktops, their images, the AMI recipes
+that build them and its container jobs. The add-on's guide is in
+`documentation/docusaurus-site/docs/developer/edh-workstations/`.
+
+#### Read (always available)
+
+`list_edh_workstations`, `get_edh_workstation`, `list_edh_catalog_images`,
+`list_edh_catalog_instance_types`, `get_edh_catalog_lease`, `list_edh_admin_images`,
+`list_edh_admin_instances`, `list_edh_stale_instances`, `get_edh_capacity`,
+`get_edh_health`, `get_edh_admin_settings`, `list_edh_container_catalog`, `list_edh_container_jobs`,
+`list_edh_ami_recipes`, `get_edh_ami_recipe`, `list_edh_ami_recipe_builds`,
+`list_edh_catalog_capacity_reservations`, `list_edh_admin_capacity_reservations`. On a
+deployment that has not enabled the add-on, every EDH tool answers
+`The EDH Workstations add-on is not enabled for this deployment ...`. The
+two container reads answer only when the deployment also enables the add-on's
+container jobs, and otherwise answer `EDH container jobs are not enabled for
+this deployment ...` the same way. The three AMI recipe reads answer only when
+the deployment also enables the add-on's AMI recipe builds, and otherwise answer
+`EDH AMI recipes are not enabled for this deployment ...` the same way. `list_edh_container_jobs` takes
+an optional `backend` (`batch`, the server default, or the experimental `eks`,
+which also takes `cluster` — required — and `namespace`, server default
+`default`) and lists that backend's jobs only; each row's `jobId` is the value
+`kill_edh_container_job` takes.
+
+The EDH lists are not paginated — each returns every row in one `Items` page,
+so none takes `max_items` or `starting_token` and none is ever `truncated`.
+`list_edh_workstations` and `get_edh_workstation` cover the authenticated
+user's own desktops; a workstation owned by someone else is reported as not
+found. `list_edh_catalog_images` marks each image with `category`: `amiRecipe`
+for an image an AMI recipe build registered, which also carries `recipeId`,
+`recipeDisplayName` and `recipeVersion`, and `baseline` for every other image;
+recipe images come first, each group sorted by name. Each image also carries
+`architecture`, its CPU architecture as EDH reports it (`x86_64`, `arm64`, ...),
+or null when EDH reports none.
+`list_edh_catalog_instance_types` returns `Items` of `{instanceType, architectures}`,
+sorted by name with numbers in numeric order (`g5.2xlarge` before `g5.12xlarge`);
+`architectures` names the desktop profile's architecture groups that list the
+type, and is `[]` when the profile does not group its types. A type runs an
+image when the image's `architecture` is null, the type's `architectures` is
+empty, or it contains the image's architecture; pass only such a type to
+`create_edh_workstation`.
+`get_edh_catalog_lease` returns the user-readable lease policy (no audit fields).
+`list_edh_catalog_capacity_reservations` returns the EC2 capacity reservations the
+user may launch into — registered by an administrator, enabled, granted to the
+user's role (object type `edhCapacityReservation`) and active in EC2 — as `Items`
+carrying `capacityReservationId`, `label`, `fallbackToOnDemand`, `instanceType`,
+`availabilityZone`, `instancePlatform`, `state`, `totalInstanceCount`,
+`availableInstanceCount`, `instanceMatchCriteria`, `endDate` and `reservationType`;
+its optional `instance_type` and `os_family` (`linux` or `windows`) keep the
+reservations a launch of that type and image family can take. An empty list means
+every launch is on-demand, which is also the answer when EC2 could not be read.
+`list_edh_admin_capacity_reservations` lists every registered reservation the same
+way, with `state` `notFound` for one EC2 no longer knows and `unknown` when the read
+failed.
+A row's `session_id` is its `sessionId`, or its `bootstrapId` while a launch has no
+session id yet (`create_edh_workstation` answers 202 with `sessionId` null and
+`state` CREATING; `lastError` names why a launch ended ORPHANED).
+A row also carries `edhFailure`, the launch failure VAMS captured from EDH's own
+record of a desktop that never ran: `event` (`placement_failed` or
+`session-failed`), `errorCode` and `operation` (the AWS error code and operation
+EDH's status named, such as `InsufficientInstanceCapacity` from
+`CreateCapacityReservation`), `checkpoint` (the desktop setup step a
+`session-failed` stopped at) and `observedAt`, the first three absent when not
+captured; it is null when VAMS captured none, and EDH's own wording is never
+returned. The items of `list_edh_admin_instances` and `list_edh_stale_instances`
+carry it from the joined VAMS row, null for a session VAMS did not launch.
+Every workstation record, and every `list_edh_admin_instances` item, also carries
+`activity`, what the workstation is doing whatever `state` says, derived on each
+read: `starting` from a start request until EDH reports the desktop connectable
+(a STOPPED row whose start is in progress, a CREATING row with a `sessionId`, an
+ACTIVE row not yet connectable), `stopping` while EDH still stops the desktop, and
+null otherwise; and `startFailure`, why the last start left a STOPPED row stopped
+(`lastError` `CAPACITY_UNAVAILABLE`, `RESERVATION_FULL` or `START_FAILED`), as
+`{errorCode, availabilityZone, observedAt}`, null when it did not.
+A CREATING row with `activity` null and `lastError` `START_STALLED` is a start EDH
+accepted and has not finished after 30 minutes: EDH never reported the desktop
+ready, and VAMS does not stop it, so stop it with `stop_edh_workstation`, then
+start it again. Its `startFailure` carries `observedAt` (and `availabilityZone`
+when read) but no `errorCode`.
+They also name the image the workstation was launched from: `imageName` (the EDH
+image name), `recipeId` (the AMI recipe whose build produced it, null for a
+baseline image), `recipeDisplayName`, `recipeVersion` (the build it runs),
+`latestRecipeVersion` (the recipe's newest AVAILABLE build, derived on each read)
+and `imageLatest` (`true` on that build, `false` only when a newer AVAILABLE build
+exists, null when that is not known), each null when not known. A workstation
+keeps the image it was launched from; launch a new workstation to use a newer
+build.
+The `admin` reads require the EDH admin routes;
+`get_edh_capacity` and `get_edh_health` are in the `autoApprove` addition below, while
+`list_edh_admin_instances` and `list_edh_stale_instances` name other users,
+`list_edh_admin_images` returns the cluster's whole image inventory, and
+`get_edh_admin_settings` returns the admin lease settings including `updatedBy`,
+and the three AMI recipe reads name the administrators who created, changed or
+built each recipe (`createdBy`, `updatedBy`, `requestedBy`), and
+`list_edh_admin_capacity_reservations` returns the whole registry whatever a role
+grants, so those eight are
+not. Each `list_edh_admin_images` item also carries `architecture`, the CPU
+architecture EDH reports for the image, such as `x86_64` or `arm64`, or null
+when EDH reports none. `list_edh_ami_recipes` returns each recipe with `latestBuild` (its newest
+build, or null before the first); `get_edh_ami_recipe` returns one recipe the same
+way, not its build history; `list_edh_ami_recipe_builds` returns the builds newest
+first, each with a `status` of QUEUED, BUILDING, REGISTERING, AVAILABLE,
+REGISTER_FAILED, FAILED or RETIRED. `list_edh_stale_instances` takes an optional `idle_minutes`
+(server default 120). `get_edh_health` reports whether the proxy can reach the
+EDH API and is the first call to make when an edh tool says the cluster did not
+answer. An edh write or destructive tool whose error carries `error_type`
+`EdhOutcomeUnknownError` and `outcomeUnknown: true` (`... not confirmed`) is not
+a health problem: EDH may have carried the request out, so call the matching list tool
+(`list_edh_workstations`, `list_edh_admin_instances`, `list_edh_admin_images` or
+`list_edh_container_jobs`) before retrying.
+
+Add the safe EDH reads to the sample's `autoApprove` array when the deployment
+enables the add-on:
+
+```json
+[
+    "list_edh_workstations",
+    "get_edh_workstation",
+    "list_edh_catalog_images",
+    "list_edh_catalog_instance_types",
+    "get_edh_catalog_lease",
+    "list_edh_catalog_capacity_reservations",
+    "get_edh_capacity",
+    "get_edh_health"
+]
+```
+
+#### Write (require `VAMS_ENABLE_WRITES=true`)
+
+`get_edh_workstation_connect`, `create_edh_workstation`,
+`renew_edh_workstation`, `start_edh_workstation`, `stop_edh_workstation`, `register_edh_vdi_image`,
+`register_edh_simulation_image`, `stop_edh_admin_instance`, `update_edh_admin_settings`,
+`submit_edh_container_job`, `create_edh_ami_recipe`, `update_edh_ami_recipe`,
+`duplicate_edh_ami_recipe`, `start_edh_ami_recipe_build`, `register_edh_ami_recipe_build`,
+`register_edh_capacity_reservation`, `update_edh_capacity_reservation`.
+
+`get_edh_workstation_connect` changes nothing, but it issues the DCV
+`connectionUrl` of one of the caller's ACTIVE workstations — a URL carrying a
+session auth token (see the security notes below) — so it is exposed with the writes rather
+than always available, and it is never in `autoApprove`. A workstation that is
+not connectable (CREATING, STOPPED, or without an EDH session) is refused with a 409.
+Each call makes EDH issue at most one connection token per request EDH answers,
+for that desktop; VAMS repeats a read once after a transport failure or a gateway
+error, which can make a second. `list_edh_workstations` and `get_edh_workstation`
+make EDH issue no connection token; a row's `connectionAvailable` is true while
+EDH reports the desktop running.
+`create_edh_workstation` and `start_edh_workstation` start real GPU compute that
+is billed until the desktop is stopped or deleted; `stop_edh_workstation` and
+`stop_edh_admin_instance` interrupt whatever is running on a desktop (the admin
+form on ANOTHER user's); `renew_edh_workstation` extends a leased workstation's
+`leaseExpiresAt` to the full policy window from now, thereby extending the runtime
+of a GPU desktop. Keep all five out of `autoApprove` and confirm each with the user
+first, as for `execute_workflow`. `update_edh_admin_settings` is a partial patch of
+the lease policy: only the arguments you pass are changed.
+`create_edh_workstation` returns the record with `state` CREATING and `sessionId`
+null (HTTP 202), plus `sessionBootstrap` (`provisioned`, `skipped`, `unavailable`
+or `disabled`, the outcome of placing a session key for the desktop). The launch
+runs asynchronously — poll `list_edh_workstations` and select the row by its
+`bootstrapId` until it reports ACTIVE and a `sessionId`, because
+`get_edh_workstation` accepts a `bootstrapId` only while the row has no
+`sessionId` and reports it not found once EDH assigns one; read `lastError` on a
+row that ended ORPHANED. A repeat with the same `bootstrap_id` by the same user
+returns the stored record (HTTP 200) and launches nothing, while one that another
+user's launch holds is refused (409).
+Its `os_family` (`linux` or `windows`) is the chosen catalog image's `osFamily`
+and is required; its `bootstrap_id` is the idempotency key — re-send the one from
+a call that timed out rather than launching again. Its optional `lease_hours` (1 up to the
+policy's `leaseHours`, see `get_edh_catalog_lease`) stamps a lease on the launch; it is
+refused (400) when leases are disabled and ignored when the policy is `forced`. An
+`instance_type` the image's profile lists only under architectures of another family
+than the image's (`x86_64` and `i386` are one family) is refused (400,
+`instanceType does not match the image's architecture`), and one outside the
+`launchInstanceTypes` a recipe image carries in `list_edh_catalog_images` is
+refused (400, `instanceType is not offered for this image`). A launch
+is refused (403) for a session authenticated with a VAMS API key.
+Its optional `capacity_reservation_id` launches into a reservation
+`list_edh_catalog_capacity_reservations` lists whose `instanceType` and platform
+match the launch; omitted, the launch is on-demand, exactly as before. It is refused
+(400) when the reservation is not registered, not active, or of another instance
+type or platform, (403) when the user's role does not grant it, and (503) when EC2
+could not be read. A full reservation whose `fallbackToOnDemand` is true launches
+on-demand, and the record carries `capacityReservationFallback: true`; one whose
+`fallbackToOnDemand` is false is refused (409, `error_type`
+`EdhReservationFullError`, `code` `RESERVATION_FULL`). A record names the
+reservation it launched into in `capacityReservationId` and
+`capacityReservationLabel`. A start of a stopped desktop whose reservation is full
+leaves it stopped with `lastError` `RESERVATION_FULL` (see below).
+`register_edh_capacity_reservation` (`capacity_reservation_id`, `label`, and the
+optional `fallback_to_on_demand` and `enabled`, both server default true) and
+`update_edh_capacity_reservation` (a partial patch of `label`,
+`fallback_to_on_demand` and `enabled`) maintain VAMS's registry of reservations and
+require the EDH admin routes; neither changes the reservation in EC2.
+`start_edh_workstation` is accepted (HTTP 202) and returns at once with the record,
+still STOPPED with `activity` `starting`, plus `sessionBootstrap`, as for a launch;
+the start runs in the background, so follow it with `list_edh_workstations` until
+the row is ACTIVE with `activity` null. A start EDH refuses leaves the row STOPPED
+with `activity` null, `lastError` `CAPACITY_UNAVAILABLE` (AWS had no capacity for
+the instance type in the desktop's Availability Zone; the desktop keeps its disk
+there, so start it again later), `RESERVATION_FULL` or `START_FAILED`, and
+`startFailure` `{errorCode, availabilityZone, observedAt}`; the desktop is never
+deleted for a refused start. While EDH still lists the desktop stopped, a start is refused (409,
+`error_type` `EdhStartInProgressError`, `startInProgress: true`) when another start
+of it is being processed,
+within 3 minutes of one EDH did not confirm, while the reconciler revokes the stopped
+desktop's key, or while a lease renewal re-issues its key (up to 5 minutes); if the
+list still shows it stopped after 5 minutes, start it again.
+`renew_edh_workstation` adds `sessionBootstrap` when it re-issued, or tried to
+re-issue, the desktop's session key: for an ACTIVE workstation with no start in
+progress, renewed by a session that did not authenticate with a VAMS API key;
+otherwise the field is absent and the renew extends the lease only. The two `register_*` tools
+take the model's
+fields by name (`ami_id`, `stack_name`, `root_size`, plus `base_os` and
+`virtual_desktop_profile_id` for desktops or `target_node_profile_id` — and an
+optional `target_node_user_data_id`, the EDH target-node user-data template,
+sent only when given so the server keeps its default of template 1 — for
+simulation nodes) and require the EDH admin routes. Their `imageId` is the new
+stack's id, read back from the catalog; a read-back that does not find the stack,
+or a project assignment that fails, is returned as the error with the stack left
+registered.
+`submit_edh_container_job` starts a Batch or EKS job through EDH that is billed
+until it finishes or is killed; like the workstation tools it stays out of
+`autoApprove`. Its `job_queue` is required (the Batch job queue, or the EKS
+cluster for the experimental `eks` backend), its `command` is a token list and
+`environment` a name→value map, sent under the request model's `command` /
+`environment` keys, and `memory` is in MiB (at least 512). It answers 202 with
+the job's `jobId` and `backend`, the pair `kill_edh_container_job` takes.
+`start_edh_ami_recipe_build` starts an EC2 Image Builder build instance that is
+billed until the image completes; like the other compute tools it stays out of
+`autoApprove`.
+`create_edh_ami_recipe` and `update_edh_ami_recipe` take the recipe as a dict in
+the shape of the CLI's recipe file, with inline components only — each `{arn}` or
+`{name, data}`; the `{file}` components the CLI reads from disk are not resolved
+here. `update_edh_ami_recipe` replaces the whole definition of an `admin` recipe;
+a `config` recipe is refused (409), and neither tool starts a build. Both refuse
+(409) a `stackName` another recipe already uses. Both, and
+`duplicate_edh_ami_recipe`, refuse (400) a `buildInstanceType` or `parentImage`
+that EC2 reports as running another architecture family than the recipe's
+`architecture` (`x86_64` and `i386` are one family), with
+`buildInstanceType does not match the recipe's architecture` or
+`parentImage does not match the recipe's architecture`; a lookup that fails
+refuses nothing.
+A recipe's optional `launchInstanceTypes` (1-64 distinct instance types) is the
+list a desktop of its image may launch on; absent, null or empty offers every
+type the deployment allows, and it is outside the content hash, so changing it
+starts no build.
+`duplicate_edh_ami_recipe` takes `source_recipe_id` (a `config` or `admin`
+recipe) and the new `recipe_id`, plus an optional `display_name` (default: the
+source's plus ` (copy)`), `stack_name` (default: the source's plus ` Copy`) and
+`keep_versions` (the number of AMIs pruning keeps for the copy, 1-20; default:
+the source's `keepVersions`).
+It reads the source and creates an `admin` recipe with its definition, its
+`launchInstanceTypes` included, and
+`duplicateOf`; the service copies the source's bundled files (`assets`), which
+an update of the copy keeps and cannot change, and records `duplicatedFrom`. It
+starts no build.
+`start_edh_ami_recipe_build` answers 202 with the build row and an `outcome` of
+`started` (status BUILDING) or `queued` (status QUEUED, behind the recipe's
+running build of other content), or 200 with `outcome: in-progress` and the
+build already QUEUED, BUILDING or REGISTERING for the recipe's current content,
+starting nothing; registration in EDH, retirement of the recipe's other AVAILABLE
+builds' stacks and pruning of AMIs beyond `keepVersions` follow automatically. A build
+that starts is refused (409), with nothing created, for a parent AMI EC2 does not
+find (`the parent image could not be found`) and for a parent or build instance
+type EC2 reports as running another architecture family than the recipe's
+(`the parent image's architecture does not match the recipe's architecture`,
+`buildInstanceType does not match the recipe's architecture`). A build is registered
+automatically when its image completes, so `register_edh_ami_recipe_build` is the
+retry for a REGISTER_FAILED build — any other status is refused (409) — and a
+successful retry retires the recipe's other AVAILABLE builds.
+
+#### Destructive (require `VAMS_ENABLE_DESTRUCTIVE=true`)
+
+`delete_edh_workstation`, `delete_edh_vdi_image`,
+`delete_edh_simulation_image`, `deactivate_edh_admin_instance`,
+`kill_edh_container_job`, `delete_edh_ami_recipe`, `retire_edh_ami_recipe_build`,
+`unregister_edh_capacity_reservation`.
+`unregister_edh_capacity_reservation` removes a reservation from VAMS's registry so
+it is no longer offered; the EC2 reservation itself is not changed, and
+workstations launched into it keep running.
+Deleting a
+workstation removes the desktop and its session; stopping it first
+(`stop_edh_workstation`) releases the GPU reversibly. The two image deletes
+unregister a software stack for a specific kind — a desktop id sent to the
+simulation delete is not found, and vice versa. `deactivate_edh_admin_instance`
+terminates ANOTHER user's desktop and, like `abort_execution`, acts on running
+compute; `stop_edh_admin_instance` is the reversible form.
+`kill_edh_container_job` stops a running job's compute and cannot be undone; pass
+the listing's `jobId` and the `backend` the job was listed under (server default
+`batch`; `eks` also needs its `cluster` and `namespace`), because a job on the
+other backend is reported as not found. `delete_edh_ami_recipe` removes an `admin`
+recipe, the EC2 Image Builder resources its last build recorded and every build
+row, answering `recipeId`, `deleted` and `warnings`; the AMIs, snapshots, EC2 Image
+Builder images and EDH stacks its builds still hold stay, and without the build
+rows VAMS cannot retire or prune them, so first retire the AVAILABLE builds, and
+the REGISTER_FAILED builds whose EDH stack exists, that should go. A `config`
+recipe, one with a QUEUED, BUILDING or REGISTERING build, or one another delete
+is already removing, is refused (409), and so is a recipe while a build's AMI
+removal is pending: a RETIRED build with `amiRemovalPending`, or a RETIRED,
+REGISTER_FAILED or FAILED build outside the recipe's `keepVersions` newest AMIs
+that still holds its AMI, as while an Amazon EC2 instance uses the AMI. Delete
+the recipe once the sweep has deregistered those AMIs (`amiDeregisteredAt`).
+`retire_edh_ami_recipe_build` deactivates an
+AVAILABLE or REGISTER_FAILED build's EDH stack, then deregisters its AMI and
+snapshots and deletes its Image Builder image once no Amazon EC2 instance uses the
+AMI; while one does, the build stays RETIRED with `amiRemovalPending` and
+`amiInUseBy`, and VAMS removes the AMI after the last instance is terminated.
+Retiring the AVAILABLE build leaves the recipe with no launchable image. Any other
+status, or a build whose stack cannot be found, is refused (409).
+
+#### Security notes
+
+-   `get_edh_workstation_connect` (write tier, for this reason) returns a DCV
+    `connectionUrl` carrying a session auth token: anyone holding it can open that
+    desktop until the token expires, and it needs no further authentication. It is
+    returned as tool output, so it lands in the host's conversation log and
+    telemetry — the same exposure as the presigned-URL tools, which is why it is
+    absent from the `autoApprove` addition above. Relay it to the user once; do not
+    repeat it. Each call makes EDH issue at most one connection token per request
+    EDH answers, for that desktop; VAMS repeats a read once after a transport
+    failure or a gateway error, which can make a second. `list_edh_workstations`
+    and `get_edh_workstation` make EDH issue none.
+-   No tool returns the Windows sign-in of an EDH workstation: its password is a
+    credential for the desktop, so VAMS shows it to the owner only in the web app
+    and with `vamscli edh workstation connect --show-windows-password`. The EDH
+    workstation tools pass their `session_id` through vamscli's client, which
+    refuses, before any request, an id that is not a single path segment and
+    any request path with an empty, `.` or `..` segment, so no workstation id
+    can address the sign-in route.
 
 ## Adding tools in a fork
 

@@ -98,7 +98,7 @@ export interface RuleResult {
     rule: Rule;
 }
 
-/** A single field a derivation forced, surfaced to the user. `changes` is empty today. */
+/** A single field a derivation forced, surfaced to the user. */
 export interface DerivedChange {
     path: string;
     to: unknown;

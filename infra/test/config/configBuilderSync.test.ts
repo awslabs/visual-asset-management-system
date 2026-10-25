@@ -13,34 +13,39 @@
  * option is added or a default changes. These tests fail loudly on that drift:
  *
  *   1. defaults.ts presets must deep-equal the three template JSONs.
- *   2. schema.ts FIELDS must cover every leaf of the ConfigPublic interface
- *      (and must not reference paths that no longer exist).
+ *   2. schema.ts FIELDS must cover every leaf of the ConfigPublic interface,
+ *      including the add-on lane config.ts intersects into `app.addons` from
+ *      infra/config/addon/ (and must not reference paths that no longer exist).
  *
  * When a test here fails, the fix is to update the ConfigBuilder to match the
  * source of truth (see the component's README.md for which files to touch), or
- * — for a deliberately non-editable field — add it to KNOWN_NON_FORM_PATHS
- * below with a justification.
+ * — for a deliberately non-editable field — add it to CORE_NON_FORM_PATHS
+ * below with a justification (an add-on's field: to the JSON-only paths of its
+ * ConfigBuilder module under addon/).
  *
  * Out of scope (mirror imperative logic in getConfig() that cannot be checked
- * declaratively; guarded by the steering-doc rules instead): validation.ts and
- * derived.ts.
+ * declaratively; guarded by the steering-doc rules instead): validation.ts,
+ * derived.ts, and the rules and derivations of the add-on modules.
  *
  * Where getConfig() rejects a feature combination rather than adjusting the config,
- * the ConfigBuilder mirrors the rejection as a validation.ts error rule and derives
- * nothing. The VPC requirement is the worked example: getConfig() collects the 16
- * VPC-requiring features and throws when app.useGlobalVpc.enabled is false, and
- * validation.ts carries one error rule per feature. derived.ts performs no config
- * mutation at all, so nothing here needs to reconcile the two lists — but a feature
- * added to the getConfig() collection does need adding to validation.ts, which no
- * test enforces.
+ * the ConfigBuilder mirrors the rejection as a validation.ts error rule. The VPC
+ * requirement is the worked example: getConfig() collects the VPC-requiring
+ * features (16 core ones plus those of the add-on lane) and throws when
+ * app.useGlobalVpc.enabled is false, and validation.ts carries one error rule per
+ * feature. Where getConfig() does normalize a field, derived.ts carries that
+ * assignment. Neither file is checked here — a feature added to the getConfig()
+ * collection needs adding to validation.ts, which no test enforces.
  */
 
 import * as fs from "fs";
 import * as path from "path";
 import {
+    InterfaceDeclaration,
+    Node,
     Project,
     SourceFile,
     SyntaxKind,
+    TypeAliasDeclaration,
     TypeElementTypes,
     TypeLiteralNode,
     TypeNode,
@@ -58,13 +63,14 @@ const TEMPLATE_EUSOVEREIGN = path.join(CONFIG_DIR, "config.template.eusovereign.
 // eslint-disable-next-line @typescript-eslint/no-var-requires -- resolved relative to this test file
 import { makeDefaultConfig } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/defaults";
 import { FIELDS } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/schema";
+import { ADDON_JSON_ONLY_PATHS } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/addon";
 
 /**
  * ConfigPublic leaves that are intentionally NOT rendered as form fields in the
  * ConfigBuilder because they are derived / overwritten at deploy time and are
  * not user-editable. Keep this list minimal and justified.
  */
-const KNOWN_NON_FORM_PATHS: ReadonlySet<string> = new Set([
+const CORE_NON_FORM_PATHS: readonly string[] = [
     "env.partition", // Derived from the deployment region/partition at synth time.
     "env.coreStackName", // "Will get overwritten always when generated" (see config.ts).
     // The fields below are edited through a COMPOSITE ConfigBuilder component rather than one input
@@ -86,6 +92,12 @@ const KNOWN_NON_FORM_PATHS: ReadonlySet<string> = new Set([
     "app.pipelines.externalPipelineBridges.accountId",
     "app.pipelines.externalPipelineBridges.roleArnPattern",
     "app.pipelines.externalPipelineBridges.invokeTargets",
+];
+
+/** The core list plus the paths each ConfigBuilder add-on module edits only in the downloaded config.json. */
+const KNOWN_NON_FORM_PATHS: ReadonlySet<string> = new Set([
+    ...CORE_NON_FORM_PATHS,
+    ...ADDON_JSON_ONLY_PATHS,
 ]);
 
 function readJson(filePath: string): Record<string, unknown> {
@@ -94,20 +106,23 @@ function readJson(filePath: string): Record<string, unknown> {
 
 /**
  * Enumerate the dotted leaf paths of the ConfigPublic interface by walking the
- * TypeScript AST (via ts-morph). config.ts is parsed as source text only — it
- * is never imported/executed, so its aws-cdk-lib / fs / dotenv dependencies are
- * never loaded. A property whose type is an inline object literal (TypeLiteral)
- * is recursed into; anything else (primitive, array, tuple, type reference) is
- * treated as a leaf — matching how the builder renders one control per leaf.
+ * TypeScript AST (via ts-morph). config.ts, and each module it imports a type
+ * from, is parsed as source text only — never imported/executed, so its
+ * aws-cdk-lib / fs / dotenv dependencies are never loaded. A property whose type
+ * is an inline object literal (TypeLiteral) or an intersection is recursed into;
+ * anything else (primitive, array, tuple, type reference) is treated as a leaf —
+ * matching how the builder renders one control per leaf.
  */
 /**
  * The object members a property's type exposes, or undefined when the type is a leaf.
  *
- * Three shapes are resolved, not one:
+ * Four shapes are resolved, not one:
  *
  *   { a: string }                  an inline type literal
- *   ConfigPresignedUrlNetworkRestrictions   a reference to an interface declared in config.ts
+ *   ConfigPresignedUrlNetworkRestrictions   a reference to an interface or type alias, declared in
+ *                                  the file that names it or in a module that file imports it from
  *   [ConfigPublicAssetS3Buckets] / X[]      a tuple or array whose element is either of the above
+ *   { a: string } & ConfigAddonLane         an intersection: the members of every constituent
  *
  * Resolving only the first left the fields inside the two referenced interfaces invisible to this
  * drift guard: `allowedIpRanges`, `allowedVpceIds`, `isDefault`, `bucketAccountId`, `bucketRegion` and
@@ -115,31 +130,79 @@ function readJson(filePath: string): Record<string, unknown> {
  * `...externalAssetBuckets`) and satisfied by two composite ConfigBuilder inputs, so adding a seventh
  * field to either interface could not fail this test.
  */
-function objectMembersOf(
-    typeNode: TypeNode | undefined,
-    sourceFile: SourceFile
-): TypeElementTypes[] | undefined {
+function objectMembersOf(typeNode: TypeNode | undefined): TypeElementTypes[] | undefined {
     if (!typeNode) return undefined;
 
     const literal = typeNode.asKind(SyntaxKind.TypeLiteral) as TypeLiteralNode | undefined;
     if (literal) return literal.getMembers();
 
+    // `A & B` carries the members of both. A constituent with no enumerable members would hide its
+    // fields from this guard, so it fails the walk instead.
+    const intersection = typeNode.asKind(SyntaxKind.IntersectionType);
+    if (intersection) {
+        return intersection.getTypeNodes().flatMap((part) => {
+            const members = objectMembersOf(part);
+            if (!members) {
+                throw new Error(
+                    `Cannot enumerate the members of intersection constituent ${part.getText()}`
+                );
+            }
+            return members;
+        });
+    }
+
     // `X[]` and `[X]` both describe a list of X; the element type is what carries the fields.
     const array = typeNode.asKind(SyntaxKind.ArrayType);
-    if (array) return objectMembersOf(array.getElementTypeNode(), sourceFile);
+    if (array) return objectMembersOf(array.getElementTypeNode());
     const tuple = typeNode.asKind(SyntaxKind.TupleType);
     if (tuple) {
         const elements = tuple.getElements();
-        return elements.length ? objectMembersOf(elements[0], sourceFile) : undefined;
+        return elements.length ? objectMembersOf(elements[0]) : undefined;
     }
 
     const reference = typeNode.asKind(SyntaxKind.TypeReference);
     if (reference) {
-        const name = reference.getTypeName().getText();
-        const iface = sourceFile.getInterface(name);
-        if (iface) return iface.getMembers();
-        const alias = sourceFile.getTypeAlias(name);
-        if (alias) return objectMembersOf(alias.getTypeNode(), sourceFile);
+        const declaration = resolveTypeDeclaration(
+            reference.getTypeName().getText(),
+            typeNode.getSourceFile()
+        );
+        if (Node.isInterfaceDeclaration(declaration)) return declaration.getMembers();
+        if (Node.isTypeAliasDeclaration(declaration))
+            return objectMembersOf(declaration.getTypeNode());
+    }
+    return undefined;
+}
+
+/**
+ * The interface or type alias `name` denotes in `file`: declared there, or brought in by a named
+ * import from a relative module, which is added to the project and searched the same way. Names
+ * from packages are not followed; they stay leaves.
+ */
+function resolveTypeDeclaration(
+    name: string,
+    file: SourceFile
+): InterfaceDeclaration | TypeAliasDeclaration | undefined {
+    const local = file.getInterface(name) ?? file.getTypeAlias(name);
+    if (local) return local;
+    for (const declaration of file.getImportDeclarations()) {
+        const specifier = declaration.getModuleSpecifierValue();
+        if (!specifier.startsWith(".")) continue;
+        const imported = declaration
+            .getNamedImports()
+            .find((named) => (named.getAliasNode()?.getText() ?? named.getName()) === name);
+        if (!imported) continue;
+        const base = path.resolve(path.dirname(file.getFilePath()), specifier);
+        const target = [`${base}.ts`, path.join(base, "index.ts")].find((candidate) =>
+            fs.existsSync(candidate)
+        );
+        if (!target) {
+            throw new Error(
+                `${file.getBaseName()} imports ${name} from ${specifier}, which does not resolve`
+            );
+        }
+        const project = file.getProject();
+        const targetFile = project.getSourceFile(target) ?? project.addSourceFileAtPath(target);
+        return resolveTypeDeclaration(imported.getName(), targetFile);
     }
     return undefined;
 }
@@ -162,13 +225,16 @@ function collectConfigPublicLeafPaths(): string[] {
             const name = prop.getName();
             const dottedPath = prefix ? `${prefix}.${name}` : name;
             const typeNode = prop.getTypeNode();
-            const inline = typeNode?.asKind(SyntaxKind.TypeLiteral) as TypeLiteralNode | undefined;
-            if (inline) {
-                // A pure grouping in the config shape: it has no value of its own.
-                walk(inline.getMembers(), dottedPath);
+            const grouping =
+                typeNode?.asKind(SyntaxKind.TypeLiteral) ??
+                typeNode?.asKind(SyntaxKind.IntersectionType);
+            if (grouping) {
+                // A pure grouping in the config shape: it has no value of its own. An intersection
+                // groups the members of every constituent, wherever each is declared.
+                walk(objectMembersOf(grouping) ?? [], dottedPath);
                 continue;
             }
-            const members = objectMembersOf(typeNode, sourceFile);
+            const members = objectMembersOf(typeNode);
             if (members) {
                 // A named interface or list element is BOTH: the ConfigBuilder edits it as a unit
                 // through one composite component, so the parent is a real field path, and its

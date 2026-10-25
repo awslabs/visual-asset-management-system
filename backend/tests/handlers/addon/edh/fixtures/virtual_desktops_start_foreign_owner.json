@@ -1,0 +1,36 @@
+{
+  "name": "virtual_desktops_start_foreign_owner",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "PUT",
+    "path": "/api/dcv/virtual_desktops/start",
+    "absolutePath": "/api/dcv/virtual_desktops/start",
+    "query": {},
+    "headers": {
+      "X-EDH-USER": "vspikeaaaaaaaaaa"
+    },
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": {
+      "session_uuid": "0a1b2c3d-4e5f-4607-8192-a3b4c5d6e7f8"
+    }
+  },
+  "response": {
+    "status": 500,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": false,
+      "message": "Unable to Restart Desktop 0a1b2c3d-4e5f-4607-8192-a3b4c5d6e7f8 (owner: vspikeaaaaaaaaaa):  Unable to find this session. Please refresh your browser and try again.  (Request ID: 82dfd955-9fc6-4168-a89a-d3930ec895c6)"
+    }
+  },
+  "expect": {},
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/dcv/start_virtual_desktop.py",
+      "source/soca/cluster_manager/utils/errors/virtual_desktops.py"
+    ]
+  }
+}

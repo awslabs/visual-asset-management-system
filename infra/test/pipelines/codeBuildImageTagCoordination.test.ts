@@ -34,6 +34,8 @@ import { Resource, SynthResult, synthTemplate } from "../support/templateSynth";
 import { IMAGE_TAG_LENGTH, MAX_IMAGE_REFERENCE_LENGTH } from "../../lib/helper/containerImageTag";
 
 const PIPELINES_DIR = path.join(__dirname, "..", "..", "lib", "nestedStacks", "pipelines");
+/** Add-on constructs that build images the same way; scanned with the pipeline constructs. */
+const ADDONS_DIR = path.join(__dirname, "..", "..", "lib", "nestedStacks", "addon");
 
 /** Enable exactly one pipeline, so an unrelated one cannot supply the resources being asserted. */
 function onlyPipeline(flag: string) {
@@ -225,15 +227,15 @@ function codeLines(file: string): string[] {
         .filter((line) => !/^\s*(\/\/|\/\*|\*)/.test(line));
 }
 
-describe("every pipeline CodeBuild construct supplies IMAGE_TAG", () => {
-    const files = typescriptFiles(PIPELINES_DIR);
+describe("every CodeBuild image construct supplies IMAGE_TAG", () => {
+    const files = [...typescriptFiles(PIPELINES_DIR), ...typescriptFiles(ADDONS_DIR)];
     const builders = files.filter((f) => codeLines(f).some((l) => /ECR_REPO_URI:/.test(l)));
 
     it("[control] finds the CodeBuild constructs to scan", () => {
-        // There are six: coordinateTransform, splatToolbox, cosmos (four repos from one construct),
-        // gr00t, isaacLab, videoSopBom. A lower number means the scan stopped seeing them, which
-        // would make the assertions below pass vacuously.
-        expect(builders.length).toBeGreaterThanOrEqual(6);
+        // There are seven: coordinateTransform, splatToolbox, cosmos (four repos from one construct),
+        // gr00t, isaacLab, videoSopBom, and the add-on image build under addon/. A lower number means
+        // the scan stopped seeing them, which would make the assertions below pass vacuously.
+        expect(builders.length).toBeGreaterThanOrEqual(7);
     });
 
     it("supplies IMAGE_TAG beside ECR_REPO_URI, from the source asset hash", () => {

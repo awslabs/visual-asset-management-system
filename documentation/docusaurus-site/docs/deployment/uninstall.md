@@ -97,6 +97,10 @@ for STACK in $(aws cloudformation list-stack-resources \
 done
 ```
 
+## Pre-uninstall: add-ons
+
+An add-on can create objects outside the VAMS stack, in an external system or at run time, that `cdk destroy` does not remove. When the deployment enables an add-on whose pages describe removal steps, complete them while the deployment is still running, before [Step 1](#step-1-destroy-the-cdk-stack). The [Add-ons Overview](../developer/addons-overview.md) lists each add-on with a link to its pages.
+
 ## Step 1: Destroy the CDK stack
 
 Run the CDK destroy command from the `infra` directory. This removes all CloudFormation-managed resources.
@@ -185,7 +189,7 @@ VAMS creates the following S3 buckets. The asset, auxiliary, artefacts, access l
 | -------------------------- | ----------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Asset bucket(s)            | Retained (manual)       | No — auto-named                     | Stores uploaded asset files. One bucket per configuration (new bucket and/or external).                                                                                                                                                                                                                                                                                                                            |
 | Auxiliary bucket           | Retained (manual)       | No — auto-named                     | Stores auto-generated previews, pipeline working files, and viewer data. When the Video SOP/BOM Extraction pipeline is enabled, objects under the `pipelines/genai-video-sop-bom/` prefix (that pipeline's working files) expire 30 days after creation, their noncurrent versions one day after deletion, and their delete markers with them; the bucket itself, and everything outside that prefix, is retained. |
-| Artefacts bucket           | Retained (manual)       | No — auto-named                     | Stores CDK deployment artefacts.                                                                                                                                                                                                                                                                                                                                                                                   |
+| Artefacts bucket           | Retained (manual)       | No — auto-named                     | Stores CDK deployment artefacts and pipeline registration bundles.                                                                                                                                                                                                                                                                                                                                                 |
 | Access logs bucket         | Retained (manual)       | No — auto-named                     | Stores S3 server access logs.                                                                                                                                                                                                                                                                                                                                                                                      |
 | Model cache bucket(s)      | Retained (manual)       | No — auto-named                     | Caches downloaded model weights for the NVIDIA Cosmos and NVIDIA GR00T pipelines. Present only when `useNvidiaCosmos`, `useNvidiaCosmos3`, or `useNvidiaGr00t` was enabled.                                                                                                                                                                                                                                        |
 | Web app bucket             | Deleted (emptied first) | ALB only — fixed name (domain host) | Stores the built frontend static files (for both CloudFront and ALB deployments).                                                                                                                                                                                                                                                                                                                                  |
@@ -345,20 +349,20 @@ VAMS log group names are deterministic (a hash of the stack name plus account ID
 
 A pipeline configured with `useCodeBuild: true` creates a private Amazon ECR repository for its container image. All of them use the `DESTROY` removal policy with `emptyOnDelete`, so a clean teardown removes both the repository and its images.
 
-Most are auto-named by AWS CloudFormation and cannot collide on a redeploy. The Coordinate Transform and Video SOP/BOM Extraction repositories are the exceptions — they carry the explicit names `<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform` and `<CONFIG_NAME>-<BASE_STACK_NAME>-videosopbom`, each with `-kms` appended when `app.useKmsCmkEncryption.enabled` is `true` — so if a teardown fails and leaves either behind, delete it before redeploying with the same configuration name and account. The commands below show the names without the key; add `-kms` for a deployment with the CMK enabled. With the CMK enabled, the repositories are encrypted with the VAMS KMS key, and deleting one retires the grants Amazon ECR holds on the key, so the caller needs `kms:RetireGrant` on the key:
+Most are auto-named by AWS CloudFormation and cannot collide on a redeploy. The Coordinate Transform and Video SOP/BOM Extraction repositories are the exceptions — they carry the explicit names `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-coordtransform` and `<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-videosopbom`, each with `-kms` appended when `app.useKmsCmkEncryption.enabled` is `true`, where `<CONFIG_NAME>` and `<BASE_STACK_NAME>` are the `name` and `app.baseStackName` values of `config.json` and `<REGION>` is the VAMS Region — so if a teardown fails and leaves either behind, delete it before redeploying with the same configuration name and account. The commands below show the names without the key; add `-kms` for a deployment with the CMK enabled. With the CMK enabled, the repositories are encrypted with the VAMS KMS key, and deleting one retires the grants Amazon ECR holds on the key, so the caller needs `kms:RetireGrant` on the key:
 
 ```bash
 # Check for the explicitly named repositories
 aws ecr describe-repositories \
-    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform" "<CONFIG_NAME>-<BASE_STACK_NAME>-videosopbom" \
+    --repository-names "<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-coordtransform" "<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-videosopbom" \
     --query 'repositories[].repositoryName' --output text 2>/dev/null
 
 # Delete each one that exists, including any images it still holds
 aws ecr delete-repository \
-    --repository-name "<CONFIG_NAME>-<BASE_STACK_NAME>-coordtransform" \
+    --repository-name "<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-coordtransform" \
     --force
 aws ecr delete-repository \
-    --repository-name "<CONFIG_NAME>-<BASE_STACK_NAME>-videosopbom" \
+    --repository-name "<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-videosopbom" \
     --force
 ```
 
@@ -373,18 +377,18 @@ aws ecr describe-repositories \
 
 ## Step 6: Delete AWS Systems Manager parameters
 
-VAMS creates explicitly named SSM parameters under the deployment prefix `/<name>-<baseStackName>/` (resource-name parameters under `.../resourceNames/`, plus OpenSearch, web URL, and Location Service parameters). They are deleted with the stack, but if a stack deletion fails partway, orphaned parameters conflict with the same-named parameters on a subsequent redeploy using the same configuration name, so delete any remaining ones before redeploying.
+VAMS creates explicitly named SSM parameters under the deployment prefix `/<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>/` (resource-name parameters under `.../resourceNames/`, plus OpenSearch, web URL, and Location Service parameters). They are deleted with the stack, but if a stack deletion fails partway, orphaned parameters conflict with the same-named parameters on a subsequent redeploy using the same configuration name, so delete any remaining ones before redeploying.
 
 ```bash
 # List remaining VAMS parameters for the deployment
 aws ssm get-parameters-by-path \
-    --path "/<CONFIG_NAME>-<BASE_STACK_NAME>" \
+    --path "/<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>" \
     --recursive \
     --query 'Parameters[].Name' --output text
 
 # Delete them (deleteParameters accepts up to 10 names per call)
 for P in $(aws ssm get-parameters-by-path \
-    --path "/<CONFIG_NAME>-<BASE_STACK_NAME>" \
+    --path "/<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>" \
     --recursive \
     --query 'Parameters[].Name' --output text); do
     echo "Deleting parameter ${P}..."
@@ -667,7 +671,7 @@ aws logs describe-log-groups \
     --query 'logGroups[].logGroupName'
 ```
 
-All of the above commands should return empty results when the uninstall is complete.
+All of the above commands should return empty results when the uninstall is complete. An add-on can leave resources of its own that these checks do not cover; the pages of each add-on the deployment enabled list the checks for them.
 
 ## Cost impact after uninstall
 

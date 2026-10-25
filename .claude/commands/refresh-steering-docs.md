@@ -50,15 +50,17 @@ Per-document scan targets:
 
 9. **`backendPipelines/CLAUDE.md`**: Scan `backendPipelines/*/*/` (and `backendPipelines/genAi/nvidia/*/*/`) for directories carrying a `vamsSchema/`. Update the pipeline inventory, the execution-type list against `PIPELINE_EXECUTION_TYPES` in `backend/backend/models/pipelines.py`, and the new-pipeline checklist.
 
-10. **`tools/VamsCLI/CLAUDE.md`**: Scan `tools/VamsCLI/vamscli/commands/` for command files (including `commands/custom/`), `tools/VamsCLI/vamscli/utils/` for utilities, and the constants lanes (`constants.py`, `addon_constants.py`, `custom_constants.py`). Update the directory tree, command list, and key files table. The `Command Groups (N top-level)` section is restated in `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`; update both copies together against the `cli.add_command()` calls in `tools/VamsCLI/vamscli/main.py`, and write no test-file count into either.
+10. **`tools/VamsCLI/CLAUDE.md`**: Scan `tools/VamsCLI/vamscli/commands/` for command files (including `commands/addon/` and `commands/custom/`), `tools/VamsCLI/vamscli/utils/` for utilities, and the constants lanes (`constants.py`, `addon_constants.py`, `custom_constants.py`). Update the directory tree, command list, and key files table. The `Command Groups (N top-level)` section is restated in `.kiro/steering/CLI_DEVELOPMENT_WORKFLOW.md`; update both copies together against the `cli.add_command()` calls in `tools/VamsCLI/vamscli/main.py`, and write no test-file count into either.
 
-11. **`tools/VamsMCP/CLAUDE.md`**: Scan `tools/VamsMCP/vams_mcp/` for modules and `server.py` for the tools in each gate section. Update the directory tree and tool sections, and check the version pair (`pyproject.toml` and `vams_mcp/__init__.py`).
+11. **`tools/VamsMCP/CLAUDE.md`**: Scan `tools/VamsMCP/vams_mcp/` for modules and `server.py` and `addon_tools/` for the tools in each gate section. Update the directory tree and tool sections, and check the version pair (`pyproject.toml` and `vams_mcp/__init__.py`).
 
 12. **`documentation/CLAUDE.md`**: Scan `documentation/docusaurus-site/docs/` for page counts per section and `src/components/` for custom components. Update the structure tree and the key-files cross-reference table. Check the lane table in `docs/developer/customizing-vams.md` ("How the Extension Points Work") against the core, add-on and custom files that exist, and the add-on table in `docs/developer/addons-overview.md` against `infra/lib/nestedStacks/addon/` and `addonViewerConfig.json`.
 
-13. **`tools/VamsAgentSkill/SKILL.md`**: Verify only the structural rules — entity creation/deletion ordering, identifier semantics, permission scoping, and mutating categories. It self-discovers commands via `vamscli --help`, so command additions need no edit here.
+13. **Add-on-local `CLAUDE.md` files** (beside an add-on's code: `backend/backend/handlers/addon/<addon>/`, `infra/lib/nestedStacks/addon/<addon>/`, `web/src/addons/<addon>/`) **and their `.kiro/steering/ADDON_*.md` mirrors**: Scan the add-on's handler, stack, web and CLI and MCP lane files. Update its layout tables, the test names its invariants cite, and the `fileMatchPattern` of its Kiro mirror, which must cover every add-on path the files describe.
 
-14. **Kiro steering mirrors (`.kiro/steering/`)**: If any factual updates above changed a rule, pattern, or convention (not just a file list), make the equivalent change in the corresponding Kiro steering document per the mapping in root `CLAUDE.md` Rule 11.
+14. **`tools/VamsAgentSkill/SKILL.md`**: Verify only the structural rules — entity creation/deletion ordering, identifier semantics, permission scoping, and mutating categories. It self-discovers commands via `vamscli --help`, so command additions need no edit here.
+
+15. **Kiro steering mirrors (`.kiro/steering/`)**: If any factual updates above changed a rule, pattern, or convention (not just a file list), make the equivalent change in the corresponding Kiro steering document per the mapping in root `CLAUDE.md` Rule 11.
 
 ### Verification
 

@@ -98,6 +98,8 @@ query state. Do **not** run commands in any mutating category:
 -   **Delete** / **archive** / **unarchive**
 -   **Edit / modify / update** (assets, metadata, tags, roles, configuration)
 -   **Execute** (workflows, pipelines, jobs)
+-   **Start / stop / deactivate / kill / submit** (compute of any add-on, such as
+    desktops, instances and jobs)
 -   **Upload** or otherwise transfer data into VAMS
 
 When you discover commands via `--help`, classify each by intent using the verbs
@@ -407,6 +409,9 @@ errors, so plan around them rather than discovering them by failure.
     pair _(database ID, asset ID)_. Carry both together through every step.
 -   Search results are the fastest way to obtain both IDs at once; prefer search
     over listing every database when the user names an asset.
+-   Some resources are created under a caller-generated ID and receive their
+    service ID asynchronously. Never fabricate the service ID — read the created
+    resource back to learn it, and pass the ID each command's `--help` asks for.
 
 **Creation order**
 
@@ -418,6 +423,11 @@ errors, so plan around them rather than discovering them by failure.
    captures the files present at that moment.
 5. Metadata, tags, and asset links attach to entities that already exist; create
    the entities first.
+6. A resource created asynchronously is not ready when the create command
+   returns: poll its `get` until it reports ready before acting on it.
+   Connection URLs and passwords a command prints are credentials: request them
+   only when the user asks, treat them as secrets, and never repeat the value.
+   Creating or starting compute is billed (see _Cost and confirmation_).
 
 **Deletion / archive order**
 

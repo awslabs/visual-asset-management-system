@@ -37,8 +37,8 @@ backend/
 │   │   │                                           #   (core + ADDON_ROUTES + CUSTOM_ROUTES).
 │   │   │                                           #   Handlers dispatch via ApiRoute.matches().
 │   │   ├── apiRouteTypes.py                        # ApiRoute + GET/POST/... (re-exported by apiRoutes.py)
-│   │   ├── addonApiRoutes.py                       # Add-on routes (Physna viewer) → ADDON_ROUTES
-│   │   ├── addonConstants.py                       # Add-on object types, constraint fields, blocklist entries
+│   │   ├── addonApiRoutes.py                       # Add-on routes (Physna viewer, EDH Workstations) → ADDON_ROUTES
+│   │   ├── addonConstants.py                       # Add-on object types, constraint fields, blocklist entries, log keys
 │   │   ├── addonResourceNames.py                   # AddonResourceKeys (mirrors infra/common/addonResourceParamKeys.ts)
 │   │   ├── constants.py                            # ABAC policy, allowed values, file blocklists:
 │   │   │                                           #   CORE_* lists merged with the add-on + custom lanes
@@ -64,7 +64,7 @@ backend/
 │   ├── customConfigCommon/                         # Override hooks for EXISTING behaviour (MFA check, login profile)
 │   ├── custom/                                     # FORK EXTENSION POINT (shipped empty, never edited upstream):
 │   │   ├── customApiRoutes.py                      #   CUSTOM_ROUTES, spliced into ALL_API_ROUTES
-│   │   ├── customConstants.py                      #   object types, constraint fields, blocklist entries
+│   │   ├── customConstants.py                      #   object types, constraint fields, blocklist entries, log keys
 │   │   └── customResourceNames.py                  #   CustomResourceKeys (mirrors infra/common/customResourceParamKeys.ts)
 │   ├── handlers/                                   # Lambda handlers, one folder per domain
 │   │   ├── assets/                                 # assetService.py (GOLD STANDARD),
@@ -84,6 +84,7 @@ backend/
 │   │   │                                           #   handleExecutionError, processWorkflowExecutionOutput,
 │   │   │                                           #   registerPipelineExecution, workflowTriggerDispatch,
 │   │   │                                           #   deadlineCloudJobCallback
+│   │   ├── addon/edh/                              # EDH Workstations add-on Lambdas; shared modules in common/ (see handlers/addon/edh/CLAUDE.md)
 │   │   ├── addon/garnetFramework/                  # Garnet NGSI-LD indexer Lambdas
 │   │   ├── addon/physna/                           # Physna Sync Lambdas (physnaCommon.py shared)
 │   │   ├── custom/                                 # FORK EXTENSION POINT: fork handlers (handlers.custom.<name>)
@@ -92,7 +93,7 @@ backend/
 │   │       tagTypes, userRoles                     # Domain handlers (folder per domain)
 │   └── models/                                     # Pydantic v1 models, one file per domain
 │       ├── assetsV3.py                             # GOLD STANDARD model file
-│       ├── addon/                                  # Add-on models (physnaViewer.py)
+│       ├── addon/                                  # Add-on models (physnaViewer.py, edh.py)
 │       ├── common.py                               # Response helpers, APIGatewayProxyResponseV2
 │       ├── custom/                                 # FORK EXTENSION POINT: fork models
 │       └── apiKeys, pipelines, workflows, executions, assetHistory, [domain].py
@@ -139,7 +140,7 @@ backend/
 
 8.  **ALWAYS use `extra='ignore'`** on every Pydantic model class to silently drop unexpected fields.
 
-9.  **NEVER log sensitive data.** `safeLogger` auto-redacts the credential keys `authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`, `apiKey`, `apiKeySecret`, `rawKey` and the caller-authored content keys `configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions` (also inside a JSON-string request `body`), at every nesting level in dicts and lists. Do not circumvent this. The redaction is key-driven, so an f-string that interpolates a payload value bypasses it — log identifiers and counts, never rendered bodies or tag values.
+9.  **NEVER log sensitive data.** `safeLogger` auto-redacts the credential keys `authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`, `apiKey`, `apiKeySecret`, `rawKey`, the credential keys the add-on and fork constants lanes register (`ADDON_LOG_SENSITIVE_KEYS`, `CUSTOM_LOG_SENSITIVE_KEYS`; see "Fork Extension Points"), and the caller-authored content keys `configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions` (also inside a JSON-string request `body`), at every nesting level in dicts and lists. Do not circumvent this. The redaction is key-driven, so an f-string that interpolates a payload value bypasses it — log identifiers and counts, never rendered bodies or tag values.
 
 10. **ALWAYS resolve resource names at module level** via `get_table_name()`, `get_bucket_name()`, or `get_log_group_name()` from `common.resourceNames` inside a `try/except`. Never read `os.environ["TABLE_NAME"]` for resource names in non-pipeline handlers — SSM resolution provides centralized name management with env-var overrides for testing.
 
@@ -511,10 +512,10 @@ return success(body=item)
 
 -   **CasbinEnforcer** is a proxy with a **60-second policy cache TTL** per user; policy is stored in DynamoDB (`ConstraintsStorageTable`).
 -   **Compiled matcher expressions are cached per user, never decisions.** The matcher contains `eval(p.obj_rule)`, so pycasbin re-parses every policy line's inlined rule on every `enforce()` (`core_enforcer.enforce_ex` -> `_get_expression` -> `SimpleEval.__init__` -> `ast.parse`). `ExpressionCachingEnforcer` (the `FastEnforcer` subclass `_create_casbin_enforcer_helper` builds) overrides `_get_expression` with an **instance-level** dict keyed on the full inlined rule string, so each distinct line is parsed once per enforcer and every `enforce()` still evaluates every line. The enforcer is owned by one `CasbinEnforcerService`, so the cache is per user and dies with the service on TTL / MFA invalidation. Keep it that way: the compiled expression holds the enforcer's function map whose `g` is bound to that user's role manager, so a class-level or module-level cache would evaluate one user's role links for another (`tests/handlers/authz/test_casbin_expression_cache.py` pins the instance-level shape, decision parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA freshness). `enforce_ex` is serialized per instance because a compiled `SimpleEval` stores the request's parameters on itself while evaluating.
--   `request_to_claims(event)` returns `{"tokens": ["userId", ...], "roles": [...], "mfaEnabled": bool}`. `roles` comes from the `vams:roles` authorizer context value, which the authorizer (`common/auth/authorizerCore.py`) resolves from the user roles table with a 60-second per-user cache — so it is populated for every auth mode (Cognito, external OAuth IDP, API key), not only where a Cognito pre-token-generation trigger runs. It is informational for handlers and audit logs: `CasbinEnforcer` re-reads a user's roles from DynamoDB when building policy, so authorization does not depend on it.
+-   `request_to_claims(event)` returns `{"tokens": ["userId", ...], "roles": [...], "externalAttributes": [...], "mfaEnabled": bool, "authMethod": "jwt" | "apiKey", "apiKeyId": str | None}`. `authMethod` is `"apiKey"` when the authorizer context carries `vams:authMethod = apiKey` and `"jwt"` otherwise (JWT callers and Lambda cross-calls alike); handlers that mint or seed a credential refuse `"apiKey"` with 403 so one key cannot be chained into another. `apiKeyId` is the id of the key an API-key caller authenticated with (the authorizer's `vams:apiKeyId`), for a handler that decides by the key itself, and `None` for every other caller. `roles` comes from the `vams:roles` authorizer context value, which the authorizer (`common/auth/authorizerCore.py`) resolves from the user roles table with a 60-second per-user cache — so it is populated for every auth mode (Cognito, external OAuth IDP, API key), not only where a Cognito pre-token-generation trigger runs. It is informational for handlers and audit logs: `CasbinEnforcer` re-reads a user's roles from DynamoDB when building policy, so authorization does not depend on it.
 -   **MFA-aware**: roles with `mfaRequired=True` are only active when `mfaEnabled=True` in claims.
 -   **Object annotation**: set `item['object__type']` before every `enforce()` call.
--   Valid object types (`ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`, and the only values `GET /auth/constraints/permissionObjects` offers): `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, plus any type the add-on or fork constants lane registers (see "Fork Extension Points"). Anything else is rejected at constraint create/update with a `400`. There is no `apiKey` object type — API key access is governed at Tier 1 through `api` route constraints on `/auth/api-keys*` and `/auth/user/api-keys*`.
+-   Valid object types (`ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`, and the only values `GET /auth/constraints/permissionObjects` offers): `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, plus any type the add-on or fork constants lane registers (see "Fork Extension Points"). Anything else is rejected at constraint create/update with a `400`. There is no `apiKey` object type — API key access is governed at Tier 1 through `api` route constraints on `/auth/api-keys*` and `/auth/user/api-keys*`. One refusal runs in addition to Tier 1, after `enforceAPI` has allowed the route: a caller authenticating with a temporary session key — an API key named with `TEMPORARY_SESSION_KEY_NAME_PREFIX` (`temporary-session-`, `common/constants.py`) that a backend component mints for one session through a Lambda cross-call, identified through the `apiKeyId` that `request_to_claims` surfaces — is answered `403` on API-key create and update in every scope, so a session credential cannot mint or extend a key (a caller whose own key record cannot be read is answered the generic `500`, not that refusal). The prefix is reserved: an API-key create that names a key under it is answered `400` unless it arrives as a Lambda cross-call (`tests/handlers/auth/test_apiKeyService_temporary_session_key_callers.py`).
 
 ### System User (`SYSTEM_USER`)
 
@@ -543,7 +544,7 @@ Defined in `common/constants.py`. Request: `(sub, obj, act)`; policy line: `(sub
 
 ### Constraint Fields (`PERMISSION_CONSTRAINT_FIELDS`)
 
-Fields that can be referenced in ABAC policy rules: `databaseId`, `assetName`, `assetType`, `tags`, `tagName`, `tagTypeName`, `roleName`, `userId`, `pipelineId`, `pipelineExecutionType`, `workflowId`, `category`, `name`, `metadataSchemaName`, `metadataSchemaEntityType`, `object__type`, `route__path`.
+Fields that can be referenced in ABAC policy rules: `databaseId`, `assetName`, `assetType`, `tags`, `tagName`, `tagTypeName`, `roleName`, `userId`, `pipelineId`, `pipelineExecutionType`, `workflowId`, `category`, `name`, `metadataSchemaName`, `metadataSchemaEntityType`, `object__type`, `route__path`, plus any field the add-on or fork constants lane registers.
 
 ---
 
@@ -835,7 +836,7 @@ logger.info(...); logger.warning(...); logger.error(...); logger.exception(...) 
 
 `safeLogger` auto-redacts two key families at every nesting level, walking dicts, lists, and tuples (`customLogging.logger.mask_sensitive_data`, case-insensitive on the key name):
 
--   **Credential keys** (`SENSITIVE_KEYS`) — `authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`, `apiKey`, `apiKeySecret`, `rawKey`.
+-   **Credential keys** (`SENSITIVE_KEYS`, which is `LOG_SENSITIVE_KEYS` from `common/constants.py`) — `authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`, `apiKey`, `apiKeySecret`, `rawKey`, plus the keys the add-on and fork lanes register (`ADDON_LOG_SENSITIVE_KEYS` in `common/addonConstants.py`, `CUSTOM_LOG_SENSITIVE_KEYS` in `custom/customConstants.py`). `common/logRedaction.py`, which redacts the free-text log lines returned to callers, reads `LOG_TEXT_SENSITIVE_KEYS`: its own core keys plus the same lane keys.
 -   **Content keys** (`CONTENT_KEYS`) — `configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions`. A pipeline template body or tag value carries free-form caller content (prompts, model configuration). Every field that can carry a template body belongs here whichever request delivers it: an execute request supplies one as `customTemplateOverride`, a template record as `configBody`. The value is replaced with `<redacted>` and the key is kept, so the record still shows that the field was submitted.
 
 A request `body` is masked whether it arrives as a dict or as a JSON string — the string is parsed, masked, and re-serialized. Redaction is key-driven, so an f-string that interpolates a payload value (`logger.info(f"template {body}")`) bypasses it entirely: log identifiers, counts, and flags instead.
@@ -954,19 +955,20 @@ Upstream VAMS ships these files empty and never edits them again, so a fork that
 endpoints writes only here and merges upstream releases without conflicts. Each opens with the same
 "Fork extension point" header. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
-| What a fork adds                                   | Fork-owned file                                                       | Spliced in by                                       |
-| -------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------- |
-| API routes                                         | `custom/customApiRoutes.py` (`CUSTOM_ROUTES`)                         | `common/apiRoutes.py` → `ALL_API_ROUTES`            |
-| Resource-name keys                                 | `custom/customResourceNames.py` (`CustomResourceKeys`)                | resolved with `get_resource_name()` like a core key |
-| Handlers                                           | `handlers/custom/<name>.py` (`handlers.custom.<name>.lambda_handler`) | the shared `backend/backend` code asset             |
-| Models                                             | `models/custom/<name>.py`                                             | imported by the fork's handlers                     |
-| Object types, constraint fields, deny-list entries | `custom/customConstants.py`                                           | `common/constants.py` (merged at import)            |
+| What a fork adds                                   | Fork-owned file                                                       | Spliced in by                                                               |
+| -------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| API routes                                         | `custom/customApiRoutes.py` (`CUSTOM_ROUTES`)                         | `common/apiRoutes.py` → `ALL_API_ROUTES`                                    |
+| Resource-name keys                                 | `custom/customResourceNames.py` (`CustomResourceKeys`)                | resolved with `get_resource_name()` like a core key                         |
+| Handlers                                           | `handlers/custom/<name>.py` (`handlers.custom.<name>.lambda_handler`) | the shared `backend/backend` code asset                                     |
+| Models                                             | `models/custom/<name>.py`                                             | imported by the fork's handlers                                             |
+| Object types, constraint fields, deny-list entries | `custom/customConstants.py`                                           | `common/constants.py` (merged at import)                                    |
+| Log redaction keys                                 | `custom/customConstants.py` (`CUSTOM_LOG_SENSITIVE_KEYS`)             | `common/constants.py` → `customLogging/logger.py`, `common/logRedaction.py` |
 
 An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
 
 The add-on lane sits beside each core list and is upstream-owned: `common/addonApiRoutes.py`,
 `common/addonResourceNames.py` (`AddonResourceKeys`), `common/addonConstants.py`, `handlers/addon/`
-and `models/addon/` (the Physna viewer model). Every list merges in the order core, add-on, custom.
+and `models/addon/` (the Physna viewer and EDH models). Every list merges in the order core, add-on, custom.
 
 -   Fork handlers follow every rule above, including both Casbin tiers with the fail-closed
     pre-set flag (Rule 4) and dispatch on the `ApiRoute` constants from `custom/customApiRoutes.py`
@@ -984,9 +986,16 @@ and `models/addon/` (the Physna viewer model). Every list merges in the order co
     take only `is_one_of` / `is_not_one_of`). Type and field names are compared ignoring letter case when
     checking for a repeat, so `Asset` repeats `asset` and `DatabaseId` repeats `databaseId`; authorization
     still matches a name exactly. Deny-list entries are append-only, lower-case, `.ext` / `type/subtype`.
+    The log-key lists follow the same shape: `CORE_LOG_SENSITIVE_KEYS` (the structured logger) and
+    `CORE_LOG_TEXT_SENSITIVE_KEYS` (the free-text redactor) become `LOG_SENSITIVE_KEYS` and
+    `LOG_TEXT_SENSITIVE_KEYS`, both extended by the one lane list `ADDON_LOG_SENSITIVE_KEYS` /
+    `CUSTOM_LOG_SENSITIVE_KEYS`, append-only. A log key matches `^[A-Za-z][A-Za-z0-9_-]{1,63}$` and repeats
+    no core or other-lane key in any letter case, because both redactors match keys case-insensitively.
 -   **No automatic grant.** An extension object type gets no seeded constraint: the
     `dynamodb-authdefaults-*` constructs are not extended, so every role, admin included, is denied on it until
     the fork adds a constraint (`tests/handlers/authz/test_extension_object_types.py`). Never add one.
+    An add-on may seed constraints for its own types, gated on its flag, through
+    `infra/lib/nestedStacks/addon/addonDefaultConstraints.ts`.
 -   Tests that pin constants must hold for any lane content: pin the `CORE_*` lists, or load a private copy of
     `constants.py` with stand-in lane modules; never assert that the merged lists equal core.
 -   `custom/` modules import `ApiRoute` from `common/apiRouteTypes.py` and `ResourceParamKey` from

@@ -10,9 +10,10 @@
  * --delete` deletes any destination key absent from its source — which includes every schema
  * bundle. Refreshing an unrelated artefact would then erase the bundles while the registration
  * custom resources still expect to read them, and because the SchemaDeploy resources see no
- * property change they do not re-upload.
+ * property change they do not re-upload. The addon/ prefix, under which the add-on stacks upload
+ * their own trees as addon/<addon>/, is excluded for the same reason.
  *
- * The exclude filter is what prevents that, so assert it reaches the synthesized resource.
+ * The exclude filters are what prevent that, so assert they reach the synthesized resource.
  */
 
 import * as cdk from "aws-cdk-lib";
@@ -67,7 +68,7 @@ describe("artefacts bucket deployment", () => {
         template = Template.fromStack(stack);
     });
 
-    test("the root artefacts deployment excludes the vamsSchema prefix from its prune", () => {
+    test("the root artefacts deployment excludes the vamsSchema and addon prefixes from its prune", () => {
         // Locate the deployment by its source, not by logical id, so a construct rename does not
         // silently turn this into a no-op assertion.
         const deployments = template.findResources("Custom::CDKBucketDeployment");
@@ -82,6 +83,7 @@ describe("artefacts bucket deployment", () => {
         // it false the exclude is redundant but harmless, so accept either as long as they agree.
         if (props.Prune !== false) {
             expect(props.Exclude).toContain("vamsSchema/*");
+            expect(props.Exclude).toContain("addon/*");
         }
     });
 });

@@ -31,6 +31,12 @@ web/e2e/fixtures/*.json
 *.patch
 # Gitignored local scratch that prettier would otherwise report forever (it never ships).
 backendPipelines/3dRecon/splatToolbox/container/LOCAL_DEBUG_README.md
+
+# Captured add-on API fixtures. An add-on's backend tests keep sanitized request/response captures in
+# their fixtures/ directory, and each file must stay byte-for-byte what the add-on's sanitizer emits (its
+# tests re-run the sanitizer over every file); reformatting them would fail that guard.
+backend/tests/handlers/addon/*/fixtures/
+
 # Model-facing prompt text of the Video SOP/BOM container. Its unit tests pin the bytes (list
 # markers, blank lines, the fenced operator block) and a formatter's reflow would change what the
 # model reads. Path-anchored with a trailing slash so it matches this one directory.

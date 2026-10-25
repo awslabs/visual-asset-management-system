@@ -14,6 +14,13 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import { region_info } from "aws-cdk-lib";
 import { oidcSettings } from "./oidc-config";
 import { samlSettings } from "./saml-config";
+import type { ConfigAddonLane } from "./addon/addonConfig";
+import {
+    addonVpcRequiringFeatures,
+    applyAddonConfigDefaults,
+    validateAddonConfig,
+    warnAddonCodeBuildPartition,
+} from "./addon/addonConfig";
 import {
     CONFIG_FILE_CONTEXT_KEY,
     DEFAULT_CONFIG_FILE_NAME,
@@ -65,8 +72,8 @@ export const SUPPORTED_API_TYPES = [API_TYPE_APIGATEWAY_REST];
 // Fixed REST API deployment stage name. This is intentionally NOT a per-deployment config
 // option: the value is also baked into the VamsCLI endpoint constants and the web app's
 // /api/* fronting, so it must stay constant across the stack and clients. The web
-// distribution (CloudFront originPath / ALB redirect) absorbs this stage so browser/CLI
-// base URLs remain /api/*.
+// distribution (CloudFront originPath / ALB redirect) maps the web URL's /api/* paths onto
+// this stage; clients call every other route on the stage-inclusive invoke URL.
 export const API_GATEWAY_STAGE_NAME = "api";
 
 // The REST API integration timeout applied when a deployment names none, in seconds. 29 seconds is
@@ -90,6 +97,31 @@ export const API_GATEWAY_DEFAULT_TIMEOUT_SECONDS = 29;
 // COSMOS3_SUPER_GPU_COUNT is referenced only by the getConfig() instance-type checks below.
 export const COSMOS3_NANO_GPU_COUNT = 4;
 export const COSMOS3_SUPER_GPU_COUNT = 8;
+
+// CloudWatch log-group name patterns the executionService Lambda may read registered sub-process logs
+// from when app.pipelines.executionLogReadPrefixes is absent. Each entry is used verbatim as an IAM
+// log-group resource name (a trailing `*` is a prefix match; none is an exact group). IAM matching is
+// case-sensitive, so both state-machine casings the pipeline constructs use are listed. The shared
+// workflow log group and the config-name pattern are granted by the builder regardless of this list.
+export const DEFAULT_EXECUTION_LOG_READ_PREFIXES: readonly string[] = [
+    "/aws/vendedlogs/VAMSStateMachine-*",
+    "/aws/vendedlogs/VAMSstateMachine-*",
+    "/aws/vendedlogs/Pipelines/*",
+    "/aws/batch/job",
+    "/aws/sagemaker/TrainingJobs",
+];
+
+// Input caps of the Video SOP/BOM Extraction pipeline that are tied to its compute sizing rather than
+// being operator cost levers. The Fargate job's ephemeral volume has to hold every input video plus
+// the audio and key frames extracted from them, so the byte caps are fixed alongside the volume size
+// and getConfig() rejects a pair the volume cannot hold (assertVideoSopBomCapsFitVolume). The per-run
+// count and duration caps are deployment configuration (app.pipelines.useGenAiVideoSopBom.limits).
+// The key-frame ceiling bounds the MAX_KEY_FRAMES template tag. The pipeline's constructs read all
+// four: the volume size into the job definition, the caps into its Lambda environments.
+export const VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB = 4096;
+export const VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB = 16384;
+export const VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB = 100;
+export const VIDEO_SOP_BOM_MAX_KEY_FRAMES_CEILING = 200;
 
 // The RapidPipeline EKS timeout chain. Three clocks bound a run, each enforced by a different service,
 // and they must nest so that the parent workflow is still waiting when the run reports its outcome:
@@ -129,30 +161,6 @@ export const RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS = 60;
 // run through PipelineEnd, and 180 s for each of 1447 calls would budget more than 72 hours.
 export const RAPID_PIPELINE_EKS_CHECK_JOB_ALLOWANCE_SECONDS = 3;
 
-/** Status checks the RapidPipeline EKS poll makes before giving up on a job: its ceiling. */
-export function rapidPipelineEksJobCheckAttempts(jobTimeoutSeconds: number): number {
-    return Math.ceil(
-        (jobTimeoutSeconds + RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS) /
-            RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS
-    );
-}
-
-/**
- * The longest a RapidPipeline EKS state machine run can take for `jobTimeoutSeconds`, without Lambda
- * retries: ConstructPipeline, RunJob, a poll that reaches its ceiling (one wait per attempt and one
- * more CheckJob call than waits, since the first check runs before the first wait), and PipelineEnd.
- */
-export function rapidPipelineEksWorstCaseRunSeconds(jobTimeoutSeconds: number): number {
-    const attempts = rapidPipelineEksJobCheckAttempts(jobTimeoutSeconds);
-    return (
-        RAPID_PIPELINE_EKS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS +
-        RAPID_PIPELINE_EKS_RUN_JOB_TIMEOUT_SECONDS +
-        attempts * RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS +
-        (attempts + 1) * RAPID_PIPELINE_EKS_CHECK_JOB_ALLOWANCE_SECONDS +
-        RAPID_PIPELINE_EKS_PIPELINE_END_TIMEOUT_SECONDS
-    );
-}
-
 // ============================================================================================
 // Constants used only to check configuration
 //
@@ -165,6 +173,14 @@ export function rapidPipelineEksWorstCaseRunSeconds(jobTimeoutSeconds: number): 
 // synchronous request/response API. Compared against, never assigned.
 export const API_GATEWAY_MAX_TIMEOUT_SECONDS = 300;
 
+/**
+ * Region names accepted for an external bucket's bucketRegion: a partition prefix
+ * (us, eu, ap, cn, eusc, ...), one or more area words (east, gov-west, iso-east,
+ * de-east, ...) and a digit. Rejects Availability Zone names and other malformed values
+ * without pinning the list of Regions, which grows.
+ */
+export const AWS_REGION_NAME_PATTERN = /^[a-z]{2,4}(-[a-z]+)+-\d{1,2}$/;
+
 // Amazon Cognito's username limit. Used to reject an over-long app.adminUserId at synthesis rather
 // than letting CreateUser fail mid-deploy and roll the core stack back.
 export const COGNITO_USERNAME_MAX_LENGTH = 128;
@@ -175,52 +191,10 @@ export const COGNITO_USERNAME_MAX_LENGTH = 128;
 // getConfig() warns about it at synthesis. Compared against, never assigned.
 export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
 
-// Input caps of the Video SOP/BOM Extraction pipeline that are tied to its compute sizing rather than
-// being operator cost levers. The Fargate job's ephemeral volume has to hold every input video plus
-// the audio and key frames extracted from them, so the byte caps are fixed alongside the volume size
-// and getConfig() rejects a pair the volume cannot hold. The per-run count and duration caps are
-// deployment configuration (app.pipelines.useGenAiVideoSopBom.limits). The key-frame ceiling bounds
-// the MAX_KEY_FRAMES template tag, and the bundle timeout is the taskTimeout the pipeline's
-// vamsSchema declares (backendPipelines/genAi/videoSopBom/vamsSchema/pipeline.json).
-export const VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB = 4096;
-export const VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB = 16384;
-export const VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB = 100;
-export const VIDEO_SOP_BOM_MAX_KEY_FRAMES_CEILING = 200;
+// The taskTimeout the Video SOP/BOM Extraction pipeline's vamsSchema declares
+// (backendPipelines/genAi/videoSopBom/vamsSchema/pipeline.json). The parent workflow waits this long
+// for the pipeline's task-token callback.
 export const VIDEO_SOP_BOM_BUNDLE_TASK_TIMEOUT_SECONDS = 30600;
-
-/**
- * Ephemeral storage, in GiB, that a total input size requires: the inputs, a 1.5x working factor for
- * the audio and frames extracted from them, and 2 GiB for the image and scratch space.
- */
-export function videoSopBomWorkingSetGib(totalInputSizeMb: number): number {
-    return Math.ceil((totalInputSizeMb * 1.5) / 1024) + 2;
-}
-
-/**
- * Refuses a byte-cap pair the Fargate job's ephemeral volume cannot hold. The caps are constants sized
- * together with the volume, so a failing pair is a code error; getConfig() calls this on every load,
- * so a constant edit cannot ship without the matching volume.
- */
-export function assertVideoSopBomCapsFitVolume(
-    fileMb: number,
-    totalMb: number,
-    volumeGib: number
-): void {
-    if (fileMb > totalMb) {
-        throw new Error(
-            `Configuration Error: VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB (${fileMb}) exceeds ` +
-                `VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB (${totalMb}) in infra/config/config.ts.`
-        );
-    }
-    const requiredGib = videoSopBomWorkingSetGib(totalMb);
-    if (requiredGib > volumeGib) {
-        throw new Error(
-            `Configuration Error: VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB (${totalMb} MB) needs ` +
-                `${requiredGib} GiB of ephemeral storage but VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB is ` +
-                `${volumeGib}. Raise the volume or lower the cap in infra/config/config.ts.`
-        );
-    }
-}
 
 // The 3D preview thumbnail compute tiers when app.pipelines.usePreview3dThumbnail sets none: each
 // tier's AWS Fargate vCPU and memory, and the input size (GiB) at or above which a run takes the
@@ -248,34 +222,6 @@ export const FARGATE_MEMORY_MIB_BY_VCPU: ReadonlyMap<number, readonly number[]> 
     [8, mibRange(16, 60, 4)],
     [16, mibRange(32, 120, 8)],
 ]);
-
-/** A memory size in GiB as the MiB value a Fargate resource requirement carries. */
-export function fargateMemoryMiB(memoryGiB: number): number {
-    return Math.round(memoryGiB * 1024);
-}
-
-/** True when AWS Fargate runs a Linux task of `vcpu` vCPU with `memoryGiB` of memory. */
-export function isFargateCpuMemory(vcpu: unknown, memoryGiB: unknown): boolean {
-    if (typeof vcpu !== "number" || typeof memoryGiB !== "number") return false;
-    const memoryMiB = memoryGiB * 1024;
-    return (
-        Number.isInteger(memoryMiB) &&
-        (FARGATE_MEMORY_MIB_BY_VCPU.get(vcpu) ?? []).includes(memoryMiB)
-    );
-}
-
-// CloudWatch log-group name patterns the executionService Lambda may read registered sub-process logs
-// from when app.pipelines.executionLogReadPrefixes is absent. Each entry is used verbatim as an IAM
-// log-group resource name (a trailing `*` is a prefix match; none is an exact group). IAM matching is
-// case-sensitive, so both state-machine casings the pipeline constructs use are listed. The shared
-// workflow log group and the config-name pattern are granted by the builder regardless of this list.
-export const DEFAULT_EXECUTION_LOG_READ_PREFIXES: readonly string[] = [
-    "/aws/vendedlogs/VAMSStateMachine-*",
-    "/aws/vendedlogs/VAMSstateMachine-*",
-    "/aws/vendedlogs/Pipelines/*",
-    "/aws/batch/job",
-    "/aws/sagemaker/TrainingJobs",
-];
 
 // GPUs per accelerated Amazon EC2 instance type, for the families the NVIDIA pipelines are deployed
 // on. The count is NOT derivable from the size: g6e.16xlarge carries one GPU while the nominally
@@ -329,6 +275,92 @@ export const GPU_COUNT_BY_INSTANCE_TYPE: Record<string, number> = {
 const TRUTHY_STRINGS = ["true", "1", "yes", "on"];
 /** Strings that mean false. Listed rather than inferred, so anything else can be reported. */
 const FALSY_STRINGS = ["false", "0", "no", "off", ""];
+
+// A role ARN pattern: the deployment partition, the entry's own account, and a role path or name made
+// of the characters IAM permits, with at most one trailing `*`. A bare `role/*` (every role in the
+// account) is rejected separately.
+const BRIDGE_ROLE_NAME_CHARS = "[A-Za-z0-9+=,.@_\\-/]+";
+
+// A log-group name under `/aws/`: a service segment, then at least one further segment, with at most
+// one trailing `*`. Rejects `*`, `/`, `/aws/`, `/aws/*`, `/aws/<service>/*` and anything outside
+// `/aws/`, so the grant can never widen to the whole vended-log namespace.
+const EXECUTION_LOG_READ_PREFIX_PATTERN =
+    /^\/aws\/[A-Za-z0-9\-._#]+\/[A-Za-z0-9\-._#][A-Za-z0-9\-._/#]*\*?$/;
+// CloudWatch Logs caps a log-group name at 512 characters.
+const EXECUTION_LOG_READ_PREFIX_MAX_LENGTH = 512;
+
+/** Status checks the RapidPipeline EKS poll makes before giving up on a job: its ceiling. */
+export function rapidPipelineEksJobCheckAttempts(jobTimeoutSeconds: number): number {
+    return Math.ceil(
+        (jobTimeoutSeconds + RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS) /
+            RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS
+    );
+}
+
+/**
+ * The longest a RapidPipeline EKS state machine run can take for `jobTimeoutSeconds`, without Lambda
+ * retries: ConstructPipeline, RunJob, a poll that reaches its ceiling (one wait per attempt and one
+ * more CheckJob call than waits, since the first check runs before the first wait), and PipelineEnd.
+ */
+export function rapidPipelineEksWorstCaseRunSeconds(jobTimeoutSeconds: number): number {
+    const attempts = rapidPipelineEksJobCheckAttempts(jobTimeoutSeconds);
+    return (
+        RAPID_PIPELINE_EKS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS +
+        RAPID_PIPELINE_EKS_RUN_JOB_TIMEOUT_SECONDS +
+        attempts * RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS +
+        (attempts + 1) * RAPID_PIPELINE_EKS_CHECK_JOB_ALLOWANCE_SECONDS +
+        RAPID_PIPELINE_EKS_PIPELINE_END_TIMEOUT_SECONDS
+    );
+}
+
+/**
+ * Ephemeral storage, in GiB, that a total input size requires: the inputs, a 1.5x working factor for
+ * the audio and frames extracted from them, and 2 GiB for the image and scratch space.
+ */
+export function videoSopBomWorkingSetGib(totalInputSizeMb: number): number {
+    return Math.ceil((totalInputSizeMb * 1.5) / 1024) + 2;
+}
+
+/**
+ * Refuses a byte-cap pair the Fargate job's ephemeral volume cannot hold. The caps are constants sized
+ * together with the volume, so a failing pair is a code error; getConfig() calls this on every load,
+ * so a constant edit cannot ship without the matching volume.
+ */
+export function assertVideoSopBomCapsFitVolume(
+    fileMb: number,
+    totalMb: number,
+    volumeGib: number
+): void {
+    if (fileMb > totalMb) {
+        throw new Error(
+            `Configuration Error: VIDEO_SOP_BOM_MAX_VIDEO_FILE_SIZE_MB (${fileMb}) exceeds ` +
+                `VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB (${totalMb}) in infra/config/config.ts.`
+        );
+    }
+    const requiredGib = videoSopBomWorkingSetGib(totalMb);
+    if (requiredGib > volumeGib) {
+        throw new Error(
+            `Configuration Error: VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB (${totalMb} MB) needs ` +
+                `${requiredGib} GiB of ephemeral storage but VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB is ` +
+                `${volumeGib}. Raise the volume or lower the cap in infra/config/config.ts.`
+        );
+    }
+}
+
+/** A memory size in GiB as the MiB value a Fargate resource requirement carries. */
+export function fargateMemoryMiB(memoryGiB: number): number {
+    return Math.round(memoryGiB * 1024);
+}
+
+/** True when AWS Fargate runs a Linux task of `vcpu` vCPU with `memoryGiB` of memory. */
+export function isFargateCpuMemory(vcpu: unknown, memoryGiB: unknown): boolean {
+    if (typeof vcpu !== "number" || typeof memoryGiB !== "number") return false;
+    const memoryMiB = memoryGiB * 1024;
+    return (
+        Number.isInteger(memoryMiB) &&
+        (FARGATE_MEMORY_MIB_BY_VCPU.get(vcpu) ?? []).includes(memoryMiB)
+    );
+}
 
 /**
  * Interprets one boolean-ish configuration value.
@@ -1169,6 +1201,8 @@ export function getConfig(app: cdk.App): Config {
         config.app.addons.usePhysnaSync.credentialsSecretArn = "";
     }
 
+    applyAddonConfigDefaults(config);
+
     if (config.app.authProvider.useCognito.useOidc == undefined) {
         config.app.authProvider.useCognito.useOidc = false;
     }
@@ -1676,6 +1710,7 @@ export function getConfig(app: cdk.App): Config {
                     "repository instead."
             );
         }
+        warnAddonCodeBuildPartition(config, resolvedPartition);
     }
 
     //The AWS European Sovereign Cloud offers FIPS endpoints for only four services (AWS KMS,
@@ -1790,6 +1825,7 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useConversionCoordinateTransform");
     if (config.app.pipelines.useGenAiVideoSopBom.enabled)
         vpcRequiringFeatures.push("pipelines.useGenAiVideoSopBom");
+    vpcRequiringFeatures.push(...addonVpcRequiringFeatures(config));
 
     if (vpcRequiringFeatures.length > 0 && !config.app.useGlobalVpc.enabled) {
         throw new Error(
@@ -3326,6 +3362,8 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    validateAddonConfig(config);
+
     return config;
 }
 
@@ -3458,11 +3496,6 @@ export function validatePresignedUrlRestrictions(
         }
     }
 }
-
-// A role ARN pattern: the deployment partition, the entry's own account, and a role path or name made
-// of the characters IAM permits, with at most one trailing `*`. A bare `role/*` (every role in the
-// account) is rejected separately.
-const BRIDGE_ROLE_NAME_CHARS = "[A-Za-z0-9+=,.@_\\-/]+";
 
 /**
  * Validates app.pipelines.externalPipelineBridges. Each entry names a 12-digit account, a role ARN
@@ -3603,14 +3636,6 @@ export function validateExternalPipelineBridges(
         });
     });
 }
-
-// A log-group name under `/aws/`: a service segment, then at least one further segment, with at most
-// one trailing `*`. Rejects `*`, `/`, `/aws/`, `/aws/*`, `/aws/<service>/*` and anything outside
-// `/aws/`, so the grant can never widen to the whole vended-log namespace.
-const EXECUTION_LOG_READ_PREFIX_PATTERN =
-    /^\/aws\/[A-Za-z0-9\-._#]+\/[A-Za-z0-9\-._#][A-Za-z0-9\-._/#]*\*?$/;
-// CloudWatch Logs caps a log-group name at 512 characters.
-const EXECUTION_LOG_READ_PREFIX_MAX_LENGTH = 512;
 
 /**
  * Validates app.pipelines.executionLogReadPrefixes: a non-empty array of distinct log-group name
@@ -3837,14 +3862,6 @@ export interface ConfigPublicAssetS3Buckets {
     bucketRegion?: string;
     bucketKmsKeyArn?: string;
 }
-
-/**
- * Region names accepted for an external bucket's bucketRegion: a partition prefix
- * (us, eu, ap, cn, eusc, ...), one or more area words (east, gov-west, iso-east,
- * de-east, ...) and a digit. Rejects Availability Zone names and other malformed values
- * without pinning the list of Regions, which grows.
- */
-export const AWS_REGION_NAME_PATTERN = /^[a-z]{2,4}(-[a-z]+)+-\d{1,2}$/;
 
 /**
  * External asset bucket entries whose bucketRegion is set and differs from the
@@ -4232,7 +4249,7 @@ export interface ConfigPublic {
                 clientId: string;
                 clientSecret: string;
             };
-        };
+        } & ConfigAddonLane;
         authProvider: {
             presignedUrlTimeoutSeconds: number;
             authorizerOptions: {

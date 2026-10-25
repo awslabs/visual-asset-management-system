@@ -36,7 +36,7 @@ export interface IApiImplementation {
     readonly apiEndpoint: string;
     /** Full invoke URL including the stage path, e.g. `https://{host}/{stage}`. */
     readonly invokeUrlWithStage: string;
-    /** The deployment stage name fronting absorbs (CloudFront originPath / ALB redirect). */
+    /** The deployment stage name, onto which the web fronting maps `/api/*` (originPath / redirect). */
     readonly stageName: string;
 }
 
@@ -65,8 +65,8 @@ export interface RestApiGatewayConstructProps {
  * optionally associates a regional WAF web ACL.
  *
  * The API is fully self-contained: it is publicly addressable on its own and does not
- * require CloudFront or an ALB in front of it. When a front is present it absorbs the
- * stage path, but direct execute-api access works the same.
+ * require CloudFront or an ALB in front of it. A front maps the web URL's `/api/*` paths onto
+ * the stage; clients call every other route on the stage-inclusive invoke URL.
  *
  */
 export class RestApiGatewayConstruct extends Construct implements IApiImplementation {

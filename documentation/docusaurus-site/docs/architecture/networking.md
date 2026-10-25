@@ -195,6 +195,7 @@ Private and public subnets are created when any of the following are enabled:
 -   Splat Toolbox pipeline
 -   Isaac Lab Training pipeline
 -   NVIDIA Cosmos pipeline (Predict, Reason, or Transfer)
+-   NVIDIA Cosmos 3 pipeline
 -   NVIDIA Gr00t pipeline
 
 ### Availability Zone Configuration
@@ -286,6 +287,8 @@ These non-pipeline endpoints are created based on the deployment configuration:
 | Amazon S3 (ALB web)                             | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint`                                        | ALB-to-S3 static web file serving                                                                                                                                                                   |
 | AWS Deadline Cloud                              | `pipelines.deadlineCloudExecutionTypeEnabled` + `useGlobalVpc.useForAllLambdas`       | `deadline.management` — read a job's status and cancel a farm job. AWS Deadline Cloud is unavailable in GovCloud / EU Sovereign, so the execution type (and this endpoint) cannot be enabled there. |
 | Amazon S3 (cross-Region, one per bucket Region) | `useGlobalVpc.addCrossRegionS3Endpoints` + an external asset bucket in another Region | `com.amazonaws.<bucketRegion>.s3` with `ServiceRegion` set — reaches an asset bucket in another Region from the isolated subnets. Commercial partition only.                                        |
+
+An enabled add-on can add interface endpoints, and security groups for its own functions, to the VPC; the add-on's page lists them (see [Add-ons Overview](../developer/addons-overview.md)).
 
 VAMS does not create Amazon Cognito interface endpoints. See [MFA-Aware Roles](security.md#mfa-aware-roles) for what that means for Lambda functions running in the VPC.
 

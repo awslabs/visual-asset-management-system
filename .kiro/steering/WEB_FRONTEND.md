@@ -2,6 +2,8 @@
 
 This is the Kiro front-end steering document for the VAMS (Visual Asset Management System) web application (`web/`). It mirrors the canonical `web/CLAUDE.md` content for the Kiro coding agent, and its viewer plugin sections are also the Kiro counterpart for `web/src/visualizerPlugin/CLAUDE.md`. When front-end standards change, update both this file and the matching `CLAUDE.md`.
 
+> **Add-on steering:** an add-on's own steering lives in `.kiro/steering/ADDON_*.md` (`inclusion: fileMatch`), which loads when you edit that add-on's files; this document covers core and the lanes an add-on plugs into.
+
 ---
 
 ## 1. Architecture Overview
@@ -96,7 +98,7 @@ web/
       SignInHeader.tsx
       SignInFooter.tsx
 
-    services/               # API and data services
+    services/               # API and data services (may import apiClient — Rule 3 lists the other directories that may)
       APIService.ts         # Main API service (~900+ lines, 40+ exports)
       AssetUploadService.ts # S3 multipart upload logic
       AssetVersionService.ts  # Includes updateAssetVersion, archiveAssetVersion, unarchiveAssetVersion
@@ -108,7 +110,8 @@ web/
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks
       addons/physnaAPIService.ts  # Add-on API calls (Physna viewer metadata)
 
-    addons/                 # Add-on web lane (shipped empty): addonRoutes.tsx, addonNavigation.ts
+    addons/                 # Add-on web lane: addonRoutes.tsx, addonNavigation.ts, addonFeatures.ts (add-on feature-switch names)
+      edh/                  #   EDH Workstations add-on module (Tailwind + Radix, pages/ route shells) — see .kiro/steering/ADDON_EDH_WORKSTATIONS.md
     custom/                 # FORK EXTENSION POINT (shipped empty, never edited upstream)
       customRoutes.tsx      #   customRouteTable, appended to routeTable in routes.tsx
       customNavigation.ts   #   customNavSections, appended to the side navigation
@@ -119,6 +122,7 @@ web/
     context/                # React Context providers
       AssetContext.ts        # NOTE: typo is intentional, do NOT rename
       AssetDetailContext.ts  # useReducer-based context
+      RuntimeConfigContext.ts # Live runtime config from Auth (useFeaturesEnabled); falls back to appCache outside the provider
 
     components/             # Domain/feature components
       asset/                # Asset viewing (ViewAsset.tsx is the main detail page)
@@ -283,7 +287,7 @@ The existing app uses AWS Cloudscape Design System. The orchestration module (`s
 
 -   **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
 -   **`features/orchestration/**`\*\* (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
--   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind's content glob covers `src/features/orchestration/**` plus the nine orchestration route shells in `src/pages/`, each named individually rather than as `src/pages/**`). A new orchestration shell must be added to that list in `web/tailwind.config.js` or its Tailwind classes are not emitted; a Cloudscape page must **not** be added, because scanning it is what makes the collision below possible.
+-   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind's content glob covers `src/features/orchestration/**`, each Tailwind add-on module under `src/addons/<addon>/**`, and the nine orchestration route shells in `src/pages/`, each named individually rather than as `src/pages/**` or `src/addons/**`). A new orchestration shell or Tailwind add-on module must be added to that list in `web/tailwind.config.js` or its Tailwind classes are not emitted; a Cloudscape page must **not** be added, because scanning it is what makes the collision below possible.
 -   **Tailwind's UTILITY CSS is global, even though its content glob is not.** The glob decides which files Tailwind _scans_ for class names; every utility it emits lands in one stylesheet loaded on every page, so a Cloudscape page using a class named like a Tailwind utility picks up Tailwind's rule. **Never name a plain layout div after a Tailwind utility** — `container`, `hidden`, `block`, `flex`, `grid`, `fixed` (examples verified in the built CSS; the emitted set depends on what the orchestration module uses). Outside the orchestration module, use a VAMS-defined class or no class at all.
 
 Do NOT introduce Material UI, Ant Design, Chakra, or any other UI library outside this boundary.
@@ -321,7 +325,7 @@ const response = await apiClient.get(`database/${databaseId}/assets`);
 const response = await fetch(`/api/database/${databaseId}/assets`);
 ```
 
-**Service files** (`src/services/`, `src/features/orchestration/api/` and, in a fork, `src/custom/services/`) are the ONLY files that may import `apiClient`:
+**Service files** (`src/services/`, `src/features/orchestration/api/`, an add-on module's own `api/` directory under `src/addons/<addon>/` and, in a fork, `src/custom/services/`) are the ONLY files that may import `apiClient`:
 
 -   `APIService.ts` — main API service (general CRUD, auth, search, subscriptions, tags, etc.)
 -   `AssetUploadService.ts` — S3 upload operations
@@ -331,9 +335,10 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `MetadataSchemaService.ts` — schema management
 -   `addons/*.ts` — add-on API calls (`addons/physnaAPIService.ts` for the Physna viewer)
 -   `features/orchestration/api/*.ts` — orchestration services (pipelines, workflows, executions, templates, triggers)
+-   `addons/<addon>/api/*.ts` (under `src/`) — the services of an add-on that ships its own module, beside its types and query hooks
 -   `custom/services/*.ts` — the fork extension point for a fork's own API calls (shipped empty)
 
-When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper). An add-on's calls go in `services/addons/`, never in `APIService.ts`.
+When adding a new API endpoint, add the function to the appropriate service file (or `APIService.ts` if no specific service exists). Follow the `[boolean, data]` return tuple pattern. The orchestration services also use this tuple pattern (via a `toTuple` helper). An add-on's calls go in `services/addons/`, or in its module's `api/` directory when it ships a module of its own, never in `APIService.ts`.
 
 ### Rule 4: npm Only
 
@@ -635,7 +640,8 @@ This codebase uses NO global state library. State is managed through:
 2. **Component-local useState/useReducer** for component state
 3. **localStorage** for persistence across sessions
 4. **appCache** (`src/services/appCache.ts`) for runtime config and preferences
-5. **URL params** via React Router v6 `useParams()`
+5. **URL params** via React Router v7 `useParams()`
+6. **TanStack Query** for server state in the Tailwind modules (`features/orchestration/` and the add-on modules under `addons/`) — caching, background refetch, smart polling (`computeRefetchInterval` keeps polling active only while non-terminal executions are visible); each module has its own `qk` key factory
 
 ### 6.2 Context Pattern
 
@@ -668,10 +674,11 @@ export const MyContext = createContext<MyContextType | undefined>(undefined);
 
 ### 6.3 Existing Contexts
 
-| Context              | File                            | Purpose                          |
-| -------------------- | ------------------------------- | -------------------------------- |
-| `AssetContext`       | `context/AssetContext.ts`       | Asset list state                 |
-| `AssetDetailContext` | `context/AssetDetailContext.ts` | Single asset detail with reducer |
+| Context                | File                              | Purpose                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AssetContext`         | `context/AssetContext.ts`         | Asset list state                                                                                                                                                                                                                                                                                                                                             |
+| `AssetDetailContext`   | `context/AssetDetailContext.ts`   | Single asset detail with reducer                                                                                                                                                                                                                                                                                                                             |
+| `RuntimeConfigContext` | `context/RuntimeConfigContext.ts` | The live runtime config, provided by `FedAuth/Auth.tsx` around the logged-in app; `useFeaturesEnabled()` re-evaluates when the secure config lands, so a feature-gated surface (a feature-restricted navigation entry, an add-on page) appears on a first login without a reload. Outside the provider both hooks fall back to `appCache.getItem("config")`. |
 
 The orchestration module (`features/orchestration/**`) holds its shared server state in TanStack Query (`features/orchestration/api/queries.ts`) rather than a React context, so a new pipeline/workflow/execution surface adds a query key there instead of a provider here.
 
@@ -808,7 +815,7 @@ The route is automatically permission-filtered via `webRoutes()` API call. The b
 
 An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
 
-A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavSections`), upstream-owned and shipped empty, hold an add-on's pages. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `React.lazy` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both splice in fork-owned files under `src/custom/`, which upstream ships empty and never edits. The add-on lane sits between core and custom: `src/addons/addonRoutes.tsx` (`addonRouteTable`) and `src/addons/addonNavigation.ts` (`addonNavMainSections` for the main menu, spliced in after "Orchestrate & Automate"; `addonNavAdminSections` for the admin area, spliced in after the core "Admin - ..." sections and before "User"), upstream-owned, hold an add-on's pages, and `src/addons/addonFeatures.ts` (`addonFeaturesEnabled`) names the add-ons' feature switches. The merge order is core, add-on, custom for both the route table and the side navigation (`src/addons/addonLanes.test.tsx`), with the fork's sections after every core and add-on section, so a path that repeats a core path never replaces the core page. The page goes in `src/custom/pages/`, its route in `customRouteTable` (`src/custom/customRoutes.tsx`, same `RouteOption` shape and `React.lazy` rule), its side-navigation section in `customNavSections` (`src/custom/customNavigation.ts`), its API calls in `src/custom/services/`, and its feature-switch names in `src/custom/customFeatures.ts`. Custom routes and nav links pass through the same `checkWebRoutesAllowed` filter as core ones. Paths under `/custom/` are recommended, not enforced. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 ---
 
@@ -850,7 +857,7 @@ The 3D/media viewer system uses a plugin-based architecture:
 | `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer        | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `preview-viewer`                   | Preview Viewer                 | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
 
-> Note: `supersplat-viewer` is a **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter (see 8.5 before copying that pattern). The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor.
+> Note: `supersplat-viewer` is a **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter (see 8.6 before copying that pattern). The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor.
 
 ### 8.3 Adding a New Viewer Plugin
 
@@ -1028,51 +1035,7 @@ at its root) or its lines render centered and stop wrapping. The differ also pas
 `pre` margin reset covers only the table, and the UA `1em` margin on the title `<pre>` pushed the
 labels down and clipped them inside the fixed-height title block.
 
-### 8.5 A Framed Viewer Must Not Receive a Signed URL in the Query String
-
-A presigned Amazon S3 URL is a bearer credential: anyone holding it can read the object until it
-expires. Putting one in an iframe's **query string** writes it into CloudFront or ALB access logs, which
-are not treated as containing credentials and stay in the web app access-logs bucket until its
-lifecycle rule removes them (`WebAppAccessLogsBucket` in `staticWebBuilder-nestedStack.ts`): the bucket
-is versioned, so a log object expires after 30 days and its noncurrent version is deleted 30 days later.
-
-`supersplat-viewer` currently does this (`SuperSplatViewerComponent.tsx` builds
-`?load=<presigned>&filename=…`) — one object, expiring, but logged. **Do not copy the pattern into a new
-viewer.** Use the **URL fragment** instead: browsers do not transmit a fragment, so nothing reaches the
-server or its logs.
-
-For a vendored build that reads `location.search` and cannot be changed at the call site, inject a shim
-into its `index.html` from that viewer's `customInstalls/` script which moves the fragment into the query
-string with `history.replaceState` before the bundle runs. Write the shim as a file beside `index.html`
-and load it with a classic `<script src>` placed ahead of the bundle's: the CSP's `script-src` admits an
-inline script only by the hashes of `web/index.html`'s own blocks (`cspInlineScriptHashes.ts`), so an
-inline shim in a viewer page never runs. Patch the HTML entry rather than the minified bundle: the bundle
-is regenerated from a pinned upstream tag on every `npm install`, so a regex against its internals breaks
-on the next version bump while injected elements do not.
-
-The shimmed page also needs `<meta name="referrer" content="no-referrer">` at the top of its `<head>`,
-ahead of the shim and of every `<script>` and `<link>`. `replaceState` issues no request, but it
-changes the document URL, and the browser builds the `Referer` of every later request the page makes
-from that URL. The CloudFront distribution sends `Referrer-Policy: strict-origin-when-cross-origin`
-(`cloudfront-s3-website-construct.ts`) and the ALB sends none, so the browser default applies, which is
-the same policy. Both put the full URL, query string included, in the `Referer` of a same-origin request,
-and a vendored viewer keeps fetching its own files after it starts (SuperSplat loads `static/locales/`
-and `static/lib/webp/webp.wasm` from `/viewers/supersplat/`). Without the `<meta>`, each of those requests
-carries the presigned URL into the web access logs: CloudFront standard logs record the `Referer`, and on
-the ALB path so do the web bucket's S3 server access logs. A `<meta>` referrer policy replaces the
-response header's for the requests the document makes after the element is parsed, which is why it goes
-at the top, and it is the only control that covers both distributions, because the ALB cannot add a
-`Referrer-Policy` header. The iframe's `referrerPolicy` attribute, which `HTMLViewerComponent.tsx` sets,
-is not a substitute: it governs only the request that loads the framed page, not the requests that page
-makes. A viewer that reads `location.hash` itself needs none of this, because a `Referer` never carries
-the fragment.
-
-Note the encoding interaction if you move an existing viewer: SuperSplat decodes `load` **twice**, so its
-value is deliberately double-encoded (see the comment in `SuperSplatViewerComponent.tsx`). Moving the
-same string to a fragment must preserve that double encoding byte-for-byte, or the presigned signature
-breaks and S3 returns 400.
-
-### 8.5 A Framed Viewer Must Not Receive a Signed URL in the Query String
+### 8.6 A Framed Viewer Must Not Receive a Signed URL in the Query String
 
 A presigned Amazon S3 URL is a bearer credential: anyone holding it can read the object until it
 expires. Putting one in an iframe's **query string** writes it into CloudFront or ALB access logs, which
@@ -1158,11 +1121,25 @@ if (config?.featuresEnabled?.includes("LOCATIONSERVICES")) {
 }
 ```
 
+A surface that stays mounted across a login (the side navigation) or that gates whole pages reads the
+flags through `useFeaturesEnabled()` from `context/RuntimeConfigContext.ts` instead: the cached config
+carries no `featuresEnabled` until the secure config lands after the first login, and only the context
+re-renders a mounted consumer when it does.
+
+Any side-navigation entry (a section, link or group in the core, add-on or custom lists) may carry
+`featuresEnabledRestriction: string[]`, the field name and all-of meaning the viewer config uses:
+`layout/Navigation.tsx` drops the entry until every listed switch is enabled, re-runs the web-route
+check when the switches arrive, and strips the field before the items reach `SideNavigation`. An
+add-on's switch names live in `addons/addonFeatures.ts` (`addonFeaturesEnabled`), each one declared in
+`infra/common/addonAppFeatures.ts` (`addons/addonFeatures.test.ts`); a fork's live in
+`custom/customFeatures.ts`.
+
 Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
 -   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, and Three.js CAD formats (WASM loaders use eval)
+-   Add-on flags (`addons/addonFeatures.ts`) are described in each add-on's own steering
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)
@@ -1481,23 +1458,23 @@ Match the comment density and style already present in the file. Describe **what
 
 ## 14. Key Dependencies
 
-| Package                         | Version              | Purpose                     |
-| ------------------------------- | -------------------- | --------------------------- |
-| `react`                         | 17.0.2               | UI framework (NOT React 18) |
-| `typescript`                    | 4.4.4                | Type system                 |
-| `vite`                          | ^6.0.0               | Build tooling               |
-| `aws-amplify`                   | v6 (latest)          | Auth integration (v6)       |
-| `@cloudscape-design/components` | ^3.0.196             | AWS Cloudscape UI           |
-| `@badgateway/oauth2-client`     | 2.4.2                | External OAuth2 PKCE flow   |
-| `react-router-dom`              | ^6.0.0               | Client-side routing         |
-| `styled-components`             | ^5.3.3               | CSS-in-JS (legacy usage)    |
-| `three`                         | (via customInstalls) | 3D rendering engine         |
-| `maplibre-gl`                   | ^6.9.0               | Map rendering               |
-| `react-pdf`                     | ^10.1.0              | PDF viewing                 |
-| `papaparse`                     | ^5.4.1               | CSV parsing                 |
-| `dompurify`                     | ^3.4.11              | HTML sanitization           |
-| `sanitize-html`                 | ^2.11.0              | HTML sanitization           |
-| `@dnd-kit/core`                 | ^6.3.1               | Drag and drop               |
+| Package                         | Version              | Purpose                   |
+| ------------------------------- | -------------------- | ------------------------- |
+| `react`                         | ^18.3.1              | UI framework              |
+| `typescript`                    | ^5.0.0               | Type system               |
+| `vite`                          | ^8.0.16              | Build tooling             |
+| `aws-amplify`                   | v6 (latest)          | Auth integration (v6)     |
+| `@cloudscape-design/components` | ^3.0.196             | AWS Cloudscape UI         |
+| `@badgateway/oauth2-client`     | 2.4.2                | External OAuth2 PKCE flow |
+| `react-router-dom`              | ^7.18.2              | Client-side routing       |
+| `styled-components`             | ^5.3.3               | CSS-in-JS (legacy usage)  |
+| `three`                         | (via customInstalls) | 3D rendering engine       |
+| `maplibre-gl`                   | ^6.9.0               | Map rendering             |
+| `react-pdf`                     | ^10.1.0              | PDF viewing               |
+| `papaparse`                     | ^5.4.1               | CSV parsing               |
+| `dompurify`                     | ^3.4.11              | HTML sanitization         |
+| `sanitize-html`                 | ^2.11.0              | HTML sanitization         |
+| `@dnd-kit/core`                 | ^6.3.1               | Drag and drop             |
 
 ### 14.1 Key Service Files
 

@@ -4,8 +4,9 @@
 """The backend constants lanes: common/addonConstants.py and custom/customConstants.py.
 
 ``common/constants.py`` builds ``ALLOWED_CONSTRAINT_OBJECT_TYPES``, ``PERMISSION_CONSTRAINT_FIELDS``,
-``CONSTRAINT_OBJECT_TYPE_FIELDS``, ``UNALLOWED_FILE_EXTENSION_LIST`` and ``UNALLOWED_MIME_LIST`` as
-core + add-on + custom at import, and refuses a lane entry that breaks a rule. These tests pin:
+``CONSTRAINT_OBJECT_TYPE_FIELDS``, ``UNALLOWED_FILE_EXTENSION_LIST``, ``UNALLOWED_MIME_LIST``,
+``LOG_SENSITIVE_KEYS`` and ``LOG_TEXT_SENSITIVE_KEYS`` as core + add-on + custom at import, and
+refuses a lane entry that breaks a rule. These tests pin:
 
 * the empty state: with every lane empty (as shipped) each merged structure equals its core list,
   and so does the ``GET /auth/constraints/permissionObjects`` body;
@@ -51,12 +52,13 @@ WIDGET_TYPE = {
 }
 
 
-def _lane(name, prefix, fields=None, types_=None, extensions=None, mimes=None):
+def _lane(name, prefix, fields=None, types_=None, extensions=None, mimes=None, log_keys=None):
     module = types.ModuleType(name)
     setattr(module, f"{prefix}_PERMISSION_CONSTRAINT_FIELDS", dict(fields or {}))
     setattr(module, f"{prefix}_CONSTRAINT_OBJECT_TYPE_FIELDS", dict(types_ or {}))
     setattr(module, f"{prefix}_UNALLOWED_FILE_EXTENSIONS", list(extensions or []))
     setattr(module, f"{prefix}_UNALLOWED_MIME_TYPES", list(mimes or []))
+    setattr(module, f"{prefix}_LOG_SENSITIVE_KEYS", list(log_keys or []))
     return module
 
 
@@ -511,10 +513,13 @@ class TestConsumersReadTheMergedStructures:
         ("models/roleConstraints.py", {"ALLOWED_CONSTRAINT_OBJECT_TYPES", "PERMISSION_CONSTRAINT_FIELDS",
                                        "get_constraint_fields_for_object_type"}),
         ("common/s3.py", {"UNALLOWED_MIME_LIST", "UNALLOWED_FILE_EXTENSION_LIST"}),
+        ("customLogging/logger.py", {"LOG_SENSITIVE_KEYS"}),
+        ("common/logRedaction.py", {"LOG_TEXT_SENSITIVE_KEYS"}),
     ])
     def test_each_consumer_imports_the_merged_names(self, relative, names):
         """The enforcer scrub and rules, constraint and template validation, the permissionObjects
-        listing and the upload check import the merged names from common.constants."""
+        listing, the upload check and the two log redactors import the merged names from
+        common.constants."""
         with open(os.path.join(_BACKEND, relative), encoding="utf-8") as handle:
             tree = ast.parse(handle.read())
         imported = {alias.name for node in ast.walk(tree)
@@ -632,3 +637,161 @@ def _load_s3(constants_module):
 def test_keyword_module_agrees_with_the_rule():
     # Control: the keyword check is the interpreter's own list, not a hand-written copy.
     assert keyword.iskeyword("lambda") and not keyword.iskeyword("widgetId")
+
+
+def _log_keys(kind_core, addon=None, custom=None):
+    core = C.CORE_LOG_SENSITIVE_KEYS if kind_core == "logger" else C.CORE_LOG_TEXT_SENSITIVE_KEYS
+    return C.merge_log_keys("log key", core, [(C.ADDON_CONSTANTS_SOURCE, addon or []),
+                                              (C.CUSTOM_CONSTANTS_SOURCE, custom or [])])
+
+
+def _load_redactor(relative, constants_module):
+    """A private copy of a redactor module (customLogging/logger.py, common/logRedaction.py) bound to
+    ``constants_module``."""
+    with _common_constants(constants_module):
+        name = "_lane_test_" + os.path.splitext(os.path.basename(relative))[0]
+        spec = importlib.util.spec_from_file_location(name, os.path.join(_BACKEND, relative))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.unit
+class TestLogKeyMerge:
+    """``LOG_SENSITIVE_KEYS`` (the structured logger) and ``LOG_TEXT_SENSITIVE_KEYS`` (the free-text
+    redactor of returned log text) are each core + ``ADDON_LOG_SENSITIVE_KEYS`` +
+    ``CUSTOM_LOG_SENSITIVE_KEYS``. One lane list feeds both, append-only, and a key that repeats a
+    core or other-lane key in any letter case is refused, because both redactors match keys
+    case-insensitively."""
+
+    def test_empty_lanes_merge_to_exactly_the_core_keys(self):
+        assert C.LOG_SENSITIVE_KEYS == C.CORE_LOG_SENSITIVE_KEYS
+        assert C.LOG_TEXT_SENSITIVE_KEYS == C.CORE_LOG_TEXT_SENSITIVE_KEYS
+        assert _log_keys("logger") == C.CORE_LOG_SENSITIVE_KEYS
+        assert _log_keys("text") == C.CORE_LOG_TEXT_SENSITIVE_KEYS
+
+    def test_the_core_lists_are_the_redactors_core_keys(self):
+        # Control: the comparisons above are against the real core keys, not two empty tuples.
+        assert C.CORE_LOG_SENSITIVE_KEYS == (
+            "authorization", "idJwtToken", "Credentials", "AccessKeyId", "SecretAccessKey",
+            "SessionToken", "apiKey", "apiKeySecret", "rawKey")
+        assert C.CORE_LOG_TEXT_SENSITIVE_KEYS == (
+            "authorization", "idJwtToken", "Credentials", "AccessKeyId", "SecretAccessKey",
+            "SessionToken", "x-amz-security-token", "TaskToken")
+
+    def test_the_merged_keys_are_tuples(self):
+        # The structured logger concatenates its key list with a tuple of content keys.
+        assert isinstance(C.LOG_SENSITIVE_KEYS, tuple) and isinstance(C.LOG_TEXT_SENSITIVE_KEYS, tuple)
+        assert isinstance(_log_keys("logger", custom=["widgetToken"]), tuple)
+
+    def test_the_shipped_lane_files_are_merged_into_the_module_lambdas_import(self):
+        """Asserted for any lane content, never that the lanes are empty."""
+        from backend.backend.common import addonConstants as addon_lane
+        from backend.backend.custom import customConstants as custom_lane
+
+        lanes = [(shipped.ADDON_CONSTANTS_SOURCE, addon_lane.ADDON_LOG_SENSITIVE_KEYS),
+                 (shipped.CUSTOM_CONSTANTS_SOURCE, custom_lane.CUSTOM_LOG_SENSITIVE_KEYS)]
+        assert shipped.LOG_SENSITIVE_KEYS == shipped.merge_log_keys(
+            "log key", shipped.CORE_LOG_SENSITIVE_KEYS, lanes)
+        assert shipped.LOG_TEXT_SENSITIVE_KEYS == shipped.merge_log_keys(
+            "log key", shipped.CORE_LOG_TEXT_SENSITIVE_KEYS, lanes)
+
+    @pytest.mark.parametrize("kind_core", ["logger", "text"])
+    def test_lane_keys_are_appended_after_core_add_on_first(self, kind_core):
+        merged = _log_keys(kind_core, addon=["X-Gadget-Token", "gadget_secret"], custom=["widgetToken"])
+        core = C.CORE_LOG_SENSITIVE_KEYS if kind_core == "logger" else C.CORE_LOG_TEXT_SENSITIVE_KEYS
+        assert merged[: len(core)] == core
+        assert merged[len(core):] == ("X-Gadget-Token", "gadget_secret", "widgetToken")
+
+    def test_one_lane_list_feeds_both_merged_lists(self):
+        module = load_constants(addon=addon_lane(log_keys=["gadgetToken"]),
+                                custom=custom_lane(log_keys=["widgetToken"]))
+        assert module.LOG_SENSITIVE_KEYS[-2:] == ("gadgetToken", "widgetToken")
+        assert module.LOG_TEXT_SENSITIVE_KEYS[-2:] == ("gadgetToken", "widgetToken")
+
+    def test_merging_does_not_mutate_the_core_keys(self):
+        before = (C.CORE_LOG_SENSITIVE_KEYS, C.CORE_LOG_TEXT_SENSITIVE_KEYS)
+        _log_keys("logger", custom=["widgetToken"])
+        _log_keys("text", custom=["widgetToken"])
+        assert before == (C.CORE_LOG_SENSITIVE_KEYS, C.CORE_LOG_TEXT_SENSITIVE_KEYS)
+
+    @pytest.mark.parametrize("lane", ["addon", "custom"])
+    @pytest.mark.parametrize("kind_core, variant, core_key", [
+        ("logger", "Authorization", "authorization"), ("logger", "AUTHORIZATION", "authorization"),
+        ("logger", "rawkey", "rawKey"), ("logger", "APIKEY", "apiKey"),
+        ("text", "tasktoken", "TaskToken"), ("text", "X-Amz-Security-Token", "x-amz-security-token"),
+    ])
+    def test_a_core_key_cannot_be_repeated_in_any_letter_case(self, lane, kind_core, variant, core_key):
+        with pytest.raises(Error, match=f"{_SOURCE[lane]}: log key '{variant}' is already redacted by core"):
+            _log_keys(kind_core, **{lane: [variant]})
+
+    def test_a_key_that_differs_from_a_core_key_in_more_than_case_is_accepted(self):
+        # Control for the refusals above.
+        merged = _log_keys("logger", custom=["authorizationHeader", "raw_key", "TaskTokens"])
+        assert merged[-3:] == ("authorizationHeader", "raw_key", "TaskTokens")
+
+    def test_add_on_and_custom_cannot_repeat_each_other_in_any_letter_case(self):
+        with pytest.raises(Error, match=r"custom/customConstants\.py: log key 'WidgetToken' is already "
+                                        r"redacted by common/addonConstants\.py"):
+            _log_keys("logger", addon=["widgetToken"], custom=["WidgetToken"])
+        with pytest.raises(Error, match=r"custom/customConstants\.py: log key 'widgetToken' is already "
+                                        r"redacted by custom/customConstants\.py"):
+            _log_keys("text", custom=["widgetToken", "widgetToken"])
+
+    @pytest.mark.parametrize("key", ["", "a", "1token", "_token", "-token", "widget token", "widget.token",
+                                     "widget:token", "widget/token", "w" * 65, "wídget", None, 3])
+    def test_a_malformed_key_is_refused(self, key):
+        with pytest.raises(Error, match="must match"):
+            _log_keys("logger", custom=[key])
+
+    def test_the_longest_valid_key_and_the_separator_characters_are_accepted(self):
+        # Control for the pattern: 64 characters, '-' and '_' all merge.
+        merged = _log_keys("text", custom=["w" * 64, "X-Widget-Token", "widget_secret"])
+        assert merged[-3:] == ("w" * 64, "X-Widget-Token", "widget_secret")
+
+    def test_a_lane_that_is_not_a_list_is_refused(self):
+        with pytest.raises(Error, match="must be a list"):
+            _log_keys("logger", custom="widgetToken")
+
+    def test_a_bad_lane_fails_the_import_naming_the_file_and_entry(self):
+        with pytest.raises(ValueError, match=r"common/addonConstants\.py: log key 'Authorization'") as excinfo:
+            load_constants(addon=addon_lane(log_keys=["Authorization"]))
+        assert type(excinfo.value).__name__ == "ConstantsExtensionError"
+
+    def test_no_module_reads_a_core_only_log_key_list(self):
+        """A redactor that read CORE_LOG_* would skip the lane keys."""
+        offenders = []
+        for root, _dirs, files in os.walk(_BACKEND):
+            for name in files:
+                path = os.path.join(root, name)
+                if not name.endswith(".py") or path == _CONSTANTS_PATH:
+                    continue
+                with open(path, encoding="utf-8") as handle:
+                    tree = ast.parse(handle.read())
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.ImportFrom):
+                        offenders += [f"{path}: {a.name}" for a in node.names if a.name.startswith("CORE_LOG")]
+                    if isinstance(node, ast.Attribute) and node.attr.startswith("CORE_LOG"):
+                        offenders.append(f"{path}: {node.attr}")
+        assert offenders == []
+
+    def test_the_structured_logger_redacts_a_lane_key(self):
+        logger = _load_redactor("customLogging/logger.py",
+                                load_constants(custom=custom_lane(log_keys=["widgetToken"])))
+        masked = logger.mask_sensitive_data({"WidgetToken": "s3cr3t", "widgetId": "w1", "apiKey": "k"})
+        assert masked == {"WidgetToken": logger.REDACTED, "widgetId": "w1", "apiKey": logger.REDACTED}
+        # Control: without the lane the same key stays in the clear, and a core key is still redacted.
+        plain = _load_redactor("customLogging/logger.py", C)
+        assert plain.mask_sensitive_data({"widgetToken": "s3cr3t", "apiKey": "k"}) == {
+            "widgetToken": "s3cr3t", "apiKey": plain.REDACTED}
+
+    def test_the_text_redactor_redacts_a_lane_key(self):
+        redactor = _load_redactor("common/logRedaction.py",
+                                  load_constants(addon=addon_lane(log_keys=["widgetToken"])))
+        line = 'start {"widgetToken": "s3cr3t", "TaskToken": "t0k"} WIDGETTOKEN=abc123'
+        assert redactor.redact_log_text(line) == (
+            'start {"widgetToken": "<redacted>", "TaskToken": "<redacted>"} WIDGETTOKEN=<redacted>')
+        # Control: without the lane only the core key is redacted.
+        plain = _load_redactor("common/logRedaction.py", C)
+        assert plain.redact_log_text(line) == (
+            'start {"widgetToken": "s3cr3t", "TaskToken": "<redacted>"} WIDGETTOKEN=abc123')

@@ -456,6 +456,8 @@ Both shapes add the machine-readable fields the error carries, beside `error` an
 | `blockedBy` | `RequestBlockedError`: `waf` when the response names the deployment's AWS WAF web ACL, `waf-or-stage` for a bare `403 Forbidden`, which a web ACL block and a base URL naming no deployed stage both return |
 | `requestId` | `RequestBlockedError`, when the response carries one: API Gateway's extended request ID from the body, else the `x-amz-apigw-id`, `x-amz-cf-id` or `x-amzn-RequestId` header, in that order                 |
 
+Add-on command groups can add fields of their own; each group's page lists them.
+
 Global errors are kept through every `APIClient` method, so a web ACL block, a permission denial or an expired token keeps its heading and fields wherever a command lets it through to the global handler; file upload and download transfers record one per file or upload sequence instead (see [Partial Transfers Exit Non-Zero](#partial-transfers-exit-non-zero)). An error the CLI did not expect reports `error` as `Unexpected error: <message>`, with `traceback` under `--debug`.
 
 In text mode, a global error's `✗ <Heading>: <message>` line goes to stderr and its follow-up lines to stdout, and a command error writes its `✗` line and any hint to stderr; the exit code is `1` in both cases.

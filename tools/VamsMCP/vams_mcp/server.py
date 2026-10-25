@@ -38,6 +38,7 @@ from .client import (  # noqa: E402
     SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
 )
 from .config import Config, ConfigError  # noqa: E402
+from .addon_tools import register_addon_tools  # noqa: E402
 from .custom_tools import register_custom_tools  # noqa: E402
 
 _force_logging_to_stderr()
@@ -2231,6 +2232,13 @@ if CONFIG.enable_destructive:
         first: it revokes the same access and can be undone.
         """
         return CLIENT.api.delete_user_api_key(api_key_id)
+
+
+# =========================================================================
+# ADD-ON TOOLS (upstream add-on lane: vams_mcp/addon_tools/)
+# =========================================================================
+
+register_addon_tools(mcp, CLIENT, CONFIG, tool_result)
 
 
 # =========================================================================

@@ -1,0 +1,38 @@
+{
+  "name": "batch_job_kill",
+  "capturedAt": "2026-09-11T00:00:00Z",
+  "edhVersion": "26.8.0",
+  "request": {
+    "method": "DELETE",
+    "path": "/api/containers/batch/job",
+    "absolutePath": "/api/containers/batch/job",
+    "query": {},
+    "headers": {
+      "X-EDH-USER": "vspikeaaaaaaaaaa"
+    },
+    "tokenHeaderName": "X-EDH-TOKEN",
+    "body": {
+      "job_id": "5c1a9d2e-7b3f-4a6c-9d8e-1f2a3b4c5d6e",
+      "reason": "Terminated by user"
+    }
+  },
+  "response": {
+    "status": 200,
+    "contentType": "application/json",
+    "elapsedSeconds": 0.0,
+    "json": {
+      "success": true,
+      "message": "Job 5c1a9d2e-7b3f-4a6c-9d8e-1f2a3b4c5d6e terminated successfully."
+    }
+  },
+  "expect": {
+    "jobId": "5c1a9d2e-7b3f-4a6c-9d8e-1f2a3b4c5d6e"
+  },
+  "provenance": {
+    "kind": "source-derived",
+    "edhCommit": "e89c653772373be7dfe3ef82549f2032dc3ecb1b",
+    "sourceFiles": [
+      "source/soca/cluster_manager/web_interface/api/v1/containers/batch/job.py"
+    ]
+  }
+}
