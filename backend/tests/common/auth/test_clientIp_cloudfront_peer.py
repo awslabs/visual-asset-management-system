@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.backend.common.auth import clientIp
-from backend.backend.common.auth import generateCloudFrontOriginFacingRanges as generator
+from backend.scripts import generateCloudFrontOriginFacingRanges as generator
 from backend.backend.common.auth.clientIp import (
     is_cloudfront_origin_facing,
     is_ip_authorized,

@@ -22,7 +22,7 @@ import re
 import pytest
 
 from backend.backend.common.auth import cloudFrontOriginFacingRanges as snapshot
-from backend.backend.common.auth import generateCloudFrontOriginFacingRanges as generator
+from backend.scripts import generateCloudFrontOriginFacingRanges as generator
 
 _SNAPSHOT_PATH = os.path.abspath(
     os.path.join(
@@ -30,6 +30,8 @@ _SNAPSHOT_PATH = os.path.abspath(
         "..", "..", "..", "backend", "common", "auth", "cloudFrontOriginFacingRanges.py",
     )
 )
+# Every file under this directory is packaged into the Lambda functions.
+_LAMBDA_ASSET_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend"))
 
 # The documentation ranges the authorizer tests use as non-CloudFront peers.
 DOCUMENTATION_RANGES = ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "2001:db8::/32")
@@ -112,9 +114,13 @@ class TestGeneratorReproducesTheSnapshot:
         assert generator.main(["--input", str(source), "--output", str(output)]) == 0
         assert output.read_text(encoding="utf-8") == _snapshot_text()
 
-    def test_the_default_output_is_the_snapshot_beside_the_script(self):
-        script_dir = os.path.dirname(os.path.abspath(generator.__file__))
-        assert os.path.join(script_dir, generator.OUTPUT_FILE_NAME) == _SNAPSHOT_PATH
+    def test_the_default_output_is_the_committed_snapshot(self):
+        assert os.path.abspath(generator.DEFAULT_OUTPUT) == _SNAPSHOT_PATH
+
+    def test_the_generator_is_not_packaged_into_the_lambda_functions(self):
+        script = os.path.abspath(generator.__file__)
+        assert os.path.commonpath([script, _LAMBDA_ASSET_ROOT]) != _LAMBDA_ASSET_ROOT
+        assert not os.path.exists(os.path.join(os.path.dirname(_SNAPSHOT_PATH), os.path.basename(script)))
 
 
 @pytest.mark.unit

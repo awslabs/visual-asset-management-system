@@ -224,6 +224,7 @@ The file also carries a commented-out example that calls an external IDP's `/idp
 | REST authorizer entry point                        | `backend/backend/handlers/auth/apiGatewayAuthorizerRest.py`          |
 | Client IP resolution                               | `backend/backend/common/auth/clientIp.py`                            |
 | CloudFront origin-facing prefixes (generated)      | `backend/backend/common/auth/cloudFrontOriginFacingRanges.py`        |
+| CloudFront origin-facing prefix generator          | `backend/scripts/generateCloudFrontOriginFacingRanges.py`            |
 | REST/HTTP event normalization                      | `backend/backend/common/auth/apiEvent.py`                            |
 | Context → claims conversion                        | `backend/backend/handlers/auth/__init__.py`                          |
 | Casbin two-tier enforcement                        | `backend/backend/handlers/authz/__init__.py`                         |
