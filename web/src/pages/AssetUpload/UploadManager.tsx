@@ -26,7 +26,11 @@ import {
     needsMultiSequenceUpload,
     getUploadSummary,
 } from "./uploadSequencer";
-import { useMultiSequenceUpload } from "./hooks/useMultiSequenceUpload";
+import {
+    getRefusedFileResults,
+    IncompleteFileParts,
+    useMultiSequenceUpload,
+} from "./hooks/useMultiSequenceUpload";
 import { useFilePartsUpload } from "./hooks/useFilePartsUpload";
 import { useAssetOperations } from "./hooks/useAssetOperations";
 import { formatRetryMessage } from "./uploadRetry";
@@ -127,10 +131,10 @@ export default function UploadManager({
         createFilePartsFromSequences,
     } = useMultiSequenceUpload();
     const {
-        fileParts,
         completedParts,
         totalParts,
         setFileParts,
+        getFileParts,
         setTotalParts,
         uploadFileParts,
         retryFailedParts,
@@ -207,12 +211,15 @@ export default function UploadManager({
                 const assetId = uploadState.createdAssetId || assetDetail.assetId || "";
                 console.log(`Completing sequence ${sequenceId} with uploadId ${uploadId}`);
 
+                // The parts are read at the moment of completion, not from this render's
+                // `fileParts`: this handler runs as soon as the last part records its ETag, before
+                // React has rendered that update.
                 const result = await completeSequence(
                     sequence,
                     uploadId,
                     assetId,
                     assetDetail.databaseId || "",
-                    fileParts,
+                    getFileParts(),
                     fileUploadItems,
                     initResult.response,
                     (retryCount, error, backoffMs) => {
@@ -241,6 +248,61 @@ export default function UploadManager({
                     }
                 }
 
+                // Show the server's verdict on each file of this sequence in the file table. A file
+                // whose parts uploaded already reads "Completed" from its upload progress, but the
+                // server validates at completion and deletes what it refuses, so a refused file is
+                // Failed with the server's reason. Every other file of a completed sequence is
+                // stored, so one failed on an earlier attempt for missing parts reads Completed.
+                const refusedReasons = new Map<number, string>();
+                const refused = getRefusedFileResults(result);
+                if (refused.length > 0) {
+                    const fileIndexByKey = new Map<string, number>();
+                    initResult.response.files.forEach(
+                        (fileResponse: any, responseIndex: number) => {
+                            const fileInfo = sequence.files[responseIndex];
+                            if (fileInfo) {
+                                fileIndexByKey.set(fileResponse.relativeKey, fileInfo.index);
+                            }
+                        }
+                    );
+                    refused.forEach((fileResult) => {
+                        const fileIndex = fileIndexByKey.get(fileResult.relativeKey);
+                        if (fileIndex !== undefined) {
+                            refusedReasons.set(
+                                fileIndex,
+                                fileResult.error || "Rejected by the server at completion"
+                            );
+                        }
+                    });
+                }
+                const sequenceFileIndices = new Set<number>(
+                    sequence.files.map((f: any) => f.index)
+                );
+                setFileUploadItems((prev) =>
+                    prev.map((item) => {
+                        if (
+                            !sequenceFileIndices.has(item.index) ||
+                            cancelledFiles.has(item.index)
+                        ) {
+                            return item;
+                        }
+                        const reason = refusedReasons.get(item.index);
+                        if (reason !== undefined) {
+                            return { ...item, status: "Failed", error: reason };
+                        }
+                        if (item.status === "Failed") {
+                            return {
+                                ...item,
+                                status: "Completed",
+                                progress: 100,
+                                loaded: item.total,
+                                error: undefined,
+                            };
+                        }
+                        return item;
+                    })
+                );
+
                 setCompletedCompleteSequences((prev) => prev + 1);
                 setRetryMessage(null);
                 console.log(`Sequence ${sequenceId} completed successfully`);
@@ -250,6 +312,29 @@ export default function UploadManager({
                 // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.error(`Failed to complete sequence ${sequenceId}:`, error);
                 setRetryMessage(null);
+                // A completion stopped because a file's uploaded parts are not all recorded names
+                // those files: show them as Failed, with the reason, instead of Completed.
+                const incompleteFiles: IncompleteFileParts[] | undefined = error?.incompleteFiles;
+                if (incompleteFiles && incompleteFiles.length > 0) {
+                    const incompleteReasons = new Map<number, string>();
+                    incompleteFiles.forEach((f) =>
+                        incompleteReasons.set(
+                            f.fileIndex,
+                            `Not completed: ${f.recordedParts} of ${f.expectedParts} uploaded parts recorded`
+                        )
+                    );
+                    setFileUploadItems((prev) =>
+                        prev.map((item) =>
+                            incompleteReasons.has(item.index)
+                                ? {
+                                      ...item,
+                                      status: "Failed",
+                                      error: incompleteReasons.get(item.index),
+                                  }
+                                : item
+                        )
+                    );
+                }
                 // Remove from in-flight set so the user can retry this sequence
                 setCompletingSequences((prev) => {
                     const next = new Set(prev);
@@ -282,7 +367,7 @@ export default function UploadManager({
             uploadState.createdAssetId,
             assetDetail.assetId,
             assetDetail.databaseId,
-            fileParts,
+            getFileParts,
             fileUploadItems,
             completeSequence,
             cancelledFiles,
@@ -684,16 +769,20 @@ export default function UploadManager({
             // an upload that stored nothing for it. Fold those in, skipping any file already listed as
             // a client-side failure so one file cannot appear twice.
             const clientFailedKeys = new Set(clientFailedFileResults.map((r) => r.relativeKey));
-            const failedFileResults = [
-                ...clientFailedFileResults,
-                ...Array.from(serverRejectedFiles.values()).filter(
-                    (r) => !clientFailedKeys.has(r.relativeKey)
-                ),
-            ];
+            const serverOnlyRejections = Array.from(serverRejectedFiles.values()).filter(
+                (r) => !clientFailedKeys.has(r.relativeKey)
+            );
+            const failedFileResults = [...clientFailedFileResults, ...serverOnlyRejections];
+            // A file that failed — refused by the server, or stopped before completion — was not
+            // stored, so the upload is not "Completed". Cancelled files are the user's choice and
+            // keep the plain completed state with its cancellation notice.
+            const hasFailedFiles =
+                serverOnlyRejections.length > 0 ||
+                fileUploadItems.some((item) => item.status === "Failed");
 
             setUploadState((prev) => ({
                 ...prev,
-                completionStatus: hasSkipped ? "partial" : "completed",
+                completionStatus: hasSkipped || hasFailedFiles ? "partial" : "completed",
                 finalCompletionTriggered: true,
             }));
 
@@ -701,7 +790,7 @@ export default function UploadManager({
             const finalResponse: CompleteUploadResponse = {
                 assetId: uploadState.createdAssetId || assetDetail.assetId || "",
                 message:
-                    hasSkipped || cancelledFiles.size > 0
+                    hasSkipped || hasFailedFiles || cancelledFiles.size > 0
                         ? `Upload completed with ${failedFileResults.length} file(s) failed/cancelled`
                         : "Upload completed successfully",
                 uploadId: firstUploadId || "no-upload-required",
@@ -863,6 +952,18 @@ export default function UploadManager({
         async (fileIndex: number) => {
             console.log(`Retrying file at index ${fileIndex}`);
 
+            // A file can be Failed with every part uploaded: refused by the server at completion,
+            // or stopped before completion. Re-uploading has nothing to send for it and would
+            // leave its row Queued; the completion step's own Retry is the action for that case.
+            if (
+                !getFileParts().some(
+                    (part) => part.fileIndex === fileIndex && part.status === "failed"
+                )
+            ) {
+                console.log(`File at index ${fileIndex} has no failed parts to re-upload`);
+                return;
+            }
+
             // Get the updated parts synchronously for this specific file
             let updatedParts: any[] = [];
             setFileParts((prev) => {
@@ -954,7 +1055,7 @@ export default function UploadManager({
                 }));
             }
         },
-        [uploadFileParts, fileUploadItems, setFileParts, setFileUploadItems]
+        [uploadFileParts, fileUploadItems, getFileParts, setFileParts, setFileUploadItems]
     );
 
     // Function to continue workflow after metadata step
@@ -1296,7 +1397,7 @@ export default function UploadManager({
 
         // First, identify all files that have any failed parts
         const filesWithFailedParts = new Set<number>();
-        fileParts.forEach((part) => {
+        getFileParts().forEach((part) => {
             if (part.status === "failed") {
                 filesWithFailedParts.add(part.fileIndex);
             }
@@ -1339,34 +1440,30 @@ export default function UploadManager({
         // A sequence can be completed if all its parts are either completed or cancelled
         const sequencesToComplete = new Set<number>();
 
-        setFileParts((currentParts) => {
-            uploadSequences.forEach((sequence) => {
-                const sequenceParts = currentParts.filter(
-                    (p) => p.sequenceId === sequence.sequenceId
-                );
+        const currentParts = getFileParts();
+        uploadSequences.forEach((sequence) => {
+            const sequenceParts = currentParts.filter((p) => p.sequenceId === sequence.sequenceId);
 
-                if (sequenceParts.length === 0) {
-                    console.log(`Sequence ${sequence.sequenceId} has no parts, skipping`);
-                    return;
-                }
+            if (sequenceParts.length === 0) {
+                console.log(`Sequence ${sequence.sequenceId} has no parts, skipping`);
+                return;
+            }
 
-                const allPartsHandled = sequenceParts.every(
-                    (p) => p.status === "completed" || p.status === "cancelled"
-                );
+            const allPartsHandled = sequenceParts.every(
+                (p) => p.status === "completed" || p.status === "cancelled"
+            );
 
-                // Check if this sequence has already been completed
-                const alreadyCompleted =
-                    sequenceCompleteStatuses.get(sequence.sequenceId) === "completed";
+            // Check if this sequence has already been completed
+            const alreadyCompleted =
+                sequenceCompleteStatuses.get(sequence.sequenceId) === "completed";
 
-                console.log(
-                    `Sequence ${sequence.sequenceId}: allPartsHandled=${allPartsHandled}, alreadyCompleted=${alreadyCompleted}`
-                );
+            console.log(
+                `Sequence ${sequence.sequenceId}: allPartsHandled=${allPartsHandled}, alreadyCompleted=${alreadyCompleted}`
+            );
 
-                if (allPartsHandled && !alreadyCompleted) {
-                    sequencesToComplete.add(sequence.sequenceId);
-                }
-            });
-            return currentParts;
+            if (allPartsHandled && !alreadyCompleted) {
+                sequencesToComplete.add(sequence.sequenceId);
+            }
         });
 
         // Trigger completion for sequences that are ready
@@ -1381,7 +1478,7 @@ export default function UploadManager({
             }
         });
     }, [
-        fileParts,
+        getFileParts,
         setFileParts,
         setFileUploadItems,
         setCancelledFiles,

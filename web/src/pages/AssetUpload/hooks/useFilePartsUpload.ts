@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import AssetUploadService from "../../../services/AssetUploadService";
 import { FileUploadTableItem } from "../FileUploadTable";
 import { safeGetFile } from "../../../utils/fileHandleCompat";
@@ -23,10 +23,30 @@ interface FilePart {
     lastAttemptTime?: number;
 }
 
+type FilePartsUpdate = FilePart[] | ((prev: FilePart[]) => FilePart[]);
+
 export function useFilePartsUpload() {
-    const [fileParts, setFileParts] = useState<FilePart[]>([]);
+    const [fileParts, setFilePartsState] = useState<FilePart[]>([]);
     const [completedParts, setCompletedParts] = useState(0);
     const [totalParts, setTotalParts] = useState(0);
+
+    // Synchronous mirror of `fileParts`, read through `getFileParts()`.
+    //
+    // React applies a state update on its next render, so code running between an update and that
+    // render reads the previous value from state. A sequence is completed the moment its last part
+    // records its ETag, and the completion was built from `fileParts` as the last render saw it: the
+    // part that had just finished was still in progress there, so it was left out and the request
+    // carried `parts: []` for that file. Every write goes through `setFileParts` below, which stores
+    // the next value here before handing it to React, so this ref always holds the latest parts.
+    const filePartsRef = useRef<FilePart[]>([]);
+
+    const setFileParts = useCallback((update: FilePartsUpdate) => {
+        const next = typeof update === "function" ? update(filePartsRef.current) : update;
+        filePartsRef.current = next;
+        setFilePartsState(next);
+    }, []);
+
+    const getFileParts = useCallback(() => filePartsRef.current, []);
 
     /**
      * Upload all file parts with sequence-aware concurrency control
@@ -159,29 +179,30 @@ export function useFilePartsUpload() {
                 }
 
                 private checkSequenceCompletion(): void {
-                    // Check if any sequences have completed all their parts
-                    setFileParts((currentParts) => {
-                        this.sequenceIds.forEach((sequenceId) => {
-                            if (this.completedSequences.has(sequenceId)) return;
+                    // Check if any sequences have completed all their parts. Read from the ref, not
+                    // inside a state updater: React runs an updater during a later render (twice
+                    // under StrictMode), where the completion callback saw the parts of the PREVIOUS
+                    // render and the ETag just recorded was missing from them.
+                    const currentParts = getFileParts();
+                    this.sequenceIds.forEach((sequenceId) => {
+                        if (this.completedSequences.has(sequenceId)) return;
 
-                            const sequenceParts = currentParts.filter(
-                                (p) => p.sequenceId === sequenceId
+                        const sequenceParts = currentParts.filter(
+                            (p) => p.sequenceId === sequenceId
+                        );
+                        const allCompleted =
+                            sequenceParts.length > 0 &&
+                            sequenceParts.every(
+                                (p) => p.status === "completed" || p.status === "cancelled"
                             );
-                            const allCompleted =
-                                sequenceParts.length > 0 &&
-                                sequenceParts.every(
-                                    (p) => p.status === "completed" || p.status === "cancelled"
-                                );
 
-                            if (allCompleted) {
-                                this.completedSequences.add(sequenceId);
-                                console.log(`Sequence ${sequenceId} completed all parts`);
-                                if (onSequenceComplete) {
-                                    onSequenceComplete(sequenceId);
-                                }
+                        if (allCompleted) {
+                            this.completedSequences.add(sequenceId);
+                            console.log(`Sequence ${sequenceId} completed all parts`);
+                            if (onSequenceComplete) {
+                                onSequenceComplete(sequenceId);
                             }
-                        });
-                        return currentParts;
+                        }
                     });
                 }
 
@@ -304,23 +325,21 @@ export function useFilePartsUpload() {
                 }
 
                 private updateFileProgress(fileIndex: number): void {
-                    setFileParts((currentFileParts) => {
-                        const filePartsForThisFile = currentFileParts.filter(
-                            (p) => p.fileIndex === fileIndex
-                        );
-                        const fileCompletedParts = filePartsForThisFile.filter(
-                            (p) => p.status === "completed"
-                        ).length;
-                        const fileProgress = Math.round(
-                            (fileCompletedParts / filePartsForThisFile.length) * 100
-                        );
+                    // Read from the ref for the same reason as checkSequenceCompletion: the progress
+                    // callback sets state of its own and must not run inside a state updater.
+                    const filePartsForThisFile = getFileParts().filter(
+                        (p) => p.fileIndex === fileIndex
+                    );
+                    const fileCompletedParts = filePartsForThisFile.filter(
+                        (p) => p.status === "completed"
+                    ).length;
+                    const fileProgress = Math.round(
+                        (fileCompletedParts / filePartsForThisFile.length) * 100
+                    );
 
-                        if (onFileProgress) {
-                            onFileProgress(fileIndex, fileProgress);
-                        }
-
-                        return currentFileParts;
-                    });
+                    if (onFileProgress) {
+                        onFileProgress(fileIndex, fileProgress);
+                    }
                 }
 
                 private updateFileStatus(fileIndex: number, status: string): void {
@@ -334,44 +353,50 @@ export function useFilePartsUpload() {
             const uploadQueue = new SequenceAwareUploadQueue(pendingParts);
             return await uploadQueue.processQueue();
         },
-        [fileParts, totalParts]
+        [fileParts, totalParts, getFileParts, setFileParts]
     );
 
     /**
      * Retry failed parts
      */
-    const retryFailedParts = useCallback((fileIndex?: number) => {
-        setFileParts((prev) =>
-            prev.map((part) => {
-                if (
-                    part.status === "failed" &&
-                    (fileIndex === undefined || part.fileIndex === fileIndex) &&
-                    part.retryCount < MAX_RETRY_ATTEMPTS
-                ) {
-                    return {
-                        ...part,
-                        status: "pending",
-                        lastError: undefined,
-                    };
-                }
-                return part;
-            })
-        );
-    }, []);
+    const retryFailedParts = useCallback(
+        (fileIndex?: number) => {
+            setFileParts((prev) =>
+                prev.map((part) => {
+                    if (
+                        part.status === "failed" &&
+                        (fileIndex === undefined || part.fileIndex === fileIndex) &&
+                        part.retryCount < MAX_RETRY_ATTEMPTS
+                    ) {
+                        return {
+                            ...part,
+                            status: "pending",
+                            lastError: undefined,
+                        };
+                    }
+                    return part;
+                })
+            );
+        },
+        [setFileParts]
+    );
 
     /**
      * Cancel parts for a specific file
      */
-    const cancelFileParts = useCallback((fileIndex: number) => {
-        setFileParts((prev) =>
-            prev.map((part) =>
-                part.fileIndex === fileIndex &&
-                (part.status === "pending" || part.status === "in-progress")
-                    ? { ...part, status: "cancelled" }
-                    : part
-            )
-        );
-    }, []);
+    const cancelFileParts = useCallback(
+        (fileIndex: number) => {
+            setFileParts((prev) =>
+                prev.map((part) =>
+                    part.fileIndex === fileIndex &&
+                    (part.status === "pending" || part.status === "in-progress")
+                        ? { ...part, status: "cancelled" }
+                        : part
+                )
+            );
+        },
+        [setFileParts]
+    );
 
     /**
      * Reset all parts to initial state
@@ -380,13 +405,14 @@ export function useFilePartsUpload() {
         setFileParts([]);
         setCompletedParts(0);
         setTotalParts(0);
-    }, []);
+    }, [setFileParts]);
 
     return {
         fileParts,
         completedParts,
         totalParts,
         setFileParts,
+        getFileParts,
         setTotalParts,
         uploadFileParts,
         retryFailedParts,
