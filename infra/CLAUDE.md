@@ -126,8 +126,9 @@ infra/
     pipelines/ecsTimeoutHeadroom.test.ts  # RapidPipeline (ECS) timeout chain: Lambda steps + Fargate task
                                  # TimeoutSeconds + stop route <= state machine < bundle taskTimeout
     pipelines/ecsTimeoutStopTask.test.ts  # RapidPipeline (ECS): a .sync task-level timeout leaves the task
-                                 # running, so StartedBy = execution name, a Timeout catch to ListTasks +
-                                 # StopTask (best-effort, into $.stopError), and the ecs:cluster-conditioned grants
+                                 # running, so the task's Group = execution name, a Timeout catch to
+                                 # ListTasks + DescribeTasks (match the group) + StopTask (best-effort,
+                                 # into $.stopError), and the ecs:cluster-conditioned grants
     partition/t1RapidPipelineEcsStopTask.test.ts  # T1: that stop route's ARNs in each partition
     pipelines/t1LambdaContainerImageArchitecture.test.ts  # T1: every PackageType Image Lambda function
                                  # (3dBasic, CAD/mesh extraction) declares Architectures [x86_64]
