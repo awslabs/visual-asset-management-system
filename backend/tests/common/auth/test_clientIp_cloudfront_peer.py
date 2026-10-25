@@ -81,6 +81,32 @@ def _downloads_failing():
     return download, attempts
 
 
+def _downloads_scripted(outcomes, networks):
+    """A stand-in that fails or serves per attempt from ``outcomes`` ("fail" / "ok"), then fails."""
+    attempts = []
+    remaining = list(outcomes)
+
+    def download():
+        attempts.append(1)
+        outcome = remaining.pop(0) if remaining else "fail"
+        if outcome == "ok":
+            return networks
+        raise ConnectionError("no route to the published document")
+
+    return download, attempts
+
+
+def _expect_next_attempt_after(clock, attempts, wait):
+    """The next refresh attempt happens exactly ``wait`` seconds after the previous one."""
+    before = len(attempts)
+    clock.now += wait - 1
+    is_cloudfront_origin_facing(DIRECT_PEER_V4)
+    assert len(attempts) == before, f"an attempt ran before its {wait} s wait was over"
+    clock.now += 1
+    is_cloudfront_origin_facing(DIRECT_PEER_V4)
+    assert len(attempts) == before + 1, f"no attempt once the {wait} s wait was over"
+
+
 @pytest.mark.unit
 class TestHeadersCountOnlyFromCloudFrontPeers:
     def test_viewer_address_alone_from_a_cloudfront_peer_resolves_to_the_peer(self):
@@ -352,6 +378,58 @@ class TestOriginFacingMembership:
         is_cloudfront_origin_facing(DIRECT_PEER_V4)
         assert len(attempts) > after_first, "no new attempt after the retry window"
 
+
+@pytest.mark.unit
+class TestRefreshBackOff:
+    """After consecutive failures the wait doubles from 15 minutes up to 6 hours; a success
+    resets it. Where the document is never reachable this settles at one attempt per 6 hours."""
+
+    MINUTE = 60
+    HOUR = 60 * MINUTE
+
+    def test_the_wait_doubles_after_each_consecutive_failure_and_caps_at_six_hours(self, monkeypatch):
+        clock = _Clock()
+        download, attempts = _downloads_failing()
+        monkeypatch.setattr(clientIp, "_monotonic", clock)
+        monkeypatch.setattr(clientIp, "_download_origin_facing", download)
+
+        is_cloudfront_origin_facing(DIRECT_PEER_V4)
+        assert len(attempts) == 1, "the first lookup did not attempt a refresh"
+        for wait in (
+            15 * self.MINUTE,
+            30 * self.MINUTE,
+            1 * self.HOUR,
+            2 * self.HOUR,
+            4 * self.HOUR,
+            6 * self.HOUR,
+            6 * self.HOUR,
+        ):
+            _expect_next_attempt_after(clock, attempts, wait)
+
+    def test_a_successful_refresh_resets_the_wait(self, monkeypatch):
+        clock = _Clock()
+        download, attempts = _downloads_scripted(["fail", "fail", "ok"], {4: (LATER_PREFIX,), 6: ()})
+        monkeypatch.setattr(clientIp, "_monotonic", clock)
+        monkeypatch.setattr(clientIp, "_download_origin_facing", download)
+
+        is_cloudfront_origin_facing(DIRECT_PEER_V4)  # fails
+        _expect_next_attempt_after(clock, attempts, 15 * self.MINUTE)  # fails
+        _expect_next_attempt_after(clock, attempts, 30 * self.MINUTE)  # succeeds
+        assert is_cloudfront_origin_facing(LATER_PEER) is True
+        _expect_next_attempt_after(clock, attempts, 6 * self.HOUR)  # fails again
+        _expect_next_attempt_after(clock, attempts, 15 * self.MINUTE)
+
+    def test_a_failure_after_a_success_starts_at_fifteen_minutes(self, monkeypatch):
+        clock = _Clock()
+        download, attempts = _downloads_scripted(["ok"], {4: (LATER_PREFIX,), 6: ()})
+        monkeypatch.setattr(clientIp, "_monotonic", clock)
+        monkeypatch.setattr(clientIp, "_download_origin_facing", download)
+
+        is_cloudfront_origin_facing(DIRECT_PEER_V4)  # succeeds
+        _expect_next_attempt_after(clock, attempts, 6 * self.HOUR)  # fails
+        _expect_next_attempt_after(clock, attempts, 15 * self.MINUTE)
+        _expect_next_attempt_after(clock, attempts, 30 * self.MINUTE)
+
     def test_a_refresh_with_prefixes_missing_from_the_snapshot_says_so(self, monkeypatch):
         logger = MagicMock()
         download, _ = _downloads_serving({4: (LATER_PREFIX,), 6: ()})
@@ -423,7 +501,8 @@ class TestDownload:
         assert fake.gets, "no request was made"
         url, kwargs = fake.gets[0]
         assert url == "https://ip-ranges.amazonaws.com/ip-ranges.json"
-        assert kwargs["timeout"] == (2, 2)
+        # (connect, read): a connect that cannot complete gives up after 1 s per address.
+        assert kwargs["timeout"] == (1, 2)
         assert kwargs["allow_redirects"] is False
         assert kwargs["stream"] is True
         assert len(fake.gets) <= 1, "an attempt issued more than one request"

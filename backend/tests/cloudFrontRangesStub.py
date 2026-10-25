@@ -72,5 +72,6 @@ def isolate_refresh(monkeypatch):
         monkeypatch.setitem(namespace, "requests", offline)
         monkeypatch.setitem(namespace, "_refreshed_networks", {4: (), 6: ()})
         monkeypatch.setitem(namespace, "_next_refresh_at", 0.0)
+        monkeypatch.setitem(namespace, "_consecutive_refresh_failures", 0)
         monkeypatch.setitem(namespace, "_refresh_failure_logged", False)
     return offline

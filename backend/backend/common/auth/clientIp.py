@@ -62,11 +62,13 @@ logger = safeLogger(service_name="ClientIp")
 
 # Run-time refresh of the CloudFront origin-facing list (see is_cloudfront_origin_facing).
 # One attempt per window and no retries: the bundled snapshot answers whenever an attempt fails.
-REFRESH_TIMEOUT_SECONDS = (2, 2)  # (connect, read) for the single request of an attempt
+REFRESH_TIMEOUT_SECONDS = (1, 2)  # (connect, read) for the single request of an attempt
 REFRESH_DOWNLOAD_SECONDS = 5  # ceiling on the whole download, on top of the per-read timeout
 REFRESH_MAX_DOCUMENT_BYTES = 16 * 1024 * 1024  # the published document is about 3 MB
 REFRESH_INTERVAL_SECONDS = 6 * 60 * 60  # a successful refresh is reused for 6 hours
-REFRESH_RETRY_AFTER_FAILURE_SECONDS = 15 * 60  # a failed attempt is not repeated for 15 minutes
+# The wait after a failed attempt; it doubles with each further consecutive failure, up to
+# REFRESH_INTERVAL_SECONDS, and returns to this value after a successful refresh.
+REFRESH_RETRY_AFTER_FAILURE_SECONDS = 15 * 60
 
 
 def _networks(prefixes, version: int) -> Tuple:
@@ -88,10 +90,12 @@ _SNAPSHOT_NETWORKS: Dict[int, Tuple] = {
 }
 
 # Per execution environment: what the last successful refresh returned, when the next attempt
-# may run (a time.monotonic() reading; 0 means none has run), and whether a failed attempt has
-# already been logged, so a failure is logged once per cold start and never per request.
+# may run (a time.monotonic() reading; 0 means none has run), how many attempts in a row have
+# failed, and whether a failed attempt has already been logged, so a failure is logged once per
+# cold start and never per request.
 _refreshed_networks: Dict[int, Tuple] = {4: (), 6: ()}
 _next_refresh_at = 0.0
+_consecutive_refresh_failures = 0
 _refresh_failure_logged = False
 
 
@@ -151,16 +155,24 @@ def _download_origin_facing() -> Dict[int, Tuple]:
     return networks
 
 
+def _retry_after_failure_seconds(consecutive_failures: int) -> float:
+    """The wait before the next attempt after this many failed attempts in a row (1 or more)."""
+    doublings = min(max(consecutive_failures - 1, 0), 16)
+    return min(REFRESH_RETRY_AFTER_FAILURE_SECONDS * 2 ** doublings, REFRESH_INTERVAL_SECONDS)
+
+
 def _refresh_if_due() -> None:
     """Refresh the run-time list when its window has elapsed; never raises."""
-    global _refreshed_networks, _next_refresh_at, _refresh_failure_logged
+    global _refreshed_networks, _next_refresh_at, _consecutive_refresh_failures
+    global _refresh_failure_logged
     now = _monotonic()
     if now < _next_refresh_at:
         return
     try:
         networks = _download_origin_facing()
     except Exception as e:
-        _next_refresh_at = now + REFRESH_RETRY_AFTER_FAILURE_SECONDS
+        _consecutive_refresh_failures += 1
+        _next_refresh_at = now + _retry_after_failure_seconds(_consecutive_refresh_failures)
         if not _refresh_failure_logged:
             _refresh_failure_logged = True
             logger.warning(
@@ -168,6 +180,7 @@ def _refresh_if_due() -> None:
                 f"({type(e).__name__}: {e}); using the bundled snapshot dated {SNAPSHOT_CREATE_DATE}"
             )
         return
+    _consecutive_refresh_failures = 0
     _refreshed_networks = networks
     _next_refresh_at = now + REFRESH_INTERVAL_SECONDS
     missing = sum(
@@ -189,10 +202,12 @@ def is_cloudfront_origin_facing(address) -> bool:
 
     The bundled snapshot answers first. Only an address it does not hold consults the run-time
     list, which is refreshed from the published document at most once per
-    ``REFRESH_INTERVAL_SECONDS`` (once per ``REFRESH_RETRY_AFTER_FAILURE_SECONDS`` after a failed
-    attempt). The two are used as a union, so a refresh can only add addresses, and an
-    environment that cannot reach the document (for example an authorizer in a VPC without
-    internet egress) keeps the snapshot. An address that does not parse is not origin-facing.
+    ``REFRESH_INTERVAL_SECONDS``. Snapshot and run-time list are used as a union, so a refresh
+    can only add addresses, and an environment that cannot reach the document (for example an
+    authorizer in a VPC without internet egress) keeps the snapshot. After a failed attempt the
+    next one waits ``REFRESH_RETRY_AFTER_FAILURE_SECONDS``, doubled for each further consecutive
+    failure up to ``REFRESH_INTERVAL_SECONDS``. An address that does not parse is not
+    origin-facing.
     """
     try:
         parsed = ipaddress.ip_address(str(address).strip())
