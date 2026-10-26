@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Synonyms from "../synonyms";
 import ComplianceSchemas, { LEGACY_SCHEMA_LABEL, sweepMessage } from "./ComplianceSchemas";
@@ -209,21 +209,27 @@ describe("ComplianceSchemas sweep message", () => {
 describe("ComplianceSchemas rule-name errors", () => {
     beforeEach(() => jest.clearAllMocks());
 
+    // Text is entered with one change event per field, not typed key by key, and each step waits
+    // for the element it produces: under a full-suite run, key-by-key typing into the Visual
+    // Builder's re-rendering form took longer than the default test timeout. The rule-name input is
+    // looked up again after every render instead of reusing a node that may have been replaced.
+    // The 20 s timeout is a ceiling for a loaded runner, not a delay.
+    const ruleNameInputs = (dialog: HTMLElement) =>
+        within(dialog).findAllByPlaceholderText("rule-name") as Promise<HTMLInputElement[]>;
+
     it("does not send Create while the builder shows a rule-name error", async () => {
         service().fetchComplianceSchemas.mockResolvedValue([true, []]);
         service().createComplianceSchema.mockResolvedValue([true, { schemaName: "s1" }]);
         render(<ComplianceSchemas />);
         await userEvent.click(await screen.findByRole("button", { name: "Create Schema" }));
         const dialog = await screen.findByRole("dialog");
-        await userEvent.type(
-            within(dialog).getByPlaceholderText(/engineering-asset-standard/),
-            "s1"
-        );
+        fireEvent.change(within(dialog).getByPlaceholderText(/engineering-asset-standard/), {
+            target: { value: "s1" },
+        });
         await userEvent.click(within(dialog).getByRole("tab", { name: "Visual Builder" }));
-        const names = await within(dialog).findAllByPlaceholderText("rule-name");
-        expect(names.length).toBeGreaterThan(0);
-        await userEvent.clear(names[0]);
-        expect(within(dialog).getByText("Rule name is required")).toBeInTheDocument();
+
+        fireEvent.change((await ruleNameInputs(dialog))[0], { target: { value: "" } });
+        expect(await within(dialog).findByText("Rule name is required")).toBeInTheDocument();
 
         await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
         expect(
@@ -233,11 +239,16 @@ describe("ComplianceSchemas rule-name errors", () => {
         ).toBeInTheDocument();
         expect(service().createComplianceSchema).not.toHaveBeenCalled();
 
-        await userEvent.type(names[0], "renamed-rule");
+        fireEvent.change((await ruleNameInputs(dialog))[0], {
+            target: { value: "renamed-rule" },
+        });
+        await waitFor(() =>
+            expect(within(dialog).queryByText("Rule name is required")).not.toBeInTheDocument()
+        );
         await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
         await waitFor(() => expect(service().createComplianceSchema).toHaveBeenCalledTimes(1));
         expect(
             Object.keys(service().createComplianceSchema.mock.calls[0][0].schemaBody.rules)
         ).toContain("renamed-rule");
-    });
+    }, 20_000);
 });
