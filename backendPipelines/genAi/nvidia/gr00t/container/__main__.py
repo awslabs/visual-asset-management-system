@@ -745,7 +745,8 @@ def main():
         logger.info("Step 6: Backing up HF cache to S3")
         logger.info("=" * 80)
         try:
-            backup_cache_to_s3(hf_home=hf_home, s3_bucket=s3_model_bucket)
+            backup_cache_to_s3(hf_home=hf_home, s3_bucket=s3_model_bucket,
+                               repos=(DEFAULTS["baseModelPath"],))
         except Exception as backup_err:
             logger.warning(f"Failed to backup HF cache to S3 (non-fatal): {backup_err}")
 

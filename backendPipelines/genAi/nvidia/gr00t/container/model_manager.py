@@ -231,8 +231,13 @@ def ensure_models_cached(hf_home: str, s3_bucket: str, invalidate: bool = False,
     hf_path.mkdir(parents=True, exist_ok=True)
 
 
-def backup_cache_to_s3(hf_home: str, s3_bucket: str) -> None:
-    """Backup HF_HOME cache to S3 for persistence across container restarts."""
+def backup_cache_to_s3(hf_home: str, s3_bucket: str, repos=()) -> None:
+    """Backup HF_HOME cache to S3 for persistence across container restarts.
+
+    ``repos`` matches _has_cached_models: when given, the skip-if-nothing-cached guard
+    asks about THIS run's weights rather than any weights at all; empty falls back to
+    "is anything cached".
+    """
     hf_path = Path(hf_home)
 
     if not hf_path.exists():

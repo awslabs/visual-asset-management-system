@@ -485,7 +485,7 @@ def main():
         logger.info("=" * 80)
         try:
             from model_manager import backup_cache_to_s3
-            backup_cache_to_s3(hf_home=hf_home, s3_bucket=s3_model_bucket)
+            backup_cache_to_s3(hf_home=hf_home, s3_bucket=s3_model_bucket, repos=(model_repo,))
         except Exception as backup_err:
             logger.warning(f"Failed to backup HF cache to S3 (non-fatal): {backup_err}")
 
