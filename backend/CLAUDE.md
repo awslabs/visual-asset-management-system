@@ -67,10 +67,11 @@ backend/
 │   │   │                                           #   written on the asset row by every upload completion;
 │   │   │                                           #   `assetVersion` stamp from asset-version create/revert;
 │   │   │                                           #   `assetEdit` from an asset edit of name/description/tags;
-│   │   │                                           #   stamp_asset_change (targeted, best-effort UpdateItem):
-│   │   │                                           #   `metadataEdit` from a metadata write, `linkChange`
-│   │   │                                           #   from a link create/delete, `workflowExecution` for a
-│   │   │                                           #   workflow execution's metadata write-back;
+│   │   │                                           #   record_indexed_change (conditional UpdateItem the
+│   │   │                                           #   compliance trigger writes from the indexer events):
+│   │   │                                           #   `metadataEdit` / `linkChange`, `workflowExecution` for
+│   │   │                                           #   a row a workflow write-back marked (metadata and link
+│   │   │                                           #   requests write no stamp themselves);
 │   │   │                                           #   completion instants lastUploadAt (user upload) and
 │   │   │                                           #   lastAssetVersionAt (create/revert), moved by no other writer
 │   │   ├── indexerEvents.py                        # s3_records_from_indexer_message: SQS→SNS→S3 unwrapping of a
@@ -106,7 +107,9 @@ backend/
 │   │   │                                           #   complianceEvaluateService (evaluate/sweep/evaluations/
 │   │   │                                           #   state), complianceQuarantineService, complianceCascadeService,
 │   │   │                                           #   complianceAuditService. Event-driven: complianceTrigger
-│   │   │                                           #   (asset indexer SNS), complianceWorkflowCallback (EventBridge
+│   │   │                                           #   (own SQS queue on the asset + file indexer topics;
+│   │   │                                           #   stamps metadata/link changes, evaluates, removes a
+│   │   │                                           #   deleted asset's record), complianceWorkflowCallback (EventBridge
 │   │   │                                           #   workflow.execution.completed), complianceCascadeExecutor
 │   │   │                                           #   (async invoke from complianceCascadeService, event {"cascadeId"}).
 │   │   │                                           #   Shared modules (not Lambdas): complianceEvaluationStore (all
