@@ -162,7 +162,10 @@ describe("UploadManager part retry", () => {
         mount([REFUSED_KEY, OTHER_KEY]);
 
         await waitFor(() => expect(screen.getByText(`Failed: ${REFUSAL}`)).toBeInTheDocument());
-        const retry = await screen.findByRole("button", { name: "Retry 1 failed Items" });
+        // Both rows are Failed: the refused file with the server's reason, the other file with its
+        // part's error.
+        expect(screen.getByText("Failed: Network Error")).toBeInTheDocument();
+        const retry = await screen.findByRole("button", { name: "Retry 2 failed Items" });
         expect(otherPartAttempts).toBe(1);
 
         fireEvent.click(retry);
