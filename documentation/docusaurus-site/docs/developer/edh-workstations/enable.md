@@ -512,6 +512,7 @@ Before users launch desktops from the shipped `isaacsim` recipe (Isaac Sim 6.2 o
 -   The account's G-instance quota covers the sizes users pick.
 -   Users' address ranges are on the cluster's client prefix list (see [Browser access to Amazon DCV](#browser-access-to-amazon-dcv)).
 -   The build subnet reaches `downloads.isaacsim.nvidia.com` for the 13 GB Isaac Sim archive, as well as the Ubuntu archive, `awscli.amazonaws.com` and PyPI.
+-   Optional: when the recipe's `nucleusServer` parameter names an NVIDIA Omniverse Nucleus server for Isaac Sim, the server, the network path from the desktops' private subnets, its name resolution there, and users' Nucleus accounts and permissions are in place before the image is built; see [Nucleus server (optional)](overview.md#nucleus-server-optional).
 
 A desktop's first boot installs the driver and reboots, and Isaac Sim starts after the user signs in to the desktop; the first start warms shaders for five to ten minutes. When Isaac Sim does not start, `/var/log/vams-isaacsim-preflight.log` on the desktop says why; see the troubleshooting table in [Isaac Sim recipe](overview.md#isaac-sim-recipe).
 

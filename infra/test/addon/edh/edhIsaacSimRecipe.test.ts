@@ -182,10 +182,12 @@ describe("the shipped Isaac Sim recipe", () => {
             isaacSimSha256: "aac4f9065f36d56f56a6523931710fad3ea9c3e5eeb067b781fa53098fcf19f2",
             isaacSimLauncher: "isaac-sim.sh",
             nvidiaDriverMinMajor: "595",
+            // Optional, and empty in the shipped recipe: the image then names no Nucleus server.
+            nucleusServer: "",
         });
     });
 
-    test("holds the kernel, then runs the AWS update component and the eight others in order", () => {
+    test("holds the kernel, then runs the AWS update component and the nine others in order", () => {
         // The hold has to precede the OS update, which would otherwise take the running kernel to a
         // series with no extra modules to install.
         expect(loaded.manifest.components[0].file).toBe("components/010-kernel.yml");
@@ -201,6 +203,7 @@ describe("the shipped Isaac Sim recipe", () => {
             "060-session-bootstrap.yml",
             "065-profile-cleanup.yml",
             "066-no-screen-lock.yml",
+            "068-nucleus-server.yml",
             "070-autolaunch.yml",
         ]);
     });
@@ -1372,7 +1375,14 @@ function runLauncher(
     {
         connectorInstalled = true,
         runtime,
-    }: { connectorInstalled?: boolean; runtime?: string | null } = {}
+        nucleusHelper,
+    }: {
+        connectorInstalled?: boolean;
+        runtime?: string | null;
+        // A stand-in for the Nucleus registration helper the 068 component installs; without it the
+        // launcher finds no helper on this host and skips the step, as on an image built before it.
+        nucleusHelper?: "adds" | "fails";
+    } = {}
 ) {
     const prelude = [
         "SLEEPS=0",
@@ -1390,7 +1400,9 @@ function runLauncher(
         .replace("${PARAM_nvidiaDriverMinMajor}", () => "570")
         .replace("/opt/isaacsim/${PARAM_isaacSimLauncher}", () => "${HOME}/kit.sh")
         .split("/etc/profile.d/vams-isaacsim.sh")
-        .join("${HOME}/no-profile.sh");
+        .join("${HOME}/no-profile.sh")
+        .split("/usr/local/bin/vams-isaacsim-nucleus-register")
+        .join("${HOME}/nucleus-register");
     const forwardSlashes = (dir: string) => dir.split(path.sep).join("/");
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vams-connector-"));
     // The image installs the connector folder root-owned and 0755, so the desktop user cannot write
@@ -1413,6 +1425,20 @@ function runLauncher(
                 prelude,
                 seed: {
                     ...seed,
+                    ...(nucleusHelper
+                        ? {
+                              "nucleus-register": [
+                                  "#!/usr/bin/env bash",
+                                  // Kit has not started yet when the helper runs.
+                                  'test -e "${HOME}/kit-argv" && echo "kit-already-started"',
+                                  'echo "nucleus helper ran" >> "${HOME}/nucleus-calls"',
+                                  nucleusHelper === "adds"
+                                      ? "echo 'Added omniverse://nucleus.example.internal'"
+                                      : "echo 'not valid TOML' >&2; exit 3",
+                                  "",
+                              ].join("\n"),
+                          }
+                        : {}),
                     "kit.sh": [
                         "#!/usr/bin/env bash",
                         'printf "%s\\n" "$@" > "${HOME}/kit-argv"',
@@ -1579,6 +1605,44 @@ describe("the Isaac Sim launcher", () => {
         const run = runLauncher({ [`${HOST}/session-none`]: `${BOOT_ID}\n` });
         expect(run.sleeps).toEqual([]);
         expect(run.notifications.filter((text) => text.includes("sign-in"))).toEqual([]);
+        expect(run.kitArgs).toContain(profileOverride);
+    });
+
+    test("adds the image's Nucleus server before Kit starts, logging what the helper says", () => {
+        const run = runLauncher({ [`${HOST}/session-ready`]: `${BOOT_ID}\n` }, 0, {
+            nucleusHelper: "adds",
+        });
+        expect(run.status).toBe(0);
+        expect(lines(run.files["nucleus-calls"])).toEqual(["nucleus helper ran"]);
+        const log = run.files[`${HOST}/isaacsim-launch.log`];
+        expect(log).toContain("Added omniverse://nucleus.example.internal");
+        expect(log).not.toContain("kit-already-started");
+        expect(run.notifications.filter((text) => text.includes("Nucleus"))).toEqual([]);
+        expect(run.kitArgs).toContain(profileOverride);
+    });
+
+    test("still starts Isaac Sim, and says where to look, when the Nucleus server cannot be added", () => {
+        const run = runLauncher({ [`${HOST}/session-ready`]: `${BOOT_ID}\n` }, 0, {
+            nucleusHelper: "fails",
+        });
+        expect(run.status).toBe(0);
+        const notice = run.notifications.filter((text) => text.includes("Nucleus"));
+        expect(notice).toHaveLength(1);
+        expect(notice[0]).toMatch(
+            new RegExp(
+                "^The Nucleus server this desktop's image names could not be added to Isaac Sim's " +
+                    `server list; .+/\\.vams/hosts/${INSTANCE_ID}/isaacsim-launch\\.log says why\\. ` +
+                    "Isaac Sim starts without it\\.$"
+            )
+        );
+        expect(run.files[`${HOST}/isaacsim-launch.log`]).toContain("not valid TOML");
+        expect(run.kitArgs).toContain(profileOverride);
+    });
+
+    test("starts as before on an image without the Nucleus helper", () => {
+        const run = runLauncher({ [`${HOST}/session-ready`]: `${BOOT_ID}\n` });
+        expect(run.files["nucleus-calls"]).toBeUndefined();
+        expect(run.notifications.filter((text) => text.includes("Nucleus"))).toEqual([]);
         expect(run.kitArgs).toContain(profileOverride);
     });
 
@@ -2124,5 +2188,228 @@ describe("the profile cleanup", () => {
         const pattern = /=~ (\^i-\S+\$) \]\]/.exec(helper)?.[1];
         expect(pattern).toBe("^i-[0-9a-f]{8,17}$");
         expect(cleanupScript()).toContain(`ID_PATTERN='${pattern}'`);
+    });
+});
+
+// The Nucleus server component. The image runs the helper with Ubuntu 24.04's Python 3.12; the
+// tests run it with any Python that has tomllib (3.11 or later), which CI's Ubuntu image provides.
+const TOML_PYTHON = ["python3.13", "python3.12", "python3.11", "python3", "python"].find(
+    (exe) => spawnSync(exe, ["-c", "import tomllib"], { encoding: "utf8" }).status === 0
+);
+const NUCLEUS_SERVER = "omniverse://nucleus.example.internal";
+
+/** The component's record step, with /etc and /var/tmp moved into `dir`, run on `value`. */
+function recordNucleusServer(value: string) {
+    const body = componentBodies.find(({ relative }) =>
+        relative.endsWith("068-nucleus-server.yml")
+    )!.body;
+    const all = body.split("\n");
+    const start = all.findIndex((line) => line.includes("# The parameter is written out as data"));
+    const end = all.findIndex(
+        (line, i) => i > start && line.includes("InstallTheRegistrationHelper")
+    );
+    const block = all.slice(start, end);
+    const indent = Math.min(
+        ...block.filter((line) => line.trim()).map((line) => line.length - line.trimStart().length)
+    );
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vams-nucleus-"));
+    const where = dir.split(path.sep).join("/");
+    try {
+        const script = block
+            .map((line) => line.slice(indent))
+            .join("\n")
+            .replace("${PARAM_nucleusServer}", () => value)
+            .split("/etc/")
+            .join(`${where}/`)
+            .split("/var/tmp/")
+            .join(`${where}/`);
+        const result = spawnSync("bash", ["-c", `set -euo pipefail\n${script}`], {
+            encoding: "utf8",
+        });
+        const stored = path.join(dir, "vams-isaacsim-nucleus-server");
+        return {
+            status: result.status,
+            output: `${result.stdout}${result.stderr}`,
+            stored: fs.existsSync(stored) ? fs.readFileSync(stored, "utf8") : null,
+            leftovers: fs
+                .readdirSync(dir)
+                .filter((name) => name !== "vams-isaacsim-nucleus-server"),
+        };
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+/**
+ * Runs the registration helper with a scratch HOME, `existing` as the user's omniverse.toml (none when
+ * undefined) and `server` as the image's recorded server (none when null).
+ */
+function runNucleusHelper(existing: string | undefined, server: string | null = NUCLEUS_SERVER) {
+    if (!TOML_PYTHON) {
+        throw new Error("These tests need a Python 3.11 or later on PATH (tomllib)");
+    }
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vams-nucleus-home-"));
+    const where = scratch.split(path.sep).join("/");
+    const toml = path.join(scratch, "home", ".nvidia-omniverse", "config", "omniverse.toml");
+    try {
+        const helper = installedScript("068-nucleus-server.yml", "NUCLEUS_REGISTER")
+            .split("/etc/vams-isaacsim-nucleus-server")
+            .join(`${where}/server`);
+        fs.writeFileSync(path.join(scratch, "register.py"), helper);
+        if (server !== null) {
+            fs.writeFileSync(path.join(scratch, "server"), `${server}\n`);
+        }
+        if (existing !== undefined) {
+            fs.mkdirSync(path.dirname(toml), { recursive: true });
+            fs.writeFileSync(toml, existing);
+        }
+        const result = spawnSync(TOML_PYTHON, [path.join(scratch, "register.py")], {
+            encoding: "utf8",
+            env: { ...process.env, HOME: path.join(scratch, "home") },
+        });
+        return {
+            status: result.status,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            toml: fs.existsSync(toml) ? fs.readFileSync(toml, "utf8") : undefined,
+            configFiles: fs.existsSync(path.dirname(toml))
+                ? fs.readdirSync(path.dirname(toml))
+                : [],
+        };
+    } finally {
+        fs.rmSync(scratch, { recursive: true, force: true });
+    }
+}
+
+describe("the Nucleus server component", () => {
+    test("records nothing when nucleusServer is empty, as in the shipped recipe", () => {
+        for (const value of ["", "   "]) {
+            const run = recordNucleusServer(value);
+            expect(run.status).toBe(0);
+            expect(run.stored).toBeNull();
+            expect(run.leftovers).toEqual([]);
+        }
+    });
+
+    test.each([
+        [NUCLEUS_SERVER, NUCLEUS_SERVER],
+        [` ${NUCLEUS_SERVER}/ `, NUCLEUS_SERVER],
+        ["omniverse://10.0.1.20:3009", "omniverse://10.0.1.20:3009"],
+        ["omniverse://nucleus:65535", "omniverse://nucleus:65535"],
+    ])("records %j as %j", (value, stored) => {
+        const run = recordNucleusServer(value);
+        expect(run.status).toBe(0);
+        expect(run.stored).toBe(`${stored}\n`);
+        expect(run.leftovers).toEqual([]);
+    });
+
+    test.each([
+        "https://nucleus.example.internal",
+        "nucleus.example.internal",
+        "omniverse://nucleus.example.internal/Projects",
+        "omniverse://user@nucleus.example.internal",
+        "omniverse://nucleus.example.internal?x=1",
+        "omniverse://nucleus:0",
+        "omniverse://nucleus:70000",
+        "omniverse://-nucleus",
+        "omniverse://nucleus; touch pwned",
+        "omniverse://a\nomniverse://b",
+    ])("fails the build on %j and records nothing", (value) => {
+        const run = recordNucleusServer(value);
+        expect(run.status).not.toBe(0);
+        expect(run.output).toContain("nucleusServer must be omniverse://<host>");
+        expect(run.stored).toBeNull();
+    });
+
+    test("reads the parameter as data: shell syntax in it is never run", () => {
+        const marker = path.join(os.tmpdir(), `vams-nucleus-ran-${process.pid}`);
+        const run = recordNucleusServer(`$(touch ${marker.split(path.sep).join("/")})`);
+        expect(run.status).not.toBe(0);
+        expect(fs.existsSync(marker)).toBe(false);
+    });
+
+    test("finds a Python with tomllib to run the helper with", () => {
+        expect(TOML_PYTHON).toBeDefined();
+    });
+
+    test("writes nothing when the image names no server", () => {
+        const run = runNucleusHelper(undefined, null);
+        expect(run.status).toBe(0);
+        expect(run.toml).toBeUndefined();
+        expect(run.configFiles).toEqual([]);
+    });
+
+    test("creates the user's server list with the image's server", () => {
+        const run = runNucleusHelper(undefined);
+        expect(run.status).toBe(0);
+        expect(run.toml).toBe(`[servers]\n"${NUCLEUS_SERVER}" = "nucleus.example.internal"\n`);
+        expect(run.configFiles).toEqual(["omniverse.toml"]);
+    });
+
+    test("adds the server to an existing list and keeps every other entry and table", () => {
+        const existing = [
+            "[bookmarks]",
+            'Samples = "https://example.com/Samples/"',
+            "",
+            "[servers]",
+            '"omniverse://other.example.internal" = "other"',
+            "",
+            "[paths]",
+            'cache = "/var/cache"',
+            "",
+        ].join("\n");
+        const run = runNucleusHelper(existing);
+        expect(run.status).toBe(0);
+        expect(run.toml).toBe(
+            existing.replace(
+                "[servers]\n",
+                `[servers]\n"${NUCLEUS_SERVER}" = "nucleus.example.internal"\n`
+            )
+        );
+    });
+
+    test("appends a [servers] table to a file that has none", () => {
+        const existing = '[bookmarks]\nSamples = "https://example.com/Samples/"';
+        const run = runNucleusHelper(existing);
+        expect(run.status).toBe(0);
+        expect(run.toml).toBe(
+            `${existing}\n\n[servers]\n"${NUCLEUS_SERVER}" = "nucleus.example.internal"\n`
+        );
+    });
+
+    test("leaves a list that already names the server, with or without a trailing slash, unchanged", () => {
+        for (const listed of [NUCLEUS_SERVER, `${NUCLEUS_SERVER}/`]) {
+            const existing = `[servers]\n"${listed}" = "Team Nucleus"\n`;
+            const run = runNucleusHelper(existing);
+            expect(run.status).toBe(0);
+            expect(run.toml).toBe(existing);
+        }
+    });
+
+    test.each([
+        ["a file that is not valid TOML", "[servers\n"],
+        ["servers defined by dotted keys", 'servers.x = "y"\n'],
+        ["servers that is not a table", 'servers = "x"\n'],
+    ])("leaves %s unchanged and exits non-zero with the reason", (_label, existing) => {
+        const run = runNucleusHelper(existing);
+        expect(run.status).toBe(3);
+        expect(run.stderr).toContain("left unchanged");
+        expect(run.toml).toBe(existing);
+        expect(run.configFiles).toEqual(["omniverse.toml"]);
+    });
+
+    test("refuses a recorded server that is not an omniverse:// server", () => {
+        const run = runNucleusHelper(undefined, "https://nucleus.example.internal");
+        expect(run.status).toBe(2);
+        expect(run.toml).toBeUndefined();
+    });
+
+    test("its validate phase runs the helper on an empty home when a server is recorded", () => {
+        const body = componentBodies.find(({ relative }) =>
+            relative.endsWith("068-nucleus-server.yml")
+        )!.body;
+        const validate = body.slice(body.indexOf("- name: validate"));
+        expect(validate).toContain("import ast, sys, tomllib");
+        expect(validate).toContain('HOME="${home}" /usr/local/bin/vams-isaacsim-nucleus-register');
     });
 });

@@ -54,6 +54,7 @@
         { "file": "components/060-session-bootstrap.yml" },
         { "file": "components/065-profile-cleanup.yml" },
         { "file": "components/066-no-screen-lock.yml" },
+        { "file": "components/068-nucleus-server.yml" },
         { "file": "components/070-autolaunch.yml" }
     ],
     "assets": [
@@ -65,7 +66,8 @@
         "isaacSimDownloadUrl": "https://downloads.isaacsim.nvidia.com/isaac-sim-standalone-6.2.0-linux-x86_64.zip",
         "isaacSimSha256": "aac4f9065f36d56f56a6523931710fad3ea9c3e5eeb067b781fa53098fcf19f2",
         "isaacSimLauncher": "isaac-sim.sh",
-        "nvidiaDriverMinMajor": "595"
+        "nvidiaDriverMinMajor": "595",
+        "nucleusServer": ""
     },
     "keepVersions": 3,
     "recipeRevision": 1,

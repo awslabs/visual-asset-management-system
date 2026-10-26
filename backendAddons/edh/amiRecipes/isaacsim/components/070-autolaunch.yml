@@ -79,6 +79,12 @@ phases:
                             notify "A working directory for Isaac Sim could not be created in ${XDG_RUNTIME_DIR:-/tmp}, so Isaac Sim was not started."
                             exit 1
                         fi
+                        # The Nucleus server the image names, when it names one, joins this user's Omniverse
+                        # server list; Isaac Sim starts whether or not that succeeds.
+                        if [ -x /usr/local/bin/vams-isaacsim-nucleus-register ] \
+                            && ! /usr/local/bin/vams-isaacsim-nucleus-register >>"${LOG}" 2>&1; then
+                            notify "The Nucleus server this desktop's image names could not be added to Isaac Sim's server list; ${LOG} says why. Isaac Sim starts without it."
+                        fi
                         notify "Isaac Sim is starting. The first launch warms shaders for 5-10 minutes and the window stays black until that finishes."
                         exec "${LAUNCHER}" \
                             --ext-folder "${EXT_PARENT}" \
