@@ -73,7 +73,7 @@ object key; wrapped here, one line at runtime:
 
     Compliance coverage asset=<assetId> path=<stream|file|direct> stamp=<attribute|none>
     stampAt=<instant|none> eventTime=<instant|none> lastEvaluationId=<id|none>
-    lastEvaluatedAt=<instant|none> outcome=<covered|evaluating>
+    lastEvaluatedAt=<instant|none> outcome=<covered|evaluating|deferred>
 
 A cascade awaiting approval is opened once per trigger asset: while one is pending for the asset,
 a further evaluation does not open another.
@@ -106,6 +106,7 @@ from common.resourceNames import ResourceKeys, get_table_name
 from common.s3 import region_routing_s3_client
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_UPLOAD,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
 )
 from customLogging.logger import safeLogger
@@ -628,19 +629,47 @@ def _evaluate_file_record(s3_record, message, decided, batch=None):
     if (database_id, asset_id) in batch.evaluated:
         return
 
-    if object_change_source(s3_info, message) == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
+    change_source = object_change_source(s3_info, message)
+    if change_source == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
         logger.info(f"Object under asset {asset_id} was written by a workflow execution; "
                     "skipping compliance evaluation")
         return
 
     decided.add(asset_id)
     # The object is not a workflow execution's (those were skipped above), so it belongs to a
-    # user upload's completion or to an asset-version revert's stamp.
+    # user upload's completion, to an asset-version revert's stamp, or to a direct write.
     stamp_attribute, completion_time = file_event_completion_stamp(asset_row)
+    if upload_object_awaits_its_completion(change_source, change_time, completion_time):
+        logger.info(coverage_log_line(asset_id, COVERAGE_PATH_FILE, stamp_attribute,
+                                      completion_time, change_time, target[0], False,
+                                      outcome="deferred"))
+        return
     _evaluate_if_uncovered(
         database_id, asset_id, target, change_time=change_time,
         completion_time=completion_time, path=COVERAGE_PATH_FILE,
         stamp_attribute=stamp_attribute, batch=batch)
+
+
+def upload_object_awaits_its_completion(change_source, change_time, completion_time):
+    """Whether a file event's object defers to the completion stamp of the upload that wrote it
+    instead of starting an evaluation itself: the object carries `vams-changesource: upload` (the
+    upload API wrote it — a completion copies the files and stamps the row only after the last
+    copy, and an asset-version revert copies an uploaded version's metadata with it and stamps
+    `lastAssetVersionAt` after its copies) and the row records no completion at or after the
+    object's `eventTime` yet. That completion's stream MODIFY evaluates the asset once with every
+    file in place, so an N-file upload yields one evaluation, not one over a partial file set per
+    early file event. An object written at or before the latest completion stamp is judged by
+    that stamp as before (it is covered once the completion's evaluation started), and an object
+    with any other provenance — a direct bucket write, a file copy, move or rename — is judged by
+    its own `eventTime`.
+
+    An upload whose completion never stamps the row (its Lambda failed after copying) leaves its
+    objects unevaluated until the asset's next change or a sweep."""
+    if change_source != VAMS_CHANGE_SOURCE_UPLOAD:
+        return False
+    if completion_time is None:
+        return True
+    return change_time is not None and change_time > completion_time
 
 
 def file_event_completion_time(asset_row):
@@ -659,9 +688,10 @@ def file_event_completion_time(asset_row):
     landing between a revert and its copies' messages, or an edit after a revert, leaves the copies
     judged by the revert's stamp. (Keyed on `lastChangeSource` instead, the copies fell back to the
     older `lastUploadAt` after such a write and started a second evaluation, and for a pipeline rule
-    a second workflow execution, per revert.) An object written after the latest stamp (an upload
-    whose completion has not stamped the row yet) postdates it and is judged by its own `eventTime`
-    with the margin; that upload's completion then raises its own MODIFY."""
+    a second workflow execution, per revert.) An object written after the latest stamp postdates
+    it: an upload's object waits for that upload's completion stamp, whose MODIFY evaluates the
+    asset (`upload_object_awaits_its_completion`); any other object is judged by its own
+    `eventTime` with the margin."""
     return file_event_completion_stamp(asset_row)[1]
 
 
@@ -836,12 +866,13 @@ def _evaluate_if_uncovered(database_id, asset_id, target, change_time=None, comp
 
 
 def coverage_log_line(asset_id, path, stamp_attribute, completion_time, change_time,
-                      compliance_record, covered):
+                      compliance_record, covered, outcome=None):
     """The one INFO line a coverage decision logs: the asset (by id only, no object key), the path
     that reported the change, the row stamp the decision used and its instant, the S3 `eventTime`
     (file path) or, for a stamp this trigger wrote from an indexer event, the stamp's instant (it is
     judged across the skew margin like an `eventTime`), the last evaluation it was compared with, and
-    the outcome. An absent value reads `none`."""
+    the outcome (`covered`, `evaluating`, or `deferred` for an upload's object that waits for its
+    completion stamp, `upload_object_awaits_its_completion`). An absent value reads `none`."""
     def _instant(value):
         return value.isoformat() if value is not None else "none"
 
@@ -850,7 +881,7 @@ def coverage_log_line(asset_id, path, stamp_attribute, completion_time, change_t
             f"stampAt={_instant(completion_time)} eventTime={_instant(change_time)} "
             f"lastEvaluationId={compliance_record.get('lastEvaluationId') or 'none'} "
             f"lastEvaluatedAt={compliance_record.get('lastEvaluatedAt') or 'none'} "
-            f"outcome={'covered' if covered else 'evaluating'}")
+            f"outcome={outcome or ('covered' if covered else 'evaluating')}")
 
 
 def check_default_schema(database_id, asset_id, db_item=None):

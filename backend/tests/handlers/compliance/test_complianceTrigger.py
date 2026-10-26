@@ -117,7 +117,9 @@ def _run(event, database_item=None, compliance_record=None, children=(), asset_r
     if isinstance(head, (Exception, list)):
         s3_client.head_object.side_effect = head
     else:
-        s3_client.head_object.return_value = head if head is not None else _s3_head("upload")
+        # By default the object is a direct bucket write (no `vams-changesource`), judged by its own
+        # `eventTime`; a test of an upload's object passes `head=_s3_head("upload")`.
+        s3_client.head_object.return_value = head if head is not None else _s3_head()
     rows = dict(evaluation_rows or {})
     logger = MagicMock(name="logger")
 
@@ -306,7 +308,7 @@ class TestIndexerMessagesAreUnwrapped:
                                   s3_event_record(f"{ASSET}/source.stl"))
         mocks = _run(_sns_event(message), database_item=AUTO_EVAL_DB,
                      compliance_record={"schemaName": SCHEMA}, asset_rows=ASSET_ROWS,
-                     head=[_s3_head("workflowExecution"), _s3_head("upload")])
+                     head=[_s3_head("workflowExecution"), _s3_head()])
         mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
 
     def test_a_batch_of_only_workflow_written_records_queues_nothing(self):
@@ -544,7 +546,9 @@ class TestWorkflowWrittenObjectsAreSkipped:
         assert keys == ["A B/x.glb", "A+B/x.glb"]
         mocks["run_evaluation"].assert_not_called()
 
-    @pytest.mark.parametrize("change_source", ["upload", "direct", "fileCopy", None])
+    # An upload's object is judged by its completion stamp instead (TestAnUploadIsEvaluatedOnceAt
+    # ItsCompletion); every other provenance, and none, is judged by the object's own event time.
+    @pytest.mark.parametrize("change_source", ["direct", "fileCopy", "fileMove", None])
     def test_other_provenance_is_evaluated(self, change_source):
         mocks = _run(_sns_event(_file_message()), database_item=AUTO_EVAL_DB,
                      compliance_record={"schemaName": SCHEMA}, asset_rows=ASSET_ROWS,
@@ -1417,7 +1421,7 @@ class TestAnInvocationOverlappingARunningEvaluation:
     evaluation started is still evaluated. Runs the real trigger and the real evaluation store
     against a state table that keeps what is written to it."""
 
-    def _run_overlapping(self, file_event_time):
+    def _run_overlapping(self, file_event_time, head=None):
         tables = Tables()
         state = FakeAssetStateTable({
             "databaseId": DB, "assetId": ASSET, "schemaName": SCHEMA, "schemaSource": "database",
@@ -1429,7 +1433,7 @@ class TestAnInvocationOverlappingARunningEvaluation:
         asset_table = MagicMock(name="asset_table")
         asset_table.query.return_value = {"Items": _stamped_rows(COLD_UPLOAD_STAMP)}
         s3_client = MagicMock(name="s3_client")
-        s3_client.head_object.return_value = _s3_head("upload")
+        s3_client.head_object.return_value = head or _s3_head("upload")
         logger = MagicMock(name="logger")
         launch = tables.lambda_client.invoke.return_value
         row_during_launch = []
@@ -1481,11 +1485,25 @@ class TestAnInvocationOverlappingARunningEvaluation:
         # Every read of the row on this path is strongly consistent.
         assert {read for op, read in state.calls if op == "get_item"} == {True}
 
-    def test_a_change_made_after_the_running_evaluation_started_is_still_evaluated(self):
-        """An object written a second after the first evaluation started (an upload whose own
-        completion has not stamped the row yet) is a change that evaluation did not read: the
-        second invocation evaluates it, and its newer evaluation keeps the row."""
+    def test_an_upload_object_written_after_the_running_evaluation_started_waits_for_its_completion(
+            self):
+        """An object written a second after the first evaluation started belongs to an upload whose
+        own completion has not stamped the row yet. It starts no evaluation over the partial file
+        set: that upload's completion stamp raises its own MODIFY, which evaluates the asset once
+        with every file in place."""
         tables, state, _, mocks = self._run_overlapping("2026-03-01T21:18:12.400Z")
+
+        parents, _ = tables.evaluation_records()
+        assert len(parents) == 1
+        assert tables.lambda_client.invoke.call_count == 1
+        assert [line.rsplit(" ", 1)[1] for line in _coverage_lines(mocks)] == [
+            "outcome=evaluating", "outcome=deferred"]
+
+    def test_a_direct_write_after_the_running_evaluation_started_is_still_evaluated(self):
+        """A direct bucket write (no `vams-changesource`) has no completion to wait for: the change
+        that evaluation did not read is evaluated by the second invocation, and its newer evaluation
+        keeps the row."""
+        tables, state, _, mocks = self._run_overlapping("2026-03-01T21:18:12.400Z", head=_s3_head())
 
         parents, _ = tables.evaluation_records()
         assert len(parents) == 2
