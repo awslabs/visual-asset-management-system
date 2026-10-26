@@ -44,6 +44,19 @@ export function isOCCTFormat(fileKey: string): boolean {
 }
 
 /**
+ * True when an error is the browser refusing `eval`/`new Function` under the Content Security
+ * Policy: an EvalError (matched by name too, in case it comes from another realm), or an error
+ * whose message is the browser's CSP violation text.
+ */
+function isEvalBlockedError(error: any): boolean {
+    if (error instanceof EvalError || error?.name === "EvalError") {
+        return true;
+    }
+    const message = String(error?.message ?? error ?? "");
+    return /unsafe-eval|Content Security Policy/i.test(message);
+}
+
+/**
  * Load GLTF/GLB file
  * Note: For .gltf files, dependencies should be pre-loaded using preloadGLTFDependencies
  * For .glb files, everything is embedded so no pre-loading needed
@@ -275,6 +288,16 @@ export async function loadFile(
                 throw error;
             }
         } catch (error: any) {
+            // The OCCT Embind glue compiles functions with `new Function`, which a script-src
+            // without 'unsafe-eval' refuses. Name the deployment setting rather than showing the
+            // browser's CSP violation text, which quotes the whole directive.
+            if (isEvalBlockedError(error)) {
+                throw new Error(
+                    `CAD Format Support Not Available.\n\n` +
+                        `CAD format viewing is blocked by the Content Security Policy. The OpenCascade loader used for STEP, IGES and BREP files needs app.webUi.allowUnsafeEvalFeatures set to true in the deployment configuration.\n\n` +
+                        `Please contact your administrator to enable CAD format support for this viewer.`
+                );
+            }
             throw new Error(`Failed to load CAD file: ${error.message || error}`);
         }
     }
