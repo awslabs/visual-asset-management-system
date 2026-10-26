@@ -10,6 +10,7 @@ import * as cdk from "aws-cdk-lib";
 import { CoreVAMSStack } from "../lib/core-stack";
 import { CfWafStack } from "../lib/cf-waf-stack";
 import { buildCrossRegionBucketNotificationStacks } from "../lib/crossRegionBucketNotifications-stack";
+import { buildApiOriginVerifyStack } from "../lib/apiOriginVerify-stack";
 import { AwsSolutionsChecks, NagSuppressions, NIST80053R5Checks } from "cdk-nag";
 import { Aspects, Annotations } from "aws-cdk-lib";
 import { WAFScope } from "../lib/constructs/wafv2-basic-construct";
@@ -51,6 +52,14 @@ const crossRegionBuckets = buildCrossRegionBucketNotificationStacks(
     buildBootstrapSynthesizer(config)
 );
 
+// The API origin verification secret (CloudFront deployments only; undefined otherwise). Its own
+// stack, created before the regional WAF stack and the core stack, which both resolve it at deploy time.
+const apiOriginVerifyStack = buildApiOriginVerifyStack(
+    app,
+    config,
+    buildBootstrapSynthesizer(config)
+);
+
 // let ssmWafArn: string = "";
 
 //Deploy with WAF?
@@ -80,9 +89,13 @@ if (config.app.useWaf) {
         },
         wafScope: WAFScope.REGIONAL,
         wafPolicy: config.wafPolicyJSON,
+        originVerifySecretArn: apiOriginVerifyStack?.secretRef.secretArn,
         description: STACK_WAF_DESCRIPTION,
         synthesizer: buildBootstrapSynthesizer(config),
     });
+    if (apiOriginVerifyStack) {
+        regionalWafStack.addStackDependency(apiOriginVerifyStack);
+    }
 
     // CloudFront requires a CLOUDFRONT-scoped ACL in us-east-1. Only created when CloudFront
     // is enabled. Keeps the historical "{name}-waf-{base}" name so existing CloudFront
@@ -112,6 +125,7 @@ if (config.app.useWaf) {
         },
         ssmWafArnRegional: regionalWafStack.wafArn,
         ssmWafArnCloudfront: cloudfrontWafStack ? cloudfrontWafStack.wafArn : "",
+        apiOriginVerifySecret: apiOriginVerifyStack?.secretRef,
         crossRegionBucketTopics: crossRegionBuckets.topics,
         config: config,
         description: STACK_CORE_DESCRIPTION,
@@ -121,6 +135,9 @@ if (config.app.useWaf) {
     coreVamsStack.addStackDependency(regionalWafStack);
     if (cloudfrontWafStack) {
         coreVamsStack.addStackDependency(cloudfrontWafStack);
+    }
+    if (apiOriginVerifyStack) {
+        coreVamsStack.addStackDependency(apiOriginVerifyStack);
     }
     for (const crossRegionStack of crossRegionBuckets.stacks) {
         coreVamsStack.addStackDependency(crossRegionStack);
@@ -164,6 +181,7 @@ else {
         },
         ssmWafArnRegional: "",
         ssmWafArnCloudfront: "",
+        apiOriginVerifySecret: apiOriginVerifyStack?.secretRef,
         crossRegionBucketTopics: crossRegionBuckets.topics,
         config: config,
         description: STACK_CORE_DESCRIPTION,
@@ -172,6 +190,9 @@ else {
 
     for (const crossRegionStack of crossRegionBuckets.stacks) {
         coreVamsStack.addStackDependency(crossRegionStack);
+    }
+    if (apiOriginVerifyStack) {
+        coreVamsStack.addStackDependency(apiOriginVerifyStack);
     }
 
     //Stack level NAG supressions

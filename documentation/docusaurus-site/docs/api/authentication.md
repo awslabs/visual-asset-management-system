@@ -102,16 +102,16 @@ None.
 
 **Response Fields:**
 
-| Field                     | Type   | Description                                                                                                                                     |
-| ------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `region`                  | string | Deployment Region.                                                                                                                              |
-| `api`                     | string | Stage-inclusive API Gateway invoke URL with a trailing slash; every other path is relative to it. See [Base URL](overview.md#base-url).         |
-| `cognitoUserPoolId`       | string | Amazon Cognito user pool identifier; `"undefined"` when Cognito is not the authentication provider.                                             |
-| `cognitoAppClientId`      | string | Amazon Cognito app client identifier; `"undefined"` when Cognito is not the authentication provider.                                            |
-| `cognitoIdentityPoolId`   | string | Amazon Cognito identity pool identifier; `"undefined"` when Cognito is not the authentication provider.                                         |
-| `cognitoUserPoolEndpoint` | string | Partition-aware Amazon Cognito user pool (IDP) endpoint URL; `"undefined"` when Cognito is not the authentication provider. See the note below. |
-| `contentSecurityPolicy`   | string | Content Security Policy header value applied by the web application.                                                                            |
-| `bannerHtmlMessage`       | string | Optional banner HTML rendered by the web application; empty when not configured.                                                                |
+| Field                     | Type   | Description                                                                                                                                                                                                                                            |
+| ------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `region`                  | string | Deployment Region.                                                                                                                                                                                                                                     |
+| `api`                     | string | Stage-inclusive API Gateway invoke URL with a trailing slash; every other path is relative to it. With the API custom domain enabled (`app.api.apiGatewayRest.customDomain`), it is `https://{api-domain}/api/`. See [Base URL](overview.md#base-url). |
+| `cognitoUserPoolId`       | string | Amazon Cognito user pool identifier; `"undefined"` when Cognito is not the authentication provider.                                                                                                                                                    |
+| `cognitoAppClientId`      | string | Amazon Cognito app client identifier; `"undefined"` when Cognito is not the authentication provider.                                                                                                                                                   |
+| `cognitoIdentityPoolId`   | string | Amazon Cognito identity pool identifier; `"undefined"` when Cognito is not the authentication provider.                                                                                                                                                |
+| `cognitoUserPoolEndpoint` | string | Partition-aware Amazon Cognito user pool (IDP) endpoint URL; `"undefined"` when Cognito is not the authentication provider. See the note below.                                                                                                        |
+| `contentSecurityPolicy`   | string | Content Security Policy header value applied by the web application.                                                                                                                                                                                   |
+| `bannerHtmlMessage`       | string | Optional banner HTML rendered by the web application; empty when not configured.                                                                                                                                                                       |
 
 When an external OAuth identity provider is the authentication provider, the response instead carries `externalOAuthIdpURL`, `externalOAuthIdpClientId`, `externalOAuthIdpScope`, `externalOAuthIdpScopeMfa`, `externalOAuthIdpTokenEndpoint`, `externalOAuthIdpAuthorizationEndpoint`, and `externalOAuthIdpDiscoveryEndpoint`.
 

@@ -5,9 +5,11 @@
 
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as path from "path";
 import { Construct } from "constructs";
-import { Duration } from "aws-cdk-lib";
+import { ArnFormat, Duration, Stack } from "aws-cdk-lib";
+import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
@@ -19,10 +21,15 @@ import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
     suppressCdkNagLambda,
+    suppressCdkNagErrorsByGrantReadWrite,
     kmsKeyPolicyStatementGenerator,
     setupSecurityAndLoggingEnvironmentAndPermissions,
     isCognitoMfaCheckEnabled,
 } from "../helper/security";
+import {
+    ApiOriginVerifySecretRef,
+    apiOriginVerifySecretKmsConditions,
+} from "../helper/apiOriginVerify";
 import { authResources } from "../nestedStacks/auth/authBuilder-nestedStack";
 import { CUSTOM_AUTHORIZER_IGNORED_PATHS } from "../../config/config";
 
@@ -337,7 +344,8 @@ export function buildApiGatewayAuthorizerRestFunction(
     storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
+    subnets: ec2.ISubnet[],
+    apiOriginVerifySecret?: ApiOriginVerifySecretRef
 ): lambda.Function {
     const name = "apiGatewayAuthorizerRest";
 
@@ -413,6 +421,32 @@ export function buildApiGatewayAuthorizerRestFunction(
     storageResources.dynamo.apiKeyStorageTable.grantReadData(fun);
     storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
 
+    // CloudFront deployments: the origin verification secret, compared against the header CloudFront
+    // adds to forwarded requests before the CloudFront forwarding headers are read
+    // (common/auth/originVerify.py). The environment carries the secret ARN, never its value.
+    if (apiOriginVerifySecret) {
+        fun.addEnvironment("ORIGIN_VERIFY_SECRET_ARN", apiOriginVerifySecret.secretArn);
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["secretsmanager:GetSecretValue"],
+                resources: [apiOriginVerifySecret.secretArn],
+            })
+        );
+        if (apiOriginVerifySecret.kmsKeyArn) {
+            // Secrets Manager calls AWS KMS with the secret's ARN as encryption context, so the
+            // grant covers this secret only, also when the key encrypts other data.
+            fun.addToRolePolicy(
+                new iam.PolicyStatement({
+                    effect: iam.Effect.ALLOW,
+                    actions: ["kms:Decrypt"],
+                    resources: [apiOriginVerifySecret.kmsKeyArn],
+                    conditions: apiOriginVerifySecretKmsConditions(apiOriginVerifySecret),
+                })
+            );
+        }
+    }
+
     // Add KMS permissions for encrypted DynamoDB table access
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
 
@@ -420,6 +454,159 @@ export function buildApiGatewayAuthorizerRestFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+
+    return fun;
+}
+
+/**
+ * The AWS Secrets Manager rotation function of the API origin verification secret (CloudFront
+ * deployments only; built by the StaticWeb nested stack, which holds the distribution).
+ *
+ * Each rotation writes `{current: <new>, previous: <old>}` as the pending version, sets the regional
+ * web ACL's origin verification matches to the new and the old value, waits for the web ACL change to
+ * settle, points the distribution's origin header at the new value, then promotes the version. The
+ * secret, distribution and web ACL are passed by ARN or id; the environment carries no secret value.
+ *
+ * Runs outside the VPC in every configuration: Amazon CloudFront and AWS WAF have no interface VPC
+ * endpoint for their control plane, so a function in an isolated subnet cannot reach either API.
+ */
+export function buildApiOriginVerifyRotationFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    target: {
+        secret: ApiOriginVerifySecretRef;
+        distribution: cloudfront.IDistribution;
+        /** The regional web ACL, or undefined when `app.useWaf` is off. */
+        regionalWebAclArn?: string;
+        /** The distribution's CLOUDFRONT-scoped web ACL, or undefined when `app.useWaf` is off. */
+        cloudFrontWebAclArn?: string;
+    }
+): lambda.Function {
+    const name = "apiOriginVerifyRotation";
+    const environment: { [key: string]: string } = {
+        ORIGIN_VERIFY_DISTRIBUTION_ID: target.distribution.distributionId,
+    };
+    if (target.regionalWebAclArn) {
+        environment.ORIGIN_VERIFY_WEB_ACL_ARN = target.regionalWebAclArn;
+    }
+
+    const fun = new lambda.Function(scope, name, {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.auth.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(15),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        environment,
+    });
+
+    // The four rotation steps read the versions, write the pending one and move AWSCURRENT to it.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                "secretsmanager:DescribeSecret",
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:PutSecretValue",
+                "secretsmanager:UpdateSecretVersionStage",
+            ],
+            resources: [target.secret.secretArn],
+        })
+    );
+    // GetRandomPassword is not a resource-level action.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["secretsmanager:GetRandomPassword"],
+            resources: ["*"],
+        })
+    );
+    if (target.secret.kmsKeyArn) {
+        // Limited to this secret through the encryption context Secrets Manager passes to AWS KMS.
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey"],
+                resources: [target.secret.kmsKeyArn],
+                conditions: apiOriginVerifySecretKmsConditions(target.secret),
+            })
+        );
+    }
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: [
+                "cloudfront:GetDistribution",
+                "cloudfront:GetDistributionConfig",
+                "cloudfront:UpdateDistribution",
+            ],
+            resources: [target.distribution.distributionArn],
+        })
+    );
+    if (target.regionalWebAclArn) {
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["wafv2:GetWebACL", "wafv2:UpdateWebACL"],
+                resources: [target.regionalWebAclArn],
+            })
+        );
+        // UpdateWebACL is also authorized against each AWS managed rule group the web ACL
+        // references, so the function may name those rule groups in the update it submits.
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["wafv2:UpdateWebACL"],
+                resources: [
+                    Stack.of(scope).formatArn({
+                        service: "wafv2",
+                        resource: "regional",
+                        resourceName: "managedruleset/*/*",
+                        arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
+                    }),
+                ],
+            })
+        );
+    }
+    // UpdateDistribution resubmits the distribution's web ACL association (WebACLId) with the rest of
+    // the configuration, so the function may read that web ACL.
+    if (target.cloudFrontWebAclArn) {
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["wafv2:GetWebACL"],
+                resources: [target.cloudFrontWebAclArn],
+            })
+        );
+    }
+
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(fun);
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "secretsmanager:GetRandomPassword generates the new value and supports no resource-level permission.",
+                appliesTo: ["Resource::*"],
+            },
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "UpdateWebACL is authorized against each AWS managed rule group the regional web ACL references; the action is the only one granted on them.",
+                appliesTo: [
+                    {
+                        regex: "/^Resource::arn:.*:wafv2:.*:regional\\/managedruleset\\/\\*\\/\\*$/g",
+                    },
+                ],
+            },
+        ],
+        true
+    );
 
     return fun;
 }
