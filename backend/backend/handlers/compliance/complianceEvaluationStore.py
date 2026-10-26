@@ -944,7 +944,7 @@ def cascade_pending_marker(cascade: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def clear_cascade_pending_marker(cascade_table, cascade: Dict[str, Any]) -> bool:
+def clear_cascade_pending_marker(table, cascade: Dict[str, Any]) -> bool:
     """Release the parent's marker once `cascade` has left `pending_approval` (approved, rejected or
     aborted on its approval timeout). The delete is conditional on the marker being this cascade's,
     so a cascade without one (created through the API, or opened before markers existed) touches no
@@ -957,7 +957,7 @@ def clear_cascade_pending_marker(cascade_table, cascade: Dict[str, Any]) -> bool
     if not (cascade_id and database_id and asset_id):
         return False
     try:
-        cascade_table.delete_item(
+        table.delete_item(
             Key=cascade_pending_marker_key(database_id, asset_id),
             ConditionExpression="markerFor = :cascadeId",
             ExpressionAttributeValues={":cascadeId": cascade_id},
@@ -991,7 +991,7 @@ def cascade_approval_timed_out(cascade: Dict[str, Any], now: Optional[datetime] 
     return (now or datetime.now(timezone.utc)) >= deadline
 
 
-def expire_timed_out_cascade(cascade_table, cascade: Dict[str, Any],
+def expire_timed_out_cascade(table, cascade: Dict[str, Any],
                              now: Optional[datetime] = None) -> Dict[str, Any]:
     """The cascade as it stands once its approval timeout is enforced.
 
@@ -1006,7 +1006,7 @@ def expire_timed_out_cascade(cascade_table, cascade: Dict[str, Any],
     cascade_id = cascade.get("cascadeId")
     completed_at = (now or datetime.now(timezone.utc)).isoformat()
     try:
-        response = cascade_table.update_item(
+        response = table.update_item(
             Key={"cascadeId": cascade_id},
             UpdateExpression="SET #s = :aborted, abortReason = :reason, completedAt = :now",
             ExpressionAttributeNames={"#s": "state"},
@@ -1024,7 +1024,7 @@ def expire_timed_out_cascade(cascade_table, cascade: Dict[str, Any],
         if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
             raise
         # Another reader aborted it, or it was approved or rejected first: return what it left.
-        current = cascade_table.get_item(Key={"cascadeId": cascade_id}).get("Item")
+        current = table.get_item(Key={"cascadeId": cascade_id}).get("Item")
         return current or cascade
     write_audit(
         cascade.get("triggeredByDatabaseId", ""),
@@ -1035,7 +1035,7 @@ def expire_timed_out_cascade(cascade_table, cascade: Dict[str, Any],
         details={"reason": CASCADE_APPROVAL_TIMED_OUT_REASON,
                  "approvalTimeoutAt": cascade.get("approvalTimeoutAt")},
     )
-    clear_cascade_pending_marker(cascade_table, cascade)
+    clear_cascade_pending_marker(table, cascade)
     logger.info(f"Cascade {cascade_id} aborted: approval timed out")
     return response.get("Attributes") or {**cascade, "state": CASCADE_STATE_ABORTED,
                                           "abortReason": CASCADE_APPROVAL_TIMED_OUT_REASON,

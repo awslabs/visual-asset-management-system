@@ -392,6 +392,14 @@ function deriveNeeds(handlerModule: string): Needs {
         }
 
         for (const call of calls) {
+            // A transaction through the table resource's client (`table.meta.client
+            // .transact_write_items`) writes its Put items into that table: PutItem on it.
+            const transaction = /^(.+)\.meta\.client\.transact_write_items$/.exec(call.callee);
+            const transactionKey = transaction ? tables.get(transaction[1]) : undefined;
+            if (transactionKey) {
+                recordMethods(need(needs, transactionKey), ["put_item"]);
+                continue;
+            }
             const method = /^(.+)\.(\w+)$/.exec(call.callee);
             const receiverKey = method ? tables.get(method[1]) : undefined;
             if (receiverKey) {
@@ -454,15 +462,19 @@ class TableResolver {
     private readonly paramKeys = resourceKeyParamKeys();
 
     constructor(private readonly synth: SynthResult) {
-        const rootKey = Object.keys(synth.templates).find((k) => !k.endsWith(".nested"))!;
-        for (const resource of Object.values<any>(synth.templates[rootKey].Resources ?? {})) {
-            if (resource.Type !== "AWS::CloudFormation::Stack") continue;
-            for (const [name, value] of Object.entries<any>(
-                resource.Properties?.Parameters ?? {}
-            )) {
-                const attribute = value?.["Fn::GetAtt"]?.[1];
-                if (typeof attribute === "string" && attribute.startsWith("Outputs.")) {
-                    this.parameterToOutput.set(name, attribute.slice("Outputs.".length));
+        // Nested stacks are declared in the core stack, which is not the only top-level template
+        // (the synth also emits the API origin-verify stack beside it), so every template's
+        // nested-stack resources are read, not those of the first top-level template found.
+        for (const template of Object.values<any>(synth.templates)) {
+            for (const resource of Object.values<any>(template.Resources ?? {})) {
+                if (resource.Type !== "AWS::CloudFormation::Stack") continue;
+                for (const [name, value] of Object.entries<any>(
+                    resource.Properties?.Parameters ?? {}
+                )) {
+                    const attribute = value?.["Fn::GetAtt"]?.[1];
+                    if (typeof attribute === "string" && attribute.startsWith("Outputs.")) {
+                        this.parameterToOutput.set(name, attribute.slice("Outputs.".length));
+                    }
                 }
             }
         }

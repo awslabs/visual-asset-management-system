@@ -413,8 +413,11 @@ export function buildComplianceAuditServiceFunction(
  *   source, so a batch still running (or retried by Lambda after a throttle) is not redelivered to a
  *   second invocation meanwhile.
  * - Three receives before the dead-letter queue: an infrastructure error fails only its own record
- *   (`reportBatchItemFailures`), so the count is per record, and a record still failing after three
- *   deliveries is an operator's to redrive within the 14-day retention.
+ *   (`reportBatchItemFailures`), but an invocation that fails as a whole (a timeout, an error the
+ *   handler cannot attribute to one record) redelivers the whole batch, and an upload completion
+ *   held back to settle spends one receive, so a record's receives also count its batch's failures.
+ *   A record still failing after three deliveries is an operator's to redrive within the 14-day
+ *   retention.
  * - `maxConcurrency` caps the concurrent trigger invocations this queue drives, so a burst of
  *   changes (a bulk upload, a large binding) queues here instead of drawing the account's Lambda
  *   concurrency away from the API handlers; at 5 invocations of up to 10 messages each, a
