@@ -291,9 +291,23 @@ def _encode_offset_token(offset):
 # Business logic
 #######################
 
+def resolved_auto_eval(requested, db_item):
+    """The `complianceAutoEval` a database binding stores: the requested value when the request
+    names one; otherwise the stored value of an existing binding (a database row that names a
+    schema; a stored value that is not `true` reads as off, as the trigger reads it), and `true`
+    for a new binding."""
+    if requested is not None:
+        return bool(requested)
+    if (db_item or {}).get("complianceSchemaName"):
+        return db_item.get("complianceAutoEval") is True
+    return True
+
+
 def bind_schema_to_database(event, database_id, request: BindSchemaRequestModel):
     """Bind a schema to a database; every asset without an asset-level override becomes
-    pending_evaluation under it."""
+    pending_evaluation under it. `complianceAutoEval` is the request's when it names one; when it
+    is omitted, a database that already has a binding keeps its stored value (so changing the schema
+    never turns automatic evaluation on or off) and a new binding defaults it to true."""
     (valid, message) = _validate_database(database_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
@@ -318,7 +332,7 @@ def bind_schema_to_database(event, database_id, request: BindSchemaRequestModel)
     now = datetime.now(timezone.utc).isoformat()
     actor = claims_and_roles["tokens"][0]
     old_schema = db_item.get("complianceSchemaName")
-    auto_eval = True if request.complianceAutoEval is None else bool(request.complianceAutoEval)
+    auto_eval = resolved_auto_eval(request.complianceAutoEval, db_item)
 
     database_table.update_item(
         Key={"databaseId": database_id},

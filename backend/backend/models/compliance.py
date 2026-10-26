@@ -777,9 +777,11 @@ class RejectCascadeRequestModel(BaseModel, extra='ignore'):
 
 
 class BindSchemaRequestModel(BaseModel, extra='ignore'):
-    """Request model for binding a schema to a database or an asset."""
+    """Request model for binding a schema to a database or an asset. `complianceAutoEval` (database
+    binding only) is None when the request omits it: a new binding then defaults it to true and an
+    existing one keeps its stored value."""
     schemaName: str = Field(min_length=3, max_length=63, regex=id_pattern)
-    complianceAutoEval: Optional[bool] = True
+    complianceAutoEval: Optional[bool] = None
 
     _trim_names = validator('schemaName', pre=True, allow_reuse=True)(trim_name)
 

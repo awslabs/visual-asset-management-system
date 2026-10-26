@@ -2462,7 +2462,8 @@ if CONFIG.enable_writes:
         no override pending_evaluation and returns `assetsPendingEvaluation`; an asset binding marks
         that one asset. `auto_eval` (database binding only — the asset route does not read it, so
         it is not sent there) records whether the database's assets are re-evaluated
-        automatically; the handler defaults it to true.
+        automatically; when it is omitted, a new binding turns it on and a database that is already
+        bound keeps its setting (changing the schema does not change it).
         """
         return CLIENT.api.bind_compliance_schema(
             database_id,

@@ -16528,8 +16528,7 @@ components:
                     description: "Name of a GLOBAL schema or a schema scoped to the target database."
                 complianceAutoEval:
                     type: boolean
-                    description: "Database binding only: evaluate assets of the database automatically when they are created or updated."
-                    default: true
+                    description: "Database binding only: evaluate assets of the database automatically when they are created or updated. Omitted: true for a new binding; a database that is already bound keeps its stored value."
             required:
                 - schemaName
 

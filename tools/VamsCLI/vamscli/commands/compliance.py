@@ -685,13 +685,14 @@ def delete_schema(ctx: click.Context, schema_name: str, confirm: bool, json_outp
               help='[REQUIRED] Database to bind, or the database of --asset-id')
 @click.option('-a', '--asset-id', default=None,
               help='Bind this asset instead, overriding the database binding')
-@click.option('--no-auto-eval', is_flag=True,
-              help='Do not re-evaluate the database\'s assets automatically (database binding only)')
+@click.option('--auto-eval/--no-auto-eval', 'auto_eval', default=None,
+              help='Re-evaluate the database\'s assets automatically, or not (database binding '
+                   'only). Omitted: a new binding turns it on, an existing binding keeps its setting')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def bind(ctx: click.Context, schema_name: str, database_id: str, asset_id: Optional[str],
-         no_auto_eval: bool, json_output: bool):
+         auto_eval: Optional[bool], json_output: bool):
     """Bind a compliance schema to a database, or to one asset as an override.
 
     A database binding marks every asset in the database (except those with their own override)
@@ -702,20 +703,22 @@ def bind(ctx: click.Context, schema_name: str, database_id: str, asset_id: Optio
     Examples:
         vamscli compliance bind -n cad-quality -d my-database
         vamscli compliance bind -n cad-quality -d my-database --no-auto-eval
+        vamscli compliance bind -n cad-quality-v2 -d my-database   # keeps the auto-eval setting
         vamscli compliance bind -n strict-cad -d my-database -a my-asset
     """
     # Setup/auth already validated by decorator
     api_client = _api(ctx)
-    if asset_id and no_auto_eval:
+    if asset_id and auto_eval is not None:
         raise click.ClickException(
-            "--no-auto-eval applies to a database binding; the asset route does not read it"
+            "--auto-eval/--no-auto-eval applies to a database binding; the asset route does not "
+            "read it"
         )
     target = f"asset '{asset_id}'" if asset_id else f"database '{database_id}'"
     output_status(f"Binding schema '{schema_name}' to {target}...", json_output)
     try:
         result = api_client.bind_compliance_schema(
             database_id, schema_name, asset_id=asset_id,
-            auto_eval=None if asset_id else not no_auto_eval)
+            auto_eval=None if asset_id else auto_eval)
         output_result(result, json_output, success_message="✓ Compliance schema bound.")
         return result
     except _COMPLIANCE_ERRORS as e:

@@ -517,6 +517,31 @@ class TestDatabaseBinding:
         assert audit.kwargs["event_type"] == "schema_bound_to_database"
         assert audit.kwargs["details"] == {"previousSchema": "previous", "affectedAssets": 2}
 
+    @pytest.mark.parametrize("stored,body_flag,expected", [
+        # An existing binding keeps its stored setting when the request omits the flag (the web's
+        # Change schema sends the schema name only).
+        ({"complianceSchemaName": "previous", "complianceAutoEval": False}, None, False),
+        ({"complianceSchemaName": "previous", "complianceAutoEval": True}, None, True),
+        ({"complianceSchemaName": "previous"}, None, False),
+        # A new binding defaults to on.
+        ({}, None, True),
+        # A flag in the request always wins.
+        ({"complianceSchemaName": "previous", "complianceAutoEval": False}, True, True),
+        ({"complianceSchemaName": "previous", "complianceAutoEval": True}, False, False),
+        ({}, False, False),
+    ], ids=["keeps-off", "keeps-on", "legacy-row-reads-off", "new-defaults-on",
+            "explicit-on", "explicit-off", "new-explicit-off"])
+    def test_an_omitted_auto_eval_flag_keeps_an_existing_bindings_setting(
+            self, stored, body_flag, expected):
+        body = {"schemaName": SCHEMA}
+        if body_flag is not None:
+            body["complianceAutoEval"] = body_flag
+        response, tables = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=body),
+                                database_item={"databaseId": DB, **stored})
+        assert response["statusCode"] == 200
+        update = tables["database"].update_item.call_args.kwargs
+        assert update["ExpressionAttributeValues"][":autoEval"] is expected
+
     def test_binding_pages_the_asset_listing_to_exhaustion(self):
         schema_table, database_table, state_table, asset_table = _tables(
             database_item={"databaseId": DB})

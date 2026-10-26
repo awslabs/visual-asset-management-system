@@ -726,6 +726,16 @@ class TestComplianceBindingCommands:
                 'compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database'])
             assert result.exit_code == 0
             assert 'assetsPendingEvaluation: 3' in result.output
+            # Without a flag the CLI omits it, so an existing binding keeps its setting.
+            mocks['api_client'].bind_compliance_schema.assert_called_once_with(
+                'my-database', 'cad-quality', asset_id=None, auto_eval=None)
+
+    def test_bind_database_with_auto_eval(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = {'schemaName': 'cad-quality'}
+            result = cli_runner.invoke(cli, [
+                'compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database', '--auto-eval'])
+            assert result.exit_code == 0
             mocks['api_client'].bind_compliance_schema.assert_called_once_with(
                 'my-database', 'cad-quality', asset_id=None, auto_eval=True)
 

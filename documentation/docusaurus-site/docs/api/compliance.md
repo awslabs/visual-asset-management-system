@@ -399,10 +399,10 @@ PUT /compliance/bind/{databaseId}
 
 ### Request body
 
-| Field                | Type    | Required | Description                                                                                      |
-| -------------------- | ------- | -------- | ------------------------------------------------------------------------------------------------ |
-| `schemaName`         | string  | Yes      | A `GLOBAL` schema or a schema scoped to this database                                            |
-| `complianceAutoEval` | boolean | No       | Evaluate assets of this database automatically when they are created or updated (default `true`) |
+| Field                | Type    | Required | Description                                                                                                                                                                                                            |
+| -------------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schemaName`         | string  | Yes      | A `GLOBAL` schema or a schema scoped to this database                                                                                                                                                                  |
+| `complianceAutoEval` | boolean | No       | Evaluate assets of this database automatically when they are created or updated. Omitted: `true` for a new binding; a database that is already bound keeps its stored value, so changing the schema does not change it |
 
 ```json
 { "schemaName": "survey-compliance", "complianceAutoEval": true }

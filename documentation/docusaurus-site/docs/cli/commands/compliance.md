@@ -202,13 +202,13 @@ Bind a schema to a database, or to one asset as an override of the database bind
 vamscli compliance bind [OPTIONS]
 ```
 
-| Option                | Type | Required | Description                                                                    |
-| --------------------- | ---- | -------- | ------------------------------------------------------------------------------ |
-| `-n`, `--schema-name` | TEXT | Yes      | Schema to bind                                                                 |
-| `-d`, `--database-id` | TEXT | Yes      | Database to bind, or the database of `--asset-id`                              |
-| `-a`, `--asset-id`    | TEXT | No       | Bind this asset instead, overriding the database binding                       |
-| `--no-auto-eval`      | FLAG | No       | Do not re-evaluate the database's assets automatically (database binding only) |
-| `--json-output`       | FLAG | No       | Output raw JSON response                                                       |
+| Option                           | Type | Required | Description                                                                                                                                                   |
+| -------------------------------- | ---- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-n`, `--schema-name`            | TEXT | Yes      | Schema to bind                                                                                                                                                |
+| `-d`, `--database-id`            | TEXT | Yes      | Database to bind, or the database of `--asset-id`                                                                                                             |
+| `-a`, `--asset-id`               | TEXT | No       | Bind this asset instead, overriding the database binding                                                                                                      |
+| `--auto-eval` / `--no-auto-eval` | FLAG | No       | Re-evaluate the database's assets automatically, or not (database binding only). Omitted: a new binding turns it on and an existing binding keeps its setting |
+| `--json-output`                  | FLAG | No       | Output raw JSON response                                                                                                                                      |
 
 ```bash
 vamscli compliance bind -n cad-quality -d my-database
@@ -216,7 +216,7 @@ vamscli compliance bind -n cad-quality -d my-database --no-auto-eval
 vamscli compliance bind -n strict-cad -d my-database -a my-asset
 ```
 
-A database binding marks every asset in the database that has no override `pending_evaluation` and reports the count as `assetsPendingEvaluation`. Only a `GLOBAL` schema or one scoped to the database can be bound, and a `legacy` schema (see `schema list`) is refused with `Schema body must be a vams-rules-v1 document`. `--no-auto-eval` is rejected together with `--asset-id`: the asset route does not read that flag.
+A database binding marks every asset in the database that has no override `pending_evaluation` and reports the count as `assetsPendingEvaluation`. Only a `GLOBAL` schema or one scoped to the database can be bound, and a `legacy` schema (see `schema list`) is refused with `Schema body must be a vams-rules-v1 document`. Changing the schema of a bound database without either flag keeps its automatic-evaluation setting. `--auto-eval` and `--no-auto-eval` are rejected together with `--asset-id`: the asset route does not read the flag.
 
 ---
 
