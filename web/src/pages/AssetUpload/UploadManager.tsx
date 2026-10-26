@@ -131,6 +131,7 @@ export default function UploadManager({
         createFilePartsFromSequences,
     } = useMultiSequenceUpload();
     const {
+        fileParts,
         completedParts,
         totalParts,
         setFileParts,
@@ -955,11 +956,7 @@ export default function UploadManager({
             // A file can be Failed with every part uploaded: refused by the server at completion,
             // or stopped before completion. Re-uploading has nothing to send for it and would
             // leave its row Queued; the completion step's own Retry is the action for that case.
-            if (
-                !getFileParts().some(
-                    (part) => part.fileIndex === fileIndex && part.status === "failed"
-                )
-            ) {
+            if (!hasFailedParts(getFileParts(), fileIndex)) {
                 console.log(`File at index ${fileIndex} has no failed parts to re-upload`);
                 return;
             }
@@ -1817,8 +1814,13 @@ export default function UploadManager({
                     allItems={fileUploadItems}
                     resume={false}
                     showCount={true}
-                    onRetry={failedFilesCount > 0 ? handleRetry : undefined}
+                    // Offer a re-upload only when there is a failed part to send: a file the
+                    // server refused at completion is Failed with every part uploaded.
+                    onRetry={
+                        failedFilesCount > 0 && hasFailedParts(fileParts) ? handleRetry : undefined
+                    }
                     onRetryItem={handleRetryFile}
+                    canRetryItem={(fileIndex) => hasFailedParts(fileParts, fileIndex)}
                     onCancelItem={handleCancelFile}
                     cancelConfirmFileIndex={cancelConfirmFileIndex}
                     onConfirmCancel={confirmCancelFile}
@@ -1830,6 +1832,21 @@ export default function UploadManager({
 }
 
 // Helper functions
+
+/**
+ * Whether a part re-upload has anything to send: some part, of the given file or of any file, is
+ * "failed". The re-upload handlers re-queue only failed parts, so without one they do nothing.
+ */
+function hasFailedParts(
+    parts: { fileIndex: number; status: string }[],
+    fileIndex?: number
+): boolean {
+    return parts.some(
+        (part) =>
+            part.status === "failed" && (fileIndex === undefined || part.fileIndex === fileIndex)
+    );
+}
+
 function getStatusIndicatorType(
     status: string
 ): "pending" | "loading" | "success" | "error" | "info" | "warning" | "stopped" {
