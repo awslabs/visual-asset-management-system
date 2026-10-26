@@ -72,6 +72,8 @@ interface FileUploadTableProps {
     allItems: FileUploadTableItem[];
     onRetry?: () => void;
     onRetryItem?: (index: number) => void;
+    // Whether a Failed row's retry can do anything; without it every Failed row offers a retry.
+    canRetryItem?: (index: number) => boolean;
     onCancelItem?: (index: number) => void;
     cancelConfirmFileIndex?: number | null;
     onConfirmCancel?: (index: number) => void;
@@ -277,6 +279,7 @@ export const FileUploadTable = ({
     allItems,
     onRetry,
     onRetryItem,
+    canRetryItem,
     onCancelItem,
     cancelConfirmFileIndex,
     onConfirmCancel,
@@ -360,14 +363,16 @@ export const FileUploadTable = ({
                 header: "Actions",
                 cell: (item: FileUploadTableItem) => (
                     <SpaceBetween direction="horizontal" size="xs">
-                        {item.status === "Failed" && onRetryItem && (
-                            <Button
-                                iconName="refresh"
-                                variant="icon"
-                                onClick={() => onRetryItem(item.index)}
-                                ariaLabel={`Retry ${item.name}`}
-                            />
-                        )}
+                        {item.status === "Failed" &&
+                            onRetryItem &&
+                            (!canRetryItem || canRetryItem(item.index)) && (
+                                <Button
+                                    iconName="refresh"
+                                    variant="icon"
+                                    onClick={() => onRetryItem(item.index)}
+                                    ariaLabel={`Retry ${item.name}`}
+                                />
+                            )}
                         {(item.status === "Queued" || item.status === "In Progress") &&
                             onCancelItem &&
                             onConfirmCancel &&
