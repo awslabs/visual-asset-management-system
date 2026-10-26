@@ -255,6 +255,16 @@ At least one field must be provided. The `databaseId` cannot be changed after cr
 }
 ```
 
+A caller who may call this route but is not permitted to update the database itself receives `403`, and nothing is written.
+
+### Error responses
+
+| Status | Description                                                                    |
+| ------ | ------------------------------------------------------------------------------ |
+| `400`  | Validation error, no updatable field supplied, or database or bucket not found |
+| `403`  | Not authorized                                                                 |
+| `500`  | Internal server error                                                          |
+
 ---
 
 ## Delete a database
