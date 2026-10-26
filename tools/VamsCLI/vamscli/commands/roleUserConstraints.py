@@ -8,6 +8,7 @@ from ..constants import API_ROLES, API_ROLE_BY_ID, API_CONSTRAINTS, API_CONSTRAI
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error
+from ..utils.confirmation import confirm_destructive_action
 from ..utils.exceptions import (
     RoleNotFoundError, RoleAlreadyExistsError, RoleDeletionError, InvalidRoleDataError,
     ConstraintNotFoundError, ConstraintAlreadyExistsError, ConstraintDeletionError, InvalidConstraintDataError,
@@ -498,7 +499,7 @@ def delete(ctx: click.Context, role_name: str, confirm: bool, json_output: bool)
             click.secho(f"⚠️  You are about to delete role '{role_name}'", fg='red', bold=True)
             click.echo("This action cannot be undone!")
             
-            if not click.confirm("Are you sure you want to proceed?"):
+            if not confirm_destructive_action():
                 click.echo("Deletion cancelled.")
                 return None
         
@@ -1103,7 +1104,7 @@ def delete_constraint(ctx: click.Context, constraint_id: str, confirm: bool, jso
             click.secho(f"⚠️  You are about to delete constraint '{constraint_id}'", fg='red', bold=True)
             click.echo("This action cannot be undone!")
             
-            if not click.confirm("Are you sure you want to proceed?"):
+            if not confirm_destructive_action():
                 click.echo("Deletion cancelled.")
                 return None
         
@@ -1645,7 +1646,7 @@ def delete_user_roles(ctx: click.Context, user_id: str, confirm: bool, json_outp
             click.secho(f"⚠️  You are about to delete ALL roles for user '{user_id}'", fg='red', bold=True)
             click.echo("This action cannot be undone!")
             
-            if not click.confirm("Are you sure you want to proceed?"):
+            if not confirm_destructive_action():
                 click.echo("Deletion cancelled.")
                 return None
         

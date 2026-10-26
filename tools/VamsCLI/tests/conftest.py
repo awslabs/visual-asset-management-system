@@ -150,6 +150,17 @@ def cli_runner():
 
 
 @pytest.fixture
+def interactive_stdin(monkeypatch):
+    """Treat stdin as an interactive terminal, as it is for a person at a prompt.
+
+    CliRunner's stdin is not a terminal, so without this fixture the second confirmation of a
+    destructive command (``vamscli/utils/confirmation.py``) is skipped and an ``input=`` answer is
+    never read. Use it in tests of the interactive prompt.
+    """
+    monkeypatch.setattr('vamscli.utils.confirmation.stdin_is_interactive', lambda: True)
+
+
+@pytest.fixture
 def mock_profile_manager():
     """Provide a properly configured mock ProfileManager.
     

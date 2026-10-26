@@ -136,6 +136,8 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Documentation** The README prerequisites, developer setup, architecture security and networking pages, configuration reference, update guide, common issues, the v2.2-to-v2.3 and v2.5-to-v2.6 migration READMEs and the viewer plugin README run the AWS CDK CLI as `npx cdk` from `infra/`, so every instruction uses the version pinned in `infra/package.json`. ([#797](https://github.com/awslabs/visual-asset-management-system/issues/797))
 -   **CDK** On an Application Load Balancer deployment, the web app bucket policy and its Amazon S3 interface endpoint policy allow only object reads (`s3:GetObject`) instead of every S3 `Get` and `List` action. ([#823](https://github.com/awslabs/visual-asset-management-system/pull/823))
 -   **Documentation** The external OAuth section of the configuration reference and the FAQ state which access-token claims the authorizer requires (`aud` equal to `lambdaAuthorizorJWTAudience`) and which claims identify the user, and that an Amazon Cognito user pool cannot be used as the external identity provider. ([#788](https://github.com/awslabs/visual-asset-management-system/issues/788))
+-   **CLI** `vamscli user cognito list` lists the user pool's users instead of reporting "No Cognito users found.", with and without `--auto-paginate`; the `--auto-paginate --json-output` result lists them under `users`, the key the API returns. ([#808](https://github.com/awslabs/visual-asset-management-system/issues/808))
+-   **CLI** Destructive commands that require `--confirm` (`assets delete`, `database delete`, `role delete`, `role constraint delete`, `role user delete`, `user cognito delete`, and `sync file push --permanent-delete` / `sync file pull --allow-delete`) ask their additional "Are you sure?" question only in an interactive terminal; in a script, pipe or CI job `--confirm` alone proceeds instead of the command reporting "Operation cancelled by user." and deleting nothing. ([#809](https://github.com/awslabs/visual-asset-management-system/issues/809))
 
 ### Chores
 
@@ -146,6 +148,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Documentation** The upload initialization rate limit is stated as 20 per user per minute everywhere. ([#658](https://github.com/awslabs/visual-asset-management-system/issues/658))
 -   **Documentation** The allowed-routes listing's handling of templated `{param}` path segments is documented in the API, CLI and MCP docs and the permissions model. ([#604](https://github.com/awslabs/visual-asset-management-system/issues/604))
 -   **Security** Dependency update to resolve security advisories: `dompurify` 3.4.17 (`web/`, the Cesium 3D Tileset viewer install in `web/customInstalls/cesium`, and the documentation site). ([#757](https://github.com/awslabs/visual-asset-management-system/pull/757))
+-   **Security** Dependency updates to resolve security advisories: `follow-redirects` 1.16.1 (`web/` and the documentation site), `vite` 8.1.6 (`web/` build and development server) and `launch-editor` 2.14.2 (documentation site development server). ([#821](https://github.com/awslabs/visual-asset-management-system/issues/821))
 
 ### Known Outstanding Issues
 
