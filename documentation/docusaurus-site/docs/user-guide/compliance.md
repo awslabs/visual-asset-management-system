@@ -56,7 +56,7 @@ The page reports the outcome and reloads the binding and the overview. In the da
 3. In the **Compliance Schema** field, select the schema to bind. `GLOBAL` schemas and schemas scoped to this database are offered.
 4. Choose **Update Database**.
 
-Every asset in the database without an asset-level override is marked `pending_evaluation`. Use **Evaluate Now** on individual assets or **Sweep** on the schema to produce verdicts. With automatic evaluation on (the default for a binding), an asset is also evaluated whenever it is created or updated — once per upload, however many files it contains; a file that arrives after that evaluation started is evaluated separately.
+Every asset in the database without an asset-level override is marked `pending_evaluation`. Use **Evaluate Now** on individual assets or **Sweep** on the schema to produce verdicts. With automatic evaluation on (the default for a binding), an asset is also evaluated whenever it is created or updated — once per upload, however many files it contains, about a minute after the upload completes (an upload of more than 50 files, which the CLI and the web uploader send as several requests, is evaluated once when its requests complete within a minute of each other); a file that arrives after that evaluation started is evaluated separately.
 
 The same binding is made with the API:
 

@@ -81,6 +81,7 @@ a further evaluation does not open another.
 
 import json
 import math
+import os
 import urllib.parse
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -117,6 +118,10 @@ dynamodb = boto3.resource("dynamodb", config=retry_config)
 # Reads the change-provenance metadata of the object a file event names (HeadObject only), signed
 # for the Region of the event's bucket.
 s3_client = region_routing_s3_client()
+# Defers an upload completion's queue record (ChangeMessageVisibility on the trigger's own queue,
+# `TriggerBatch.defer`); the queue's URL is set by complianceFunctions.ts.
+sqs_client = boto3.client("sqs", config=retry_config)
+trigger_queue_url = os.environ.get("COMPLIANCE_TRIGGER_QUEUE_URL", "")
 logger = safeLogger(service_name="ComplianceTrigger")
 
 SCHEMA_SOURCE_DATABASE = "database"
@@ -157,6 +162,20 @@ COVERAGE_PATH_DIRECT = "direct"
 # stamp is written after every object of the upload was copied, so the ordering is causal. The same
 # holds for the objects an asset-version revert copies and the `lastAssetVersionAt` written after them.
 EVALUATION_COVERS_CHANGE_MARGIN = timedelta(seconds=2)
+
+# How long an upload completion settles before it is evaluated. A client sends an upload of more
+# than 50 files as several upload requests (`vamscli` and the web uploader both cap a request at 50
+# files and run the requests in parallel), and each request's completion stamps the asset row. The
+# completion's stream record is therefore held back (`TriggerBatch.defer`) until the completion is
+# this old, and then evaluated only when no later completion has been recorded on the row by then
+# (`upload_completion_superseded`): consecutive completions of one upload coalesce into one
+# evaluation over the final file set, by the last one. A client's requests complete as their parts
+# finish uploading, so the gap between two completions is about one request's transfer time — a
+# few seconds for small files (6 s measured for a 100-file upload), up to a minute for about a
+# gigabyte per request at 20 MB/s. Requests completing further apart are evaluated each, as before.
+# The cost is this much added latency between an upload's completion and its evaluation; other
+# changes are not held back.
+UPLOAD_COMPLETION_SETTLE_SECONDS = 60
 
 # Audit event of a permanently deleted asset whose compliance record the trigger removed.
 AUDIT_EVENT_ASSET_DELETED = "asset_deleted"
@@ -256,6 +275,8 @@ class TriggerBatch:
         self._targets = {}
         self._file_targets = {}
         self._link_endpoints = {}
+        # Per queue record: (receipt handle, ApproximateReceiveCount), for `defer`.
+        self._receipts = {}
 
     def run(self, record_id, step, *args, **kwargs):
         """Run `step` for the queue record `record_id`; an exception is logged, and an
@@ -273,6 +294,35 @@ class TriggerBatch:
     def fail(self, message_id):
         if message_id and message_id not in self._failed:
             self._failed.append(message_id)
+
+    def note_receipt(self, message_id, record):
+        """Remember the receipt handle and receive count of the queue record `message_id`."""
+        if not message_id or not isinstance(record, dict):
+            return
+        try:
+            count = int((record.get("attributes") or {}).get("ApproximateReceiveCount", "1"))
+        except (TypeError, ValueError):
+            count = 1
+        self._receipts[message_id] = (record.get("receiptHandle") or "", count)
+
+    def defer(self, message_id, seconds):
+        """Hold the queue record `message_id` back for `seconds`: its visibility timeout is set to
+        that, and it is reported failed, so SQS delivers it again then. Only a record on its first
+        delivery is deferred, so a deferral costs one of the queue's receives and the record keeps
+        two for infrastructure retries. Returns False, and the caller processes the record now, when
+        it cannot be deferred (no receipt, a redelivery, no queue URL, or the call failed)."""
+        handle, count = self._receipts.get(message_id, ("", 0))
+        if not handle or count != 1 or not trigger_queue_url:
+            return False
+        try:
+            sqs_client.change_message_visibility(
+                QueueUrl=trigger_queue_url, ReceiptHandle=handle,
+                VisibilityTimeout=max(1, int(math.ceil(seconds))))
+        except Exception as e:
+            logger.warning(f"Could not defer a queue record; processing it now: {e}")
+            return False
+        self.fail(message_id)
+        return True
 
     def failures(self):
         """The `batchItemFailures` an SQS event source with `ReportBatchItemFailures` reads."""
@@ -358,6 +408,7 @@ def lambda_handler(event, context):
     batch = TriggerBatch()
     for record in event.get("Records", []) or []:
         message_id = record.get("messageId", "") if isinstance(record, dict) else ""
+        batch.note_receipt(message_id, record)
         message = message_from_queue_record(record)
         if message is None:
             logger.info("Queue record carries no indexer message, skipping")
@@ -420,6 +471,19 @@ def _process_stream_record(message, batch, message_id=""):
     # stamp is the completion that raised the event.
     stamp_time = (parse_event_time(_image_string(new_image, LAST_CHANGE_AT_ATTRIBUTE))
                   if is_modify else None)
+    if is_modify and _image_change_source(new_image) == VAMS_CHANGE_SOURCE_UPLOAD:
+        # An upload completion settles first, and the last of consecutive completions evaluates.
+        completion = (parse_event_time(_image_string(new_image, LAST_UPLOAD_AT_ATTRIBUTE))
+                      or stamp_time)
+        wait = upload_completion_wait_seconds(completion)
+        if wait > 0 and batch.defer(message_id, wait):
+            logger.info(f"Upload completion of asset {asset_id} at "
+                        f"{completion.isoformat() if completion else 'none'} settles for "
+                        f"{math.ceil(wait)} s before it is evaluated")
+            return
+        batch.add_candidate(message_id, _process_upload_completion, database_id, asset_id,
+                            completion=completion, stamp_time=stamp_time)
+        return
     if is_modify and _image_change_source(new_image) in ASYNC_STAMPED_SOURCES:
         # A stamp this trigger wrote from an indexer event carries the DynamoDB stream's instant of
         # the change (`indexed_change_time`), not the evaluating Lambda's clock, so it is compared
@@ -431,6 +495,50 @@ def _process_stream_record(message, batch, message_id=""):
     batch.add_candidate(message_id, _process_compliance_event, database_id, asset_id,
                         completion_time=stamp_time, path=COVERAGE_PATH_STREAM,
                         stamp_attribute=LAST_CHANGE_AT_ATTRIBUTE)
+
+
+def _now():
+    return datetime.now(timezone.utc)
+
+
+def upload_completion_wait_seconds(completion):
+    """How much longer an upload completion recorded at `completion` settles before it is evaluated
+    (`UPLOAD_COMPLETION_SETTLE_SECONDS`); 0 when it is old enough or its instant is unknown."""
+    if completion is None:
+        return 0
+    remaining = (completion + timedelta(seconds=UPLOAD_COMPLETION_SETTLE_SECONDS) - _now())
+    return max(0.0, remaining.total_seconds())
+
+
+def upload_completion_superseded(asset_row, completion):
+    """Whether the asset row records a completion later than the upload completion at `completion`:
+    a later upload request of the same upload (or an asset-version create or revert) completed
+    since. That completion raised its own stream record, which evaluates the asset with every file
+    in place, so this one is not evaluated. A row that cannot be read or records nothing later is
+    not superseded."""
+    if completion is None or not isinstance(asset_row, dict):
+        return False
+    latest = file_event_completion_time(asset_row)
+    return latest is not None and latest > completion
+
+
+def _process_upload_completion(database_id, asset_id, completion=None, stamp_time=None, batch=None):
+    """An upload completion's stream MODIFY, once it has settled: skipped when a later completion
+    superseded it (`upload_completion_superseded`, read from the row strongly consistent), else
+    evaluated like any other completion."""
+    batch = batch if batch is not None else TriggerBatch()
+    if (database_id, asset_id) in batch.evaluated:
+        return
+    asset_row = asset_table.get_item(Key={"databaseId": database_id, "assetId": asset_id},
+                                     ConsistentRead=True).get("Item")
+    if upload_completion_superseded(asset_row, completion):
+        logger.info(f"Upload completion of asset {asset_id} at {completion.isoformat()} was "
+                    f"followed by a later completion "
+                    f"({file_event_completion_time(asset_row).isoformat()}); that one evaluates")
+        return
+    _process_compliance_event(database_id, asset_id, completion_time=stamp_time,
+                              path=COVERAGE_PATH_STREAM, stamp_attribute=LAST_CHANGE_AT_ATTRIBUTE,
+                              batch=batch)
 
 
 def _register_new_asset(database_id, asset_id, batch=None):
@@ -724,7 +832,9 @@ def _evaluate_file_record(s3_record, message, decided, batch=None):
     # The object is not a workflow execution's (those were skipped above), so it belongs to a
     # user upload's completion, to an asset-version revert's stamp, or to a direct write.
     stamp_attribute, completion_time = file_event_completion_stamp(asset_row)
-    if upload_object_awaits_its_completion(change_source, change_time, completion_time):
+    if (upload_object_awaits_its_completion(change_source, change_time, completion_time)
+            or upload_object_awaits_its_settling_completion(change_source, stamp_attribute,
+                                                            change_time, completion_time)):
         logger.info(coverage_log_line(asset_id, COVERAGE_PATH_FILE, stamp_attribute,
                                       completion_time, change_time, target[0], False,
                                       outcome="deferred"))
@@ -755,6 +865,21 @@ def upload_object_awaits_its_completion(change_source, change_time, completion_t
     if completion_time is None:
         return True
     return change_time is not None and change_time > completion_time
+
+
+def upload_object_awaits_its_settling_completion(change_source, stamp_attribute, change_time,
+                                                 completion_time):
+    """Whether an object the upload API wrote, of an upload completion the row already records,
+    leaves the evaluation to that completion's stream record because the completion is still
+    settling (`UPLOAD_COMPLETION_SETTLE_SECONDS`). That record is held back until then and
+    evaluates the asset unless a later completion of the same upload superseded it, so an object
+    event must not evaluate the partial file set meanwhile. Once the completion has settled, the
+    object is judged by the stamp as before."""
+    return (change_source == VAMS_CHANGE_SOURCE_UPLOAD
+            and stamp_attribute == LAST_UPLOAD_AT_ATTRIBUTE
+            and completion_time is not None
+            and (change_time is None or change_time <= completion_time)
+            and upload_completion_wait_seconds(completion_time) > 0)
 
 
 def file_event_completion_time(asset_row):
@@ -957,7 +1082,8 @@ def coverage_log_line(asset_id, path, stamp_attribute, completion_time, change_t
     (file path) or, for a stamp this trigger wrote from an indexer event, the stamp's instant (it is
     judged across the skew margin like an `eventTime`), the last evaluation it was compared with, and
     the outcome (`covered`, `evaluating`, or `deferred` for an upload's object that waits for its
-    completion stamp, `upload_object_awaits_its_completion`). An absent value reads `none`."""
+    completion stamp, `upload_object_awaits_its_completion`, or for its completion to settle,
+    `upload_object_awaits_its_settling_completion`). An absent value reads `none`."""
     def _instant(value):
         return value.isoformat() if value is not None else "none"
 

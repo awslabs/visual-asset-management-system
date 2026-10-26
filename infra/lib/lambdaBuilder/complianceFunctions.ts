@@ -567,6 +567,10 @@ export function buildComplianceTriggerFunction(
     );
 
     triggerQueue.grantConsumeMessages(fun);
+    // The trigger holds an upload completion's record back on this queue until the completion has
+    // settled (ChangeMessageVisibility, part of the consume grant), so consecutive completions of
+    // one multi-request upload are evaluated once (complianceTrigger.UPLOAD_COMPLETION_SETTLE_SECONDS).
+    fun.addEnvironment("COMPLIANCE_TRIGGER_QUEUE_URL", triggerQueue.queueUrl);
 
     // GovCloud and EU Sovereign Lambda reject Tags on an event source mapping, which the high-level
     // addEventSource() stamps from the stack tags; there the mapping is built directly and its Tags

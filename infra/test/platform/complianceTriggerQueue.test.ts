@@ -363,6 +363,16 @@ describe("compliance trigger queue", () => {
         expect(getAtt(st.Resource)).toBe(source.id);
     });
 
+    test("the trigger knows its own queue's URL, to hold an upload completion back on it", () => {
+        const { source } = queues(commercial);
+        const trigger = resources(commercial, "AWS::Lambda::Function").find(
+            (f) => f.id === triggerFunctionId(commercial)
+        )!;
+        expect(trigger.Properties.Environment.Variables.COMPLIANCE_TRIGGER_QUEUE_URL).toEqual({
+            Ref: source.id,
+        });
+    });
+
     test("the trigger can stamp the asset row with UpdateItem and writes it no other way", () => {
         const statements = [
             ...resources(commercial, "AWS::IAM::Policy"),

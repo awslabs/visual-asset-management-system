@@ -98,13 +98,15 @@ def _s3_head(change_source=None):
 def _run(event, database_item=None, compliance_record=None, children=(), asset_rows=None,
          evaluation=EVALUATION, evaluation_rows=None, head=None, cascade_table=None,
          compliance_records=None, run_evaluation_effect=None, database_effect=None,
-         asset_query_effect=None):
+         asset_query_effect=None, asset_item=None):
     """Run the handler against stand-ins. `asset_rows` answers every assetIdGSI query; a dict maps an
     assetId to its own rows. `compliance_records` maps `databaseId:assetId` to a state row and
     takes precedence over `compliance_record`. `cascade_table` replaces the MagicMock cascade table
     (a moto-backed table for the dedup tests). `run_evaluation_effect` / `database_effect` become
     the side effect of `run_evaluation` / the database row read (an exception to raise, or a
-    callable), `asset_query_effect` that of the assetIdGSI query. The handler's response is returned under `response`."""
+    callable), `asset_query_effect` that of the assetIdGSI query. `asset_item`, when given, is the
+    asset row a strongly consistent read by key returns. The handler's response is returned under
+    `response`."""
     database_table = MagicMock(name="database_table")
     database_table.get_item.return_value = {"Item": database_item} if database_item else {}
     if database_effect is not None:
@@ -121,6 +123,8 @@ def _run(event, database_item=None, compliance_record=None, children=(), asset_r
         asset_table.query.return_value = {"Items": list(asset_rows or [])}
     if asset_query_effect is not None:
         asset_table.query.side_effect = asset_query_effect
+    if asset_item is not None:
+        asset_table.get_item.return_value = {"Item": asset_item}
     s3_client = MagicMock(name="s3_client")
     if isinstance(head, (Exception, list)):
         s3_client.head_object.side_effect = head
