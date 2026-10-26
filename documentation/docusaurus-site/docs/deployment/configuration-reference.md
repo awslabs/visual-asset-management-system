@@ -513,7 +513,7 @@ When external OAuth IdP is enabled, configuration validation applies this rule: 
 :::
 
 :::note[Redirect URI to register with the IdP]
-The web application sends the page URL without its query string or `#/` route as the `redirect_uri` on both the authorization request and the token request. A deep link is carried in the OAuth `state` parameter instead. Register `https://<web host>/` for Amazon CloudFront deployments, and `https://<web host>/index.html` for ALB deployments, where the listener redirects `/` to `/index.html`.
+The web application sends the page URL without its query string or `#/` route as the `redirect_uri` on both the authorization request and the token request. A deep link is kept in the browser instead, and the OAuth `state` parameter carries an opaque random value, so sign-in returns to the deep link even when the identity provider returns `state` without percent-encoding. Register `https://<web host>/` for Amazon CloudFront deployments, and `https://<web host>/index.html` for ALB deployments, where the listener redirects `/` to `/index.html`.
 :::
 
 :::note[Tokens the authorizer accepts]
