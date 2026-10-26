@@ -20,6 +20,7 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { appCache } from "../services/appCache";
+import { fetchLoginProfile } from "../services/APIService";
 import Auth from "./Auth";
 
 /**
@@ -227,4 +228,65 @@ describe("Auth secure-config fetch", () => {
         await new Promise((resolve) => setTimeout(resolve, 2500));
         expect(mockGetSecureConfig).toHaveBeenCalledTimes(3);
     }, 30000);
+});
+
+/**
+ * Issue #816: a session signed in on a cached amplify-config from before
+ * `externalOAuthIdpUserIdClaim` was set (or changed) takes the claim the refreshed amplify-config
+ * names, and the login profile is requested for that user id. Durable (root CLAUDE.md Rule 13).
+ */
+describe("Auth external OAuth user id follows the refreshed amplify-config", () => {
+    const claims = {
+        sub: "sub-1",
+        username: "plain-name",
+        email: "first.last@example.com",
+    };
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        localStorage.clear();
+        appCache.setItem("config", OAUTH2_CONFIG); // cached: no user id claim
+        localStorage.setItem(
+            "oauth2_token",
+            JSON.stringify({
+                accessToken: "h." + btoa(JSON.stringify(claims)) + ".s",
+                refreshToken: "r1",
+                expiresAt: Date.now() + 3_600_000,
+            })
+        );
+        localStorage.setItem("user", JSON.stringify({ username: "plain-name" })); // the chain
+        mockGetSecureConfig.mockResolvedValue(SECURE_CONFIG);
+    });
+
+    it("re-derives the user and requests the login profile for it", async () => {
+        mockGetAmplifyConfig.mockResolvedValue({
+            ...OAUTH2_CONFIG,
+            externalOAuthIdpUserIdClaim: "email",
+        });
+
+        renderAuth();
+
+        expect(await screen.findByTestId("app-children")).toBeInTheDocument();
+        expect((window as any).DISABLE_COGNITO).toBe(true);
+        await waitFor(() =>
+            expect(JSON.parse(localStorage.getItem("user")!).username).toBe(
+                "first.last@example.com"
+            )
+        );
+        await waitFor(() =>
+            expect(fetchLoginProfile).toHaveBeenCalledWith({ username: "first.last@example.com" })
+        );
+    });
+
+    it("positive control: an unchanged amplify-config leaves the user alone", async () => {
+        mockGetAmplifyConfig.mockResolvedValue({ ...OAUTH2_CONFIG });
+
+        renderAuth();
+
+        expect(await screen.findByTestId("app-children")).toBeInTheDocument();
+        await waitFor(() =>
+            expect(fetchLoginProfile).toHaveBeenCalledWith({ username: "plain-name" })
+        );
+        expect(JSON.parse(localStorage.getItem("user")!).username).toBe("plain-name");
+    });
 });

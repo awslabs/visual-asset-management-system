@@ -5,6 +5,7 @@
 
 import { fetchAuthSession, TokenProvider, decodeJWT } from "aws-amplify/auth";
 import { OAuth2Token, OAuth2Client } from "@badgateway/oauth2-client";
+import { appCache } from "../services/appCache";
 
 /**
  * Reference to the OAuth2Client instance from Auth.tsx
@@ -77,11 +78,7 @@ export function externalTokenValidation(): [boolean, boolean] {
 /**
  * Parses JWT token to extract payload
  */
-const parseJwt = (
-    accessToken: string
-): {
-    sub: string;
-} => {
+const parseJwt = (accessToken: string): Record<string, unknown> => {
     let jsonPayload = "{}";
     const base64Url = accessToken.split(".")[1];
     if (base64Url) {
@@ -101,16 +98,92 @@ const parseJwt = (
 };
 
 /**
+ * Claims the user id is read from when `externalOAuthIdpUserIdClaim` is not set, in order.
+ */
+const EXTERNAL_USER_ID_CLAIM_CHAIN = ["cognito:username", "username", "sub"];
+
+/**
+ * The access-token claim configured as the VAMS user id (`externalOAuthIdpUserIdClaim` in the
+ * cached amplify-config, from `useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim`), or null when
+ * it is not set: absent (a deployment or cached config from before the setting), empty, or the
+ * `"undefined"` placeholder amplify-config uses for an unset field.
+ *
+ * Read from the cache rather than passed in, so the sign-in code exchange and the token refresh
+ * (which has no config at hand) apply the same claim.
+ */
+export function getExternalUserIdClaim(): string | null {
+    const value = appCache.getItem("config")?.externalOAuthIdpUserIdClaim;
+    if (typeof value !== "string" || value.trim() === "" || value === "undefined") {
+        return null;
+    }
+    return value;
+}
+
+/**
+ * The VAMS user id in an external OAuth access token's claims.
+ *
+ * Set (`userIdClaim`): that claim only, "" when the token lacks it (the API refuses such a token,
+ * so there is nothing to fall back to). Not set: the first of cognito:username, username and sub
+ * that is a non-empty string.
+ *
+ * Keep this in step with resolve_user_id in backend/backend/common/auth/authorizerCore.py, which
+ * applies the same rule in the API authorizer: the login profile request is keyed on this value
+ * and is refused unless it is the user id the authorizer resolved.
+ */
+export function resolveExternalUserId(
+    claims: Record<string, unknown>,
+    userIdClaim: string | null
+): string {
+    if (userIdClaim) {
+        const value = claims[userIdClaim];
+        return typeof value === "string" ? value : "";
+    }
+    for (const name of EXTERNAL_USER_ID_CLAIM_CHAIN) {
+        const value = claims[name];
+        if (typeof value === "string" && value !== "") {
+            return value;
+        }
+    }
+    return "";
+}
+
+/** Stores the user resolved from an external OAuth access token under localStorage "user". */
+function storeExternalOAuthUser(accessToken: string): void {
+    const userIdClaim = getExternalUserIdClaim();
+    const username = resolveExternalUserId(parseJwt(accessToken), userIdClaim);
+    if (userIdClaim && !username) {
+        // The claim name only: the token itself is never logged.
+        console.error(`The access token has no "${userIdClaim}" claim to identify the user.`);
+    }
+    localStorage.setItem("user", JSON.stringify({ username }));
+}
+
+/**
  * Sets OAuth2 token in localStorage and updates Amplify session (External OAuth2 only)
  * This function is used internally and by Auth.tsx
  */
 export function setExternalOauth2Token(oauth2Token: OAuth2Token): void {
     localStorage.setItem("oauth2_token", JSON.stringify(oauth2Token));
 
-    const jwt = parseJwt(oauth2Token.accessToken);
-    localStorage.setItem("user", JSON.stringify({ username: jwt.sub }));
+    storeExternalOAuthUser(oauth2Token.accessToken);
 
     // Removed: AmplifyAuth.setUserSession() — not needed with custom apiClient + TokenProvider
+}
+
+/**
+ * Re-derives the stored user from the stored access token with the current user id claim
+ * (External OAuth2 only). Auth.tsx calls it after a refreshed amplify-config lands, so a sign-in
+ * that ran on a cached config from before the claim was set or changed keeps the user id the API
+ * resolves. Returns true when the stored user changed.
+ */
+export function syncExternalOAuthUser(): boolean {
+    const accessToken = getExternalOAuth2Token().accessToken;
+    if (!accessToken) {
+        return false;
+    }
+    const before = localStorage.getItem("user");
+    storeExternalOAuthUser(accessToken);
+    return localStorage.getItem("user") !== before;
 }
 
 /**

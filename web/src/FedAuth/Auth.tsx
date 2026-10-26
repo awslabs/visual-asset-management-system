@@ -23,6 +23,7 @@ import {
     externalTokenValidation,
     setExternalOauth2Token,
     externalOAuthTokenProvider,
+    syncExternalOAuthUser,
 } from "../utils/authTokenUtils";
 import {
     ensureValidSession,
@@ -158,6 +159,13 @@ interface Config {
      * External OAUTH IDP Discovery Endpoint Configuration
      */
     externalOAuthIdpDiscoveryEndpoint?: string;
+
+    /**
+     * External OAUTH IDP access-token claim whose value is the VAMS user id
+     * (`"undefined"` or absent when not set: cognito:username, then username, then sub, as the
+     * API authorizer does). Read by authTokenUtils getExternalUserIdClaim.
+     */
+    externalOAuthIdpUserIdClaim?: string;
 
     /**
      * VAMS Features that are enabled
@@ -520,6 +528,13 @@ const Auth: React.FC<AuthProps> = (props) => {
                         const merged = { ...latest, ...fetchedConfig };
                         if (JSON.stringify(merged) !== JSON.stringify(latest)) {
                             appCache.setItem("config", merged);
+                            // External OAuth: a session signed in on the cached config keeps the
+                            // user id claim the backend now names, so the web app and the API
+                            // agree on the user. A changed user drops the cached login profile,
+                            // which the profile effect then fetches again for the new id.
+                            if (window.DISABLE_COGNITO && syncExternalOAuthUser()) {
+                                appCache.removeItem("loginProfile");
+                            }
                             setConfig(merged);
                         }
                     } else {
