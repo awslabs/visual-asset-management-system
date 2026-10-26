@@ -186,6 +186,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Deployment instructions use the pinned AWS CDK CLI** — The README prerequisites, developer setup, security, networking, configuration reference, update, common issues, migration and viewer plugin instructions run `npx cdk` from `infra/`, so they use the version pinned in `infra/package.json`. (issue #797)
 -   **CLI lists Cognito users** — `vamscli user cognito list` lists the user pool's users instead of reporting that none were found, with and without `--auto-paginate`; the auto-paginated JSON result lists them under `users`, the key the API returns. (issue #808)
 -   **CLI `--confirm` works in scripts** — Destructive commands that require `--confirm` (asset, database, role, constraint, role user and Cognito user deletion, and sync deletions) ask their additional confirmation question only in an interactive terminal, so in a script, pipe or CI job `--confirm` alone proceeds instead of the command cancelling and deleting nothing. (issue #809)
+-   **Constraint values match as written** — Permission constraint criteria values that contain `p.`, `r.`, `!`, `&&` or `||` match as written, for every operator.
 
 **Other changes:**
 

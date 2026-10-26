@@ -197,6 +197,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Documentation** The README prerequisites, developer setup, architecture security and networking pages, configuration reference, update guide, common issues, the v2.2-to-v2.3 and v2.5-to-v2.6 migration READMEs and the viewer plugin README run the AWS CDK CLI as `npx cdk` from `infra/`, so every instruction uses the version pinned in `infra/package.json`. ([#797](https://github.com/awslabs/visual-asset-management-system/issues/797))
 -   **CLI** `vamscli user cognito list` lists the user pool's users instead of reporting "No Cognito users found.", with and without `--auto-paginate`; the `--auto-paginate --json-output` result lists them under `users`, the key the API returns. ([#808](https://github.com/awslabs/visual-asset-management-system/issues/808))
 -   **CLI** Destructive commands that require `--confirm` (`assets delete`, `database delete`, `role delete`, `role constraint delete`, `role user delete`, `user cognito delete`, and `sync file push --permanent-delete` / `sync file pull --allow-delete`) ask their additional "Are you sure?" question only in an interactive terminal; in a script, pipe or CI job `--confirm` alone proceeds instead of the command reporting "Operation cancelled by user." and deleting nothing. ([#809](https://github.com/awslabs/visual-asset-management-system/issues/809))
+-   **Backend** Permission constraint criteria values that contain `p.`, `r.`, `!`, `&&` or `||` match as written, for every operator.
 
 ### Chores
 
