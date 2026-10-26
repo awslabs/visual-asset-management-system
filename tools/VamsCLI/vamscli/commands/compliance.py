@@ -82,11 +82,20 @@ def load_schema_body(schema_file: str) -> Dict[str, Any]:
     return parsed
 
 
-def _handle_compliance_error(e: Exception, json_output: bool) -> None:
-    """Report a compliance business-logic error and end the command.
+class _ReportedComplianceError(click.ClickException):
+    """A compliance error `output_error` has already printed: it ends the command with exit code 1,
+    and Click's own handler prints nothing more, so the error appears once."""
 
-    `output_error` exits the process in JSON mode; the ClickException it is followed by is what
-    ends the command in CLI mode.
+    def show(self, file=None) -> None:
+        return None
+
+
+def _handle_compliance_error(e: Exception, json_output: bool) -> None:
+    """Report a compliance business-logic error once and end the command.
+
+    `output_error` prints the styled error (and hint) and, in JSON mode, exits the process with the
+    JSON error. In CLI mode the command then ends through `_ReportedComplianceError`, which carries
+    the message for logging but is not printed again.
     """
     if isinstance(e, ComplianceSchemaNotFoundError):
         output_error(e, json_output, error_type="Compliance Schema Not Found",
@@ -104,7 +113,7 @@ def _handle_compliance_error(e: Exception, json_output: bool) -> None:
         output_error(e, json_output, error_type="Invalid Input")
     else:
         output_error(e, json_output, error_type="Compliance Error")
-    raise click.ClickException(str(e))
+    raise _ReportedComplianceError(str(e))
 
 
 _COMPLIANCE_ERRORS = (

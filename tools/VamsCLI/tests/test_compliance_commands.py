@@ -510,6 +510,29 @@ class TestComplianceSchemaCommands:
             assert result.exit_code != 0
             assert 'Compliance Schema Not Found' in result.output
 
+    def test_a_text_mode_error_is_printed_once(self, cli_runner, generic_command_mocks):
+        """The styled error line and its hint, and no second `Error:` line from Click."""
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_schema.side_effect = ComplianceSchemaNotFoundError(
+                "Schema 'gone' not found")
+            result = cli_runner.invoke(cli, ['compliance', 'schema', 'get', '-n', 'gone'])
+            assert result.exit_code == 1
+            assert result.output.count("Schema 'gone' not found") == 1
+            assert not [line for line in result.output.splitlines() if line.startswith("Error:")]
+            assert "vamscli compliance schema list" in result.output
+
+    def test_a_refused_request_is_printed_once(self, cli_runner, generic_command_mocks, tmp_path):
+        schema_file = tmp_path / "bad.json"
+        schema_file.write_text(json.dumps(SCHEMA_BODY), encoding='utf-8')
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].create_compliance_schema.side_effect = InvalidComplianceDataError(
+                "Invalid schema: At least one rule is required")
+            result = cli_runner.invoke(cli, ['compliance', 'schema', 'create', '-n', 'bad',
+                                             '--schema-file', str(schema_file)])
+            assert result.exit_code == 1
+            assert result.output.count("At least one rule is required") == 1
+            assert not [line for line in result.output.splitlines() if line.startswith("Error:")]
+
     def test_get_not_found_json_error_is_pure(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].get_compliance_schema.side_effect = ComplianceSchemaNotFoundError(
