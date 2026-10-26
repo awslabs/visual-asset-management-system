@@ -69,7 +69,8 @@ VAMS deploys as a serverless architecture using AWS CDK with 14 nested CloudForm
 
 ### Prerequisites
 
--   Python 3.12+, Docker (or a Docker-compatible CLI such as [Finch](https://aws.github.io/finch/) or [Podman](https://podman.io/)), Node.js 22+, npm 11.10.0+, AWS CLI, AWS CDK CLI
+-   Python 3.12+, Docker (or a Docker-compatible CLI such as [Finch](https://aws.github.io/finch/) or [Podman](https://podman.io/)), Node.js 22+, npm 11.10.0+, AWS CLI
+-   The AWS CDK CLI is pinned in `infra/package.json` and installed with the `infra/` dependencies; the commands below run it as `npx cdk`
 
 ### Deploy
 
