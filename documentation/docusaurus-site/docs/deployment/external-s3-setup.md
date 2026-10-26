@@ -377,7 +377,7 @@ Apply a Cross-Origin Resource Sharing (CORS) configuration to the external bucke
 }
 ```
 
-`AllowedMethods` accepts only `GET`, `PUT`, `POST`, `DELETE`, and `HEAD`. Amazon S3 answers the browser's `OPTIONS` preflight request from these rules, so `OPTIONS` is not listed. `ExposeHeaders` makes response headers readable by the VAMS web application: `ETag` for multipart uploads, which read each part's ETag from the upload response, and `Accept-Ranges`, `Content-Range`, `Content-Length`, and `Content-Encoding`, the range and streaming headers the VAMS-created asset bucket exposes, so a ranged read returns the same readable headers from either bucket.
+`AllowedMethods` accepts only `GET`, `PUT`, `POST`, `DELETE`, and `HEAD`. Amazon S3 answers the browser's `OPTIONS` preflight request from these rules, so `OPTIONS` is not listed. `ExposeHeaders` makes response headers readable by the VAMS web application: `ETag` for multipart uploads, which read each part's ETag from the upload response, and `Accept-Ranges`, `Content-Range`, `Content-Length`, and `Content-Encoding`, the range and streaming headers the VAMS-created asset bucket exposes, so a ranged read returns the same readable headers from either bucket. The Robotics Data Viewer reads `.mcap` and `.bag` files through these range headers.
 
 Apply the CORS configuration using the AWS Command Line Interface (AWS CLI):
 

@@ -576,7 +576,7 @@ that deployment and removes the repository, then set it back to `true` and deplo
 The principal that creates or deletes a KMS-encrypted Amazon ECR repository needs `kms:CreateGrant`,
 `kms:DescribeKey` and `kms:RetireGrant` on the key in its IAM policy. For VAMS that principal is the AWS
 CloudFormation execution role, and the default CDK bootstrap role has these permissions. A custom execution
-role (`app.iamRoleConfig.useCustomBootstrapRoles`, or `cdk bootstrap --cloudformation-execution-policies`)
+role (`app.iamRoleConfig.useCustomBootstrapRoles`, or `npx cdk bootstrap --cloudformation-execution-policies`)
 must allow them on the key; with `useCliCredentialsSynthesizer` set in `infra/config/policy/iamRoleConfig.json`,
 the deploying credentials must. An external key's policy must keep the statement that lets IAM policies in the
 account authorize use of the key. Amazon ECR encrypts and decrypts image layers through the grants it creates

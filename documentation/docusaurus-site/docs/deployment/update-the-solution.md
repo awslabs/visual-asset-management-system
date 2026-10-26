@@ -84,7 +84,7 @@ cd infra
 npx cdk deploy --all --require-approval never
 ```
 
-If the deployment was made with `-c configFile=<name>`, pass the same parameter to this command and to `cdk diff`; without it they target the stacks named in `config.json`.
+If the deployment was made with `-c configFile=<name>`, pass the same parameter to this command and to `npx cdk diff`; without it they target the stacks named in `config.json`.
 
 AWS CDK creates a CloudFormation changeset and applies only the modified resources. Resources that have not changed are left untouched.
 
@@ -546,9 +546,9 @@ The v2.6 CDK switches `OPENSEARCH_VERSION` to `OPENSEARCH_3_5`. This applies onl
 If `cdk deploy` fails on the OpenSearch domain version upgrade, recover by deploying first with OpenSearch disabled and then re-enabling it:
 
 1. Set `app.openSearch.useProvisioned.enabled = false` (and `useServerless.enabled = false`) in `infra/config/config.json`.
-2. Run `cdk deploy --all --require-approval never` to delete the existing 2.7 domain.
+2. Run `npx cdk deploy --all --require-approval never` from `infra/` to delete the existing 2.7 domain.
 3. Restore the original `useProvisioned` configuration in `config.json`.
-4. Run `cdk deploy --all --require-approval never` to create a fresh 3.5 domain with the empty v3 indexes.
+4. Run `npx cdk deploy --all --require-approval never` to create a fresh 3.5 domain with the empty v3 indexes.
 5. Run this migration to repopulate the v3 indexes from source data.
 
 This recovery path discards only the OpenSearch indexes; all source data lives in DynamoDB and S3, and the reindex restores the full search corpus. For details and other troubleshooting steps, see the [v2.5 to v2.6 migration README](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/deploymentDataMigration/v2.5_to_v2.6/upgrade/v2.5_to_v2.6_migration_README.md).
@@ -848,7 +848,7 @@ A rollback deployment creates its own tables; it does not reattach the ones a re
 ### A/B deployment rollback
 
 1. Switch DNS records back to Stack A endpoints.
-2. Destroy Stack B using `cdk destroy --all` with the `-c configFile=<name>` used to deploy it.
+2. Destroy Stack B using `npx cdk destroy --all` from `infra/` with the `-c configFile=<name>` used to deploy it.
 3. Verify Stack A is functioning correctly.
 
 ## Related resources

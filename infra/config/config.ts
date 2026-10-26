@@ -173,8 +173,9 @@ export function rapidPipelineEksWorstCaseRunSeconds(jobTimeoutSeconds: number): 
 // machine does: vamsExecute invokes openPipeline and waits for it, openPipeline starts the
 // execution, and vamsExecute's five-minute timeout bounds both.
 //
-// The stop route. A task-level States.Timeout fails the state but does not stop the Fargate task,
-// so the timeout's Catch runs up to three AWS SDK calls before PipelineEnd. The Fargate task is
+// The stop route. A task-level States.Timeout fails the state, and Step Functions stops the Fargate
+// task as it ends the state. Its documentation does not list that case, so the timeout's Catch also
+// runs up to three AWS SDK calls before PipelineEnd to stop a task still running. The Fargate task is
 // started with its group set to the execution name, and ecs:ListTasks cannot filter by group, so
 // ecs:ListTasks lists the cluster's running tasks (one page of STOP_ROUTE_PAGE_SIZE, the most
 // ListTasks returns and DescribeTasks accepts), ecs:DescribeTasks keeps the one whose group is the
