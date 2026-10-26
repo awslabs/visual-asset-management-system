@@ -346,7 +346,9 @@
                 "idpAuthProviderAuthorizationEndpoint": null,
                 "idpAuthProviderDiscoveryEndpoint": null,
                 "lambdaAuthorizorJWTIssuerUrl": null,
-                "lambdaAuthorizorJWTAudience": null
+                "lambdaAuthorizorJWTAudience": null,
+                "lambdaAuthorizorJWTAudienceClaims": ["aud"],
+                "lambdaAuthorizorJWTUserIdClaim": ""
             }
         },
         "webUi": {

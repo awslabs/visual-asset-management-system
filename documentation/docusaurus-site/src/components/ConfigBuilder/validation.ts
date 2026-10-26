@@ -63,6 +63,9 @@ const ACM_CERTIFICATE_ARN_PATTERN =
 const API_CUSTOM_DOMAIN_HOST_PATTERN =
     /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
+// config.ts EXTERNAL_OAUTH_USER_ID_CLAIM_PATTERN and EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS.
+const EXTERNAL_OAUTH_USER_ID_CLAIM_PATTERN = /^[A-Za-z0-9_:.-]+$/;
+const EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS = ["aud", "client_id"];
 // config.ts API_CUSTOM_DOMAIN_PARTITIONS.
 const API_CUSTOM_DOMAIN_PARTITIONS = ["aws", "aws-us-gov"];
 /**
@@ -2028,6 +2031,53 @@ export const RULES: Rule[] = [
             g(c, "app.authProvider.useExternalOAuthIdp.enabled") && oauthFieldsMissing(c),
         message:
             "External OAuth IdP requires all of its fields (provider URL, client ID, scopes, principal domain, endpoints, JWT issuer URL and audience).",
+    },
+
+    // ----- External OAuth claim settings (config.ts: "External OAuth claim settings, read only in
+    // external OAuth mode"). Both are optional: an absent (null) value takes its default. -----
+    {
+        id: "oauth-user-id-claim",
+        severity: "error",
+        fieldPaths: ["app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.authProvider.useExternalOAuthIdp.enabled")) return false;
+            const claim = g(
+                c,
+                "app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim"
+            );
+            if (isAbsent(claim)) return false;
+            return (
+                typeof claim !== "string" ||
+                (claim !== "" && !EXTERNAL_OAUTH_USER_ID_CLAIM_PATTERN.test(claim))
+            );
+        },
+        message:
+            "JWT user ID claim must be empty (cognito:username, then username, then sub) or a token claim name of letters, digits, '_', ':', '.' and '-'.",
+    },
+    {
+        id: "oauth-audience-claims",
+        severity: "error",
+        fieldPaths: ["app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.authProvider.useExternalOAuthIdp.enabled")) return false;
+            const claims = g(
+                c,
+                "app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims"
+            );
+            if (isAbsent(claims)) return false;
+            return (
+                !Array.isArray(claims) ||
+                claims.length === 0 ||
+                claims.some(
+                    (claim: unknown) =>
+                        typeof claim !== "string" ||
+                        !EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS.includes(claim)
+                ) ||
+                new Set(claims).size !== claims.length
+            );
+        },
+        message:
+            'JWT audience claims must be a non-empty list of distinct claim names from "aud" and "client_id".',
     },
 
     // ----- Cognito federation: SAML or OIDC, or neither
