@@ -201,9 +201,11 @@ describe("compliance trigger queue", () => {
     describe("the synthesized filter policies over a sample of every message kind", () => {
         const subs = resources(commercial, "AWS::SNS::Subscription");
         const policyOf = (topicPrefix: string) => {
-            const sub = subs.find((s) => String(s.Properties.TopicArn.Ref).startsWith(topicPrefix));
-            expect(sub).toBeDefined();
-            return sub!.Properties.FilterPolicy as Record<string, unknown>;
+            const matching = subs.filter((s) =>
+                String(s.Properties.TopicArn.Ref).startsWith(topicPrefix)
+            );
+            expect(matching).toHaveLength(1);
+            return matching[0].Properties.FilterPolicy as Record<string, unknown>;
         };
         const policies: Record<string, Record<string, unknown>> = {
             assetIndexer: policyOf("AssetIndexer"),
@@ -236,7 +238,7 @@ describe("compliance trigger queue", () => {
         });
 
         test("the samples cover every table each topic relays and both S3 event kinds", () => {
-            const tableOf = (body: any) =>
+            const tableOf = (body: { eventSourceARN?: unknown }) =>
                 typeof body.eventSourceARN === "string"
                     ? body.eventSourceARN.split(":table/")[1].split("/stream/")[0]
                     : "S3";
@@ -369,10 +371,11 @@ describe("compliance trigger queue", () => {
 
     test("the trigger knows its own queue's URL, to hold an upload completion back on it", () => {
         const { source } = queues(commercial);
-        const trigger = resources(commercial, "AWS::Lambda::Function").find(
+        const triggers = resources(commercial, "AWS::Lambda::Function").filter(
             (f) => f.id === triggerFunctionId(commercial)
-        )!;
-        expect(trigger.Properties.Environment.Variables.COMPLIANCE_TRIGGER_QUEUE_URL).toEqual({
+        );
+        expect(triggers).toHaveLength(1);
+        expect(triggers[0].Properties.Environment.Variables.COMPLIANCE_TRIGGER_QUEUE_URL).toEqual({
             Ref: source.id,
         });
     });
