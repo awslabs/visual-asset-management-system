@@ -17116,7 +17116,7 @@ components:
                     description: "JSON-encoded map of `databaseId:assetId` to node status (`pending`, `evaluating`, the evaluation verdict, `skipped`, `superseded` when a newer evaluation of the asset had already started so this one did not run, `error`). A skipped or superseded node does not abort the cascade."
                 executionOrder:
                     type: string
-                    description: "JSON-encoded list of the downstream assets in evaluation order."
+                    description: "JSON-encoded list of the downstream assets' `databaseId:assetId` keys in evaluation order."
             required:
                 - cascadeId
                 - state

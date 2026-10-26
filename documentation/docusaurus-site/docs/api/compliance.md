@@ -1047,12 +1047,12 @@ GET /compliance/cascades/{cascadeId}
     "approvalReason": "approved",
     "totalNodes": 2,
     "nodes": "{\"survey-project:x1a2b3c4-scan-0042\": \"compliant\", \"survey-project:x1a2b3c4-scan-0043\": \"quarantined\"}",
-    "executionOrder": "[{\"databaseId\": \"survey-project\", \"assetId\": \"x1a2b3c4-scan-0042\"}, {\"databaseId\": \"survey-project\", \"assetId\": \"x1a2b3c4-scan-0043\"}]",
+    "executionOrder": "[\"survey-project:x1a2b3c4-scan-0042\", \"survey-project:x1a2b3c4-scan-0043\"]",
     "completedAt": "2026-03-15T11:02:44+00:00"
 }
 ```
 
-`state` is `pending_approval`, `executing`, `completed` or `aborted`. `nodes` is a JSON-encoded map of `databaseId:assetId` to the node's status — `pending`, `evaluating`, the verdict the evaluation produced (`compliant`, `non_compliant`, `quarantined`, `pending_pipeline`, `error`), `skipped` for a descendant with no bound schema, or `superseded` for a descendant whose evaluation found a newer one of it already started (that evaluation settles the asset's state; not an error) — and `executionOrder` the JSON-encoded evaluation order. A `completed` cascade also carries `results`, a JSON-encoded list of `{node, status, evaluationId}` with the same statuses. A skipped or superseded node does not abort the cascade. A rejected cascade carries `rejectedBy`, `rejectedAt` and `rejectionReason` instead of the approval fields. An `aborted` cascade carries `abortReason`: the rejection, or the failure that ended the run.
+`state` is `pending_approval`, `executing`, `completed` or `aborted`. `nodes` is a JSON-encoded map of `databaseId:assetId` to the node's status — `pending`, `evaluating`, the verdict the evaluation produced (`compliant`, `non_compliant`, `quarantined`, `pending_pipeline`, `error`), `skipped` for a descendant with no bound schema, or `superseded` for a descendant whose evaluation found a newer one of it already started (that evaluation settles the asset's state; not an error) — and `executionOrder` the JSON-encoded list of the same `databaseId:assetId` keys in evaluation order. A `completed` cascade also carries `results`, a JSON-encoded list of `{node, status, evaluationId}` with the same statuses. A skipped or superseded node does not abort the cascade. A rejected cascade carries `rejectedBy`, `rejectedAt` and `rejectionReason` instead of the approval fields. An `aborted` cascade carries `abortReason`: the rejection, or the failure that ended the run.
 
 ### Error responses
 

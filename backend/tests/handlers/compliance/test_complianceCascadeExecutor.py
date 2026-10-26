@@ -244,6 +244,24 @@ class TestExecuteCascade:
         _, mocks = _run_executor(graph, EXECUTING)
         assert [c.args[1] for c in mocks["run_evaluation"].call_args_list] == ["B"]
 
+    def test_the_documented_execution_order_has_the_shape_the_executor_writes(self):
+        """`executionOrder` is a JSON-encoded list of `databaseId:assetId` keys, the same keys as
+        `nodes` (D26): the API reference's Get-a-cascade example must show that shape, not objects."""
+        import os
+        doc = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "documentation",
+                           "docusaurus-site", "docs", "api", "compliance.md")
+        with open(doc, encoding="utf-8") as handle:
+            text = handle.read()
+        section = text[text.index("## Get a cascade"):]
+        line = next(l for l in section.splitlines() if l.strip().startswith('"executionOrder": "['))
+        documented = json.loads(json.loads("{" + line.strip().rstrip(",") + "}")["executionOrder"])
+        assert documented and all(isinstance(key, str) and ":" in key for key in documented)
+
+        _, mocks = _run_executor(Graph([(ASSET, "B")]), EXECUTING)
+        written = json.loads(mocks["table"].update_item.call_args_list[0].kwargs[
+            "ExpressionAttributeValues"][":order"])
+        assert all(isinstance(key, str) for key in written)
+
     def test_the_execution_order_and_node_states_land_on_the_cascade_row(self):
         graph = Graph([(ASSET, "B"), ("B", "C")])
         _, mocks = _run_executor(graph, EXECUTING,
