@@ -306,43 +306,75 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
 }
 
 /**
- * Adds a proxy route from CloudFront /api to the api gateway url
+ * Adds the proxy routes from CloudFront `/api/*` to the API Gateway REST API.
  *
- * Deploys Api gateway (proxied through a CloudFront distribution at route `/api` if deploying through cloudfront)
+ * The anonymous bootstrap routes are registered under the stage's own `/api/` prefix, so each of
+ * those exact paths is forwarded with the stage as the origin path (`<cf>/api/version` reaches stage
+ * route `/api/version`). Every other `/api/*` path is forwarded without an origin path, so
+ * `<cf>/api/{route}` reaches stage `api`, route `/{route}` — the same URL shape as the execute-api
+ * invoke URL. The exact behaviors come first because CloudFront matches behaviors in order.
  *
- * Any Api's attached to the gateway should be located at `/api/*` so that requests are correctly proxied.
- * Make sure Api's return the header `"Cache-Control" = "no-cache, no-store"` or CloudFront will cache responses
+ * The catch-all uses the managed CachingDisabled and AllViewerExceptHostHeader policies: every
+ * header, cookie and query string except Host reaches the API, and nothing is cached. Managed policies
+ * do not count against the account's custom cache policy quota.
  *
+ * Make sure APIs return the header `"Cache-Control" = "no-cache, no-store"` or CloudFront will cache
+ * the bootstrap responses.
+ *
+ * `originCustomHeaders` (CloudFront deployments with an origin verification secret) is added to both
+ * origins. CloudFront sets an origin custom header on every request it forwards, replacing a viewer
+ * header of the same name; origin custom headers are not a CloudFront policy and use no policy quota.
  */
 export function addBehaviorToCloudFrontDistribution(
     scope: Construct,
     cloudFrontDistribution: cloudfront.Distribution,
     apiUrl: string,
-    apiStageName: string
+    apiStageName: string,
+    apiGatewayTimeoutSeconds: number,
+    originCustomHeaders?: Record<string, string>
 ) {
-    // Add general behavior for all other /api/* routes (excluding /api/amplify-config)
+    const stagePrefixedOrigin = new cloudfrontOrigins.HttpOrigin(apiUrl, {
+        originSslProtocols: [cloudfront.OriginSslPolicy.TLS_V1_2],
+        protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+        originPath: `/${apiStageName}`,
+        customHeaders: originCustomHeaders,
+    });
+    const stagePrefixedCachePolicy = new cloudfront.CachePolicy(scope, "ApiCachePolicy", {
+        // required or CloudFront will strip the Authorization token from the request.
+        // must be in the cache policy
+        headerBehavior: cloudfront.CacheHeaderBehavior.allowList("Authorization"),
+        enableAcceptEncodingGzip: true,
+    });
+    const stagePrefixedOriginRequestPolicy = new cloudfront.OriginRequestPolicy(
+        scope,
+        "ApiOriginRequestPolicy",
+        {
+            // required or CloudFront will strip all query strings off the request
+            queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.all(),
+        }
+    );
+    for (const routePath of Config.API_STAGE_PREFIXED_ROUTE_PATHS) {
+        cloudFrontDistribution.addBehavior(routePath, stagePrefixedOrigin, {
+            cachePolicy: stagePrefixedCachePolicy,
+            originRequestPolicy: stagePrefixedOriginRequestPolicy,
+            allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+            viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        });
+    }
+
+    // The origin response timeout is one second above the integration timeout, so the REST API answers a
+    // timed-out integration before CloudFront does, capped at 60 seconds (CloudFront's default quota).
     cloudFrontDistribution.addBehavior(
         "/api/*",
         new cloudfrontOrigins.HttpOrigin(apiUrl, {
             originSslProtocols: [cloudfront.OriginSslPolicy.TLS_V1_2],
             protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
-            originPath: `/${apiStageName}`,
+            readTimeout: Duration.seconds(Math.min(apiGatewayTimeoutSeconds + 1, 60)),
+            customHeaders: originCustomHeaders,
         }),
         {
-            cachePolicy: new cloudfront.CachePolicy(scope, "ApiCachePolicy", {
-                // required or CloudFront will strip the Authorization token from the request.
-                // must be in the cache policy
-                headerBehavior: cloudfront.CacheHeaderBehavior.allowList("Authorization"),
-                enableAcceptEncodingGzip: true,
-            }),
-            originRequestPolicy: new cloudfront.OriginRequestPolicy(
-                scope,
-                "ApiOriginRequestPolicy",
-                {
-                    // required or CloudFront will strip all query strings off the request
-                    queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.all(),
-                }
-            ),
+            cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+            originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
             allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
             viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         }

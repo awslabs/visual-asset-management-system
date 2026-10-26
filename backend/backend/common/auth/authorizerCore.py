@@ -36,6 +36,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 import base64
 
+from common.auth.apiEvent import strip_custom_domain_base_path
 from common.auth.clientIp import resolve_client_ip, is_ip_authorized
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import normalize_userid
@@ -385,16 +386,42 @@ def _path_from_method_arn(method_arn: str) -> str:
     return "/" + "/".join(parts[3:])
 
 
+def _resolve_request_path(event: dict) -> str:
+    """The stage-relative request path the ignored-path check compares.
+
+    A REST REQUEST-authorizer event carries ``methodArn``
+    (".../{apiId}/{stage}/{verb}/{resource path}"), which API Gateway generates from the
+    routed request. It names the stage and never a custom domain's base path, so it is
+    stage-relative on every host: execute-api, CloudFront and the REST API custom domain,
+    where the event's ``path`` instead keeps the base path ("/api/api/version" for the
+    "/api/version" route). It is also the ARN the returned policy is evaluated against, so
+    the bypass decision and the REST authorizer's scoped ignored-path Allow are computed from
+    the same value. It is therefore read first.
+
+    Without a methodArn (a proxy-shaped event), ``requestContext.http.path`` is used as
+    given, since normalize_event already made it stage-relative, and a raw top-level
+    ``path`` goes through strip_custom_domain_base_path, which removes the base path only
+    for an event API Gateway routed through the configured custom domain.
+    """
+    method_arn_path = _path_from_method_arn(event.get("methodArn", ""))
+    if method_arn_path:
+        return method_arn_path
+    request_context = event.get("requestContext") or {}
+    http_path = (request_context.get("http") or {}).get("path")
+    if http_path:
+        return http_path
+    return strip_custom_domain_base_path(event, event.get("path") or "") or ""
+
+
 def is_path_ignored(path: str) -> bool:
     """
     Check if the request path should bypass authentication (the IP check still applies).
 
-    Matches an ignored path exactly. A REST API REQUEST-authorizer event exposes the
-    resource path with the stage already stripped ("/api/version", not "/api/api/version"),
-    which is also what _path_from_method_arn returns, so the resolved request path is
-    directly comparable to a configured entry. The comparison stays an equality test: a
-    prefix or suffix test would let a greedy "{proxy+}" route whose tail spells an ignored
-    path (e.g. ".../download/stream/api/version") bypass authentication.
+    Matches an ignored path exactly. The path is the stage-relative one
+    _resolve_request_path returns ("/api/version", not "/api/api/version", on every host),
+    so it is directly comparable to a configured entry. The comparison stays an equality
+    test: a prefix or suffix test would let a greedy "{proxy+}" route whose tail spells an
+    ignored path (e.g. ".../download/stream/api/version") bypass authentication.
     """
     if not path:
         return False
@@ -943,18 +970,9 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
         logger.info(f"IP {client_ip} not in allowed ranges")
         return {"authorized": False, "context": None, "reason": "IP address not authorized"}
 
-    # Step 2: Check for ignored paths.
-    # Resolve the request path across event shapes: proxy events expose it at
-    # requestContext.http.path or the top-level "path"; a REST REQUEST-authorizer event
-    # exposes "path" and "methodArn" (".../STAGE/VERB/resource/path"). The methodArn
-    # fallback ensures the ignored-path check works in the authorizer context even when
-    # "path" is absent.
-    request_path = (
-        (event.get("requestContext", {}).get("http", {}) or {}).get("path")
-        or event.get("path")
-        or _path_from_method_arn(event.get("methodArn", ""))
-        or ""
-    )
+    # Step 2: Check for ignored paths, on the stage-relative path (_resolve_request_path:
+    # methodArn first, then requestContext.http.path, then the top-level "path").
+    request_path = _resolve_request_path(event)
     if is_path_ignored(request_path):
         logger.info(f"Path {request_path} is in ignored paths, allowing access")
         return {"authorized": True, "context": None, "reason": None, "ignoredPath": True}
