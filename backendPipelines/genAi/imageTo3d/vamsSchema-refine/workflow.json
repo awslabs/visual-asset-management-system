@@ -1,0 +1,36 @@
+{
+    "workflowName": "Image to 3D: reconstruct, then refine",
+    "category": "3D Reconstruction",
+    "description": "Two steps on one photograph: a reconstruction model builds the mesh, then the Blender agent refines it -- keeping the model's body and depth, correcting what the photograph contradicts, and projecting the photograph onto it. Choose a first-step template that passes the photograph on (SAM 3D Objects, passing the photograph on) so the second step receives the mesh and the photograph together. On the second step, the refine template runs the agent; the refit templates run the scripted refit alone or before the agent.",
+    "systemConfig": {
+        "inputFileArity": "multi",
+        "assetScope": {
+            "crossAssetAllowed": false,
+            "singleAssetOnly": true,
+            "wholeAssetAllowed": false,
+            "folderAllowed": false
+        },
+        "metadataInputs": {
+            "assetMetadata": false,
+            "fileMetadata": false,
+            "fileAttributes": false,
+            "databaseMetadata": false
+        },
+        "inputFileFilters": {
+            "allow": ["*.png", "*.jpg", "*.jpeg", "*.glb", "*.gltf", "*.obj", "*.stl", "*.ply"],
+            "exclude": []
+        },
+        "concurrencyRestriction": "none",
+        "outputTarget": {
+            "locationType": "asset",
+            "allowOverride": false
+        },
+        "allowWorkflowTriggerChaining": false,
+        "defaultOutputFileBaseExecutionPathExtension": "/{{jobStartDate}}-{{jobStartTimestampUnix}}-{{executionId}}/"
+    },
+    "specifiedPipelines": [
+        { "pipelineDatabaseId": "GLOBAL", "pipelineId": "genai-image-to-3d" },
+        { "pipelineDatabaseId": "GLOBAL", "pipelineId": "genai-image-to-3d-refine" }
+    ],
+    "triggers": []
+}
