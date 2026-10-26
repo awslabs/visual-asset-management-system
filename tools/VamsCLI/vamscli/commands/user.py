@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error
+from ..utils.confirmation import confirm_destructive_action
 from ..utils.exceptions import (
     CognitoUserNotFoundError,
     CognitoUserAlreadyExistsError,
@@ -439,7 +440,7 @@ def delete(ctx: click.Context, user_id: str, confirm: bool, json_output: bool):
             click.secho(f"⚠️  You are about to delete user '{user_id}'", fg='red', bold=True)
             click.echo("This action cannot be undone!")
             
-            if not click.confirm("Are you sure you want to proceed?"):
+            if not confirm_destructive_action():
                 click.echo("Deletion cancelled.")
                 return None
         

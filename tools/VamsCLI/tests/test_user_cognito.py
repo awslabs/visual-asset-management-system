@@ -615,7 +615,7 @@ class TestUserCognitoDeleteCommand:
             # Verify API was not called
             mocks['api_client'].delete_cognito_user.assert_not_called()
 
-    def test_delete_cancelled_at_prompt(self, cli_runner, user_command_mocks):
+    def test_delete_cancelled_at_prompt(self, cli_runner, user_command_mocks, interactive_stdin):
         """Test delete cancelled at confirmation prompt."""
         with user_command_mocks as mocks:
             result = cli_runner.invoke(cli, [
@@ -667,10 +667,8 @@ class TestUserCognitoDeleteCommand:
 
             assert result.exit_code == 0
 
-            # Note: Delete command has confirmation prompts that appear even with --json-output
-            # This is by design for safety - the prompts use click.secho/click.echo which bypass json_output
-            # For this test, we verify the command succeeds and API is called correctly
-            # In real usage, users can parse the JSON from the output or use --confirm to skip interactive prompt
+            # --json-output never asks the second confirmation question: --confirm alone proceeds
+            assert 'Are you sure you want to proceed?' not in result.output
             
             # Verify API was called correctly
             mocks['api_client'].delete_cognito_user.assert_called_once_with('user@example.com')
