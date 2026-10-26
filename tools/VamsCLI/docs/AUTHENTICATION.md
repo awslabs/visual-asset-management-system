@@ -232,6 +232,8 @@ echo "$VAMS_TOKEN" | vamscli auth login --user-id user@example.com --token-overr
 -   `--token-override-stdin`: Read the override token from standard input (preferred; `--token-override <token>` is accepted but exposes the token in the process table)
 -   `--expires-at`: Token expiration time (optional)
 
+With an external OAuth identity provider (`app.authProvider.useExternalOAuthIdp`), the API identifies the caller from the token, so `--user-id` must be the user ID the API resolves from it: the claim named by `lambdaAuthorizorJWTUserIdClaim`, or, when that is not set, the first of `cognito:username`, `username` and `sub`.
+
 There is no global `--token-override` option: the root `vamscli` group accepts only `--version`, `--verbose` and `--profile`, and each goes before the command.
 
 ### Override Token Features

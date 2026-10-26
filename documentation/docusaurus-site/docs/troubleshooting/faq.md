@@ -155,7 +155,10 @@ Cognito federation uses the Amazon Cognito hosted UI, which is available only in
     - `idpAuthProviderDiscoveryEndpoint` -- Discovery endpoint
     - `lambdaAuthorizorJWTIssuerUrl` -- JWT issuer URL for token validation
     - `lambdaAuthorizorJWTAudience` -- Expected JWT audience
-4. Deploy the stack with the updated configuration.
+4. Optionally, name the token claims VAMS reads:
+    - `lambdaAuthorizorJWTAudienceClaims` -- the claims compared with the audience, in order (default `["aud"]`; `["aud", "client_id"]` for an IdP whose access tokens carry `client_id` instead of `aud`, such as an Amazon Cognito user pool)
+    - `lambdaAuthorizorJWTUserIdClaim` -- the claim whose value is the VAMS user id (default: `cognito:username`, then `username`, then `sub`)
+5. Deploy the stack with the updated configuration.
 
 Refer to the [Configuration Guide](../deployment/configuration-reference.md) for the complete field list for both paths, and to [Plan your deployment](../deployment/plan-your-deployment.md) for the authentication decision table.
 
