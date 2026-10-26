@@ -115,9 +115,12 @@ def _node_key(database_id: str, asset_id: str) -> str:
 
 
 def discover_children(database_id: str, asset_id: str) -> List[Dict[str, str]]:
-    """Direct children of an asset (link rows where the asset is the `from` side)."""
+    """Direct children of an asset: `parentChild` link rows where the asset is the `from` side
+    (`store.is_cascade_link`; a `related` link is not followed)."""
     children = []
     for item in store.get_child_links(database_id, asset_id):
+        if not store.is_cascade_link(item):
+            continue
         child_db = item.get("toAssetDatabaseId")
         child_asset = item.get("toAssetId")
         if child_db and child_asset:
@@ -188,9 +191,12 @@ def topological_sort(
 
 
 def _parent_keys(database_id: str, asset_id: str) -> List[str]:
-    """Composite keys of an asset's parents (link rows where the asset is the `to` side)."""
+    """Composite keys of an asset's parents: `parentChild` link rows where the asset is the `to`
+    side (`store.is_cascade_link`)."""
     parents = []
     for item in store.get_parent_links(database_id, asset_id):
+        if not store.is_cascade_link(item):
+            continue
         parent_db = item.get("fromAssetDatabaseId")
         parent_asset = item.get("fromAssetId")
         if parent_db and parent_asset:

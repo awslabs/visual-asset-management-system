@@ -418,6 +418,18 @@ def get_asset_links(database_id: str, asset_id: str) -> Dict[str, List[Dict[str,
     return {engine.LINK_DIRECTION_PARENTS: parents, engine.LINK_DIRECTION_CHILDREN: children}
 
 
+# The relationship type a cascade follows. A `related` link records an association, not a
+# dependency: re-evaluating its other end when this asset changes would be a cascade nothing
+# asked for, so cascade discovery, its topological order and the trigger's has-children check read
+# `parentChild` links only (`is_cascade_link`).
+CASCADE_RELATIONSHIP_TYPE = "parentChild"
+
+
+def is_cascade_link(link: Dict[str, Any]) -> bool:
+    """Whether a link row is one a cascade follows (`relationshipType` `parentChild`)."""
+    return isinstance(link, dict) and link.get("relationshipType") == CASCADE_RELATIONSHIP_TYPE
+
+
 def get_child_links(database_id: str, asset_id: str) -> List[Dict[str, Any]]:
     """Link rows where the asset is the `from` side, paged to exhaustion."""
     return query_all_items(

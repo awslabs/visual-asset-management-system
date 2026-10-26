@@ -378,8 +378,8 @@ class TestEvaluationGate:
 
 @pytest.mark.unit
 class TestCascadeCheck:
-    CHILDREN = [{"toAssetDatabaseId": DB, "toAssetId": "child-1"},
-                {"toAssetDatabaseId": DB, "toAssetId": "child-2"}]
+    CHILDREN = [{"toAssetDatabaseId": DB, "toAssetId": "child-1", "relationshipType": "parentChild"},
+                {"toAssetDatabaseId": DB, "toAssetId": "child-2", "relationshipType": "parentChild"}]
 
     def test_an_asset_with_children_opens_a_pending_cascade(self, notifications_aws):
         notifications_aws.dynamodb_client.query.return_value = {"Items": [
@@ -400,6 +400,23 @@ class TestCascadeCheck:
         published = notifications_aws.sns_client.publish.call_args.kwargs
         assert "CASCADE PENDING" in published["Subject"]
         assert cascade["cascadeId"] in published["Message"]
+
+    def test_an_asset_whose_only_links_are_related_opens_no_cascade(self):
+        """A related link is not a parent/child dependency (D25): no cascade, no audit entry."""
+        related = [dict(child, relationshipType="related") for child in self.CHILDREN]
+        mocks = _run(_sns_event(_stream_message()), database_item=AUTO_EVAL_DB,
+                     compliance_record={"schemaName": SCHEMA}, children=related)
+        mocks["run_evaluation"].assert_called_once()
+        mocks["cascade"].put_item.assert_not_called()
+        mocks["audit"].assert_not_called()
+
+    def test_a_cascade_counts_the_parent_child_children_only(self, notifications_aws):
+        mixed = self.CHILDREN + [{"toAssetDatabaseId": DB, "toAssetId": "rel-1",
+                                  "relationshipType": "related"}]
+        mocks = _run(_sns_event(_stream_message()), database_item=AUTO_EVAL_DB,
+                     compliance_record={"schemaName": SCHEMA}, children=mixed)
+        mocks["cascade"].put_item.assert_called_once()
+        assert mocks["audit"].call_args.kwargs["details"]["childCount"] == len(self.CHILDREN)
 
     def test_an_asset_without_children_opens_no_cascade(self):
         mocks = _run(_sns_event({"databaseId": DB, "assetId": ASSET}), database_item=AUTO_EVAL_DB,
@@ -445,7 +462,7 @@ class TestOnePendingCascadePerTriggerAsset:
     triggered by the same asset and no second one is opened; a pending cascade for another asset, or
     a cascade for this asset that is no longer pending, does not stand in the way."""
 
-    CHILDREN = [{"toAssetDatabaseId": DB, "toAssetId": "child-1"}]
+    CHILDREN = [{"toAssetDatabaseId": DB, "toAssetId": "child-1", "relationshipType": "parentChild"}]
 
     def _run_with_cascades(self, *rows):
         with mock_aws():

@@ -166,7 +166,8 @@ class TestOnlyInfrastructureErrorsAreRetried:
         cascade_table.query.side_effect = THROTTLED
         mocks = _run(_sns_event(_stream_message()), database_item=AUTO_EVAL_DB,
                      compliance_record=_record_never_evaluated(),
-                     children=[{"toAssetId": "child"}], cascade_table=cascade_table)
+                     children=[{"toAssetId": "child", "relationshipType": "parentChild"}],
+                     cascade_table=cascade_table)
         mocks["run_evaluation"].assert_called_once()
         assert _failed_ids(mocks) == []
         mocks["logger"].exception.assert_called()

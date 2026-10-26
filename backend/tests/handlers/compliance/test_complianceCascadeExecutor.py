@@ -28,14 +28,17 @@ EXECUTING = dict(PENDING, state="executing")
 
 def _link(from_asset, to_asset, database_id=DB):
     return {"fromAssetDatabaseId": database_id, "fromAssetId": from_asset,
-            "toAssetDatabaseId": database_id, "toAssetId": to_asset}
+            "toAssetDatabaseId": database_id, "toAssetId": to_asset,
+            "relationshipType": "parentChild"}
 
 
 class Graph:
-    """An asset-link DAG served through the store's two link readers."""
+    """An asset-link DAG served through the store's two link readers. `related` edges are served
+    too, as the links table holds them beside the parentChild ones."""
 
-    def __init__(self, edges):
-        self.edges = [_link(a, b) for a, b in edges]
+    def __init__(self, edges, related=()):
+        self.edges = [_link(a, b) for a, b in edges] + [
+            dict(_link(a, b), relationshipType="related") for a, b in related]
 
     def children(self, database_id, asset_id):
         return [e for e in self.edges if e["fromAssetId"] == asset_id]
@@ -220,6 +223,21 @@ class TestExecuteCascade:
         assert result["evaluated"] == 3
         assert {r["node"]: r["status"] for r in result["results"]} == {
             f"{DB}:B": "compliant", f"{DB}:C": "compliant", f"{DB}:D": "compliant"}
+
+    def test_a_related_link_is_not_followed(self):
+        """Only descendants reachable through parentChild links are evaluated (D25): a related
+        asset of the source, and a related asset of a child, are left alone."""
+        graph = Graph([(ASSET, "B")], related=[(ASSET, "R1"), ("B", "R2")])
+        result, mocks = _run_executor(graph, EXECUTING)
+        assert [c.args[1] for c in mocks["run_evaluation"].call_args_list] == ["B"]
+        assert [r["node"] for r in result["results"]] == [f"{DB}:B"]
+
+    def test_a_related_link_does_not_order_the_execution(self):
+        """The topological sort reads parentChild parents only: a related link from D back to B
+        would otherwise make B wait for D and the two would form a cycle."""
+        graph = Graph([(ASSET, "B"), ("B", "D")], related=[("D", "B")])
+        _, mocks = _run_executor(graph, EXECUTING)
+        assert [c.args[1] for c in mocks["run_evaluation"].call_args_list] == ["B", "D"]
 
     def test_the_source_itself_is_not_re_evaluated(self):
         graph = Graph([(ASSET, "B"), ("B", ASSET)])

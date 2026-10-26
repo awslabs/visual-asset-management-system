@@ -926,9 +926,11 @@ def trigger_evaluation(database_id, asset_id, schema_name):
 
 
 def check_and_trigger_cascade(database_id: str, asset_id: str):
-    """Open a cascade awaiting approval when the asset has downstream children and none is already
-    pending for it."""
-    children = store.get_child_links(database_id, asset_id)
+    """Open a cascade awaiting approval when the asset has downstream children — `parentChild`
+    links where it is the parent (`store.is_cascade_link`; a `related` link opens none) — and none
+    is already pending for it."""
+    children = [link for link in store.get_child_links(database_id, asset_id)
+                if store.is_cascade_link(link)]
     if not children:
         return
 
