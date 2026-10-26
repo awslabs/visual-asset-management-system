@@ -317,10 +317,10 @@ To enable this viewer, set `app.webUi.allowUnsafeEvalFeatures` to `true` in the 
 
 ### Available Feature Flags
 
-| Flag               | Effect on Viewers                                                                                                                                    |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ALLOWUNSAFEEVAL`  | Enables the Needle USD, SuperSplat Editor, and ThatOpen IFC BIM viewers, plus the Three.js CAD formats (all require the `unsafe-eval` CSP directive) |
-| `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                                                                                               |
+| Flag               | Effect on Viewers                                                                                                                                                  |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ALLOWUNSAFEEVAL`  | Enables the Needle USD, SuperSplat Editor, ThatOpen IFC BIM and Robotics Data viewers, plus the Three.js CAD formats (all require the `unsafe-eval` CSP directive) |
+| `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                                                                                                             |
 
 ### Multiple Requirements
 
