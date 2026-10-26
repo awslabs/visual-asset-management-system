@@ -1,0 +1,685 @@
+{
+    "description": "One SNS message body of every kind the asset and file indexer topics carry, as the publishers send them: snsQueuing relays each DynamoDB stream record (without its OldImage on INSERT and MODIFY), sqsBucketSync publishes the SQS-wrapped S3 event with the bucket identity. Key schemas are the tables' in storageBuilder-nestedStack.ts. `topics` names the topics a message is published to and whether the compliance trigger queue's subscription on that topic must admit or drop it: every message reaches the queue exactly once. The backend test test_complianceTrigger_topicSamples.py holds these bodies to the relay's output and the trigger's routing.",
+    "samples": [
+        {
+            "name": "asset row created",
+            "topics": {
+                "assetIndexer": "admit"
+            },
+            "body": {
+                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e1",
+                "eventName": "INSERT",
+                "eventVersion": "1.1",
+                "eventSource": "aws:dynamodb",
+                "awsRegion": "us-east-1",
+                "dynamodb": {
+                    "ApproximateCreationDateTime": 1793045425.0,
+                    "Keys": {
+                        "databaseId": {
+                            "S": "example-db"
+                        },
+                        "assetId": {
+                            "S": "x0f6c2a7e-1b3d-4c5e-8f90-123456789abc"
+                        }
+                    },
+                    "NewImage": {
+                        "databaseId": {
+                            "S": "example-db"
+                        },
+                        "assetId": {
+                            "S": "x0f6c2a7e-1b3d-4c5e-8f90-123456789abc"
+                        },
+                        "assetName": {
+                            "S": "bracket"
+                        },
+                        "description": {
+                            "S": "A bracket"
+                        },
+                        "lastChangeAt": {
+                            "S": "2026-10-26T20:10:25+00:00"
+                        },
+                        "lastChangeSource": {
+                            "S": "assetEdit"
+                        }
+                    },
+                    "SequenceNumber": "49100000000000000000001",
+                    "SizeBytes": 220,
+                    "StreamViewType": "NEW_IMAGE"
+                },
+                "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/AssetStorageTable/stream/2026-10-26T20:10:25.401"
+            }
+        },
+        {
+            "name": "asset row modified",
+            "topics": {
+                "assetIndexer": "admit"
+            },
+            "body": {
+                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e2",
+                "eventName": "MODIFY",
+                "eventVersion": "1.1",
+                "eventSource": "aws:dynamodb",
+                "awsRegion": "us-east-1",
+                "dynamodb": {
+                    "ApproximateCreationDateTime": 1793045425.0,
+                    "Keys": {
+                        "databaseId": {
+                            "S": "example-db"
+                        },
+                        "assetId": {
+                            "S": "x0f6c2a7e-1b3d-4c5e-8f90-123456789abc"
+                        }
+                    },
+                    "NewImage": {
+                        "databaseId": {
+                            "S": "example-db"
+                        },
+                        "assetId": {
+                            "S": "x0f6c2a7e-1b3d-4c5e-8f90-123456789abc"
+                        },
+                        "assetName": {
+                            "S": "bracket"
+                        },
+                        "description": {
+                            "S": "A bracket"
+                        },
+                        "lastChangeAt": {
+                            "S": "2026-10-26T20:10:25+00:00"
+                        },
+                        "lastChangeSource": {
+                            "S": "assetEdit"
+                        }
+                    },
+                    "SequenceNumber": "49100000000000000000002",
+                    "SizeBytes": 220,
+                    "StreamViewType": "NEW_IMAGE"
+                },
+                "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/AssetStorageTable/stream/2026-10-26T20:10:25.401"
+            }
+        },
+        {
+            "name": "asset row removed",
+            "topics": {
+                "assetIndexer": "admit"
+            },
+            "body": {
+                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e3",
+                "eventName": "REMOVE",
+                "eventVersion": "1.1",
+                "eventSource": "aws:dynamodb",
+                "awsRegion": "us-east-1",
+                "dynamodb": {
+                    "ApproximateCreationDateTime": 1793045425.0,
+                    "Keys": {
+                        "databaseId": {
+                            "S": "example-db"
+                        },
+                        "assetId": {
+                            "S": "x0f6c2a7e-1b3d-4c5e-8f90-123456789abc"
+                        }
+                    },
+                    "SequenceNumber": "49100000000000000000003",
+                    "SizeBytes": 220,
+                    "StreamViewType": "NEW_IMAGE"
+                },
+                "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/AssetStorageTable/stream/2026-10-26T20:10:25.401"
+            }
+        },
+        {
+            "name": "file metadata created",
+            "topics": {
+                "assetIndexer": "admit",
+                "fileIndexer": "drop"
+            },
+            "body": {
+                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e4",
+                "eventName": "INSERT",
+                "eventVersion": "1.1",
+                "eventSource": "aws:dynamodb",
+                "awsRegion": "us-east-1",
+                "dynamodb": {
+                    "ApproximateCreationDateTime": 1793045425.0,
+                    "Keys": {
+                        "metadataKey": {
+                            "S": "owner"
+                        },
+                        "databaseId:assetId:filePath": {
+                            "S": "example-db:x0f6c2a7e-1b3d-4c5e-8f90-123456789abc:/models/part.stl"
+                        }
+                    },
+                    "NewImage": {
+                        "metadataKey": {
+                            "S": "owner"
+                        },
+                        "databaseId:assetId:filePath": {
+                            "S": "example-db:x0f6c2a7e-1b3d-4c5e-8f90-123456789abc:/models/part.stl"
+                        },
+                        "metadataValue": {
+                            "S": "team-a"
+                        },
+                        "metadataValueType": {
+                            "S": "string"
+                        }
+                    },
+                    "SequenceNumber": "49100000000000000000004",
+                    "SizeBytes": 220,
+                    "StreamViewType": "NEW_AND_OLD_IMAGES"
+                },
+                "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/AssetFileMetadataStorageTableV2/stream/2026-10-26T20:10:25.401"
+            }
+        },
+        {
+            "name": "file metadata modified",
+            "topics": {
+                "assetIndexer": "admit",
+                "fileIndexer": "drop"
+            },
+            "body": {
+                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e5",
+                "eventName": "MODIFY",
+                "eventVersion": "1.1",
+                "eventSource": "aws:dynamodb",
+                "awsRegion": "us-east-1",
+                "dynamodb": {
+                    "ApproximateCreationDateTime": 1793045425.0,
+                    "Keys": {
+                        "metadataKey": {
+                            "S": "owner"
+                        },
+                        "databaseId:assetId:filePath": {
+                            "S": "example-db:x0f6c2a7e-1b3d-4c5e-8f90-123456789abc:/models/part.stl"
+                        }
+                    },
+                    "NewImage": {
+                        "metadataKey": {
+                            "S": "owner"
+                        },
+                        "databaseId:assetId:filePath": {
+                            "S": "example-db:x0f6c2a7e-1b3d-4c5e-8f90-123456789abc:/models/part.stl"
+                        },
+                        "metadataValue": {
+                            "S": "team-a"
+                        },
+                        "metadataValueType": {
+                            "S": "string"
+                        }
+                    },
+                    "SequenceNumber": "49100000000000000000005",
+                    "SizeBytes": 220,
+                    "StreamViewType": "NEW_AND_OLD_IMAGES"
+                },
+                "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/AssetFileMetadataStorageTableV2/stream/2026-10-26T20:10:25.401"
+            }
+        },
+        {
+            "name": "file metadata removed",
+            "topics": {
+                "assetIndexer": "admit",
+                "fileIndexer": "drop"
+            },
+            "body": {
+                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e6",
+                "eventName": "REMOVE",
+                "eventVersion": "1.1",
+                "eventSource": "aws:dynamodb",
+                "awsRegion": "us-east-1",
+                "dynamodb": {
+                    "ApproximateCreationDateTime": 1793045425.0,
+                    "Keys": {
+                        "metadataKey": {
+                            "S": "owner"
+                        },
+                        "databaseId:assetId:filePath": {
+                            "S": "example-db:x0f6c2a7e-1b3d-4c5e-8f90-123456789abc:/models/part.stl"
+                        }
+                    },
+                    "OldImage": {
+                        "metadataKey": {
+                            "S": "owner"
+                        },
+                        "databaseId:assetId:filePath": {
+                            "S": "example-db:x0f6c2a7e-1b3d-4c5e-8f90-123456789abc:/models/part.stl"
+                        },
+                        "metadataValue": {
+                            "S": "team-a"
+                        },
+                        "metadataValueType": {
+                            "S": "string"
+                        }
+                    },
+                    "SequenceNumber": "49100000000000000000006",
+                    "SizeBytes": 220,
+                    "StreamViewType": "NEW_AND_OLD_IMAGES"
+                },
+                "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/AssetFileMetadataStorageTableV2/stream/2026-10-26T20:10:25.401"
+            }
+        },
+        {
+            "name": "asset metadata created (file path /)",
+            "topics": {
+                "assetIndexer": "admit",
+                "fileIndexer": "drop"
+            },
+            "body": {
+                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e7",
+                "eventName": "INSERT",
+                "eventVersion": "1.1",
+                "eventSource": "aws:dynamodb",
+                "awsRegion": "us-east-1",
+                "dynamodb": {
+                    "ApproximateCreationDateTime": 1793045425.0,
+                    "Keys": {
+                        "metadataKey": {
+                            "S": "owner"
+                        },
+                        "databaseId:assetId:filePath": {
+                            "S": "example-db:x0f6c2a7e-1b3d-4c5e-8f90-123456789abc:/"
+                        }
+                    },
+                    "NewImage": {
+                        "metadataKey": {
+                            "S": "owner"
+                        },
+                        "databaseId:assetId:filePath": {
+                            "S": "example-db:x0f6c2a7e-1b3d-4c5e-8f90-123456789abc:/"
+                        },
+                        "metadataValue": {
+                            "S": "team-a"
+                        },
+                        "metadataValueType": {
+                            "S": "string"
+                        }
+                    },
+                    "SequenceNumber": "49100000000000000000007",
+                    "SizeBytes": 220,
+                    "StreamViewType": "NEW_AND_OLD_IMAGES"
+                },
+                "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/AssetFileMetadataStorageTableV2/stream/2026-10-26T20:10:25.401"
+            }
+        },
+        {
+            "name": "file attribute created",
+            "topics": {
+                "fileIndexer": "admit"
+            },
+            "body": {
+                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e8",
+                "eventName": "INSERT",
+                "eventVersion": "1.1",
+                "eventSource": "aws:dynamodb",
+                "awsRegion": "us-east-1",
+                "dynamodb": {
+                    "ApproximateCreationDateTime": 1793045425.0,
+                    "Keys": {
+                        "attributeKey": {
+                            "S": "source"
+                        },
+                        "databaseId:assetId:filePath": {
+                            "S": "example-db:x0f6c2a7e-1b3d-4c5e-8f90-123456789abc:/models/part.stl"
+                        }
+                    },
+                    "NewImage": {
+                        "attributeKey": {
+                            "S": "source"
+                        },
+                        "databaseId:assetId:filePath": {
+                            "S": "example-db:x0f6c2a7e-1b3d-4c5e-8f90-123456789abc:/models/part.stl"
+                        },
+                        "attributeValue": {
+                            "S": "scanner"
+                        },
+                        "attributeValueType": {
+                            "S": "string"
+                        }
+                    },
+                    "SequenceNumber": "49100000000000000000008",
+                    "SizeBytes": 220,
+                    "StreamViewType": "NEW_AND_OLD_IMAGES"
+                },
+                "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/FileAttributeStorageTableV2/stream/2026-10-26T20:10:25.401"
+            }
+        },
+        {
+            "name": "file attribute modified",
+            "topics": {
+                "fileIndexer": "admit"
+            },
+            "body": {
+                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e9",
+                "eventName": "MODIFY",
+                "eventVersion": "1.1",
+                "eventSource": "aws:dynamodb",
+                "awsRegion": "us-east-1",
+                "dynamodb": {
+                    "ApproximateCreationDateTime": 1793045425.0,
+                    "Keys": {
+                        "attributeKey": {
+                            "S": "source"
+                        },
+                        "databaseId:assetId:filePath": {
+                            "S": "example-db:x0f6c2a7e-1b3d-4c5e-8f90-123456789abc:/models/part.stl"
+                        }
+                    },
+                    "NewImage": {
+                        "attributeKey": {
+                            "S": "source"
+                        },
+                        "databaseId:assetId:filePath": {
+                            "S": "example-db:x0f6c2a7e-1b3d-4c5e-8f90-123456789abc:/models/part.stl"
+                        },
+                        "attributeValue": {
+                            "S": "scanner"
+                        },
+                        "attributeValueType": {
+                            "S": "string"
+                        }
+                    },
+                    "SequenceNumber": "49100000000000000000009",
+                    "SizeBytes": 220,
+                    "StreamViewType": "NEW_AND_OLD_IMAGES"
+                },
+                "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/FileAttributeStorageTableV2/stream/2026-10-26T20:10:25.401"
+            }
+        },
+        {
+            "name": "file attribute removed",
+            "topics": {
+                "fileIndexer": "admit"
+            },
+            "body": {
+                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e10",
+                "eventName": "REMOVE",
+                "eventVersion": "1.1",
+                "eventSource": "aws:dynamodb",
+                "awsRegion": "us-east-1",
+                "dynamodb": {
+                    "ApproximateCreationDateTime": 1793045425.0,
+                    "Keys": {
+                        "attributeKey": {
+                            "S": "source"
+                        },
+                        "databaseId:assetId:filePath": {
+                            "S": "example-db:x0f6c2a7e-1b3d-4c5e-8f90-123456789abc:/models/part.stl"
+                        }
+                    },
+                    "OldImage": {
+                        "attributeKey": {
+                            "S": "source"
+                        },
+                        "databaseId:assetId:filePath": {
+                            "S": "example-db:x0f6c2a7e-1b3d-4c5e-8f90-123456789abc:/models/part.stl"
+                        },
+                        "attributeValue": {
+                            "S": "scanner"
+                        },
+                        "attributeValueType": {
+                            "S": "string"
+                        }
+                    },
+                    "SequenceNumber": "491000000000000000000010",
+                    "SizeBytes": 220,
+                    "StreamViewType": "NEW_AND_OLD_IMAGES"
+                },
+                "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/FileAttributeStorageTableV2/stream/2026-10-26T20:10:25.401"
+            }
+        },
+        {
+            "name": "asset link created",
+            "topics": {
+                "assetIndexer": "admit"
+            },
+            "body": {
+                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e11",
+                "eventName": "INSERT",
+                "eventVersion": "1.1",
+                "eventSource": "aws:dynamodb",
+                "awsRegion": "us-east-1",
+                "dynamodb": {
+                    "ApproximateCreationDateTime": 1793045425.0,
+                    "Keys": {
+                        "assetLinkId": {
+                            "S": "2f0d7b1e-9c3a-4e5f-8a6b-0c1d2e3f4a5b"
+                        }
+                    },
+                    "NewImage": {
+                        "assetLinkId": {
+                            "S": "2f0d7b1e-9c3a-4e5f-8a6b-0c1d2e3f4a5b"
+                        },
+                        "fromAssetDatabaseId": {
+                            "S": "example-db"
+                        },
+                        "fromAssetId": {
+                            "S": "x0f6c2a7e-1b3d-4c5e-8f90-123456789abc"
+                        },
+                        "toAssetDatabaseId": {
+                            "S": "example-db"
+                        },
+                        "toAssetId": {
+                            "S": "x9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+                        },
+                        "relationshipType": {
+                            "S": "parentChild"
+                        }
+                    },
+                    "SequenceNumber": "491000000000000000000011",
+                    "SizeBytes": 220,
+                    "StreamViewType": "NEW_AND_OLD_IMAGES"
+                },
+                "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/AssetLinksStorageTableV2.2/stream/2026-10-26T20:10:25.401"
+            }
+        },
+        {
+            "name": "asset link removed",
+            "topics": {
+                "assetIndexer": "admit"
+            },
+            "body": {
+                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e12",
+                "eventName": "REMOVE",
+                "eventVersion": "1.1",
+                "eventSource": "aws:dynamodb",
+                "awsRegion": "us-east-1",
+                "dynamodb": {
+                    "ApproximateCreationDateTime": 1793045425.0,
+                    "Keys": {
+                        "assetLinkId": {
+                            "S": "2f0d7b1e-9c3a-4e5f-8a6b-0c1d2e3f4a5b"
+                        }
+                    },
+                    "OldImage": {
+                        "assetLinkId": {
+                            "S": "2f0d7b1e-9c3a-4e5f-8a6b-0c1d2e3f4a5b"
+                        },
+                        "fromAssetDatabaseId": {
+                            "S": "example-db"
+                        },
+                        "fromAssetId": {
+                            "S": "x0f6c2a7e-1b3d-4c5e-8f90-123456789abc"
+                        },
+                        "toAssetDatabaseId": {
+                            "S": "example-db"
+                        },
+                        "toAssetId": {
+                            "S": "x9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+                        },
+                        "relationshipType": {
+                            "S": "parentChild"
+                        }
+                    },
+                    "SequenceNumber": "491000000000000000000012",
+                    "SizeBytes": 220,
+                    "StreamViewType": "NEW_AND_OLD_IMAGES"
+                },
+                "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/AssetLinksStorageTableV2.2/stream/2026-10-26T20:10:25.401"
+            }
+        },
+        {
+            "name": "asset link metadata created",
+            "topics": {
+                "assetIndexer": "admit"
+            },
+            "body": {
+                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e13",
+                "eventName": "INSERT",
+                "eventVersion": "1.1",
+                "eventSource": "aws:dynamodb",
+                "awsRegion": "us-east-1",
+                "dynamodb": {
+                    "ApproximateCreationDateTime": 1793045425.0,
+                    "Keys": {
+                        "assetLinkId": {
+                            "S": "2f0d7b1e-9c3a-4e5f-8a6b-0c1d2e3f4a5b"
+                        },
+                        "metadataKey": {
+                            "S": "placement"
+                        }
+                    },
+                    "NewImage": {
+                        "assetLinkId": {
+                            "S": "2f0d7b1e-9c3a-4e5f-8a6b-0c1d2e3f4a5b"
+                        },
+                        "metadataKey": {
+                            "S": "placement"
+                        },
+                        "metadataValue": {
+                            "S": "left"
+                        },
+                        "metadataValueType": {
+                            "S": "string"
+                        }
+                    },
+                    "SequenceNumber": "491000000000000000000013",
+                    "SizeBytes": 220,
+                    "StreamViewType": "NEW_AND_OLD_IMAGES"
+                },
+                "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/AssetLinksMetadataStorageTable/stream/2026-10-26T20:10:25.401"
+            }
+        },
+        {
+            "name": "asset link metadata removed",
+            "topics": {
+                "assetIndexer": "admit"
+            },
+            "body": {
+                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e14",
+                "eventName": "REMOVE",
+                "eventVersion": "1.1",
+                "eventSource": "aws:dynamodb",
+                "awsRegion": "us-east-1",
+                "dynamodb": {
+                    "ApproximateCreationDateTime": 1793045425.0,
+                    "Keys": {
+                        "assetLinkId": {
+                            "S": "2f0d7b1e-9c3a-4e5f-8a6b-0c1d2e3f4a5b"
+                        },
+                        "metadataKey": {
+                            "S": "placement"
+                        }
+                    },
+                    "OldImage": {
+                        "assetLinkId": {
+                            "S": "2f0d7b1e-9c3a-4e5f-8a6b-0c1d2e3f4a5b"
+                        },
+                        "metadataKey": {
+                            "S": "placement"
+                        },
+                        "metadataValue": {
+                            "S": "left"
+                        },
+                        "metadataValueType": {
+                            "S": "string"
+                        }
+                    },
+                    "SequenceNumber": "491000000000000000000014",
+                    "SizeBytes": 220,
+                    "StreamViewType": "NEW_AND_OLD_IMAGES"
+                },
+                "eventSourceARN": "arn:aws:dynamodb:us-east-1:123456789012:table/AssetLinksMetadataStorageTable/stream/2026-10-26T20:10:25.401"
+            }
+        },
+        {
+            "name": "file uploaded (S3 event)",
+            "topics": {
+                "fileIndexer": "admit"
+            },
+            "body": {
+                "Records": [
+                    {
+                        "messageId": "msg-1",
+                        "receiptHandle": "handle",
+                        "body": "{\"Type\": \"Notification\", \"MessageId\": \"6f1e2d3c-0000-4000-8000-000000000001\", \"TopicArn\": \"arn:aws:sns:us-east-1:123456789012:example-asset-bucket-notifications\", \"Subject\": \"Amazon S3 Notification\", \"Message\": \"{\\\"Records\\\": [{\\\"eventVersion\\\": \\\"2.1\\\", \\\"eventSource\\\": \\\"aws:s3\\\", \\\"awsRegion\\\": \\\"us-east-1\\\", \\\"eventTime\\\": \\\"2026-10-26T20:30:23.000Z\\\", \\\"eventName\\\": \\\"ObjectCreated:Put\\\", \\\"s3\\\": {\\\"s3SchemaVersion\\\": \\\"1.0\\\", \\\"bucket\\\": {\\\"name\\\": \\\"example-asset-bucket\\\", \\\"arn\\\": \\\"arn:aws:s3:::example-asset-bucket\\\"}, \\\"object\\\": {\\\"key\\\": \\\"x0f6c2a7e-1b3d-4c5e-8f90-123456789abc/models/part.stl\\\", \\\"size\\\": 3, \\\"eTag\\\": \\\"e\\\", \\\"versionId\\\": \\\"v1\\\", \\\"sequencer\\\": \\\"0\\\"}}}]}\", \"Timestamp\": \"2026-10-26T20:30:23.100Z\"}",
+                        "attributes": {
+                            "ApproximateReceiveCount": "1"
+                        },
+                        "messageAttributes": {},
+                        "eventSource": "aws:sqs",
+                        "eventSourceARN": "arn:aws:sqs:us-east-1:123456789012:example-bucket-sync-queue",
+                        "awsRegion": "us-east-1"
+                    }
+                ],
+                "ASSET_BUCKET_NAME": "example-asset-bucket",
+                "ASSET_BUCKET_PREFIX": ""
+            }
+        },
+        {
+            "name": "files uploaded, two notifications (S3 event)",
+            "topics": {
+                "fileIndexer": "admit"
+            },
+            "body": {
+                "Records": [
+                    {
+                        "messageId": "msg-1",
+                        "receiptHandle": "handle",
+                        "body": "{\"Type\": \"Notification\", \"MessageId\": \"6f1e2d3c-0000-4000-8000-000000000001\", \"TopicArn\": \"arn:aws:sns:us-east-1:123456789012:example-asset-bucket-notifications\", \"Subject\": \"Amazon S3 Notification\", \"Message\": \"{\\\"Records\\\": [{\\\"eventVersion\\\": \\\"2.1\\\", \\\"eventSource\\\": \\\"aws:s3\\\", \\\"awsRegion\\\": \\\"us-east-1\\\", \\\"eventTime\\\": \\\"2026-10-26T20:30:23.000Z\\\", \\\"eventName\\\": \\\"ObjectCreated:CompleteMultipartUpload\\\", \\\"s3\\\": {\\\"s3SchemaVersion\\\": \\\"1.0\\\", \\\"bucket\\\": {\\\"name\\\": \\\"example-asset-bucket\\\", \\\"arn\\\": \\\"arn:aws:s3:::example-asset-bucket\\\"}, \\\"object\\\": {\\\"key\\\": \\\"x0f6c2a7e-1b3d-4c5e-8f90-123456789abc/models/a.stl\\\", \\\"size\\\": 3, \\\"eTag\\\": \\\"e\\\", \\\"versionId\\\": \\\"v1\\\", \\\"sequencer\\\": \\\"0\\\"}}}]}\", \"Timestamp\": \"2026-10-26T20:30:23.100Z\"}",
+                        "attributes": {
+                            "ApproximateReceiveCount": "1"
+                        },
+                        "messageAttributes": {},
+                        "eventSource": "aws:sqs",
+                        "eventSourceARN": "arn:aws:sqs:us-east-1:123456789012:example-bucket-sync-queue",
+                        "awsRegion": "us-east-1"
+                    },
+                    {
+                        "messageId": "msg-2",
+                        "receiptHandle": "handle",
+                        "body": "{\"Type\": \"Notification\", \"MessageId\": \"6f1e2d3c-0000-4000-8000-000000000002\", \"TopicArn\": \"arn:aws:sns:us-east-1:123456789012:example-asset-bucket-notifications\", \"Subject\": \"Amazon S3 Notification\", \"Message\": \"{\\\"Records\\\": [{\\\"eventVersion\\\": \\\"2.1\\\", \\\"eventSource\\\": \\\"aws:s3\\\", \\\"awsRegion\\\": \\\"us-east-1\\\", \\\"eventTime\\\": \\\"2026-10-26T20:30:23.000Z\\\", \\\"eventName\\\": \\\"ObjectCreated:Put\\\", \\\"s3\\\": {\\\"s3SchemaVersion\\\": \\\"1.0\\\", \\\"bucket\\\": {\\\"name\\\": \\\"example-asset-bucket\\\", \\\"arn\\\": \\\"arn:aws:s3:::example-asset-bucket\\\"}, \\\"object\\\": {\\\"key\\\": \\\"x0f6c2a7e-1b3d-4c5e-8f90-123456789abc/models/b.txt\\\", \\\"size\\\": 3, \\\"eTag\\\": \\\"e\\\", \\\"versionId\\\": \\\"v1\\\", \\\"sequencer\\\": \\\"0\\\"}}}]}\", \"Timestamp\": \"2026-10-26T20:30:23.100Z\"}",
+                        "attributes": {
+                            "ApproximateReceiveCount": "1"
+                        },
+                        "messageAttributes": {},
+                        "eventSource": "aws:sqs",
+                        "eventSourceARN": "arn:aws:sqs:us-east-1:123456789012:example-bucket-sync-queue",
+                        "awsRegion": "us-east-1"
+                    }
+                ],
+                "ASSET_BUCKET_NAME": "example-asset-bucket",
+                "ASSET_BUCKET_PREFIX": ""
+            }
+        },
+        {
+            "name": "file deleted (S3 event)",
+            "topics": {
+                "fileIndexer": "admit"
+            },
+            "body": {
+                "Records": [
+                    {
+                        "messageId": "msg-1",
+                        "receiptHandle": "handle",
+                        "body": "{\"Type\": \"Notification\", \"MessageId\": \"6f1e2d3c-0000-4000-8000-000000000001\", \"TopicArn\": \"arn:aws:sns:us-east-1:123456789012:example-asset-bucket-notifications\", \"Subject\": \"Amazon S3 Notification\", \"Message\": \"{\\\"Records\\\": [{\\\"eventVersion\\\": \\\"2.1\\\", \\\"eventSource\\\": \\\"aws:s3\\\", \\\"awsRegion\\\": \\\"us-east-1\\\", \\\"eventTime\\\": \\\"2026-10-26T20:30:23.000Z\\\", \\\"eventName\\\": \\\"ObjectRemoved:Delete\\\", \\\"s3\\\": {\\\"s3SchemaVersion\\\": \\\"1.0\\\", \\\"bucket\\\": {\\\"name\\\": \\\"example-asset-bucket\\\", \\\"arn\\\": \\\"arn:aws:s3:::example-asset-bucket\\\"}, \\\"object\\\": {\\\"key\\\": \\\"x0f6c2a7e-1b3d-4c5e-8f90-123456789abc/models/part.stl\\\", \\\"size\\\": 3, \\\"eTag\\\": \\\"e\\\", \\\"versionId\\\": \\\"v1\\\", \\\"sequencer\\\": \\\"0\\\"}}}]}\", \"Timestamp\": \"2026-10-26T20:30:23.100Z\"}",
+                        "attributes": {
+                            "ApproximateReceiveCount": "1"
+                        },
+                        "messageAttributes": {},
+                        "eventSource": "aws:sqs",
+                        "eventSourceARN": "arn:aws:sqs:us-east-1:123456789012:example-bucket-sync-queue",
+                        "awsRegion": "us-east-1"
+                    }
+                ],
+                "ASSET_BUCKET_NAME": "example-asset-bucket",
+                "ASSET_BUCKET_PREFIX": ""
+            }
+        }
+    ]
+}

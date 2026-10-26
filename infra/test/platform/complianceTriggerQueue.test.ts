@@ -40,6 +40,8 @@ import {
 import commercialTemplate from "../../config/config.template.commercial.json";
 import { newTestApp } from "../support/testApp";
 import { batchSizeOffenders } from "../support/sqsEventSourceBounds";
+import { snsMessageBodyPolicyAdmits } from "../support/snsFilterPolicy";
+import topicMessages from "./fixtures/indexerTopicMessages.json";
 
 const mockConfig = (govCloud: boolean): Config.Config => {
     const config = JSON.parse(JSON.stringify(commercialTemplate)) as Config.Config;
@@ -185,9 +187,74 @@ describe("compliance trigger queue", () => {
         // Asset indexer topic: stream records only.
         expect(byTopic[assetTopicId]).toEqual({ eventSource: ["aws:dynamodb"] });
         // File indexer topic: everything but the asset-file-metadata records, which the asset
-        // indexer topic already delivers.
+        // indexer topic already delivers. The check sits on the leaf `S`: SNS `exists` applies to
+        // leaf values only, and `Keys.metadataKey` is an attribute-value object.
         expect(byTopic[fileTopicId]).toEqual({
-            dynamodb: { Keys: { metadataKey: [{ exists: false }] } },
+            dynamodb: { Keys: { metadataKey: { S: [{ exists: false }] } } },
+        });
+    });
+
+    describe("the synthesized filter policies over a sample of every message kind", () => {
+        const subs = resources(commercial, "AWS::SNS::Subscription");
+        const policyOf = (topicPrefix: string) => {
+            const sub = subs.find((s) => String(s.Properties.TopicArn.Ref).startsWith(topicPrefix));
+            expect(sub).toBeDefined();
+            return sub!.Properties.FilterPolicy as Record<string, unknown>;
+        };
+        const policies: Record<string, Record<string, unknown>> = {
+            assetIndexer: policyOf("AssetIndexer"),
+            fileIndexer: policyOf("FileIndexer"),
+        };
+        const cases = topicMessages.samples.flatMap((sample) =>
+            Object.entries(sample.topics).map(([topic, expected]) => ({
+                name: sample.name,
+                topic,
+                expected,
+                body: sample.body,
+            }))
+        );
+
+        test.each(cases)("$topic topic: $name is $expected", ({ topic, expected, body }) => {
+            expect(policies[topic]).toBeDefined();
+            expect(snsMessageBodyPolicyAdmits(policies[topic], body)).toBe(expected === "admit");
+        });
+
+        test("every message reaches the trigger queue exactly once", () => {
+            for (const sample of topicMessages.samples) {
+                const admitted = Object.keys(sample.topics).filter((topic) =>
+                    snsMessageBodyPolicyAdmits(policies[topic], sample.body)
+                );
+                expect({ name: sample.name, admitted: admitted.length }).toEqual({
+                    name: sample.name,
+                    admitted: 1,
+                });
+            }
+        });
+
+        test("the samples cover every table each topic relays and both S3 event kinds", () => {
+            const tableOf = (body: any) =>
+                typeof body.eventSourceARN === "string"
+                    ? body.eventSourceARN.split(":table/")[1].split("/stream/")[0]
+                    : "S3";
+            const covered = (topic: string) =>
+                new Set(
+                    topicMessages.samples
+                        .filter((sample) => topic in sample.topics)
+                        .map((sample) => tableOf(sample.body))
+                );
+            // The tables buildAssetIndexerSnsQueuingFunction / buildFileIndexerSnsQueuingFunction
+            // read the streams of, and the bucket sync's S3 messages on the file topic.
+            expect(covered("assetIndexer")).toEqual(
+                new Set([
+                    "AssetStorageTable",
+                    "AssetFileMetadataStorageTableV2",
+                    "AssetLinksStorageTableV2.2",
+                    "AssetLinksMetadataStorageTable",
+                ])
+            );
+            expect(covered("fileIndexer")).toEqual(
+                new Set(["AssetFileMetadataStorageTableV2", "FileAttributeStorageTableV2", "S3"])
+            );
         });
     });
 

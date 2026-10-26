@@ -432,11 +432,17 @@ export const COMPLIANCE_TRIGGER_MAX_CONCURRENCY = 5;
  * as the SNS message body, and publish no message attributes, so the policies filter on the body.
  *
  * - Asset indexer topic: DynamoDB stream records only (the asset, asset-file-metadata, asset-link
- *   and asset-link-metadata tables).
+ *   and asset-link-metadata tables), told apart by their top-level `eventSource`.
  * - File indexer topic: the S3 file-event messages and the file-attribute table's records. The
  *   asset-file-metadata table's records are published to both topics; they are taken from the
- *   asset indexer topic only (a record whose `Keys` carry `metadataKey`), so each reaches the queue
- *   once.
+ *   asset indexer topic only, so each reaches the queue once. The file topic's policy drops a
+ *   record whose `dynamodb.Keys.metadataKey.S` exists: SNS applies `exists` to leaf values only,
+ *   and in a stream record `Keys.metadataKey` is the attribute-value object `{"S": ...}`, so a
+ *   check on `Keys.metadataKey` itself never finds a leaf and admits every record. The file
+ *   attribute table keys on `attributeKey` and an S3 message has no `dynamodb`, so both pass.
+ *
+ * test/platform/complianceTriggerQueue.test.ts runs both synthesized policies over a sample of
+ * every message kind each topic carries (test/platform/fixtures/indexerTopicMessages.json).
  */
 export function complianceTriggerAssetTopicFilter(): { [key: string]: sns.FilterOrPolicy } {
     return {
@@ -450,7 +456,9 @@ export function complianceTriggerFileTopicFilter(): { [key: string]: sns.FilterO
     return {
         dynamodb: sns.FilterOrPolicy.policy({
             Keys: sns.FilterOrPolicy.policy({
-                metadataKey: sns.FilterOrPolicy.filter(sns.SubscriptionFilter.notExistsFilter()),
+                metadataKey: sns.FilterOrPolicy.policy({
+                    S: sns.FilterOrPolicy.filter(sns.SubscriptionFilter.notExistsFilter()),
+                }),
             }),
         }),
     };
