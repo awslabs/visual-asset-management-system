@@ -54,7 +54,7 @@ External OAuth IDP deployments have no equivalent trigger. VAMS derives the user
 
 All API Gateway routes use a single custom REQUEST-type Lambda authorizer (`handlers/auth/apiGatewayAuthorizerRest.py`, with the shared logic in `common/auth/authorizerCore.py`). It runs these steps in order, and returns a deny as soon as one fails:
 
-1. **Resolve the true client IP and check IP ranges.** The IP is resolved in a fronting-aware way (`common/auth/clientIp.py`) and checked against `authProvider.authorizerOptions.allowedIpRanges`. This runs before credential verification so a disallowed IP costs no JWT work.
+1. **Resolve the true client IP and check IP ranges.** The IP is resolved in a fronting-aware way (`common/auth/clientIp.py`) and checked against `authProvider.authorizerOptions.allowedIpRanges`. On a CloudFront deployment a request through the VAMS distribution uses the viewer's address, which is the address Amazon API Gateway reports for it; the `X-Forwarded-For` header counts only for a request that API Gateway reports with a CloudFront origin-facing address (see [IP Range Restrictions](../architecture/security.md#ip-range-restrictions)), and every other request uses its connection address. This runs before credential verification so a disallowed IP costs no JWT work.
 2. **Bypass authentication for ignored paths.** Paths in `CUSTOM_AUTHORIZER_IGNORED_PATHS` (`/api/amplify-config`, `/api/version`) return an allow with no context. The IP check above still applies.
 3. **Verify the credential.** An `Authorization` value beginning with `vams_` (with or without a `Bearer` prefix) takes the API key path; anything else is treated as a JWT and verified according to the configured auth mode.
 4. **Resolve the caller's roles** from the user roles table.
@@ -223,6 +223,8 @@ The file also carries a commented-out example that calls an external IDP's `/idp
 | Shared authorizer logic (verification, roles, MFA) | `backend/backend/common/auth/authorizerCore.py`                      |
 | REST authorizer entry point                        | `backend/backend/handlers/auth/apiGatewayAuthorizerRest.py`          |
 | Client IP resolution                               | `backend/backend/common/auth/clientIp.py`                            |
+| CloudFront origin-facing prefixes (generated)      | `backend/backend/common/auth/cloudFrontOriginFacingRanges.py`        |
+| CloudFront origin-facing prefix generator          | `backend/scripts/generateCloudFrontOriginFacingRanges.py`            |
 | REST/HTTP event normalization                      | `backend/backend/common/auth/apiEvent.py`                            |
 | Context → claims conversion                        | `backend/backend/handlers/auth/__init__.py`                          |
 | Casbin two-tier enforcement                        | `backend/backend/handlers/authz/__init__.py`                         |
