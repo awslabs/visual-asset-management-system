@@ -78,6 +78,7 @@ On the database's compliance overview, choose **Remove** in the **Schema Binding
 2. Choose **Edit** to open the database editor.
 3. In the **Compliance Schema** field, select **None (no compliance schema)**.
 4. Choose **Update Database**.
+5. Confirm with **Remove binding**. This is the same confirmation as **Remove** on the overview. Until you confirm, nothing is sent, not even other changes to the database fields; **Cancel** returns to the editor.
 
 The compliance records of every asset that inherited the database schema are removed, and the overview shows **No compliance schema bound** until a schema is assigned again.
 

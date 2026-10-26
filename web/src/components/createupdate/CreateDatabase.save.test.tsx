@@ -11,7 +11,7 @@
  * closes only when every request it sent succeeded.
  */
 import React from "react";
-import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act, within } from "@testing-library/react";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import CreateDatabase from "./CreateDatabase";
 import Synonyms from "../../synonyms";
@@ -213,14 +213,39 @@ describe(`${Synonyms.Database} editor save and compliance schema binding`, () =>
         );
     });
 
-    it("removes the binding when None is chosen", async () => {
+    it("removes the binding when None is chosen, only after the confirmation", async () => {
         compliance.unbindSchemaFromDatabase.mockResolvedValue([true, "Schema unbound"]);
         const { setOpen } = await openEditor("std");
         chooseSchema(1);
         submit("Update");
+        const confirm = await screen.findByText("Remove the compliance schema binding");
+        const dialog = confirm.closest('[role="dialog"]') as HTMLElement;
+        expect(dialog).not.toBeNull();
+        expect(dialog.textContent).toContain(
+            `Remove std from the ${Synonyms.database} db-one? The compliance state of every ${Synonyms.asset} that inherits it is deleted;`
+        );
+        expect(compliance.unbindSchemaFromDatabase).not.toHaveBeenCalled();
+        fireEvent.click(within(dialog).getByRole("button", { name: "Remove binding" }));
         await waitFor(() => expect(closedWith(setOpen)).toBe(true));
         expect(compliance.unbindSchemaFromDatabase).toHaveBeenCalledWith("db-one");
         expect(api.updateDatabase).not.toHaveBeenCalled();
+    });
+
+    it("sends nothing, not even the save, when the removal is cancelled", async () => {
+        const { setOpen } = await openEditor("std");
+        editDescription("changed description");
+        chooseSchema(1);
+        submit("Update");
+        const dialog = (await screen.findByText("Remove the compliance schema binding")).closest(
+            '[role="dialog"]'
+        ) as HTMLElement;
+        fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(compliance.unbindSchemaFromDatabase).not.toHaveBeenCalled();
+        expect(api.updateDatabase).not.toHaveBeenCalled();
+        expect(closedWith(setOpen)).toBe(false);
     });
 
     it("closes without sending anything when nothing changed", async () => {

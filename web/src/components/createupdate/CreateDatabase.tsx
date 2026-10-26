@@ -207,6 +207,8 @@ export default function CreateDatabase({
     const [loadingSchemas, setLoadingSchemas] = useState(false);
 
     const [initialSchemaValue, setInitialSchemaValue] = useState<string | null>(null);
+    // The confirmation shown before a bound schema is removed (None chosen).
+    const [confirmUnbind, setConfirmUnbind] = useState(false);
 
     // Everything the form reads is loaded when the modal opens, not on mount: the component is
     // mounted while closed.
@@ -331,13 +333,20 @@ export default function CreateDatabase({
     // Sends the database save only when a database field changed and the schema binding only when
     // the schema selection changed, in that order. A refused save sends no binding; any refusal
     // keeps the modal open with the message, and the modal closes only when every request sent
-    // succeeded. With nothing changed it closes without sending anything.
-    const submit = async () => {
+    // succeeded. With nothing changed it closes without sending anything. Removing a bound schema
+    // (choosing None) deletes the compliance state of every asset that inherits it, so it first
+    // asks for the same confirmation as Remove on the database compliance overview, and sends
+    // nothing (not even the save) until it is confirmed.
+    const submit = async (unbindConfirmed: boolean = false) => {
         const selectedValue = (selectedSchema?.value as string | undefined) || null;
         const sendSave = savedState === null || !sameDatabaseFields(formState, savedState);
         const sendBinding = canBindComplianceSchema && selectedValue !== initialSchemaValue;
         if (!sendSave && !sendBinding) {
             closeModal();
+            return;
+        }
+        if (sendBinding && !selectedValue && !unbindConfirmed) {
+            setConfirmUnbind(true);
             return;
         }
 
@@ -392,170 +401,204 @@ export default function CreateDatabase({
     };
 
     return (
-        <Modal
-            onDismiss={closeModal}
-            visible={open}
-            closeAriaLabel="Close modal"
-            footer={
-                <Box float="right">
-                    <SpaceBetween direction="horizontal" size="xs">
-                        <Button variant="link" onClick={closeModal}>
-                            Cancel
-                        </Button>
-                        <Button
-                            variant="primary"
-                            onClick={submit}
-                            disabled={
-                                inProgress ||
-                                !(
-                                    validateDatabaseName(formState.databaseId) === null &&
-                                    validateDatabaseDescriptionLength(formState.description) ===
-                                        null &&
-                                    formState.defaultBucketId &&
-                                    validateFileExtensions(
-                                        formState.restrictFileUploadsToExtensions || ""
-                                    ) === null
-                                )
-                            }
-                            data-testid={`${createOrUpdate}-database-button`}
-                        >
-                            {`${createOrUpdate} ${Synonyms.Database}`}
-                        </Button>
-                    </SpaceBetween>
-                </Box>
-            }
-            header={`${createOrUpdate} ${Synonyms.Database}`}
-        >
-            <form onSubmit={(e) => e.preventDefault()}>
-                <Form errorText={formError}>
-                    <SpaceBetween direction="vertical" size="s">
-                        <FormField
-                            label={`${Synonyms.Database} Name`}
-                            errorText={validateDatabaseName(formState.databaseId)}
-                            constraintText="Required. 4-63 characters: letters, numbers, - and _ only."
-                        >
-                            <Input
-                                value={formState.databaseId}
-                                disabled={inProgress || savedState !== null}
-                                onChange={({ detail }) =>
-                                    setFormState({ ...formState, databaseId: detail.value })
+        <>
+            {confirmUnbind && (
+                <Modal
+                    visible={confirmUnbind}
+                    onDismiss={() => setConfirmUnbind(false)}
+                    header="Remove the compliance schema binding"
+                    closeAriaLabel="Close dialog"
+                    footer={
+                        <Box float="right">
+                            <SpaceBetween direction="horizontal" size="xs">
+                                <Button variant="link" onClick={() => setConfirmUnbind(false)}>
+                                    Cancel
+                                </Button>
+                                <Button
+                                    variant="primary"
+                                    onClick={() => {
+                                        setConfirmUnbind(false);
+                                        submit(true);
+                                    }}
+                                >
+                                    Remove binding
+                                </Button>
+                            </SpaceBetween>
+                        </Box>
+                    }
+                >
+                    Remove {initialSchemaValue} from the {Synonyms.database} {formState.databaseId}?
+                    The compliance state of every {Synonyms.asset} that inherits it is deleted;{" "}
+                    {Synonyms.assets} that bind their own schema keep theirs.
+                </Modal>
+            )}
+            <Modal
+                onDismiss={closeModal}
+                visible={open}
+                closeAriaLabel="Close modal"
+                footer={
+                    <Box float="right">
+                        <SpaceBetween direction="horizontal" size="xs">
+                            <Button variant="link" onClick={closeModal}>
+                                Cancel
+                            </Button>
+                            <Button
+                                variant="primary"
+                                onClick={() => submit()}
+                                disabled={
+                                    inProgress ||
+                                    !(
+                                        validateDatabaseName(formState.databaseId) === null &&
+                                        validateDatabaseDescriptionLength(formState.description) ===
+                                            null &&
+                                        formState.defaultBucketId &&
+                                        validateFileExtensions(
+                                            formState.restrictFileUploadsToExtensions || ""
+                                        ) === null
+                                    )
                                 }
-                                placeholder={`${Synonyms.Database} Name`}
-                                data-testid="database-name"
-                            />
-                        </FormField>
-                        <FormField
-                            label={`${Synonyms.Database} Description`}
-                            constraintText="Required. Max 256 characters."
-                            errorText={validateDatabaseDescriptionLength(formState.description)}
-                        >
-                            <Textarea
-                                value={formState.description}
-                                disabled={inProgress}
-                                onChange={({ detail }) =>
-                                    setFormState({ ...formState, description: detail.value })
-                                }
-                                rows={4}
-                                placeholder={`${Synonyms.Database} Description`}
-                                data-testid="database-desc"
-                            />
-                        </FormField>
-                        <FormField
-                            label="Default Bucket and Prefix"
-                            constraintText={`Required. Select a bucket and prefix for this ${Synonyms.database}.`}
-                            errorText={
-                                !formState.defaultBucketId ? "A default bucket is required" : null
-                            }
-                        >
-                            <Select
-                                selectedOption={selectedBucket}
-                                onChange={({ detail }) => {
-                                    setSelectedBucket(detail.selectedOption);
-                                    setFormState({
-                                        ...formState,
-                                        defaultBucketId: detail.selectedOption.value || "",
-                                    });
-                                }}
-                                options={buckets.map((bucket) => ({
-                                    label: bucketOptionLabel(bucket),
-                                    value: bucket.bucketId,
-                                }))}
-                                placeholder="Select a bucket"
-                                loadingText="Loading buckets"
-                                statusType={loadingBuckets ? "loading" : "finished"}
-                                disabled={inProgress}
-                                data-testid="database-bucket"
-                            />
-                        </FormField>
-                        <FormField
-                            label="Restrict Metadata Outside Schemas"
-                            description={`Restricts all metadata for components below this ${Synonyms.database} to only allow fields based on applied metadata schema. If no schema is applied, this option is disregarded.`}
-                        >
-                            <Checkbox
-                                checked={formState.restrictMetadataOutsideSchemas || false}
-                                onChange={({ detail }) =>
-                                    setFormState({
-                                        ...formState,
-                                        restrictMetadataOutsideSchemas: detail.checked,
-                                    })
-                                }
-                                disabled={inProgress}
+                                data-testid={`${createOrUpdate}-database-button`}
                             >
-                                Enable metadata schema restrictions
-                            </Checkbox>
-                        </FormField>
-                        <FormField
-                            label="Restrict File Upload Extensions"
-                            description="Restricts file uploads through web and CLI to specific extensions (comma-delimited). Use '.all' or leave blank to allow all extensions (except system-wide restrictions). Does not apply to files directly edited in the S3 bucket."
-                            constraintText="Optional. Comma-separated list of extensions (e.g., .jpg,.png,.pdf)"
-                            errorText={validateFileExtensions(
-                                formState.restrictFileUploadsToExtensions || ""
-                            )}
-                        >
-                            <Input
-                                value={formState.restrictFileUploadsToExtensions || ""}
-                                onChange={({ detail }) =>
-                                    setFormState({
-                                        ...formState,
-                                        restrictFileUploadsToExtensions: detail.value,
-                                    })
-                                }
-                                placeholder="e.g., .jpg,.png,.pdf or leave blank for all"
-                                disabled={inProgress}
-                                data-testid="database-file-extensions"
-                            />
-                        </FormField>
-                        {canBindComplianceSchema && (
+                                {`${createOrUpdate} ${Synonyms.Database}`}
+                            </Button>
+                        </SpaceBetween>
+                    </Box>
+                }
+                header={`${createOrUpdate} ${Synonyms.Database}`}
+            >
+                <form onSubmit={(e) => e.preventDefault()}>
+                    <Form errorText={formError}>
+                        <SpaceBetween direction="vertical" size="s">
                             <FormField
-                                label="Compliance Schema"
-                                description={`Bind a compliance schema to this ${Synonyms.database}. All ${Synonyms.assets} in the ${Synonyms.database} inherit this schema unless overridden at the ${Synonyms.asset} level.`}
-                                constraintText="Optional. Schema can be changed later."
+                                label={`${Synonyms.Database} Name`}
+                                errorText={validateDatabaseName(formState.databaseId)}
+                                constraintText="Required. 4-63 characters: letters, numbers, - and _ only."
                             >
-                                <Select
-                                    selectedOption={selectedSchema}
+                                <Input
+                                    value={formState.databaseId}
+                                    disabled={inProgress || savedState !== null}
                                     onChange={({ detail }) =>
-                                        setSelectedSchema(
-                                            detail.selectedOption?.value
-                                                ? detail.selectedOption
-                                                : null
-                                        )
+                                        setFormState({ ...formState, databaseId: detail.value })
                                     }
-                                    options={[
-                                        { label: "None (no compliance schema)", value: "" },
-                                        ...schemaOptions,
-                                    ]}
-                                    placeholder="Select a compliance schema"
-                                    loadingText="Loading schemas"
-                                    statusType={loadingSchemas ? "loading" : "finished"}
-                                    disabled={inProgress}
-                                    filteringType="auto"
-                                    data-testid="database-compliance-schema"
+                                    placeholder={`${Synonyms.Database} Name`}
+                                    data-testid="database-name"
                                 />
                             </FormField>
-                        )}
-                    </SpaceBetween>
-                </Form>
-            </form>
-        </Modal>
+                            <FormField
+                                label={`${Synonyms.Database} Description`}
+                                constraintText="Required. Max 256 characters."
+                                errorText={validateDatabaseDescriptionLength(formState.description)}
+                            >
+                                <Textarea
+                                    value={formState.description}
+                                    disabled={inProgress}
+                                    onChange={({ detail }) =>
+                                        setFormState({ ...formState, description: detail.value })
+                                    }
+                                    rows={4}
+                                    placeholder={`${Synonyms.Database} Description`}
+                                    data-testid="database-desc"
+                                />
+                            </FormField>
+                            <FormField
+                                label="Default Bucket and Prefix"
+                                constraintText={`Required. Select a bucket and prefix for this ${Synonyms.database}.`}
+                                errorText={
+                                    !formState.defaultBucketId
+                                        ? "A default bucket is required"
+                                        : null
+                                }
+                            >
+                                <Select
+                                    selectedOption={selectedBucket}
+                                    onChange={({ detail }) => {
+                                        setSelectedBucket(detail.selectedOption);
+                                        setFormState({
+                                            ...formState,
+                                            defaultBucketId: detail.selectedOption.value || "",
+                                        });
+                                    }}
+                                    options={buckets.map((bucket) => ({
+                                        label: bucketOptionLabel(bucket),
+                                        value: bucket.bucketId,
+                                    }))}
+                                    placeholder="Select a bucket"
+                                    loadingText="Loading buckets"
+                                    statusType={loadingBuckets ? "loading" : "finished"}
+                                    disabled={inProgress}
+                                    data-testid="database-bucket"
+                                />
+                            </FormField>
+                            <FormField
+                                label="Restrict Metadata Outside Schemas"
+                                description={`Restricts all metadata for components below this ${Synonyms.database} to only allow fields based on applied metadata schema. If no schema is applied, this option is disregarded.`}
+                            >
+                                <Checkbox
+                                    checked={formState.restrictMetadataOutsideSchemas || false}
+                                    onChange={({ detail }) =>
+                                        setFormState({
+                                            ...formState,
+                                            restrictMetadataOutsideSchemas: detail.checked,
+                                        })
+                                    }
+                                    disabled={inProgress}
+                                >
+                                    Enable metadata schema restrictions
+                                </Checkbox>
+                            </FormField>
+                            <FormField
+                                label="Restrict File Upload Extensions"
+                                description="Restricts file uploads through web and CLI to specific extensions (comma-delimited). Use '.all' or leave blank to allow all extensions (except system-wide restrictions). Does not apply to files directly edited in the S3 bucket."
+                                constraintText="Optional. Comma-separated list of extensions (e.g., .jpg,.png,.pdf)"
+                                errorText={validateFileExtensions(
+                                    formState.restrictFileUploadsToExtensions || ""
+                                )}
+                            >
+                                <Input
+                                    value={formState.restrictFileUploadsToExtensions || ""}
+                                    onChange={({ detail }) =>
+                                        setFormState({
+                                            ...formState,
+                                            restrictFileUploadsToExtensions: detail.value,
+                                        })
+                                    }
+                                    placeholder="e.g., .jpg,.png,.pdf or leave blank for all"
+                                    disabled={inProgress}
+                                    data-testid="database-file-extensions"
+                                />
+                            </FormField>
+                            {canBindComplianceSchema && (
+                                <FormField
+                                    label="Compliance Schema"
+                                    description={`Bind a compliance schema to this ${Synonyms.database}. All ${Synonyms.assets} in the ${Synonyms.database} inherit this schema unless overridden at the ${Synonyms.asset} level.`}
+                                    constraintText="Optional. Schema can be changed later."
+                                >
+                                    <Select
+                                        selectedOption={selectedSchema}
+                                        onChange={({ detail }) =>
+                                            setSelectedSchema(
+                                                detail.selectedOption?.value
+                                                    ? detail.selectedOption
+                                                    : null
+                                            )
+                                        }
+                                        options={[
+                                            { label: "None (no compliance schema)", value: "" },
+                                            ...schemaOptions,
+                                        ]}
+                                        placeholder="Select a compliance schema"
+                                        loadingText="Loading schemas"
+                                        statusType={loadingSchemas ? "loading" : "finished"}
+                                        disabled={inProgress}
+                                        filteringType="auto"
+                                        data-testid="database-compliance-schema"
+                                    />
+                                </FormField>
+                            )}
+                        </SpaceBetween>
+                    </Form>
+                </form>
+            </Modal>
+        </>
     );
 }
