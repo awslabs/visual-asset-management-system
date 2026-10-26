@@ -14,6 +14,8 @@ import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
 import * as destinations from "aws-cdk-lib/aws-lambda-destinations";
 import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as sqs from "aws-cdk-lib/aws-sqs";
+import * as sns from "aws-cdk-lib/aws-sns";
+import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -397,9 +399,67 @@ export function buildComplianceAuditServiceFunction(
 }
 
 /**
- * Asset-event trigger. Subscribed to the asset and file indexer SNS topics; an asset or file
- * change on a database or asset bound to a compliance schema starts an evaluation, which may
- * launch a workflow for pipeline rules and open a cascade for downstream assets.
+ * Settings of the compliance trigger and the queue it consumes, exported so the synth tests assert
+ * the values the builder uses.
+ *
+ * - The function timeout bounds one batch: at most `COMPLIANCE_TRIGGER_BATCH_SIZE` messages,
+ *   de-duplicated per asset, so at most that many evaluations, each a few DynamoDB reads and writes
+ *   and, for a pipeline rule, one workflow launch.
+ * - The visibility timeout is six times the function timeout, the AWS guidance for an SQS event
+ *   source, so a batch still running (or retried by Lambda after a throttle) is not redelivered to a
+ *   second invocation meanwhile.
+ * - Three receives before the dead-letter queue: an infrastructure error fails only its own record
+ *   (`reportBatchItemFailures`), so the count is per record, and a record still failing after three
+ *   deliveries is an operator's to redrive within the 14-day retention.
+ * - `maxConcurrency` caps the concurrent trigger invocations this queue drives, so a burst of
+ *   changes (a bulk upload, a large binding) queues here instead of drawing the account's Lambda
+ *   concurrency away from the API handlers; at 5 invocations of up to 10 messages each, a
+ *   1000-asset burst drains in minutes, which an asynchronous compliance check tolerates.
+ */
+export const COMPLIANCE_TRIGGER_TIMEOUT = Duration.minutes(5);
+export const COMPLIANCE_TRIGGER_QUEUE_VISIBILITY_TIMEOUT = Duration.minutes(30);
+export const COMPLIANCE_TRIGGER_QUEUE_MAX_RECEIVE_COUNT = 3;
+export const COMPLIANCE_TRIGGER_BATCH_SIZE = 10;
+export const COMPLIANCE_TRIGGER_BATCHING_WINDOW = Duration.seconds(5);
+export const COMPLIANCE_TRIGGER_MAX_CONCURRENCY = 5;
+
+/**
+ * Message-body filter policies of the trigger queue's two topic subscriptions. Both topics carry
+ * the whole DynamoDB stream record (`snsQueuing`) or the file indexer's S3 message (`sqsBucketSync`)
+ * as the SNS message body, and publish no message attributes, so the policies filter on the body.
+ *
+ * - Asset indexer topic: DynamoDB stream records only (the asset, asset-file-metadata, asset-link
+ *   and asset-link-metadata tables).
+ * - File indexer topic: the S3 file-event messages and the file-attribute table's records. The
+ *   asset-file-metadata table's records are published to both topics; they are taken from the
+ *   asset indexer topic only (a record whose `Keys` carry `metadataKey`), so each reaches the queue
+ *   once.
+ */
+export function complianceTriggerAssetTopicFilter(): { [key: string]: sns.FilterOrPolicy } {
+    return {
+        eventSource: sns.FilterOrPolicy.filter(
+            sns.SubscriptionFilter.stringFilter({ allowlist: ["aws:dynamodb"] })
+        ),
+    };
+}
+
+export function complianceTriggerFileTopicFilter(): { [key: string]: sns.FilterOrPolicy } {
+    return {
+        dynamodb: sns.FilterOrPolicy.policy({
+            Keys: sns.FilterOrPolicy.policy({
+                metadataKey: sns.FilterOrPolicy.filter(sns.SubscriptionFilter.notExistsFilter()),
+            }),
+        }),
+    };
+}
+
+/**
+ * Asset-event trigger. Consumes the asset and file indexer SNS topics through its own SQS queue
+ * (`ComplianceTriggerQueue`, one filtered subscription per topic, a dead-letter queue, batched and
+ * concurrency-capped); an asset or file change on a database or asset bound to a compliance schema
+ * starts an evaluation, which may launch a workflow for pipeline rules and open a cascade for
+ * downstream assets. The topics are fed by the table-stream relays and the bucket sync that every
+ * deployment builds, with or without OpenSearch, so compliance does not depend on search.
  */
 export function buildComplianceTriggerFunction(
     scope: Construct,
@@ -416,7 +476,7 @@ export function buildComplianceTriggerFunction(
         handler: `handlers.compliance.${name}.lambda_handler`,
         runtime: LAMBDA_PYTHON_RUNTIME,
         layers: [lambdaCommonBaseLayer],
-        timeout: Duration.minutes(15),
+        timeout: COMPLIANCE_TRIGGER_TIMEOUT,
         memorySize: Config.LAMBDA_MEMORY_SIZE,
         vpc:
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
@@ -445,8 +505,80 @@ export function buildComplianceTriggerFunction(
     // workflow execution wrote, so a pipeline rule's own output does not re-trigger the evaluation.
     grantReadPermissionsToAllAssetBuckets(fun);
 
-    fun.addEventSource(new eventsources.SnsEventSource(storageResources.sns.assetIndexerSnsTopic));
-    fun.addEventSource(new eventsources.SnsEventSource(storageResources.sns.fileIndexerSnsTopic));
+    // Encryption mirrors the source queue: a message moved into a DLQ the trigger's role cannot
+    // decrypt is unreadable dead letter.
+    const triggerDlq = new sqs.Queue(scope, "ComplianceTriggerDLQ", {
+        retentionPeriod: cdk.Duration.days(14),
+        encryption: storageResources.encryption.kmsKey
+            ? sqs.QueueEncryption.KMS
+            : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: storageResources.encryption.kmsKey,
+        enforceSSL: true,
+    });
+    NagSuppressions.addResourceSuppressions(triggerDlq, [
+        {
+            id: "AwsSolutions-SQS3",
+            reason:
+                "This queue IS the dead-letter queue of the compliance trigger queue. A DLQ is the " +
+                "terminal destination for records the trigger could not process after its receive " +
+                "limit, so giving it a redrive policy of its own would only defer the same failure " +
+                "to a further queue.",
+        },
+    ]);
+
+    const triggerQueue = new sqs.Queue(scope, "ComplianceTriggerQueue", {
+        visibilityTimeout: COMPLIANCE_TRIGGER_QUEUE_VISIBILITY_TIMEOUT,
+        encryption: storageResources.encryption.kmsKey
+            ? sqs.QueueEncryption.KMS
+            : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: storageResources.encryption.kmsKey,
+        enforceSSL: true,
+        deadLetterQueue: {
+            queue: triggerDlq,
+            maxReceiveCount: COMPLIANCE_TRIGGER_QUEUE_MAX_RECEIVE_COUNT,
+        },
+    });
+
+    // One subscription per topic. Each adds a queue-policy statement letting only that topic send
+    // (aws:SourceArn), so nothing else can write into the queue.
+    storageResources.sns.assetIndexerSnsTopic.addSubscription(
+        new SqsSubscription(triggerQueue, {
+            filterPolicyWithMessageBody: complianceTriggerAssetTopicFilter(),
+        })
+    );
+    storageResources.sns.fileIndexerSnsTopic.addSubscription(
+        new SqsSubscription(triggerQueue, {
+            filterPolicyWithMessageBody: complianceTriggerFileTopicFilter(),
+        })
+    );
+
+    triggerQueue.grantConsumeMessages(fun);
+
+    // GovCloud and EU Sovereign Lambda reject Tags on an event source mapping, which the high-level
+    // addEventSource() stamps from the stack tags; there the mapping is built directly and its Tags
+    // removed (test/partition/eventSourceMappingGovCloudTags.test.ts).
+    if (config.app.govCloud.enabled) {
+        const esm = new lambda.EventSourceMapping(scope, "ComplianceTriggerSqsEventSource", {
+            eventSourceArn: triggerQueue.queueArn,
+            target: fun,
+            batchSize: COMPLIANCE_TRIGGER_BATCH_SIZE,
+            maxBatchingWindow: COMPLIANCE_TRIGGER_BATCHING_WINDOW,
+            // Emits FunctionResponseTypes: ["ReportBatchItemFailures"]. Without it Lambda ignores
+            // the handler's batchItemFailures and deletes the whole batch on a 200.
+            reportBatchItemFailures: true,
+            maxConcurrency: COMPLIANCE_TRIGGER_MAX_CONCURRENCY,
+        });
+        (esm.node.defaultChild as lambda.CfnEventSourceMapping).addPropertyDeletionOverride("Tags");
+    } else {
+        fun.addEventSource(
+            new eventsources.SqsEventSource(triggerQueue, {
+                batchSize: COMPLIANCE_TRIGGER_BATCH_SIZE,
+                maxBatchingWindow: COMPLIANCE_TRIGGER_BATCHING_WINDOW,
+                reportBatchItemFailures: true,
+                maxConcurrency: COMPLIANCE_TRIGGER_MAX_CONCURRENCY,
+            })
+        );
+    }
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);

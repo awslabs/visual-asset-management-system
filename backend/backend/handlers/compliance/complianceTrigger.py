@@ -1,17 +1,26 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-"""Compliance Trigger handler (SNS-invoked).
+"""Compliance Trigger handler (SQS-invoked).
 
-Subscribes to the asset and file indexer SNS topics. For each asset created or updated in a
-database with `complianceAutoEval` on, it resolves the asset's bound schema (the asset override,
-else the database binding — auto-registering the asset under it) and runs an evaluation through
-`complianceEvaluationStore.run_evaluation`. After an evaluation of an asset that has children it
-opens a cascade awaiting approval so the downstream assets can be re-evaluated.
+Consumes the asset and file indexer SNS topics through its own SQS queue (`ComplianceTriggerQueue`,
+one subscription per topic, each with a message-body filter policy). Every SQS record carries one
+SNS `Notification` whose `Message` is an indexer-topic message. For each asset created or updated in
+a database with `complianceAutoEval` on, the trigger resolves the asset's bound schema (the asset
+override, else the database binding — auto-registering the asset under it) and runs an evaluation
+through `complianceEvaluationStore.run_evaluation`. After an evaluation of an asset that has children
+it opens a cascade awaiting approval so the downstream assets can be re-evaluated.
+
+A batch is processed as a whole (`TriggerBatch`): the database row, the asset row and the
+evaluation target of an asset are read once per batch, and an asset is evaluated at most once per
+batch however many of its messages the batch carries — an evaluation started now reads the asset as
+it is now, so it covers every change the batch reports. Only an infrastructure error (an AWS call
+that failed, `is_infrastructure_error`) fails the queue record it belongs to, which SQS redelivers
+and, after the queue's receive limit, moves to the dead-letter queue; a schema or rule error is a
+recorded `error` evaluation, and a malformed message is logged and dropped.
 
 A file indexer message is unwrapped with `common.indexerEvents.s3_records_from_indexer_message`
-(the same walk the file indexer performs) and every S3 record it carries is processed, with one
-evaluation per distinct asset per message.
+(the same walk the file indexer performs) and every S3 record it carries is processed.
 
 Three guards keep the trigger from multiplying evaluations or relaunching a pipeline rule's own
 workflow:
@@ -64,6 +73,7 @@ from datetime import datetime, timedelta, timezone
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
 
 from common.compliance import evaluationEngine as engine
 from models.compliance import EvaluationVerdict
@@ -130,6 +140,10 @@ CASCADE_APPROVAL_TIMEOUT_HOURS = 24
 # Suffix on the partition key of an archived asset row.
 ARCHIVED_DATABASE_SUFFIX = "#deleted"
 
+# The DynamoDB error a conditional write raises when its condition does not hold. It answers the
+# write, it does not fail the AWS call, so it is never an infrastructure error.
+CONDITIONAL_CHECK_FAILED = "ConditionalCheckFailedException"
+
 try:
     database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
     cascade_table_name = get_table_name(ResourceKeys.COMPLIANCE_CASCADE_STORAGE_TABLE)
@@ -145,31 +159,135 @@ asset_state_table = store.asset_state_table
 asset_table = store.asset_table
 
 
-def lambda_handler(event, context):
-    """Process the SNS records of an asset / file change event."""
-    for record in event.get("Records", []):
+def is_infrastructure_error(error):
+    """Whether `error` is an AWS call that failed — a service error (throttling, access, an
+    unavailable endpoint) or a client-side transport error — rather than a condition the code
+    answered or a fault in the data. Only these fail a queue record for redelivery: a retry can
+    succeed where the call failed, while a malformed message or a schema error fails the same way
+    every time and would only ride the record into the dead-letter queue. A conditional write whose
+    condition did not hold is an answer, not a failure."""
+    if isinstance(error, ClientError):
+        return (error.response or {}).get("Error", {}).get("Code") != CONDITIONAL_CHECK_FAILED
+    return isinstance(error, BotoCoreError)
+
+
+def message_from_queue_record(record):
+    """The indexer-topic message one SQS record carries: the record's body is the SNS `Notification`
+    the topic subscription delivered, and its `Message` is the message the indexer topic was given
+    (a DynamoDB stream record, a file-indexer S3 message, or a direct `{databaseId, assetId}`
+    message). A body that is not an SNS envelope is read as the message itself (raw delivery). None
+    when the body is not a JSON object."""
+    body = record.get("body") if isinstance(record, dict) else None
+    try:
+        payload = json.loads(body) if isinstance(body, str) else body
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("Type") == "Notification" and "Message" in payload:
         try:
-            message_body = json.loads(record.get("Sns", {}).get("Message", "{}"))
-            _dispatch_event(message_body)
+            message = json.loads(payload["Message"]) if isinstance(payload["Message"], str) \
+                else payload["Message"]
+        except (TypeError, ValueError):
+            return None
+        return message if isinstance(message, dict) else None
+    return payload
+
+
+class TriggerBatch:
+    """The state of one SQS batch: the evaluation candidates its messages report, in arrival order,
+    and the reads shared between them.
+
+    `collect` reads a message into candidates without evaluating anything; `evaluate_all` then
+    judges them in order. A database row (`database_item`), an asset's row (`file_event_target`)
+    and an asset's evaluation target (`evaluation_target`) are read once per batch, and an asset
+    evaluated once (`evaluated`) is not evaluated again in the batch. `run` runs one step for one
+    queue record and records the record as failed when the step raised an infrastructure error."""
+
+    def __init__(self):
+        self.candidates = []
+        self.evaluated = set()
+        self._failed = []
+        self._database_items = {}
+        self._targets = {}
+        self._file_targets = {}
+
+    def run(self, record_id, step, *args, **kwargs):
+        """Run `step` for the queue record `record_id`; an exception is logged, and an
+        infrastructure error also fails the record so SQS redelivers it."""
+        try:
+            return step(*args, **kwargs)
         except Exception as e:
-            logger.exception(f"Error processing SNS record: {e}")
+            if is_infrastructure_error(e):
+                logger.exception(f"Infrastructure error processing a queue record; it is retried: {e}")
+                self.fail(record_id)
+            else:
+                logger.exception(f"Error processing a queue record; it is not retried: {e}")
+            return None
+
+    def fail(self, message_id):
+        if message_id and message_id not in self._failed:
+            self._failed.append(message_id)
+
+    def failures(self):
+        """The `batchItemFailures` an SQS event source with `ReportBatchItemFailures` reads."""
+        return [{"itemIdentifier": message_id} for message_id in self._failed]
+
+    def add_candidate(self, message_id, step, *args, **kwargs):
+        self.candidates.append((message_id, step, args, kwargs))
+
+    def evaluate_all(self):
+        for message_id, step, args, kwargs in self.candidates:
+            self.run(message_id, step, *args, batch=self, **kwargs)
+
+    def database_item(self, database_id):
+        if database_id not in self._database_items:
+            self._database_items[database_id] = _database_item(database_id)
+        return self._database_items[database_id]
+
+    def evaluation_target(self, database_id, asset_id):
+        key = (database_id, asset_id)
+        if key not in self._targets:
+            self._targets[key] = _evaluation_target(database_id, asset_id, batch=self)
+        return self._targets[key]
+
+    def file_event_target(self, asset_id):
+        if asset_id not in self._file_targets:
+            self._file_targets[asset_id] = _file_event_target(asset_id, batch=self)
+        return self._file_targets[asset_id]
+
+
+def lambda_handler(event, context):
+    """Process one SQS batch of indexer-topic messages and report the records an infrastructure
+    error failed (`batchItemFailures`), so only those are redelivered."""
+    batch = TriggerBatch()
+    for record in event.get("Records", []) or []:
+        message_id = record.get("messageId", "") if isinstance(record, dict) else ""
+        message = message_from_queue_record(record)
+        if message is None:
+            logger.info("Queue record carries no indexer message, skipping")
             continue
+        batch.run(message_id, _dispatch_event, message, batch=batch, message_id=message_id)
+    batch.evaluate_all()
+    return {"batchItemFailures": batch.failures()}
 
 
-def _dispatch_event(message):
-    """Route one SNS message by its shape."""
+def _dispatch_event(message, batch=None, message_id=""):
+    """Route one indexer-topic message by its shape into the batch's candidates."""
+    batch = batch if batch is not None else TriggerBatch()
     if message.get("eventName") in ("INSERT", "MODIFY", "REMOVE"):
-        _process_stream_record(message)
+        _process_stream_record(message, batch, message_id)
     elif message.get("s3") or message.get("Records"):
-        _process_file_event(message)
+        _process_file_event(message, batch, message_id)
     elif message.get("databaseId") and message.get("assetId"):
-        _process_compliance_event(message.get("databaseId"), message.get("assetId"))
+        batch.add_candidate(message_id, _process_compliance_event,
+                            message.get("databaseId"), message.get("assetId"))
     else:
         logger.info("Unrecognized message format, skipping")
 
 
-def _process_stream_record(message):
-    """A DynamoDB stream record relayed by the asset indexer topic."""
+def _process_stream_record(message, batch, message_id=""):
+    """A DynamoDB stream record of the asset table relayed by the asset indexer topic."""
     if message.get("eventName") == "REMOVE":
         return
 
@@ -199,9 +317,9 @@ def _process_stream_record(message):
     # stamp is the completion that raised the event.
     completion_time = (parse_event_time(_image_string(new_image, LAST_CHANGE_AT_ATTRIBUTE))
                        if is_modify else None)
-    _process_compliance_event(database_id, asset_id, completion_time=completion_time,
-                              path=COVERAGE_PATH_STREAM,
-                              stamp_attribute=LAST_CHANGE_AT_ATTRIBUTE)
+    batch.add_candidate(message_id, _process_compliance_event, database_id, asset_id,
+                        completion_time=completion_time, path=COVERAGE_PATH_STREAM,
+                        stamp_attribute=LAST_CHANGE_AT_ATTRIBUTE)
 
 
 def _image_string(new_image, attribute):
@@ -249,52 +367,60 @@ def change_covered_by_last_evaluation(compliance_record, change_time=None, compl
     return last_evaluated_at >= change_time + EVALUATION_COVERS_CHANGE_MARGIN
 
 
-def _process_file_event(message):
-    """A file indexer message: every S3 record it carries, one evaluation per distinct asset.
+def _process_file_event(message, batch, message_id=""):
+    """A file indexer message: one evaluation candidate per S3 record it carries.
 
-    The asset row and the evaluation target (the database's auto-evaluation flag and the asset's
-    bound schema) are resolved once per asset per message, before any object is read: an asset
-    that is not evaluated costs no HEAD. For an asset that is, the object's provenance is read and a
-    record naming an object a workflow execution wrote is skipped; a second record for an asset
-    already evaluated in this message (an N-file upload) is neither read nor evaluated again."""
+    Within the message, the first record of an asset that is not a workflow execution's decides for
+    the asset (`_evaluate_file_record`): a second record for it (an N-file upload) is neither read
+    nor evaluated again. Across the batch, the asset row and the evaluation target are read once."""
     s3_records = s3_records_from_indexer_message(message)
     if not s3_records:
         logger.info("File event has no s3 data, skipping")
         return
 
-    prefix = message.get("ASSET_BUCKET_PREFIX", "")
-    targets_by_asset = {}
-    evaluated = set()
+    decided = set()
     for s3_record in s3_records:
-        s3_info = s3_record.get("s3") or {}
-        object_key = (s3_info.get("object") or {}).get("key", "")
-        change_time = parse_event_time(s3_record.get("eventTime"))
+        batch.add_candidate(message_id, _evaluate_file_record, s3_record, message, decided)
 
-        asset_id = _extract_asset_id_from_key(object_key, prefix)
-        if not asset_id:
-            logger.info("Could not extract an assetId from the object key")
-            continue
 
-        if asset_id not in targets_by_asset:
-            targets_by_asset[asset_id] = _file_event_target(asset_id)
-        resolved = targets_by_asset[asset_id]
-        if resolved is None or asset_id in evaluated:
-            continue
-        database_id, asset_row, target = resolved
+def _evaluate_file_record(s3_record, message, decided, batch=None):
+    """Judge one S3 record of a file indexer message (see `_process_file_event`).
 
-        if object_change_source(s3_info, message) == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
-            logger.info(f"Object under asset {asset_id} was written by a workflow execution; "
-                        "skipping compliance evaluation")
-            continue
+    The asset row and the evaluation target (the database's auto-evaluation flag and the asset's
+    bound schema) are resolved before any object is read: an asset that is not evaluated costs no
+    HEAD. For an asset that is, the object's provenance is read and a record naming an object a
+    workflow execution wrote is skipped."""
+    batch = batch if batch is not None else TriggerBatch()
+    prefix = message.get("ASSET_BUCKET_PREFIX", "")
+    s3_info = s3_record.get("s3") or {}
+    object_key = (s3_info.get("object") or {}).get("key", "")
+    change_time = parse_event_time(s3_record.get("eventTime"))
 
-        evaluated.add(asset_id)
-        # The object is not a workflow execution's (those were skipped above), so it belongs to a
-        # user upload's completion or to an asset-version revert's stamp.
-        stamp_attribute, completion_time = file_event_completion_stamp(asset_row)
-        _evaluate_if_uncovered(
-            database_id, asset_id, target, change_time=change_time,
-            completion_time=completion_time, path=COVERAGE_PATH_FILE,
-            stamp_attribute=stamp_attribute)
+    asset_id = _extract_asset_id_from_key(object_key, prefix)
+    if not asset_id:
+        logger.info("Could not extract an assetId from the object key")
+        return
+
+    resolved = batch.file_event_target(asset_id)
+    if resolved is None or asset_id in decided:
+        return
+    database_id, asset_row, target = resolved
+    if (database_id, asset_id) in batch.evaluated:
+        return
+
+    if object_change_source(s3_info, message) == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
+        logger.info(f"Object under asset {asset_id} was written by a workflow execution; "
+                    "skipping compliance evaluation")
+        return
+
+    decided.add(asset_id)
+    # The object is not a workflow execution's (those were skipped above), so it belongs to a
+    # user upload's completion or to an asset-version revert's stamp.
+    stamp_attribute, completion_time = file_event_completion_stamp(asset_row)
+    _evaluate_if_uncovered(
+        database_id, asset_id, target, change_time=change_time,
+        completion_time=completion_time, path=COVERAGE_PATH_FILE,
+        stamp_attribute=stamp_attribute, batch=batch)
 
 
 def file_event_completion_time(asset_row):
@@ -331,16 +457,17 @@ def file_event_completion_stamp(asset_row):
     return latest_attribute, latest_instant
 
 
-def _file_event_target(asset_id):
+def _file_event_target(asset_id, batch=None):
     """`(database_id, asset row, evaluation target)` for an asset a file event names, or None
     (logged) when the asset has no row, is archived, or its database or binding does not evaluate
     it."""
+    batch = batch if batch is not None else TriggerBatch()
     asset_row = _resolve_asset_row(asset_id)
     database_id = (asset_row or {}).get("databaseId") or None
     if not database_id:
         logger.info(f"Could not resolve a databaseId for asset {asset_id}")
         return None
-    target = _evaluation_target(database_id, asset_id)
+    target = batch.evaluation_target(database_id, asset_id)
     if target is None:
         return None
     return database_id, asset_row, target
@@ -390,7 +517,8 @@ def _resolve_asset_row(asset_id):
     """The asset's row via the assetIdGSI (the first match; an asset id is unique), carrying its
     `databaseId` and its change-provenance stamps (`lastUploadAt`, `lastAssetVersionAt`,
     `lastChangeSource`, `lastChangeAt`). An asset whose row sits under an archived partition resolves
-    to None so it is not evaluated."""
+    to None so it is not evaluated. A failed read is raised when it is an infrastructure error, so
+    the queue record is redelivered, and logged as an unresolved asset otherwise."""
     try:
         response = asset_table.query(
             IndexName="assetIdGSI",
@@ -406,6 +534,8 @@ def _resolve_asset_row(asset_id):
             return None
         return items[0] if database_id else None
     except Exception as e:
+        if is_infrastructure_error(e):
+            raise
         logger.exception(f"Error resolving the database for asset {asset_id}: {e}")
         return None
 
@@ -415,7 +545,7 @@ def _database_item(database_id):
 
 
 def _process_compliance_event(database_id, asset_id, change_time=None, completion_time=None,
-                              path=COVERAGE_PATH_DIRECT, stamp_attribute=None):
+                              path=COVERAGE_PATH_DIRECT, stamp_attribute=None, batch=None):
     """Evaluate an asset when its database has auto-evaluation on and it has a bound schema.
 
     `completion_time` is the recorded completion's instant (the MODIFY image's `lastChangeAt` on
@@ -425,16 +555,20 @@ def _process_compliance_event(database_id, asset_id, change_time=None, completio
     two paths reports it first and however many files it carries.
     An evaluation still awaiting its pipeline rules covers the changes made at or before its start
     like any other; a change after its start is evaluated now, and the state row records whichever
-    evaluation is newest. `path` and `stamp_attribute` (the row attribute `completion_time` was
-    read from) only name the decision in its log line."""
-    target = _evaluation_target(database_id, asset_id)
+    evaluation is newest. An asset the batch already evaluated is not evaluated again. `path` and
+    `stamp_attribute` (the row attribute `completion_time` was read from) only name the decision in
+    its log line."""
+    batch = batch if batch is not None else TriggerBatch()
+    if (database_id, asset_id) in batch.evaluated:
+        return
+    target = batch.evaluation_target(database_id, asset_id)
     if target is None:
         return
     _evaluate_if_uncovered(database_id, asset_id, target, change_time, completion_time,
-                           path=path, stamp_attribute=stamp_attribute)
+                           path=path, stamp_attribute=stamp_attribute, batch=batch)
 
 
-def _evaluation_target(database_id, asset_id):
+def _evaluation_target(database_id, asset_id, batch=None):
     """`(compliance record, schema name)` for an asset to evaluate: its database has
     `complianceAutoEval` on and it has a bound schema (the asset override, else the database
     binding, registering the asset under it). None (logged) when it is not to be evaluated.
@@ -443,7 +577,8 @@ def _evaluation_target(database_id, asset_id):
     evaluation of the same change that another invocation started moments ago has already claimed
     the row (`lastEvaluatedAt` its start), and an eventually-consistent replica could still show the
     row from before that claim and start a second evaluation."""
-    db_item = _database_item(database_id)
+    batch = batch if batch is not None else TriggerBatch()
+    db_item = batch.database_item(database_id)
     if not db_item or db_item.get("complianceAutoEval") is not True:
         logger.info(f"Database {database_id} does not have complianceAutoEval enabled, skipping")
         return None
@@ -464,15 +599,19 @@ def _evaluation_target(database_id, asset_id):
 
 
 def _evaluate_if_uncovered(database_id, asset_id, target, change_time=None, completion_time=None,
-                           path=COVERAGE_PATH_DIRECT, stamp_attribute=None):
+                           path=COVERAGE_PATH_DIRECT, stamp_attribute=None, batch=None):
     """Run the evaluation unless the asset's last evaluation already covers the change, logging the
-    decision in one INFO line (`coverage_log_line`)."""
+    decision in one INFO line (`coverage_log_line`). The asset is recorded as evaluated in the batch
+    before the evaluation runs, so a failed evaluation is retried through its own queue record
+    rather than a second time in this batch."""
     compliance_record, schema_name = target
     covered = change_covered_by_last_evaluation(compliance_record, change_time, completion_time)
     logger.info(coverage_log_line(asset_id, path, stamp_attribute, completion_time, change_time,
                                   compliance_record, covered))
     if covered:
         return
+    if batch is not None:
+        batch.evaluated.add((database_id, asset_id))
     trigger_evaluation(database_id, asset_id, schema_name)
 
 
@@ -519,13 +658,19 @@ def check_default_schema(database_id, asset_id, db_item=None):
 
 
 def trigger_evaluation(database_id, asset_id, schema_name):
-    """Run an evaluation for the asset and open a cascade for its children."""
+    """Run an evaluation for the asset and open a cascade for its children.
+
+    A failure to open the cascade is logged rather than raised: the evaluation has claimed the
+    asset-state row, so a redelivered record would find its change covered and open nothing either."""
     result = store.run_evaluation(database_id, asset_id, schema_name, store.SYSTEM_ACTOR)
     logger.info(
         f"Evaluation {result.get('evaluationId')} for {database_id}:{asset_id}: "
         f"verdict={result.get('verdict')}")
     if not result.get("error") and result.get("verdict") != EvaluationVerdict.error.value:
-        check_and_trigger_cascade(database_id, asset_id)
+        try:
+            check_and_trigger_cascade(database_id, asset_id)
+        except Exception as e:
+            logger.exception(f"Failed opening a cascade for {database_id}:{asset_id}: {e}")
 
 
 def check_and_trigger_cascade(database_id: str, asset_id: str):

@@ -55,7 +55,10 @@ CASCADE_TABLE_DEFINITION = {
 
 
 def _sns_event(*messages):
-    return {"Records": [{"Sns": {"Message": json.dumps(m)}} for m in messages]}
+    """The SQS event the trigger's queue delivers: one record per indexer-topic message, each body
+    the SNS `Notification` the topic subscription wrapped it in."""
+    return {"Records": [sqs_record(sns_envelope(m), message_id=f"q-{index}")
+                        for index, m in enumerate(messages, start=1)]}
 
 
 def _stream_message(event_name="MODIFY", database_id=DB, asset_id=ASSET, created_at=None,
@@ -86,13 +89,18 @@ def _s3_head(change_source=None):
 
 def _run(event, database_item=None, compliance_record=None, children=(), asset_rows=None,
          evaluation=EVALUATION, evaluation_rows=None, head=None, cascade_table=None,
-         compliance_records=None):
+         compliance_records=None, run_evaluation_effect=None, database_effect=None,
+         asset_query_effect=None):
     """Run the handler against stand-ins. `asset_rows` answers every assetIdGSI query; a dict maps an
     assetId to its own rows. `compliance_records` maps `databaseId:assetId` to a state row and
     takes precedence over `compliance_record`. `cascade_table` replaces the MagicMock cascade table
-    (a moto-backed table for the dedup tests)."""
+    (a moto-backed table for the dedup tests). `run_evaluation_effect` / `database_effect` become
+    the side effect of `run_evaluation` / the database row read (an exception to raise, or a
+    callable), `asset_query_effect` that of the assetIdGSI query. The handler's response is returned under `response`."""
     database_table = MagicMock(name="database_table")
     database_table.get_item.return_value = {"Item": database_item} if database_item else {}
+    if database_effect is not None:
+        database_table.get_item.side_effect = database_effect
     cascade_table = cascade_table if cascade_table is not None else MagicMock(name="cascade_table")
     if isinstance(cascade_table, MagicMock):
         cascade_table.query.return_value = {"Items": []}
@@ -103,6 +111,8 @@ def _run(event, database_item=None, compliance_record=None, children=(), asset_r
             "Items": list(asset_rows.get(kwargs["KeyConditionExpression"]._values[1], []))}
     else:
         asset_table.query.return_value = {"Items": list(asset_rows or [])}
+    if asset_query_effect is not None:
+        asset_table.query.side_effect = asset_query_effect
     s3_client = MagicMock(name="s3_client")
     if isinstance(head, (Exception, list)):
         s3_client.head_object.side_effect = head
@@ -129,13 +139,15 @@ def _run(event, database_item=None, compliance_record=None, children=(), asset_r
                   side_effect=_get_compliance_record) as get_compliance_record, \
             patch(f"{STORE}.get_evaluation", side_effect=_get_evaluation) as get_evaluation, \
             patch(f"{STORE}.get_child_links", return_value=list(children)), \
-            patch(f"{STORE}.run_evaluation", return_value=evaluation) as run_evaluation, \
+            patch(f"{STORE}.run_evaluation", return_value=evaluation,
+                  side_effect=run_evaluation_effect) as run_evaluation, \
             patch(f"{STORE}.write_audit") as write_audit:
-        trigger.lambda_handler(event, MagicMock())
+        response = trigger.lambda_handler(event, MagicMock())
     return {"database": database_table, "cascade": cascade_table, "state": state_table,
             "asset": asset_table, "s3": s3_client, "get_evaluation": get_evaluation,
             "get_compliance_record": get_compliance_record,
-            "run_evaluation": run_evaluation, "audit": write_audit, "logger": logger}
+            "run_evaluation": run_evaluation, "audit": write_audit, "logger": logger,
+            "response": response}
 
 
 def _info_messages(mocks):
@@ -223,8 +235,9 @@ class TestMessageShapes:
         mocks["run_evaluation"].assert_not_called()
 
     def test_a_bad_record_does_not_stop_the_batch(self):
-        event = {"Records": [{"Sns": {"Message": "not json"}},
-                             {"Sns": {"Message": json.dumps({"databaseId": DB, "assetId": ASSET})}}]}
+        event = {"Records": [{"messageId": "q-bad", "body": "not json"},
+                             sqs_record(sns_envelope({"databaseId": DB, "assetId": ASSET}),
+                                        message_id="q-good")]}
         mocks = _run(event, database_item=AUTO_EVAL_DB, compliance_record={"schemaName": SCHEMA})
         mocks["run_evaluation"].assert_called_once()
 
