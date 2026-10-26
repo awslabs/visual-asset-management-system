@@ -1673,12 +1673,15 @@ def delete(ctx: click.Context, confirm: bool, json_output: bool):
                 click.echo("Use --confirm flag to proceed with deletion.")
                 raise click.ClickException("Confirmation required for deletion")
 
-        # Additional confirmation prompt for safety (skip in JSON mode)
+        # Additional confirmation prompt for safety (skip in JSON mode). Use the shared helper
+        # (from ..utils.confirmation import confirm_destructive_action): it asks only when stdin is
+        # an interactive terminal, so a script or CI job with --confirm proceeds instead of reading
+        # end of input and aborting. Never call click.confirm() directly after a --confirm gate.
         if not json_output:
             click.secho(f"⚠️  You are about to delete '{resource_id}'", fg='red', bold=True)
             click.echo("This action cannot be undone!")
 
-            if not click.confirm("Are you sure you want to proceed?"):
+            if not confirm_destructive_action():
                 click.echo("Deletion cancelled.")
                 return None
 
