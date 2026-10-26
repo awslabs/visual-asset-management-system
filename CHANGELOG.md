@@ -11,6 +11,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### ⚠ BREAKING CHANGES
 
+-   **Pipelines/CDK** Every AWS Batch compute environment behind a GPU pipeline (the four NVIDIA Cosmos pipelines, GR00T Finetune and Gaussian Splat) is replaced on update by one on the AWS Batch service-linked role, so later deploys update its launch template, instance types and subnets in place. The replacement terminates any job still running on those environments; let in-flight GPU executions finish before updating. One `cdk deploy`, no configuration change. See the [v2.6 to v2.7 update guide](documentation/docusaurus-site/docs/deployment/update-the-solution.md#gpu-compute-environments-are-replaced). ([#813](https://github.com/awslabs/visual-asset-management-system/issues/813))
+
 ### Features
 
 -   **Pipeline** Added the Video SOP/BOM Extraction pipeline (`genai-video-sop-bom`), which transcribes one to four narrated teardown videos from one asset with Amazon Transcribe and derives a step-by-step SOP, a bill of materials in the 66-column `LCA-BOM-INPUT` layout (JSON, Markdown, and CSV), a lab summary, and verification key frames with Amazon Bedrock, running as an AWS Batch Fargate container.
@@ -53,6 +55,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Pipelines** GPU pipeline instances mount the shared Amazon EFS model cache: the start-up script is encoded with `Fn::Base64` after token resolution rather than in the synthesis process, and each compute environment is pinned to its launch template's latest version number rather than `$Latest`, so a changed script reaches the instances. Each NVIDIA Cosmos pipeline keeps its own weight-cache directory on that file system. ([#813](https://github.com/awslabs/visual-asset-management-system/issues/813))
 -   **Pipelines/Security** GPU pipeline Batch containers (Cosmos 3, Predict v1, Predict v2.5, Reason, Transfer, GR00T, Isaac Lab) now run as non-root user (uid/gid 10000:10000). The shared Hugging Face model cache is owned by this uid/gid via the launch-template userdata (Cosmos and GR00T), and the Isaac Lab checkpoint volume mounts through an EFS access point that owns its root directory, so containers read/write the cache and checkpoints without root privileges. ([#327](https://github.com/awslabs/visual-asset-management-system/issues/327))
 -   **Pipelines** The Potree point cloud viewer container job role holds `states:SendTaskHeartbeat` alongside `SendTaskSuccess`/`SendTaskFailure` (scoped to the deployment account and region), so the PDAL/Potree container's workflow task-token heartbeat is delivered instead of logging an `AccessDeniedException` on every job. ([#330](https://github.com/awslabs/visual-asset-management-system/issues/330))
 -   **Documentation** The `/generate-permissions` agent skill's deny-tagged overlay guidance and example use `is_one_of` on the list-valued `tags` field (previously `contains`, which the constraint API rejects), and its operator table states that `tags` accepts only `is_one_of` / `is_not_one_of`. ([#391](https://github.com/awslabs/visual-asset-management-system/issues/391))

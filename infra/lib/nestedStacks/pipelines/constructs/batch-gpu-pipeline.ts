@@ -12,9 +12,9 @@ import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { CfnJobDefinition, CfnComputeEnvironment, CfnJobQueue } from "aws-cdk-lib/aws-batch";
+import { Service } from "../../../helper/service-helper";
 import path = require("path");
 import { suppressCdkNagEcrAuthTokenWildcard } from "../../../helper/security";
-import { Service } from "../../../helper/service-helper";
 
 export interface BatchGpuPipelineConstructProps extends cdk.StackProps {
     vpc: ec2.IVpc;
@@ -66,14 +66,6 @@ export class BatchGpuPipelineConstruct extends Construct {
         props = { ...defaultProps, ...props };
         const region = cdk.Stack.of(this).region;
         const account = cdk.Stack.of(this).account;
-
-        // Create batch service role
-        const batchServiceRole = new iam.Role(this, "BatchServiceRole", {
-            assumedBy: Service("BATCH").Principal,
-            managedPolicies: [
-                iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSBatchServiceRole"),
-            ],
-        });
 
         // Create instance role and profile
         const instanceRole = new iam.Role(this, "BatchInstanceRole", {
@@ -147,15 +139,45 @@ chmod 775 /mnt/workspace
         // Create on-demand compute environment
         const batchEnvironment = new CfnComputeEnvironment(
             this,
-            `OnDemandComputeEnv${props.batchJobDefinitionName}`,
+            `GpuComputeEnv${props.batchJobDefinitionName}`,
             {
-                computeEnvironmentName: `VAMS-GPU-ONDEMAND-${props.batchJobDefinitionName}`,
+                // No explicit name, so CloudFormation can REPLACE this environment. A
+                // custom-named resource cannot be replaced -- "CloudFormation cannot update a
+                // stack when a custom-named resource requires replacing" -- which left this
+                // environment unable to take a change to its instance start-up script by either
+                // route: not in place, because a named service role forbids that, and not by
+                // replacement, because of the name. The other GPU constructs are all auto-named
+                // for the same reason.
                 type: "MANAGED",
                 state: "ENABLED",
-                serviceRole: batchServiceRole.roleArn,
+                // No serviceRole, so this environment uses the Batch service-linked role
+                // (AWSServiceRoleForBatch), which Batch creates on demand for a managed environment. Naming a
+                // role instead is what forbids an in-place update of the launch template, instance types,
+                // subnets or security groups -- Batch allows those fields to be updated "only for ... Compute
+                // Environment having a Batch Service Linked Role" -- leaving replacement as the only way to
+                // deliver a change to the instance start-up script. VAMS already runs the Isaac Lab, Coordinate
+                // Transform and Fargate environments on the service-linked role, and AWS maintains its
+                // permissions as Batch gains features, which a hand-rolled role does not track.
+                // Updated in PLACE for the rest of this environment's life: Batch re-merges the launch template
+                // and rolls the instances, with no new environment, no job-queue re-point and no orphan left
+                // behind. That needs three things together, and all three are here -- no serviceRole above (so
+                // the Batch service-linked role is used), BEST_FIT_PROGRESSIVE below, and this property.
+                //
+                // It is safe to ship to an existing deployment only because the environment's construct id
+                // changed in the same release. That makes the upgrade a CREATE of this resource and a DELETE of
+                // the old one rather than an update, so this property does not have to permit the one
+                // replacement the upgrade needs -- an environment still naming a service role can be neither
+                // updated in place nor left alone. Setting this without the rename would fail a v2.5 upgrade.
+                replaceComputeEnvironment: false,
                 computeResources: {
                     type: "EC2",
                     allocationStrategy: "BEST_FIT_PROGRESSIVE",
+                    // Each infrastructure update takes the current ECS-optimised AMI rather than staying on the one
+                    // that was current when this environment was first created, which matters on a GPU image
+                    // carrying drivers. This is also the fourth condition CloudFormation names for updating a
+                    // compute environment in place, alongside no serviceRole, a progressive allocation strategy and
+                    // replaceComputeEnvironment.
+                    updateToLatestImageVersion: true,
                     minvCpus: 0,
                     maxvCpus: 64,
                     desiredvCpus: 0,
@@ -171,7 +193,11 @@ chmod 775 /mnt/workspace
                     instanceRole: instanceProfile.attrArn,
                     launchTemplate: {
                         launchTemplateId: launchTemplate.ref,
-                        version: "$Latest",
+                        // Pinned to the template's own latest version rather than "$Latest". Batch does not read this
+                        // template when an instance launches: it merges it with its own bootstrap into a Batch-managed
+                        // copy when the compute environment is created or updated, and "$Latest" never changes, so an
+                        // edit to the user data above would not reach a running fleet.
+                        version: launchTemplate.attrLatestVersionNumber,
                     },
                 },
             }

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Dict, List, Set, Tuple
 from urllib.parse import urlparse
 
-from inference import generate_preview_gif, run_inference
+from inference import VARIANT_CHECKPOINT, generate_preview_gif, run_inference
 from model_manager import S3_HF_CACHE_PREFIX, ensure_models_cached
 import manifest_io
 
@@ -379,7 +379,17 @@ def main():
 
         # Step 1: Ensure models cached
         logger.info("Step 1: Ensuring models are cached")
-        ensure_models_cached(hf_home=hf_home, s3_bucket=s3_model_bucket, invalidate=invalidate_models)
+        # The repository this run needs, so the cache check can tell a warm cache for THIS variant
+        # from a warm cache for another one. Serving several variants from a single cache directory,
+        # a check that only asks whether any weights are present reports a hit on the wrong variant,
+        # skips the restore from S3, and downloads the right weights during inference instead.
+        # VARIANT_CHECKPOINT is inference.py's own map, read here rather than restated so a new
+        # variant cannot be added in one place only. Read after the variant is finalised from the
+        # execution parameters above, not from its first reading.
+        checkpoint = VARIANT_CHECKPOINT.get(variant)
+        model_repos = (f"nvidia/{checkpoint}",) if checkpoint else ()
+        ensure_models_cached(hf_home=hf_home, s3_bucket=s3_model_bucket,
+                             invalidate=invalidate_models, repos=model_repos)
 
         # Step 2: Download input file for input-file modes
         input_file_path = None
