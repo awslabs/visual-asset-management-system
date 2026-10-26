@@ -294,7 +294,7 @@ In Application Load Balancer deployment mode, VAMS creates a dedicated Amazon S3
 
 -   It is gated by `useAlb.addAlbS3SpecialVpcEndpoint` (default `true`) and is created **independently of** `useGlobalVpc.addVpcEndpoints` — it exists whenever ALB mode is used, because the ALB listener/target group depends on it. Set `addAlbS3SpecialVpcEndpoint` to `false` only when the endpoint already exists in your VPC (for example, when it must be created manually outside the stack).
 -   It is created with `privateDnsEnabled: false` and placed in the ALB (web app) subnets rather than the isolated subnets.
--   Its endpoint policy restricts access to the specific web-app Amazon S3 bucket (`s3:Get*`, `s3:List*`), and a Lambda-backed custom resource registers the endpoint's network interface IPs as ALB targets.
+-   Its endpoint policy allows only object reads (`s3:GetObject`) on the web-app Amazon S3 bucket's objects, the same grant as the web-app bucket policy statement, which is further restricted to requests through this endpoint (`aws:SourceVpce`). Because neither policy grants `s3:ListBucket`, a request for a file that does not exist is answered with `403` rather than `404`. A Lambda-backed custom resource registers the endpoint's network interface IPs as ALB targets.
     :::
 
 :::info[Cross-Region Amazon S3 interface endpoints]
