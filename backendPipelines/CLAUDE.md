@@ -518,7 +518,11 @@ partition. Author it with the block for your execution type present but empty:
     (even to the millisecond) is not enough, so keep the random suffix. The name also namespaces
     per-execution S3 objects in some pipelines (`rp_config_{jobName}.json`), where a collision has
     concurrent runs overwrite each other's config instead of merely failing to start. Keep it within the
-    80-character Step Functions limit and free of `:` and `/`.
+    80-character Step Functions limit and free of `:` and `/`. In `multi/rapidPipeline` the name is also
+    the Fargate task's ECS task group, which is how the state machine finds a task still running at its
+    task-level timeout to stop it (it matches the group of the cluster's running tasks to the execution
+    name), so keep it unique per execution and within ECS's 255-character task group limit: pinned by
+    `multi/rapidPipeline/lambda/tests/test_rapidpipeline_ecs_timeout_stop_route.py`.
 
 Verify registration after a deploy rather than assuming it:
 

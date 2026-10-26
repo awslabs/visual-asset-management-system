@@ -70,8 +70,6 @@ const LARGEST_FITTING_JOB_TIMEOUT = 15350;
 
 function enableEksPipelineAtMaximum(c: any) {
     c.app.useGlobalVpc.enabled = true;
-    c.app.pipelines.useRapidPipeline.enabled = true;
-    c.app.pipelines.useRapidPipeline.autoRegisterWithVAMS = false;
     c.app.pipelines.useRapidPipeline.useEks.enabled = true;
     c.app.pipelines.useRapidPipeline.useEks.ecrContainerImageURI = IMAGE_URI;
     c.app.pipelines.useRapidPipeline.useEks.jobTimeout =
@@ -223,7 +221,6 @@ describe("getConfig() bounds jobTimeout by the state machine timeout and the max
         config.env.account = "123456789012";
         config.app.baseStackName = "vamstest";
         config.app.useGlobalVpc.enabled = true;
-        config.app.pipelines.useRapidPipeline.enabled = true;
         config.app.pipelines.useRapidPipeline.useEks.enabled = true;
         config.app.pipelines.useRapidPipeline.useEks.ecrContainerImageURI = IMAGE_URI;
         config.app.pipelines.useRapidPipeline.useEks.jobTimeout = jobTimeout;
@@ -264,7 +261,6 @@ describe("ConfigBuilder validation.ts mirrors the getConfig() jobTimeout rules",
     const firing = (jobTimeout: unknown): string[] => {
         const config = makeDefaultConfig("commercial");
         config.app.useGlobalVpc.enabled = true;
-        config.app.pipelines.useRapidPipeline.enabled = true;
         config.app.pipelines.useRapidPipeline.useEks.enabled = true;
         config.app.pipelines.useRapidPipeline.useEks.jobTimeout = jobTimeout;
         return evaluateRules(config)
