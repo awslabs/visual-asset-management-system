@@ -90,7 +90,9 @@ def report_geometry_checks(gexp: Dict, meta: Dict, output_metrics: Dict, text: O
     """Checks on what the REPORT states against the output's measured geometry. Keys: ``extents_sorted`` +
     ``tol_mm`` (the reported bounding box's sorted extents), ``through_holes`` (holes the report calls
     through), ``face_count_equals_output`` and ``states_non_solid_geometry`` (the geometry carries
-    ``dropped_non_solid_geometry``, or the summary names the annotation geometry)."""
+    ``dropped_non_solid_geometry`` -- dropped from the output file -- or ``dropped_input_non_solid_geometry`` --
+    the input's, left out by a script that wrote the solids alone -- or the summary names the annotation
+    geometry)."""
     checks = []
     geom = reported_geometry(meta, text)
     bbox = geom.get("bounding_box_mm")
@@ -113,10 +115,11 @@ def report_geometry_checks(gexp: Dict, meta: Dict, output_metrics: Dict, text: O
                              f"reported {reported}, output file {measured}"))
     if gexp.get("states_non_solid_geometry"):
         summary = ((meta or {}).get("cadAgentSummary") or "").lower()
-        in_geometry = bool(geom.get("dropped_non_solid_geometry"))
+        in_geometry = bool(geom.get("dropped_non_solid_geometry") or geom.get("dropped_input_non_solid_geometry"))
         in_summary = any(w in summary for w in ("non-solid", "annotation", "outside the solid", "pmi"))
         checks.append(_check("report states the non-solid geometry", in_geometry or in_summary,
                              f"dropped_non_solid_geometry={geom.get('dropped_non_solid_geometry')}, "
+                             f"dropped_input_non_solid_geometry={geom.get('dropped_input_non_solid_geometry')}, "
                              f"summary names it={in_summary}"))
     return checks
 

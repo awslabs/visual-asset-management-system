@@ -191,6 +191,15 @@ def derive_outcome(state, definition, model_label, run_id, wall_seconds):
     status = report.STATUS_PARTIAL if (unresolved or state.final_status_hint == report.STATUS_PARTIAL) \
         else report.STATUS_SUCCEEDED
     summary = state.final_summary or (state.attempts[-1].summary if state.attempts else "")
+    # The input's annotation geometry that the output leaves out is stated by the pipeline, not left to the
+    # model's wording: one summary line, and a geometry entry unless the drop from the output file is
+    # already recorded there.
+    geometry, notes = state.best_geometry, []
+    left_out = tools.input_non_solid_geometry_left_out(state)
+    if left_out:
+        notes.append(tools.solids_only_note(left_out))
+        if not (geometry or {}).get("dropped_non_solid_geometry"):
+            geometry = {**(geometry or {}), tools.INPUT_NON_SOLID_GEOMETRY_KEY: left_out}
     return report.RunOutcome(
         status=status,
         prompt=str(definition["agent"].get("prompt", "")),
@@ -202,10 +211,11 @@ def derive_outcome(state, definition, model_label, run_id, wall_seconds):
         summary=summary,
         unresolved=unresolved,
         sources=list(state.sources),
-        geometry=state.best_geometry,
+        geometry=geometry,
         wall_seconds=wall_seconds,
         research_allowed=state.research_allowed,
         checks=list(state.final_checks),
+        pipeline_notes=notes,
     )
 
 

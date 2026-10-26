@@ -1788,6 +1788,126 @@ class TestRunJob:
 
 
 # ---------------------------------------------------------------------------------------------------
+# the input's geometry outside the solids that a modify run's output leaves out
+# ---------------------------------------------------------------------------------------------------
+_PMI = {"faces": 5, "edges": 290}
+_PMI_NOTE = ("Pipeline note: the input's 5 face(s) and 290 edge(s) outside the solids (annotation geometry such as "
+             "PMI planes and curves) are not in the output file; keeping solids only is this pipeline's rule, not a "
+             "limit of STEP or of the exporter.")
+
+
+def _sheet(non_solid=None):
+    """An AP242 sheet as cad_io summarizes it: one 158-face solid, with or without annotation geometry beside it."""
+    return cad_io.StepSummary(valid=True, solid_count=1, face_count=158, edge_count=454,
+                              bounding_box_mm=[-95.25, 0.0, -139.7, 95.25, 3.038, 139.7], volume_mm3=136445.105,
+                              features={"holes": [{"diameter_mm": 6.35, "through": True, "count": 26}]},
+                              non_solid_geometry=dict(non_solid) if non_solid else None)
+
+
+def _summary_section(report_md):
+    return report_md.split("## Summary\n\n", 1)[1].split("\n\n## Geometry", 1)[0]
+
+
+def _geometry_section(report_md):
+    return json.loads(report_md.split("## Geometry", 1)[1].split("\n## ", 1)[0])
+
+
+@pytest.mark.unit
+class TestInputGeometryLeftOut:
+    # A model summary that does not mention the annotation geometry.
+    SUMMARY = "Re-exported the input unchanged: 190.5 x 3.038 x 279.4 mm, 136445.105 mm^3, 26 through holes D6.35."
+    CHECKS = ["bbox: expected 190.5 x 3.038 x 279.4 - measured 190.5 x 3.038 x 279.4 - ok"]
+
+    def _run(self, monkeypatch, input_summary, outputs, mode="modify", drop=None):
+        """run_job with the input inspecting as ``input_summary`` and the output as each of ``outputs`` in turn;
+        returns (success payload, report beside the STEP, metadata, attributes, result JSON, results report)."""
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        s3, pending = _FakeS3(), list(outputs)
+
+        def inspect(path):
+            return input_summary if os.path.basename(path) == run.INPUT_FILE_NAME else pending.pop(0)
+        dropping = {"side_effect": drop} if isinstance(drop, BaseException) else {"return_value": drop}
+        with patch.object(cad_io, "inspect_step", side_effect=inspect), \
+                patch.object(cad_io, "drop_non_solid_geometry", **dropping):
+            payload = run.run_job(_definition(mode), "inner-token", s3=s3, sfn=MagicMock(), guardrail=_FakeGuardrail(),
+                                  agent_factory=_agent_that(finish_args=(self.SUMMARY, [], "succeeded", self.CHECKS)))
+        assert pending == []
+        name, sub = ("part.stp", "sub/") if mode == "modify" else ("board-20260922-185500.step", "")
+        objects, results = s3.objects, "pipelines/cad/job/output/E1/results/"
+
+        def entries(key):
+            return {e["metadataKey"]: e["metadataValue"] for e in json.loads(objects[("abkt", key)])["metadata"]}
+        return (payload, objects[("abkt", f"xasset1/{sub}{name}.cad-agent-report.md")].decode("utf-8"),
+                entries(f"xasset1/metadata/{sub}{name}.metadata.json"),
+                entries(f"xasset1/metadata/{sub}{name}.attribute.json"),
+                json.loads(objects[("abkt", results + report.RESULT_FILE_NAME)]),
+                objects[("abkt", results + report.RESULT_REPORT_FILE_NAME)].decode("utf-8"))
+
+    def test_a_script_that_wrote_the_solids_alone_still_gets_the_input_s_annotation_geometry_reported(self, monkeypatch):
+        # The agent's own re-export recipe writes the solid alone: the sanitiser has nothing to drop, and the
+        # input's annotation geometry is stated by the pipeline, whatever the model's summary says.
+        payload, report_md, meta, attributes, result, results_md = self._run(monkeypatch, _sheet(_PMI), [_sheet()])
+        assert payload["status"] == report.STATUS_SUCCEEDED and result["unresolvedCount"] == 0
+        assert _summary_section(report_md) == f"{self.SUMMARY}\n\n{_PMI_NOTE}"
+        geometry = _geometry_section(report_md)
+        assert geometry[tools.INPUT_NON_SOLID_GEOMETRY_KEY] == _PMI and "dropped_non_solid_geometry" not in geometry
+        assert meta["cadAgentSummary"] == f"{self.SUMMARY}\n\n{_PMI_NOTE}"
+        assert json.loads(meta["cadAgentGeometry"])[tools.INPUT_NON_SOLID_GEOMETRY_KEY] == _PMI
+        assert result["summary"] == meta["cadAgentSummary"] and result["geometry"] == geometry
+        assert payload["summary"].endswith(_PMI_NOTE) and results_md == report_md
+        # The output contract keeps its shape: the result keys, the assumptions and the file attributes.
+        assert set(result) == {"status", "mode", "outputFile", "model", "runId", "attempts", "unresolvedCount",
+                               "summary", "assumptions", "unresolved", "checks", "sources", "geometry"}
+        assert result["assumptions"] == []
+        assert attributes == {"cadAgentStatus": "succeeded", "cadAgentMode": "modify", "cadVolumeMm3": "136445.105",
+                              "cadBboxXMm": "190.5", "cadBboxYMm": "3.038", "cadBboxZMm": "279.4",
+                              "cadSolidCount": "1", "cadHoleCount": "26", "cadUnits": "mm"}
+
+    def test_a_drop_from_the_output_file_is_reported_once(self, monkeypatch):
+        # A script that wrote the whole imported shape: the sanitiser drops the annotation geometry and records it,
+        # so the geometry keeps that one entry and the summary gets the same single line.
+        _, report_md, meta, _, result, _ = self._run(monkeypatch, _sheet(_PMI), [_sheet(_PMI), _sheet()],
+                                                     drop=dict(_PMI))
+        geometry = _geometry_section(report_md)
+        assert geometry["dropped_non_solid_geometry"] == _PMI and tools.INPUT_NON_SOLID_GEOMETRY_KEY not in geometry
+        assert _summary_section(report_md) == f"{self.SUMMARY}\n\n{_PMI_NOTE}"
+        assert report_md.count("Pipeline note:") == 1 and meta["cadAgentSummary"].count("Pipeline note:") == 1
+        assert result["geometry"] == geometry
+
+    @pytest.mark.parametrize("case", ["input-solids-only", "output-still-carries-it", "generate"])
+    def test_nothing_is_added_when_nothing_was_left_out(self, monkeypatch, case):
+        if case == "input-solids-only":
+            args = (_sheet(), [_sheet()])
+            kwargs = {}
+        elif case == "output-still-carries-it":  # the rewrite failed: the output keeps the annotation geometry
+            args = (_sheet(_PMI), [_sheet(_PMI)])
+            kwargs = {"drop": OSError("read-only")}
+        else:
+            args = (None, [_sheet()])
+            kwargs = {"mode": "generate"}
+        payload, report_md, meta, _, result, _ = self._run(monkeypatch, *args, **kwargs)
+        assert _summary_section(report_md) == self.SUMMARY and "Pipeline note" not in report_md
+        assert meta["cadAgentSummary"] == result["summary"] == payload["summary"] == self.SUMMARY
+        assert tools.INPUT_NON_SOLID_GEOMETRY_KEY not in _geometry_section(report_md)
+        assert "dropped_non_solid_geometry" not in _geometry_section(report_md)
+
+    def test_a_pipeline_note_survives_every_summary_bound(self):
+        long = _outcome(summary="s" * 5000, pipeline_notes=[_PMI_NOTE])
+        meta = {e["metadataKey"]: e["metadataValue"] for e in report.metadata_document(long)["metadata"]}
+        for text, bound in ((meta["cadAgentSummary"], report.SUMMARY_MAX_CHARS),
+                            (report.result_document(long)["summary"], report.SUMMARY_MAX_CHARS),
+                            (report.success_payload(long)["summary"], report.TOKEN_SUMMARY_MAX_CHARS),
+                            (_summary_section(report.markdown_report(long)), report.SUMMARY_MAX_CHARS)):
+            assert len(text) <= bound and text.endswith(f"\u2026\n\n{_PMI_NOTE}")
+        # The note is not read as an assumption, even after a summary that ends on an empty "Assumptions:" line.
+        assert report.result_document(_outcome(summary="Plate. Assumptions:", pipeline_notes=[_PMI_NOTE]))[
+            "assumptions"] == []
+        # Without a note the summary is the model's, clipped as before.
+        assert report.summary_text(_outcome()) == "s" * (report.SUMMARY_MAX_CHARS - 1) + "\u2026"
+        assert report.summary_text(_outcome(summary="", pipeline_notes=[_PMI_NOTE])) == _PMI_NOTE
+
+
+# ---------------------------------------------------------------------------------------------------
 # guardrail
 # ---------------------------------------------------------------------------------------------------
 @pytest.mark.unit

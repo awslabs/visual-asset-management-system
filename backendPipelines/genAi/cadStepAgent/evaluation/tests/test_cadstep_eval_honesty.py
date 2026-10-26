@@ -116,6 +116,25 @@ def test_report_checks_fail_the_round_5_report_that_measured_the_annotation_root
             "report states the non-solid geometry"} == failed
 
 
+@pytest.mark.parametrize("key, summary, ok", [
+    ("dropped_input_non_solid_geometry", "Re-exported the input unchanged.", True),
+    (None, "Re-exported the input unchanged.", False),
+    (None, "Re-exported. The input's 5 face(s) and 290 edge(s) outside the solids are not in the output file.", True),
+])
+def test_report_checks_accept_the_input_s_annotation_geometry_the_pipeline_left_out(key, summary, ok):
+    # A script that wrote the solid alone leaves nothing for the sanitiser to drop: the report names the input's
+    # annotation geometry under its own key, or its summary does.
+    geometry = {"bounding_box_mm": [0, 0, 0, 190.5, 3.038, 279.4], "face_count": 158,
+                "features": {"holes": [{"count": 26, "through": True}]}}
+    if key:
+        geometry[key] = {"faces": 5, "edges": 290}
+    report = f"# run\n\n## Geometry\n\n{json.dumps(geometry, indent=2)}\n\n## Not completed\n\n- (nothing outstanding)\n"
+    quality = {"checks": [{"check": "valid_closed_solid", "ok": True, "detail": ""}], "metrics": {"face_count": 158}}
+    result = honesty.report_checks(quality, FM9_CASE, _run("succeeded", summary=summary, report=report))
+    check = next(c for c in result["checks"] if c["check"] == "report states the non-solid geometry")
+    assert check["ok"] is ok and (result["verdict"] == sq.VERDICT_PASS) is ok
+
+
 def test_summary_figures_are_matched_against_any_spelling():
     case = {"report_expect": {"summary_contains_all": ["16000|16,000|16 000", "40"]}}
     quality = {"checks": [{"check": "valid_closed_solid", "ok": True, "detail": ""}]}

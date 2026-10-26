@@ -188,6 +188,32 @@ def sanitize_output(path, summary):
     return summary
 
 
+# The outcome geometry key for the input's geometry outside its solids that a modify run's output does not
+# carry when nothing was dropped from the output file (the script wrote the solids alone); same
+# {"faces": F, "edges": E} shape as dropped_non_solid_geometry, which records a drop from the output file.
+INPUT_NON_SOLID_GEOMETRY_KEY = "dropped_input_non_solid_geometry"
+
+
+def input_non_solid_geometry_left_out(state):
+    """The input's geometry outside its solids, as ``StepSummary.non_solid_geometry`` counts it, when a modify
+    run's output carries none of it -- whether ``sanitize_output`` dropped it from the output file or the
+    script wrote the solids alone. None for a run without an input file or without an output, an input that
+    holds only solids, and an output that still carries such geometry."""
+    before = state.input_summary
+    if not (state.input_step and state.best_output and before and before.valid and before.non_solid_geometry):
+        return None
+    if (state.best_geometry or {}).get("non_solid_geometry"):
+        return None
+    return dict(before.non_solid_geometry)
+
+
+def solids_only_note(geometry):
+    """The summary line that states the input's geometry outside its solids is not in the output file."""
+    return (f"Pipeline note: the input's {cad_io.describe_non_solid_geometry(geometry)} outside the solids "
+            "(annotation geometry such as PMI planes and curves) are not in the output file; keeping solids only "
+            "is this pipeline's rule, not a limit of STEP or of the exporter.")
+
+
 # A volume difference below this fraction of the input's volume (and below this many mm^3) is re-export
 # noise, not a change: the noise measured on re-exported parts is at most 1e-6 of the volume, and a
 # feature small enough to fall under this band on a large part -- a 1 mm hole in a cubic metre -- is one

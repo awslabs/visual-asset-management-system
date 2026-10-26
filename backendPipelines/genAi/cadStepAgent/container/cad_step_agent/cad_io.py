@@ -32,6 +32,8 @@ class StepSummary:
     non_solid_geometry: Optional[Dict] = None
     # Such geometry that was in a script's output and has been removed from the file (see
     # ``drop_non_solid_geometry``): the file now holds the solids the summary describes, and nothing else.
+    # (When a modify run's script wrote the solids alone, the run's outcome records the input's such geometry
+    # under ``tools.INPUT_NON_SOLID_GEOMETRY_KEY`` instead.)
     dropped_non_solid_geometry: Optional[Dict] = None
     # The largest planar faces with their outward normals and, for a sheet-like part, the axis its thickness
     # runs along (see ``summarize_orientation``): what a script drills through. Advisory; None when unknown.

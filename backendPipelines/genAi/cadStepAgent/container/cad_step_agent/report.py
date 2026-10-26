@@ -86,11 +86,25 @@ class RunOutcome:
     wall_seconds: float = 0.0
     research_allowed: bool = True
     checks: List[str] = field(default_factory=list)  # per-feature "expected - measured - ok|mismatch" lines
+    # Lines the pipeline adds after the model's summary, whatever the model wrote (``summary_text``).
+    pipeline_notes: List[str] = field(default_factory=list)
 
 
 def _clip(text, limit):
     text = "" if text is None else str(text)
     return text if len(text) <= limit else text[: limit - 1] + "\u2026"
+
+
+def summary_text(outcome, limit=SUMMARY_MAX_CHARS):
+    """The run's summary as every output shows it: the model's summary, then the pipeline's notes, within
+    ``limit`` characters. The model's text is what is cut, so a note survives every bound. Without notes
+    this is the model's summary clipped to ``limit``."""
+    notes = "\n\n".join(str(n) for n in outcome.pipeline_notes if str(n).strip())
+    if not notes:
+        return _clip(outcome.summary, limit)
+    room = limit - len(notes) - 2
+    head = _clip(outcome.summary, room) if room > 1 else ""
+    return _clip(f"{head}\n\n{notes}" if head else notes, limit)
 
 
 def _bounded_list(items, max_items=MAX_LIST_ITEMS, max_chars=LIST_MAX_CHARS):
@@ -105,7 +119,7 @@ def metadata_document(outcome, update_type="update"):
     """The ``<file>.metadata.json`` body the process-output step applies to the output file."""
     entries = [
         {"metadataKey": METADATA_KEY_STATUS, "metadataValue": outcome.status},
-        {"metadataKey": METADATA_KEY_SUMMARY, "metadataValue": _clip(outcome.summary, SUMMARY_MAX_CHARS)},
+        {"metadataKey": METADATA_KEY_SUMMARY, "metadataValue": summary_text(outcome)},
         {"metadataKey": METADATA_KEY_UNRESOLVED, "metadataValue": _bounded_list(outcome.unresolved)},
         {"metadataKey": METADATA_KEY_SOURCES, "metadataValue": _bounded_list(outcome.sources)},
         {"metadataKey": METADATA_KEY_MODEL, "metadataValue": _clip(outcome.model, 256)},
@@ -203,7 +217,7 @@ def result_document(outcome):
         "runId": _clip(outcome.run_id, 128),
         "attempts": len(outcome.attempts),
         "unresolvedCount": len(outcome.unresolved),
-        "summary": _clip(outcome.summary, SUMMARY_MAX_CHARS),
+        "summary": summary_text(outcome),
         "assumptions": json.loads(_bounded_list(assumptions_of(outcome.summary))),
         "unresolved": json.loads(_bounded_list(outcome.unresolved)),
         "checks": json.loads(_bounded_list(outcome.checks)),
@@ -258,7 +272,7 @@ def _render_report(outcome, geometry_text):
         "",
         "## Summary",
         "",
-        _clip(outcome.summary, SUMMARY_MAX_CHARS) or "(none)",
+        summary_text(outcome) or "(none)",
         "",
         "## Geometry",
         "",
@@ -295,7 +309,7 @@ def success_payload(outcome):
         "outputFile": outcome.output_file_name,
         "attempts": len(outcome.attempts),
         "unresolvedCount": len(outcome.unresolved),
-        "summary": _clip(outcome.summary, TOKEN_SUMMARY_MAX_CHARS),
+        "summary": summary_text(outcome, TOKEN_SUMMARY_MAX_CHARS),
     }
 
 
