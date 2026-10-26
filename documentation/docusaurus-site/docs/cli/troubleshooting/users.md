@@ -218,7 +218,7 @@ vamscli user cognito reset-password -u user@example.com --confirm
 ```
 
 :::note
-In interactive mode, `user cognito delete` also prompts for a final confirmation after the `--confirm` flag. In `--json-output` mode the interactive prompt is skipped, so `--confirm` alone authorizes the operation.
+In an interactive terminal, `user cognito delete` also prompts for a final confirmation after the `--confirm` flag. In a script, pipe or CI job, or with `--json-output`, the prompt is skipped, so `--confirm` alone authorizes the operation.
 :::
 
 ---

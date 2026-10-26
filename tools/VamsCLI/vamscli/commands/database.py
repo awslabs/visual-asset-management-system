@@ -8,6 +8,7 @@ from ..constants import API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error
+from ..utils.confirmation import confirm_destructive_action
 from ..utils.exceptions import (
     DatabaseNotFoundError, DatabaseAlreadyExistsError, DatabaseDeletionError,
     BucketNotFoundError, InvalidDatabaseDataError
@@ -659,7 +660,7 @@ def delete(ctx: click.Context, database_id: str, confirm: bool, json_output: boo
             click.secho(f"⚠️  You are about to delete database '{database_id}'", fg='red', bold=True)
             click.echo("This action cannot be undone!")
             
-            if not click.confirm("Are you sure you want to proceed?"):
+            if not confirm_destructive_action():
                 click.echo("Deletion cancelled.")
                 return None
         

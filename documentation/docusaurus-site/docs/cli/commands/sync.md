@@ -68,7 +68,7 @@ A file is considered changed when its size differs, or (unless `--size-only` is 
 :::
 
 :::warning[Deletion Safeguards]
-Without `--allow-delete`, remote files missing locally are only reported, never removed. With `--allow-delete`, they are archived (recoverable via `vamscli file unarchive`). Permanent deletion additionally requires `--permanent-delete` and `--confirm`, and prompts interactively outside `--json-output` mode.
+Without `--allow-delete`, remote files missing locally are only reported, never removed. With `--allow-delete`, they are archived (recoverable via `vamscli file unarchive`). Permanent deletion additionally requires `--permanent-delete` and `--confirm`, and prompts for confirmation when the command runs in an interactive terminal without `--json-output`; in a script, pipe or CI job, or with `--json-output`, `--confirm` alone proceeds.
 :::
 
 :::tip[Ignore Patterns]
@@ -132,7 +132,7 @@ vamscli sync file pull ./textures -d my-db -a my-asset --asset-location /texture
 ```
 
 :::warning[Local Deletion Safeguards]
-Without `--allow-delete`, local files missing from VAMS are only reported. With `--allow-delete`, the `--confirm` flag is required and an interactive prompt is shown outside `--json-output` mode. Local deletion cannot be undone.
+Without `--allow-delete`, local files missing from VAMS are only reported. With `--allow-delete`, the `--confirm` flag is required, and a confirmation prompt is shown when the command runs in an interactive terminal without `--json-output`; in a script, pipe or CI job, or with `--json-output`, `--confirm` alone proceeds. Local deletion cannot be undone.
 :::
 
 :::note[Distributable Assets]
