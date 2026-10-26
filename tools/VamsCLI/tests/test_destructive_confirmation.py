@@ -1,4 +1,4 @@
-"""Second confirmation of destructive commands in and out of an interactive terminal (#809).
+"""Second confirmation of destructive commands in and out of an interactive terminal.
 
 Each destructive command below refuses to run without ``--confirm`` and, in text mode, then asks
 "Are you sure you want to proceed?". The question is asked only when stdin is an interactive
@@ -22,13 +22,13 @@ PROMPT = "Are you sure you want to proceed?"
 # (command id, command module patched by generic_command_mocks, argv, APIClient delete method)
 DESTRUCTIVE_COMMANDS = [
     ("assets delete", "assets",
-     ["assets", "delete", "s27-asset", "-d", "s27-db"], "delete_asset_permanent"),
+     ["assets", "delete", "test-asset", "-d", "test-db"], "delete_asset_permanent"),
     ("database delete", "database",
-     ["database", "delete", "-d", "s27-db"], "delete_database"),
+     ["database", "delete", "-d", "test-db"], "delete_database"),
     ("role delete", "roleUserConstraints",
-     ["role", "delete", "-r", "s27-role"], "delete_role"),
+     ["role", "delete", "-r", "test-role"], "delete_role"),
     ("role constraint delete", "roleUserConstraints",
-     ["role", "constraint", "delete", "-c", "s27-constraint"], "delete_constraint"),
+     ["role", "constraint", "delete", "-c", "test-constraint"], "delete_constraint"),
     ("role user delete", "roleUserConstraints",
      ["role", "user", "delete", "-u", "user@example.com"], "delete_user_roles"),
     ("user cognito delete", "user",

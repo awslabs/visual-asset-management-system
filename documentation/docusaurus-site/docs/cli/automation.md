@@ -14,7 +14,7 @@ vamscli database list --json-output
 When `--json-output` is enabled:
 
 -   Status messages and progress indicators are suppressed
--   Interactive confirmation prompts are skipped (use `--confirm` flags instead). Without `--json-output`, the additional prompt of a destructive command is also skipped when stdin is not a terminal (a script, pipe or CI job), so `--confirm` alone proceeds
+-   Interactive confirmation prompts are skipped (use `--confirm` flags instead)
 -   Errors are returned as JSON objects to stdout with exit code `1` (see [JSON Error Format](#json-error-format))
 -   Password prompts are disabled (provide `--password` explicitly)
     :::
@@ -190,6 +190,14 @@ vamscli auth login -u "$VAMS_USERNAME" -p "$VAMS_PASSWORD" --save-credentials
 
 :::warning[Credential Security]
 Never store passwords in CI/CD pipeline definitions or version control. Use your CI/CD platform's secrets management to inject credentials as environment variables.
+:::
+
+### Destructive Commands in Scripts
+
+A destructive command, such as `assets delete`, `database delete` or `role delete`, refuses to run without `--confirm`. In text mode it then asks "Are you sure you want to proceed?", but only when stdin is an interactive terminal. In a script, a pipe or a CI job, `--confirm` is the confirmation and the command proceeds without asking. With `--json-output` it never asks.
+
+:::note
+The CLI asks only when Python sees stdin as a terminal. Some Windows terminals, such as Git Bash (mintty) running a native Windows Python without `winpty`, do not present stdin as a terminal, so the question is skipped there as well. `--confirm` is still required.
 :::
 
 ### Profile-Based Multi-Environment Configuration
