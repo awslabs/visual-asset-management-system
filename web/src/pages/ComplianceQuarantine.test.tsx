@@ -43,7 +43,11 @@ const quarantined = (assetId: string) => ({
 describe("ComplianceQuarantine", () => {
     beforeEach(() => {
         jest.clearAllMocks();
-        mockAllowed = [];
+        // A caller who may release and grant exceptions but not open asset pages.
+        mockAllowed = [
+            "POST /compliance/quarantine/{databaseId}/{assetId}/release",
+            "POST /compliance/quarantine/{databaseId}/{assetId}/exception",
+        ];
     });
 
     it("shows asset names as text to a caller who may not open the asset page", async () => {

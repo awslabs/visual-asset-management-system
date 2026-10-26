@@ -31,7 +31,14 @@ import {
     ComplianceSchema,
 } from "../services/ComplianceService";
 import ComplianceSchemaEditor from "../components/compliance/ComplianceSchemaEditor";
+import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
 import { EXAMPLE_PIPELINE_RULE } from "../components/compliance/complianceSchemaRules";
+
+// The routes behind the page's write actions (backend/backend/common/apiRoutes.py). Each action is
+// offered only to a caller who may call its route; while the routes load, none is offered.
+export const COMPLIANCE_SCHEMAS_API_ROUTE = "/compliance/schemas";
+export const COMPLIANCE_SCHEMA_API_ROUTE = "/compliance/schemas/{schemaName}";
+export const COMPLIANCE_SWEEP_API_ROUTE = "/compliance/sweep/{schemaName}";
 
 /** Shown on a schema row whose body is not a vams-rules-v1 document. */
 export const LEGACY_SCHEMA_LABEL = "Legacy — cannot be bound or evaluated";
@@ -399,6 +406,10 @@ const DEFAULT_TEMPLATE_OPTION =
 const DEFAULT_TEMPLATE_BODY = JSON.stringify(SCHEMA_TEMPLATES[DEFAULT_TEMPLATE_KEY].body, null, 2);
 
 export default function ComplianceSchemas() {
+    const { can: canCallRoute } = useAllowedRoutes();
+    const canCreate = canCallRoute("POST", COMPLIANCE_SCHEMAS_API_ROUTE);
+    const canUpdate = canCallRoute("PUT", COMPLIANCE_SCHEMA_API_ROUTE);
+    const canSweep = canCallRoute("POST", COMPLIANCE_SWEEP_API_ROUTE);
     usePageTitle("Compliance Schemas");
 
     const [schemas, setSchemas] = useState<ComplianceSchema[]>([]);
@@ -411,6 +422,8 @@ export default function ComplianceSchemas() {
     // Modal state
     const [modalVisible, setModalVisible] = useState(false);
     const [editingSchema, setEditingSchema] = useState<ComplianceSchema | null>(null);
+    // A caller who may read a schema but not update it opens it read-only from its name.
+    const viewOnly = !!editingSchema && !canUpdate;
     const [formName, setFormName] = useState("");
     const [formDescription, setFormDescription] = useState("");
     const [formBody, setFormBody] = useState(DEFAULT_TEMPLATE_BODY);
@@ -555,9 +568,11 @@ export default function ComplianceSchemas() {
                 <Header
                     variant="h1"
                     actions={
-                        <Button variant="primary" onClick={openCreateModal}>
-                            Create Schema
-                        </Button>
+                        canCreate ? (
+                            <Button variant="primary" onClick={openCreateModal}>
+                                Create Schema
+                            </Button>
+                        ) : undefined
                     }
                 >
                     Compliance Schemas
@@ -621,33 +636,44 @@ export default function ComplianceSchemas() {
                                 cell: (item) => item.version || 1,
                                 width: 80,
                             },
-                            {
-                                id: "actions",
-                                header: "Actions",
-                                width: 150,
-                                cell: (item) => {
-                                    // A legacy schema cannot be updated or evaluated.
-                                    const legacy = complianceSchemaFormat(item) === "legacy";
-                                    return (
-                                        <SpaceBetween direction="horizontal" size="xs">
-                                            <Button
-                                                variant="link"
-                                                disabled={legacy}
-                                                onClick={() => openEditModal(item)}
-                                            >
-                                                Edit
-                                            </Button>
-                                            <Button
-                                                variant="link"
-                                                disabled={legacy}
-                                                onClick={() => handleSweep(item.schemaName)}
-                                            >
-                                                Sweep
-                                            </Button>
-                                        </SpaceBetween>
-                                    );
-                                },
-                            },
+                            ...(canUpdate || canSweep
+                                ? [
+                                      {
+                                          id: "actions",
+                                          header: "Actions",
+                                          width: 150,
+                                          cell: (item: ComplianceSchema) => {
+                                              // A legacy schema cannot be updated or evaluated.
+                                              const legacy =
+                                                  complianceSchemaFormat(item) === "legacy";
+                                              return (
+                                                  <SpaceBetween direction="horizontal" size="xs">
+                                                      {canUpdate && (
+                                                          <Button
+                                                              variant="link"
+                                                              disabled={legacy}
+                                                              onClick={() => openEditModal(item)}
+                                                          >
+                                                              Edit
+                                                          </Button>
+                                                      )}
+                                                      {canSweep && (
+                                                          <Button
+                                                              variant="link"
+                                                              disabled={legacy}
+                                                              onClick={() =>
+                                                                  handleSweep(item.schemaName)
+                                                              }
+                                                          >
+                                                              Sweep
+                                                          </Button>
+                                                      )}
+                                                  </SpaceBetween>
+                                              );
+                                          },
+                                      },
+                                  ]
+                                : []),
                         ]}
                     />
                 </Container>
@@ -656,15 +682,21 @@ export default function ComplianceSchemas() {
                 <Modal
                     visible={modalVisible}
                     onDismiss={() => setModalVisible(false)}
-                    header={editingSchema ? "Edit Schema" : "Create Schema"}
+                    header={
+                        editingSchema ? (viewOnly ? "View Schema" : "Edit Schema") : "Create Schema"
+                    }
                     size="large"
                     footer={
                         <Box float="right">
                             <SpaceBetween direction="horizontal" size="xs">
-                                <Button onClick={() => setModalVisible(false)}>Cancel</Button>
-                                <Button variant="primary" loading={saving} onClick={handleSave}>
-                                    {editingSchema ? "Update" : "Create"}
+                                <Button onClick={() => setModalVisible(false)}>
+                                    {viewOnly ? "Close" : "Cancel"}
                                 </Button>
+                                {!viewOnly && (
+                                    <Button variant="primary" loading={saving} onClick={handleSave}>
+                                        {editingSchema ? "Update" : "Create"}
+                                    </Button>
+                                )}
                             </SpaceBetween>
                         </Box>
                     }
@@ -701,6 +733,7 @@ export default function ComplianceSchemas() {
                             <Input
                                 value={formDescription}
                                 onChange={({ detail }) => setFormDescription(detail.value)}
+                                disabled={viewOnly}
                                 placeholder="Brief description of what this schema enforces"
                             />
                         </FormField>
@@ -708,7 +741,11 @@ export default function ComplianceSchemas() {
                             label="Schema Body"
                             description="A vams-rules-v1 rule set: pipeline, metadata, relationship, file structure, version coverage and asset attributes rules with an enforcement level each. Use the JSON editor for full control or the Visual Builder for guided editing."
                         >
-                            <ComplianceSchemaEditor value={formBody} onChange={setFormBody} />
+                            <ComplianceSchemaEditor
+                                value={formBody}
+                                onChange={setFormBody}
+                                readOnly={viewOnly}
+                            />
                         </FormField>
                     </SpaceBetween>
                 </Modal>

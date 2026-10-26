@@ -21,6 +21,7 @@ import {
     CascadeRecord,
 } from "../services/ComplianceService";
 import ReasonModal from "../components/compliance/ReasonModal";
+import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
 
 const statusIndicatorMap: Record<string, { type: string; label: string }> = {
     pending_approval: { type: "pending", label: "Pending Approval" },
@@ -77,7 +78,15 @@ export const cascadeProgress = (record: CascadeRecord | null): string | null => 
  */
 export const CASCADE_ACTIONS_COLUMN_WIDTH = 220;
 
+// The routes behind the row actions (backend/backend/common/apiRoutes.py); each is offered only to a
+// caller who may call it, none while the routes load.
+export const CASCADE_APPROVE_API_ROUTE = "/compliance/cascades/{cascadeId}/approve";
+export const CASCADE_REJECT_API_ROUTE = "/compliance/cascades/{cascadeId}/reject";
+
 const ComplianceCascades: React.FC = () => {
+    const { can: canCallRoute } = useAllowedRoutes();
+    const canApprove = canCallRoute("POST", CASCADE_APPROVE_API_ROUTE);
+    const canReject = canCallRoute("POST", CASCADE_REJECT_API_ROUTE);
     const [items, setItems] = useState<CascadeRecord[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -334,28 +343,39 @@ const ComplianceCascades: React.FC = () => {
                         header: "Actor",
                         cell: (item) => item.actor || "-",
                     },
-                    {
-                        id: "actions",
-                        header: "Actions",
-                        width: CASCADE_ACTIONS_COLUMN_WIDTH,
-                        minWidth: CASCADE_ACTIONS_COLUMN_WIDTH,
-                        cell: (item) =>
-                            item.state === "pending_approval" ? (
-                                <SpaceBetween direction="horizontal" size="xs">
-                                    <Button
-                                        variant="primary"
-                                        onClick={() => handleApprove(item.cascadeId)}
-                                    >
-                                        Approve
-                                    </Button>
-                                    <Button variant="normal" onClick={() => setRejectTarget(item)}>
-                                        Reject
-                                    </Button>
-                                </SpaceBetween>
-                            ) : (
-                                "-"
-                            ),
-                    },
+                    ...(canApprove || canReject
+                        ? [
+                              {
+                                  id: "actions",
+                                  header: "Actions",
+                                  width: CASCADE_ACTIONS_COLUMN_WIDTH,
+                                  minWidth: CASCADE_ACTIONS_COLUMN_WIDTH,
+                                  cell: (item: CascadeRecord) =>
+                                      item.state === "pending_approval" ? (
+                                          <SpaceBetween direction="horizontal" size="xs">
+                                              {canApprove && (
+                                                  <Button
+                                                      variant="primary"
+                                                      onClick={() => handleApprove(item.cascadeId)}
+                                                  >
+                                                      Approve
+                                                  </Button>
+                                              )}
+                                              {canReject && (
+                                                  <Button
+                                                      variant="normal"
+                                                      onClick={() => setRejectTarget(item)}
+                                                  >
+                                                      Reject
+                                                  </Button>
+                                              )}
+                                          </SpaceBetween>
+                                      ) : (
+                                          "-"
+                                      ),
+                              },
+                          ]
+                        : []),
                 ]}
             />
 

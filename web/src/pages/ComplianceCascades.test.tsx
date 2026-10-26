@@ -14,6 +14,12 @@ import ComplianceCascades, {
 } from "./ComplianceCascades";
 import { REASON_REQUIRED_MESSAGE } from "../components/compliance/ReasonModal";
 
+// The page's write actions are gated on the caller's routes; these tests run as a caller who may
+// call every route (ComplianceWriteActionGating.test.tsx covers the gating).
+jest.mock("../features/orchestration/permissions/useAllowedRoutes", () => ({
+    useAllowedRoutes: () => ({ loading: false, can: () => true }),
+}));
+
 jest.mock("../services/ComplianceService", () => ({
     ...jest.requireActual("../services/ComplianceService"),
     fetchCascades: jest.fn(),

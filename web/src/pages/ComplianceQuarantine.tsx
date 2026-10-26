@@ -23,6 +23,7 @@ import {
 import ReasonModal from "../components/compliance/ReasonModal";
 import { ComplianceStateBadge } from "../components/compliance/complianceStateBadge";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
+import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
 
 /**
  * Width (px) of the Actions column: room for the Release and Exception buttons side by side.
@@ -30,9 +31,18 @@ import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
  */
 export const QUARANTINE_ACTIONS_COLUMN_WIDTH = 240;
 
+// The routes behind the row actions (backend/backend/common/apiRoutes.py); each is offered only to a
+// caller who may call it, none while the routes load.
+export const QUARANTINE_RELEASE_API_ROUTE = "/compliance/quarantine/{databaseId}/{assetId}/release";
+export const QUARANTINE_EXCEPTION_API_ROUTE =
+    "/compliance/quarantine/{databaseId}/{assetId}/exception";
+
 const ComplianceQuarantine: React.FC = () => {
     // Asset names link to the asset page only when the caller may open it.
     const { canOpenAsset } = useAssetPageAccess();
+    const { can: canCallRoute } = useAllowedRoutes();
+    const canRelease = canCallRoute("POST", QUARANTINE_RELEASE_API_ROUTE);
+    const canGrantException = canCallRoute("POST", QUARANTINE_EXCEPTION_API_ROUTE);
     const [items, setItems] = useState<QuarantinedAsset[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -237,22 +247,36 @@ const ComplianceQuarantine: React.FC = () => {
                             item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "-",
                         sortingField: "updatedAt",
                     },
-                    {
-                        id: "actions",
-                        header: "Actions",
-                        width: QUARANTINE_ACTIONS_COLUMN_WIDTH,
-                        minWidth: QUARANTINE_ACTIONS_COLUMN_WIDTH,
-                        cell: (item) => (
-                            <SpaceBetween direction="horizontal" size="xs">
-                                <Button variant="normal" onClick={() => handleRelease(item)}>
-                                    Release
-                                </Button>
-                                <Button variant="normal" onClick={() => setExceptionTarget(item)}>
-                                    Exception
-                                </Button>
-                            </SpaceBetween>
-                        ),
-                    },
+                    ...(canRelease || canGrantException
+                        ? [
+                              {
+                                  id: "actions",
+                                  header: "Actions",
+                                  width: QUARANTINE_ACTIONS_COLUMN_WIDTH,
+                                  minWidth: QUARANTINE_ACTIONS_COLUMN_WIDTH,
+                                  cell: (item: QuarantinedAsset) => (
+                                      <SpaceBetween direction="horizontal" size="xs">
+                                          {canRelease && (
+                                              <Button
+                                                  variant="normal"
+                                                  onClick={() => handleRelease(item)}
+                                              >
+                                                  Release
+                                              </Button>
+                                          )}
+                                          {canGrantException && (
+                                              <Button
+                                                  variant="normal"
+                                                  onClick={() => setExceptionTarget(item)}
+                                              >
+                                                  Exception
+                                              </Button>
+                                          )}
+                                      </SpaceBetween>
+                                  ),
+                              },
+                          ]
+                        : []),
                 ]}
             />
 

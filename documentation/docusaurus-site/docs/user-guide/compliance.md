@@ -546,7 +546,7 @@ Compliance operations are governed by the same two-tier access control as the re
 
 ### Tier 1: route access
 
-Controls which users can call the compliance API and open the compliance pages. Grant the API routes with an `api` constraint matching `/compliance` and the methods the role needs: `GET` to view; `POST` to create schemas, evaluate, sweep, release, grant exceptions, and create, approve or reject cascades; `PUT` to update schemas and bind them; `DELETE` to delete schemas, unbind them and revoke exceptions. Grant the pages with a `web` constraint matching `/compliance` and `/databases` (the database compliance overview is `/databases/{databaseId}/compliance`):
+Controls which users can call the compliance API and open the compliance pages. Grant the API routes with an `api` constraint matching `/compliance` and the methods the role needs: `GET` to view; `POST` to create schemas, evaluate, sweep, release, grant exceptions, and create, approve or reject cascades; `PUT` to update schemas and bind them; `DELETE` to delete schemas, unbind them and revoke exceptions. Grant the pages with a `web` constraint matching `/compliance` and `/databases` (the database compliance overview is `/databases/{databaseId}/compliance`). A page offers each action — Create Schema, Edit, Sweep, Release, Exception, Approve, Reject, Evaluate All — only to a user whose role may call its route, so a read-only role sees the lists without them:
 
 ```json
 {

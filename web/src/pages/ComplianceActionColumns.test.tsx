@@ -31,7 +31,7 @@ jest.mock("../services/ComplianceService", () => ({
 }));
 
 jest.mock("../features/orchestration/permissions/useAllowedRoutes", () => ({
-    useAllowedRoutes: () => ({ loading: false, can: () => false }),
+    useAllowedRoutes: () => ({ loading: false, can: () => true }),
 }));
 
 const service = () =>

@@ -44,6 +44,8 @@ import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 // schema list fills the selector, PUT binds or changes the schema, DELETE removes it.
 const COMPLIANCE_SCHEMAS_API_ROUTE = "/compliance/schemas";
 const COMPLIANCE_BIND_DATABASE_API_ROUTE = "/compliance/bind/{databaseId}";
+// Evaluate All (the database's tracked assets); offered only to a caller who may call it.
+export const COMPLIANCE_EVALUATE_DATABASE_API_ROUTE = "/compliance/evaluate/{databaseId}";
 
 /**
  * The success message of Evaluate All: the API's count, plus how many tracked assets were not
@@ -75,6 +77,7 @@ const DatabaseCompliancePage: React.FC = () => {
     const canListSchemas = canCallRoute("GET", COMPLIANCE_SCHEMAS_API_ROUTE);
     const canBind = canListSchemas && canCallRoute("PUT", COMPLIANCE_BIND_DATABASE_API_ROUTE);
     const canUnbind = canListSchemas && canCallRoute("DELETE", COMPLIANCE_BIND_DATABASE_API_ROUTE);
+    const canEvaluateAll = canCallRoute("POST", COMPLIANCE_EVALUATE_DATABASE_API_ROUTE);
     // The breadcrumb and asset names link to the assets and asset pages only when the caller may
     // open them.
     const { canOpenDatabaseAssets, canOpenAsset } = useAssetPageAccess();
@@ -355,14 +358,16 @@ const DatabaseCompliancePage: React.FC = () => {
                     <Header
                         variant="h2"
                         actions={
-                            <Button
-                                variant="primary"
-                                loading={sweeping}
-                                onClick={handleEvaluateAll}
-                                disabled={!databaseSchema && totalTracked === 0}
-                            >
-                                Evaluate All {Synonyms.Assets}
-                            </Button>
+                            canEvaluateAll ? (
+                                <Button
+                                    variant="primary"
+                                    loading={sweeping}
+                                    onClick={handleEvaluateAll}
+                                    disabled={!databaseSchema && totalTracked === 0}
+                                >
+                                    Evaluate All {Synonyms.Assets}
+                                </Button>
+                            ) : undefined
                         }
                         description={
                             databaseSchema
