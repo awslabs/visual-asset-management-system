@@ -59,10 +59,11 @@ const defaultProps: Partial<RapidPipelineConstructProps> = {
 /**
  * An EcsRunTask whose RunTask call also sets the task's group to the Step Functions execution name.
  *
- * A Fargate task that reaches the state's task-level timeout is still running, and the timed-out
- * state's error output carries no task ARN. Labelling the task with the execution name is what lets
- * the timeout route find it: the route lists the cluster's running tasks, describes them, and stops
- * the one whose group is this execution's name. aws-cdk-lib's EcsRunTask has no group prop, so this
+ * Step Functions stops the Fargate task as the state reaches its task-level timeout, but its
+ * documentation does not list that case, and the timed-out state's error output carries no task
+ * ARN. Labelling the task with the execution name is what lets the timeout route find a task still
+ * running: the route lists the cluster's running tasks, describes them, and stops the one whose
+ * group is this execution's name. aws-cdk-lib's EcsRunTask has no group prop, so this
  * adds the field to the rendered Parameters and leaves everything else EcsRunTask renders and grants
  * as it is. The RunTask API reference documents no length or character limit for group; the Amazon
  * ECS Developer Guide ("Group related Amazon ECS tasks") limits a task group name to 255 characters.
@@ -419,11 +420,11 @@ export class RapidPipelineConstruct extends NestedStack {
         // labels the task with its group set to the execution name. ecs:ListTasks cannot filter by
         // group, so these states list the cluster's running tasks, describe them, keep the ARNs of
         // the task(s) whose group is this execution's name, stop those, and go on to
-        // PipelineEndTask. The list is often empty by then, because Step Functions has already
-        // stopped the task. Each call is bounded and best-effort: a failure is caught into
-        // $.stopError and also goes on to PipelineEndTask, so $.error stays States.Timeout and the
-        // parent workflow is told of the timeout whether or not the stop succeeds. The bounds are
-        // counted in the chain in config.ts.
+        // PipelineEndTask. By then the list often holds no task of this execution, because Step
+        // Functions has already stopped it. Each call is bounded and best-effort: a failure is
+        // caught into $.stopError and also goes on to PipelineEndTask, so $.error stays
+        // States.Timeout and the parent workflow is told of the timeout whether or not the stop
+        // succeeds. The bounds are counted in the chain in config.ts.
         //
         // One page only: ListTasks returns at most 100 ARNs per call, and DescribeTasks takes at most
         // 100. The cluster is this pipeline's own; when more than 100 of its tasks are running and

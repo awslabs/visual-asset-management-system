@@ -7,8 +7,9 @@
  * A RapidPipeline (Amazon ECS) Fargate task that reaches its task-level timeout is stopped.
  *
  * The `.sync` RapidPipelineRunFargate state carries a TimeoutSeconds (the chain in
- * ecsTimeoutHeadroom.test.ts). When it fires, the state fails with States.Timeout, but Step Functions
- * does not stop the task, and the error output carries no task ARN. So:
+ * ecsTimeoutHeadroom.test.ts). When it fires, the state fails with States.Timeout and its error
+ * output carries no task ARN. Step Functions stops the task as it ends the state, but its
+ * documentation does not list that case, so the state machine also stops a task still running:
  *
  *  1. the RunTask call sets the task's group to the execution name;
  *  2. a Timeout catch, ahead of the general catch, lists the cluster's running tasks with
