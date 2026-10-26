@@ -293,7 +293,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
         if (!canBindComplianceSchema) return;
         const loadSchemas = async () => {
             setLoadingSchemas(true);
-            const [success, result] = await fetchComplianceSchemas();
+            const [success, result] = await fetchComplianceSchemas(tagScopeDatabaseId);
             if (success && Array.isArray(result)) {
                 setSchemaOptions(
                     result.map((s) => ({
@@ -306,7 +306,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
             setLoadingSchemas(false);
         };
         loadSchemas();
-    }, [canBindComplianceSchema]);
+    }, [canBindComplianceSchema, tagScopeDatabaseId]);
 
     useEffect(() => {
         if (!canBindComplianceSchema || !asset?.databaseId || !asset?.assetId) return;
@@ -448,7 +448,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                 {canBindComplianceSchema && (
                     <FormField
                         label="Compliance Schema"
-                        description={`Override the ${Synonyms.database}-level compliance schema for this ${Synonyms.asset}. Choose "Inherit" to use the ${Synonyms.database} schema.`}
+                        description={`Override the ${Synonyms.database}-level compliance schema for this ${Synonyms.asset}. Choose "Inherit" to use the ${Synonyms.database} schema. Offered: the GLOBAL schemas and those available to this ${Synonyms.asset}'s ${Synonyms.database} only.`}
                         constraintText={`Optional. ${Synonyms.Asset}-level binding overrides ${Synonyms.database}-level.`}
                     >
                         <Select

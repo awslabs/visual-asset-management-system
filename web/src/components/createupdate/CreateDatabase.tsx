@@ -216,7 +216,11 @@ export default function CreateDatabase({
         if (!open || !canBindComplianceSchema) return;
         const loadSchemas = async () => {
             setLoadingSchemas(true);
-            const [success, result] = await fetchComplianceSchemas();
+            // Only GLOBAL schemas and this database's own can be bound to it; a new database
+            // has none of its own yet.
+            const [success, result] = await fetchComplianceSchemas(
+                initState?.databaseId || "GLOBAL"
+            );
             if (success && Array.isArray(result)) {
                 setSchemaOptions(
                     result.map((s) => ({
@@ -229,7 +233,7 @@ export default function CreateDatabase({
             setLoadingSchemas(false);
         };
         loadSchemas();
-    }, [open, canBindComplianceSchema]);
+    }, [open, canBindComplianceSchema, initState?.databaseId]);
 
     // Load current schema binding when editing
     useEffect(() => {
@@ -570,7 +574,7 @@ export default function CreateDatabase({
                             {canBindComplianceSchema && (
                                 <FormField
                                     label="Compliance Schema"
-                                    description={`Bind a compliance schema to this ${Synonyms.database}. All ${Synonyms.assets} in the ${Synonyms.database} inherit this schema unless overridden at the ${Synonyms.asset} level.`}
+                                    description={`Bind a compliance schema to this ${Synonyms.database}. All ${Synonyms.assets} in the ${Synonyms.database} inherit this schema unless overridden at the ${Synonyms.asset} level. Offered: the GLOBAL schemas and those available to this ${Synonyms.database} only.`}
                                     constraintText="Optional. Schema can be changed later."
                                 >
                                     <Select

@@ -576,6 +576,21 @@ class TestDatabaseBinding:
         assert "not available" in body_of(response)["message"]
         tables["database"].update_item.assert_not_called()
 
+    def test_overriding_an_asset_with_another_databases_schema_is_refused(self):
+        response, tables = _run(
+            rest_event("PUT", ASSET_PATH, ASSET_PARAMS, body=BIND_BODY),
+            schema_rows=[schema_row(database_id="other-db")], database_item={"databaseId": DB})
+        assert response["statusCode"] == 400
+        assert "not available" in body_of(response)["message"]
+        _assert_nothing_written(tables)
+
+    @pytest.mark.parametrize("scope", ["GLOBAL", DB])
+    def test_a_global_or_own_database_schema_binds(self, scope):
+        response, _ = _run(
+            rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY),
+            schema_rows=[schema_row(database_id=scope)], database_item={"databaseId": DB})
+        assert response["statusCode"] == 200, response
+
     def test_binding_to_a_missing_database_is_refused(self):
         response, tables = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY))
         assert response["statusCode"] == 400

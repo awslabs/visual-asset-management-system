@@ -225,6 +225,8 @@ export type ComplianceSchemaFormat = typeof VAMS_RULES_V1_FORMAT | "legacy";
 export interface ComplianceSchema {
     schemaName: string;
     description?: string;
+    /** The database the schema is available to: "GLOBAL" (every database) or one database id. */
+    databaseId?: string;
     schemaBody: ComplianceSchemaBody;
     /** Derived by the backend from the body; absent on a response that predates the field. */
     schemaFormat?: ComplianceSchemaFormat;
@@ -457,9 +459,18 @@ const responseErrored = (response: any): boolean =>
 
 // --- Schema Management ---
 
-export const fetchComplianceSchemas = async (): Promise<[boolean, ComplianceSchema[] | string]> => {
+/**
+ * The compliance schemas the caller may read. With `databaseId`, only the schemas that database may
+ * bind: the GLOBAL ones and those available to that database alone.
+ */
+export const fetchComplianceSchemas = async (
+    databaseId?: string
+): Promise<[boolean, ComplianceSchema[] | string]> => {
     try {
-        const response = await apiClient.get("compliance/schemas", {});
+        const response = await apiClient.get(
+            "compliance/schemas",
+            databaseId ? { queryStringParameters: { databaseId } } : {}
+        );
         if (
             response?.message &&
             (response.message.includes("error") || response.message.includes("Error"))

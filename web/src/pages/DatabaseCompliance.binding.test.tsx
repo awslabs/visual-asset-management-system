@@ -120,6 +120,16 @@ describe(`${Synonyms.Database} compliance schema binding control`, () => {
         expect(service().fetchComplianceSchemas).not.toHaveBeenCalled();
     });
 
+    it("offers only the schemas this database may bind, and says so", async () => {
+        mockAllowed = COMPLIANCE_ADMIN;
+        await mount();
+        // GLOBAL schemas and those available to this database: the listing is asked for db1's.
+        await waitFor(() => expect(service().fetchComplianceSchemas).toHaveBeenCalledWith("db1"));
+        expect(
+            screen.getByText(/Offered: the GLOBAL schemas and those available to this/)
+        ).toBeInTheDocument();
+    });
+
     it("binds the selected schema and re-reads the binding and the overview", async () => {
         mockAllowed = COMPLIANCE_ADMIN;
         service().bindSchemaToDatabase.mockResolvedValue([true, "Schema bound"]);

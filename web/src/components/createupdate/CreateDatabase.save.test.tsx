@@ -129,6 +129,11 @@ beforeEach(() => {
 afterEach(() => jest.restoreAllMocks());
 
 describe(`${Synonyms.Database} editor save and compliance schema binding`, () => {
+    it("lists only the schemas the database may bind", async () => {
+        await openEditor();
+        expect(compliance.fetchComplianceSchemas).toHaveBeenCalledWith("db-one");
+    });
+
     it("sends only the binding for a schema-only change", async () => {
         compliance.bindSchemaToDatabase.mockResolvedValue([true, "Schema bound"]);
         const { setOpen } = await openEditor();

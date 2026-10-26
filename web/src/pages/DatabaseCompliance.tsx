@@ -188,7 +188,7 @@ const DatabaseCompliancePage: React.FC = () => {
         if (!canBind) return;
         const loadSchemas = async () => {
             setLoadingSchemas(true);
-            const [success, result] = await fetchComplianceSchemas();
+            const [success, result] = await fetchComplianceSchemas(databaseId);
             if (success && Array.isArray(result)) {
                 setSchemaOptions(
                     result.map((s) => ({
@@ -328,7 +328,7 @@ const DatabaseCompliancePage: React.FC = () => {
                     header={
                         <Header
                             variant="h2"
-                            description={`The compliance schema the ${Synonyms.assets} of this ${Synonyms.database} are evaluated against. Schemas bound to individual ${Synonyms.assets} in the ${Synonyms.asset} editor take precedence.`}
+                            description={`The compliance schema the ${Synonyms.assets} of this ${Synonyms.database} are evaluated against. Schemas bound to individual ${Synonyms.assets} in the ${Synonyms.asset} editor take precedence. Offered: the GLOBAL schemas and those available to this ${Synonyms.database} only.`}
                         >
                             Schema Binding
                         </Header>

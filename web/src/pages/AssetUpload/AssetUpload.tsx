@@ -488,7 +488,9 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
         if (!canBindComplianceSchema) return;
         const loadSchemas = async () => {
             setLoadingSchemas(true);
-            const [success, result] = await fetchComplianceSchemas();
+            const [success, result] = await fetchComplianceSchemas(
+                assetDetailState?.databaseId || undefined
+            );
             if (success && Array.isArray(result)) {
                 setSchemaOptions(
                     result.map((s) => ({
@@ -501,7 +503,7 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
             setLoadingSchemas(false);
         };
         loadSchemas();
-    }, [canBindComplianceSchema]);
+    }, [canBindComplianceSchema, assetDetailState?.databaseId]);
 
     useEffect(() => {
         if (!assetDetailState.tags) {
@@ -694,7 +696,7 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
                 {canBindComplianceSchema && (
                     <FormField
                         label="Compliance Schema"
-                        description={`Override the ${Synonyms.database}-level compliance schema for this ${Synonyms.asset}. Leave empty to inherit from the ${Synonyms.database}.`}
+                        description={`Override the ${Synonyms.database}-level compliance schema for this ${Synonyms.asset}. Leave empty to inherit from the ${Synonyms.database}. Offered: the GLOBAL schemas and those available to the chosen ${Synonyms.database} only.`}
                         constraintText={`Optional. ${Synonyms.Asset}-level binding overrides ${Synonyms.database}-level.`}
                     >
                         <Select

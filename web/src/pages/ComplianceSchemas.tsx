@@ -18,6 +18,8 @@ import {
     Select,
     Flashbar,
     FlashbarProps,
+    RadioGroup,
+    SelectProps,
 } from "@cloudscape-design/components";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { usePageTitle } from "../hooks/usePageTitle";
@@ -31,6 +33,8 @@ import {
     ComplianceSchema,
 } from "../services/ComplianceService";
 import ComplianceSchemaEditor from "../components/compliance/ComplianceSchemaEditor";
+import ScopeBadge from "../components/common/ScopeBadge";
+import { fetchAllDatabases } from "../services/APIService";
 import { ROW_ACTIONS_STICKY_COLUMNS } from "../components/compliance/rowActions";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
 import { EXAMPLE_PIPELINE_RULE } from "../components/compliance/complianceSchemaRules";
@@ -40,6 +44,13 @@ import { EXAMPLE_PIPELINE_RULE } from "../components/compliance/complianceSchema
 export const COMPLIANCE_SCHEMAS_API_ROUTE = "/compliance/schemas";
 export const COMPLIANCE_SCHEMA_API_ROUTE = "/compliance/schemas/{schemaName}";
 export const COMPLIANCE_SWEEP_API_ROUTE = "/compliance/sweep/{schemaName}";
+// The database list behind the "one database" choice of a schema's availability.
+export const DATABASE_LIST_API_ROUTE = "/database";
+
+/** A schema's scope: the database it is available to, GLOBAL when it records none. */
+export const GLOBAL_SCOPE = "GLOBAL";
+export const schemaScope = (schema: ComplianceSchema): string => schema.databaseId || GLOBAL_SCOPE;
+const ALL_SCOPES_OPTION: SelectProps.Option = { value: "*", label: "Any availability" };
 
 /**
  * Width (px) of the Actions column: the Edit and Sweep inline links side by side (about 85 px of
@@ -431,6 +442,7 @@ export default function ComplianceSchemas() {
     const canCreate = canCallRoute("POST", COMPLIANCE_SCHEMAS_API_ROUTE);
     const canUpdate = canCallRoute("PUT", COMPLIANCE_SCHEMA_API_ROUTE);
     const canSweep = canCallRoute("POST", COMPLIANCE_SWEEP_API_ROUTE);
+    const canListDatabases = canCallRoute("GET", DATABASE_LIST_API_ROUTE);
     usePageTitle("Compliance Schemas");
 
     const [schemas, setSchemas] = useState<ComplianceSchema[]>([]);
@@ -447,6 +459,10 @@ export default function ComplianceSchemas() {
     const viewOnly = !!editingSchema && !canUpdate;
     const [formName, setFormName] = useState("");
     const [formDescription, setFormDescription] = useState("");
+    // Where the schema can be bound: GLOBAL (every database) or one database (only there).
+    const [formDatabaseId, setFormDatabaseId] = useState<string>(GLOBAL_SCOPE);
+    const [databaseOptions, setDatabaseOptions] = useState<SelectProps.Option[]>([]);
+    const [scopeFilter, setScopeFilter] = useState<SelectProps.Option>(ALL_SCOPES_OPTION);
     const [formBody, setFormBody] = useState(DEFAULT_TEMPLATE_BODY);
     const [selectedTemplate, setSelectedTemplate] = useState(DEFAULT_TEMPLATE_OPTION);
     const [formError, setFormError] = useState<string | null>(null);
@@ -499,11 +515,27 @@ export default function ComplianceSchemas() {
         setEditingSchema(null);
         setFormName("");
         setFormDescription("");
+        setFormDatabaseId(GLOBAL_SCOPE);
         setSelectedTemplate(DEFAULT_TEMPLATE_OPTION);
         setFormBody(DEFAULT_TEMPLATE_BODY);
         setFormError(null);
         setModalVisible(true);
     };
+
+    useEffect(() => {
+        if (!canListDatabases) return;
+        fetchAllDatabases().then((databases) => {
+            if (Array.isArray(databases)) {
+                setDatabaseOptions(
+                    databases
+                        .map((d: any) => d.databaseId)
+                        .filter((id: any) => typeof id === "string" && id !== GLOBAL_SCOPE)
+                        .sort()
+                        .map((id: string) => ({ value: id, label: id }))
+                );
+            }
+        });
+    }, [canListDatabases]);
 
     const handleTemplateChange = (option: any) => {
         setSelectedTemplate(option);
@@ -517,6 +549,7 @@ export default function ComplianceSchemas() {
         setEditingSchema(schema);
         setFormName(schema.schemaName);
         setFormDescription(schema.description || "");
+        setFormDatabaseId(schema.databaseId || GLOBAL_SCOPE);
         setFormBody(JSON.stringify(schema.schemaBody, null, 2));
         setFormError(null);
         setModalVisible(true);
@@ -527,6 +560,10 @@ export default function ComplianceSchemas() {
 
         if (!formName.trim()) {
             setFormError("Schema name is required");
+            return;
+        }
+        if (!formDatabaseId) {
+            setFormError(`Choose the ${Synonyms.database} the schema is available to`);
             return;
         }
 
@@ -550,6 +587,7 @@ export default function ComplianceSchemas() {
             const [success, result] = await updateComplianceSchema(editingSchema.schemaName, {
                 description: formDescription,
                 schemaBody: parsedBody,
+                databaseId: formDatabaseId,
             });
             if (success) {
                 addFlashMessage("success", `Schema "${editingSchema.schemaName}" updated`);
@@ -563,6 +601,7 @@ export default function ComplianceSchemas() {
                 schemaName: formName.trim(),
                 description: formDescription,
                 schemaBody: parsedBody,
+                databaseId: formDatabaseId,
             });
             if (success) {
                 addFlashMessage("success", `Schema "${formName}" created`);
@@ -587,9 +626,18 @@ export default function ComplianceSchemas() {
 
     const filteredSchemas = schemas.filter(
         (s) =>
-            s.schemaName.toLowerCase().includes(filterText.toLowerCase()) ||
-            (s.description || "").toLowerCase().includes(filterText.toLowerCase())
+            (s.schemaName.toLowerCase().includes(filterText.toLowerCase()) ||
+                (s.description || "").toLowerCase().includes(filterText.toLowerCase())) &&
+            (scopeFilter.value === ALL_SCOPES_OPTION.value || schemaScope(s) === scopeFilter.value)
     );
+    // The filter offers GLOBAL and every database a listed schema is available to.
+    const scopeFilterOptions: SelectProps.Option[] = [
+        ALL_SCOPES_OPTION,
+        { value: GLOBAL_SCOPE, label: "All databases (GLOBAL)" },
+        ...Array.from(new Set(schemas.map(schemaScope).filter((d) => d !== GLOBAL_SCOPE)))
+            .sort()
+            .map((d) => ({ value: d, label: d })),
+    ];
 
     return (
         <Box padding={{ top: "m", horizontal: "l" }}>
@@ -621,11 +669,19 @@ export default function ComplianceSchemas() {
                             </Box>
                         }
                         filter={
-                            <TextFilter
-                                filteringText={filterText}
-                                filteringPlaceholder="Find schemas"
-                                onChange={({ detail }) => setFilterText(detail.filteringText)}
-                            />
+                            <SpaceBetween direction="horizontal" size="xs">
+                                <TextFilter
+                                    filteringText={filterText}
+                                    filteringPlaceholder="Find schemas"
+                                    onChange={({ detail }) => setFilterText(detail.filteringText)}
+                                />
+                                <Select
+                                    ariaLabel="Filter by availability"
+                                    selectedOption={scopeFilter}
+                                    options={scopeFilterOptions}
+                                    onChange={({ detail }) => setScopeFilter(detail.selectedOption)}
+                                />
+                            </SpaceBetween>
                         }
                         columnDefinitions={[
                             {
@@ -638,6 +694,12 @@ export default function ComplianceSchemas() {
                                 ),
                                 sortingField: "schemaName",
                                 width: 200,
+                            },
+                            {
+                                id: "databaseId",
+                                header: "Available to",
+                                cell: (item) => <ScopeBadge databaseId={schemaScope(item)} />,
+                                sortingField: "databaseId",
                             },
                             {
                                 id: "description",
@@ -761,6 +823,53 @@ export default function ComplianceSchemas() {
                                 />
                             </FormField>
                         )}
+                        <FormField
+                            label="Available to"
+                            description={`Where the schema can be bound. A GLOBAL schema is offered in every ${Synonyms.database}; a schema for one ${Synonyms.database} is offered, and can be bound, only there. Its rules may name metadata schemas, workflows and pipelines of GLOBAL or of that ${Synonyms.database} only.`}
+                        >
+                            <SpaceBetween size="xs">
+                                <RadioGroup
+                                    ariaLabel="Available to"
+                                    value={formDatabaseId === GLOBAL_SCOPE ? GLOBAL_SCOPE : "one"}
+                                    onChange={({ detail }) =>
+                                        setFormDatabaseId(
+                                            detail.value === GLOBAL_SCOPE ? GLOBAL_SCOPE : ""
+                                        )
+                                    }
+                                    items={[
+                                        {
+                                            value: GLOBAL_SCOPE,
+                                            label: "All databases (GLOBAL)",
+                                            disabled: viewOnly,
+                                        },
+                                        {
+                                            value: "one",
+                                            label: `One ${Synonyms.database}`,
+                                            disabled: viewOnly,
+                                        },
+                                    ]}
+                                />
+                                {formDatabaseId !== GLOBAL_SCOPE && (
+                                    <Select
+                                        ariaLabel={`${Synonyms.Database} the schema is available to`}
+                                        selectedOption={
+                                            formDatabaseId
+                                                ? { value: formDatabaseId, label: formDatabaseId }
+                                                : null
+                                        }
+                                        options={databaseOptions}
+                                        filteringType="auto"
+                                        placeholder={`Choose a ${Synonyms.database}`}
+                                        disabled={viewOnly}
+                                        onChange={({ detail }) =>
+                                            setFormDatabaseId(
+                                                (detail.selectedOption.value as string) || ""
+                                            )
+                                        }
+                                    />
+                                )}
+                            </SpaceBetween>
+                        </FormField>
                         <FormField label="Description">
                             <Input
                                 value={formDescription}
@@ -778,6 +887,7 @@ export default function ComplianceSchemas() {
                                 onChange={setFormBody}
                                 readOnly={viewOnly}
                                 onRulesProblemChange={setRulesProblem}
+                                schemaDatabaseId={formDatabaseId || GLOBAL_SCOPE}
                             />
                         </FormField>
                     </SpaceBetween>
