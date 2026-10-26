@@ -158,6 +158,7 @@ describe("UploadManager completion", () => {
 
         expect(onUploadComplete.mock.calls[0][0]).toMatchObject({
             overallSuccess: true,
+            noFilesStored: false,
             message: "Upload completed successfully",
         });
         expect(screen.queryByText(/Failed/)).not.toBeInTheDocument();
@@ -173,11 +174,14 @@ describe("UploadManager completion", () => {
 
         // The file's row, not only the summary, says it was not stored and why.
         expect(screen.getByText(`Failed: ${REFUSAL}`)).toBeInTheDocument();
-        // The completion step is not reported as plain Completed, and neither is the result.
-        expect(screen.getByText("Completed with Errors")).toBeInTheDocument();
+        // It was the only file, so nothing was stored: the completion step and the result say the
+        // upload failed.
+        expect(screen.getByText("Upload failed")).toBeInTheDocument();
+        expect(screen.queryByText("Completed with Errors")).not.toBeInTheDocument();
         const finalResponse = onUploadComplete.mock.calls[0][0];
         expect(finalResponse.overallSuccess).toBe(false);
-        expect(finalResponse.message).not.toBe("Upload completed successfully");
+        expect(finalResponse.noFilesStored).toBe(true);
+        expect(finalResponse.message).toBe("Upload failed: none of the 1 file(s) were stored");
         expect(finalResponse.fileResults).toEqual([
             expect.objectContaining({ relativeKey: KEY, success: false, error: REFUSAL }),
         ]);

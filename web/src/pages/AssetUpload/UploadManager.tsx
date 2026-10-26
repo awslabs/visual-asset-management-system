@@ -34,6 +34,7 @@ import {
 import { useFilePartsUpload } from "./hooks/useFilePartsUpload";
 import { useAssetOperations } from "./hooks/useAssetOperations";
 import { formatRetryMessage } from "./uploadRetry";
+import { storedNoFile, UploadOutcome } from "./uploadOutcome";
 import { PREVIEW_FILE_PATTERN } from "../../common/constants/fileFormats";
 import Synonyms from "../../synonyms";
 
@@ -41,7 +42,7 @@ interface UploadManagerProps {
     assetDetail: AssetDetail;
     metadata: Metadata;
     fileItems: FileUploadTableItem[];
-    onUploadComplete: (response: CompleteUploadResponse) => void;
+    onUploadComplete: (response: UploadOutcome) => void;
     onError: (error: Error) => void;
     isExistingAsset?: boolean;
     onCancel?: () => void;
@@ -54,7 +55,16 @@ interface UploadState {
     metadataStatus: "pending" | "in-progress" | "completed" | "failed" | "skipped";
     uploadInitStatus: "pending" | "in-progress" | "completed" | "failed" | "skipped";
     uploadStatus: "pending" | "in-progress" | "completed" | "failed" | "skipped";
-    completionStatus: "pending" | "in-progress" | "completed" | "failed" | "partial" | "skipped";
+    // "nothing-stored": every sequence finished but no file was stored. Not "failed", which offers
+    // the completion retry for failed sequences; there are none to retry here.
+    completionStatus:
+        | "pending"
+        | "in-progress"
+        | "completed"
+        | "failed"
+        | "partial"
+        | "nothing-stored"
+        | "skipped";
     createdAssetId?: string;
     errors: { step: string; message: string }[];
     overallProgress: number;
@@ -780,23 +790,36 @@ export default function UploadManager({
             const hasFailedFiles =
                 serverOnlyRejections.length > 0 ||
                 fileUploadItems.some((item) => item.status === "Failed");
+            // An upload that stored none of its files failed as a whole and says so; one that
+            // stored some of them is completed with errors.
+            const noFilesStored = storedNoFile(
+                fileUploadItems,
+                cancelledFiles,
+                new Set(serverRejectedFiles.keys())
+            );
 
             setUploadState((prev) => ({
                 ...prev,
-                completionStatus: hasSkipped || hasFailedFiles ? "partial" : "completed",
+                completionStatus: noFilesStored
+                    ? "nothing-stored"
+                    : hasSkipped || hasFailedFiles
+                    ? "partial"
+                    : "completed",
                 finalCompletionTriggered: true,
             }));
 
             const firstUploadId = sequenceUploadIds.values().next().value;
-            const finalResponse: CompleteUploadResponse = {
+            const finalResponse: UploadOutcome = {
                 assetId: uploadState.createdAssetId || assetDetail.assetId || "",
-                message:
-                    hasSkipped || hasFailedFiles || cancelledFiles.size > 0
-                        ? `Upload completed with ${failedFileResults.length} file(s) failed/cancelled`
-                        : "Upload completed successfully",
+                message: noFilesStored
+                    ? `Upload failed: none of the ${fileUploadItems.length} file(s) were stored`
+                    : hasSkipped || hasFailedFiles || cancelledFiles.size > 0
+                    ? `Upload completed with ${failedFileResults.length} file(s) failed/cancelled`
+                    : "Upload completed successfully",
                 uploadId: firstUploadId || "no-upload-required",
                 fileResults: failedFileResults,
                 overallSuccess: !hasSkipped && failedFileResults.length === 0,
+                noFilesStored,
                 largeFileAsynchronousHandling: uploadState.largeFileAsynchronousHandling,
             };
             onUploadComplete(finalResponse);
@@ -810,7 +833,7 @@ export default function UploadManager({
         uploadState.largeFileAsynchronousHandling,
         assetDetail.assetId,
         sequenceUploadIds,
-        cancelledFiles.size,
+        cancelledFiles,
         fileUploadItems,
         serverRejectedFiles,
         onUploadComplete,
@@ -1543,6 +1566,8 @@ export default function UploadManager({
             uploadId: "no-upload-required",
             fileResults: failedFileResults,
             overallSuccess: false,
+            // No file is uploaded until every sequence has initialized, so none was stored.
+            noFilesStored: fileItems.length > 0,
         });
     }, [fileItems, uploadState.createdAssetId, assetDetail.assetId, onUploadComplete]);
 
@@ -1861,6 +1886,7 @@ function getStatusIndicatorType(
         case "partial":
             return "warning";
         case "failed":
+        case "nothing-stored":
             return "error";
         default:
             return "info";
@@ -1877,6 +1903,8 @@ function getStatusText(status: string): string {
             return "Completed";
         case "partial":
             return "Completed with Errors";
+        case "nothing-stored":
+            return "Upload failed";
         case "failed":
             return "Failed";
         case "skipped":
