@@ -142,6 +142,7 @@ Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed 
 -   [ ] **Test Authorization**: Test Casbin enforcement scenarios
 -   [ ] **Test Validation**: Test Pydantic model validation
 -   [ ] **Mock AWS Services**: Use proper mocking for DynamoDB, S3, SNS
+-   [ ] **Keep authorizer tests offline**: `tests/common/auth/` and `tests/handlers/auth/` take the CloudFront address-list refresh in `common/auth/clientIp.py` offline through an autouse fixture (`backend/tests/cloudFrontRangesStub.py`); use its `CLOUDFRONT_PEER_V4` / `CLOUDFRONT_PEER_V6` for a CloudFront peer instead of a hard-coded edge address; the snapshot is regenerated with `python backend/scripts/generateCloudFrontOriginFacingRanges.py` from the repo root (outside the Lambda asset tree), and `tests/common/auth/test_cloudFrontOriginFacingRanges.py` fails on a hand edit
 -   [ ] **Run All Tests**: Ensure `pytest` passes with coverage
 
 #### **Step 6: Frontend Integration**

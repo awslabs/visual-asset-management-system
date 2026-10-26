@@ -7,11 +7,17 @@ has no ``auth`` subpackage, so the real ``common.auth.*`` modules these tests
 exercise are not importable by their absolute names. Register them here (real
 modules, loaded by path) at collection time, scoped to this directory only so
 the broader suite's mock wiring is untouched. clientIp must be registered before
-authorizerCore (authorizerCore imports ``from common.auth.clientIp import ...``).
+authorizerCore (authorizerCore imports ``from common.auth.clientIp import ...``), and the
+CloudFront origin-facing snapshot before clientIp (clientIp imports it).
+
+Every test here runs with the CloudFront address-list refresh offline
+(``backend/tests/cloudFrontRangesStub.py``).
 """
 import os
 import sys
 import importlib.util
+
+import pytest
 
 
 def _load(module_name, file_path):
@@ -36,6 +42,18 @@ _common_dir = os.path.abspath(_common_dir)
 if "common.auth" not in sys.modules:
     _load("common.auth", os.path.join(_auth_dir, "__init__.py"))
 _load("common.resourceNames", os.path.join(_common_dir, "resourceNames.py"))
+_load(
+    "common.auth.cloudFrontOriginFacingRanges",
+    os.path.join(_auth_dir, "cloudFrontOriginFacingRanges.py"),
+)
 _load("common.auth.clientIp", os.path.join(_auth_dir, "clientIp.py"))
 _load("common.auth.apiEvent", os.path.join(_auth_dir, "apiEvent.py"))
 _load("common.auth.authorizerCore", os.path.join(_auth_dir, "authorizerCore.py"))
+
+from backend.tests.cloudFrontRangesStub import isolate_refresh  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def cloudfront_refresh_offline(monkeypatch):
+    """No test here reaches the network for the CloudFront origin-facing address list."""
+    return isolate_refresh(monkeypatch)
