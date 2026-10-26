@@ -335,7 +335,7 @@ describe("Auth external OAuth access token without the configured user id claim"
         mockGetCurrentUser.mockRejectedValue(new Error("not signed in"));
         mockGetSecureConfig.mockResolvedValue(SECURE_CONFIG);
         // jsdom implements no navigation; the sign-out's redirect only logs.
-        jest.spyOn(console, "error").mockImplementation(() => {});
+        jest.spyOn(console, "error").mockImplementation(() => undefined);
     });
 
     afterEach(() => {
@@ -386,7 +386,7 @@ describe("Auth external OAuth access token without the configured user id claim"
         renderAuth();
 
         await waitFor(() =>
-            expect(JSON.parse(localStorage.getItem("user")!).username).toBe(
+            expect(JSON.parse(localStorage.getItem("user") ?? "{}").username).toBe(
                 "first.last@example.com"
             )
         );

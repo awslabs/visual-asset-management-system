@@ -480,28 +480,6 @@ const Auth: React.FC<AuthProps> = (props) => {
         setIsLoading(false);
     };
 
-    //External OAUTH Function
-    //Re-derive the stored user from the stored access token with the cached config's user id
-    //claim. A changed user drops the cached login profile, which the profile effect then fetches
-    //again for the new id. False when the token lacks the claim and the session was ended.
-    const keepExternalOAuthUser = (): boolean => {
-        try {
-            if (syncExternalOAuthUser()) {
-                appCache.removeItem("loginProfile");
-            }
-            return true;
-        } catch (error) {
-            if (error instanceof MissingUserIdClaimError) {
-                endSessionForMissingUserIdClaim(error.claim);
-                return false;
-            }
-            // A stored token that cannot be decoded is left to the session validation and the
-            // API. A fixed message: a decoding error can quote the token's payload.
-            console.error("The stored access token could not be decoded.");
-            return true;
-        }
-    };
-
     //Both Affect
     //Fetch && Setup Initial global configurations
     useEffect(() => {
@@ -573,8 +551,12 @@ const Auth: React.FC<AuthProps> = (props) => {
                             // External OAuth: a session signed in on the cached config keeps the
                             // user id claim the backend now names, so the web app and the API
                             // agree on the user, or ends when its token lacks that claim.
-                            if (window.DISABLE_COGNITO && !keepExternalOAuthUser()) {
-                                return;
+                            if (window.DISABLE_COGNITO) {
+                                const missingClaim = syncStoredExternalOAuthUser();
+                                if (missingClaim) {
+                                    endSessionForMissingUserIdClaim(missingClaim);
+                                    return;
+                                }
                             }
                             setConfig(merged);
                         }
@@ -659,9 +641,12 @@ const Auth: React.FC<AuthProps> = (props) => {
                 }
                 if (valid) {
                     // The stored token must carry the configured user id claim as well.
-                    if (keepExternalOAuthUser()) {
-                        setisLoggedIn(true);
+                    const missingClaim = syncStoredExternalOAuthUser();
+                    if (missingClaim) {
+                        endSessionForMissingUserIdClaim(missingClaim);
+                        return;
                     }
+                    setisLoggedIn(true);
                 } else {
                     setisLoggedIn(false);
                     resetSession();
@@ -1330,6 +1315,26 @@ const resetSession = () => {
     localStorage.removeItem("email");
     appCache.removeItem("loginProfile");
     appCache.removeItem(ALLOWED_API_ROUTES_CACHE_KEY);
+};
+
+// Re-derives the stored user from the stored access token with the cached config's user id
+// claim. A changed user drops the cached login profile, which the profile effect then fetches
+// again for the new id. Returns the claim when the token lacks it, else null.
+const syncStoredExternalOAuthUser = (): string | null => {
+    try {
+        if (syncExternalOAuthUser()) {
+            appCache.removeItem("loginProfile");
+        }
+        return null;
+    } catch (error) {
+        if (error instanceof MissingUserIdClaimError) {
+            return error.claim;
+        }
+        // A stored token that cannot be decoded is left to the session validation and the API.
+        // A fixed message: a decoding error can quote the token's payload.
+        console.error("The stored access token could not be decoded.");
+        return null;
+    }
 };
 
 // Wrapper for setExternalOauth2Token that also handles timer restart and error clearing
