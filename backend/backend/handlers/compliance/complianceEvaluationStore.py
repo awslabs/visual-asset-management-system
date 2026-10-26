@@ -61,6 +61,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 from common.apiRoutes import API_EXECUTE_WORKFLOW
 from common.compliance import evaluationEngine as engine
@@ -155,6 +156,7 @@ try:
     pipeline_table_name = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
     pipeline_templates_table_name = get_table_name(ResourceKeys.PIPELINE_TEMPLATES_STORAGE_TABLE)
     s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
     # Set only on the Lambdas that launch pipeline-rule executions (evaluate service, trigger).
     execute_workflow_function_name = os.environ.get("EXECUTE_WORKFLOW_FUNCTION_NAME", "")
 except Exception as e:
@@ -176,6 +178,7 @@ workflow_table = dynamodb.Table(workflow_table_name)
 pipeline_table = dynamodb.Table(pipeline_table_name)
 pipeline_templates_table = dynamodb.Table(pipeline_templates_table_name)
 s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
+database_table = dynamodb.Table(database_table_name)
 
 
 def now_iso() -> str:
@@ -217,6 +220,72 @@ def get_asset_item(database_id: str, asset_id: str) -> Optional[Dict[str, Any]]:
     """The asset row, or None."""
     return asset_table.get_item(
         Key={"databaseId": database_id, "assetId": asset_id}).get("Item")
+
+
+def get_database_item(database_id: str) -> Optional[Dict[str, Any]]:
+    """The database row (it carries the database binding, `complianceSchemaName`), or None."""
+    return database_table.get_item(Key={"databaseId": database_id}).get("Item")
+
+
+# --- Database binding: assets registered under it ---
+
+# `schemaSource` of an asset-state row that inherits its database's binding.
+SCHEMA_SOURCE_DATABASE = "database"
+
+
+def register_under_database_binding(database_id: str, asset_id: str, schema_name: str) -> None:
+    """Record that the asset is governed by its database's binding `schema_name`, as the binding
+    does for the assets it finds when it is made: `schemaName`, `schemaSource` `database`, and
+    `pending_evaluation` unless the row already records a state. Conditional on the row naming no
+    schema yet, so an asset override or a registration that raced this one is left as it is; the
+    rest of an existing row (an on-demand evaluation's state) is kept."""
+    now = now_iso()
+    try:
+        asset_state_table.update_item(
+            Key={"databaseId": database_id, "assetId": asset_id},
+            UpdateExpression=("SET schemaName = :schema, schemaSource = :source, "
+                              "complianceState = if_not_exists(complianceState, :pending), "
+                              "registeredAt = if_not_exists(registeredAt, :now), updatedAt = :now"),
+            ConditionExpression="attribute_not_exists(schemaName)",
+            ExpressionAttributeValues={":schema": schema_name, ":source": SCHEMA_SOURCE_DATABASE,
+                                       ":pending": engine.STATE_PENDING_EVALUATION, ":now": now},
+        )
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
+
+
+def databases_bound_to_schema(schema_name: str) -> List[str]:
+    """The ids of the databases whose binding is `schema_name` (the database rows carry it; the
+    database table is small and has no index on it, so it is scanned with a filter, paged)."""
+    database_ids = []
+    scan_kwargs = {"FilterExpression": Attr("complianceSchemaName").eq(schema_name),
+                   "ProjectionExpression": "databaseId"}
+    while True:
+        response = database_table.scan(**scan_kwargs)
+        database_ids.extend(item["databaseId"] for item in response.get("Items", [])
+                            if item.get("databaseId"))
+        if "LastEvaluatedKey" not in response:
+            return database_ids
+        scan_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+
+
+def register_unrecorded_assets(database_id: str, schema_name: str) -> int:
+    """Register under the database binding every live asset of the database that has no
+    asset-state row yet (`register_under_database_binding`); returns how many were registered. An
+    asset created after the binding in a database whose auto-evaluation is off is registered by the
+    trigger when it is created; this catches one whose creation event was not processed."""
+    recorded = {row["assetId"] for row in query_all_items(
+        asset_state_table, KeyConditionExpression=Key("databaseId").eq(database_id),
+        ProjectionExpression="assetId")}
+    registered = 0
+    for row in query_all_items(asset_table, KeyConditionExpression=Key("databaseId").eq(database_id),
+                               ProjectionExpression="assetId"):
+        asset_id = row.get("assetId")
+        if asset_id and asset_id not in recorded:
+            register_under_database_binding(database_id, asset_id, schema_name)
+            registered += 1
+    return registered
 
 
 def get_compliance_record(database_id: str, asset_id: str,

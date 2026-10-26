@@ -228,6 +228,12 @@ def evaluate_asset(event, database_id, asset_id, request: EvaluateAssetRequestMo
     current_state = store.get_compliance_record(database_id, asset_id) or {}
     schema_name = request.schemaName or current_state.get("schemaName")
     if not schema_name:
+        # The database binding governs every asset of the database, whatever its auto-evaluation
+        # says: an asset it does not record yet is registered under it and evaluated against it.
+        schema_name = (store.get_database_item(database_id) or {}).get("complianceSchemaName")
+        if schema_name:
+            store.register_under_database_binding(database_id, asset_id, schema_name)
+    if not schema_name:
         return general_error(body={
             "message": "No schema specified and the asset has no bound schema",
         }, event=event)
@@ -287,11 +293,21 @@ def sweep_schema(event, schema_name):
     if store.load_schema_item(schema_name) is None:
         return general_error(body={"message": "Schema not found"}, event=event)
 
+    # The evaluation object depends only on the database, so one verdict serves every asset in it.
+    database_allowed = {}
+    # A database binding governs every asset of the database: an asset it does not record yet (one
+    # whose creation event was not processed) is registered under it first, in each bound database
+    # the caller may evaluate, so the sweep reaches it.
+    registered = 0
+    for database_id in store.databases_bound_to_schema(schema_name):
+        if database_id not in database_allowed:
+            database_allowed[database_id] = _enforce_evaluation(database_id, "POST")
+        if database_allowed[database_id]:
+            registered += store.register_unrecorded_assets(database_id, schema_name)
+
     bound_assets = _bound_assets_pending_first(schema_name)
     actor = claims_and_roles["tokens"][0]
 
-    # The evaluation object depends only on the database, so one verdict serves every asset in it.
-    database_allowed = {}
     triggered = []
     skipped = 0
     superseded = 0
@@ -326,6 +342,7 @@ def sweep_schema(event, schema_name):
         triggered.append(entry)
 
     remaining = beyond_cap + beyond_budget
+    logger.info(f"Sweep of schema {schema_name}: {registered} registered under a database binding")
     logger.info(f"Sweep of schema {schema_name}: {len(triggered)} triggered ({superseded} "
                 f"superseded by a newer evaluation), {skipped} skipped, {remaining} remaining "
                 f"({beyond_cap} beyond the cap, {beyond_budget} beyond the time budget)")

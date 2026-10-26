@@ -200,6 +200,9 @@ export function buildComplianceEvaluateServiceFunction(
     storageResources.dynamo.complianceEvaluationStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.complianceAuditStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.complianceCascadeStorageTable.grantReadWriteData(fun);
+    // An evaluation without a schema falls back to the database binding, and a sweep finds the
+    // databases bound to its schema, both on the database rows.
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     grantEvaluationEngineReads(fun, storageResources);
     executeWorkflowFunction.grantInvoke(fun);
     grantPublishToAssetTopics(fun, config);

@@ -44,6 +44,18 @@ EVALUATION_RESULT = {"evaluationId": "eval-1", "verdict": "compliant",
                      "complianceState": "compliant", "ruleResults": [], "pipelineRulesPending": 0}
 
 
+@pytest.fixture(autouse=True)
+def database_binding():
+    """The store's database-binding reads, stubbed for every test here: no database row, no
+    database bound to the swept schema. A test of the binding fallback configures the mocks."""
+    with patch(f"{STORE}.get_database_item", return_value=None) as get_database_item, \
+            patch(f"{STORE}.databases_bound_to_schema", return_value=[]) as bound, \
+            patch(f"{STORE}.register_unrecorded_assets", return_value=0) as register_unrecorded, \
+            patch(f"{STORE}.register_under_database_binding") as register:
+        yield {"get_database_item": get_database_item, "databases_bound_to_schema": bound,
+               "register_unrecorded_assets": register_unrecorded, "register": register}
+
+
 def _superseded_result(evaluation_id):
     """What the store returns for a run that found a newer evaluation of the asset already started
     (the store's own builder, so the shape cannot drift from it)."""

@@ -402,6 +402,8 @@ def _process_stream_record(message, batch, message_id=""):
         return
     if database_id.endswith(ARCHIVED_DATABASE_SUFFIX):
         return
+    if message.get("eventName") == "INSERT":
+        batch.add_candidate(message_id, _register_new_asset, database_id, asset_id)
 
     is_modify = message.get("eventName") == "MODIFY"
     if is_modify and _image_change_source(new_image) == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
@@ -425,6 +427,27 @@ def _process_stream_record(message, batch, message_id=""):
     batch.add_candidate(message_id, _process_compliance_event, database_id, asset_id,
                         completion_time=stamp_time, path=COVERAGE_PATH_STREAM,
                         stamp_attribute=LAST_CHANGE_AT_ATTRIBUTE)
+
+
+def _register_new_asset(database_id, asset_id, batch=None):
+    """A new asset of a bound database whose auto-evaluation is off: register it under the
+    database binding without evaluating it, so `evaluate`, the sweep and the database overview reach
+    it (the binding governs every asset of the database whatever auto-evaluation says). With
+    auto-evaluation on, the evaluation that follows registers it (`check_default_schema`). A
+    database without a binding, or an asset already recorded, costs the database read only, or one
+    consistent read more."""
+    batch = batch if batch is not None else TriggerBatch()
+    db_item = batch.database_item(database_id)
+    if not db_item or db_item.get("complianceAutoEval") is True:
+        return
+    schema_name = db_item.get("complianceSchemaName")
+    if not schema_name:
+        return
+    if store.get_compliance_record(database_id, asset_id, consistent_read=True):
+        return
+    store.register_under_database_binding(database_id, asset_id, schema_name)
+    logger.info(f"Registered asset {database_id}:{asset_id} under the database schema "
+                f"'{schema_name}' (auto-evaluation off; not evaluated)")
 
 
 def live_database_id(database_id):
