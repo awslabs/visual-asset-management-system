@@ -19,8 +19,11 @@
 
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
+import { signOut } from "aws-amplify/auth";
 import { appCache } from "../services/appCache";
 import { fetchLoginProfile } from "../services/APIService";
+import { MISSING_USER_ID_CLAIM_KEY } from "../utils/authTokenUtils";
+import { ensureValidSession } from "../utils/sessionManager";
 import Auth from "./Auth";
 
 /**
@@ -65,8 +68,13 @@ jest.mock("aws-amplify/auth", () => ({
 
 jest.mock("aws-amplify/utils", () => ({ Hub: { listen: jest.fn(() => () => {}) } }));
 
+const mockGetTokenFromCodeRedirect = jest.fn();
 jest.mock("@badgateway/oauth2-client", () => ({
-    OAuth2Client: class {},
+    OAuth2Client: class {
+        authorizationCode = {
+            getTokenFromCodeRedirect: (...args: any[]) => mockGetTokenFromCodeRedirect(...args),
+        };
+    },
     generateCodeVerifier: jest.fn(),
 }));
 
@@ -288,5 +296,124 @@ describe("Auth external OAuth user id follows the refreshed amplify-config", () 
             expect(fetchLoginProfile).toHaveBeenCalledWith({ username: "plain-name" })
         );
         expect(JSON.parse(localStorage.getItem("user")!).username).toBe("plain-name");
+    });
+});
+
+/**
+ * With `externalOAuthIdpUserIdClaim` set, an access token without that claim opens no session:
+ * the web application signs out and the sign-in page names the missing claim. The API refuses
+ * such a token on every request, so a session would only show an empty user name. Applies to
+ * the code exchange, page load and the amplify-config refresh. Durable (root CLAUDE.md Rule 13).
+ */
+describe("Auth external OAuth access token without the configured user id claim", () => {
+    const CLAIM_MESSAGE = /access token has no "email" claim/;
+    const LACKS_EMAIL = { sub: "sub-1", username: "plain-name" };
+    const jwtWith = (claims: Record<string, unknown>) => "h." + btoa(JSON.stringify(claims)) + ".s";
+    const OAUTH2_CONFIG_EMAIL = { ...OAUTH2_CONFIG, externalOAuthIdpUserIdClaim: "email" };
+
+    const storeToken = (claims: Record<string, unknown>) =>
+        localStorage.setItem(
+            "oauth2_token",
+            JSON.stringify({
+                accessToken: jwtWith(claims),
+                refreshToken: "r1",
+                expiresAt: Date.now() + 3_600_000,
+            })
+        );
+
+    const expectSignedOutForClaim = async () => {
+        await waitFor(() => expect(localStorage.getItem(MISSING_USER_ID_CLAIM_KEY)).toBe("email"));
+        expect(localStorage.getItem("oauth2_token")).toBeNull();
+        expect(localStorage.getItem("user")).toBeNull();
+        expect(await screen.findByText(CLAIM_MESSAGE)).toBeInTheDocument();
+        expect(screen.queryByTestId("app-children")).not.toBeInTheDocument();
+    };
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        localStorage.clear();
+        mockGetCurrentUser.mockRejectedValue(new Error("not signed in"));
+        mockGetSecureConfig.mockResolvedValue(SECURE_CONFIG);
+        // jsdom implements no navigation; the sign-out's redirect only logs.
+        jest.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        (console.error as jest.Mock).mockRestore();
+    });
+
+    it("the sign-in page names the claim after the sign-out", async () => {
+        appCache.setItem("config", OAUTH2_CONFIG_EMAIL);
+        localStorage.setItem(MISSING_USER_ID_CLAIM_KEY, "email");
+        (ensureValidSession as jest.Mock).mockResolvedValueOnce(false);
+        mockGetAmplifyConfig.mockResolvedValue({ ...OAUTH2_CONFIG_EMAIL });
+
+        renderAuth();
+
+        expect(await screen.findByText(CLAIM_MESSAGE)).toBeInTheDocument();
+        expect(screen.queryByTestId("app-children")).not.toBeInTheDocument();
+    });
+
+    it("the code exchange stores no session and signs out", async () => {
+        appCache.setItem("config", OAUTH2_CONFIG_EMAIL);
+        localStorage.setItem("auth_state", "http://localhost/#/assets");
+        localStorage.setItem("code_verifier", "verifier");
+        mockGetAmplifyConfig.mockResolvedValue({ ...OAUTH2_CONFIG_EMAIL });
+        mockGetTokenFromCodeRedirect.mockResolvedValue({
+            accessToken: jwtWith(LACKS_EMAIL),
+            refreshToken: "r1",
+            expiresAt: Date.now() + 3_600_000,
+        });
+
+        renderAuth();
+
+        await waitFor(() => expect(mockGetTokenFromCodeRedirect).toHaveBeenCalled());
+        await expectSignedOutForClaim();
+        expect(signOut).toHaveBeenCalled();
+    });
+
+    it("positive control: a code exchange whose token carries the claim stores the session", async () => {
+        appCache.setItem("config", OAUTH2_CONFIG_EMAIL);
+        localStorage.setItem("auth_state", "http://localhost/#/assets");
+        localStorage.setItem("code_verifier", "verifier");
+        mockGetAmplifyConfig.mockResolvedValue({ ...OAUTH2_CONFIG_EMAIL });
+        mockGetTokenFromCodeRedirect.mockResolvedValue({
+            accessToken: jwtWith({ ...LACKS_EMAIL, email: "first.last@example.com" }),
+            refreshToken: "r1",
+            expiresAt: Date.now() + 3_600_000,
+        });
+
+        renderAuth();
+
+        await waitFor(() =>
+            expect(JSON.parse(localStorage.getItem("user")!).username).toBe(
+                "first.last@example.com"
+            )
+        );
+        expect(localStorage.getItem(MISSING_USER_ID_CLAIM_KEY)).toBeNull();
+    });
+
+    it("a page load with a stored token that lacks the claim opens no session", async () => {
+        appCache.setItem("config", OAUTH2_CONFIG_EMAIL);
+        storeToken(LACKS_EMAIL);
+        localStorage.setItem("user", JSON.stringify({ username: "" }));
+        mockGetAmplifyConfig.mockResolvedValue({ ...OAUTH2_CONFIG_EMAIL });
+
+        renderAuth();
+
+        await expectSignedOutForClaim();
+        expect(fetchLoginProfile).not.toHaveBeenCalled();
+    });
+
+    it("an amplify-config refresh that names a claim the stored token lacks signs out", async () => {
+        appCache.setItem("config", OAUTH2_CONFIG); // cached: no user id claim
+        storeToken(LACKS_EMAIL);
+        localStorage.setItem("user", JSON.stringify({ username: "plain-name" }));
+        mockGetAmplifyConfig.mockResolvedValue({ ...OAUTH2_CONFIG_EMAIL });
+
+        renderAuth();
+
+        await expectSignedOutForClaim();
+        expect(signOut).toHaveBeenCalled();
     });
 });

@@ -15,6 +15,8 @@ import {
     ensureSessionValid,
     getDualValidAccessToken,
     getExternalOAuth2Token,
+    MISSING_USER_ID_CLAIM_KEY,
+    MissingUserIdClaimError,
     resolveExternalUserId,
     setOAuth2ClientInstance,
     setExternalOauth2Token,
@@ -275,9 +277,35 @@ describe("external OAuth user id", () => {
 
         it("does not fall back when the token lacks the configured claim", () => {
             withClaimSetting("email");
-            signIn({ username: "plain-name", sub: "sub-1" });
-            expect(storedUser()).toBe("");
+            expect(() => signIn({ username: "plain-name", sub: "sub-1" })).toThrow(
+                MissingUserIdClaimError
+            );
         });
+
+        it.each([
+            ["absent", {}],
+            ["empty", { email: "" }],
+            ["a number", { email: 7 }],
+            ["a list", { email: ["first.last@example.com"] }],
+        ])(
+            "stores no session when the configured claim is %s",
+            (_label, emailClaim: Record<string, unknown>) => {
+                withClaimSetting("email");
+                let thrown: unknown;
+                try {
+                    signIn({ username: "plain-name", sub: "sub-1", ...emailClaim });
+                } catch (error) {
+                    thrown = error;
+                }
+                expect(thrown).toBeInstanceOf(MissingUserIdClaimError);
+                expect((thrown as MissingUserIdClaimError).claim).toBe("email");
+                // The claim name only: no token or claim value in the message.
+                expect((thrown as Error).message).toContain('"email"');
+                expect((thrown as Error).message).not.toContain("plain-name");
+                expect(localStorage.getItem("oauth2_token")).toBeNull();
+                expect(localStorage.getItem("user")).toBeNull();
+            }
+        );
 
         it("the refresh path applies the same claim", async () => {
             withClaimSetting("email");
@@ -298,6 +326,76 @@ describe("external OAuth user id", () => {
             expect(refreshToken).toHaveBeenCalled();
             expect(storedUser()).toBe("new@example.com");
         });
+
+        describe("a refreshed token without the configured claim ends the session", () => {
+            const LACKS_EMAIL = { "cognito:username": "cognito-name", sub: "sub-1" };
+
+            const signedInThenRefreshesTo = (
+                refreshed: Record<string, unknown>,
+                expiresAt: number
+            ) => {
+                withClaimSetting("email");
+                signIn({ sub: "sub-1", email: "old@example.com" });
+                localStorage.setItem(
+                    "oauth2_token",
+                    JSON.stringify({ ...getExternalOAuth2Token(), expiresAt })
+                );
+                const refreshToken = jest.fn().mockResolvedValue({
+                    accessToken: jwtWith(refreshed),
+                    refreshToken: "r2",
+                    expiresAt: Date.now() + 60_000,
+                });
+                setOAuth2ClientInstance({ refreshToken } as any);
+                return refreshToken;
+            };
+
+            const expectSessionEndedForClaim = () => {
+                expect(localStorage.getItem("oauth2_token")).toBeNull();
+                expect(localStorage.getItem("user")).toBeNull();
+                // sessionManager.logoutExpired reads this to show the claim instead of "expired".
+                expect(localStorage.getItem(MISSING_USER_ID_CLAIM_KEY)).toBe("email");
+            };
+
+            beforeEach(() => {
+                jest.spyOn(console, "error").mockImplementation(() => {});
+            });
+
+            afterEach(() => {
+                (console.error as jest.Mock).mockRestore();
+            });
+
+            it("on validation after expiry", async () => {
+                const refreshToken = signedInThenRefreshesTo(LACKS_EMAIL, 1);
+
+                expect(await ensureSessionValid()).toBe(false);
+                expect(refreshToken).toHaveBeenCalled();
+                expectSessionEndedForClaim();
+            });
+
+            it("on a proactive refresh while the access token is still valid", async () => {
+                // Unlike a transient IdP failure, keeping the old token would only delay the end.
+                const refreshToken = signedInThenRefreshesTo(LACKS_EMAIL, Date.now() + 120_000);
+
+                expect(await ensureSessionValid(true)).toBe(false);
+                expect(refreshToken).toHaveBeenCalled();
+                expectSessionEndedForClaim();
+            });
+
+            it("on an API call's token fetch", async () => {
+                signedInThenRefreshesTo(LACKS_EMAIL, 1);
+
+                await expect(getDualValidAccessToken()).rejects.toThrow();
+                expectSessionEndedForClaim();
+            });
+
+            it("positive control: a refreshed token with the claim keeps the session", async () => {
+                signedInThenRefreshesTo({ ...LACKS_EMAIL, email: "new@example.com" }, 1);
+
+                expect(await ensureSessionValid()).toBe(true);
+                expect(storedUser()).toBe("new@example.com");
+                expect(localStorage.getItem(MISSING_USER_ID_CLAIM_KEY)).toBeNull();
+            });
+        });
     });
 
     describe("syncExternalOAuthUser", () => {
@@ -316,6 +414,15 @@ describe("external OAuth user id", () => {
             withClaimSetting("email");
             expect(syncExternalOAuthUser()).toBe(false);
             expect(localStorage.getItem("user")).toBeNull();
+        });
+
+        it("refuses the stored token when the newly named claim is missing from it", () => {
+            withClaimSetting(undefined);
+            signIn({ username: "plain-name", sub: "sub-1" });
+            expect(storedUser()).toBe("plain-name");
+
+            withClaimSetting("email"); // the refreshed amplify-config names a claim the token lacks
+            expect(() => syncExternalOAuthUser()).toThrow(MissingUserIdClaimError);
         });
     });
 

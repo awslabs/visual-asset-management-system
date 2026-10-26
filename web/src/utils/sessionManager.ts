@@ -4,7 +4,11 @@
  */
 
 import { signOut } from "aws-amplify/auth";
-import { ensureSessionValid, getCurrentTokenExpiryMs } from "./authTokenUtils";
+import {
+    ensureSessionValid,
+    getCurrentTokenExpiryMs,
+    MISSING_USER_ID_CLAIM_KEY,
+} from "./authTokenUtils";
 
 /** localStorage keys read by Auth.tsx to drive the login-screen message and route restore. */
 export const SESSION_EXPIRED_KEY = "session_expired";
@@ -112,6 +116,10 @@ export function registerFocusRevalidation(): () => void {
  * Tear down a session that can no longer be refreshed: stop the timer, sign out of
  * Amplify, wipe localStorage (preserving theme), record the expired flag + the route
  * to return to, then redirect to the login screen. Idempotent — first caller wins.
+ *
+ * A session ended because a refreshed external OAuth token lacked the configured user id
+ * claim (MISSING_USER_ID_CLAIM_KEY, written by authTokenUtils) keeps that claim instead of
+ * the expired flag, so the login screen names it.
  */
 export function logoutExpired(returnTo: string = window.location.hash): void {
     if (loggingOut) {
@@ -121,12 +129,17 @@ export function logoutExpired(returnTo: string = window.location.hash): void {
     clearExpiryTimer();
 
     const theme = localStorage.getItem(THEME_PREFERENCE_KEY);
+    const missingUserIdClaim = localStorage.getItem(MISSING_USER_ID_CLAIM_KEY);
     void signOut().catch(() => {});
     localStorage.clear();
     if (theme) {
         localStorage.setItem(THEME_PREFERENCE_KEY, theme);
     }
-    localStorage.setItem(SESSION_EXPIRED_KEY, "true");
+    if (missingUserIdClaim) {
+        localStorage.setItem(MISSING_USER_ID_CLAIM_KEY, missingUserIdClaim);
+    } else {
+        localStorage.setItem(SESSION_EXPIRED_KEY, "true");
+    }
     if (returnTo) {
         localStorage.setItem(SESSION_RETURN_TO_KEY, returnTo);
     }
