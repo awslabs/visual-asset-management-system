@@ -22,10 +22,16 @@ import {
 } from "../services/ComplianceService";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 
-/** Every event type the audit trail records, in the order the filter offers them. */
+/**
+ * Every event type the audit trail records, in the order the filter offers them. The list is the
+ * user guide's event-type table (docs/user-guide/compliance.md, "Event types"); the backend test
+ * test_compliance_audit_event_types_documented.py holds that table to the types the code writes,
+ * and ComplianceAuditLog.test.tsx holds this list to the table.
+ */
 export const eventTypeOptions: SelectProps.Option[] = [
     { label: "All Events", value: "" },
     { label: "Compliance Check", value: "compliance_check" },
+    { label: "Evaluation Error", value: "evaluation_error" },
     { label: `Schema Bound to ${Synonyms.Database}`, value: "schema_bound_to_database" },
     { label: `Schema Bound to ${Synonyms.Asset}`, value: "schema_bound_to_asset" },
     { label: `Schema Unbound from ${Synonyms.Database}`, value: "schema_unbound_from_database" },
@@ -33,6 +39,8 @@ export const eventTypeOptions: SelectProps.Option[] = [
     { label: "Quarantine Released", value: "quarantine_released" },
     { label: "Exception Granted", value: "exception_granted" },
     { label: "Exception Revoked", value: "exception_revoked" },
+    { label: "Exception Superseded", value: "exception_superseded" },
+    { label: "Schema Deleted", value: "schema_deleted" },
     { label: "Cascade Triggered", value: "cascade_triggered" },
     { label: "Cascade Auto-Triggered", value: "cascade_auto_triggered" },
     { label: "Cascade Approved", value: "cascade_approved" },

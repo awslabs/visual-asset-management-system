@@ -4,6 +4,8 @@
  */
 
 import React from "react";
+import fs from "fs";
+import path from "path";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ComplianceAuditLog, { eventTypeOptions } from "./ComplianceAuditLog";
@@ -136,22 +138,32 @@ describe("ComplianceAuditLog event type filter", () => {
     });
 
     it("offers every event type the audit trail records", async () => {
-        const recordedEventTypes = [
-            "compliance_check",
-            "schema_bound_to_database",
-            "schema_bound_to_asset",
-            "schema_unbound_from_database",
-            "schema_unbound_from_asset",
-            "quarantine_released",
-            "exception_granted",
-            "exception_revoked",
-            "cascade_triggered",
-            "cascade_auto_triggered",
-            "cascade_approved",
-            "cascade_rejected",
-            "cascade_completed",
-            "asset_deleted",
-        ];
+        // The user guide's event-type table, which the backend test holds to the types the code
+        // writes: one list, so a type cannot be recorded and then be impossible to filter on.
+        const guide = fs.readFileSync(
+            path.join(
+                __dirname,
+                "..",
+                "..",
+                "..",
+                "documentation",
+                "docusaurus-site",
+                "docs",
+                "user-guide",
+                "compliance.md"
+            ),
+            "utf-8"
+        );
+        const section = guide.slice(guide.indexOf("### Event types"));
+        const table = section.slice(0, section.indexOf("\n## "));
+        const recordedEventTypes = Array.from(
+            table.matchAll(/^\|\s*`([a-z]+(?:_[a-z]+)+)`\s*\|/gm),
+            (match) => match[1]
+        );
+        // The control: the table was found and holds the types once missing from the filter.
+        expect(recordedEventTypes).toEqual(
+            expect.arrayContaining(["evaluation_error", "exception_superseded", "schema_deleted"])
+        );
         const offered = eventTypeOptions.map((option) => option.value);
         expect(offered[0]).toBe("");
         expect(offered.slice(1).sort()).toEqual([...recordedEventTypes].sort());
