@@ -17237,6 +17237,7 @@ components:
                         - cascade_approved
                         - cascade_rejected
                         - cascade_completed
+                        - asset_deleted
                 databaseId:
                     type: string
                     description: "`*` on entries that are not about one database."

@@ -150,6 +150,7 @@ describe("ComplianceAuditLog event type filter", () => {
             "cascade_approved",
             "cascade_rejected",
             "cascade_completed",
+            "asset_deleted",
         ];
         const offered = eventTypeOptions.map((option) => option.value);
         expect(offered[0]).toBe("");

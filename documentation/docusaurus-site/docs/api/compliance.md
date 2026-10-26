@@ -1196,6 +1196,7 @@ GET /compliance/audit
 | `cascade_approved`             | A pending cascade is approved                                                                                                    |
 | `cascade_rejected`             | A pending cascade is rejected                                                                                                    |
 | `cascade_completed`            | A cascade finishes evaluating its downstream assets; `details` carries `nodesEvaluated` and `summary`, the node count per status |
+| `asset_deleted`                | An asset is permanently deleted; its compliance record (state, binding override, quarantine) is removed                          |
 
 ### Error responses
 

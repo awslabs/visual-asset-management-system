@@ -528,6 +528,7 @@ The compliance audit log records every compliance action across the deployment.
 | `cascade_approved`             | A pending cascade was approved and executed                                                            |
 | `cascade_rejected`             | A pending cascade was rejected                                                                         |
 | `cascade_completed`            | A cascade finished evaluating its downstream assets                                                    |
+| `asset_deleted`                | An asset was permanently deleted and its compliance record removed                                     |
 
 ---
 

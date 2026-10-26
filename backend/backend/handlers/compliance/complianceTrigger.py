@@ -158,6 +158,9 @@ COVERAGE_PATH_DIRECT = "direct"
 # holds for the objects an asset-version revert copies and the `lastAssetVersionAt` written after them.
 EVALUATION_COVERS_CHANGE_MARGIN = timedelta(seconds=2)
 
+# Audit event of a permanently deleted asset whose compliance record the trigger removed.
+AUDIT_EVENT_ASSET_DELETED = "asset_deleted"
+
 # A cascade awaiting approval expires after this many hours.
 CASCADE_APPROVAL_TIMEOUT_HOURS = 24
 
@@ -380,10 +383,8 @@ def _dispatch_event(message, batch=None, message_id=""):
 
 
 def _process_stream_record(message, batch, message_id=""):
-    """A DynamoDB stream record of the asset table relayed by the asset indexer topic."""
-    if message.get("eventName") == "REMOVE":
-        return
-
+    """A DynamoDB stream record of the asset table relayed by the asset indexer topic. A REMOVE is
+    an archive, an unarchive or a permanent delete (`_process_asset_removal`)."""
     dynamodb_data = message.get("dynamodb", {})
     new_image = dynamodb_data.get("NewImage", {})
     keys = dynamodb_data.get("Keys", {})
@@ -395,6 +396,9 @@ def _process_stream_record(message, batch, message_id=""):
 
     if not database_id or not asset_id:
         logger.info("Stream record missing databaseId or assetId, skipping")
+        return
+    if message.get("eventName") == "REMOVE":
+        batch.add_candidate(message_id, _process_asset_removal, database_id, asset_id)
         return
     if database_id.endswith(ARCHIVED_DATABASE_SUFFIX):
         return
@@ -421,6 +425,60 @@ def _process_stream_record(message, batch, message_id=""):
     batch.add_candidate(message_id, _process_compliance_event, database_id, asset_id,
                         completion_time=stamp_time, path=COVERAGE_PATH_STREAM,
                         stamp_attribute=LAST_CHANGE_AT_ATTRIBUTE)
+
+
+def live_database_id(database_id):
+    """The database an asset row belongs to: its partition key without the archived suffix."""
+    if database_id.endswith(ARCHIVED_DATABASE_SUFFIX):
+        return database_id[:-len(ARCHIVED_DATABASE_SUFFIX)]
+    return database_id
+
+
+def asset_row_exists(database_id, asset_id):
+    """Whether the asset table holds the row, read strongly consistent (an archive writes the
+    archived row before it deletes the live one, so a consistent read sees the move)."""
+    response = asset_table.get_item(Key={"databaseId": database_id, "assetId": asset_id},
+                                    ConsistentRead=True, ProjectionExpression="assetId")
+    return bool(response.get("Item"))
+
+
+def asset_is_gone(database_id, asset_id):
+    """Whether the asset has no row left under its database, live or archived: a permanent
+    delete, as opposed to an archive or unarchive, which move the row between the two."""
+    live = live_database_id(database_id)
+    return not (asset_row_exists(live, asset_id)
+                or asset_row_exists(f"{live}{ARCHIVED_DATABASE_SUFFIX}", asset_id))
+
+
+def _process_asset_removal(database_id, asset_id, batch=None):
+    """An asset-table REMOVE: when the asset was permanently deleted, delete its compliance
+    asset-state row (its state, schema binding or override, and quarantine) and audit it once as
+    `asset_deleted`; the evaluation records and the audit trail are history and are kept.
+
+    An archive moves the row to `<databaseId>#deleted` and an unarchive moves it back, each a
+    REMOVE of the old partition key; the asset still has a row then, and its compliance record is
+    left as it is (an archived asset keeps its record, as before). Two consistent reads tell them
+    apart, in any database, bound or not. A REMOVE of each partition (a permanent delete of an asset
+    that had both) deletes and audits once: the second finds no row."""
+    batch = batch if batch is not None else TriggerBatch()
+    live = live_database_id(database_id)
+    if not asset_is_gone(database_id, asset_id):
+        return
+    batch.evaluated.add((live, asset_id))
+    removed = asset_state_table.delete_item(
+        Key={"databaseId": live, "assetId": asset_id}, ReturnValues="ALL_OLD").get("Attributes")
+    if not removed:
+        return
+    logger.info(f"Asset {live}:{asset_id} was permanently deleted; removed its compliance record")
+    store.write_audit(
+        live, asset_id,
+        event_type=AUDIT_EVENT_ASSET_DELETED,
+        actor=store.SYSTEM_ACTOR,
+        details={"reason": "asset_permanently_deleted",
+                 "schemaSource": removed.get("schemaSource")},
+        previous_state=removed.get("complianceState"),
+        schema_name=removed.get("schemaName"),
+    )
 
 
 def stream_record_kind(dynamodb_data):
@@ -886,12 +944,17 @@ def coverage_log_line(asset_id, path, stamp_attribute, completion_time, change_t
 
 def check_default_schema(database_id, asset_id, db_item=None):
     """Register an asset under its database's bound schema (when the database has one) and
-    return the new asset-state row, else None."""
+    return the new asset-state row, else None. An asset that no longer exists is not registered:
+    a change event delivered after the asset's permanent delete must not bring its compliance
+    record back."""
     db_item = db_item or _database_item(database_id)
     if not db_item:
         return None
     schema_name = db_item.get("complianceSchemaName")
     if not schema_name:
+        return None
+    if not asset_row_exists(database_id, asset_id):
+        logger.info(f"Asset {database_id}:{asset_id} no longer exists; not registering it")
         return None
 
     now = datetime.now(timezone.utc).isoformat()

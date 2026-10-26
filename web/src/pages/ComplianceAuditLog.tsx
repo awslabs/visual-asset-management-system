@@ -38,6 +38,7 @@ export const eventTypeOptions: SelectProps.Option[] = [
     { label: "Cascade Approved", value: "cascade_approved" },
     { label: "Cascade Rejected", value: "cascade_rejected" },
     { label: "Cascade Completed", value: "cascade_completed" },
+    { label: `${Synonyms.Asset} Deleted`, value: "asset_deleted" },
 ];
 
 const ComplianceAuditLog: React.FC = () => {
