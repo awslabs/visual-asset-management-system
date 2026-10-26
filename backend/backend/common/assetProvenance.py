@@ -27,6 +27,8 @@ re-evaluate the asset on it.
 
 from datetime import datetime, timezone
 
+from botocore.exceptions import ClientError
+
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_UPLOAD,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
@@ -56,6 +58,67 @@ ASSET_CHANGE_SOURCE_METADATA_EDIT = "metadataEdit"
 # `lastChangeSource` of an asset row whose latest change is the creation or deletion of one of its
 # asset links. An asset-row value only, like `assetEdit`.
 ASSET_CHANGE_SOURCE_LINK_CHANGE = "linkChange"
+
+# The two sources the compliance trigger itself stamps, from the indexer events of the metadata,
+# file-attribute, asset-link and asset-link-metadata tables (`record_indexed_change`). Their
+# `lastChangeAt` comes from the DynamoDB stream rather than from the writer's clock.
+ASYNC_STAMPED_SOURCES = (ASSET_CHANGE_SOURCE_METADATA_EDIT, ASSET_CHANGE_SOURCE_LINK_CHANGE)
+
+# Attributes a metadata row (asset or file metadata, file attribute, asset-link metadata) carries
+# when a workflow execution's metadata write-back wrote it (the execution's id), or is about to
+# delete it (written onto the row just before the delete, so the stream's old image of the delete
+# names the execution). The compliance trigger reads them from the stream image to tell a pipeline
+# rule's own metadata output apart from a user change. No other writer sets them, and a user's write
+# replaces the whole row, so a row a user rewrote no longer carries the first.
+METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE = "lastChangeWorkflowExecutionId"
+METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE = "deletedByWorkflowExecutionId"
+
+
+def record_indexed_change(table, database_id, asset_id, source, change_at,
+                          workflow_execution_id=None):
+    """Record a change the compliance trigger read from an indexer event (a metadata, file-attribute,
+    asset-link or asset-link-metadata stream record) as the asset row's latest change, with one
+    conditional `update_item` on `table` (the asset table): SET `lastChangeSource` (`source`, or `workflowExecution` with
+    `lastChangeWorkflowExecutionId` given `workflow_execution_id`), `lastChangeAt` (`change_at`, the
+    change's own instant as an ISO-8601 string) and `lastChangeRecordedAt` (now, so a re-stamp at an
+    unchanged instant still changes the row and raises its stream MODIFY); a user change also
+    REMOVEs `lastChangeWorkflowExecutionId`.
+
+    The condition keeps an event delivered late from moving the stamp backwards: the row is written
+    only while it exists under `databaseId` (an archived or deleted asset is not stamped) and its
+    `lastChangeAt` is absent or not later than `change_at`. A user change also overwrites a later
+    `workflowExecution` stamp, since that stamp's MODIFY starts no evaluation and the user change
+    would otherwise never be evaluated. `lastUploadAt` and `lastAssetVersionAt` are left as they are.
+
+    Returns True when the row was stamped and False when the condition did not hold. Any other error
+    is raised: the caller retries the event rather than lose the change."""
+    names = {"#src": "lastChangeSource", "#at": "lastChangeAt", "#rec": "lastChangeRecordedAt",
+             "#wf": "lastChangeWorkflowExecutionId", "#asset": "assetId"}
+    values = {":at": change_at, ":rec": datetime.now(timezone.utc).isoformat(timespec="microseconds")}
+    if workflow_execution_id:
+        values[":src"] = VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION
+        values[":wf"] = workflow_execution_id
+        expression = "SET #src = :src, #at = :at, #rec = :rec, #wf = :wf"
+        condition = "attribute_exists(#asset) AND (attribute_not_exists(#at) OR #at <= :at)"
+    else:
+        values[":src"] = source
+        values[":wfsrc"] = VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION
+        expression = "SET #src = :src, #at = :at, #rec = :rec REMOVE #wf"
+        condition = ("attribute_exists(#asset) AND "
+                     "(attribute_not_exists(#at) OR #at <= :at OR #src = :wfsrc)")
+    try:
+        table.update_item(
+            Key={"databaseId": database_id, "assetId": asset_id},
+            UpdateExpression=expression,
+            ConditionExpression=condition,
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+        )
+    except ClientError as e:
+        if (e.response or {}).get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
 
 
 def stamp_asset_change(asset_table, database_id, asset_id, source, workflow_execution_id=None):

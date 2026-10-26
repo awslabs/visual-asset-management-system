@@ -1567,7 +1567,11 @@ export function storageResourcesBuilder(
                 name: "databaseId:assetId:filePath",
                 type: dynamodb.AttributeType.STRING,
             },
-            stream: dynamodb.StreamViewType.NEW_IMAGE,
+            // The old image is what a REMOVE record carries: the compliance trigger reads the
+            // assets of a deleted row from it (and, for a metadata row, whether a workflow
+            // execution deleted it). The stream relay drops it from INSERT and MODIFY records,
+            // so their messages are no larger than before.
+            stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
         }
     );
 
@@ -1739,7 +1743,11 @@ export function storageResourcesBuilder(
             name: "databaseId:assetId:filePath",
             type: dynamodb.AttributeType.STRING,
         },
-        stream: dynamodb.StreamViewType.NEW_IMAGE,
+        // The old image is what a REMOVE record carries: the compliance trigger reads the
+        // assets of a deleted row from it (and, for a metadata row, whether a workflow
+        // execution deleted it). The stream relay drops it from INSERT and MODIFY records,
+        // so their messages are no larger than before.
+        stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
     });
 
     // GSI for querying by database/asset/file
@@ -2014,7 +2022,11 @@ export function storageResourcesBuilder(
             name: "assetLinkId",
             type: dynamodb.AttributeType.STRING,
         },
-        stream: dynamodb.StreamViewType.NEW_IMAGE,
+        // The old image is what a REMOVE record carries: the compliance trigger reads the
+        // assets of a deleted row from it (and, for a metadata row, whether a workflow
+        // execution deleted it). The stream relay drops it from INSERT and MODIFY records,
+        // so their messages are no larger than before.
+        stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
     });
 
     assetLinksStorageTableV2.addGlobalSecondaryIndex({
@@ -2054,7 +2066,11 @@ export function storageResourcesBuilder(
                 name: "metadataKey",
                 type: dynamodb.AttributeType.STRING,
             },
-            stream: dynamodb.StreamViewType.NEW_IMAGE,
+            // The old image is what a REMOVE record carries: the compliance trigger reads the
+            // assets of a deleted row from it (and, for a metadata row, whether a workflow
+            // execution deleted it). The stream relay drops it from INSERT and MODIFY records,
+            // so their messages are no larger than before.
+            stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
         }
     );
 

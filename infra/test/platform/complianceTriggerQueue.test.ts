@@ -296,6 +296,26 @@ describe("compliance trigger queue", () => {
         expect(getAtt(st.Resource)).toBe(source.id);
     });
 
+    test("the trigger can stamp the asset row with UpdateItem and writes it no other way", () => {
+        const statements = [
+            ...resources(commercial, "AWS::IAM::Policy"),
+            ...resources(commercial, "AWS::IAM::ManagedPolicy"),
+        ]
+            .filter((p) => JSON.stringify(p.Properties.Roles).includes("complianceTrigger"))
+            .flatMap((p) => p.Properties.PolicyDocument.Statement)
+            .filter((st: any) => JSON.stringify(st.Resource).includes("TassetStorageTable"));
+        const actions = statements.flatMap((st: any) => [st.Action].flat());
+        expect(actions).toContain("dynamodb:UpdateItem");
+        expect(actions).toContain("dynamodb:GetItem");
+        for (const write of [
+            "dynamodb:PutItem",
+            "dynamodb:DeleteItem",
+            "dynamodb:BatchWriteItem",
+        ]) {
+            expect(actions).not.toContain(write);
+        }
+    });
+
     test.each([
         ["commercial", false],
         ["govCloud", true],

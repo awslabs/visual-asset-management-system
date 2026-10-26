@@ -21,7 +21,12 @@ from common.apiRoutes import (
     API_FILE_METADATA, API_DATABASE_METADATA,
 )
 from common.validators import validate
-from common.assetProvenance import ASSET_CHANGE_SOURCE_METADATA_EDIT, stamp_asset_change
+from common.assetProvenance import (
+    ASSET_CHANGE_SOURCE_METADATA_EDIT,
+    METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE,
+    METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE,
+    stamp_asset_change,
+)
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -193,9 +198,81 @@ asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name)
 file_attribute_table = dynamodb.Table(file_attribute_table_name)
 s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 
+# The tables whose rows belong to an asset (asset and file metadata, file attributes, asset-link
+# metadata): a workflow execution's metadata write-back marks the rows it writes or deletes there
+# (`attribute_rows_to_writing_workflow`), which is how the compliance trigger tells a pipeline rule's
+# own output apart from a user change in the indexer events.
+WORKFLOW_ATTRIBUTED_TABLES = frozenset({
+    asset_file_metadata_table_name, file_attribute_table_name, asset_links_metadata_table_name})
+
+# The workflow execution whose metadata output this invocation writes back, or None for an API
+# request; `lambda_handler` sets it at the start of every invocation.
+writing_workflow_execution_id = None
+
 #######################
 # Common Utility Functions
 #######################
+
+
+def workflow_execution_writer(event):
+    """The workflow execution a metadata write is made for: the `workflowExecutionId` string a
+    `lambdaCrossCall` carries (`processWorkflowExecutionOutput` writing a workflow execution's
+    metadata output back), else None — an API request, or a system cross-call without one."""
+    cross_call = event.get('lambdaCrossCall') if isinstance(event, dict) else None
+    execution_id = cross_call.get('workflowExecutionId') if isinstance(cross_call, dict) else None
+    return execution_id if isinstance(execution_id, str) and execution_id else None
+
+
+def attribute_rows_to_writing_workflow(table_name: str, batch: list) -> list:
+    """The batch as it is written when a workflow execution's metadata write-back makes it.
+
+    For an API request (no writing execution), or a table outside WORKFLOW_ATTRIBUTED_TABLES, the
+    batch is returned unchanged: a user's write costs exactly the calls it made before. For a
+    write-back, every PutRequest row carries METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE (the
+    execution's id) — an attribute on the write already being made — and every row a DeleteRequest
+    removes is first marked METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE with one UpdateItem, so the
+    stream's old image of the delete names the execution. A user's later write replaces the whole
+    row and drops the mark. A failed mark is logged and the delete proceeds: the compliance trigger
+    then reads the delete as a user change and re-evaluates the asset, the safe failure."""
+    execution_id = writing_workflow_execution_id
+    if not execution_id or table_name not in WORKFLOW_ATTRIBUTED_TABLES:
+        return batch
+    attributed = []
+    for request in batch:
+        put = request.get('PutRequest') if isinstance(request, dict) else None
+        delete = request.get('DeleteRequest') if isinstance(request, dict) else None
+        if put and isinstance(put.get('Item'), dict):
+            item = dict(put['Item'])
+            item[METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE] = {'S': execution_id}
+            attributed.append({'PutRequest': {**put, 'Item': item}})
+            continue
+        if delete and isinstance(delete.get('Key'), dict) and delete['Key']:
+            _mark_row_deleted_by_workflow(table_name, delete['Key'], execution_id)
+        attributed.append(request)
+    return attributed
+
+
+def _mark_row_deleted_by_workflow(table_name: str, key: dict, execution_id: str) -> None:
+    """Mark the row `key` names as about to be deleted by `execution_id` (see
+    `attribute_rows_to_writing_workflow`); a row already gone is left gone."""
+    key_attribute = sorted(key)[0]
+    try:
+        dynamodb_client.update_item(
+            TableName=table_name,
+            Key=key,
+            UpdateExpression='SET #deletedBy = :executionId',
+            ConditionExpression='attribute_exists(#key)',
+            ExpressionAttributeNames={'#deletedBy': METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE,
+                                      '#key': key_attribute},
+            ExpressionAttributeValues={':executionId': {'S': execution_id}},
+        )
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') != 'ConditionalCheckFailedException':
+            logger.warning(f"Could not mark a {table_name} row as deleted by workflow execution "
+                           f"{execution_id}; the delete proceeds: {e}")
+    except Exception as e:
+        logger.warning(f"Could not mark a {table_name} row as deleted by workflow execution "
+                       f"{execution_id}; the delete proceeds: {e}")
 
 class BatchWriteIncompleteError(Exception):
     """DynamoDB still reported UnprocessedItems after the retry bound was exhausted.
@@ -221,7 +298,7 @@ def batch_write_with_retry(table_name: str, batch: list) -> None:
         BatchWriteIncompleteError: Requests remained unprocessed after
             BATCH_WRITE_MAX_ATTEMPTS attempts.
     """
-    pending = list(batch)
+    pending = attribute_rows_to_writing_workflow(table_name, list(batch))
     if not pending:
         return
 
@@ -5036,7 +5113,8 @@ def handle_database_metadata_delete(event):
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for centralized metadata service"""
-    global claims_and_roles
+    global claims_and_roles, writing_workflow_execution_id
+    writing_workflow_execution_id = workflow_execution_writer(event)
     claims_and_roles = request_to_claims(event)
     
     try:

@@ -22,6 +22,20 @@ recorded `error` evaluation, and a malformed message is logged and dropped.
 A file indexer message is unwrapped with `common.indexerEvents.s3_records_from_indexer_message`
 (the same walk the file indexer performs) and every S3 record it carries is processed.
 
+Metadata and link changes are stamped here, not on the request that made them: every stream record
+of the asset-file-metadata (asset and file metadata), file-attribute, asset-link and
+asset-link-metadata tables is mapped to the asset(s) it changes — both ends of a link and of a
+link's metadata — and recorded on the asset row as `metadataEdit` / `linkChange`
+(`common.assetProvenance.record_indexed_change`), in every database, bound or not and whatever
+auto-evaluation says, so when evaluation is enabled later the row already records its last change.
+The stamp carries the change's own instant (the stream record's `ApproximateCreationDateTime`,
+`indexed_change_time`) and is conditional, so a late event never moves it backwards. A record that
+only stamps evaluates nothing itself: the stamp's asset-table MODIFY is the one input the coverage
+decision reads. A row a workflow execution's metadata write-back wrote (or deleted) carries the
+execution's id (`METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE`, `METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE`)
+and is stamped `workflowExecution`, which starts no evaluation. In an unbound database a stamp costs
+one conditional UpdateItem (a link's metadata one GetItem more, for the link's two ends).
+
 Three guards keep the trigger from multiplying evaluations or relaunching a pipeline rule's own
 workflow:
 
@@ -66,6 +80,7 @@ a further evaluation does not open another.
 """
 
 import json
+import math
 import urllib.parse
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -75,6 +90,14 @@ from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
+from common.assetProvenance import (
+    ASSET_CHANGE_SOURCE_LINK_CHANGE,
+    ASSET_CHANGE_SOURCE_METADATA_EDIT,
+    ASYNC_STAMPED_SOURCES,
+    METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE,
+    METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE,
+    record_indexed_change,
+)
 from common.compliance import evaluationEngine as engine
 from models.compliance import EvaluationVerdict
 from common.dynamodb import query_all_items
@@ -140,6 +163,17 @@ CASCADE_APPROVAL_TIMEOUT_HOURS = 24
 # Suffix on the partition key of an archived asset row.
 ARCHIVED_DATABASE_SUFFIX = "#deleted"
 
+# Kinds of DynamoDB stream record the asset and file indexer topics carry, told apart by their keys
+# (`stream_record_kind`).
+RECORD_KIND_ASSET = "asset"
+RECORD_KIND_METADATA = "metadata"
+RECORD_KIND_FILE_ATTRIBUTE = "fileAttribute"
+RECORD_KIND_LINK = "link"
+RECORD_KIND_LINK_METADATA = "linkMetadata"
+
+# The composite key a metadata or file-attribute row carries: `databaseId:assetId:filePath`.
+METADATA_COMPOSITE_KEY = "databaseId:assetId:filePath"
+
 # The DynamoDB error a conditional write raises when its condition does not hold. It answers the
 # write, it does not fail the AWS call, so it is never an infrastructure error.
 CONDITIONAL_CHECK_FAILED = "ConditionalCheckFailedException"
@@ -157,6 +191,7 @@ cascade_table = dynamodb.Table(cascade_table_name)
 # Tables the shared store resolved at import.
 asset_state_table = store.asset_state_table
 asset_table = store.asset_table
+asset_links_table = store.asset_links_table
 
 
 def is_infrastructure_error(error):
@@ -207,10 +242,12 @@ class TriggerBatch:
     def __init__(self):
         self.candidates = []
         self.evaluated = set()
+        self.stamps = {}
         self._failed = []
         self._database_items = {}
         self._targets = {}
         self._file_targets = {}
+        self._link_endpoints = {}
 
     def run(self, record_id, step, *args, **kwargs):
         """Run `step` for the queue record `record_id`; an exception is logged, and an
@@ -240,6 +277,56 @@ class TriggerBatch:
         for message_id, step, args, kwargs in self.candidates:
             self.run(message_id, step, *args, batch=self, **kwargs)
 
+    def add_stamp(self, message_id, database_id, asset_id, source, change_at,
+                  workflow_execution_id=None):
+        """Merge one indexed change into the asset's stamp for this batch: the latest instant of all
+        its changes, with the source of the latest user change if the batch reports one (so the
+        stamp evaluates), else `workflowExecution` with the latest workflow change's execution."""
+        stamp = self.stamps.setdefault((database_id, asset_id), {
+            "ids": [], "at": None, "source": None, "userAt": None,
+            "workflowExecutionId": None, "workflowAt": None})
+        if message_id not in stamp["ids"]:
+            stamp["ids"].append(message_id)
+        if stamp["at"] is None or change_at > stamp["at"]:
+            stamp["at"] = change_at
+        if workflow_execution_id:
+            if stamp["workflowAt"] is None or change_at >= stamp["workflowAt"]:
+                stamp["workflowAt"] = change_at
+                stamp["workflowExecutionId"] = workflow_execution_id
+        elif stamp["userAt"] is None or change_at >= stamp["userAt"]:
+            stamp["userAt"] = change_at
+            stamp["source"] = source
+
+    def write_stamps(self):
+        """One conditional UpdateItem per asset the batch stamps. An infrastructure error fails
+        every record that contributed to the asset's stamp; a condition that did not hold (the
+        asset is gone, or its row records a later change) is not an error."""
+        for (database_id, asset_id), stamp in self.stamps.items():
+            user_change = stamp["source"] is not None
+            try:
+                stamped = record_indexed_change(
+                    asset_table, database_id, asset_id,
+                    stamp["source"] if user_change else None,
+                    stamp["at"].isoformat(timespec="microseconds"),
+                    workflow_execution_id=None if user_change else stamp["workflowExecutionId"])
+            except Exception as e:
+                if is_infrastructure_error(e):
+                    logger.exception(f"Infrastructure error stamping asset {database_id}:{asset_id}; "
+                                     f"its records are retried: {e}")
+                    for message_id in stamp["ids"]:
+                        self.fail(message_id)
+                else:
+                    logger.exception(f"Error stamping asset {database_id}:{asset_id}: {e}")
+                continue
+            source = stamp["source"] if user_change else VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION
+            logger.info(f"Compliance change stamp asset={asset_id} source={source} "
+                        f"at={stamp['at'].isoformat()} outcome={'stamped' if stamped else 'not-newer'}")
+
+    def link_endpoints(self, asset_link_id):
+        if asset_link_id not in self._link_endpoints:
+            self._link_endpoints[asset_link_id] = _link_endpoints_from_table(asset_link_id)
+        return self._link_endpoints[asset_link_id]
+
     def database_item(self, database_id):
         if database_id not in self._database_items:
             self._database_items[database_id] = _database_item(database_id)
@@ -268,6 +355,7 @@ def lambda_handler(event, context):
             logger.info("Queue record carries no indexer message, skipping")
             continue
         batch.run(message_id, _dispatch_event, message, batch=batch, message_id=message_id)
+    batch.write_stamps()
     batch.evaluate_all()
     return {"batchItemFailures": batch.failures()}
 
@@ -276,7 +364,11 @@ def _dispatch_event(message, batch=None, message_id=""):
     """Route one indexer-topic message by its shape into the batch's candidates."""
     batch = batch if batch is not None else TriggerBatch()
     if message.get("eventName") in ("INSERT", "MODIFY", "REMOVE"):
-        _process_stream_record(message, batch, message_id)
+        kind = stream_record_kind(message.get("dynamodb") or {})
+        if kind == RECORD_KIND_ASSET:
+            _process_stream_record(message, batch, message_id)
+        else:
+            _process_indexed_change(message, kind, batch, message_id)
     elif message.get("s3") or message.get("Records"):
         _process_file_event(message, batch, message_id)
     elif message.get("databaseId") and message.get("assetId"):
@@ -315,11 +407,139 @@ def _process_stream_record(message, batch, message_id=""):
     # An INSERT's image carries whatever `lastChangeAt` the row had when it was written (an
     # unarchived asset keeps its old stamp), which says nothing about this change; only a MODIFY's
     # stamp is the completion that raised the event.
-    completion_time = (parse_event_time(_image_string(new_image, LAST_CHANGE_AT_ATTRIBUTE))
-                       if is_modify else None)
+    stamp_time = (parse_event_time(_image_string(new_image, LAST_CHANGE_AT_ATTRIBUTE))
+                  if is_modify else None)
+    if is_modify and _image_change_source(new_image) in ASYNC_STAMPED_SOURCES:
+        # A stamp this trigger wrote from an indexer event carries the DynamoDB stream's instant of
+        # the change (`indexed_change_time`), not the evaluating Lambda's clock, so it is compared
+        # with the evaluation start across the skew margin, as an S3 `eventTime` is.
+        batch.add_candidate(message_id, _process_compliance_event, database_id, asset_id,
+                            change_time=stamp_time, path=COVERAGE_PATH_STREAM,
+                            stamp_attribute=LAST_CHANGE_AT_ATTRIBUTE)
+        return
     batch.add_candidate(message_id, _process_compliance_event, database_id, asset_id,
-                        completion_time=completion_time, path=COVERAGE_PATH_STREAM,
+                        completion_time=stamp_time, path=COVERAGE_PATH_STREAM,
                         stamp_attribute=LAST_CHANGE_AT_ATTRIBUTE)
+
+
+def stream_record_kind(dynamodb_data):
+    """Which table a stream record comes from, by the keys its table defines: the asset-link table
+    (`assetLinkId`), the asset-link-metadata table (`assetLinkId` + `metadataKey`), the
+    file-attribute table (`attributeKey`), the asset-file-metadata table (`metadataKey` + the
+    composite key; asset metadata is the row whose file path is `/`), else the asset table."""
+    keys = dynamodb_data.get("Keys") or {}
+    if "assetLinkId" in keys:
+        return RECORD_KIND_LINK_METADATA if "metadataKey" in keys else RECORD_KIND_LINK
+    if "attributeKey" in keys:
+        return RECORD_KIND_FILE_ATTRIBUTE
+    if "metadataKey" in keys:
+        return RECORD_KIND_METADATA
+    return RECORD_KIND_ASSET
+
+
+def indexed_change_time(dynamodb_data):
+    """The instant a stream record's change was made, as late as it can have been: DynamoDB reports
+    `ApproximateCreationDateTime` in epoch seconds rounded down, so the change happened within the
+    second after it, and the next whole second is returned. Erring late means an evaluation that
+    started within that second is not counted as covering the change, so the safe failure — a
+    second evaluation — is the only one. A record without the field (never the case for a stream
+    record) is stamped now."""
+    value = dynamodb_data.get("ApproximateCreationDateTime")
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        parsed = parse_event_time(value) if isinstance(value, str) else None
+        return parsed if parsed is not None else datetime.now(timezone.utc)
+    return datetime.fromtimestamp(math.floor(seconds) + 1, tz=timezone.utc)
+
+
+def change_attribution(kind, event_name, image):
+    """`(source, workflow execution id)` of an indexed change. A link change is always a user's
+    (`linkChange`). A metadata or file-attribute row, or a link's metadata row, is a workflow
+    execution's when its image names the execution: an INSERT or MODIFY whose new image carries
+    `METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE` (the write-back wrote it) or
+    `METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE` (it marked the row before deleting it), and a REMOVE
+    whose old image carries the latter. A user deleting a row a workflow wrote is a user change:
+    only the delete marker, written by the deleting execution itself, attributes a REMOVE."""
+    if kind == RECORD_KIND_LINK:
+        return ASSET_CHANGE_SOURCE_LINK_CHANGE, None
+    deleted_by = _image_string(image, METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE)
+    if deleted_by:
+        return None, deleted_by
+    if event_name != "REMOVE":
+        written_by = _image_string(image, METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE)
+        if written_by:
+            return None, written_by
+    return ASSET_CHANGE_SOURCE_METADATA_EDIT, None
+
+
+def _process_indexed_change(message, kind, batch, message_id=""):
+    """A metadata, file-attribute, asset-link or asset-link-metadata stream record: stamp the
+    asset(s) it changes (`TriggerBatch.add_stamp`). Nothing is evaluated here."""
+    event_name = message.get("eventName")
+    dynamodb_data = message.get("dynamodb") or {}
+    keys = dynamodb_data.get("Keys") or {}
+    image = (dynamodb_data.get("OldImage") if event_name == "REMOVE"
+             else dynamodb_data.get("NewImage")) or {}
+
+    if kind in (RECORD_KIND_METADATA, RECORD_KIND_FILE_ATTRIBUTE):
+        endpoints = _composite_key_asset(_image_string(keys, METADATA_COMPOSITE_KEY))
+    elif kind == RECORD_KIND_LINK:
+        endpoints = link_image_endpoints(image)
+        if not endpoints:
+            logger.info(f"Asset link {_image_string(keys, 'assetLinkId')} {event_name} record "
+                        "carries no image naming its assets; nothing to stamp")
+    else:
+        endpoints = batch.link_endpoints(_image_string(keys, "assetLinkId"))
+        if not endpoints:
+            # The link itself is gone; its own REMOVE stamps both of its assets.
+            logger.info(f"Asset link {_image_string(keys, 'assetLinkId')} of a link metadata "
+                        "record no longer exists; nothing to stamp")
+
+    source, workflow_execution_id = change_attribution(kind, event_name, image)
+    change_at = indexed_change_time(dynamodb_data)
+    for database_id, asset_id in endpoints:
+        if database_id.endswith(ARCHIVED_DATABASE_SUFFIX):
+            continue
+        batch.add_stamp(message_id, database_id, asset_id, source, change_at,
+                        workflow_execution_id=workflow_execution_id)
+
+
+def _composite_key_asset(composite_key):
+    """`[(databaseId, assetId)]` of a metadata row's `databaseId:assetId:filePath` key (database and
+    asset ids carry no ':'; a file path may), or [] when the key does not name both."""
+    parts = (composite_key or "").split(":", 2)
+    if len(parts) < 2 or not parts[0] or not parts[1]:
+        return []
+    return [(parts[0], parts[1])]
+
+
+def link_image_endpoints(image):
+    """The `(databaseId, assetId)` of both assets an asset-link row joins (one when they are the
+    same), read from a stream image; [] when the image does not name them."""
+    endpoints = []
+    for db_key, asset_key in (("fromAssetDatabaseId", "fromAssetId"),
+                              ("toAssetDatabaseId", "toAssetId")):
+        database_id, asset_id = _image_string(image, db_key), _image_string(image, asset_key)
+        if database_id and asset_id and (database_id, asset_id) not in endpoints:
+            endpoints.append((database_id, asset_id))
+    return endpoints
+
+
+def _link_endpoints_from_table(asset_link_id):
+    """Both ends of an asset link, read from the links table (one GetItem; a link's metadata row
+    does not carry them); [] when the link no longer exists. A failed read is raised, so the record
+    is retried."""
+    if not asset_link_id:
+        return []
+    link = asset_links_table.get_item(Key={"assetLinkId": asset_link_id}).get("Item") or {}
+    endpoints = []
+    for db_key, asset_key in (("fromAssetDatabaseId", "fromAssetId"),
+                              ("toAssetDatabaseId", "toAssetId")):
+        database_id, asset_id = link.get(db_key), link.get(asset_key)
+        if database_id and asset_id and (database_id, asset_id) not in endpoints:
+            endpoints.append((database_id, asset_id))
+    return endpoints
 
 
 def _image_string(new_image, attribute):
@@ -619,8 +839,9 @@ def coverage_log_line(asset_id, path, stamp_attribute, completion_time, change_t
                       compliance_record, covered):
     """The one INFO line a coverage decision logs: the asset (by id only, no object key), the path
     that reported the change, the row stamp the decision used and its instant, the S3 `eventTime`
-    (file path), the last evaluation it was compared with, and the outcome. An absent value reads
-    `none`."""
+    (file path) or, for a stamp this trigger wrote from an indexer event, the stamp's instant (it is
+    judged across the skew margin like an `eventTime`), the last evaluation it was compared with, and
+    the outcome. An absent value reads `none`."""
     def _instant(value):
         return value.isoformat() if value is not None else "none"
 

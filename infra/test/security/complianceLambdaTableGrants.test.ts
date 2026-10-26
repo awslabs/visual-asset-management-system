@@ -47,8 +47,12 @@ jest.setTimeout(600_000);
 const BACKEND_ROOT = path.resolve(__dirname, "..", "..", "..", "backend", "backend");
 const RESOURCE_NAMES_PY = path.join(BACKEND_ROOT, "common", "resourceNames.py");
 
-/** Python packages whose modules the reachability walk follows into. */
-const FOLLOWED_PACKAGES = ["handlers.compliance", "common.compliance"];
+/**
+ * Python packages (and single modules) whose functions the reachability walk follows into.
+ * `common.assetProvenance` is followed for `record_indexed_change`, the change stamp the trigger
+ * writes on the asset row through the table handle it is passed.
+ */
+const FOLLOWED_PACKAGES = ["handlers.compliance", "common.compliance", "common.assetProvenance"];
 
 /** `boto3` Table methods that mutate rows. Any other reference to a table is a read. */
 const WRITE_METHODS = new Set([
@@ -124,7 +128,8 @@ function modulePath(id: string): string {
 
 function isFollowed(id: string): boolean {
     return (
-        FOLLOWED_PACKAGES.some((pkg) => id.startsWith(`${pkg}.`)) && fs.existsSync(modulePath(id))
+        FOLLOWED_PACKAGES.some((pkg) => id === pkg || id.startsWith(`${pkg}.`)) &&
+        fs.existsSync(modulePath(id))
     );
 }
 
@@ -247,16 +252,28 @@ function loadModule(id: string): PyModule {
 
 interface TableNeed {
     write: boolean;
+    /** The single-item write actions the code's calls on the table need (`WRITE_METHOD_ACTIONS`). */
+    writeActions: Set<string>;
     batchWrite: boolean;
     index: boolean;
 }
+
+/**
+ * The action each single-item write method needs, so a handler that only updates a table (the
+ * trigger's change stamp on the asset row) is held to UpdateItem rather than to every write action.
+ */
+const WRITE_METHOD_ACTIONS: Record<string, string> = {
+    put_item: "dynamodb:PutItem",
+    update_item: "dynamodb:UpdateItem",
+    delete_item: "dynamodb:DeleteItem",
+};
 
 type Needs = Map<string, TableNeed>;
 
 function need(needs: Needs, key: string): TableNeed {
     let entry = needs.get(key);
     if (!entry) {
-        entry = { write: false, batchWrite: false, index: false };
+        entry = { write: false, writeActions: new Set(), batchWrite: false, index: false };
         needs.set(key, entry);
     }
     return entry;
@@ -265,6 +282,7 @@ function need(needs: Needs, key: string): TableNeed {
 function recordMethods(entry: TableNeed, methods: string[]): void {
     for (const method of methods) {
         if (WRITE_METHODS.has(method)) entry.write = true;
+        if (WRITE_METHOD_ACTIONS[method]) entry.writeActions.add(WRITE_METHOD_ACTIONS[method]);
         if (method === "batch_writer" || method === "batch_write_item") entry.batchWrite = true;
     }
 }
@@ -563,7 +581,7 @@ function coverageGaps(
             }
         }
         if (requirement.write) {
-            for (const action of missing(WRITE_ACTIONS, grant?.actions)) {
+            for (const action of missing([...requirement.writeActions].sort(), grant?.actions)) {
                 gaps.push(`${key}: ${action} is not granted on the table`);
             }
         }
@@ -749,11 +767,13 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
         const fabricated: Needs = new Map(deriveNeeds(audit.handlerModule));
         fabricated.set("COMPLIANCE_CASCADE_STORAGE_TABLE", {
             write: false,
+            writeActions: new Set(),
             batchWrite: false,
             index: true,
         });
         fabricated.set("COMPLIANCE_AUDIT_STORAGE_TABLE", {
             write: true,
+            writeActions: new Set(["dynamodb:PutItem"]),
             batchWrite: false,
             index: true,
         });

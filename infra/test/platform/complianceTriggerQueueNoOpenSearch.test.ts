@@ -10,6 +10,8 @@
  * asset-link-metadata and file-attribute table records to those topics are still built. Without
  * them a NOOPENSEARCH deployment would bind schemas that never re-evaluate on a change.
  *
+ * Also pins the stream view of the tables whose REMOVE records the trigger maps to assets.
+ *
  * Full-app synth (~1 min, several GB): run this suite on its own.
  */
 
@@ -80,6 +82,29 @@ describe("compliance trigger without OpenSearch", () => {
         expect(topics[0]).not.toEqual(topics[1]);
         expect(topics.some((t) => /AssetIndexerSnsTopic/i.test(t))).toBe(true);
         expect(topics.some((t) => /FileIndexerSnsTopic/i.test(t))).toBe(true);
+    });
+
+    test("the tables whose REMOVE the trigger maps to assets stream the old image", () => {
+        // A REMOVE record carries only the keys unless the stream holds the old image, and the keys of
+        // an asset-link row do not name its assets; for a metadata row the old image also says whether
+        // a workflow execution deleted it.
+        const viewType = (prefix: string) => {
+            const tables = synth.where("AWS::DynamoDB::Table", (r) =>
+                r.logicalId.startsWith(prefix)
+            );
+            expect(tables).toHaveLength(1);
+            return tables[0].properties.StreamSpecification?.StreamViewType;
+        };
+        for (const prefix of [
+            "AssetLinksStorageTableV22",
+            "AssetLinksMetadataStorageTable",
+            "AssetFileMetadataStorageTableV2",
+            "FileAttributeStorageTableV2",
+        ]) {
+            expect(viewType(prefix)).toBe("NEW_AND_OLD_IMAGES");
+        }
+        // The control: a table the change does not touch keeps its new-image stream.
+        expect(viewType("AssetStorageTable")).toBe("NEW_IMAGE");
     });
 
     test("the stream relays that feed both topics are built", () => {

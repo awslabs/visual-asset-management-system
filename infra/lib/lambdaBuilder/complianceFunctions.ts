@@ -499,6 +499,9 @@ export function buildComplianceTriggerFunction(
     storageResources.dynamo.complianceSchemaStorageTable.grantReadData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     grantEvaluationEngineReads(fun, storageResources);
+    // Records the metadata and link changes it reads from the indexer events on the asset row
+    // (common/assetProvenance.record_indexed_change): one conditional UpdateItem, no other write.
+    storageResources.dynamo.assetStorageTable.grant(fun, "dynamodb:UpdateItem");
     executeWorkflowFunction.grantInvoke(fun);
     grantPublishToAssetTopics(fun, config);
     // Reads the changed object's metadata (head_object across asset buckets) to skip files a
