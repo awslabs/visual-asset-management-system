@@ -322,6 +322,21 @@ All plugin behavior is defined in `viewerConfig.json`:
 -   **Feature restriction**: none
 -   **Note**: The mesh formats are always offered. The CAD formats (`.stp`, `.step`, `.iges`, `.igs`, `.brep`) need a Three.js bundle built with OCCT (`occt-import-js`, LGPL, off by default; see `web/customInstalls/threejs/README.md`) and `SharedArrayBuffer` (cross-origin isolation headers). When either is missing, `loadFile()` in `ThreeJSViewerPlugin/utils/fileLoaders.ts` reports it on the file instead of hiding the viewer.
 
+### 21. RoboticsDataViewerPlugin
+
+-   **ID**: `robotics-data-viewer`
+-   **Extensions**: `.mcap`, `.bag`, `.db3`, `.ulg`, `.ulog`
+-   **Features**: The Lichtblick robotics visualization web app, embedded in an iframe: plots, 3D scene, images, raw messages and logs on one shared timeline. `.mcap` and ROS 1 `.bag` files are read with HTTP Range requests against their presigned URLs; ROS 2 `.db3` and PX4 `.ulg`/`.ulog` files are downloaded whole first.
+-   **Multi-file**: Yes, for several `.mcap` files (one timeline) and the `.db3` files of one ROS 2 split bag. A `.bag` or `.ulg` opens one file at a time, and a selection mixing formats is refused before any file is requested. Each file is presigned under its own asset, and a file that cannot be read is listed with its state while the others open.
+-   **Dependencies**: A from-source Lichtblick build that `customInstalls/robotics` places under `public/viewers/robotics/`
+-   **Priority**: 1
+-   **Category**: data
+-   **Feature restriction**: `ALLOWUNSAFEEVAL` (set `app.webUi.allowUnsafeEvalFeatures` to `true`)
+-   **Custom Parameters**:
+    -   `basePath`: Path of the hosted app page (default: `/viewers/robotics/index.html`)
+    -   `maxWholeFileBytes`: Size limit for the files downloaded whole (`.db3`, `.ulg`, `.ulog`), applied to the selection's total (default: `1073741824`, 1 GiB)
+-   **Note**: The presigned URLs reach the app only in the iframe's URL fragment (`roboticsDeepLink.ts`), the reference for `CLAUDE.md` → "A Framed Viewer Must Not Receive a Signed URL in the Query String".
+
 ## 🚀 Usage
 
 ### Basic Integration
@@ -723,7 +738,7 @@ export const featuresEnabled = {
 }
 ```
 
-**Use Case**: Requires `ALLOWUNSAFEEVAL` because the viewer's USD WebAssembly loader needs the `unsafe-eval` Content Security Policy directive. The SuperSplat Editor and the ThatOpen IFC BIM Viewer carry the same restriction.
+**Use Case**: Requires `ALLOWUNSAFEEVAL` because the viewer's USD WebAssembly loader needs the `unsafe-eval` Content Security Policy directive. The SuperSplat Editor, the ThatOpen IFC BIM Viewer and the Robotics Data Viewer carry the same restriction.
 
 #### Example 3: Multiple Requirements
 

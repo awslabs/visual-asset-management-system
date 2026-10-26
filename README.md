@@ -43,7 +43,7 @@ _Use cases include:_
 ### Key capabilities
 
 -   **Centralized storage** — Manage 3D models, point clouds, CAD files, and media in Amazon S3 with versioning and access control
--   **Interactive visualization** — View assets in the browser with 20 built-in viewer plugins (Three.js, Potree, Cesium, USD, Gaussian Splat, and more)
+-   **Interactive visualization** — View assets in the browser with 21 built-in viewer plugins (Three.js, Potree, Cesium, USD, Gaussian Splat, and more)
 -   **Automated processing** — Transform assets using configurable pipelines backed by AWS Lambda, Amazon SQS, or Amazon EventBridge
 -   **Intelligent search** — Full-text and metadata search powered by Amazon OpenSearch with map-based geographic views
 -   **Fine-grained permissions** — Attribute-based and role-based access control (ABAC/RBAC) at both API and data entity levels
