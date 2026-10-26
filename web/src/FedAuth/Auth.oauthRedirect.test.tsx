@@ -6,15 +6,18 @@
 /**
  * External OAuth sign-in sends one redirect_uri, without the hash route, on both the authorize
  * request and the token request. An IdP compares the two (and against its registered value), so
- * a deep link such as #/databases/<id>/assets/<id> must not change what is sent. A code exchange
- * that fails signs the browser out, which also clears the browser asset store. Auth also clears
- * that store once per page load, signed in or not.
+ * a deep link such as #/databases/<id>/assets/<id> must not change what is sent. `state` is an
+ * opaque random value: an IdP that returns it without percent-encoding would cut a URL in it at
+ * `#`. The deep link is stored separately, followed only on this origin, and used once. A code
+ * exchange that fails signs the browser out, which also clears the browser asset store. Auth also
+ * clears that store once per page load, signed in or not.
  */
 
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { appCache } from "../services/appCache";
 import Auth from "./Auth";
+import { oauthNavigation } from "./oauthSignInState";
 
 const mockGetAuthorizeUri = jest.fn();
 const mockGetTokenFromCodeRedirect = jest.fn();
@@ -116,6 +119,30 @@ const OAUTH2_CONFIG = {
 
 const DEEP_LINK = "/#/databases/db1/assets/asset1";
 
+/** An opaque state as the sign-in stores it: 64 hex characters. */
+const STATE = "0123456789abcdef".repeat(4);
+
+/** A token whose access token parses as a JWT with a `sub`. */
+const TOKEN = {
+    accessToken: `header.${btoa(JSON.stringify({ sub: "user-1" }))}.signature`,
+    refreshToken: "refresh-1",
+    expiresAt: Date.now() + 60 * 60 * 1000,
+};
+
+/** The values a sign-in attempt that started on the deep link leaves in localStorage. */
+const storeSignInAttempt = (returnTo = `http://localhost${DEEP_LINK}`) => {
+    localStorage.setItem("auth_state", STATE);
+    localStorage.setItem("auth_return_to", returnTo);
+    localStorage.setItem("code_verifier", "verifier-1");
+};
+
+/** The three values a sign-in attempt stores, read back. */
+const storedSignInValues = () => [
+    localStorage.getItem("auth_state"),
+    localStorage.getItem("auth_return_to"),
+    localStorage.getItem("code_verifier"),
+];
+
 const renderAuth = () =>
     render(
         <Auth>
@@ -155,14 +182,11 @@ describe("Auth external OAuth redirect_uri", () => {
         await waitFor(() => expect(mockGetAuthorizeUri).toHaveBeenCalledTimes(1));
         const request = mockGetAuthorizeUri.mock.calls[0][0];
         expect(request.redirectUri).toBe("http://localhost/");
-        // The deep link still travels in state, so sign-in returns to it.
-        expect(request.state).toBe(`http://localhost${DEEP_LINK}`);
     });
 
     it("sends the same redirect_uri to the token request", async () => {
-        localStorage.setItem("auth_state", `http://localhost${DEEP_LINK}`);
-        localStorage.setItem("code_verifier", "verifier-1");
-        window.history.replaceState(null, "", "/?code=abc&state=xyz");
+        storeSignInAttempt();
+        window.history.replaceState(null, "", `/?code=abc&state=${STATE}`);
         mockGetTokenFromCodeRedirect.mockReturnValue(new Promise(() => {}));
 
         renderAuth();
@@ -194,9 +218,8 @@ describe("Auth sign-out after a failed code exchange", () => {
     });
 
     it("clears the browser asset store and records the error", async () => {
-        localStorage.setItem("auth_state", `http://localhost${DEEP_LINK}`);
-        localStorage.setItem("code_verifier", "verifier-1");
-        window.history.replaceState(null, "", "/?code=abc&state=xyz");
+        storeSignInAttempt();
+        window.history.replaceState(null, "", `/?code=abc&state=${STATE}`);
         let rejectExchange!: (error: Error) => void;
         mockGetTokenFromCodeRedirect.mockReturnValue(
             new Promise((_resolve, reject) => {
@@ -218,9 +241,8 @@ describe("Auth sign-out after a failed code exchange", () => {
     });
 
     it("signs out of Amplify before clearing localStorage and the asset store", async () => {
-        localStorage.setItem("auth_state", `http://localhost${DEEP_LINK}`);
-        localStorage.setItem("code_verifier", "verifier-1");
-        window.history.replaceState(null, "", "/?code=abc&state=xyz");
+        storeSignInAttempt();
+        window.history.replaceState(null, "", `/?code=abc&state=${STATE}`);
         let rejectExchange!: (error: Error) => void;
         mockGetTokenFromCodeRedirect.mockReturnValue(
             new Promise((_resolve, reject) => {
@@ -260,6 +282,112 @@ describe("Auth sign-out after a failed code exchange", () => {
             ])
         );
         expect(localStorage.getItem("auth_error")).toBe("Failed to get access token");
+    });
+});
+
+describe("Auth external OAuth state", () => {
+    let consoleError: jest.SpyInstance;
+    let goTo: jest.SpyInstance;
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        localStorage.clear();
+        appCache.setItem("config", OAUTH2_CONFIG);
+        mockGetAmplifyConfig.mockResolvedValue({ ...OAUTH2_CONFIG });
+        mockEnsureValidSession.mockResolvedValue(false);
+        mockClearLocalStore.mockResolvedValue(undefined);
+        mockRevokeSession.mockReset().mockResolvedValue(undefined);
+        mockClearStoredSession.mockReset();
+        goTo = jest.spyOn(oauthNavigation, "goTo").mockImplementation(() => undefined);
+        // jsdom reports document.location assignments as unimplemented navigation.
+        consoleError = jest.spyOn(console, "error").mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+        goTo.mockRestore();
+        consoleError.mockRestore();
+        window.history.replaceState(null, "", "/");
+    });
+
+    it("sends an opaque state, not the page URL, and stores the deep link separately", async () => {
+        window.history.replaceState(null, "", DEEP_LINK);
+        mockGetAuthorizeUri.mockResolvedValue("https://idp.test/authorize?x=1");
+
+        renderAuth();
+        fireEvent.click(await screen.findByText("Log in with SSO"));
+
+        await waitFor(() => expect(mockGetAuthorizeUri).toHaveBeenCalledTimes(1));
+        const { state } = mockGetAuthorizeUri.mock.calls[0][0];
+        expect(state).toMatch(/^[0-9a-f]{64}$/);
+        expect(state).not.toMatch(/[#/:]/);
+        expect(state).not.toBe(`http://localhost${DEEP_LINK}`);
+        expect(localStorage.getItem("auth_state")).toBe(state);
+        expect(localStorage.getItem("auth_return_to")).toBe(`http://localhost${DEEP_LINK}`);
+    });
+
+    it("returns to the deep link when the IdP sends state back without encoding it", async () => {
+        window.history.replaceState(null, "", DEEP_LINK);
+        mockGetAuthorizeUri.mockResolvedValue("https://idp.test/authorize?x=1");
+        const signIn = renderAuth();
+        fireEvent.click(await screen.findByText("Log in with SSO"));
+        await waitFor(() => expect(mockGetAuthorizeUri).toHaveBeenCalledTimes(1));
+        const sentState = mockGetAuthorizeUri.mock.calls[0][0].state;
+        signIn.unmount();
+
+        // The callback as an IdP that does not percent-encode builds it. A `#` in state would
+        // start the fragment here and cut the value the browser reads back.
+        window.history.replaceState(null, "", `/?code=abc&state=${sentState}`);
+        expect(new URL(window.location.href).searchParams.get("state")).toBe(
+            localStorage.getItem("auth_state")
+        );
+        mockGetTokenFromCodeRedirect.mockResolvedValue(TOKEN);
+
+        renderAuth();
+
+        await waitFor(() => expect(goTo).toHaveBeenCalledWith(`http://localhost${DEEP_LINK}`));
+        expect(mockGetTokenFromCodeRedirect.mock.calls[0][1].state).toBe(sentState);
+        expect(storedSignInValues()).toEqual([null, null, null]);
+    });
+
+    it("refuses a callback whose state does not match the stored one", async () => {
+        storeSignInAttempt();
+        window.history.replaceState(null, "", `/?code=abc&state=${"f".repeat(64)}`);
+        mockGetTokenFromCodeRedirect.mockResolvedValue(TOKEN);
+
+        renderAuth();
+
+        await waitFor(() =>
+            expect(localStorage.getItem("auth_error")).toBe("Failed to get access token")
+        );
+        expect(mockGetTokenFromCodeRedirect).not.toHaveBeenCalled();
+        expect(goTo).not.toHaveBeenCalled();
+        expect(storedSignInValues()).toEqual([null, null, null]);
+    });
+
+    it("goes to the app root instead of a stored return page on another origin", async () => {
+        storeSignInAttempt(`https://other.test${DEEP_LINK}`);
+        window.history.replaceState(null, "", `/?code=abc&state=${STATE}`);
+        mockGetTokenFromCodeRedirect.mockResolvedValue(TOKEN);
+
+        renderAuth();
+
+        await waitFor(() => expect(goTo).toHaveBeenCalledTimes(1));
+        expect(goTo).toHaveBeenCalledWith("http://localhost/");
+        expect(storedSignInValues()).toEqual([null, null, null]);
+    });
+
+    it("removes the stored values when the code exchange fails", async () => {
+        storeSignInAttempt();
+        window.history.replaceState(null, "", `/?code=abc&state=${STATE}`);
+        mockGetTokenFromCodeRedirect.mockRejectedValue(new Error("bad code"));
+
+        renderAuth();
+
+        await waitFor(() =>
+            expect(localStorage.getItem("auth_error")).toBe("Failed to get access token")
+        );
+        expect(goTo).not.toHaveBeenCalled();
+        expect(storedSignInValues()).toEqual([null, null, null]);
     });
 });
 
