@@ -69,7 +69,8 @@ VAMS deploys as a serverless architecture using AWS CDK with 14 nested CloudForm
 
 ### Prerequisites
 
--   Python 3.12+, Docker (or a Docker-compatible CLI such as [Finch](https://aws.github.io/finch/) or [Podman](https://podman.io/)), Node.js 22+, npm 11.10.0+, AWS CLI, AWS CDK CLI
+-   Python 3.12+, Docker (or a Docker-compatible CLI such as [Finch](https://aws.github.io/finch/) or [Podman](https://podman.io/)), Node.js 22+, npm 11.10.0+, AWS CLI
+-   The AWS CDK CLI is pinned in `infra/package.json` and installed with the `infra/` dependencies; the commands below run it as `npx cdk`
 
 ### Deploy
 
@@ -85,15 +86,18 @@ cd web && nvm use && npm install && npm run build
 cd ../infra && npm install
 
 # 3. Bootstrap CDK (first time only)
-#    If importing an existing VPC, add: --context loadContextIgnoreVPCStacks=true
-#    See documentation/docusaurus-site/docs/deployment/deploy-the-solution.md (Bootstrap step)
-cdk bootstrap aws://ACCOUNT_ID/REGION
+#    This Quick start deploys to us-east-1. The Region is env.region in config.json, or
+#    your AWS CLI default Region when env.region is empty (as shipped).
+#    For any other Region, including AWS GovCloud (US) and the AWS European Sovereign
+#    Cloud, and for importing an existing VPC, follow the Bootstrap step in
+#    documentation/docusaurus-site/docs/deployment/deploy-the-solution.md
+npx cdk bootstrap aws://ACCOUNT_ID/us-east-1
 
 # 4. Configure deployment (edit infra/config/config.json)
 #    See documentation/docusaurus-site/docs/deployment/configuration-reference.md
 
 # 5. Deploy
-cdk deploy --all --require-approval never
+npx cdk deploy --all --require-approval never
 ```
 
 After deployment, find your URL in the CDK output and check your email for temporary credentials.
@@ -157,7 +161,7 @@ See the [Configuration Reference](https://awslabs.github.io/visual-asset-managem
 
 ```bash
 cd infra
-cdk destroy --all
+npx cdk destroy --all
 ```
 
 Some resources (S3 buckets, DynamoDB tables) are retained by default. See the [Uninstall Guide](https://awslabs.github.io/visual-asset-management-system/deployment/uninstall) for complete cleanup instructions.
