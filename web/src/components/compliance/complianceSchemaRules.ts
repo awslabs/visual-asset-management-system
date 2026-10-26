@@ -398,7 +398,7 @@ export const EXAMPLE_RULES: Record<ComplianceRuleType, ComplianceRule> = {
     metadata: {
         ruleType: "metadata",
         enforcement: "warn",
-        metadataSchemaRef: { databaseId: "GLOBAL", schemaName: "defaultAsset" },
+        metadataSchemaRef: { schemaName: "defaultAsset" },
         checks: [{ name: "required-fields-present", validateRequired: true, validateTypes: true }],
     },
     relationship: {
@@ -796,6 +796,74 @@ export interface MetadataScopeErrors {
  * links scope only, each from its own vocabulary. Whether a pattern is a valid regular expression is
  * checked by the API when the schema is saved.
  */
+/** The "asset's database" location of a metadata schema reference: no `databaseId`. */
+export const ASSET_DATABASE_LOCATION = "";
+
+/**
+ * Where a metadata rule's schema is looked up (`metadataSchemaRef.databaseId`): the evaluated
+ * asset's database then GLOBAL (no `databaseId`, the default), GLOBAL only, or — for a schema
+ * scoped to one database — that database (then GLOBAL). The API refuses any other database, so it
+ * is not offered.
+ */
+export function metadataSchemaLocationOptions(
+    schemaDatabaseId?: string | null
+): { value: string; label: string; description?: string }[] {
+    const options = [
+        {
+            value: ASSET_DATABASE_LOCATION,
+            label: "The asset's database (then GLOBAL)",
+            description:
+                "Each database bound to this schema uses its own metadata schema of this name, else the GLOBAL one",
+        },
+        { value: "GLOBAL", label: "GLOBAL", description: "Always the GLOBAL metadata schema" },
+    ];
+    if (schemaDatabaseId && schemaDatabaseId !== "GLOBAL") {
+        options.push({
+            value: schemaDatabaseId,
+            label: `This database (${schemaDatabaseId})`,
+            description: "This database's metadata schema of this name, else the GLOBAL one",
+        });
+    }
+    return options;
+}
+
+/** The `metadataSchemaRef` a rule carries after setting its name and/or location. */
+export function withMetadataSchemaRef(
+    rest: Record<string, any>,
+    patch: { schemaName?: string; databaseId?: string }
+): Record<string, any> {
+    const current =
+        rest.metadataSchemaRef && typeof rest.metadataSchemaRef === "object"
+            ? rest.metadataSchemaRef
+            : {};
+    const next: Record<string, any> = { ...current, ...patch };
+    if (!next.databaseId) delete next.databaseId;
+    return { ...rest, metadataSchemaRef: next };
+}
+
+/** The API's refusal of a metadata schema reference, as the builder shows it next to the field. */
+export function validateMetadataSchemaRef(
+    rest: Record<string, any>,
+    schemaDatabaseId?: string | null
+): { schemaName?: string; databaseId?: string } {
+    const ref =
+        rest.metadataSchemaRef && typeof rest.metadataSchemaRef === "object"
+            ? rest.metadataSchemaRef
+            : {};
+    const errors: { schemaName?: string; databaseId?: string } = {};
+    if (!String(ref.schemaName ?? "").trim()) {
+        errors.schemaName = "metadataSchemaRef.schemaName is required";
+    }
+    const databaseId = String(ref.databaseId ?? "").trim();
+    const scopedTo = schemaDatabaseId && schemaDatabaseId !== "GLOBAL" ? schemaDatabaseId : null;
+    if (databaseId && databaseId !== "GLOBAL" && databaseId !== scopedTo) {
+        errors.databaseId = scopedTo
+            ? "a database-scoped compliance schema may reference only GLOBAL or its own database"
+            : "a GLOBAL compliance schema may reference only GLOBAL; choose the asset's database to use each database's own metadata schema";
+    }
+    return errors;
+}
+
 export function validateMetadataScope(rest: Record<string, any>): MetadataScopeErrors {
     const errors: MetadataScopeErrors = {};
     if (rest.scope !== undefined && !COMPLIANCE_METADATA_SCOPES.includes(rest.scope)) {

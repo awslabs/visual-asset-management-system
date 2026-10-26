@@ -1295,7 +1295,8 @@ def run_evaluation(
         key = engine.metadata_schema_ref_key(ref, rule.scope)
         if key not in metadata_schemas:
             metadata_schemas[key] = get_metadata_schema(
-                ref.databaseId, ref.schemaName, engine.SCOPE_ENTITY_TYPE[rule.scope])
+                engine.metadata_schema_lookup_database(ref, database_id), ref.schemaName,
+                engine.SCOPE_ENTITY_TYPE[rule.scope])
     asset_links = get_asset_links(database_id, asset_id)
     # Read only for the rule types that use them: an evaluation without a file-structure,
     # version-coverage, asset-attribute or file-scope metadata rule lists no S3 objects and reads no

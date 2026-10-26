@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import FormField from "@cloudscape-design/components/form-field";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
@@ -194,10 +194,82 @@ describe("ComplianceSchemaEditor rule types", () => {
         await waitFor(() => {
             expect(lastBody(onChange).rules["metadata-rule-1"]).toMatchObject({
                 ruleType: "metadata",
-                metadataSchemaRef: { databaseId: "GLOBAL", schemaName: "defaultAsset" },
+                metadataSchemaRef: { schemaName: "defaultAsset" },
             });
         });
+        // No databaseId: the schema is looked up in the evaluated asset's database, then GLOBAL.
+        expect(lastBody(onChange).rules["metadata-rule-1"].metadataSchemaRef).not.toHaveProperty(
+            "databaseId"
+        );
         expect(screen.getByText(/checks of a metadata rule are edited in the/)).toBeInTheDocument();
+    });
+
+    const metadataBody = (ref: Record<string, string>) => ({
+        schemaFormat: "vams-rules-v1",
+        rules: {
+            m: {
+                ruleType: "metadata",
+                enforcement: "warn",
+                metadataSchemaRef: ref,
+                checks: [{ name: "req", validateRequired: true }],
+            },
+        },
+    });
+
+    const locationSelect = () => {
+        const select = createWrapper()
+            .findAllFormFields()
+            .find((f) => f.findLabel()?.getElement().textContent === "Metadata schema location")
+            ?.findControl()
+            ?.findSelect();
+        if (!select) throw new Error("no metadata schema location select");
+        return select;
+    };
+
+    it("offers the asset's database and GLOBAL for a GLOBAL schema, and pins on choice", async () => {
+        const onChange = jest.fn();
+        render(<Harness initial={metadataBody({ schemaName: "s" })} onChange={onChange} />);
+        await openBuilder();
+        expect(screen.getByText("Metadata schema location")).toBeInTheDocument();
+        expect(screen.getByText("The asset's database (then GLOBAL)")).toBeInTheDocument();
+        act(() => locationSelect().openDropdown());
+        const labels = locationSelect()
+            .findDropdown()!
+            .findOptions()
+            .map((o) => o.findLabel().getElement().textContent);
+        expect(labels).toEqual(["The asset's database (then GLOBAL)", "GLOBAL"]);
+        act(() => locationSelect().selectOptionByValue("GLOBAL"));
+        await waitFor(() =>
+            expect(lastBody(onChange).rules.m.metadataSchemaRef).toEqual({
+                schemaName: "s",
+                databaseId: "GLOBAL",
+            })
+        );
+    });
+
+    it("offers this database for a database-scoped schema", async () => {
+        render(
+            <ComplianceSchemaEditor
+                value={JSON.stringify(metadataBody({ schemaName: "s", databaseId: "db-a" }))}
+                onChange={jest.fn()}
+                schemaDatabaseId="db-a"
+            />
+        );
+        await openBuilder();
+        expect(screen.getByText("This database (db-a)")).toBeInTheDocument();
+    });
+
+    it("flags a reference to another database, as the API does", async () => {
+        render(
+            <Harness
+                initial={metadataBody({ schemaName: "s", databaseId: "db-b" })}
+                onChange={jest.fn()}
+            />
+        );
+        await openBuilder();
+        expect(
+            screen.getByText(/a GLOBAL compliance schema may reference only GLOBAL/)
+        ).toBeInTheDocument();
     });
 
     it("adds a file structure rule and writes the patterns typed one per line", async () => {

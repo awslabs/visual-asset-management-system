@@ -107,7 +107,8 @@ export const COMPLIANCE_METADATA_SCOPES: ComplianceMetadataScope[] = [
 export interface ComplianceMetadataRule {
     ruleType: "metadata";
     enforcement: ComplianceEnforcementLevel;
-    metadataSchemaRef: { databaseId: string; schemaName: string };
+    /** Without `databaseId` the schema is looked up in the evaluated asset's database, then GLOBAL. */
+    metadataSchemaRef: { databaseId?: string; schemaName: string };
     /** Absent means `asset`. */
     scope?: ComplianceMetadataScope;
     /** `files` / `fileAttributes` only: regular expressions a file path must match (any one). */

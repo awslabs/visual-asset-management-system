@@ -98,7 +98,7 @@ A `vams-rules-v1` body is a set of named rules. Each rule has a `ruleType`, an `
 
 #### Metadata rules
 
-A metadata rule validates metadata against a VAMS metadata schema. Its `scope` selects which metadata, and the schema named by `metadataSchemaRef` must be of the entity type that scope reads:
+A metadata rule validates metadata against a VAMS metadata schema. Without `databaseId` the metadata schema is looked up in the database of the asset being evaluated, then in `GLOBAL`, so one compliance schema bound to several databases uses each database's own metadata schema of that name where it has one. `databaseId` pins the lookup to that database (then `GLOBAL`) and is limited to the compliance schema's scope: a GLOBAL compliance schema may name only `GLOBAL`, a database-scoped one `GLOBAL` or its own database. The same limit applies to a pipeline rule's `pipelineRef.databaseId` and `pipelineRef.pipelineDatabaseId`; another database is refused with `400`. Its `scope` selects which metadata, and the schema named by `metadataSchemaRef` must be of the entity type that scope reads:
 
 | `scope`           | Validates                                         | Metadata schema entity type | Filters                             |
 | ----------------- | ------------------------------------------------- | --------------------------- | ----------------------------------- |
@@ -113,7 +113,7 @@ Each check runs against the metadata of every unit in scope — the asset, each 
 {
     "ruleType": "metadata",
     "enforcement": "quarantine",
-    "metadataSchemaRef": { "databaseId": "GLOBAL", "schemaName": "defaultAsset" },
+    "metadataSchemaRef": { "schemaName": "defaultAsset" },
     "checks": [
         {
             "name": "baseline",
@@ -130,7 +130,7 @@ Each check runs against the metadata of every unit in scope — the asset, each 
     "ruleType": "metadata",
     "enforcement": "warn",
     "scope": "files",
-    "metadataSchemaRef": { "databaseId": "GLOBAL", "schemaName": "modelFileMetadata" },
+    "metadataSchemaRef": { "schemaName": "modelFileMetadata" },
     "includePaths": ["\\.(glb|stl)$"],
     "excludePaths": ["\\.previewFile\\."],
     "checks": [{ "name": "file-fields", "validateRequired": true, "validateTypes": true }]
@@ -142,7 +142,7 @@ Each check runs against the metadata of every unit in scope — the asset, each 
     "ruleType": "metadata",
     "enforcement": "inform",
     "scope": "fileAttributes",
-    "metadataSchemaRef": { "databaseId": "GLOBAL", "schemaName": "defaultAssetFile3dModel" },
+    "metadataSchemaRef": { "schemaName": "defaultAssetFile3dModel" },
     "checks": [{ "name": "polygon-count", "additionalRequiredFields": ["Polygon_Count"] }]
 }
 ```
@@ -154,7 +154,7 @@ Each check runs against the metadata of every unit in scope — the asset, each 
     "scope": "links",
     "linkDirection": "parents",
     "relationshipType": "parentChild",
-    "metadataSchemaRef": { "databaseId": "GLOBAL", "schemaName": "defaultAssetLinks" },
+    "metadataSchemaRef": { "schemaName": "defaultAssetLinks" },
     "checks": [{ "name": "placement-recorded", "additionalRequiredFields": ["Translation"] }]
 }
 ```

@@ -111,14 +111,14 @@ The schema body is a `vams-rules-v1` document. A pipeline rule names the workflo
         "has-owner": {
             "ruleType": "metadata",
             "enforcement": "warn",
-            "metadataSchemaRef": { "databaseId": "GLOBAL", "schemaName": "ownership" },
+            "metadataSchemaRef": { "schemaName": "ownership" },
             "checks": [{ "name": "required-fields", "validateRequired": true }]
         },
         "model-file-metadata": {
             "ruleType": "metadata",
             "enforcement": "warn",
             "scope": "files",
-            "metadataSchemaRef": { "databaseId": "GLOBAL", "schemaName": "modelFileMetadata" },
+            "metadataSchemaRef": { "schemaName": "modelFileMetadata" },
             "includePaths": ["\\.(glb|stl)$"],
             "checks": [{ "name": "file-fields", "validateRequired": true }]
         }

@@ -2366,8 +2366,10 @@ if CONFIG.enable_writes:
         Schema, an envelope wrapping the document) is refused with `schemaBody must be a
         vams-rules-v1 document`. A pipeline rule's `pipelineRef` takes databaseId (the WORKFLOW's
         database; GLOBAL allowed), workflowId, pipelineDatabaseId (GLOBAL allowed), pipelineId and
-        an optional templateId; a metadata rule's `metadataSchemaRef` takes databaseId and
-        schemaName; each rule needs at least one check. Read an existing schema with
+        an optional templateId; a metadata rule's `metadataSchemaRef` takes schemaName and an
+        optional databaseId (omitted: the evaluated asset's database, then GLOBAL). Any database id
+        a rule names must be GLOBAL or, for a database-scoped compliance schema, its own database;
+        each rule needs at least one check. Read an existing schema with
         get_compliance_schema() and copy its shape.
 
         A metadata rule's `scope` selects what it validates: `asset` (the default; the asset's own
@@ -2378,7 +2380,7 @@ if CONFIG.enable_writes:
         metadata, against an assetLinkMetadata schema, narrowed by `linkDirection` parents /
         children / related and `relationshipType` parentChild / related). Every file or link in
         scope must pass, e.g. `{"ruleType": "metadata", "enforcement": "warn", "scope": "files",
-        "metadataSchemaRef": {"databaseId": "GLOBAL", "schemaName": "modelFileMetadata"},
+        "metadataSchemaRef": {"schemaName": "modelFileMetadata"},
         "excludePaths": ["\\\\.previewFile\\\\."], "checks": [{"name": "c", "validateRequired":
         true}]}`. A schema that is missing or of another entity type records an `error` result,
         never a pass.

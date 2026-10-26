@@ -84,6 +84,10 @@ import {
     rulesDraftFromBody,
     validateInputFiles,
     validateMetadataScope,
+    validateMetadataSchemaRef,
+    metadataSchemaLocationOptions,
+    withMetadataSchemaRef,
+    ASSET_DATABASE_LOCATION,
     validatePipelineRef,
     ruleNamesError,
     withMetadataScope,
@@ -207,7 +211,9 @@ const RULE_META_SCHEMA = {
         },
         metadataSchemaRef: {
             type: "object",
-            required: ["databaseId", "schemaName"],
+            required: ["schemaName"],
+            description:
+                "The VAMS metadata schema the rule validates against. Without databaseId it is looked up in the evaluated asset's database, then GLOBAL; databaseId pins the lookup (GLOBAL, or this compliance schema's own database).",
             properties: { databaseId: ID_STRING, schemaName: { type: "string", minLength: 1 } },
         },
         scope: {
@@ -614,6 +620,11 @@ interface ComplianceSchemaEditorProps {
      * null; the page refuses to save while one is shown.
      */
     onRulesProblemChange?: (problem: string | null) => void;
+    /**
+     * The database the compliance schema is available to (GLOBAL, or one database id). It decides
+     * which metadata schema locations a metadata rule may name.
+     */
+    schemaDatabaseId?: string;
 }
 
 export default function ComplianceSchemaEditor({
@@ -621,6 +632,7 @@ export default function ComplianceSchemaEditor({
     onChange,
     readOnly = false,
     onRulesProblemChange,
+    schemaDatabaseId = "GLOBAL",
 }: ComplianceSchemaEditorProps) {
     const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
     const [markers, setMarkers] = useState<editor.IMarkerData[]>([]);
@@ -1092,8 +1104,62 @@ export default function ComplianceSchemaEditor({
             updateRule(idx, { rest: patchCheck(rule.rest, patch) });
         const selected = (options: { value: string; label: string }[], value: any) =>
             options.find((o) => o.value === (value ?? "")) || options[0];
+        const refErrors = validateMetadataSchemaRef(rule.rest, schemaDatabaseId);
+        const ref =
+            rule.rest.metadataSchemaRef && typeof rule.rest.metadataSchemaRef === "object"
+                ? rule.rest.metadataSchemaRef
+                : {};
+        const locationOptions = metadataSchemaLocationOptions(schemaDatabaseId);
+        const location = locationOptions.find(
+            (o) => o.value === (ref.databaseId ?? ASSET_DATABASE_LOCATION)
+        );
         return (
             <SpaceBetween size="s">
+                <ColumnLayout columns={2}>
+                    <FormField
+                        label="Metadata schema"
+                        description="The name of the VAMS metadata schema the rule validates against."
+                        errorText={refErrors.schemaName}
+                    >
+                        <Input
+                            ariaLabel={`Metadata schema, ${ruleLabel}`}
+                            value={String(ref.schemaName ?? "")}
+                            disabled={readOnly}
+                            placeholder="defaultAsset"
+                            onChange={({ detail }) =>
+                                updateRule(idx, {
+                                    rest: withMetadataSchemaRef(rule.rest, {
+                                        schemaName: detail.value,
+                                    }),
+                                })
+                            }
+                        />
+                    </FormField>
+                    <FormField
+                        label="Metadata schema location"
+                        description="Where the metadata schema is looked up. The asset's database looks it up in the database of the asset being evaluated, then GLOBAL, so one compliance schema bound to several databases uses each database's own metadata schema. GLOBAL, or this database, pins the lookup."
+                        errorText={refErrors.databaseId}
+                    >
+                        <Select
+                            ariaLabel={`Metadata schema location, ${ruleLabel}`}
+                            selectedOption={
+                                location || {
+                                    value: String(ref.databaseId),
+                                    label: `${ref.databaseId} (not allowed here)`,
+                                }
+                            }
+                            options={locationOptions}
+                            disabled={readOnly}
+                            onChange={({ detail }) =>
+                                updateRule(idx, {
+                                    rest: withMetadataSchemaRef(rule.rest, {
+                                        databaseId: detail.selectedOption.value || "",
+                                    }),
+                                })
+                            }
+                        />
+                    </FormField>
+                </ColumnLayout>
                 <FormField
                     label="Scope"
                     description="Which metadata the rule validates. The referenced metadata schema must be of the matching type; a schema that is missing or of another type records the rule as an error."

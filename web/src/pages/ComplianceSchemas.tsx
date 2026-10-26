@@ -92,7 +92,7 @@ export const SCHEMA_TEMPLATES: Record<
                 "required-metadata": {
                     ruleType: "metadata",
                     enforcement: "warn",
-                    metadataSchemaRef: { databaseId: "GLOBAL", schemaName: "defaultAsset" },
+                    metadataSchemaRef: { schemaName: "defaultAsset" },
                     checks: [
                         {
                             name: "required-fields-present",
@@ -105,7 +105,7 @@ export const SCHEMA_TEMPLATES: Record<
                     ruleType: "metadata",
                     enforcement: "warn",
                     scope: "files",
-                    metadataSchemaRef: { databaseId: "GLOBAL", schemaName: "modelFileMetadata" },
+                    metadataSchemaRef: { schemaName: "modelFileMetadata" },
                     includePaths: ["\\.(glb|gltf|obj|stl|fbx)$"],
                     excludePaths: ["\\.previewFile\\."],
                     checks: [
@@ -131,7 +131,6 @@ export const SCHEMA_TEMPLATES: Record<
                     ruleType: "metadata",
                     enforcement: "warn",
                     metadataSchemaRef: {
-                        databaseId: "GLOBAL",
                         schemaName: "defaultAsset",
                     },
                     checks: [
@@ -149,7 +148,6 @@ export const SCHEMA_TEMPLATES: Record<
                     ruleType: "metadata",
                     enforcement: "inform",
                     metadataSchemaRef: {
-                        databaseId: "GLOBAL",
                         schemaName: "defaultAsset",
                     },
                     checks: [
@@ -181,7 +179,6 @@ export const SCHEMA_TEMPLATES: Record<
                     linkDirection: "parents",
                     relationshipType: "parentChild",
                     metadataSchemaRef: {
-                        databaseId: "GLOBAL",
                         schemaName: "defaultAssetLinks",
                     },
                     checks: [
@@ -219,7 +216,6 @@ export const SCHEMA_TEMPLATES: Record<
                     ruleType: "metadata",
                     enforcement: "quarantine",
                     metadataSchemaRef: {
-                        databaseId: "GLOBAL",
                         schemaName: "defaultAsset",
                     },
                     checks: [
@@ -241,7 +237,6 @@ export const SCHEMA_TEMPLATES: Record<
                     ruleType: "metadata",
                     enforcement: "inform",
                     metadataSchemaRef: {
-                        databaseId: "GLOBAL",
                         schemaName: "defaultAsset",
                     },
                     checks: [
@@ -270,7 +265,6 @@ export const SCHEMA_TEMPLATES: Record<
                     ruleType: "metadata",
                     enforcement: "warn",
                     metadataSchemaRef: {
-                        databaseId: "GLOBAL",
                         schemaName: "defaultAsset",
                     },
                     checks: [
@@ -350,7 +344,6 @@ export const SCHEMA_TEMPLATES: Record<
                     ruleType: "metadata",
                     enforcement: "warn",
                     metadataSchemaRef: {
-                        databaseId: "GLOBAL",
                         schemaName: "defaultAsset",
                     },
                     checks: [
@@ -372,7 +365,6 @@ export const SCHEMA_TEMPLATES: Record<
                     ruleType: "metadata",
                     enforcement: "inform",
                     metadataSchemaRef: {
-                        databaseId: "GLOBAL",
                         schemaName: "defaultAsset",
                     },
                     checks: [

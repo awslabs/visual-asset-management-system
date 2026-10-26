@@ -16220,15 +16220,14 @@ components:
                     $ref: "#/components/schemas/complianceEnforcementLevel"
                 metadataSchemaRef:
                     type: object
-                    description: "The metadata schema, looked up among the schemas of the scope's entity type (asset: `assetMetadata`, files: `fileMetadata`, fileAttributes: `fileAttribute`, links: `assetLinkMetadata`) in the database, then in `GLOBAL`. The schema is read whether or not it is enabled; its enabled setting governs metadata write validation only."
+                    description: "The metadata schema, looked up among the schemas of the scope's entity type (asset: `assetMetadata`, files: `fileMetadata`, fileAttributes: `fileAttribute`, links: `assetLinkMetadata`) in the evaluated asset's database (or `databaseId` when given), then in `GLOBAL`. The schema is read whether or not it is enabled; its enabled setting governs metadata write validation only."
                     properties:
                         databaseId:
                             type: string
-                            description: "Database of the metadata schema; `GLOBAL` is accepted."
+                            description: "Optional. Omitted: the evaluated asset's database, then `GLOBAL`. Given: that database, then `GLOBAL`; a GLOBAL compliance schema accepts only `GLOBAL`, a database-scoped one `GLOBAL` or its own database (another is refused with 400)."
                         schemaName:
                             type: string
                     required:
-                        - databaseId
                         - schemaName
                 scope:
                     type: string

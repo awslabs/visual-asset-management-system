@@ -108,6 +108,16 @@ Compliance schemas define the rules assets are evaluated against. Write schemas 
 
 The **Compliance Schemas** page lists every schema you may read with its name, description, format and version. **Create Schema** opens the schema editor, which builds a `vams-rules-v1` body rule by rule; **Edit** opens an existing schema in the same editor and writes its next version; **Sweep** evaluates every asset bound to the schema.
 
+### Where a metadata rule's schema is looked up
+
+A metadata rule names a VAMS metadata schema. In the Visual Builder, **Metadata schema location** decides where it is looked up:
+
+-   **The asset's database (then GLOBAL)** (the default) — the database of the asset being evaluated, then GLOBAL. A GLOBAL compliance schema bound to several databases uses each database's own metadata schema of that name, and the GLOBAL one where a database has none.
+-   **GLOBAL** — always the GLOBAL metadata schema.
+-   **This database** — offered for a compliance schema available to one database only: that database's metadata schema, then the GLOBAL one.
+
+A schema cannot name another database's metadata schema, workflow or pipeline: the database it names must be GLOBAL or, for a database-scoped compliance schema, its own. Saving one that does is refused.
+
 ### Adding rules in the Visual Builder
 
 In the schema editor, open the **Visual Builder** tab and choose a rule type from **Add rule**. Each new rule starts from a working example that you then adjust; **Add check** adds a check to a rule and **Remove check** removes one. The builder shows the validation message the API would return next to the field it concerns. Every rule needs a name of its own: while a rule name is empty or repeated, **Create** and **Save** are refused with that message, since the schema body keys rules by name and would drop or merge the rule. Path, name and description patterns are regular expressions — see [Path and attribute patterns](../concepts/compliance.md#path-and-attribute-patterns) — and are checked as such when you save the schema; a pattern the API refuses is reported at the top of the dialog, which scrolls the message into view.

@@ -130,6 +130,46 @@ def _validate_vams_rules_v1(schema_body):
     return True, None
 
 
+# Refusal of a database reference outside the compliance schema's own scope.
+GLOBAL_SCHEMA_REFERENCE_MESSAGE = (
+    "a GLOBAL compliance schema may reference only GLOBAL ({field}); omit metadataSchemaRef."
+    "databaseId to use the evaluated asset's database, then GLOBAL")
+DATABASE_SCHEMA_REFERENCE_MESSAGE = (
+    "a database-scoped compliance schema may reference only GLOBAL or its own database ({field})")
+
+
+def schema_reference_error(schema_body, schema_database_id):
+    """The refusal for a rule that references a database outside the compliance schema's scope, or
+    None. A GLOBAL compliance schema binds in every database, so a metadata or pipeline reference to
+    one database would hold only in that database: it may reference GLOBAL only (a metadata rule may
+    also omit `metadataSchemaRef.databaseId`, which looks the schema up in the evaluated asset's
+    database, then GLOBAL). A database-scoped schema binds only in its database, so it may reference
+    GLOBAL or that database. Checked on the body's own rules; rules inherited through `extends`
+    were checked against the schema that defines them."""
+    allowed = {GLOBAL_DATABASE_ID}
+    if schema_database_id and schema_database_id != GLOBAL_DATABASE_ID:
+        allowed.add(schema_database_id)
+    message = (GLOBAL_SCHEMA_REFERENCE_MESSAGE if allowed == {GLOBAL_DATABASE_ID}
+               else DATABASE_SCHEMA_REFERENCE_MESSAGE)
+    rules = (schema_body or {}).get("rules") or {}
+    for position, rule_def in enumerate(rules.values()):
+        if not isinstance(rule_def, dict):
+            continue
+        references = []
+        if rule_def.get("ruleType") == "metadata":
+            ref = rule_def.get("metadataSchemaRef") or {}
+            references.append(("metadataSchemaRef.databaseId", ref.get("databaseId")))
+        elif rule_def.get("ruleType") == "pipeline":
+            ref = rule_def.get("pipelineRef") or {}
+            references.append(("pipelineRef.databaseId", ref.get("databaseId")))
+            references.append(("pipelineRef.pipelineDatabaseId", ref.get("pipelineDatabaseId")))
+        for field, value in references:
+            value = value.strip() if isinstance(value, str) else value
+            if value and value not in allowed:
+                return f"rules[{position}]: {message.format(field=field)}"
+    return None
+
+
 #######################
 # Lambda handler
 #######################
@@ -378,6 +418,9 @@ def register_schema(event, request: CreateSchemaRequestModel):
     valid, err = validate_schema_body(request.schemaBody)
     if not valid:
         return _schema_body_rejected(event, err)
+    err = schema_reference_error(request.schemaBody, request.databaseId)
+    if err:
+        return _schema_body_rejected(event, err)
 
     # Only the system actor registers system schemas (which no other caller can later modify).
     is_system = bool(request.isSystem) and claims_and_roles["tokens"][0] == SYSTEM_USER
@@ -447,6 +490,11 @@ def update_schema(event, schema_name, request: UpdateSchemaRequestModel):
         schema_body = normalize_schema_item(current)["schemaBody"]
     valid, err = validate_schema_body(schema_body)
     if not valid:
+        return _schema_body_rejected(event, err)
+    # Checked against the scope the new version has, so moving a schema to another scope is
+    # refused while its rules reference a database outside it.
+    err = schema_reference_error(schema_body, database_id)
+    if err:
         return _schema_body_rejected(event, err)
 
     description = request.description if request.description is not None else current.get("description", "")

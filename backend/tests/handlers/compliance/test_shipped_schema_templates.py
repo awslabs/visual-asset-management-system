@@ -74,7 +74,14 @@ class TestEveryShippedTemplate:
             if isinstance(rule, MetadataRule):
                 ref = rule.metadataSchemaRef
                 assert rule.scope in SEEDED_METADATA_SCHEMAS
-                assert (ref.databaseId, ref.schemaName) == SEEDED_METADATA_SCHEMAS[rule.scope]
+                # No databaseId: looked up in the evaluated asset's database, then GLOBAL, where
+                # the seeded schema is found for a database that has none of its own.
+                assert ref.databaseId is None
+                assert ("GLOBAL", ref.schemaName) == SEEDED_METADATA_SCHEMAS[rule.scope]
+
+    @pytest.mark.parametrize("path", _template_paths(), ids=os.path.basename)
+    def test_the_template_names_no_database_outside_a_global_schema(self, path):
+        assert svc.schema_reference_error(_load(path)["schemaBody"], "GLOBAL") is None
 
     def test_a_shipped_template_exercises_a_scoped_metadata_rule(self):
         scopes = {rule.scope for path in _template_paths() for rule in _rules(path).values()

@@ -532,7 +532,9 @@ def create_schema(ctx: click.Context, schema_name: str, schema_file: str,
     notMatches regular expression, or its tags against requiredTags, forbiddenTags or minTags.
 
     A metadata rule validates metadata against the metadata schema its metadataSchemaRef names
-    (databaseId, schemaName), in one of four scopes set by "scope": "asset" (the default; the
+    (schemaName, and optionally databaseId: omitted, the schema is looked up in the evaluated
+    asset's database, then GLOBAL; given, it must be GLOBAL or - for a database-scoped compliance
+    schema - its own database, as must a pipeline rule's database ids), in one of four scopes set by "scope": "asset" (the default; the
     asset's own metadata, against an assetMetadata schema), "files" or "fileAttributes" (the
     metadata or attributes of each current, non-archived file, against a fileMetadata or
     fileAttribute schema; the schema's file type restriction applies, then the rule's optional

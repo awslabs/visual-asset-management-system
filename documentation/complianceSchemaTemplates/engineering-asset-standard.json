@@ -13,7 +13,6 @@
                 "ruleType": "metadata",
                 "enforcement": "warn",
                 "metadataSchemaRef": {
-                    "databaseId": "GLOBAL",
                     "schemaName": "defaultAsset"
                 },
                 "checks": [
@@ -30,7 +29,6 @@
                 "ruleType": "metadata",
                 "enforcement": "inform",
                 "metadataSchemaRef": {
-                    "databaseId": "GLOBAL",
                     "schemaName": "defaultAsset"
                 },
                 "checks": [
@@ -61,7 +59,6 @@
                 "linkDirection": "parents",
                 "relationshipType": "parentChild",
                 "metadataSchemaRef": {
-                    "databaseId": "GLOBAL",
                     "schemaName": "defaultAssetLinks"
                 },
                 "checks": [

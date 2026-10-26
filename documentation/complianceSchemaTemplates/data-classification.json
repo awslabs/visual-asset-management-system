@@ -13,7 +13,6 @@
                 "ruleType": "metadata",
                 "enforcement": "quarantine",
                 "metadataSchemaRef": {
-                    "databaseId": "GLOBAL",
                     "schemaName": "defaultAsset"
                 },
                 "checks": [
@@ -34,7 +33,6 @@
                 "ruleType": "metadata",
                 "enforcement": "inform",
                 "metadataSchemaRef": {
-                    "databaseId": "GLOBAL",
                     "schemaName": "defaultAsset"
                 },
                 "checks": [

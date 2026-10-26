@@ -208,20 +208,26 @@ class PipelineRule(BaseModel, extra='ignore'):
 
 
 class MetadataSchemaRef(BaseModel, extra='ignore'):
-    """Reference to a VAMS metadata schema (database-scoped or GLOBAL)."""
-    databaseId: str = Field(min_length=3, max_length=63)
+    """Reference to a VAMS metadata schema by name, and where it is looked up.
+
+    `databaseId` omitted (the default): the evaluated asset's database, then GLOBAL — so a GLOBAL
+    compliance schema bound to several databases uses each database's own metadata schema of that
+    name where one exists. `databaseId` given pins the lookup to that database, then GLOBAL; the
+    schema service accepts only `GLOBAL` or the compliance schema's own database there
+    (`complianceSchemaService.schema_reference_error`)."""
+    databaseId: Optional[str] = Field(None, min_length=3, max_length=63)
     schemaName: str = Field(min_length=1, max_length=256)
 
     _trim_names = validator('databaseId', 'schemaName', pre=True, allow_reuse=True)(trim_name)
 
     @root_validator
     def validate_ids(cls, values):
-        (valid, message) = validate({
-            'databaseId': {
+        checks = {'schemaName': {'value': values.get('schemaName'), 'validator': 'OBJECT_NAME'}}
+        if values.get('databaseId') is not None:
+            checks['databaseId'] = {
                 'value': values.get('databaseId'), 'validator': 'ID', 'allowGlobalKeyword': True,
-            },
-            'schemaName': {'value': values.get('schemaName'), 'validator': 'OBJECT_NAME'},
-        })
+            }
+        (valid, message) = validate(checks)
         if not valid:
             raise ValueError(message)
         return values

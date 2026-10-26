@@ -83,7 +83,8 @@ RULES_SCHEMA_BODY = {
         "owner-present": {
             "ruleType": "metadata",
             "enforcement": "warn",
-            "metadataSchemaRef": {"databaseId": DB, "schemaName": "Asset Schema"},
+            # No databaseId: looked up in the evaluated asset's database (DB), then GLOBAL.
+            "metadataSchemaRef": {"schemaName": "Asset Schema"},
             "checks": [{"name": "req", "validateRequired": True, "validateTypes": True,
                         "additionalRequiredFields": ["owner"]}],
         },

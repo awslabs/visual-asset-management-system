@@ -739,7 +739,7 @@ def evaluate_metadata_rule(rule_name: str, rule: MetadataRule,
     if schema_fields is None:
         return error(METADATA_SCHEMA_FIELDS_UNREADABLE_MESSAGE)
     ref = rule.metadataSchemaRef
-    expected = {"schemaRef": f"{ref.databaseId}/{ref.schemaName}", "scope": scope.value}
+    expected = {"schemaRef": metadata_schema_ref_label(ref), "scope": scope.value}
 
     if scope == MetadataScope.asset:
         if data.asset_metadata is None:
@@ -1105,12 +1105,30 @@ def needs_asset_row(groups: RuleGroups) -> bool:
     return bool(groups.assetAttributes) or needs_current_files(groups)
 
 
+# Stands for "the evaluated asset's database" in a metadata schema reference without `databaseId`.
+ASSET_DATABASE_REF = "@assetDatabase"
+
+
+def metadata_schema_lookup_database(ref, asset_database_id: str) -> str:
+    """The database a metadata rule's schema is looked up in (then GLOBAL): the reference's
+    `databaseId` when it pins one, else the evaluated asset's database."""
+    return ref.databaseId or asset_database_id
+
+
+def metadata_schema_ref_label(ref) -> str:
+    """How a rule result names its schema reference: 'databaseId/schemaName' for a pinned
+    reference, the schema name alone for one looked up in the asset's database (then GLOBAL)."""
+    return f"{ref.databaseId}/{ref.schemaName}" if ref.databaseId else ref.schemaName
+
+
 def metadata_schema_ref_key(ref, scope: Any = MetadataScope.asset) -> str:
-    """Lookup key for a metadata rule's schema: 'databaseId/schemaName/scope'. The scope is part of
-    the key because it selects the entity type the schema is looked up under, so two rules naming
-    one schema with different scopes do not share an entry."""
+    """Lookup key for a metadata rule's schema: 'databaseId/schemaName/scope', with
+    ASSET_DATABASE_REF for a reference without `databaseId` (one evaluation is of one asset, so
+    that stands for one database). The scope is part of the key because it selects the entity type
+    the schema is looked up under, so two rules naming one schema with different scopes do not
+    share an entry."""
     scope_value = scope.value if isinstance(scope, MetadataScope) else str(scope)
-    return f"{ref.databaseId}/{ref.schemaName}/{scope_value}"
+    return f"{ref.databaseId or ASSET_DATABASE_REF}/{ref.schemaName}/{scope_value}"
 
 
 def verdict_to_state(verdict: EvaluationVerdict) -> str:
