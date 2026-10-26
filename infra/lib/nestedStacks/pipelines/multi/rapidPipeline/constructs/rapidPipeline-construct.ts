@@ -57,6 +57,38 @@ const defaultProps: Partial<RapidPipelineConstructProps> = {
 };
 
 /**
+ * An EcsRunTask whose RunTask call also sets the task's group to the Step Functions execution name.
+ *
+ * A Fargate task that reaches the state's task-level timeout is still running, and the timed-out
+ * state's error output carries no task ARN. Labelling the task with the execution name is what lets
+ * the timeout route find it: the route lists the cluster's running tasks, describes them, and stops
+ * the one whose group is this execution's name. aws-cdk-lib's EcsRunTask has no group prop, so this
+ * adds the field to the rendered Parameters and leaves everything else EcsRunTask renders and grants
+ * as it is. The RunTask API reference documents no length or character limit for group; the Amazon
+ * ECS Developer Guide ("Group related Amazon ECS tasks") limits a task group name to 255 characters.
+ * openPipeline names each execution `PipelineJob_<timestamp>_<8 hex>`, within Step Functions'
+ * 80-character execution name limit, and without the `:` of the `family:` and `service:` groups ECS
+ * gives tasks by default.
+ */
+class GroupLabelledEcsRunTask extends tasks.EcsRunTask {
+    public toStateJson(topLevelQueryLanguage?: sfn.QueryLanguage): object {
+        const state = super.toStateJson(topLevelQueryLanguage) as {
+            Parameters?: Record<string, unknown>;
+        };
+        if (state.Parameters === undefined) {
+            // A JSONata state renders Arguments instead, which takes a different expression syntax.
+            throw new Error(
+                "RapidPipelineRunFargate rendered no Parameters; the Group label needs the JSONPath query language"
+            );
+        }
+        return {
+            ...state,
+            Parameters: { ...state.Parameters, "Group.$": "$$.Execution.Name" },
+        };
+    }
+}
+
+/**
  * Deploys a Step Function for ECS RunTask workflow
  * Creates:
  * - SFN
@@ -376,9 +408,145 @@ export class RapidPipelineConstruct extends NestedStack {
         // const securityGroup = new cdk.aws_ec2.SecurityGroup(this, "RapidPipelineTaskRunSG", { vpc: props.vpc, allowAllOutbound: true });
         // securityGroup.addIngressRule(Peer.anyIpv4(), Port.tcp(443), "Allow HTTPS access");
 
-        // Step function task for ECS
-        const runRapidPipelineJob = new tasks.EcsRunTask(this, "RapidPipelineRunFargate", {
+        /**
+         * Timeout route: stop a Fargate task that is still running at its task-level timeout
+         */
+
+        // A .sync ECS state that reaches its TimeoutSeconds fails with States.Timeout but leaves the
+        // task running, and its error output carries no task ARN. The Fargate state labels the task
+        // with its group set to the execution name. ecs:ListTasks cannot filter by group, so these
+        // states list the cluster's running tasks, describe them, keep the ARNs of the task(s) whose
+        // group is this execution's name, stop those, and go on to PipelineEndTask. Each call is
+        // bounded and best-effort: a failure is caught into $.stopError and also goes on to
+        // PipelineEndTask, so $.error stays States.Timeout and the parent workflow is told of the
+        // timeout whether or not the stop succeeds. The bounds are counted in the chain in config.ts.
+        //
+        // One page only: ListTasks returns at most 100 ARNs per call, and DescribeTasks takes at most
+        // 100. The cluster is this pipeline's own; when more than 100 of its tasks are running and
+        // this run's task is not on the first page, or the listed tasks' descriptions exceed the
+        // 256 KiB payload quota, the task is not stopped and runs until its container exits, as it
+        // did before the route existed. The parent workflow is told of the timeout either way.
+        const stopCallRetry: sfn.RetryProps = {
+            // AWS SDK integration errors are named <service prefix>.<exception>; the ECS prefix is Ecs.
+            errors: ["Ecs.ThrottlingException", "Ecs.ServerException"],
+            interval: Duration.seconds(1),
+            maxAttempts: Config.RAPID_PIPELINE_ECS_STOP_CALL_RETRIES,
+            backoffRate: 2,
+        };
+        const stopCallCatch: sfn.CatchProps = { resultPath: "$.stopError" };
+
+        const listTimedOutTask = new sfn.CustomState(this, "ListTimedOutTask", {
+            stateJson: {
+                Type: "Task",
+                Comment:
+                    "List the cluster's running tasks; the timed-out one is matched by group next",
+                Resource: `arn:${ServiceHelper.Partition()}:states:::aws-sdk:ecs:listTasks`,
+                TimeoutSeconds: Config.RAPID_PIPELINE_ECS_STOP_CALL_TIMEOUT_SECONDS,
+                Parameters: {
+                    Cluster: cluster.clusterArn,
+                    DesiredStatus: "RUNNING",
+                    MaxResults: Config.RAPID_PIPELINE_ECS_STOP_ROUTE_PAGE_SIZE,
+                },
+                // The whole response is kept: a ResultSelector path the response lacks would fail
+                // the execution with an uncatchable States.Runtime before PipelineEndTask ran.
+                ResultPath: "$.timedOutTasks",
+            },
+        })
+            .addRetry(stopCallRetry)
+            .addCatch(pipeLineEndTask, stopCallCatch);
+
+        // JSONata catchers have no ResultPath; this Output does what ResultPath "$.stopError" does
+        // for the JSONPath states: it keeps the state input and adds the error output beside it.
+        // These catchers are written into the state JSON, because CustomState renders addCatch()
+        // catchers in JSONPath form; PipelineEndTask is in the graph through the other routes.
+        const keepInputAndAddStopError =
+            "{% $merge([$states.input, {'stopError': $states.errorOutput}]) %}";
+        const pipelineEndStateId = pipeLineEndTask.startState.stateId;
+
+        // DescribeTasks is a JSONata state so that its response, up to 100 full task descriptions,
+        // never becomes state data: its Output keeps the state input and adds only the ARNs of the
+        // described tasks whose group is this execution's name, as a list that is empty when none is.
+        // A JSONPath filter cannot compare with the execution name, and keeping the descriptions in
+        // the state would carry up to 256 KiB to every later state. A task without a group is not
+        // matched; an expression that cannot be evaluated raises States.QueryEvaluationError, which
+        // the States.ALL catcher takes. States.ALL does not match States.DataLimitExceeded (a
+        // response over the 256 KiB payload quota), so that error has a catcher of its own.
+        const describeTimedOutTasks = new sfn.CustomState(this, "DescribeTimedOutTasks", {
+            stateJson: {
+                Type: "Task",
+                QueryLanguage: "JSONata",
+                Comment: "Keep the ARN of the listed task whose group is this execution's name",
+                Resource: `arn:${ServiceHelper.Partition()}:states:::aws-sdk:ecs:describeTasks`,
+                TimeoutSeconds: Config.RAPID_PIPELINE_ECS_STOP_CALL_TIMEOUT_SECONDS,
+                Arguments: {
+                    Cluster: cluster.clusterArn,
+                    Tasks: "{% $states.input.timedOutTasks.TaskArns %}",
+                },
+                Output:
+                    "{% $merge([$states.input, {'timedOutTaskArns': " +
+                    "[$states.result.Tasks[Group = $states.context.Execution.Name].TaskArn]}]) %}",
+                Catch: [
+                    {
+                        ErrorEquals: ["States.DataLimitExceeded"],
+                        Output: keepInputAndAddStopError,
+                        Next: pipelineEndStateId,
+                    },
+                    {
+                        ErrorEquals: ["States.ALL"],
+                        Output: keepInputAndAddStopError,
+                        Next: pipelineEndStateId,
+                    },
+                ],
+            },
+        }).addRetry(stopCallRetry);
+
+        const stopTimedOutTask = new sfn.CustomState(this, "StopTimedOutTask", {
+            stateJson: {
+                Type: "Task",
+                Comment: "Stop the timed-out Fargate task",
+                Resource: `arn:${ServiceHelper.Partition()}:states:::aws-sdk:ecs:stopTask`,
+                TimeoutSeconds: Config.RAPID_PIPELINE_ECS_STOP_CALL_TIMEOUT_SECONDS,
+                Parameters: {
+                    Cluster: cluster.clusterArn,
+                    "Task.$": "$.taskArn",
+                    Reason: "VAMS RapidPipeline task timeout",
+                },
+                ResultPath: null,
+            },
+        }).addRetry(stopCallRetry);
+
+        // A failed iteration fails the Map, whose catch takes the run on to PipelineEndTask. The
+        // iterations run concurrently; the group is unique to the execution, so there is one at most.
+        const stopTimedOutTasks = new sfn.Map(this, "StopTimedOutTasks", {
+            comment: "Stop the task DescribeTimedOutTasks matched to this execution",
+            // Always present when this state runs: DescribeTimedOutTasks' Output sets it to a list.
+            itemsPath: sfn.JsonPath.stringAt("$.timedOutTaskArns"),
+            itemSelector: { taskArn: sfn.JsonPath.stringAt("$$.Map.Item.Value") },
+            resultPath: sfn.JsonPath.DISCARD,
+        });
+        stopTimedOutTasks.itemProcessor(stopTimedOutTask);
+        stopTimedOutTasks.addCatch(pipeLineEndTask, stopCallCatch).next(pipeLineEndTask);
+        describeTimedOutTasks.next(stopTimedOutTasks);
+
+        // DescribeTasks rejects an empty task list (InvalidParameterException), so it runs only when
+        // ListTasks listed a task. With none running there is nothing to stop, and the run goes
+        // straight on to PipelineEndTask without a $.stopError.
+        listTimedOutTask.next(
+            new sfn.Choice(this, "TimedOutTaskListed")
+                .when(sfn.Condition.isPresent("$.timedOutTasks.TaskArns[0]"), describeTimedOutTasks)
+                .otherwise(pipeLineEndTask)
+        );
+
+        // Step function task for ECS. The .sync pattern waits for the task to stop however long it
+        // runs, so the state carries a task-level timeout: a task that reaches it fails the state with
+        // States.Timeout, which the first catch below routes through the timeout route above to
+        // PipelineEndTask, and the run fits in the state machine timeout (the chain in config.ts). The
+        // task is started with its group set to the execution name, which is how that route finds it.
+        const runRapidPipelineJob = new GroupLabelledEcsRunTask(this, "RapidPipelineRunFargate", {
             integrationPattern: sfn.IntegrationPattern.RUN_JOB,
+            taskTimeout: sfn.Timeout.duration(
+                Duration.seconds(Config.RAPID_PIPELINE_ECS_FARGATE_TASK_TIMEOUT_SECONDS)
+            ),
             cluster,
             taskDefinition,
             assignPublicIp: false,
@@ -400,6 +568,14 @@ export class RapidPipelineConstruct extends NestedStack {
             securityGroups: props.pipelineSecurityGroups,
             subnets: subnetSelection,
         })
+            // Catchers match in order, and the general catch matches States.Timeout too, so the
+            // timeout catch must render first. CDK renders a States.ALL catcher last whatever the
+            // addCatch order; ecsTimeoutStopTask.test.ts pins the emitted order. Both keep the state
+            // input and add the error at $.error.
+            .addCatch(listTimedOutTask, {
+                errors: [sfn.Errors.TIMEOUT],
+                resultPath: "$.error",
+            })
             .addCatch(handleRapidPipelineError, {
                 resultPath: "$.error",
             })
@@ -441,7 +617,9 @@ export class RapidPipelineConstruct extends NestedStack {
             "RapidPipelineProcessing-StateMachine",
             {
                 definitionBody: sfn.DefinitionBody.fromChainable(sfnPipelineDefinition),
-                timeout: Duration.hours(5),
+                // The middle link of the timeout chain in config.ts: the Fargate task bound and the
+                // two Lambda steps fit inside it, and the registered pipeline's taskTimeout outlasts it.
+                timeout: Duration.seconds(Config.RAPID_PIPELINE_ECS_STATE_MACHINE_TIMEOUT_SECONDS),
                 logs: {
                     destination: stateMachineLogGroup,
                     includeExecutionData: true,
@@ -449,6 +627,44 @@ export class RapidPipelineConstruct extends NestedStack {
                 },
                 tracingEnabled: true,
             }
+        );
+
+        // The timeout route's three ECS calls. The RunTask state's generated policy is left as CDK
+        // emits it; these statements are added beside it.
+        //
+        // ecs:ListTasks: its only resource type is a container instance (Service Authorization
+        // Reference), and a Fargate cluster has none, so the action is evaluated against "*". The
+        // ecs:cluster condition limits it to this pipeline's cluster.
+        pipelineStateMachine.addToRolePolicy(
+            new iam.PolicyStatement({
+                sid: "ListTimedOutRapidPipelineTask",
+                actions: ["ecs:ListTasks"],
+                resources: ["*"],
+                conditions: { ArnEquals: { "ecs:cluster": cluster.clusterArn } },
+            })
+        );
+        // ecs:DescribeTasks and ecs:StopTask on this cluster's tasks, under the same condition. The
+        // RunTask state's generated policy already holds both on "*" (Step Functions' .sync
+        // integration uses them to watch and cancel a task), so these statements record what the
+        // timeout route needs rather than narrowing what the role can do.
+        const clusterTasksArn = `arn:${ServiceHelper.Partition()}:ecs:${region}:${account}:task/${
+            cluster.clusterName
+        }/*`;
+        pipelineStateMachine.addToRolePolicy(
+            new iam.PolicyStatement({
+                sid: "DescribeTimedOutRapidPipelineTask",
+                actions: ["ecs:DescribeTasks"],
+                resources: [clusterTasksArn],
+                conditions: { ArnEquals: { "ecs:cluster": cluster.clusterArn } },
+            })
+        );
+        pipelineStateMachine.addToRolePolicy(
+            new iam.PolicyStatement({
+                sid: "StopTimedOutRapidPipelineTask",
+                actions: ["ecs:StopTask"],
+                resources: [clusterTasksArn],
+                conditions: { ArnEquals: { "ecs:cluster": cluster.clusterArn } },
+            })
         );
 
         /**
@@ -661,12 +877,30 @@ export class RapidPipelineConstruct extends NestedStack {
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
-                        `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                        {
+                            regex: "/^Resource::arn:<AWS::Partition>:batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job-definition\\/\\*$/g",
+                        },
                         {
                             regex: "/^Resource::<.*Function.*.Arn>:.*$/g",
                         },
                         {
                             regex: "/^Action::s3:.*$/g",
+                        },
+                    ],
+                },
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason:
+                        "ecs:ListTasks is granted on * because its only resource type is a container " +
+                        "instance and a Fargate cluster has none; an ArnEquals ecs:cluster condition " +
+                        "limits it to this pipeline's cluster. ecs:DescribeTasks and ecs:StopTask are " +
+                        "scoped to this cluster's tasks (task/<cluster>/*) under the same condition, " +
+                        "because the task ID is only known once the task runs. All three find and stop " +
+                        "a Fargate task still running at its task-level timeout.",
+                    appliesTo: [
+                        "Resource::*",
+                        {
+                            regex: "/^Resource::arn:.+:ecs:.+:task\\/<RapidPipelineEcsCluster[A-Za-z0-9]+>\\/\\*$/g",
                         },
                     ],
                 },

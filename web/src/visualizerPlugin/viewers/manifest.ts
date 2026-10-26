@@ -22,20 +22,16 @@ export const VIEWER_COMPONENTS = {
     "./viewers/CesiumViewerPlugin/CesiumViewerComponent":
         "CesiumViewerPlugin/CesiumViewerComponent",
     "./viewers/TextViewerPlugin/TextViewerComponent": "TextViewerPlugin/TextViewerComponent",
+    "./viewers/TextDiffViewerPlugin/TextDiffViewerComponent":
+        "TextDiffViewerPlugin/TextDiffViewerComponent",
     "./viewers/BabylonJSGaussianSplatViewerPlugin/BabylonJSGaussianSplatViewerComponent":
         "BabylonJSGaussianSplatViewerPlugin/BabylonJSGaussianSplatViewerComponent",
     "./viewers/PlayCanvasGaussianSplatViewerPlugin/PlayCanvasGaussianSplatViewerComponent":
         "PlayCanvasGaussianSplatViewerPlugin/PlayCanvasGaussianSplatViewerComponent",
-    "./viewers/VntanaViewerPlugin/VntanaViewerComponent":
-        "VntanaViewerPlugin/VntanaViewerComponent",
-    "./viewers/VeerumViewerPlugin/VeerumViewerComponent":
-        "VeerumViewerPlugin/VeerumViewerComponent",
     "./viewers/NeedleUSDViewerPlugin/NeedleUSDViewerComponent":
         "NeedleUSDViewerPlugin/NeedleUSDViewerComponent",
     "./viewers/ThreeJSViewerPlugin/ThreeJSViewerComponent":
         "ThreeJSViewerPlugin/ThreeJSViewerComponent",
-    "./viewers/PhysnaViewerPlugin/PhysnaViewerComponent":
-        "PhysnaViewerPlugin/PhysnaViewerComponent",
     "./viewers/ThatOpenWebIfcViewerPlugin/ThatOpenWebIfcViewerComponent":
         "ThatOpenWebIfcViewerPlugin/ThatOpenWebIfcViewerComponent",
     "./viewers/SuperSplatViewerPlugin/SuperSplatViewerComponent":
@@ -51,11 +47,10 @@ export const DEPENDENCY_MANAGERS = {
         "BabylonJSGaussianSplatViewerPlugin/dependencies",
     "./viewers/PlayCanvasGaussianSplatViewerPlugin/dependencies":
         "PlayCanvasGaussianSplatViewerPlugin/dependencies",
-    "./viewers/VntanaViewerPlugin/dependencies": "VntanaViewerPlugin/dependencies",
-    "./viewers/VeerumViewerPlugin/dependencies": "VeerumViewerPlugin/dependencies",
     "./viewers/NeedleUSDViewerPlugin/dependencies": "NeedleUSDViewerPlugin/dependencies",
     "./viewers/ThreeJSViewerPlugin/dependencies": "ThreeJSViewerPlugin/dependencies",
     "./viewers/ThatOpenWebIfcViewerPlugin/dependencies": "ThatOpenWebIfcViewerPlugin/dependencies",
+    "./viewers/TextDiffViewerPlugin/dependencies": "TextDiffViewerPlugin/dependencies",
     // Add new dependency managers here as needed:
     // './viewers/MyViewerPlugin/dependencies': 'MyViewerPlugin/dependencies',
 } as const;
@@ -66,3 +61,5 @@ export const DEPENDENCY_MANAGERS = {
 // 3. Add entry to DEPENDENCY_MANAGERS above (if needed)
 // 4. Add configuration to viewerConfig.json
 // 5. No changes needed to PluginRegistry.ts!
+// An add-on's viewer, or a licensed viewer that ships disabled, is registered in addonManifest.ts and
+// config/addonViewerConfig.json instead.

@@ -20,6 +20,13 @@ import { useNavigate, useParams } from "react-router";
 import { fetchAssetVersion, compareAssetVersions } from "../../../services/AssetVersionService";
 import { fetchAssetS3Files } from "../../../services/APIService";
 import { AssetVersionContext, AssetVersion, AssetVersionMetadataItem } from "./AssetVersionManager";
+import FileViewerModal from "../../filemanager/modals/FileViewerModal";
+import { FileInfo } from "../../../visualizerPlugin/core/types";
+import {
+    extensionOfFilename,
+    isExtensionComparableAsVersions,
+} from "../../../visualizerPlugin/core/viewableExtensions";
+import { useViewerRegistryReady } from "../../../visualizerPlugin/core/useViewerRegistryReady";
 
 // TypeScript interfaces - using imported AssetVersion from AssetVersionManager
 
@@ -139,6 +146,35 @@ const formatVersionLabel = (version: AssetVersion): string => {
     return version.versionAlias ? `${version.Version} (${version.versionAlias})` : version.Version;
 };
 
+/**
+ * Build the ordered FileInfo[] for a same-file version compare. Both entries share the file's
+ * asset-relative key (so PluginRegistry classifies the selection as "same-file-versions") and each
+ * keeps its own S3 versionId, which is what the diff viewer streams. Index 0 is version1 (left).
+ * Returns null when either side is missing (compare needs both).
+ */
+const buildVersionCompareFiles = (
+    file: FileComparison,
+    assetId: string,
+    databaseId: string
+): FileInfo[] | null => {
+    if (!file.version1File || !file.version2File) {
+        return null;
+    }
+    const filename = file.relativeKey.split("/").pop() || file.relativeKey;
+    const toFileInfo = (fv: FileVersion): FileInfo => ({
+        filename,
+        key: file.relativeKey,
+        isDirectory: false,
+        assetId,
+        databaseId,
+        versionId: fv.versionId,
+        size: fv.size,
+        dateCreatedCurrentVersion: fv.lastModified,
+        isArchived: fv.isArchived,
+    });
+    return [toFileInfo(file.version1File), toFileInfo(file.version2File)];
+};
+
 // Original standalone component for comparing with current files
 const AssetVersionComparison: React.FC<ComparisonProps> = ({
     databaseId,
@@ -153,6 +189,13 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
     const [error, setError] = useState<string | null>(null);
     const [comparison, setComparison] = useState<any | null>(null);
     const [currentFiles, setCurrentFiles] = useState<any[]>([]);
+    // Files handed to the compare host when the user clicks "Compare" on a modified row.
+    const [compareFiles, setCompareFiles] = useState<FileInfo[] | null>(null);
+    // "Compare" is offered only for a type some compare viewer diffs (registry must be initialized).
+    const viewerRegistryReady = useViewerRegistryReady();
+    const canCompareRow = (item: FileComparison): boolean =>
+        viewerRegistryReady &&
+        isExtensionComparableAsVersions(extensionOfFilename(item.relativeKey));
 
     // State for table pagination and filtering
     const [comparisonFilterText, setComparisonFilterText] = useState<string>("");
@@ -580,11 +623,27 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
                                     : `View v${version2 ? formatVersionLabel(version2) : ""}`}
                             </Button>
                         )}
-                        {item.version1File && item.version2File && item.status === "modified" && (
-                            <Button iconName="copy" variant="normal">
-                                Compare
-                            </Button>
-                        )}
+                        {item.version1File &&
+                            item.version2File &&
+                            item.status === "modified" &&
+                            canCompareRow(item) && (
+                                <Button
+                                    iconName="copy"
+                                    variant="normal"
+                                    onClick={() => {
+                                        const built = buildVersionCompareFiles(
+                                            item,
+                                            assetId,
+                                            databaseId
+                                        );
+                                        if (built) {
+                                            setCompareFiles(built);
+                                        }
+                                    }}
+                                >
+                                    Compare
+                                </Button>
+                            )}
                     </SpaceBetween>
                 );
             },
@@ -593,260 +652,282 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
 
     // Render comparison results
     return (
-        <Container
-            header={
-                <Header
-                    variant="h2"
-                    actions={
-                        <SpaceBetween direction="horizontal" size="xs">
-                            <Button onClick={onClose} variant="normal">
-                                Close Comparison
-                            </Button>
-                        </SpaceBetween>
-                    }
-                >
-                    {compareWithCurrent
-                        ? `Comparing Version ${formatVersionLabel(version1)} with Current Files`
-                        : `Comparing Version ${formatVersionLabel(version1)} with Version ${
-                              version2 ? formatVersionLabel(version2) : ""
-                          }`}
-                </Header>
-            }
-        >
-            <SpaceBetween direction="vertical" size="l">
-                {/* Summary */}
-                <Container header={<Header variant="h3">Comparison Summary</Header>}>
-                    <ColumnLayout columns={2}>
-                        <div>
-                            <SpaceBetween direction="vertical" size="s">
-                                <Box variant="h4">Version Information</Box>
-                                <div>
-                                    <strong>First Version:</strong> v{formatVersionLabel(version1)}{" "}
-                                    ({new Date(version1.DateModified || "").toLocaleDateString()})
-                                </div>
-                                <div>
-                                    <strong>Second Version:</strong>{" "}
-                                    {compareWithCurrent
-                                        ? "Current Files"
-                                        : `v${
-                                              version2 ? formatVersionLabel(version2) : ""
-                                          } (${new Date(
-                                              version2?.DateModified || ""
-                                          ).toLocaleDateString()})`}
-                                </div>
-                                {comparison.summary && (
+        <>
+            <Container
+                header={
+                    <Header
+                        variant="h2"
+                        actions={
+                            <SpaceBetween direction="horizontal" size="xs">
+                                <Button onClick={onClose} variant="normal">
+                                    Close Comparison
+                                </Button>
+                            </SpaceBetween>
+                        }
+                    >
+                        {compareWithCurrent
+                            ? `Comparing Version ${formatVersionLabel(version1)} with Current Files`
+                            : `Comparing Version ${formatVersionLabel(version1)} with Version ${
+                                  version2 ? formatVersionLabel(version2) : ""
+                              }`}
+                    </Header>
+                }
+            >
+                <SpaceBetween direction="vertical" size="l">
+                    {/* Summary */}
+                    <Container header={<Header variant="h3">Comparison Summary</Header>}>
+                        <ColumnLayout columns={2}>
+                            <div>
+                                <SpaceBetween direction="vertical" size="s">
+                                    <Box variant="h4">Version Information</Box>
                                     <div>
-                                        <strong>Total Files:</strong> {comparison.summary.total}
+                                        <strong>First Version:</strong> v
+                                        {formatVersionLabel(version1)} (
+                                        {new Date(version1.DateModified || "").toLocaleDateString()}
+                                        )
                                     </div>
-                                )}
-                            </SpaceBetween>
-                        </div>
+                                    <div>
+                                        <strong>Second Version:</strong>{" "}
+                                        {compareWithCurrent
+                                            ? "Current Files"
+                                            : `v${
+                                                  version2 ? formatVersionLabel(version2) : ""
+                                              } (${new Date(
+                                                  version2?.DateModified || ""
+                                              ).toLocaleDateString()})`}
+                                    </div>
+                                    {comparison.summary && (
+                                        <div>
+                                            <strong>Total Files:</strong> {comparison.summary.total}
+                                        </div>
+                                    )}
+                                </SpaceBetween>
+                            </div>
 
-                        <div>
-                            <SpaceBetween direction="vertical" size="s">
-                                <Box variant="h4">Changes</Box>
-                                {comparison.summary && (
-                                    <>
-                                        <div>
-                                            <span
-                                                style={{
-                                                    color: "var(--vams-color-success)",
-                                                    marginRight: "4px",
-                                                }}
-                                            >
-                                                ➕
-                                            </span>
-                                            <strong>Added:</strong> {comparison.summary.added}
-                                        </div>
-                                        <div>
-                                            <span
-                                                style={{
-                                                    color: "var(--vams-color-error)",
-                                                    marginRight: "4px",
-                                                }}
-                                            >
-                                                ➖
-                                            </span>
-                                            <strong>Removed:</strong> {comparison.summary.removed}
-                                        </div>
-                                        <div>
-                                            <span
-                                                style={{
-                                                    color: "var(--vams-color-info)",
-                                                    marginRight: "4px",
-                                                }}
-                                            >
-                                                ✏️
-                                            </span>
-                                            <strong>Modified:</strong> {comparison.summary.modified}
-                                        </div>
-                                        <div>
-                                            <span
-                                                style={{
-                                                    color: "var(--vams-text-secondary)",
-                                                    marginRight: "4px",
-                                                }}
-                                            >
-                                                ✓
-                                            </span>
-                                            <strong>Unchanged:</strong>{" "}
-                                            {comparison.summary.unchanged}
-                                        </div>
-                                    </>
-                                )}
-                            </SpaceBetween>
-                        </div>
-                    </ColumnLayout>
-                </Container>
+                            <div>
+                                <SpaceBetween direction="vertical" size="s">
+                                    <Box variant="h4">Changes</Box>
+                                    {comparison.summary && (
+                                        <>
+                                            <div>
+                                                <span
+                                                    style={{
+                                                        color: "var(--vams-color-success)",
+                                                        marginRight: "4px",
+                                                    }}
+                                                >
+                                                    ➕
+                                                </span>
+                                                <strong>Added:</strong> {comparison.summary.added}
+                                            </div>
+                                            <div>
+                                                <span
+                                                    style={{
+                                                        color: "var(--vams-color-error)",
+                                                        marginRight: "4px",
+                                                    }}
+                                                >
+                                                    ➖
+                                                </span>
+                                                <strong>Removed:</strong>{" "}
+                                                {comparison.summary.removed}
+                                            </div>
+                                            <div>
+                                                <span
+                                                    style={{
+                                                        color: "var(--vams-color-info)",
+                                                        marginRight: "4px",
+                                                    }}
+                                                >
+                                                    ✏️
+                                                </span>
+                                                <strong>Modified:</strong>{" "}
+                                                {comparison.summary.modified}
+                                            </div>
+                                            <div>
+                                                <span
+                                                    style={{
+                                                        color: "var(--vams-text-secondary)",
+                                                        marginRight: "4px",
+                                                    }}
+                                                >
+                                                    ✓
+                                                </span>
+                                                <strong>Unchanged:</strong>{" "}
+                                                {comparison.summary.unchanged}
+                                            </div>
+                                        </>
+                                    )}
+                                </SpaceBetween>
+                            </div>
+                        </ColumnLayout>
+                    </Container>
 
-                {/* Filter options */}
-                <SpaceBetween direction="horizontal" size="xs">
-                    <Toggle
-                        onChange={({ detail }: { detail: { checked: boolean } }) =>
-                            setShowArchivedFiles(detail.checked)
-                        }
-                        checked={showArchivedFiles}
-                    >
-                        Show archived files
-                    </Toggle>
-                    <Toggle
-                        onChange={({ detail }: { detail: { checked: boolean } }) =>
-                            setShowMismatchedOnly(detail.checked)
-                        }
-                        checked={showMismatchedOnly}
-                    >
-                        Show only changed files
-                    </Toggle>
-                </SpaceBetween>
-
-                {/* File comparison table */}
-                <Table
-                    columnDefinitions={columns}
-                    items={paginatedComparisons}
-                    loading={loading}
-                    loadingText="Loading comparison data"
-                    empty={
-                        <Box textAlign="center" padding="l">
-                            <div>No files match the current filter criteria</div>
-                        </Box>
-                    }
-                    header={<Header counter={`(${totalComparisonFiles})`}>File Comparison</Header>}
-                    filter={
-                        <TextFilter
-                            filteringText={comparisonFilterText}
-                            filteringPlaceholder="Find files"
-                            filteringAriaLabel="Filter files"
-                            onChange={({ detail }) => setComparisonFilterText(detail.filteringText)}
-                        />
-                    }
-                    pagination={
-                        <Pagination
-                            currentPageIndex={comparisonCurrentPage}
-                            pagesCount={Math.max(
-                                1,
-                                Math.ceil(totalComparisonFiles / comparisonPageSize)
-                            )}
-                            onChange={({ detail }) =>
-                                setComparisonCurrentPage(detail.currentPageIndex)
+                    {/* Filter options */}
+                    <SpaceBetween direction="horizontal" size="xs">
+                        <Toggle
+                            onChange={({ detail }: { detail: { checked: boolean } }) =>
+                                setShowArchivedFiles(detail.checked)
                             }
-                            ariaLabels={{
-                                nextPageLabel: "Next page",
-                                previousPageLabel: "Previous page",
-                                pageLabel: (pageNumber) =>
-                                    `Page ${pageNumber} of ${Math.max(
-                                        1,
-                                        Math.ceil(totalComparisonFiles / comparisonPageSize)
-                                    )}`,
-                            }}
-                        />
-                    }
-                    preferences={
-                        <CollectionPreferences
-                            title="Preferences"
-                            confirmLabel="Confirm"
-                            cancelLabel="Cancel"
-                            preferences={preferences}
-                            onConfirm={({ detail }) => {
-                                // Create a new preferences object with the correct types
-                                const newPreferences = {
-                                    pageSize: detail.pageSize || preferences.pageSize,
-                                    visibleContent: detail.visibleContent
-                                        ? [...detail.visibleContent]
-                                        : preferences.visibleContent,
-                                };
-                                setPreferences(newPreferences);
+                            checked={showArchivedFiles}
+                        >
+                            Show archived files
+                        </Toggle>
+                        <Toggle
+                            onChange={({ detail }: { detail: { checked: boolean } }) =>
+                                setShowMismatchedOnly(detail.checked)
+                            }
+                            checked={showMismatchedOnly}
+                        >
+                            Show only changed files
+                        </Toggle>
+                    </SpaceBetween>
 
-                                // Update page size if changed
-                                if (
-                                    detail.pageSize !== undefined &&
-                                    detail.pageSize !== comparisonPageSize
-                                ) {
-                                    setComparisonPageSize(detail.pageSize);
-                                    setComparisonCurrentPage(1); // Reset to first page when changing page size
+                    {/* File comparison table */}
+                    <Table
+                        columnDefinitions={columns}
+                        items={paginatedComparisons}
+                        loading={loading}
+                        loadingText="Loading comparison data"
+                        empty={
+                            <Box textAlign="center" padding="l">
+                                <div>No files match the current filter criteria</div>
+                            </Box>
+                        }
+                        header={
+                            <Header counter={`(${totalComparisonFiles})`}>File Comparison</Header>
+                        }
+                        filter={
+                            <TextFilter
+                                filteringText={comparisonFilterText}
+                                filteringPlaceholder="Find files"
+                                filteringAriaLabel="Filter files"
+                                onChange={({ detail }) =>
+                                    setComparisonFilterText(detail.filteringText)
                                 }
-                            }}
-                            pageSizePreference={{
-                                title: "Page size",
-                                options: [
-                                    { value: 10, label: "10 files" },
-                                    { value: 20, label: "20 files" },
-                                    { value: 50, label: "50 files" },
-                                    { value: 100, label: "100 files" },
-                                ],
-                            }}
-                            visibleContentPreference={{
-                                title: "Select visible columns",
-                                options: [
-                                    {
-                                        label: "File information",
-                                        options: [
-                                            { id: "status", label: "Status" },
-                                            { id: "fileName", label: "File Name" },
-                                            { id: "path", label: "Path" },
-                                            {
-                                                id: "size1",
-                                                label: `Size (v${formatVersionLabel(version1)})`,
-                                            },
-                                            {
-                                                id: "size2",
-                                                label: compareWithCurrent
-                                                    ? "Size (Current)"
-                                                    : `Size (v${
-                                                          version2
-                                                              ? formatVersionLabel(version2)
-                                                              : ""
-                                                      })`,
-                                            },
-                                            {
-                                                id: "lastModified1",
-                                                label: `Last Modified (v${formatVersionLabel(
-                                                    version1
-                                                )})`,
-                                            },
-                                            {
-                                                id: "lastModified2",
-                                                label: compareWithCurrent
-                                                    ? "Last Modified (Current)"
-                                                    : `Last Modified (v${
-                                                          version2
-                                                              ? formatVersionLabel(version2)
-                                                              : ""
-                                                      })`,
-                                            },
-                                        ],
-                                    },
-                                    {
-                                        label: "Actions",
-                                        options: [{ id: "actions", label: "Actions" }],
-                                    },
-                                ],
-                            }}
-                        />
-                    }
-                    visibleColumns={preferences.visibleContent}
+                            />
+                        }
+                        pagination={
+                            <Pagination
+                                currentPageIndex={comparisonCurrentPage}
+                                pagesCount={Math.max(
+                                    1,
+                                    Math.ceil(totalComparisonFiles / comparisonPageSize)
+                                )}
+                                onChange={({ detail }) =>
+                                    setComparisonCurrentPage(detail.currentPageIndex)
+                                }
+                                ariaLabels={{
+                                    nextPageLabel: "Next page",
+                                    previousPageLabel: "Previous page",
+                                    pageLabel: (pageNumber) =>
+                                        `Page ${pageNumber} of ${Math.max(
+                                            1,
+                                            Math.ceil(totalComparisonFiles / comparisonPageSize)
+                                        )}`,
+                                }}
+                            />
+                        }
+                        preferences={
+                            <CollectionPreferences
+                                title="Preferences"
+                                confirmLabel="Confirm"
+                                cancelLabel="Cancel"
+                                preferences={preferences}
+                                onConfirm={({ detail }) => {
+                                    // Create a new preferences object with the correct types
+                                    const newPreferences = {
+                                        pageSize: detail.pageSize || preferences.pageSize,
+                                        visibleContent: detail.visibleContent
+                                            ? [...detail.visibleContent]
+                                            : preferences.visibleContent,
+                                    };
+                                    setPreferences(newPreferences);
+
+                                    // Update page size if changed
+                                    if (
+                                        detail.pageSize !== undefined &&
+                                        detail.pageSize !== comparisonPageSize
+                                    ) {
+                                        setComparisonPageSize(detail.pageSize);
+                                        setComparisonCurrentPage(1); // Reset to first page when changing page size
+                                    }
+                                }}
+                                pageSizePreference={{
+                                    title: "Page size",
+                                    options: [
+                                        { value: 10, label: "10 files" },
+                                        { value: 20, label: "20 files" },
+                                        { value: 50, label: "50 files" },
+                                        { value: 100, label: "100 files" },
+                                    ],
+                                }}
+                                visibleContentPreference={{
+                                    title: "Select visible columns",
+                                    options: [
+                                        {
+                                            label: "File information",
+                                            options: [
+                                                { id: "status", label: "Status" },
+                                                { id: "fileName", label: "File Name" },
+                                                { id: "path", label: "Path" },
+                                                {
+                                                    id: "size1",
+                                                    label: `Size (v${formatVersionLabel(
+                                                        version1
+                                                    )})`,
+                                                },
+                                                {
+                                                    id: "size2",
+                                                    label: compareWithCurrent
+                                                        ? "Size (Current)"
+                                                        : `Size (v${
+                                                              version2
+                                                                  ? formatVersionLabel(version2)
+                                                                  : ""
+                                                          })`,
+                                                },
+                                                {
+                                                    id: "lastModified1",
+                                                    label: `Last Modified (v${formatVersionLabel(
+                                                        version1
+                                                    )})`,
+                                                },
+                                                {
+                                                    id: "lastModified2",
+                                                    label: compareWithCurrent
+                                                        ? "Last Modified (Current)"
+                                                        : `Last Modified (v${
+                                                              version2
+                                                                  ? formatVersionLabel(version2)
+                                                                  : ""
+                                                          })`,
+                                                },
+                                            ],
+                                        },
+                                        {
+                                            label: "Actions",
+                                            options: [{ id: "actions", label: "Actions" }],
+                                        },
+                                    ],
+                                }}
+                            />
+                        }
+                        visibleColumns={preferences.visibleContent}
+                    />
+                </SpaceBetween>
+            </Container>
+            {compareFiles && compareFiles.length > 0 && (
+                <FileViewerModal
+                    visible={true}
+                    files={compareFiles}
+                    assetId={assetId}
+                    databaseId={databaseId}
+                    initialMode="compare"
+                    onDismiss={() => setCompareFiles(null)}
                 />
-            </SpaceBetween>
-        </Container>
+            )}
+        </>
     );
 };
 
@@ -876,6 +957,13 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
     const [error, setError] = useState<string | null>(null);
     const [comparison, setComparison] = useState<any | null>(null);
     const [metadataComparisons, setMetadataComparisons] = useState<MetadataComparison[]>([]);
+    // Files handed to the compare host when the user clicks "Compare" on a modified row.
+    const [compareFiles, setCompareFiles] = useState<FileInfo[] | null>(null);
+    // "Compare" is offered only for a type some compare viewer diffs (registry must be initialized).
+    const viewerRegistryReady = useViewerRegistryReady();
+    const canCompareRow = (item: FileComparison): boolean =>
+        viewerRegistryReady &&
+        isExtensionComparableAsVersions(extensionOfFilename(item.relativeKey));
 
     // State for tabs
     const [activeTabId, setActiveTabId] = useState<string>("files");
@@ -1388,11 +1476,27 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
                                 View v{selectedVersion?.Version}
                             </Button>
                         )}
-                        {item.version1File && item.version2File && item.status === "modified" && (
-                            <Button iconName="copy" variant="normal">
-                                Compare
-                            </Button>
-                        )}
+                        {item.version1File &&
+                            item.version2File &&
+                            item.status === "modified" &&
+                            canCompareRow(item) && (
+                                <Button
+                                    iconName="copy"
+                                    variant="normal"
+                                    onClick={() => {
+                                        const built = buildVersionCompareFiles(
+                                            item,
+                                            assetId || "",
+                                            databaseId || ""
+                                        );
+                                        if (built) {
+                                            setCompareFiles(built);
+                                        }
+                                    }}
+                                >
+                                    Compare
+                                </Button>
+                            )}
                     </SpaceBetween>
                 );
             },
@@ -1649,136 +1753,155 @@ export const EnhancedAssetVersionComparison: React.FC<EnhancedComparisonProps> =
 
     // Render comparison results
     return (
-        <Container
-            header={
-                <Header
-                    variant="h2"
-                    actions={
-                        <SpaceBetween direction="horizontal" size="xs">
-                            <Button onClick={onClose} variant="normal">
-                                Close Comparison
-                            </Button>
-                        </SpaceBetween>
-                    }
-                >
-                    Comparing Version {versionToCompare ? formatVersionLabel(versionToCompare) : ""}{" "}
-                    with Version {selectedVersion ? formatVersionLabel(selectedVersion) : ""}
-                </Header>
-            }
-        >
-            <SpaceBetween direction="vertical" size="l">
-                {/* Summary */}
-                <Container header={<Header variant="h3">Comparison Summary</Header>}>
-                    <ColumnLayout columns={2}>
-                        <div>
-                            <SpaceBetween direction="vertical" size="s">
-                                <Box variant="h4">Version Information</Box>
-                                <div>
-                                    <strong>First Version:</strong> v
-                                    {versionToCompare ? formatVersionLabel(versionToCompare) : ""} (
-                                    {new Date(
-                                        versionToCompare?.DateModified || ""
-                                    ).toLocaleDateString()}
-                                    )
-                                </div>
-                                <div>
-                                    <strong>Second Version:</strong> v
-                                    {selectedVersion ? formatVersionLabel(selectedVersion) : ""} (
-                                    {new Date(
-                                        selectedVersion?.DateModified || ""
-                                    ).toLocaleDateString()}
-                                    )
-                                </div>
-                                {comparison.summary && (
-                                    <div>
-                                        <strong>Total Files:</strong> {comparison.summary.total}
-                                    </div>
-                                )}
-                                {metadataComparisons.length > 0 && (
-                                    <div>
-                                        <strong>Total Metadata Items:</strong>{" "}
-                                        {metadataComparisons.length}
-                                    </div>
-                                )}
+        <>
+            <Container
+                header={
+                    <Header
+                        variant="h2"
+                        actions={
+                            <SpaceBetween direction="horizontal" size="xs">
+                                <Button onClick={onClose} variant="normal">
+                                    Close Comparison
+                                </Button>
                             </SpaceBetween>
-                        </div>
+                        }
+                    >
+                        Comparing Version{" "}
+                        {versionToCompare ? formatVersionLabel(versionToCompare) : ""} with Version{" "}
+                        {selectedVersion ? formatVersionLabel(selectedVersion) : ""}
+                    </Header>
+                }
+            >
+                <SpaceBetween direction="vertical" size="l">
+                    {/* Summary */}
+                    <Container header={<Header variant="h3">Comparison Summary</Header>}>
+                        <ColumnLayout columns={2}>
+                            <div>
+                                <SpaceBetween direction="vertical" size="s">
+                                    <Box variant="h4">Version Information</Box>
+                                    <div>
+                                        <strong>First Version:</strong> v
+                                        {versionToCompare
+                                            ? formatVersionLabel(versionToCompare)
+                                            : ""}{" "}
+                                        (
+                                        {new Date(
+                                            versionToCompare?.DateModified || ""
+                                        ).toLocaleDateString()}
+                                        )
+                                    </div>
+                                    <div>
+                                        <strong>Second Version:</strong> v
+                                        {selectedVersion ? formatVersionLabel(selectedVersion) : ""}{" "}
+                                        (
+                                        {new Date(
+                                            selectedVersion?.DateModified || ""
+                                        ).toLocaleDateString()}
+                                        )
+                                    </div>
+                                    {comparison.summary && (
+                                        <div>
+                                            <strong>Total Files:</strong> {comparison.summary.total}
+                                        </div>
+                                    )}
+                                    {metadataComparisons.length > 0 && (
+                                        <div>
+                                            <strong>Total Metadata Items:</strong>{" "}
+                                            {metadataComparisons.length}
+                                        </div>
+                                    )}
+                                </SpaceBetween>
+                            </div>
 
-                        <div>
-                            <SpaceBetween direction="vertical" size="s">
-                                <Box variant="h4">File Changes</Box>
-                                {comparison.summary && (
-                                    <>
-                                        <div>
-                                            <span
-                                                style={{
-                                                    color: "var(--vams-color-success)",
-                                                    marginRight: "4px",
-                                                }}
-                                            >
-                                                ➕
-                                            </span>
-                                            <strong>Added:</strong> {comparison.summary.added}
-                                        </div>
-                                        <div>
-                                            <span
-                                                style={{
-                                                    color: "var(--vams-color-error)",
-                                                    marginRight: "4px",
-                                                }}
-                                            >
-                                                ➖
-                                            </span>
-                                            <strong>Removed:</strong> {comparison.summary.removed}
-                                        </div>
-                                        <div>
-                                            <span
-                                                style={{
-                                                    color: "var(--vams-color-info)",
-                                                    marginRight: "4px",
-                                                }}
-                                            >
-                                                ✏️
-                                            </span>
-                                            <strong>Modified:</strong> {comparison.summary.modified}
-                                        </div>
-                                        <div>
-                                            <span
-                                                style={{
-                                                    color: "var(--vams-text-secondary)",
-                                                    marginRight: "4px",
-                                                }}
-                                            >
-                                                ✓
-                                            </span>
-                                            <strong>Unchanged:</strong>{" "}
-                                            {comparison.summary.unchanged}
-                                        </div>
-                                    </>
-                                )}
-                            </SpaceBetween>
-                        </div>
-                    </ColumnLayout>
-                </Container>
+                            <div>
+                                <SpaceBetween direction="vertical" size="s">
+                                    <Box variant="h4">File Changes</Box>
+                                    {comparison.summary && (
+                                        <>
+                                            <div>
+                                                <span
+                                                    style={{
+                                                        color: "var(--vams-color-success)",
+                                                        marginRight: "4px",
+                                                    }}
+                                                >
+                                                    ➕
+                                                </span>
+                                                <strong>Added:</strong> {comparison.summary.added}
+                                            </div>
+                                            <div>
+                                                <span
+                                                    style={{
+                                                        color: "var(--vams-color-error)",
+                                                        marginRight: "4px",
+                                                    }}
+                                                >
+                                                    ➖
+                                                </span>
+                                                <strong>Removed:</strong>{" "}
+                                                {comparison.summary.removed}
+                                            </div>
+                                            <div>
+                                                <span
+                                                    style={{
+                                                        color: "var(--vams-color-info)",
+                                                        marginRight: "4px",
+                                                    }}
+                                                >
+                                                    ✏️
+                                                </span>
+                                                <strong>Modified:</strong>{" "}
+                                                {comparison.summary.modified}
+                                            </div>
+                                            <div>
+                                                <span
+                                                    style={{
+                                                        color: "var(--vams-text-secondary)",
+                                                        marginRight: "4px",
+                                                    }}
+                                                >
+                                                    ✓
+                                                </span>
+                                                <strong>Unchanged:</strong>{" "}
+                                                {comparison.summary.unchanged}
+                                            </div>
+                                        </>
+                                    )}
+                                </SpaceBetween>
+                            </div>
+                        </ColumnLayout>
+                    </Container>
 
-                {/* Tabs for Files and Metadata */}
-                <Tabs
-                    activeTabId={activeTabId}
-                    onChange={({ detail }) => setActiveTabId(detail.activeTabId)}
-                    tabs={[
-                        {
-                            id: "files",
-                            label: `Files (${totalComparisonFiles})`,
-                            content: renderFilesTab(),
-                        },
-                        {
-                            id: "metadata",
-                            label: `Metadata (${metadataComparisons.length})`,
-                            content: renderMetadataTab(),
-                        },
-                    ]}
+                    {/* Tabs for Files and Metadata */}
+                    <Tabs
+                        activeTabId={activeTabId}
+                        onChange={({ detail }) => setActiveTabId(detail.activeTabId)}
+                        tabs={[
+                            {
+                                id: "files",
+                                label: `Files (${totalComparisonFiles})`,
+                                content: renderFilesTab(),
+                            },
+                            {
+                                id: "metadata",
+                                label: `Metadata (${metadataComparisons.length})`,
+                                content: renderMetadataTab(),
+                            },
+                        ]}
+                    />
+                </SpaceBetween>
+            </Container>
+            {compareFiles && compareFiles.length > 0 && (
+                <FileViewerModal
+                    visible={true}
+                    files={compareFiles}
+                    assetId={assetId || ""}
+                    databaseId={databaseId || ""}
+                    initialMode="compare"
+                    onDismiss={() => setCompareFiles(null)}
                 />
-            </SpaceBetween>
-        </Container>
+            )}
+        </>
     );
 };
 

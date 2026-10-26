@@ -30,7 +30,12 @@ import {
     buildHandleExecutionErrorFunction,
     buildInterimPipelineTrackingFunction,
     buildProcessWorkflowExecutionOutputFunction,
+    buildWorkflowServiceV2Function,
+    grantWorkflowServiceInternalInvoke,
 } from "../../lib/lambdaBuilder/workflowFunctions";
+import { buildPipelineServiceV2Function } from "../../lib/lambdaBuilder/pipelineFunctions";
+import * as s3AssetBuckets from "../../lib/helper/s3AssetBuckets";
+import * as iam from "aws-cdk-lib/aws-iam";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import { newTestApp } from "../support/testApp";
 
@@ -422,6 +427,28 @@ describe("executionService sub-execution read grants", () => {
         // The abort grant it sits beside is unchanged.
         expect(resourceEntries(template, "executionService", "batch:TerminateJob")).toEqual(["*"]);
     });
+
+    // A SageMaker training job or pipeline execution a pipeline registered is stopped on abort and
+    // described for the details view. Both carry a run-time name, so the scope is the account and
+    // Region's training-job and pipeline-execution namespaces — never a bare `*`, and never another
+    // account or Region.
+    const SAGEMAKER_RESOURCES = [
+        "arn:aws:sagemaker:us-east-1:123456789012:training-job/*",
+        "arn:aws:sagemaker:us-east-1:123456789012:pipeline/*/execution/*",
+    ].sort();
+    test("grants the two SageMaker Stop and two Describe actions on this account's namespaces", () => {
+        const { template } = synthed();
+        for (const action of [
+            "sagemaker:StopTrainingJob",
+            "sagemaker:StopPipelineExecution",
+            "sagemaker:DescribeTrainingJob",
+            "sagemaker:DescribePipelineExecution",
+        ]) {
+            expect(resourceEntries(template, "executionService", action).sort()).toEqual(
+                SAGEMAKER_RESOURCES
+            );
+        }
+    });
 });
 
 /**
@@ -486,6 +513,32 @@ describe("handleExecutionError sub-process stop grants", () => {
             resourceEntries(synthed().template, "handleExecutionError", "batch:TerminateJob")
         ).toEqual(["*"]);
     });
+
+    // The failure path shares the stop implementation with the abort path, so it holds the same two
+    // SageMaker Stop actions and the two Describe actions a refused stop is classified through, on the
+    // same namespaces — and no other SageMaker action.
+    test("grants the two SageMaker Stop and two Describe actions on this account's namespaces", () => {
+        const { template } = synthed();
+        const expected = [
+            "arn:aws:sagemaker:us-east-1:123456789012:training-job/*",
+            "arn:aws:sagemaker:us-east-1:123456789012:pipeline/*/execution/*",
+        ].sort();
+        const sageMakerActions = [
+            "sagemaker:StopTrainingJob",
+            "sagemaker:StopPipelineExecution",
+            "sagemaker:DescribeTrainingJob",
+            "sagemaker:DescribePipelineExecution",
+        ];
+        for (const action of sageMakerActions) {
+            expect(resourceEntries(template, "handleExecutionError", action).sort()).toEqual(
+                expected
+            );
+        }
+        const granted = actionsOnRole(template, "handleExecutionError").filter((a) =>
+            a.startsWith("sagemaker:")
+        );
+        expect(granted.sort()).toEqual([...sageMakerActions].sort());
+    });
 });
 
 describe("processWorkflowExecutionOutput least privilege", () => {
@@ -512,5 +565,183 @@ describe("processWorkflowExecutionOutput least privilege", () => {
             .join(" ");
         expect(dynamoRefs).not.toContain(synthed.logicalIdOf("databaseStorageTable"));
         expect(dynamoRefs).toContain(synthed.logicalIdOf("s3AssetBucketsStorageTable"));
+    });
+});
+
+/** The logical id of the stub workflow-service function built inside a synth callback. */
+const WORKFLOW_SERVICE_STUB = "WorkflowServiceStub";
+
+const workflowServiceStub = (scope: cdk.Stack): lambda.Function =>
+    new lambda.Function(scope, WORKFLOW_SERVICE_STUB, {
+        runtime: lambda.Runtime.PYTHON_3_12,
+        handler: "index.handler",
+        code: lambda.Code.fromInline("def handler(e, c): pass"),
+    });
+
+const stubLogicalId = (template: Template): string => {
+    const id = Object.keys(template.findResources("AWS::Lambda::Function")).find((key) =>
+        key.startsWith(WORKFLOW_SERVICE_STUB)
+    );
+    if (!id) {
+        throw new Error("workflow service stub not synthesized");
+    }
+    return id;
+};
+
+/**
+ * A pipeline save schedules a redeploy of every workflow referencing the pipeline, and a launch
+ * redeploys a stale workflow before starting it. Both are done BY the workflow service, which holds
+ * the Step Functions deploy permissions and the state-machine role it passes. The callers therefore get
+ * exactly one new permission — lambda:InvokeFunction on the workflow service's own function ARN — and
+ * no Step Functions or iam:PassRole grant (ARCC BSC6, IAM least privilege).
+ */
+describe("workflow-service internal invoke grants", () => {
+    // The pipeline-Lambda role pipelineService attaches to auto-provisioned functions is built from
+    // the deployment's asset-bucket registry, which must hold at least one bucket to synthesize.
+    afterEach(() => {
+        s3AssetBuckets.getS3AssetBucketRecords().length = 0;
+    });
+    const pipelineServiceSynth = () =>
+        synthWorkflowLambda((scope, layer, resources, _extra, config) => {
+            s3AssetBuckets.getS3AssetBucketRecords().length = 0;
+            s3AssetBuckets.addS3AssetBucket(
+                new s3.Bucket(scope, "AssetBucket"),
+                "/",
+                "db",
+                undefined,
+                undefined,
+                true
+            );
+            const pipelineService = buildPipelineServiceV2Function(
+                scope,
+                layer,
+                resources,
+                config,
+                undefined as any,
+                []
+            );
+            grantWorkflowServiceInternalInvoke(pipelineService, workflowServiceStub(scope));
+            return pipelineService;
+        });
+    const executeSynth = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) => {
+            const execute = buildExecuteWorkflowV2Function(
+                scope,
+                layer,
+                resources,
+                extra.metadataServiceFunction,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            );
+            grantWorkflowServiceInternalInvoke(execute, workflowServiceStub(scope));
+            return execute;
+        });
+    const invokeTarget = (template: Template) => ({
+        "Fn::GetAtt": [stubLogicalId(template), "Arn"],
+    });
+
+    test.each([
+        ["pipelineService", pipelineServiceSynth],
+        ["executeWorkflow", executeSynth],
+    ])("%s may invoke the workflow service ARN and nothing broader", (lambdaId, synth) => {
+        const { template } = synth();
+        const target = JSON.stringify(invokeTarget(template));
+        const stubId = stubLogicalId(template);
+        // Stated over resource ENTRIES rather than whole statements: the deployed app minimizes
+        // policies, which folds this grant into any other InvokeFunction statement on the role.
+        const entries = resourceEntries(template, lambdaId, "lambda:InvokeFunction");
+        expect(entries).toContain(target);
+        // Exactly the function ARN: no `{arn}:*` version/alias wildcard on the workflow service.
+        const onWorkflowService = entries.filter((entry) => entry.includes(stubId));
+        expect(onWorkflowService).toEqual([target]);
+        // And the statements that carry it grant InvokeFunction alone.
+        for (const statement of statementsOnRole(template, lambdaId)) {
+            if (JSON.stringify(statement.Resource ?? "").includes(stubId)) {
+                expect(([] as string[]).concat(statement.Action)).toEqual([
+                    "lambda:InvokeFunction",
+                ]);
+                expect(statement.Effect).toEqual("Allow");
+            }
+        }
+    });
+
+    test("pipelineService gains no Step Functions or iam:PassRole permission for the refresh", () => {
+        const { template } = pipelineServiceSynth();
+        const actions = actionsOnRole(template, "pipelineService");
+        expect(actions.filter((a) => a.startsWith("states:"))).toEqual([]);
+        // The one PassRole it holds is the pre-existing auto-provisioning grant on the pipeline-Lambda
+        // role; nothing lets it pass the state-machine role.
+        const passRole = resourceEntries(template, "pipelineService", "iam:PassRole");
+        expect(passRole).toHaveLength(1);
+        expect(passRole[0]).toContain("lambdaPipelineRole");
+        // Positive control for the action scan: the invoke grant itself is found.
+        expect(actions).toContain("lambda:InvokeFunction");
+    });
+
+    test("executeWorkflow gains no deploy or iam:PassRole permission", () => {
+        const actions = actionsOnRole(executeSynth().template, "executeWorkflow");
+        for (const action of [
+            "states:CreateStateMachine",
+            "states:UpdateStateMachine",
+            "states:PublishStateMachineVersion",
+            "iam:PassRole",
+        ]) {
+            expect(actions).not.toContain(action);
+        }
+        expect(actions).toContain("states:StartExecution");
+    });
+
+    test.each([
+        ["pipelineService.lambda_handler", pipelineServiceSynth],
+        ["executeWorkflow.lambda_handler", executeSynth],
+    ])("%s receives the workflow service function name", (handler, synth) => {
+        const { template } = synth();
+        expect(environmentOf(template, handler).WORKFLOW_SERVICE_V2_FUNCTION_NAME).toEqual({
+            Ref: stubLogicalId(template),
+        });
+    });
+});
+
+/**
+ * Every deploy publishes a version a launch starts on, and old versions are pruned so the 1000-version
+ * Step Functions quota is never reached. Publishing on create/update needs
+ * states:PublishStateMachineVersion in addition to the update action itself.
+ */
+describe("workflowService state machine version grants", () => {
+    const synthed = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) => {
+            const role = new iam.Role(scope, "WorkflowRole", {
+                assumedBy: new iam.ServicePrincipal("states.amazonaws.com"),
+            });
+            return buildWorkflowServiceV2Function(
+                scope,
+                layer,
+                resources,
+                role,
+                extra.metadataServiceFunction,
+                extra.fileUploadFunction,
+                extra.metadataServiceFunction,
+                extra.workflowsLogGroup,
+                config.env.coreStackName,
+                config,
+                undefined as any,
+                []
+            );
+        });
+
+    test("grants publish, list and delete version on the deployment's state machines only", () => {
+        const { template } = synthed();
+        for (const action of [
+            "states:PublishStateMachineVersion",
+            "states:ListStateMachineVersions",
+            "states:DeleteStateMachineVersion",
+        ]) {
+            const entries = resourceEntries(template, "workflowService", action);
+            expect(entries).toContain("arn:aws:states:us-east-1:123456789012:stateMachine:*vams*");
+            expect(entries).toContain("arn:aws:states:us-east-1:123456789012:stateMachine:vams-*");
+            expect(entries).not.toContain("*");
+        }
     });
 });

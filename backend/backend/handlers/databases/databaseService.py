@@ -245,6 +245,10 @@ def get_databases(query_params, show_deleted=False, claims_and_roles=None):
         logger.exception(f"Error getting databases: {e}")
         raise VAMSGeneralErrorResponse(f"Error getting databases.")
 
+class DatabaseAccessDeniedError(VAMSGeneralErrorResponse):
+    """An object-level authorization denial on a database, answered with 403 rather than 400."""
+
+
 def update_database(database_id, update_data, claims_and_roles=None):
     """Update an existing database with new data
     
@@ -270,10 +274,10 @@ def update_database(database_id, update_data, claims_and_roles=None):
         # falling through would reach the update_item below unauthorized (backend/CLAUDE.md Rule 4).
         database.update({"object__type": "database"})
         if not claims_and_roles or len(claims_and_roles["tokens"]) == 0:
-            raise VAMSGeneralErrorResponse("Access denied")
+            raise DatabaseAccessDeniedError("Access denied")
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if not casbin_enforcer.enforce(database, "PUT"):
-            raise VAMSGeneralErrorResponse("Access denied")
+            raise DatabaseAccessDeniedError("Access denied")
         
         # If defaultBucketId is being updated, verify it exists
         if 'defaultBucketId' in update_data and update_data['defaultBucketId'] is not None:
@@ -489,7 +493,9 @@ def update_database_handler(event, path_parameters, body, claims_and_roles):
         # Update database
         result = update_database(database_id, request_model.dict(exclude_unset=True), claims_and_roles)
         return success(body=result.dict())
-        
+
+    except DatabaseAccessDeniedError:
+        return authorization_error(event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -581,7 +587,9 @@ def get_buckets(query_params, claims_and_roles=None):
                 bucketId=deserialized_document.get('bucketId'),
                 bucketName=deserialized_document.get('bucketName', ''),
                 baseAssetsPrefix=deserialized_document.get('baseAssetsPrefix', ''),
-                isDefault=bool(deserialized_document.get('isDefault', False))
+                isDefault=bool(deserialized_document.get('isDefault', False)),
+                bucketRegion=deserialized_document.get('bucketRegion') or None,
+                bucketAccountId=deserialized_document.get('bucketAccountId') or None
             )
             items.append(bucket_model)
 

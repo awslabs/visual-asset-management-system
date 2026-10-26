@@ -194,6 +194,9 @@ def _run_conversion(mod, conversion, input_key="xd130a6d6/parts/housing/model.ob
                     handle.write("companion")
 
         trimesh_stub.load.return_value.export = MagicMock(side_effect=_export)
+        # One triangle: the handler refuses to export a model with no geometry (check_exportable).
+        trimesh_stub.load.return_value.vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0]]
+        trimesh_stub.load.return_value.faces = [[0, 1, 2]]
 
     with patch.object(mod, "download", MagicMock(side_effect=_download)), \
             patch.object(mod, "uploadV2", MagicMock(side_effect=_upload)), \
@@ -204,8 +207,14 @@ def _run_conversion(mod, conversion, input_key="xd130a6d6/parts/housing/model.ob
 
 def _work_root(input_file_path):
     """The per-invocation working directory, given the path the input was downloaded to. The input
-    and the export live in sibling subdirectories of it."""
-    return os.path.dirname(os.path.dirname(input_file_path))
+    is staged at its asset-relative path under the working directory's ``input`` folder, which is a
+    sibling of the export folder."""
+    path = os.path.dirname(input_file_path)
+    while os.path.basename(path) != "input":
+        parent = os.path.dirname(path)
+        assert parent != path, input_file_path
+        path = parent
+    return os.path.dirname(path)
 
 
 @pytest.mark.unit
@@ -396,7 +405,10 @@ class TestEveryFileTheExportProducedIsUploaded:
                         companion_names=_GLTF_COMPANIONS)
         assert conversion.input_paths, "the run never downloaded an input file"
         input_name = os.path.basename(conversion.input_paths[-1])
-        assert input_name == "input.obj", input_name
+        # The input keeps its own name and its subdirectory within the asset, so the files it
+        # references resolve beside it (#507).
+        assert conversion.input_paths[-1].endswith("/input/parts/housing/model.obj"), \
+            conversion.input_paths[-1]
         assert not any(key.endswith(f"/{input_name}") for key in conversion.uploaded_keys), \
             conversion.uploaded_keys
         assert len(conversion.uploaded_keys) == 3, conversion.uploaded_keys

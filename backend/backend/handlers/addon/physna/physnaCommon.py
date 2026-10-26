@@ -923,9 +923,10 @@ def delete_folder_if_empty(
 
 from boto3.dynamodb.conditions import Key
 from common.resourceNames import get_table_name, ResourceKeys
+from common.s3 import region_routing_s3_client, bucket_region_fields
 
 _dynamodb = boto3.resource("dynamodb", config=_retry_config)
-_s3_client = boto3.client("s3", config=_retry_config)
+_s3_client = region_routing_s3_client()
 
 try:
     _ASSET_STORAGE_TABLE_NAME = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
@@ -1065,6 +1066,7 @@ def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
         "bucketId": bucket_id,
         "bucketName": bucket.get("bucketName"),
         "baseAssetsPrefix": base_prefix,
+        **bucket_region_fields(bucket),
     }
 
 
@@ -1097,6 +1099,7 @@ def get_bucket_details_by_name(bucket_name: str) -> Optional[Dict[str, Any]]:
         "bucketId": bucket.get("bucketId"),
         "bucketName": bucket.get("bucketName") or bucket_name,
         "baseAssetsPrefix": base_prefix,
+        **bucket_region_fields(bucket),
     }
 
 

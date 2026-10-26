@@ -11,7 +11,7 @@ import functools
 import logging
 import sys
 import uuid
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 
 def _force_logging_to_stderr() -> None:
@@ -38,6 +38,7 @@ from .client import (  # noqa: E402
     SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
 )
 from .config import Config, ConfigError  # noqa: E402
+from .custom_tools import register_custom_tools  # noqa: E402
 
 _force_logging_to_stderr()
 
@@ -90,7 +91,11 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap a tool so API/client errors are returned as data, not exceptions.
 
     Agents handle a structured ``{"error": ...}`` far better than a raised
-    exception, and it keeps one failing call from derailing a session.
+    exception, and it keeps one failing call from derailing a session. The
+    result is ``{"error", "error_type"}`` plus the exception's ``json_fields``,
+    which never replace those two: a ``RequestBlockedError`` (a request the
+    deployment's AWS WAF web ACL blocked) carries ``blockedBy`` and, when
+    known, ``requestId``.
     """
 
     @functools.wraps(fn)
@@ -98,7 +103,14 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
         try:
             return fn(*args, **kwargs)
         except Exception as exc:  # noqa: BLE001 - surface any failure cleanly
-            return {"error": str(exc), "error_type": type(exc).__name__}
+            result = {"error": str(exc), "error_type": type(exc).__name__}
+            # Machine-readable facts the exception carries (for example blockedBy and requestId), as
+            # the CLI's --json-output carries them.
+            fields = getattr(exc, "json_fields", None)
+            if isinstance(fields, dict):
+                for key, value in fields.items():
+                    result.setdefault(key, value)
+            return result
 
     return wrapper
 
@@ -110,19 +122,22 @@ def tool_result(fn: Callable[..., Any]) -> Callable[..., Any]:
 # callers depend on). Moving them onto the client would couple the two again.
 
 
-def _unwrap_message_with_warnings(page: Any) -> Any:
-    """Unwrap the ``message`` envelope, keeping a sibling top-level ``warnings`` array.
+def _unwrap_message_with_warnings(page: Any, siblings: Tuple[str, ...] = ("warnings",)) -> Any:
+    """Unwrap the ``message`` envelope, keeping the named sibling top-level arrays (``warnings`` by
+    default).
 
     A pipeline save reports its non-blocking warnings as a SIBLING of ``message`` — the response
     model carries no warnings field, so that array is the only copy and plain unwrapping drops it.
+    An abort passes ``("warnings", "notAbortable")``: a group abort nests its results under
+    ``message`` and reports both arrays beside it.
     """
     payload = CLIENT.unwrap_message(page)
-    if not isinstance(page, dict) or not isinstance(payload, dict):
+    if not isinstance(page, dict) or not isinstance(payload, dict) or payload is page:
         return payload
-    warnings = page.get("warnings")
-    if not warnings or payload is page:
+    kept = {key: page[key] for key in siblings if page.get(key)}
+    if not kept:
         return payload
-    return {**payload, "warnings": warnings}
+    return {**payload, **kept}
 
 
 def _bounded_message_list(
@@ -260,6 +275,9 @@ def list_buckets(
     max_items: Optional[int] = None, starting_token: Optional[str] = None
 ) -> Dict[str, Any]:
     """List asset storage buckets available for creating databases.
+
+    Each item carries `bucketRegion` and, for a bucket in another account, `bucketAccountId`;
+    a bucket in the deployment Region registered without a Region reports neither.
 
     The walk is BOUNDED: `truncated` means rows were not seen, and `NextToken` continues it via
     `starting_token`. Do not report a count from a truncated result."""
@@ -1058,6 +1076,18 @@ def get_execution_details(execution_id: str, include_sub_executions: bool = Fals
 
     This is the tool to reach for when asked why a run failed or what it produced.
 
+    `workflowVersion` is the published workflow state machine version the run started on, and
+    `workflowVersionCurrent` says whether the workflow still runs that version: true when it does,
+    false once its state machine has been redeployed since the run. A save from the workflow builder
+    always redeploys it, as does an API or CLI update that supplies the step list; a change to a
+    setting one of its pipelines contributes to the state machine (execution type, target, callback
+    mode, timeouts, Deadline Cloud job settings) redeploys it too. The flag does not track
+    `workflowSystemConfig` or the pipeline names and descriptions: they are read live and can change
+    without a redeploy, so they may differ from what the run used whatever the flag says; each
+    step's `effectiveSystemConfig` is the snapshot it ran under. Both are null for a run started
+    before versions were recorded, and `workflowVersionCurrent` is also null when the workflow no
+    longer records a current version (for example, the workflow was deleted).
+
     Metadata the run read arrives in two SEPARATE collections: `inputMetadata` (asset- and
     file-scope rows) and `inputDatabaseMetadata` (database-scope rows, which belong to no asset).
     Reading only the first understates what the run saw.
@@ -1578,9 +1608,14 @@ if CONFIG.enable_writes:
     def update_pipeline(database_id: str, pipeline_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """Update a pipeline. Only the fields present in `body` change.
 
-        Carries the same save `warnings` as create_pipeline. An executionConfig change adds a
-        stale-deployment warning: referencing workflows keep invoking the PREVIOUS execution target
-        until each one is re-saved, so the repoint is not live until then. Always relay it.
+        Carries the same save `warnings` as create_pipeline. A change to a setting compiled into
+        workflow state machines (executionConfig: execution type, target, callback mode, timeouts,
+        Deadline Cloud job settings) adds a warning with how many referencing workflows are being
+        redeployed in the background; nothing has to be re-saved. A launch of a workflow that the
+        background redeploy has not reached yet redeploys it first, or returns a retryable 409 and
+        starts nothing, so no run uses the previous settings. When the warning says the redeploy
+        could not be scheduled, each workflow is redeployed at its next save or launch. Always
+        relay the warnings.
         """
         return _unwrap_message_with_warnings(CLIENT.api.update_pipeline(database_id, pipeline_id, body))
 
@@ -1751,8 +1786,20 @@ if CONFIG.enable_writes:
 
         Pass group_id to abort every active execution in that group. Any returned warnings
         identify a member whose sub-process may still be running after the abort.
+
+        A single abort answers `message` plus, when something could not be stopped, two sibling
+        arrays: `warnings` (free text) and `notAbortable` — one {resourceType, label, stageName,
+        locator} per registered sub-process of a type VAMS has no stop API for (an externally owned
+        pipeline's own compute, for example). The execution still reads ABORTED, so do NOT conclude
+        that everything stopped: a non-empty `notAbortable` means that compute is still running until
+        the bridge's own heartbeat or timeout ends it, and the entry names what and where. Both arrays
+        are absent from a clean abort. A group abort returns the group's results with the same two
+        arrays beside them: each warning is prefixed with its member's execution id and each
+        `notAbortable` entry carries its member's `executionId`, so non-empty `warnings` or
+        `notAbortable` from a group abort likewise means not everything stopped.
         """
-        return _unwrap_message_with_warnings(CLIENT.api.abort_execution(execution_id, group_id=group_id))
+        return _unwrap_message_with_warnings(
+            CLIENT.api.abort_execution(execution_id, group_id=group_id), siblings=("warnings", "notAbortable"))
 
     # ---------------------------------------------------------------------
     # Comment / subscription / metadata-schema writes
@@ -2184,6 +2231,13 @@ if CONFIG.enable_destructive:
         first: it revokes the same access and can be undone.
         """
         return CLIENT.api.delete_user_api_key(api_key_id)
+
+
+# =========================================================================
+# CUSTOM TOOLS (fork extension point: vams_mcp/custom_tools.py, shipped empty)
+# =========================================================================
+
+register_custom_tools(mcp, CLIENT, CONFIG, tool_result)
 
 
 def main() -> None:

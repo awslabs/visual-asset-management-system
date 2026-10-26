@@ -23,6 +23,10 @@ Both tiers must allow access for a request to succeed. A user with Tier 1 API ac
 
 For the complete technical reference of all object types, constraint fields, operators, web routes, and API routes, see [Permissions Model](../concepts/permissions-model.md).
 
+:::note[Extension object types]
+A deployment that adds its own features can register object types of its own, which then appear in the constraint editor's **Object Type** list. No role has access to such a type until a constraint on it allows that access, the `admin` role included, because the default constraints cover only the built-in types. See [Extension object types](../concepts/permissions-model.md#extension-object-types).
+:::
+
 ## Roles
 
 A role is a named collection of constraints that can be assigned to users. Roles themselves do not grant any permissions -- they act as containers for constraints.
@@ -40,7 +44,8 @@ The deployment assigns the administrator account named by `app.adminUserId` to `
 `SYSTEM_USER` identity is also assigned to `admin` so system processes pass both authorization tiers.
 
 `basicReadOnly` reads assets, files, metadata, databases, pipelines, workflows, executions, tags,
-comments, subscriptions, and metadata schemas, and it may manage its own API keys. It cannot reach the
+comments, subscriptions, and metadata schemas, opens files in the viewers and downloads them, and it
+may manage its own API keys. It cannot reach the
 administrative routes that `admin` holds: detailed execution logs
 (`GET /workflows/executions/{executionId}/logs`) and execution permanent delete
 (`DELETE /workflows/executions/{executionId}/permanent`). Because read access is granted through
@@ -168,7 +173,7 @@ If you receive a 403 Forbidden error or cannot see expected data, check both aut
 
 2. **Check Tier 2 (entity access):**
 
-    - Does the user's role have a constraint on the correct object type (for example, `asset`, `database`)?
+    - Does the user's role have a constraint on the correct object type (for example, `asset`, `database`)? For an object type the deployment registered itself, even an administrator needs a constraint on that type.
     - Does the criteria match the specific resource? Check `databaseId`, `assetName`, or other filter fields.
     - Is there a **deny** constraint that overrides the allow?
 

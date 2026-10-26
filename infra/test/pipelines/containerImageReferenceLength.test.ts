@@ -47,6 +47,9 @@ const MUST_BE_EXPLICITLY_NAMED: Record<string, string> = {
     EcrRepoCoordTransform:
         "auto-generated URI measured 237 chars on the reference deployment; 237 + 33 = 270 > 255, and " +
         "AWS Batch rejected every job at submit",
+    EcrRepoVideoSopBom:
+        "nested under PipelineBuilder at the same depth as coordinateTransform, whose identically " +
+        "shaped path measured 237 chars; an auto-generated name would overrun the cap the same way",
 };
 
 function ecrRepositories(s: SynthResult) {
@@ -89,6 +92,14 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
                         pipelines.useNvidiaGr00t.huggingFaceToken = "synth-only";
                     if (pipelines.useIsaacLabTraining)
                         pipelines.useIsaacLabTraining.acceptNvidiaEula = true;
+                    // The restricted templates ship the Video SOP/BOM model id empty (the commercial
+                    // inference profiles do not exist there) and the construct requires one; supply a
+                    // synth-only id with no partition-specific prefix.
+                    if (
+                        pipelines.useGenAiVideoSopBom &&
+                        !pipelines.useGenAiVideoSopBom.bedrockModelId
+                    )
+                        pipelines.useGenAiVideoSopBom.bedrockModelId = "synth-only-model";
                 },
             });
         });
@@ -169,8 +180,8 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
          * after the rename the new repository held 0 images while the Batch job definition referenced
          * `f0462fcacd8a838acf19eb56badf08a2`, the deploy exited 0, and the image had to be built by hand.
          *
-         * An auto-named repository has no rename to trigger this, which is why the rule applies only to
-         * the explicitly named ones.
+         * An auto-named repository is replaced only when its encryption changes, which
+         * `codeBuildEcrEncryption.test.ts` covers, so this rule is about the explicitly named ones.
          */
         it("an explicitly named repository's build trigger depends on that repository", () => {
             const named = ecrRepositories(synth).filter((r) => r.properties.RepositoryName);

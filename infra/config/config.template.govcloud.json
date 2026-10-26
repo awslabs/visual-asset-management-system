@@ -37,6 +37,7 @@
             "enabled": true,
             "useForAllLambdas": false,
             "addVpcEndpoints": true,
+            "addCrossRegionS3Endpoints": true,
             "optionalExternalVpcId": null,
             "optionalExternalIsolatedSubnetIds": null,
             "optionalExternalPrivateSubnetIds": null,
@@ -87,6 +88,14 @@
         },
         "pipelines": {
             "deadlineCloudExecutionTypeEnabled": false,
+            "externalPipelineBridges": [],
+            "executionLogReadPrefixes": [
+                "/aws/vendedlogs/VAMSStateMachine-*",
+                "/aws/vendedlogs/VAMSstateMachine-*",
+                "/aws/vendedlogs/Pipelines/*",
+                "/aws/batch/job",
+                "/aws/sagemaker/TrainingJobs"
+            ],
             "useConversion3dBasic": {
                 "enabled": true,
                 "autoRegisterWithVAMS": true
@@ -94,7 +103,18 @@
             "usePreview3dThumbnail": {
                 "enabled": false,
                 "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true
+                "autoRegisterAutoTriggerOnFileUpload": true,
+                "computeTiers": {
+                    "standard": {
+                        "vcpu": 4,
+                        "memoryGiB": 16
+                    },
+                    "large": {
+                        "vcpu": 16,
+                        "memoryGiB": 120
+                    }
+                },
+                "largeTierThresholdGiB": 2
             },
             "useConversionCadMeshMetadataExtraction": {
                 "enabled": false,
@@ -117,6 +137,16 @@
                 "bedrockModelId": "",
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true
+            },
+            "useGenAiVideoSopBom": {
+                "enabled": false,
+                "useCodeBuild": false,
+                "autoRegisterWithVAMS": true,
+                "bedrockModelId": "",
+                "limits": {
+                    "maxVideoFiles": 4,
+                    "maxTotalDurationMinutes": 240
+                }
             },
             "useSplatToolbox": {
                 "enabled": false,

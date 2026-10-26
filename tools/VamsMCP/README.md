@@ -111,6 +111,16 @@ To use a non-default profile, add `"env": { "VAMS_PROFILE": "myprofile" }`.
 
 ## Tools
 
+A tool returns a failure as data rather than raising it: `{"error", "error_type"}`
+plus the machine-readable fields the CLI's `--json-output` carries for the same
+error. An `error_type` of `RequestBlockedError` is a request the deployment's AWS
+WAF web ACL blocked before VAMS handled it, ahead of both authorization tiers. It
+carries `blockedBy` (`waf`, or `waf-or-stage` for a bare API Gateway `Forbidden`,
+which a base URL that names no deployed stage also produces) and, when known,
+`requestId`. Signing in again does not change it, and neither does retrying it:
+report the `requestId` to the VAMS administrator, who finds the rule that matched
+in the web ACL's sampled requests or its `aws-waf-logs-vams-*` log group.
+
 ### Read / search (always available)
 
 `list_allowed_api_routes`, `list_api_routes`, `list_constraint_permission_objects`,
@@ -181,6 +191,18 @@ by, and `include_sub_executions=True` adds `subExecutions` — each registered
 sub-process (a nested state machine or a container job) with per-stage status
 derived from its own execution history. The flag is off by default because that
 derivation reads Step Functions history.
+
+`get_execution_details` also reports `workflowVersion`, the published workflow
+state machine version the run started on, and `workflowVersionCurrent`, false
+once the workflow's state machine has been redeployed since the run. A save
+from the workflow builder always redeploys it, as does an API or CLI update that
+supplies the step list; a change to a setting one of its pipelines contributes
+to the state machine (execution type, target, callback mode, timeouts, Deadline
+Cloud job settings) redeploys it too. The flag does not track
+`workflowSystemConfig` or the pipeline names and descriptions, which are read
+live and can change without a redeploy; each step's `effectiveSystemConfig` is
+the snapshot it ran under. Both are null for a run started before versions were
+recorded.
 
 `get_execution_logs` full mode takes `limit` (default 100, server cap 1000),
 `next_token`, `filter_pattern`, `start_time`, and `end_time` (epoch
@@ -277,11 +299,22 @@ compute and, with `group_id`, fans out across every active execution in that gro
 Keep all three out of `autoApprove`, and confirm a group abort with the user first.
 `rerun_execution` re-runs ONE execution; its `execution_group_id` assigns the new
 execution's group membership rather than selecting a group to re-run.
+`abort_execution` returns `warnings` and `notAbortable` beside `message` when a
+registered sub-process could not be stopped: each `notAbortable` entry
+(`resourceType`, `label`, `stageName`, `locator`) is compute of a type VAMS has no
+stop API for — an externally owned pipeline's own job, say — that keeps running
+after the execution reads ABORTED. Treat a non-empty list as "not everything
+stopped", not as a failed abort. A group abort returns the group's results with
+both arrays beside them, gathered from its members: each warning is prefixed with
+its member's execution id and each `notAbortable` entry carries its member's
+`executionId`.
 
 `create_pipeline` and `update_pipeline` can return a `warnings` array on a
 successful save (for example a `requireTemplate` pipeline with no default template
-chosen, or the stale-deployment notice after an `executionConfig` change).
-The save succeeded; the warnings still need relaying.
+chosen, or, after an `executionConfig` change, how many referencing workflows are
+being redeployed in the background). The save succeeded; the warnings still need
+relaying. A workflow launch that the background redeploy has not reached yet
+redeploys the workflow first, or returns a retryable `409` and starts nothing.
 
 `create_pipeline_template`, `update_pipeline_template`, and
 `set_pipeline_template_tag_schema` reject an unrecognized key in a tag definition
@@ -402,6 +435,55 @@ and is the better first move.
     caller's own API-key route permissions.
 -   The server persists nothing; revoking access is just `vamscli auth logout`
     (or letting your session expire).
+
+## Adding tools in a fork
+
+A fork of VAMS adds its own tools in `vams_mcp/custom_tools.py`, which upstream ships
+as a no-op and does not modify, so the fork's tools do not conflict when it merges an
+upstream release. `server.py` calls `register_custom_tools(mcp, client, config,
+tool_result)` once, after its own tools are defined:
+
+```python
+# vams_mcp/custom_tools.py (in the fork)
+from typing import Any, Dict, Optional
+
+
+def register_custom_tools(mcp, client, config, tool_result) -> None:
+    @mcp.tool()
+    @tool_result
+    def custom_list_widgets(
+        database_id: str, max_items: Optional[int] = None, starting_token: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """List the widgets of one database. The walk is bounded: `truncated` means rows were not
+        seen, and `NextToken` continues it when passed back as `starting_token`."""
+        return client.paginate(
+            lambda params: client.api.list_custom_widgets(database_id, params=params),
+            max_items=max_items,
+            starting_token=starting_token,
+        )
+
+    if config.enable_writes:
+
+        @mcp.tool()
+        @tool_result
+        def custom_create_widget(database_id: str, name: str) -> Dict[str, Any]:
+            """Create a widget in a database."""
+            return client.api.create_custom_widget(database_id, name)
+```
+
+-   Gate write tools on `config.enable_writes` and destructive tools on
+    `config.enable_destructive`, as the upstream tools are; the `VAMS_ENABLE_*`
+    variables then govern them too.
+-   `client.api` is the `vamscli` `APIClient`, which inherits the fork's methods from
+    `vamscli/utils/custom_api_client.py`, so a custom tool calls the fork's API
+    through the same authentication and retry path as the upstream tools, and
+    `client.paginate` follows `NextToken` with the same bounds as the upstream list tools.
+-   Prefix tool names with `custom_` so a later upstream tool does not collide with
+    one of yours, and list your tools (and any `autoApprove` choice) in your own
+    documentation. A tool whose name an upstream tool already uses is not registered:
+    the server keeps the upstream tool and logs `Tool already exists: <name>`.
+
+The "Extending VAMS in a fork" developer guide has the end-to-end example.
 
 ## License
 

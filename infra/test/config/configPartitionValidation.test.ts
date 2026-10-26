@@ -585,3 +585,283 @@ describe("ConfigBuilder mirror of the Rekognition availability rules", () => {
         );
     });
 });
+
+/**
+ * **Cross-Region Amazon S3 interface endpoints.** An external asset bucket may be in another Region
+ * of the deployment's partition. When Lambdas run in the VPC, VAMS reaches that Region through a
+ * cross-Region AWS PrivateLink interface endpoint, which AWS offers in the commercial partition only.
+ * `getConfig()` therefore rejects `app.useGlobalVpc.addCrossRegionS3Endpoints: true` together with a
+ * cross-Region bucket outside the `aws` partition, naming the flag and both Regions; with the flag
+ * `false` the operator supplies the network path and the configuration is accepted. The check is
+ * keyed on the resolved partition, not `app.govCloud.enabled`. The commercial case is the control;
+ * the no-cross-Region-bucket case proves the flag is inert until such a bucket appears, which is why
+ * every shipped template carries it `true`. A cross-Region DEFAULT bucket is rejected in every
+ * partition. The ConfigBuilder's hand-ported rules are asserted from the same arms.
+ */
+const CROSS_REGION_ENDPOINT_MESSAGE =
+    /app\.useGlobalVpc\.addCrossRegionS3Endpoints is true, but cross-Region AWS PrivateLink to Amazon S3 is available in the commercial partition only/;
+const CROSS_REGION_ENDPOINT_RULE_ID = "cross-region-s3-endpoints-commercial-only";
+const CROSS_REGION_DEFAULT_RULE_ID = "external-bucket-default-must-be-deployment-region";
+const CROSS_REGION_NO_ENDPOINT_WARNING_RULE_ID = "cross-region-bucket-isolated-lambdas-no-endpoint";
+
+describe("cross-Region S3 interface endpoint partition gate", () => {
+    afterEach(() => {
+        (fs.readFileSync as unknown as jest.Mock).mockReset();
+    });
+
+    const withCrossRegionBucket =
+        (bucketRegion: string, partition: string, extra?: (c: any) => void) => (c: any) => {
+            c.app.assetBuckets.externalAssetBuckets = [
+                {
+                    bucketArn: `arn:${partition}:s3:::remote-assets`,
+                    baseAssetsPrefix: "/",
+                    defaultSyncDatabaseId: "remote",
+                    bucketRegion,
+                },
+            ];
+            extra?.(c);
+        };
+
+    const restrictedArms: [string, string, string, () => unknown][] = [
+        ["us-gov-west-1", "aws-us-gov", "us-gov-east-1", () => govcloudTemplate],
+        ["eusc-de-east-1", "aws-eusc", "eusc-de-west-1", () => eusovereignTemplate],
+    ];
+
+    test.each(restrictedArms)(
+        "%s (%s) rejects the flag true with a bucket in %s",
+        (region, partition, bucketRegion, base) => {
+            const run = loadConfig(
+                base(),
+                region,
+                withCrossRegionBucket(bucketRegion, partition, (c) => {
+                    c.app.useGlobalVpc.addCrossRegionS3Endpoints = true;
+                })
+            );
+            expect(run).toThrow(CROSS_REGION_ENDPOINT_MESSAGE);
+        }
+    );
+
+    test.each(restrictedArms)(
+        "%s (%s) names the flag and both Regions in the error",
+        (region, partition, bucketRegion, base) => {
+            const run = loadConfig(base(), region, withCrossRegionBucket(bucketRegion, partition));
+            expect(run).toThrow(
+                new RegExp(
+                    `addCrossRegionS3Endpoints[\\s\\S]*'${bucketRegion}'[\\s\\S]*'${region}'[\\s\\S]*\\(${partition}\\)[\\s\\S]*Set app\\.useGlobalVpc\\.addCrossRegionS3Endpoints to false`
+                )
+            );
+        }
+    );
+
+    test.each(restrictedArms)(
+        "%s (%s) treats an omitted flag as true (the backward-compatible default)",
+        (region, partition, bucketRegion, base) => {
+            const run = loadConfig(
+                base(),
+                region,
+                withCrossRegionBucket(bucketRegion, partition, (c) => {
+                    delete c.app.useGlobalVpc.addCrossRegionS3Endpoints;
+                })
+            );
+            expect(run).toThrow(CROSS_REGION_ENDPOINT_MESSAGE);
+        }
+    );
+
+    test.each(restrictedArms)(
+        "%s (%s) accepts the flag false with a bucket in %s",
+        (region, partition, bucketRegion, base) => {
+            const run = loadConfig(
+                base(),
+                region,
+                withCrossRegionBucket(bucketRegion, partition, (c) => {
+                    c.app.useGlobalVpc.addCrossRegionS3Endpoints = false;
+                })
+            );
+            expect(run).not.toThrow();
+        }
+    );
+
+    test.each(restrictedArms)(
+        "%s (%s) accepts the shipped template, whose flag is inert without a cross-Region bucket",
+        (region, _partition, _bucketRegion, base) => {
+            const run = loadConfig(base(), region);
+            expect(run).not.toThrow(CROSS_REGION_ENDPOINT_MESSAGE);
+        }
+    );
+
+    test("the commercial partition accepts the flag true with a cross-Region bucket", () => {
+        // Control: proves the rule is scoped to restricted partitions rather than always firing.
+        const run = loadConfig(
+            commercialTemplate,
+            "us-west-2",
+            withCrossRegionBucket("us-east-1", "aws", (c) => {
+                c.app.useGlobalVpc.addCrossRegionS3Endpoints = true;
+            })
+        );
+        expect(run).not.toThrow();
+    });
+
+    test("the commercial partition resolves an omitted flag to true", () => {
+        const run = loadConfig(commercialTemplate, "us-west-2", (c) => {
+            delete c.app.useGlobalVpc.addCrossRegionS3Endpoints;
+        });
+        expect(run().app.useGlobalVpc.addCrossRegionS3Endpoints).toBe(true);
+    });
+
+    test("a cross-Region default bucket is rejected in the commercial partition too", () => {
+        const run = loadConfig(
+            commercialTemplate,
+            "us-west-2",
+            withCrossRegionBucket("us-east-1", "aws", (c) => {
+                c.app.assetBuckets.externalAssetBuckets[0].isDefault = true;
+            })
+        );
+        expect(run).toThrow(
+            /is marked isDefault but is in 'us-east-1' while the deployment is in 'us-west-2'/
+        );
+    });
+
+    test("warns, rather than rejects, for in-VPC Lambdas with the flag false and a cross-Region bucket", () => {
+        const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+        try {
+            const run = loadConfig(
+                commercialTemplate,
+                "us-west-2",
+                withCrossRegionBucket("us-east-1", "aws", (c) => {
+                    c.app.useGlobalVpc.enabled = true;
+                    c.app.useGlobalVpc.useForAllLambdas = true;
+                    c.app.useGlobalVpc.addCrossRegionS3Endpoints = false;
+                    // In-VPC Lambdas cannot use a public Serverless collection (an unrelated rule).
+                    c.app.openSearch.useServerless.allowPublic = false;
+                })
+            );
+            expect(run).not.toThrow();
+            expect(
+                warn.mock.calls.some((call) =>
+                    /addCrossRegionS3Endpoints is false, but external asset buckets are configured in 'us-east-1'/.test(
+                        String(call[0])
+                    )
+                )
+            ).toBe(true);
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
+    test("does not warn when the flag is true", () => {
+        const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+        try {
+            loadConfig(
+                commercialTemplate,
+                "us-west-2",
+                withCrossRegionBucket("us-east-1", "aws", (c) => {
+                    c.app.useGlobalVpc.enabled = true;
+                    c.app.useGlobalVpc.useForAllLambdas = true;
+                    c.app.openSearch.useServerless.allowPublic = false;
+                })
+            )();
+            expect(
+                warn.mock.calls.some((call) =>
+                    /addCrossRegionS3Endpoints is false/.test(String(call[0]))
+                )
+            ).toBe(false);
+        } finally {
+            warn.mockRestore();
+        }
+    });
+});
+
+describe("ConfigBuilder mirror of the cross-Region S3 endpoint rules", () => {
+    const ruleIds = (cfg: ReturnType<typeof makeDefaultConfig>) =>
+        evaluateRules(cfg)
+            .map((rule) => rule.id)
+            .filter((id) =>
+                [
+                    CROSS_REGION_ENDPOINT_RULE_ID,
+                    CROSS_REGION_DEFAULT_RULE_ID,
+                    CROSS_REGION_NO_ENDPOINT_WARNING_RULE_ID,
+                ].includes(id)
+            );
+
+    const withBucket = (
+        cfg: ReturnType<typeof makeDefaultConfig>,
+        bucketRegion: string,
+        partition: string,
+        isDefault = false
+    ) => {
+        (cfg.app.assetBuckets as any).externalAssetBuckets = [
+            {
+                bucketArn: `arn:${partition}:s3:::remote-assets`,
+                baseAssetsPrefix: "/",
+                defaultSyncDatabaseId: "remote",
+                bucketRegion,
+                isDefault,
+            },
+        ];
+        return cfg;
+    };
+
+    test.each([
+        ["govcloud", "us-gov-west-1", "us-gov-east-1", "aws-us-gov"],
+        ["eusovereign", "eusc-de-east-1", "eusc-de-west-1", "aws-eusc"],
+    ])(
+        "%s preset reports the endpoint rule with the flag true",
+        (profile, region, bucketRegion, partition) => {
+            const cfg = makeDefaultConfig(profile as any);
+            cfg.env.region = region;
+            withBucket(cfg, bucketRegion, partition);
+            expect(ruleIds(cfg)).toEqual([CROSS_REGION_ENDPOINT_RULE_ID]);
+            const rule = evaluateRules(cfg).find((r) => r.id === CROSS_REGION_ENDPOINT_RULE_ID);
+            expect(rule?.severity).toBe("error");
+        }
+    );
+
+    test("govcloud preset clears the endpoint rule with the flag false", () => {
+        const cfg = makeDefaultConfig("govcloud");
+        cfg.env.region = "us-gov-west-1";
+        withBucket(cfg, "us-gov-east-1", "aws-us-gov");
+        cfg.app.useGlobalVpc.addCrossRegionS3Endpoints = false;
+        expect(ruleIds(cfg)).toEqual([]);
+    });
+
+    test("govcloud preset with in-VPC Lambdas and the flag false reports the warning", () => {
+        const cfg = makeDefaultConfig("govcloud");
+        cfg.env.region = "us-gov-west-1";
+        withBucket(cfg, "us-gov-east-1", "aws-us-gov");
+        cfg.app.useGlobalVpc.useForAllLambdas = true;
+        cfg.app.useGlobalVpc.addCrossRegionS3Endpoints = false;
+        expect(ruleIds(cfg)).toEqual([CROSS_REGION_NO_ENDPOINT_WARNING_RULE_ID]);
+        const rule = evaluateRules(cfg).find(
+            (r) => r.id === CROSS_REGION_NO_ENDPOINT_WARNING_RULE_ID
+        );
+        expect(rule?.severity).toBe("warning");
+    });
+
+    test("commercial preset reports nothing for a cross-Region bucket with the flag true", () => {
+        const cfg = makeDefaultConfig("commercial");
+        cfg.env.region = "us-west-2";
+        withBucket(cfg, "us-east-1", "aws");
+        expect(ruleIds(cfg)).toEqual([]);
+    });
+
+    test("commercial preset reports the default-bucket rule for a cross-Region default bucket", () => {
+        const cfg = makeDefaultConfig("commercial");
+        cfg.env.region = "us-west-2";
+        withBucket(cfg, "us-east-1", "aws", true);
+        expect(ruleIds(cfg)).toEqual([CROSS_REGION_DEFAULT_RULE_ID]);
+    });
+
+    test("stays silent without a cross-Region bucket", () => {
+        const cfg = makeDefaultConfig("govcloud");
+        cfg.env.region = "us-gov-west-1";
+        withBucket(cfg, "us-gov-west-1", "aws-us-gov");
+        expect(ruleIds(cfg)).toEqual([]);
+    });
+
+    test("stays silent while the Region is unset", () => {
+        const cfg = makeDefaultConfig("govcloud");
+        (cfg.env as any).region = null;
+        withBucket(cfg, "us-gov-east-1", "aws-us-gov", true);
+        expect(ruleIds(cfg)).toEqual([]);
+    });
+});

@@ -77,6 +77,19 @@ vamscli execution details my-execution-id --include-sub-executions
 vamscli execution details my-execution-id --json-output
 ```
 
+`Workflow version` names the published workflow state machine version the run started on, marked
+`(latest)` while the workflow still runs it or `(superseded)` once the workflow's state machine has
+been redeployed since the run. A save from the workflow builder always redeploys it, as does an API
+or CLI update that supplies the step list (`vamscli workflow update` with `--pipeline`,
+`--specified-pipelines` or `--specified-pipelines-file`); a change to a setting one of its pipelines
+contributes to the state machine (execution type, target, callback mode, timeouts, Deadline Cloud
+job settings) redeploys it too.
+The marker does not track the workflow-level settings or the pipeline names and descriptions: they are
+read live and can change without a redeploy, so they may differ from what the run used whatever the
+marker says. A number with no marker means the workflow no longer records a current version (for
+example, the workflow was deleted), and a run started before versions were recorded shows
+`not recorded`.
+
 Asset and file metadata and database metadata are reported as separate row counts, each marked
 independently when the response returned only part of that collection, and the metadata sources the run
 read are named. The metadata rows themselves, and the full list of collections the response trimmed,
@@ -251,6 +264,40 @@ vamscli execution abort my-execution-id --group-id batch-2026-01 --yes
 # Non-interactive
 vamscli execution abort my-execution-id --group-id batch-2026-01 --yes --json-output
 ```
+
+A single abort reports `message` and, when a registered sub-process could not be stopped, two
+sibling arrays: `warnings` (free text, one sentence per sub-process) and `notAbortable` -- one
+`{resourceType, label, stageName, locator}` entry per registered sub-process of a type VAMS has no
+stop API for (an externally owned pipeline's own job, for example). The execution still reads
+`ABORTED`; a non-empty `notAbortable` means that compute keeps running until its owner's heartbeat or
+timeout ends it. `locator` is the registered id or the final segment of a registered ARN. Both arrays
+are absent from a clean abort. In CLI mode the warnings are listed and the `notAbortable` entries are
+summarised on one `Left running` line; `--json-output` carries every field the API returned beside
+`message`, so a field added later reaches a script without a CLI change.
+
+```json
+{
+    "message": "Execution aborted",
+    "warnings": [
+        "Sub-process of type 'slurmJob' (slurm-00001) could not be aborted: VAMS cannot stop this resource type; it may still be running."
+    ],
+    "notAbortable": [
+        {
+            "resourceType": "slurmJob",
+            "label": "Mock Slurm job",
+            "stageName": "MockTrain",
+            "locator": "slurm-00001"
+        }
+    ]
+}
+```
+
+A group abort reports `groupId`, a per-member `results` list (`aborted`, `skipped-terminal`, or
+`error`), `skippedInaccessibleCount`, and `moreRemaining`, plus the same two arrays gathered from its
+members: each warning is prefixed with its member's execution ID, and each `notAbortable` entry
+carries the member's `executionId`. In CLI mode the warnings follow a `Warnings:` heading and the
+`Left running` line names each sub-process after its member (`e1: Mock Slurm job (slurmJob, in
+MockTrain)`); `--json-output` returns the group fields with both arrays beside them.
 
 ---
 

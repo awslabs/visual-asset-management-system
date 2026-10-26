@@ -119,11 +119,19 @@ archived pipeline. Remove the pipeline from every workflow that uses it first.
 
 ### Updating a pipeline
 
-Editing a pipeline updates the pipeline itself. The workflows that reference it keep running against the
-execution configuration they were last saved with, so after changing where a pipeline sends its work — its
-execution type, its target function, queue, event bus or farm, or its callback and timeout settings — open
-each workflow that uses it and save it again to bring it up to date. Saving such a change reports a warning
-naming the workflows that reference the pipeline, so you know which ones to revisit.
+Editing a pipeline updates the pipeline itself. When the edit changes a setting compiled into workflow state
+machines — the execution type, the target function, queue, event bus or farm, the callback mode, the timeouts,
+or the AWS Deadline Cloud job settings — VAMS redeploys every non-archived workflow that references the
+pipeline in the background, so the workflows do not need to be opened or saved again. The save returns a
+warning with the number of referencing workflows being redeployed. If the background redeploy cannot be
+scheduled, the warning says so, and each workflow is redeployed at its next save or launch.
+
+A workflow launch checks that the workflow's state machine was built from its pipelines' current settings.
+When the background redeploy has not reached the workflow yet, the launch redeploys it first; when the
+workflow cannot be brought up to date, nothing starts and the launch returns a `409` error that can be retried.
+Archived workflows are left out of the background redeploy: restoring one brings its state machine up to date
+as part of the restoring save, and its next launch is checked like any other. A workflow whose redeploy fails
+is marked `deploymentStale` with the reason.
 
 ### Configuration templates
 
@@ -278,14 +286,18 @@ A **Validation** panel reports what it found before and after saving, split by c
 -   **Warnings** do not block it. They flag a workflow that is saveable but may not be able to run as
     intended, most often because the workflow's own settings starve one of its pipelines:
 
-    | Warning                                                                  | Cause                                                                                                                                                                             |
-    | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | A pipeline's accepted file types do not overlap what the workflow allows | The workflow's **allow** list admits nothing the pipeline can process, so no selection can ever satisfy it.                                                                       |
-    | The workflow excludes a type the pipeline accepts                        | The allow lists may overlap perfectly and the **exclude** list still removes the file afterwards, because exclude is applied second. The warning names what is left, if anything. |
-    | A pipeline uses metadata the workflow has turned off                     | The pipeline will run without that metadata rather than fail.                                                                                                                     |
+    | Warning                                                                      | Cause                                                                                                                                                                                                                                                    |
+    | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | The first step's accepted file types do not overlap what the workflow allows | The workflow's **allow** list admits nothing the first step can process, so no selection can ever satisfy it.                                                                                                                                            |
+    | The workflow excludes a type the first step accepts                          | The allow lists may overlap perfectly and the **exclude** list still removes the file afterwards, because exclude is applied second. The warning names what is left, if anything.                                                                        |
+    | A single-file later step admits both the selected type and an earlier output | A step after the first receives the selected files plus every file the earlier steps wrote. When its filters admit both, it is handed two files once an earlier step writes such a file, and the run fails at that step. Narrow its filters to one type. |
+    | A pipeline uses metadata the workflow has turned off                         | The pipeline will run without that metadata rather than fail.                                                                                                                                                                                            |
+
+    The workflow's filters bound the files a run selects, so the first two describe the first step: a
+    later step can accept a type the workflow does not, when an earlier step writes it.
 
     Warnings are worth resolving before anyone tries to run the workflow: a mismatch here becomes a
-    rejected execution later, when the reason is less obvious.
+    rejected execution, or a step that fails partway through a run, when the reason is less obvious.
 
 ![Workflow editor with pipeline steps configured and visual graph](/img/workflow_editor_20260803_v2.6.png)
 
@@ -324,7 +336,9 @@ pre-fills that asset, and you can still switch to a different one.
 
 Only files the workflow accepts are offered. When its filters hide some of an asset's files, the picker
 says how many were hidden, so a file that is missing from the list reads as "this workflow does not take
-that type" rather than "it is not there".
+that type" rather than "it is not there". In a workflow of several steps, a file is offered when any step
+accepts it, and a step's own exclusion hides it only when every step that takes files excludes it — a
+later step that reads only what an earlier step writes does not hide the file the run starts from.
 A requirements strip under the dialog title shows how many files the workflow takes, the file
 types it accepts and where output goes, so what is being asked for is visible while you select.
 Anything still needed is listed under **To continue** once you start selecting or try to move on.
@@ -500,6 +514,20 @@ workflow, trigger, start and stop times and duration — together with where it 
 **Output Path Prefix** the run wrote beneath. Knowing the prefix is what lets you find a particular run's
 output in the asset when several runs have written to the same place.
 
+The header also shows the **Workflow Version** the run started on: the published version of the
+workflow's state machine, the exact definition the run executed. It reads **(latest)** while the
+workflow still runs that version, and is marked **Superseded** once the workflow's state machine has
+been redeployed since the run. A save from the workflow builder always redeploys it, as does an API
+or CLI update that supplies the step list; a change to a setting one of its pipelines contributes to
+the state machine (execution type, target, callback mode, timeouts, Deadline Cloud job settings)
+redeploys it too. Running the workflow again then runs the newer definition. The version does not
+track the workflow settings on the **Settings** tab or the pipeline names and descriptions: they are
+read as they stand now and can change without a redeploy, so they may differ from what the run used
+whatever the version shows. Each step's own settings on the **Settings** tab are the ones it ran
+under. A number with no marker means the workflow no longer records a current version (for
+example, the workflow was deleted), and a run started before versions were recorded shows **Not
+recorded**.
+
 The tabs below it break the run down:
 
 | Tab           | What it shows                                                                                                                                                                                                                                                                                                                   |
@@ -578,6 +606,7 @@ VAMS may include built-in pipelines depending on your deployment configuration. 
 -   **Point Cloud Processing** -- Processes point cloud data (for example, E57, LAS) for web visualization.
 -   **Metadata Extraction** -- Extracts metadata from file headers and content.
 -   **GenAI Labeling** -- Uses generative AI to automatically generate labels and descriptions.
+-   **Video SOP/BOM Extraction** -- Transcribes narrated teardown videos and derives a step-by-step procedure, a bill of materials, and a lab summary; select one to four video files of one asset explicitly.
 -   **Gaussian Splatting** -- Generates 3D Gaussian splats from image and video media files.
 -   **Physical AI Inference and Fine-Tuning** -- GPU-accelerated pipelines for NVIDIA world foundation models, vision language models (VLMs), and vision-language-action models (VLAs) including inference, simulation training, and model fine-tuning.
 

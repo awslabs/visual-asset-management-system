@@ -115,6 +115,8 @@ GET /buckets
 | `bucketName`       | string  | Name of the Amazon S3 bucket used for asset storage.                                                                                                                                    |
 | `baseAssetsPrefix` | string  | Base prefix within the bucket under which assets are stored. Empty when assets are stored at the bucket root.                                                                           |
 | `isDefault`        | boolean | Whether this is the VAMS default asset bucket, which holds pipeline template data and execution-time run input and output under the `pipelines/` prefix. Exactly one bucket is default. |
+| `bucketRegion`     | string  | The AWS Region the bucket is in; presigned URLs and Amazon S3 requests for the bucket are signed for it. `null` on a row written without a Region, which is the deployment Region.      |
+| `bucketAccountId`  | string  | The 12-digit AWS account that owns the bucket when it is not the deployment account; `null` otherwise.                                                                                  |
 
 ```json
 {
@@ -123,7 +125,17 @@ GET /buckets
             "bucketId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
             "bucketName": "vams-assets-abc123",
             "baseAssetsPrefix": "assets/",
-            "isDefault": true
+            "isDefault": true,
+            "bucketRegion": "us-west-2",
+            "bucketAccountId": null
+        },
+        {
+            "bucketId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+            "bucketName": "east-coast-scans",
+            "baseAssetsPrefix": "",
+            "isDefault": false,
+            "bucketRegion": "us-east-1",
+            "bucketAccountId": "222222222222"
         }
     ],
     "NextToken": null
@@ -240,6 +252,16 @@ At least one field must be provided. The `databaseId` cannot be changed after cr
     "timestamp": "2026-03-16T14:20:00"
 }
 ```
+
+A caller who may call this route but is not permitted to update the database itself receives `403`, and nothing is written.
+
+### Error responses
+
+| Status | Description                                                                    |
+| ------ | ------------------------------------------------------------------------------ |
+| `400`  | Validation error, no updatable field supplied, or database or bucket not found |
+| `403`  | Not authorized                                                                 |
+| `500`  | Internal server error                                                          |
 
 ---
 

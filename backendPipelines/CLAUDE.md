@@ -99,6 +99,89 @@ Output dir: {outputS3AssetFilesPath}
 ❌ Wrong output:   {outputS3AssetFilesPath}pump.e57.previewFile.gif  (relative path lost)
 ```
 
+## Fetching Files an Input References
+
+A container job role usually reads every asset bucket, so a path written inside an uploaded file (a glTF URI, a USD sublayer/reference/payload or texture path, an OBJ `mtllib`, an FBX texture name) is untrusted input that could pull another asset's content into this one's output. `preview/3dThumbnail/container/preview_pipeline/dependencies.py` is the worked example (ARCC BSC1, allowlist validation):
+
+-   Accept only relative paths that, normalised against the referring file's directory, stay inside the input's asset prefix (the key up to the `assetId` segment; the run's output files folder for a file an earlier step wrote; else the input's own directory — the case for an asset on a `bucketExistingKey` folder). Reject absolute paths, `..` escapes, any URI scheme, control characters and values over 1,024 characters. Percent-decode only formats whose references are URIs (glTF), and check the decoded value.
+-   Bound the fetch: a file count, a byte total from HeadObject before each download, a free-disk check, and a recursion depth for formats whose fetched files reference more files (USD layers).
+-   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference.
+-   When a third-party tool opens the referenced files itself (splat-transform reads an `.lcc2` scene's chunk files by the names its description lists), check every name the description lists before the tool starts, and refuse the conversion when one would leave the work directory or a needed file is missing. Do not rely on the fetch having skipped it: the tool would still open the path. `format_handlers/splat_handler.prepare_lcc2` is the worked example.
+
+## Parsing XML From Uploaded Files
+
+An uploaded XML file (COLLADA, 3MF, any XML sidecar) can carry a DTD that expands entities without bound or an external entity that reads local files or URLs. Parse it as `preview/3dThumbnail/container/preview_pipeline/format_handlers/xml_mesh_handler.py` does (ARCC BSC12, secure XML parsing): an `xml.parsers.expat` parser whose `StartDoctypeDeclHandler`, `EntityDeclHandler`, `UnparsedEntityDeclHandler` and `ExternalEntityRefHandler` raise, with `SetParamEntityParsing(XML_PARAM_ENTITY_PARSING_NEVER)`, feeding an `ElementTree.TreeBuilder`. Never call `ElementTree.parse`/`fromstring` or `lxml` on input. The C-accelerated `ElementTree.XMLParser` does not expose its expat parser, so the handlers cannot be set on it. Check a zip-based input's central directory (total uncompressed size against free disk, compression ratio per member) before decompressing it (`utils/archive.py`). A format whose elements reference one another (3MF components, COLLADA `instance_node`) also bounds its expansion; see [Sizing a Container's Work to Its Task](#sizing-a-containers-work-to-its-task).
+
+## Sizing a Container's Work to Its Task
+
+A Batch/Fargate container reads its limits from its own cgroup rather than from a tier name or a constant, so it stays inside whichever job size started it. `preview/3dThumbnail/container/preview_pipeline/resources.py` is the worked example:
+
+-   Memory from `/sys/fs/cgroup/memory.max` (v1 `memory/memory.limit_in_bytes` fallback; "max" or a near-2^63 value means unlimited); CPUs from the scheduler affinity capped by `cpu.max` (v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us`). `os.cpu_count()` alone reports the host's CPUs inside a quota.
+-   Derive work budgets (points, triangles) from both, and set `LP_NUM_THREADS` (Mesa llvmpipe) to the CPU count before the first GL context exists.
+-   Bound what a library allocates for the work, not only what it returns. VTK's `vtkQuadricClustering` allocates its grid densely (88 bytes per bin, occupied or not) and counts the bins in a C `int`, so a grid sized from the triangle budget alone overflows at the shipping budgets and aborts the process with an uncaught `std::bad_alloc` that no `except MemoryError` sees. `geometry_budget.py` also bounds the grid by the task's memory (`cluster_bin_limit`) and keeps the grid arithmetic in pure functions a test checks at each tier's budget without allocating.
+-   Bound how far an instancing format expands before any budget applies. A 3MF component, a COLLADA `instance_node`, a STEP assembly component or an FBX model connected to several parents may place the same child several times per level, so a few-KB file describes 2^depth placements and a depth limit alone allows billions. Each walk counts its nodes and placed geometry against one `format_handlers/scene_limits.SceneLimit` (the triangle budget, three vertices per triangle of it, 1,000,000 nodes) and parses each object or geometry once (ARCC BSC1). Where a library expands the scene itself (OCCT's STEP transfer visits every placement; Assimp builds every FBX model placement and copies instanced geometry), count the placements from the file before handing it over (`cad_handler.assembly_occurrences`, `format_handlers/fbx_scene.scene_size`) and refuse a file over the bound. A recursive native parser can also be exhausted by nesting depth alone, independent of placement count: in the same pass `fbx_scene.scene_size` refuses an FBX whose scopes (ASCII) or node records (binary) nest past a fixed depth (`MAX_FBX_NESTING_DEPTH`), since the reader descends into each level as it opens.
+-   Check the input size plus output headroom against `shutil.disk_usage` before downloading, and fail with a message naming both sizes; do not keep a fixed maximum-size constant.
+-   Download with a `TransferConfig` (parallel ranged GETs); stream line-oriented inputs from S3 (`get_object` + `iter_chunks`, resuming with a `Range` header after a dropped stream) and sample as they are read (`format_handlers/point_streams.py`).
+-   Log a compute-tier environment variable when the orchestration sets one, but never branch on it; log each phase's duration (`utils/timing.py`).
+
+## Pinning a Container's Dependencies
+
+Install a container's dependencies so that two builds of one commit ship the same code. `preview/3dThumbnail/container/Dockerfile` is the worked example:
+
+-   Python packages come from a lock generated from `requirements.txt` with `uv pip compile --generate-hashes`, installed with `pip install --require-hashes`; `requirements.txt` holds only the direct dependencies, and the lock's header carries the command that regenerates it.
+-   npm tools come from a committed `package-lock.json`, installed with `npm ci`.
+-   A release tarball (Node.js) is downloaded at a fixed version and its SHA-256 is checked in the same `RUN`.
+-   Compilers and build tools stay in a builder stage; the runtime stage copies only the installed results, from the same digest-pinned base image.
+-   Each stage's package-install `RUN` runs `apt-get update && apt-get upgrade -y` before `apt-get install -y --no-install-recommends` and removes the package lists in the same layer. The digest pin fixes the Debian packages at the day the digest was built, so the upgrade is what brings in the security updates published since; AWS Batch on AWS Fargate patches the host, not the image. `preview/3dThumbnail/container/tests/test_thumbnail_dockerfile_security_updates.py` holds both stages to it.
+    -   Debian packages are the exception to "the same code": the upgrade layer takes what Debian has published on the build day, so two builds of one commit can differ in Debian patch level, and the build log's `apt-get upgrade` lines list what moved.
+    -   A deployed image takes later Debian updates only when the container directory changes and the build runs on a cold cache: `ecs.AssetImage.fromAsset` skips the build when the directory's asset hash is already in the CDK bootstrap ECR repository, and Docker reuses the cached upgrade layer, whose instruction and digest-pinned parent do not change and which comes before every `COPY`. To take new updates deliberately, move the digest, or rebuild with `--no-cache` after a change to the container directory.
+-   A package manager used only to install a tool is removed in the builder stage, in the `RUN` that used it, so the runtime image does not ship it: npm, npx and corepack arrive with the Node.js tarball and are deleted after `npm ci` installs `splat-transform`, because the pipeline runs only `node`. The same test file holds the Dockerfile to it.
+
+## Files a Model Input References
+
+A model format can keep part of the model in other files: glTF/GLB buffers and images, an OBJ's
+`mtllib` and the `map_Kd` textures the MTL names, a PLY `TextureFile`. A pipeline that loads such a
+model downloads the input at its asset-relative path and fetches those files from the **input's own
+asset** beside it before loading; downloading the selected file alone loses them, and renaming it breaks
+`../` references.
+
+Every reference is untrusted input, because the pipeline role reads every asset bucket (ARCC BSC1, input
+validation by allowlist). Accept a reference only when it is a relative path that, normalised against
+the referring file's directory, stays inside the input's asset prefix; reject absolute paths, `..`
+escapes, URI schemes and control characters before any Amazon S3 call, and bound the file count, byte
+total and depth. Collect each name exactly as the loader will ask for it, so the fetch requests, and its
+warnings name, only files the loader reads: trimesh's OBJ loader asks for one material library, the
+rest of the line after the first `mtllib` anywhere in the text (spaces included), and its MTL parser
+asks only for each `map_Kd` value, the rest of its line. Hand the loader a resolver that serves **only**
+the fetched files and refuses every other name, so a reference outside the asset is refused or skipped,
+never read.
+
+The 3D Basic Conversion applies these rules in `conversion/3dBasic/lambdaContainer/referenced_files.py`
+(`resolve_reference` for the path rules, one collector per format, `ConfinedResolver`). It FAILS on a
+glTF/GLB buffer (the geometry) and skips a material library or texture image with a warning naming it
+(`Reference.required`).
+A skipped name is never in the resolver's set, and every name looked up counts toward the file limit,
+found or not. Real-trimesh coverage runs in a child interpreter (`tests/test_3dbasic_real_conversions.py`)
+since sibling modules stub `trimesh`.
+
+The two Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) log through
+`lambdaContainer/common/logger.py`, which is **not** in the `customLogging/logger.py` byte-identity set
+and redacts only `authorization`. A Lambda-container handler therefore checks `TaskToken` before it
+logs anything and never logs the event, as both handlers do
+(`tests/test_3dbasic_task_token_logging.py`, `tests/test_meshcad_task_token_logging.py`). The 3dBasic
+`.dockerignore` keeps `tests/`, the Poetry files and caches out of its `COPY . .`.
+
+VAMS reads a Lambda step's log group only for lines that contain the workflow execution id, so a line
+that names no run path (a referenced-file warning, for one) is missing from the run's log in VAMS. Both
+Lambda-container handlers therefore put the body's `workflowExecutionId` on every line with
+`logger.append_keys` after the task-token check, and remove it with `remove_keys` first thing in each
+invocation, because a reused execution environment keeps the logger's keys
+(`tests/test_3dbasic_execution_id_logging.py`, `tests/test_cadmesh_execution_id_logging.py`). A module
+that logs on the handler's behalf creates its logger as a Powertools child of the handler's service
+(`safeLogger(service=<handler's service>, child=True)`, as the CAD/mesh `metadata_extractors` do), so its
+lines go through the handler's formatter and carry the same keys; a logger with a service of its own
+does not.
+
 ## Reporting Failure on a Task-Token Pipeline
 
 A pipeline registered with `waitForCallback: "Enabled"` receives an AWS Step Functions task token, and the
@@ -164,6 +247,17 @@ implementations — that is a pre-invoke rejection, whose whole message is one s
 reports a finished JOB's outcome carries the child's own output instead, so it bounds that text itself to
 fit the 32768-character `cause` limit; `multi/rapidPipelineEKS`'s CHECK_JOB path is the example, and its
 `POD_LOG_TAIL_MAX_CHARS` is deliberately far larger than 256.
+
+A value over either `SendTaskFailure` limit (`error` 256 characters, `cause` 32768) is rejected by the
+service — botocore checks only the minimum length — and the rejection lands in the callback's own
+`except`, so the token goes unreported exactly as if no callback had been written. A route that forwards
+an error it did not compose (a `PipelineEnd` handler passing on the state's `$.error`) cannot know its
+size. `multi/rapidPipelineEKS/lambda/taskFailureBounds.py` is the pattern: every `send_task_failure` in
+that pipeline's `consolidated_handler.py` and `openPipeline.py` takes its `error` and `cause` from
+`bounded_task_failure`, which returns a value within its limit unchanged, keeps the head of a longer one
+(a Lambda error body puts the message first) with a `... [truncated from N characters]` marker inside the
+limit, and converts a non-string with `str()`. `tests/test_rapidpipeline_eks_task_failure_bounds.py`
+holds every call to that form with a syntax-tree guard; it is durable, not temporary.
 
 **On the SUCCESS path, report the outcome and not the job's output.** A `SendTaskSuccess` output and the
 lambda's own return value both land in the execution record, which is durable and readable by anyone who
@@ -323,7 +417,7 @@ partition. Author it with the block for your execution type present but empty:
       variations of it. A caller then gets a working zero-argument run.
     - **Mark none**, when the templates are _mutually exclusive outputs_ and picking for the caller
       would silently produce the wrong artifact. Four bundles are this shape: `conversion-3d-basic`
-      (convert-to-glb / -gltf / -obj / -stl), `rapid-pipeline` (to-glb / to-gltf), `vntana-model-ops`
+      (convert-to-glb / -gltf / -obj / -ply / -stl), `rapid-pipeline` (to-glb / to-gltf), `vntana-model-ops`
       (to-glb / -gltf / -usdz) and `3dRecon-splat-toolbox` (splat-objects /
       splat-environments-360). There is no defensible default target format or capture geometry, so
       the API refusing a run that names no `templateId` is the correct behaviour.
@@ -357,7 +451,8 @@ partition. Author it with the block for your execution type present but empty:
    preview thumbnail, and GenAI 3D metadata labeling bundles enable it.
 7. **A workflow's `defaultOutputFileBaseExecutionPathExtension` supplies the output path prefix when
    an execution names none.** It is stored UNRESOLVED, so its `{{tag}}` placeholders resolve per run --
-   one stored `/{{jobName}}/` gives every execution its own output folder. The prefix is inserted
+   one stored `/{{jobName}}/` gives every execution its own output folder, because the `{{jobName}}`
+   tag renders a value unique to each run and step (rule 9). The prefix is inserted
    immediately before each output file's own name, so a container's own output folders are preserved.
    **A container must therefore not create its own per-job folder** -- the workflow prefix is what
    separates runs, and a container-side folder shows up as a stray level inside every asset. The
@@ -386,6 +481,14 @@ partition. Author it with the block for your execution type present but empty:
    quoting a typed tag would hand the container `"42"` where it expects `42`. Non-`json` formats
    (`yaml`, `xml`, `openjd`, `raw`) are stored verbatim and not shape-checked. A `tagKey` may not
    collide with a reserved system tag name or start with the reserved `metadata_` prefix.
+   **Text the container renders itself — a GenAI prompt carried in a template body — places its
+   inputs as `[[TOKEN]]`, never `{{TOKEN}}`:** VAMS substitutes every declared and catalog `{{tag}}`
+   in the body before the pipeline sees it, so `{{…}}` stays the channel for operator values. **A
+   template never names a model:** a GenAI pipeline's model is one deployment setting whose IAM grant
+   is scoped to it at synth, so the pipeline refuses a body carrying a model key rather than widening
+   the grant. The Video SOP/BOM workload-profile templates are the worked example; their rules live
+   in `genAi/videoSopBom/lambda/profileRules.py`, a byte-identical copy of the container's, so
+   `constructPipeline` refuses a bad profile before any AWS Batch job starts.
 9. **A workflow ref's `jobName` is an output-path segment, not a display label.** It becomes the
    `{jobName}` folder in `{baseAssetsPrefix}pipelines/{pipelineName}/{jobName}/output/{executionId}/files/`
    — relative to the area VAMS owns in the default asset bucket, which
@@ -396,7 +499,10 @@ partition. Author it with the block for your execution type present but empty:
    the step — blank already falls back to the pipeline id, keeping each step's output distinct. It
    takes the id charset only (3-63 chars), so **`{{tag}}` placeholders are rejected**: use the
    workflow's `defaultOutputFileBaseExecutionPathExtension` (rule 7) to vary the path per run. Do not
-   confuse the FIELD with the `{{jobName}}` TAG, which resolves to the run's generated job name.
+   confuse the FIELD with the `{{jobName}}` TAG, which renders `executionRecords.run_job_name()`: the
+   step's stored `jobNames[]` entry joined to that step's `pipelineExecutionId`, at most 80 characters,
+   so it differs on every run and for every step of one run. The run-bucket prefix above keeps the
+   stored name, which the deployed state machine bakes in.
 10. **A workflow may not list the same pipeline twice.** Per-step execute params, resolved template
     configs, and filtered inputs are all keyed by `pipelineDatabaseId:pipelineId`, so a repeated
     pipeline silently overwrites the earlier step's resolved config and both steps run identically —
@@ -410,7 +516,11 @@ partition. Author it with the block for your execution type present but empty:
     (even to the millisecond) is not enough, so keep the random suffix. The name also namespaces
     per-execution S3 objects in some pipelines (`rp_config_{jobName}.json`), where a collision has
     concurrent runs overwrite each other's config instead of merely failing to start. Keep it within the
-    80-character Step Functions limit and free of `:` and `/`.
+    80-character Step Functions limit and free of `:` and `/`. In `multi/rapidPipeline` the name is also
+    the Fargate task's ECS task group, which is how the state machine finds a task still running at its
+    task-level timeout to stop it (it matches the group of the cluster's running tasks to the execution
+    name), so keep it unique per execution and within ECS's 255-character task group limit: pinned by
+    `multi/rapidPipeline/lambda/tests/test_rapidpipeline_ecs_timeout_stop_route.py`.
 
 Verify registration after a deploy rather than assuming it:
 
@@ -460,9 +570,10 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
      "sourceType": "batch", "label": "<Batch state name> container"}
     ```
 
-    Which group that is depends on the compute family. The five **Fargate** job definitions (coordinate
-    transform, Blender renderer, 3D thumbnail, PDAL, Potree) write through the `awslogs` driver to a
-    VAMS-owned, KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and register **that** group;
+    Which group that is depends on the compute family. The six **Fargate** job definitions (coordinate
+    transform, Blender renderer, 3D thumbnail, PDAL, Potree, video SOP/BOM extraction) write through the
+    `awslogs` driver to a VAMS-owned, KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and
+    register **that** group;
     the **GPU** Batch pipelines (NVIDIA Cosmos, GR00T, Isaac Lab, Splat Toolbox) set no log configuration,
     so theirs is AWS Batch's default `/aws/batch/job`. In both families the stream is
     `<jobDefinitionName>/default/<ecs-task-id>` — the Fargate construct sets `awslogs-stream-prefix` to the
@@ -470,6 +581,12 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
     resolves to. Container output does not print the VAMS execution ids, so a registered prefix that the
     real stream falls under is what lets the read skip the execution-scope terms; a prefix the stream does
     not start with reads as `scoped`, and the filter drops every container line.
+
+-   **Batch states that submit the same job definition share one stream prefix**, so register only the
+    state the run is routed to. The registration handler dedups log entries by location and keeps the
+    first entry's `stageName`, so registering every such state attributes the run's container lines to
+    whichever state was listed first. The 3D thumbnail pipeline's standard and large tiers are the case
+    in the tree (`preview/3dThumbnail/lambda/openPipeline.py`).
 
 CDK rules for those env values (`infra/lib/nestedStacks/pipelines/**`):
 
@@ -511,6 +628,19 @@ keys and that the emitted `logGroupArn` passes `CLOUDWATCH_LOG_GROUP_ARN` and `l
 `LOG_STREAM_NAME`. Run each pipeline's `tests/` in its own pytest process (module-name collision across
 pipelines).
 
+**Work a stopped execution leaves running.** Abort and a failure elsewhere in the workflow stop a
+registered `stepFunctionsExecution`, and a stopped execution runs no further states, so anything its
+states started outside a Step Functions `.sync` integration keeps running unless the pipeline cleans it
+up itself. `multi/rapidPipelineEKS` is the example for its Kubernetes job: CONSTRUCT_PIPELINE records each
+job name under `$$.Execution.Name` in the auxiliary bucket, and an EventBridge rule on the state
+machine's own `ABORTED` / `TIMED_OUT` / `FAILED` status changes invokes the handler's
+`EXECUTION_END_CLEANUP`, which rejects any other state machine and deletes the recorded jobs. The rule's
+`targets.LambdaFunction` permission carries `SourceArn` only, so the construct adds `SourceAccount`
+(`infra/test/pipelines/eksExecutionEndCleanup.test.ts`). The target's `retryAttempts` covers only
+EventBridge's delivery; a handler that returns an error body has succeeded as far as Lambda is concerned,
+so `lambda_handler` raises for a 5xx `EXECUTION_END_CLEANUP` result (never for its 400/403 rejections)
+and the construct pins Lambda's asynchronous retries with `configureAsyncInvoke` (no destination).
+
 ## Every boto3 Client Carries the Adaptive Retry Configuration
 
 Every `boto3.client(...)` and `boto3.resource(...)` in this tree takes the shared retry configuration:
@@ -551,12 +681,14 @@ so no suite there runs `--strict-markers` and an unregistered marker only warns.
 `unit` through a `pytest_configure` hook in their `conftest.py`; none registers `temporary`.
 
 **A rule that must hold for EVERY pipeline goes in `backendPipelines/tests/`.**
-`test_open_pipeline_extension_gates.py` is the worked example: it loads all seven `openPipeline.py`
+`test_open_pipeline_extension_gates.py` is the worked example: it loads all eight `openPipeline.py`
 handlers by path under per-pipeline module names and asserts each tests EXACT membership of its parsed
 `ALLOWED_INPUT_FILEEXTENSIONS` list. `in` against the joined env string is substring containment, which
 admits any prefix of a listed extension (`.us` passes for `.usd,.usda`), and the loose form spread by
-copying an existing pipeline — which is precisely what a per-pipeline test cannot catch. Two of seven
-were fixed and five were not, and no per-pipeline suite noticed.
+copying an existing pipeline — which is precisely what a per-pipeline test cannot catch. When the test
+was written it covered seven handlers: two had been fixed and five had not, and no per-pipeline suite
+noticed. The handler count is the `PIPELINES` tuple in that file — recompute it with
+`grep -c '^    ("[A-Za-z0-9]*", "backendPipelines/' backendPipelines/tests/test_open_pipeline_extension_gates.py`.
 
 **Give every test module a suite-private basename.** Pipelines are near-copies of one another, so their
 test files collide: `test_extension_gate.py`, `test_manifest_refactor.py`,
@@ -623,6 +755,8 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
 
 ## Adding a New Processing Pipeline
 
+**In a fork, or for an external solution.** Pipelines have no custom lane and are not add-ons. A fork adds a pipeline without editing these core files by deploying it as its own stack and registering it through the API (`documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`), or as an externally owned pipeline bridge (`app.pipelines.externalPipelineBridges`); the custom nested stack (`infra/lib/nestedStacks/custom/customResources.ts`) is not a pipeline seam. An upstream pipeline that calls a vendor's service is still a core pipeline behind its own `app.pipelines.*` switch. The `/add-pipeline` skill's fork mode and `documentation/docusaurus-site/docs/developer/customizing-vams.md` (Known Limits) say the same; the add-on definition is in `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
 1. Create directory under `backendPipelines/{useCase}/`.
 2. Add Lambda handler in `lambda/` subdirectory. **Every pipeline `lambda/` directory MUST include:**
 
@@ -646,7 +780,69 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     A pipeline that reads the workflow manifest also vendors `manifestHelper.py`. **All copies must stay
     byte-identical** — verify with
     `find backendPipelines -name manifestHelper.py -exec md5sum {} \; | awk '{print $1}' | sort -u`,
-    which must print exactly one hash. Edit one copy, then propagate to the rest in the same change.
+    which must print exactly one hash. Edit one copy, then propagate to the rest in the same change
+    (`backendPipelines/tests/test_pipeline_cross_region_inputs.py` lists the copies and pins the digest).
+
+    An asset bucket may be in another Region than the deployment. The manifest names it on every input
+    file (`inputFiles[].bucketRegion`, plus `bucketAccountId` for a cross-account bucket) and on the
+    output bucket (`outputs.bucketRegion`); an empty value is the deployment Region. `resolve_inputs`
+    exposes them as `inputBucketRegion` / `outputBucketRegion`, and `manifestHelper.s3_client_for_region()`
+    builds the client that reads or writes there (adaptive retries, regional `us-east-1` endpoint, no
+    `endpoint_url`). **A pipeline whose AWS Batch compute runs in the isolated subnets** (Potree viewer,
+    3D thumbnail, GenAI metadata labeling, coordinate transform, Video SOP/BOM) reaches Amazon S3 in the
+    deployment
+    Region through the S3 gateway endpoint and in each cross-Region asset bucket's Region through the
+    cross-Region S3 interface endpoint the VPC builder creates in those subnets
+    (`app.useGlobalVpc.addCrossRegionS3Endpoints`), so its `vamsExecute` handler calls
+    `manifestHelper.enforce_inputs_in_region(resolved)` right after `enforce_single_input_file` (or, for
+    the multi-file Video SOP/BOM pipeline, right after the manifest resolves and before its own count and
+    HeadObject gates, so no head is sent to a Region the compute cannot reach), inside the `try` that
+    reports `SendTaskFailure`. The gate admits the deployment Region and the Regions in
+    `CROSS_REGION_S3_ENDPOINT_REGIONS`, which the pipeline's lambda builder sets on the `vamsExecute`
+    function from `Config.crossRegionS3EndpointRegions(config)` -- the same helper the VPC builder
+    iterates to create the endpoints, so the two cannot drift -- and rejects any other Region with a
+    message naming both remedies (the flag with the bucket registered, or private subnets). The
+    private-subnet pipelines and the Lambda-container pipelines do not call it, and the Lambda-container
+    entry points (`lambdaContainer/lambda.py`) read the input and write the output with a client for the
+    Region the manifest names. Moving a pipeline between placements means adding or removing that call
+    and the env var. `infra/test/pipelines/isolatedPipelinesCrossRegionEndpointEnv.test.ts` holds the
+    four functions' value to the VPC builder's endpoint list.
+    **Batch containers get the Regions through the job definition:** `vamsExecute` passes
+    `inputBucketRegion` / `outputBucketRegion` to `openPipeline` (state-machine input), `constructPipeline`
+    turns them into the definition's `bucketRegions` map (`bucket_regions(event)`: bucket name -> Region,
+    deployment-Region buckets left out; the container `PipelineDefinition` dataclass has
+    `bucketRegions: dict = None`), and the container's S3 helper (`register_bucket_regions`,
+    `client_for_bucket`) signs each registered bucket's requests with a cached client for that Region --
+    adaptive retries, regional `us-east-1` endpoint, no `endpoint_url` -- called from `core.run` before
+    the first S3 call. Every bucket-addressed helper call routes through `client_for_bucket`; the
+    auxiliary bucket is never registered and stays on the default client. Splat Toolbox hands the map to
+    the upstream `main.py`'s process (`VAMS_BUCKET_REGIONS`), where the launcher replaces a bare
+    `boto3.client('s3')` with `vams_utils.aws.s3.region_routing_client()`; Isaac Lab carries the map in
+    its job config and `openPipeline` reads the asset bucket with `manifestHelper.s3_client_for_region`.
+    The 3D thumbnail `openPipeline` does the same when it picks the compute tier: `computeTier.py` maps
+    the event's input and output buckets to their Regions (`bucket_regions`) and sends the input's
+    `HeadObject` and the input-configuration read through `s3_client_for`, which falls back to the
+    default client for a bucket in the deployment Region.
+    The five NVIDIA containers (Cosmos 3, Predict v2.5, Reason, Transfer, GR00T) run the AWS CLI rather
+    than boto3: their `manifest_io.py` carries the registry (`register_bucket_regions`, `bucket_region`,
+    `s3_region_args`), `__main__.py` registers the definition's map right after loading it, and every
+    `aws s3` / `aws s3api` command that addresses an asset bucket spreads `*manifest_io.s3_region_args(uri)`
+    into its argv; `model_manager.py` addresses the deployment-Region model-cache bucket and carries none.
+    The helper is duplicated per container (each Dockerfile COPYs an explicit file list) and
+    `genAi/nvidia/tests/test_container_s3_region_routing.py` compares the five copies structurally and
+    scans every argv literal, so edit one and propagate. A new Batch pipeline copies one of these chains;
+    its lambda and container tests assert the map end to end (`test_*_bucket_regions.py`,
+    `test_*_s3_region_client.py`).
+    **A pipeline that hands `s3://` locations to a third-party container image** (ModelOps, RapidPipeline
+    ECS and EKS) cannot route that image's S3 calls, and the image's cross-Region behaviour is
+    unverified, so the pipeline is same-Region only: its `vamsExecute` calls
+    `manifestHelper.enforce_same_region_io(resolved)` right after `enforce_single_input_file`, inside the
+    `try` that reports `SendTaskFailure`, rejecting an input OR output bucket outside the deployment
+    Region. Every S3 call VAMS itself makes in those pipelines (manifest, input configuration, the
+    `rp_config` object) addresses the default run bucket or the auxiliary bucket, both in the deployment
+    Region. `backendPipelines/tests/test_pipeline_cross_region_inputs.py` holds the repo-wide rule: every
+    `vamsExecute*.py` is in exactly one of the three classes -- isolated-subnet gate, Region-consuming
+    (forwards both resolved Regions), or same-Region-only -- so a new pipeline must be placed in one.
     `fetch_manifest` RAISES when a referenced manifest cannot be read (it returns `None` only when the
     payload references no manifest at all): the manifest is the sole carrier of asset identity and the
     output paths, so swallowing that error starts a job that fails only after its compute — a GPU
@@ -660,7 +856,7 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
    [A Non-Root Container Normalizes Read Bits on the Source It COPYs](#a-non-root-container-normalizes-read-bits-on-the-source-it-copys).
 4. **Register the pipeline's sub-process and log sources** from `openPipeline.py` (or from
    `executeBatchJob.py` when that lambda submits the job itself): the state-machine log entry with
-   `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state naming the
+   `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state (only the state the run is routed to when several states share one job definition) naming the
    group that job definition writes to — the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group
    for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration — (`logStreamPrefix`
    `"<jobDefinitionName>/default/"`, `stageName` = the ASL state name, declared as a
@@ -691,7 +887,7 @@ mode stays restrictive. Worked examples: `preview/3dThumbnail/container/Dockerfi
     - **Pipeline-only endpoint condition** (~line 651) — the `if` block that creates Batch, ECR API, and ECR Docker interface VPC endpoints in the isolated subnets. **Required for every pipeline, either placement.** Without it Batch jobs cannot pull container images.
     - **ECS endpoint condition** (~line 736) — the `needsEcsPrivate` variable. **Private-subnet pipelines only.** This is the ECS _control-plane_ endpoint that the ECS agent on an EC2-launch-type container instance needs; **Fargate tasks do not use it** (they need ECR, Amazon S3 and CloudWatch Logs, supplied by the block above). Each endpoint adds one ENI per AZ, ~$15/month.
 
-    Four Batch pipelines run in isolated subnets (Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; seven run in private subnets (Splat Toolbox, ModelOps, RapidPipeline ECS and EKS, NVIDIA Cosmos, NVIDIA Cosmos 3, NVIDIA GR00T) and appear in all three. Isaac Lab training runs its compute in private subnets and appears in the subnet-creation and endpoint conditions, with its ECS endpoint gated separately by `needsEcsIsolated`. The Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) use no Batch and appear in none. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
+    Which blocks a flag belongs in is derived from the source, not from a list kept here. Read the placement off `pipelineBuilder-nestedStack.ts`: a stack given `pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline` is an isolated-subnet pipeline (endpoint block only); one given `privateSubnets.pipeline`, or both `pipelineSubnetsPrivate` and `pipelineSubnetsIsolated`, is a private-subnet pipeline (all three). A containerized Lambda pipeline (3dBasic, CAD/mesh metadata extraction) is placed in isolated subnets but runs no Batch job, so it appears in no block. A pipeline whose container calls a service that has no interface endpoint yet also gets a service-endpoint gate beside the Bedrock Runtime / Rekognition `if` — the Bedrock Runtime endpoint is created when `bedrockRuntimeFromLambda` (`useForAllLambdas && useGenAiMetadata3dLabeling.enabled`) **or** `bedrockRuntimeFromContainer` (`useGenAiVideoSopBom.enabled`) holds, and the Transcribe endpoint when `bedrockRuntimeFromContainer` holds. Isaac Lab training is the one placement the derivation does not predict: its EC2 Batch compute is placed in `privateSubnets.pipeline` (its EFS in isolated subnets) and the flag appears in the subnet-creation and endpoint blocks, while its ECS endpoint is gated separately by `needsEcsIsolated` rather than `needsEcsPrivate`. Recompute the membership with `grep -n "pipelineSubnets" infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts` against `grep -n "subnetConfigurations.push(subnetPublicConfig)\|Pipeline-Only Required Endpoints\|const needsEcsPrivate\|bedrockRuntimeFromContainer" infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts` (no NAT for an isolated-subnet pipeline, NAT present for a private-subnet one) and `infra/test/pipelines/videoSopBomVpcPlacement.test.ts` (the service-endpoint gate widened for the container without widening the Lambda gate). `infra/test/security/vpcEndpointsAndAuthGrants.test.ts` asserts each flag's block membership from its `privateSubnetBatchFlags` / `isolatedSubnetBatchFlags` lists — add a new pipeline's flag to the matching list.
 
 11. **Pass through all output paths** in the `vamsExecute` lambda — never hardcode empty strings for `outputS3AssetFilesPath`, `outputS3AssetPreviewPath`, or `outputS3AssetMetadataPath`. See [Pipeline S3 Output Paths](#pipeline-s3-output-paths) for conventions.
 12. **Use the correct output path** in the `constructPipeline` lambda for the container's output target: `outputS3AssetFilesPath` for file-level outputs (including `.previewFile.X` thumbnails), `outputS3AssetPreviewPath` for asset-level previews only, `outputS3AssetMetadataPath` for metadata. Only use `inputOutputS3AssetAuxiliaryFilesPath` for temporary files or special non-versioned viewer data (e.g., Potree octree files).

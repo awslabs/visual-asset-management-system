@@ -8,6 +8,7 @@ import sys
 import subprocess
 import boto3
 from vams_utils import manifest_io
+from vams_utils.aws import s3 as vams_s3
 from botocore.config import Config
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
@@ -316,8 +317,42 @@ def failure_cause(error) -> str:
 # `python main.py` — it sets `sys.argv[0]` and `__file__` to the script and puts its directory first on
 # `sys.path`, which is what `main.py` resolves `config.json` and its sibling modules against. The entry
 # module loads under its own name, so `main()` does not re-run.
+# The definition's bucket name -> Region map, handed to main.py's process through its environment
+# (the launcher runs it in a fresh interpreter, so the registration here does not carry over).
+BUCKET_REGIONS_ENV = 'VAMS_BUCKET_REGIONS'
+
+
+def install_region_routing_s3_clients(bucket_regions_json: str) -> dict:
+    """Route the upstream `main.py`'s bare `boto3.client('s3')` through vams_utils' per-bucket clients.
+
+    `main.py` downloads S3_INPUT and uploads to S3_OUTPUT with `boto3.client('s3')` -- a client for
+    the job's own Region. Either bucket may be in another Region (the pipeline definition's
+    bucketRegions names which); a request for such a bucket signed for this Region succeeds only
+    through botocore's redirect-on-error, one failed round trip per bucket per process. `main.py` is
+    upstream-synced, so the fix lives here: the launcher calls this in main.py's process before it
+    runs, and from then on a `boto3.client('s3')` call that pins neither a Region nor an endpoint
+    returns a client whose every call runs on the client for the Region of the bucket it names. Any
+    other client (another service, an explicit Region) is built exactly as asked. Returns the
+    registered map."""
+    bucket_regions = json.loads(bucket_regions_json) if bucket_regions_json else {}
+    vams_s3.register_bucket_regions(bucket_regions)
+    if bucket_regions:
+        original_client = boto3.client
+
+        def routing_client(service_name, *args, **kwargs):
+            if (service_name == 's3' and not args
+                    and not kwargs.get('region_name') and not kwargs.get('endpoint_url')):
+                return vams_s3.region_routing_client()
+            return original_client(service_name, *args, **kwargs)
+
+        boto3.client = routing_client
+        print(f"S3 requests signed per bucket Region: {bucket_regions}")
+    return bucket_regions
+
+
 _GUARDED_MAIN_LAUNCHER = """
 import importlib.util
+import os
 import runpy
 import zipfile
 
@@ -333,6 +368,7 @@ def _limited_extractall(self, *args, **kwargs):
 
 
 zipfile.ZipFile.extractall = _limited_extractall
+_entry.install_region_routing_s3_clients(os.environ.get(_entry.BUCKET_REGIONS_ENV, ''))
 print('Archive extraction limits active: %d extracted bytes / %d entries'
       % (_entry.MAX_ARCHIVE_EXTRACTED_BYTES, _entry.MAX_ARCHIVE_ENTRY_COUNT))
 runpy.run_path({script_path!r}, run_name='__main__')
@@ -476,6 +512,12 @@ def main():
     stage = pipeline_def['stages'][0]
     input_file = stage.get('inputFile', {})
     output_files = stage.get('outputFiles', {})
+
+    # Regions of the asset buckets this job reads and writes (empty for the deployment Region): this
+    # process signs its own S3 calls per bucket, and main.py's process installs the same map.
+    bucket_regions = pipeline_def.get('bucketRegions') or {}
+    vams_s3.register_bucket_regions(bucket_regions)
+    os.environ[BUCKET_REGIONS_ENV] = json.dumps(bucket_regions)
     
     if not input_file or not output_files:
         print("Error: Missing inputFile or outputFiles in stage")
@@ -547,7 +589,7 @@ def main():
         output_bucket, output_prefix = output_listing_prefix(
             os.environ['S3_OUTPUT'], os.environ['UUID'])
         no_output_cause = missing_output_cause(
-            output_bucket, output_prefix, boto3.client('s3', region_name=region, config=retry_config))
+            output_bucket, output_prefix, vams_s3.client_for_bucket(output_bucket))
         if no_output_cause:
             print(no_output_cause)
             if task_token:

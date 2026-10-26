@@ -13,7 +13,9 @@ tools/VamsCLI/
 ├── vamscli/
 │   ├── main.py              # CLI entry point with global options
 │   ├── version.py           # Version management
-│   ├── constants.py         # ALL API endpoints and configuration constants
+│   ├── constants.py         # ALL API endpoints and configuration constants (re-exports addon_constants)
+│   ├── addon_constants.py   # Add-on FEATURE_* names (FEATURE_PHYSNA_ADDON), mirrors infra/common/addonAppFeatures.ts
+│   ├── custom_constants.py  # FORK EXTENSION POINT: a fork's API_* paths + FEATURE_CUSTOM_* (shipped empty)
 │   ├── auth/                # Authentication providers
 │   │   ├── __init__.py
 │   │   ├── base.py          # Base interfaces
@@ -51,7 +53,7 @@ Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution
 
 -   `pipeline create|get|list|update|delete|unarchive`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
 -   `workflow create|get|list|update|delete|unarchive`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
--   `execution list` (global, permission-filtered, filterable), `execution details`, `execution details-metadata` (pages one metadata collection of the detail view past the bound `details` applies), `execution logs`, `execution abort` (single or `--group-id`), `execution rerun`, `execution permanent-delete`
+-   `execution list` (global, permission-filtered, filterable), `execution details`, `execution details-metadata` (pages one metadata collection of the detail view past the bound `details` applies), `execution logs`, `execution abort` (single or `--group-id`; `--json-output` carries every top-level sibling of the handler's `message` — `warnings`, `notAbortable` — through `_payload_with_warnings`, so a field added upstream reaches scripts, the MCP server and the connectors without a CLI change), `execution rerun`, `execution permanent-delete`
 
 Comment and subscription cover the comments and subscriptions APIs:
 
@@ -94,7 +96,8 @@ Industry has nested sub-command groups:
 
 -   [ ] **Add API Methods**: Add new API methods to `utils/api_client.py`
 -   [ ] **Follow Naming Convention**: Use descriptive method names (e.g., `call_login_profile`)
--   [ ] **Include Error Handling**: Handle HTTP errors appropriately
+-   [ ] **Include Error Handling**: Handle HTTP errors appropriately; map `401` to `AuthenticationError` and leave `403` to `_make_request`, which raises the typed 403s itself
+-   [ ] **Guard Global Errors**: Precede every broad handler that raises (a bare `except`, or one naming `Exception`, `BaseException` or `VamsCLIError`) with `except GlobalInfrastructureError: raise` in the same `try`; a handler naming a global type re-raises with a bare `raise` (ratchet: `tests/test_api_client_global_error_guards.py`)
 -   [ ] **Add Documentation**: Include docstrings with examples
 
 #### **Step 4: Command Implementation**
@@ -110,7 +113,7 @@ Industry has nested sub-command groups:
 
 -   [ ] **Register Commands**: Add new commands to `main.py`
 -   [ ] **Update Global Options**: Add any new global options if needed
--   [ ] **Update Exception Handling**: Include new exceptions in global handler
+-   [ ] **Update Exception Handling**: Give a new `GlobalInfrastructureError` a branch in `utils/global_exceptions.py`
 
 ### **Phase 3: Quality Assurance**
 
@@ -167,10 +170,13 @@ Industry has nested sub-command groups:
 
 Three consumers sit **downstream of the CLI** and must be carried through in the same change. The VAMS MCP server (`tools/VamsMCP/`) imports `vamscli`'s `APIClient` and `ProfileManager` directly. The external connectors (`tools/ExternalIntegrations/`) instead shell out to the `vamscli` **executable** and parse its `--json-output`, so they are coupled to the command surface itself — command names, subcommands, flags, and response JSON keys.
 
+**In a fork**, the chain runs through the fork extension points instead of `constants.py`, `utils/api_client.py`, `commands/` and `server.py`; see [Fork Extension Points](#fork-extension-points-commands-client-methods-mcp-tools). The checklist below applies unchanged.
+
 **MCP server:**
 
 -   [ ] **Review MCP Impact**: Check whether `tools/VamsMCP/vams_mcp/server.py` calls the `APIClient` method you changed. A renamed method, new required parameter, or changed response shape breaks the MCP tool silently — it only surfaces at agent runtime.
 -   [ ] **Add an MCP Tool**: If the new `APIClient` method is something agents should be able to call, add an `@mcp.tool()` + `@tool_result` function in the correct gate section (read at top, writes under `if CONFIG.enable_writes:`, destructive under `if CONFIG.enable_destructive:`). The tier is about STORED DATA, so `abort_execution` is write-tier even though it is irreversible; the compute risk is carried by the README's `autoApprove` caution and `tools/VamsMCP/CLAUDE.md` Rule 4, which name `execute_workflow`, `rerun_execution` and `abort_execution` together. A required-true request field is not a confirmation to re-expose: `delete_asset` sends `confirmPermanentDelete=True` because `DeleteAssetRequestModel` declares an `always=True` validator rejecting any other value, so surfacing it as a tool parameter would give the agent a boolean whose only non-erroring value is `True`.
+-   [ ] **Return Errors as Data, With Their Fields**: `@tool_result` returns a raised error as `{"error", "error_type"}` plus the exception's `json_fields`, merged without replacing those two, as the CLI's `--json-output` carries them: for example `blockedBy` (`waf`, or `waf-or-stage` for a bare API Gateway `Forbidden`) and `requestId` of a `RequestBlockedError`, a request the deployment's AWS WAF web ACL blocked before VAMS handled it. A new machine-readable fact belongs on the CLI exception's `json_fields`, so the CLI and every tool carry it alike.
 -   [ ] **Check Pagination Shape**: `VamsClient.paginate()` is driven by the list field name — whatever field the handler returns the list under, passed as `items_key` — and unwraps the legacy `message` envelope. Read the handler's response model rather than checking against a list of names: the names in use today are `Items`, `items`, `versions` and `metadata`. Confirm the `items_key` still matches the endpoint's response. **Three envelope variants exist and they are not interchangeable** — an unenveloped body (the asset/database and metadata-schema/api-key methods); `{"message": {"Items": [...], "NextToken": ...}}`, where the page is nested UNDER `message` so the envelope must be unwrapped before the items key applies (the subscriptions list); and `{"message": [row, ...]}`, a **bare array** with no items key and no token at all (both asset-scoped comment listings). Do **not** route the bare-array shape through `paginate()`: it finds no items key and returns zero rows on a perfectly successful 200. Lift the list and report the bound with `_bounded_message_list()` instead. The failure is silent in the worst direction — an empty result reads as "no comments exist".
 -   [ ] **Give the List Tool a `starting_token`, and State Its Bound**: `paginate()` stops at `max_items` or at `max_pages` (a per-call work bound on the server process, which a larger `max_items` deliberately does not raise), sets `truncated` with a `note` naming which fired — including the case where one page returned more rows than `max_items` and carried no token, which a token-only check misses — and returns the outstanding `NextToken`. Every paginated read tool takes a `starting_token` that forwards it as the first page's `startingToken`, and says so in its docstring. Without that pair the ceiling is a wall and the rows past it are unreachable through the server at all.
 -   [ ] **Never expose a parameter the endpoint cannot honour — the converse of the rule above.** Two shapes, both found in the comment routes: a parameter the handler **accepts and ignores** (`showDeleted` is forwarded by `get_handler` and read by none of the three asset-scoped service functions), and a parameter whose value **can never be obtained** (`starting_token` on a route that drops its `NextToken`, so a caller can pass a token it has no way to get). Expose neither. A flag that silently does nothing is worse than its absence, because a green result now carries a false claim: the operator believes they asked for deleted comments and were shown none. Where the capability genuinely exists on a sibling route, reach that route rather than exposing a parameter on the one that ignores it — and where it exists nowhere, say so in the docstring instead of offering the parameter.
@@ -215,6 +221,8 @@ def get_user_assets(self):
     return self.get("/api/user/assets")  # BAD
 ```
 
+In a fork, the fork's paths go in `vamscli/custom_constants.py` instead (see [Fork Extension Points](#fork-extension-points-commands-client-methods-mcp-tools)).
+
 #### **Rule 2: Import Constants in API Client**
 
 ```python
@@ -226,6 +234,19 @@ def call_login_profile(self, user_id: str):
     endpoint = f"{API_LOGIN_PROFILE}/{user_id}"
     return self.get(endpoint)
 ```
+
+#### **Fork Extension Points (commands, client methods, MCP tools)**
+
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
+A fork adds CLI commands and MCP tools without editing `main.py`, `constants.py`, `utils/api_client.py` or `tools/VamsMCP/vams_mcp/server.py`. Each splices in a fork-owned file that upstream ships empty and never edits:
+
+-   `vamscli/custom_constants.py` — the fork's `API_*` paths and `FEATURE_CUSTOM_*` names. It imports nothing from `vamscli`, so the files below can import it without a cycle. `tests/test_constants_contract.py` checks each path against the backend route lists (including `backend/backend/custom/customApiRoutes.py`) and each feature name against `infra/common/customAppFeatures.ts`.
+-   `vamscli/utils/custom_api_client.py` — `CustomAPIClientMixin`, which `APIClient` inherits; its methods get the core retry/backoff and typed errors and the MCP server reaches them as `CLIENT.api.<method>`. It must not import from `vamscli.commands`.
+-   `vamscli/commands/custom/__init__.py` — `CUSTOM_COMMANDS`; `main.py` registers each entry on the root `cli` group after every core command, and raises at import on a name that is already registered, so a custom command never replaces a core one (`tests/test_custom_commands.py`).
+-   `tools/VamsMCP/vams_mcp/custom_tools.py` — `register_custom_tools(mcp, client, config, tool_result)`, called once by `server.py` after the destructive block; gate write/destructive tools on `config.enable_writes` / `config.enable_destructive`. A custom tool with a core tool's name is not registered: the MCP SDK keeps the core tool and logs `Tool already exists: <name>` (`tools/VamsMCP/tests/test_custom_tools.py`).
+
+A `CustomAPIClientMixin` method with the name of an `APIClient` method is never called, because `APIClient` comes first in the MRO; `tests/test_custom_api_client.py` fails on such a name. Names prefixed `custom-` (commands) and `custom_` (tools) are recommended, not enforced. Add-on feature-switch names live in `vamscli/addon_constants.py` (mirroring `infra/common/addonAppFeatures.ts`) and are re-exported from `constants.py`; the contract test checks core, add-on and custom constants against their enums in both directions. Walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 ### **Command Implementation Standards**
 
@@ -526,11 +547,16 @@ def [api_method_name](self, [parameters]) -> [ReturnType]:
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
             raise [SpecificError](f"[Resource] not found: {[parameter]}")
-        elif e.response.status_code in [401, 403]:
-            # Handle authentication errors
+        elif e.response.status_code == 401:
+            # _make_request raises a 403 itself as RequestBlockedError, PermissionDeniedError,
+            # TokenExpiredError or, for an unrouted path, APIError, so only a 401 reaches this
+            # handler as an HTTPError
             raise AuthenticationError(f"Authentication failed: {e}")
         else:
             raise APIError(f"[API operation] failed: {e}")
+
+    except GlobalInfrastructureError:
+        raise
 
     except Exception as e:
         raise APIError(f"Failed to [operation]: {e}")
@@ -663,7 +689,9 @@ def get_assets(self):
     return self.get("/api/user/assets")  # VIOLATION
 ```
 
-**Every `API_*` path constant must also name a route the backend actually registers.** `constants.py` is the authority a new consumer trusts, so a path the backend never declared is a trap that fails only at runtime against a live deployment: API Gateway rejects an unmatched path before any handler runs, so neither import nor build catches it, and the caller sees a `403 Missing Authentication Token` that is indistinguishable from a permissions failure. `tests/test_constants_contract.py` cross-checks every constant against the `ApiRoute` declarations in `backend/backend/common/apiRoutes.py`.
+In a fork, the fork's paths go in `vamscli/custom_constants.py`, which the contract test below checks the same way.
+
+**Every `API_*` path constant must also name a route the backend actually registers.** `constants.py` is the authority a new consumer trusts, so a path the backend never declared is a trap that fails only at runtime against a live deployment: API Gateway rejects an unmatched path before any handler runs, so neither import nor build catches it, and API Gateway answers `403 Missing Authentication Token`, which the CLI reports as `No deployed API route matches <METHOD> <path>` rather than a permission failure. `tests/test_constants_contract.py` cross-checks every constant against the `ApiRoute` declarations in `backend/backend/common/apiRoutes.py`.
 
 Two such constants shipped in this release — one formatted by a live `APIClient` method (so the request really was rejected), and one imported but never formatted (dead, but reading like working code). A third case is a dead _name_ rather than a dead _path_: two constants holding the same registered path, one unused, differing by a single character. That one passes the cross-check by construction, so it stays a review concern rather than a mechanical one.
 
@@ -1137,7 +1165,7 @@ When referencing feature switches in commands or logic, these MUST be defined as
 
 #### **Feature Switch Requirements:**
 
--   [ ] **Add Feature Constants**: Add all feature switch names to `constants.py`
+-   [ ] **Add Feature Constants**: Add all feature switch names to `constants.py` (in a fork: `FEATURE_CUSTOM_*` in `custom_constants.py`)
 -   [ ] **Import Feature Constants**: Import constants in command files
 -   [ ] **Use @requires_feature Decorator**: For commands that require specific features, passing a `FEATURE_*` constant (never a string literal). `vamscli features example-govcloud` and `vamscli features example-location` (`commands/features.py`) are the reference uses. The `user cognito` commands carry no feature gate: a deployment with Cognito disabled answers them with a `400`, which `APIClient` reports as `Cognito not enabled: ...` (`_is_cognito_unavailable` in `utils/api_client.py`)
 -   [ ] **Manual Feature Checks**: Use `is_feature_enabled()` for conditional logic
@@ -1363,11 +1391,29 @@ def create(ctx: click.Context, ...):
 
 #### **Exception Classification Guidelines:**
 
-##### **Global Infrastructure Exceptions (handled in main.py):**
+##### **Global Infrastructure Exceptions (handled by `utils/global_exceptions.py`):**
 
 -   `SetupRequiredError`, `AuthenticationError`, `APIUnavailableError`
--   `ProfileError`, `ConfigurationError`, `OverrideTokenError`
+-   `ProfileError`, `InvalidProfileNameError`, `ConfigurationError`, `OverrideTokenError`
+-   `TokenExpiredError`, `PermissionDeniedError`, `RequestBlockedError`
 -   `RetryExhaustedError`, `RateLimitExceededError`, `VersionMismatchError`
+
+**HTTP 403 classification.** `_classify_403(response)` (module level in `api_client.py`, never raises) names the party that answered from the response alone, and `_make_request` raises before the `raise_http_errors` re-raise. A 403 from another host that a followed redirect reached (`_redirected_host`: a non-empty `response.history` and a final host other than the request's, such as the presigned Amazon S3 URL of a staged `assets export` payload) is not classified: it is `APIError` (`_REDIRECT_TARGET_REFUSED_MESSAGE`) naming that host, never the URL, after one send. Only the authorizer's deny can be cured by a fresh token, so only it and an unclassified (`unknown`) 403, which may be one, are refreshed and resent:
+
+| Kind (first match)                                                       | Raised                                                                                                                                                                                                                                             |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `waf`: JSON `blockedBy == "waf"`, or CloudFront's "request blocked" text | `RequestBlockedError(confirmed=True)`, with or without auth; one send                                                                                                                                                                              |
+| `waf_or_stage`: the body is exactly `{"message": "Forbidden"}`           | With auth, `RequestBlockedError(confirmed=False)`, one send; without auth, `APIError` + `_STAGE_HINT` naming both causes (the original `HTTPError` with `raise_http_errors=True`)                                                                  |
+| `no_route`: `Missing Authentication Token`, or its `x-amzn-ErrorType`    | `APIError` naming the method and URL path, never the body; one send                                                                                                                                                                                |
+| `resource_policy`: `execute-api:invoke` in `Message` or `message`, auth  | `PermissionDeniedError(_RESOURCE_POLICY_MESSAGE)`; one send                                                                                                                                                                                        |
+| `handler`: any other lowercase `message`, with auth                      | `PermissionDeniedError("Access forbidden. " + message)`; one send                                                                                                                                                                                  |
+| `authorizer`, `unknown`, with auth                                       | The override-token checks, then a Cognito refresh up to `MAX_AUTH_RETRIES`; a failed refresh is `TokenExpiredError` or `PermissionDeniedError` as before, and a deny that outlasts the retries `PermissionDeniedError(_AUTHORIZER_DENIED_MESSAGE)` |
+
+`RequestBlockedError` carries `json_fields` `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` (the marker body's request ID, else the first non-blank `x-amz-apigw-id`, `x-amz-cf-id` or `x-amzn-RequestId` header: the IDs the regional web ACL log, the CloudFront web ACL log and the API Gateway access log record), never clears stored credentials (`call_login_profile` re-raises global errors), and is printed under `Request Blocked`, ahead of the `AuthenticationError` branch, with `WAF_ADMIN_HINT` (`WAF_OR_STAGE_ADMIN_HINT`, which also names the stage-path check, when `confirmed` is false) and the request ID. Its texts carry no sign-in wording (`auth login`, `401`, `token has expired`, `Authentication failed`), which the IsaacSim connector would class as a credential failure; `tests/test_api_403_classification.py::TestBlockWording` holds them to that. `check_api_availability` raises `RequestBlockedError` for the marker and `APIUnavailableError` naming both causes for a bare `Forbidden`, and `requires_api_access` re-raises both, so a blocked version check stops `auth login`, `auth change-password` and `auth forgot-password` before any Cognito call; `setup` refuses a URL whose stage probe the web ACL blocked.
+
+A global error's `--json-output` document (`_global_error_data`) is `{"error": "<Heading>: <message>", "error_type", ...json_fields, "additional_info"?}` on stdout; in text mode its `✗ <Heading>: <message>` line goes to stderr and its `additional_info` lines to stdout. Both exit 1.
+
+Every broad handler that raises in an `APIClient` method -- a bare `except`, or one naming `Exception`, `BaseException` or `VamsCLIError` -- is preceded by `except GlobalInfrastructureError: raise` in the same `try`, and a handler naming `GlobalInfrastructureError` or a subclass re-raises with a bare `raise`; a handler that swallows the error or returns a value is exempt. The ratchet `tests/test_api_client_global_error_guards.py` fails otherwise, for every class in `APIClient.__mro__`. This keeps a web ACL block, a permission denial or an expired token typed through every `APIClient` method; `utils/upload_manager.py`, `utils/download_manager.py` and a few command wrappers still record one per file, upload sequence or item, with its message but without its heading or `json_fields`.
 
 ##### **Command-Specific Business Logic Exceptions (handled in commands):**
 
@@ -1953,10 +1999,14 @@ def call_new_endpoint(self, param: str) -> Dict[str, Any]:
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
             raise SpecificError(f"Resource not found: {param}")
-        elif e.response.status_code in [401, 403]:
+        elif e.response.status_code == 401:
+            # _make_request raises the typed 403s itself
             raise AuthenticationError(f"Authentication failed: {e}")
         else:
             raise APIError(f"API call failed: {e}")
+
+    except GlobalInfrastructureError:
+        raise
 
     except Exception as e:
         raise APIError(f"Failed to call endpoint: {e}")
@@ -2065,6 +2115,8 @@ class NewSpecificError(VamsCLIError):
     pass
 ```
 
+An exception whose `--json-output` error should carry a machine-readable field beside `error` and `error_type` declares it in the dict `json_fields`, which `output_error` merges without replacing those two: `RequestBlockedError` sets `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` on the instance. `json_fields` is merged only when it is a dict, whether it is set on the class or on the instance; any other value is left out and the error is reported without it (`tests/test_json_output_error_fields.py`). The global handler merges the same `json_fields`, by the same rule, into a global error's document when it is called with `exc=e`.
+
 #### **Step 2: Update Utils Init**
 
 ```python
@@ -2080,21 +2132,14 @@ __all__ = [
 ]
 ```
 
-#### **Step 3: Update Main Exception Handler**
+#### **Step 3: Update the Global Exception Handler (global errors only)**
+
+A `GlobalInfrastructureError` subclass gets a branch in `utils/global_exceptions.py`, ahead of any branch for a class it subclasses. `exc=e` puts its class name in `error_type` and merges its `json_fields` into the `--json-output` document:
 
 ```python
-# main.py
-from .utils.exceptions import NewSpecificError
-
-# Add to exception handler in main.py
-# Note: main.py exception handlers don't need JSON output support
-# as they handle global infrastructure errors before command execution
-except NewSpecificError as e:
-    click.echo(
-        click.style(f"✗ New Error: {e}", fg='red', bold=True),
-        err=True
-    )
-    sys.exit(1)
+# utils/global_exceptions.py, inside handle_global_exceptions()
+elif isinstance(e, NewGlobalError):
+    _handle_global_error("New Error", str(e), "What the user can do next.", exc=e)
 ```
 
 ## ✅ **Quality Assurance Checklist**

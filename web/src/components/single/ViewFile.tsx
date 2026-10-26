@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { archiveFile } from "../../services/FileOperationsService";
 import {
     Alert,
@@ -23,10 +23,14 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { useLocation, useNavigate, useParams } from "react-router";
 
 import FileMetadata from "../metadata/FileMetadata";
-import { fetchAsset, fetchFileInfo } from "../../services/APIService";
+import { fetchAsset, fetchFileInfo, isRequestBlocked } from "../../services/APIService";
 import { FileVersionsTable } from "../filemanager/components/FileVersionsTable";
 // File format constants no longer needed - handled by plugin system
 import DynamicViewer from "../../visualizerPlugin/components/DynamicViewer";
+import { ViewerMode } from "../../visualizerPlugin/core/PluginRegistry";
+import { seedCompareFromSingleFile } from "../../visualizerPlugin/core/compareShape";
+import { availableModesForFiles } from "../../visualizerPlugin/core/viewableExtensions";
+import { useViewerRegistryReady } from "../../visualizerPlugin/core/useViewerRegistryReady";
 
 import Synonyms from "../../synonyms";
 import { usePageTitle } from "../../hooks/usePageTitle";
@@ -88,7 +92,18 @@ interface Asset {
 
 // File format detection now handled by plugin system - no longer needed
 
+// React Router keeps this route's element mounted when only :databaseId or :assetId change, so a link
+// to another asset's file would re-render the previous asset's page with its loaded file still in
+// state. Keying on the asset gives each asset a fresh page instance.
 export default function ViewFile() {
+    const { databaseId, assetId } = useParams<{
+        databaseId: string;
+        assetId: string;
+    }>();
+    return <ViewFileForAsset key={`${databaseId}/${assetId}`} />;
+}
+
+function ViewFileForAsset() {
     const location = useLocation();
     const navigate = useNavigate();
     const { state } = location as { state: ViewFileState };
@@ -144,11 +159,17 @@ export default function ViewFile() {
     const urlVersion = getVersionFromQuery();
     const urlAssetVersion = getAssetVersionFromQuery();
     const isDirectPathAccess = urlFilePath && !state;
+    // The URL file path and version that a direct-path load answers.
+    const directPathRequest = `${urlFilePath ?? ""}?${urlVersion ?? ""}`;
 
     // State for direct path loading
     const [isLoadingDirectPath, setIsLoadingDirectPath] = useState(isDirectPathAccess);
     const [directPathError, setDirectPathError] = useState<string | null>(null);
     const [loadedFileInfo, setLoadedFileInfo] = useState<FileInfo | null>(null);
+    // The direct-path requests that loadedFileInfo answers: the one it was loaded for and, when that
+    // named no version, the same path with the version that was picked, until the URL names that
+    // version. Until one equals directPathRequest, the loaded file is the one the URL named before.
+    const [loadedFileRequests, setLoadedFileRequests] = useState<string[]>([]);
     // State for on-demand version loading when state is passed without versionId
     const [isLoadingVersionInfo, setIsLoadingVersionInfo] = useState(false);
 
@@ -237,6 +258,61 @@ export default function ViewFile() {
     const [showDeletePreviewModal, setShowDeletePreviewModal] = useState(false);
     const [isPreviewDeleting, setIsPreviewDeleting] = useState(false);
 
+    // Visualize ↔ Compare for the single file on this page. Compare is offered only when a differ
+    // diffs two versions of this file's type (registry admission, never an extension list) and the
+    // File tab is showing; it opens the differ on [this version, latest] — the same seed the version
+    // lists' per-row Compare uses — and the differ's per-side picker takes it from there.
+    const [fileViewMode, setFileViewMode] = useState<ViewerMode>("visualize");
+    const viewerRegistryReady = useViewerRegistryReady();
+
+    // The single-file entry exactly as the visualize path hands it to the viewer: the preview tab
+    // swaps in the preview key, and a file viewed through an ASSET version is fetched by that version
+    // rather than pinned to an S3 versionId.
+    const singleViewerEntry = useMemo(
+        () =>
+            !isMultiFileMode && singleFileInfo
+                ? {
+                      ...singleFileInfo,
+                      versionId: effectiveAssetVersionId ? undefined : singleFileInfo.versionId,
+                      key:
+                          viewType === "preview"
+                              ? singleFileInfo.previewFile || singleFileInfo.key
+                              : singleFileInfo.key,
+                  }
+                : null,
+        // `singleFileInfo` is rebuilt every render, so the memo keys on its fields instead.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [
+            isMultiFileMode,
+            singleFileInfo?.key,
+            singleFileInfo?.versionId,
+            singleFileInfo?.previewFile,
+            singleFileInfo?.filename,
+            singleFileInfo?.isDirectory,
+            singleFileInfo?.isArchived,
+            singleFileInfo?.primaryType,
+            singleFileInfo?.size,
+            singleFileInfo?.dateCreatedCurrentVersion,
+            effectiveAssetVersionId,
+            viewType,
+        ]
+    );
+    const canCompareSingleFile =
+        viewerRegistryReady &&
+        viewType === "file" &&
+        !!singleViewerEntry &&
+        !singleViewerEntry.isDirectory &&
+        availableModesForFiles([singleViewerEntry]).compare;
+    const effectiveFileViewMode: ViewerMode = canCompareSingleFile ? fileViewMode : "visualize";
+    const multiFiles = state?.files;
+    const viewerFiles = useMemo(() => {
+        if (isMultiFileMode || viewType === "files") return multiFiles ?? [];
+        if (!singleViewerEntry) return [];
+        return effectiveFileViewMode === "compare"
+            ? seedCompareFromSingleFile(singleViewerEntry)
+            : [singleViewerEntry];
+    }, [isMultiFileMode, viewType, multiFiles, singleViewerEntry, effectiveFileViewMode]);
+
     const changeViewerMode = (mode: string) => {
         if (mode === "fullscreen" && viewerMode === "fullscreen") {
             mode = "collapse";
@@ -302,8 +378,26 @@ export default function ViewFile() {
 
     // Handle direct path access - fetch file info from URL
     useEffect(() => {
+        // A response for a URL the page has since left is dropped, so it cannot replace the file
+        // the URL names now.
+        let cancelled = false;
         const loadFileFromDirectPath = async () => {
             if (!isDirectPathAccess || !databaseId || !assetId || !urlFilePath) {
+                setIsLoadingDirectPath(false);
+                return;
+            }
+
+            // The file in hand already answers this URL: the URL gained the version picked for it,
+            // or the effect re-ran after the load wrote that file. Looking it up again would show the
+            // spinner a second time.
+            if (loadedFileInfo && loadedFileRequests.includes(directPathRequest)) {
+                // Once the URL names the picked version, the request that named no version no longer
+                // stands for the file in hand: a link that names no version asks for the latest one.
+                if (loadedFileRequests.length > 1 && loadedFileRequests[0] !== directPathRequest) {
+                    setLoadedFileRequests([directPathRequest]);
+                }
+                setDirectPathError(null);
+                setIsLoadingDirectPath(false);
                 return;
             }
 
@@ -321,6 +415,9 @@ export default function ViewFile() {
                     fileKey: urlFilePath,
                     includeVersions: true,
                 });
+                if (cancelled) {
+                    return;
+                }
 
                 if (!success) {
                     setDirectPathError(
@@ -396,14 +493,21 @@ export default function ViewFile() {
 
                 console.log("Loaded file info:", loadedFile);
                 setLoadedFileInfo(loadedFile);
+                setLoadedFileRequests(
+                    Array.from(new Set([directPathRequest, `${urlFilePath}?${versionToUse ?? ""}`]))
+                );
                 setIsLoadingDirectPath(false);
                 setReload(true); // Trigger asset data fetch
             } catch (error: any) {
+                if (cancelled) {
+                    return;
+                }
                 console.error("Error loading file from direct path:", error);
 
                 // Check for specific error types. The apiClient throws an ApiError
-                // carrying the HTTP status in `.status` and the backend message in `.message`.
-                if (error?.status === 403) {
+                // carrying the HTTP status in `.status` and the backend message in `.message`;
+                // a request the AWS WAF web ACL blocked keeps its message.
+                if (error?.status === 403 && !isRequestBlocked(error)) {
                     setDirectPathError("You don't have permission to access this file.");
                 } else if (error?.status === 404) {
                     setDirectPathError(
@@ -419,7 +523,19 @@ export default function ViewFile() {
         };
 
         loadFileFromDirectPath();
-    }, [isDirectPathAccess, databaseId, assetId, urlFilePath, urlVersion]);
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        isDirectPathAccess,
+        databaseId,
+        assetId,
+        urlFilePath,
+        urlVersion,
+        directPathRequest,
+        loadedFileInfo,
+        loadedFileRequests,
+    ]);
 
     // Fetch version info when state is passed but versionId is missing
     useEffect(() => {
@@ -571,6 +687,12 @@ export default function ViewFile() {
             return;
         }
 
+        // The file in hand is the one the URL named before until the direct-path load answers the
+        // current URL; writing it into the URL would send the URL, and the next load, back to it.
+        if (isDirectPathAccess && !loadedFileRequests.includes(directPathRequest)) {
+            return;
+        }
+
         // Get the relative path from the file key
         // The key format is typically: assetId/relativePath
         // We need to extract just the relativePath part
@@ -613,6 +735,9 @@ export default function ViewFile() {
         assetId,
         isMultiFileMode,
         isLoadingDirectPath,
+        isDirectPathAccess,
+        loadedFileRequests,
+        directPathRequest,
         navigate,
         location.pathname,
         location.search,
@@ -749,8 +874,27 @@ export default function ViewFile() {
                                                 display: "flex",
                                                 alignItems: "center",
                                                 justifyContent: "flex-end",
+                                                gap: "12px",
+                                                flexWrap: "wrap",
                                             }}
                                         >
+                                            {canCompareSingleFile && !isNotDistributable && (
+                                                <div data-testid="file-viewer-mode-toggle">
+                                                    <SegmentedControl
+                                                        label="Viewer mode"
+                                                        selectedId={effectiveFileViewMode}
+                                                        onChange={({ detail }) =>
+                                                            setFileViewMode(
+                                                                detail.selectedId as ViewerMode
+                                                            )
+                                                        }
+                                                        options={[
+                                                            { id: "visualize", text: "Visualize" },
+                                                            { id: "compare", text: "Compare" },
+                                                        ]}
+                                                    />
+                                                </div>
+                                            )}
                                             {viewerOptions.length > 0 && !isNotDistributable && (
                                                 <SegmentedControl
                                                     label="Visualizer Control"
@@ -810,33 +954,15 @@ export default function ViewFile() {
                                                     }}
                                                 >
                                                     <DynamicViewer
-                                                        key={`${viewType}-${assetId}-${
+                                                        key={`${viewType}-${effectiveFileViewMode}-${assetId}-${
                                                             singleFileInfo?.key || "no-file"
                                                         }-${
                                                             effectiveAssetVersionId ||
                                                             singleFileInfo?.versionId ||
                                                             "no-version"
                                                         }`}
-                                                        files={
-                                                            isMultiFileMode || viewType === "files"
-                                                                ? currentFiles
-                                                                : singleFileInfo
-                                                                ? [
-                                                                      {
-                                                                          ...singleFileInfo,
-                                                                          versionId:
-                                                                              effectiveAssetVersionId
-                                                                                  ? undefined
-                                                                                  : singleFileInfo.versionId,
-                                                                          key:
-                                                                              viewType === "preview"
-                                                                                  ? singleFileInfo.previewFile ||
-                                                                                    singleFileInfo.key
-                                                                                  : singleFileInfo.key,
-                                                                      },
-                                                                  ]
-                                                                : []
-                                                        }
+                                                        files={viewerFiles}
+                                                        mode={effectiveFileViewMode}
                                                         assetId={assetId!}
                                                         databaseId={databaseId!}
                                                         assetVersionId={effectiveAssetVersionId}

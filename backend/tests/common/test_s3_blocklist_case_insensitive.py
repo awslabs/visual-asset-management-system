@@ -28,6 +28,8 @@ import os
 import pytest
 
 from backend.backend.common.constants import (
+    CORE_UNALLOWED_FILE_EXTENSION_LIST,
+    CORE_UNALLOWED_MIME_LIST,
     UNALLOWED_FILE_EXTENSION_LIST,
     UNALLOWED_MIME_LIST,
 )
@@ -153,8 +155,11 @@ class TestContentTypeCase:
         assert logger.errors[0].startswith("Unallowed file content type")
 
 
-# The blocklist as documented in backend/CLAUDE.md "File Security" and
-# documentation/docusaurus-site/docs/architecture/security.md "Blocked File Types".
+# The core blocklist as documented in backend/CLAUDE.md "File Security" and
+# documentation/docusaurus-site/docs/architecture/security.md "Blocked File Types". The lists the
+# helper reads are this core plus the add-on and custom lanes (common/constants.py), so the hygiene
+# tests below read the merged lists and the one-time dedup check reads the CORE_* lists: a fork that
+# adds a lane entry must not fail it.
 DOCUMENTED_EXTENSIONS = {
     ".jar", ".java", ".com", ".php", ".reg", ".pif", ".bak", ".dll", ".exe", ".nat",
     ".cmd", ".lnk", ".docm", ".vbs", ".bat",
@@ -217,6 +222,6 @@ class TestBlocklistHygiene:
 
     @pytest.mark.temporary  # pins the one-time removal of the duplicated .java / .exe entries from the lists
     def test_dedup_added_and_removed_nothing(self):
-        # Positive control for the list hygiene: the same set of entries as before, only once each.
-        assert set(UNALLOWED_FILE_EXTENSION_LIST) == DOCUMENTED_EXTENSIONS
-        assert set(UNALLOWED_MIME_LIST) == DOCUMENTED_MIME_TYPES
+        # Positive control for the list hygiene: the same set of core entries as before, only once each.
+        assert set(CORE_UNALLOWED_FILE_EXTENSION_LIST) == DOCUMENTED_EXTENSIONS
+        assert set(CORE_UNALLOWED_MIME_LIST) == DOCUMENTED_MIME_TYPES

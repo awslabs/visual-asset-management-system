@@ -169,6 +169,8 @@ Archived workflows are hidden by default. Set `includeArchived=true` to retrieve
 
 Returns a single workflow object, in the same shape as an item of [List all workflows](#list-all-workflows) plus a `triggers` array describing the workflow's configured triggers (each entry carrying `triggerType`, `triggerConfig`, and `enabled`). `executionCount`, `triggerCount`, and `triggersEnabledCount` are computed for list responses and are `null` here. See [System configuration](#system-configuration) for the shape of `systemConfig`.
 
+A workflow's AWS Step Functions definition is regenerated whenever a referenced pipeline's execution settings change. When that redeploy fails, the workflow carries `deploymentStale: true` and a `deploymentStaleReason`; both are `null` otherwise. A stale workflow is redeployed on its next save or launch, and a launch never runs the stale definition (see [Execute a workflow](#execute-a-workflow)).
+
 ### Error responses
 
 | Status | Description             |
@@ -324,7 +326,7 @@ Set `enabled` to `true` or `false` to enable or disable a workflow without chang
 :::
 
 :::warning[`specifiedPipelines` and `systemConfig` replace the stored value]
-Both are stored whole. A request that supplies either one persists exactly what it sends, and anything it omits is gone rather than retained — send the complete list or block, not the part being changed. Supplying `specifiedPipelines` also regenerates the workflow's AWS Step Functions definition, which is how a change to a referenced pipeline's execution binding is picked up.
+Both are stored whole. A request that supplies either one persists exactly what it sends, and anything it omits is gone rather than retained — send the complete list or block, not the part being changed. Supplying `specifiedPipelines` regenerates the workflow's AWS Step Functions definition. An update without it regenerates the definition too when a referenced pipeline's execution settings have changed since the workflow was last deployed; if that redeploy fails, the edit is still saved and the response carries the reason in `warnings` and `deploymentStaleReason`.
 :::
 
 ### Request body example
@@ -671,7 +673,7 @@ A `jobName` names the step in the workflow's AWS Step Functions state machine, a
 {baseAssetsPrefix}pipelines/{firstStepName}/{generatedJobName}/output/{executionId}/files/
 ```
 
-`firstStepName` is the first step's `jobName`, or its `pipelineId` when the `jobName` is empty. `generatedJobName` is that same name carrying a short generated prefix, assigned when the workflow's state machine is built. `baseAssetsPrefix` is the prefix the deployment's default asset bucket is registered under, and is empty for the bucket VAMS creates. Every step of a run writes beneath these prefixes; the steps do not each get a folder of their own. Omitting `jobName` is the normal choice — the pipeline id already labels the step.
+`firstStepName` is the first step's `jobName`, or its `pipelineId` when the `jobName` is empty. `generatedJobName` is that same name carrying a short generated prefix, assigned when the workflow's state machine is built and kept when it is rebuilt with the same steps. `baseAssetsPrefix` is the prefix the deployment's default asset bucket is registered under, and is empty for the bucket VAMS creates. Every step of a run writes beneath these prefixes; the steps do not each get a folder of their own. Omitting `jobName` is the normal choice — the pipeline id already labels the step.
 
 The value is 3–63 characters of letters, numbers, hyphens, and underscores, and each step in a workflow needs its own: two steps sharing a job name collapse into one state-machine state, leaving one of the two pipelines unrun. It is a fixed label rather than a template — `{{tag}}` placeholders are not substituted in a `jobName` and are rejected, because the name is written into the state machine when the workflow is deployed rather than resolved per execution.
 
@@ -723,9 +725,11 @@ Filters resolve down a three-level chain, and an open list defers to the next le
 2. **Pipeline** — what that individual step accepts.
 3. **Template `overrides.inputFileFilters`** — replaces its pipeline's list entirely for executions using that template.
 
-`exclude` lists accumulate across all three levels.
+`exclude` lists accumulate down a step's chain: the workflow's exclusions apply to the whole selection, and a pipeline's or template's to that step.
 
-At execute time the selected files are narrowed by the workflow's filters first, and each pipeline is then checked against that narrowed set. If any pipeline is left without the input it requires, the request is rejected rather than launching a step that cannot run.
+At execute time the selected files are narrowed by the workflow's filters first, and the **first** step is then checked against that narrowed set. If the first step is left without the input it requires, or the file count does not satisfy its `inputFileArity`, the request is rejected rather than launching a step that cannot run.
+
+Each later step is checked when the run reaches it. It receives the selected files together with every file the earlier steps wrote, narrowed by its own effective filters, so a step can accept only the type an earlier step produces — `*.glb` after a step that converts `*.obj` to glTF binary. A later step left without a file, or handed more files than its `inputFileArity` allows, fails the execution at that step with a reason naming the pipeline. One such failure is known before the run starts: when two or more selected files pass the filters of a later step whose `inputFileArity` is `one`, the selection alone already gives it more files than it takes (an earlier step's output only adds files or replaces one at the same path), so the request is rejected at launch. A later step's `assetScope` is also checked at launch, against the selected files that reach it.
 
 A workflow response also reports `aggregateWorkflowPipelineInputFileFilters`, the restriction the workflow effectively imposes, with `source` naming whether it came from the workflow or its pipelines.
 
@@ -823,7 +827,7 @@ These constraints govern valid `systemConfig` combinations. Some are enforced at
 -   **Results-only may take input files.** `outputTarget.locationType: none` writes no asset output but places no restriction on `inputFileArity` — it may be `none`, `one`, or `multi` (e.g. a workflow that reads files and emits only a metadata report). A results-only execution supplies no `outputAssetId`/`outputDatabaseId`.
 -   **Asset output with no input files needs override.** When `outputTarget.locationType: asset` and `inputFileArity: none`, there is no input asset to lock the output to, so `outputTarget.allowOverride` must be `true` (an output asset is then chosen at execute time). Create/update rejects `asset` + `none` + `allowOverride: false`.
 -   **`inputFileArity` at execute time** — `none` rejects any supplied input file; `one` requires exactly one; `multi` requires at least one.
--   **Input-file filters** — a non-empty `allow` list means only matching files are eligible; `exclude` is applied after `allow`. A pipeline whose filters exclude every selected input fails the execution.
+-   **Input-file filters** — a non-empty `allow` list means only matching files are eligible; `exclude` is applied after `allow`. A first step whose filters exclude every selected input rejects the execution at launch; a later step whose filters leave it nothing of the selection and the earlier steps' output fails the execution when the run reaches it. A later step of `inputFileArity` `one` whose filters two or more selected files pass rejects the execution at launch.
 -   **Pipeline references** — a `GLOBAL` workflow may reference only `GLOBAL` pipelines; a database workflow may reference `GLOBAL` or its own database's pipelines.
 
 ### Trigger chaining
@@ -875,7 +879,11 @@ file name.
 
 A workflow may declare a default in `systemConfig.defaultOutputFileBaseExecutionPathExtension`. The
 default is stored **unresolved**, so its template tags are substituted per execution — a single stored
-`/{{jobName}}/` gives every run its own output folder. Resolution follows the request:
+`/{{jobName}}/` gives every run its own output folder. `{{jobName}}` resolves to the first step's
+generated job name joined to that step's `pipelineExecutionId` (for example
+`fb522-convert-3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a`), at most 80 characters, so its value differs on
+every run. A re-run reuses the prefix its original execution resolved, so it writes into that
+execution's folder. Resolution follows the request:
 
 | `outputFileBaseExecutionPathExtension` on the request | Prefix used                  |
 | ----------------------------------------------------- | ---------------------------- |
@@ -974,7 +982,7 @@ Executing requires access to this route plus `GET` permission on the workflow, `
 
 -   Input files must exist; each is read from its own asset bucket.
 -   Metadata sources are optional and take no part in arity or input-file filters. The `assetScope` **span** keys do bound them: a workflow declaring `singleAssetOnly` (or `crossAssetAllowed` `false`) rejects an execution naming more than one asset in `metadataSourceAssets`. See [Metadata inputs](#metadata-inputs) for which entities a run captures and the limits it applies, and [Asset scope](#asset-scope) for the span rule.
--   Per-pipeline template resolution and tag validation run before launch, followed by cross-entity validation (input-file arity, asset scope, and file filters).
+-   Per-pipeline template resolution and tag validation run before launch, followed by cross-entity validation: the workflow's input-file arity, asset scope, and file filters, the first step's file filters and arity, every step's asset scope, and, for each later step of `inputFileArity` `one`, whether two or more selected files already pass its filters. Everything else about a later step's file filters and arity is checked when the run reaches it (see [Input-file filters](#input-file-filters)).
 -   Every referenced pipeline must be enabled and not archived, and the workflow must be enabled and not archived.
 -   The workflow's `concurrencyRestriction` may block a launch that conflicts with an already-running execution.
 -   When the input files resolve to zero or multiple input assets, supply an explicit output target — both `outputAssetId` and `outputDatabaseId` — or configure the workflow as results-only (`outputTarget.locationType` `none`); otherwise the request is rejected. A results-only workflow rejects a supplied `outputAssetId`/`outputDatabaseId` as a contradiction. See [Output target](#output-target).
@@ -1001,14 +1009,19 @@ Executing requires access to this route plus `GET` permission on the workflow, `
 
 The execution starts in every case.
 
+:::note[An execution always runs its pipelines' current settings]
+A workflow's AWS Step Functions definition encodes each referenced pipeline's execution type, target, callback mode, timeouts, and AWS Deadline Cloud job settings. Before starting, the launch checks that the workflow's deployed definition was built from those pipelines' current settings, and redeploys the workflow first when it was not — a pipeline changed and its background redeploy has not reached this workflow yet, or the workflow was deployed by an earlier release. The execution then starts on the published state machine version built from those settings. When the workflow cannot be brought up to date, nothing is started and the request returns `409`.
+:::
+
 ### Error responses
 
-| Status | Description                                                                                                                                       |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Validation, template-resolution, or cross-entity validation error, including `metadataSourceAssets` spanning more assets than `assetScope` allows |
-| `403`  | Not authorized (API, input asset, metadata-source asset or database, output asset, workflow, or pipeline level)                                   |
-| `429`  | Throttling -- too many requests                                                                                                                   |
-| `500`  | Internal server error or execution limit exceeded                                                                                                 |
+| Status | Description                                                                                                                                                                |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Validation, template-resolution, or cross-entity validation error, including `metadataSourceAssets` spanning more assets than `assetScope` allows                          |
+| `403`  | Not authorized (API, input asset, metadata-source asset or database, output asset, workflow, or pipeline level)                                                            |
+| `409`  | The workflow's state machine could not be brought up to date with its pipelines' current settings, so no execution was started. Retryable; the message carries any reason. |
+| `429`  | Throttling -- too many requests                                                                                                                                            |
+| `500`  | Internal server error or execution limit exceeded                                                                                                                          |
 
 ---
 
@@ -1228,9 +1241,26 @@ Aborting a single execution returns:
 }
 ```
 
-A single-execution abort may include a `warnings` array when a best-effort inner sub-process abort failed. Each warning names the sub-process by its registered id or the final segment of its registered ARN, never the ARN itself.
+A single-execution abort may include a `warnings` array when a best-effort inner sub-process abort failed, and a `notAbortable` array when a registered sub-process is of a type VAMS cannot stop (an externally owned pipeline's own compute, say). Each `notAbortable` entry is \{`resourceType`, `label`, `stageName`, `locator`\}, listed once per registered locator; `locator` is the registered id, or the final segment of a registered ARN (never the ARN itself). The sub-process is left running and its `warnings` sentence says so as well. Every `warnings` sentence names a sub-process the same way, by its registered id or the final segment of its registered ARN. Both arrays are absent from a clean abort.
 
-When `groupId` is supplied, every active execution in the group is aborted and the response reports each member's outcome. If a member's sub-process abort is incomplete, the group abort response also includes a top-level `warnings` array; each warning is prefixed with that member's execution id (issue #445):
+```json
+{
+    "message": "Execution aborted",
+    "warnings": [
+        "Sub-process of type 'slurmJob' (slurm-00001) could not be aborted: VAMS cannot stop this resource type; it may still be running."
+    ],
+    "notAbortable": [
+        {
+            "resourceType": "slurmJob",
+            "label": "Mock Slurm job",
+            "stageName": "MockTrain",
+            "locator": "slurm-00001"
+        }
+    ]
+}
+```
+
+When `groupId` is supplied, every active execution in the group is aborted and the response reports each member's outcome. If a member's sub-process abort is incomplete, the group abort response also includes a top-level `warnings` array; each warning is prefixed with that member's execution id (issue #445). When a member registered a sub-process of a type VAMS cannot stop, the response also includes a top-level `notAbortable` array: that member's own `notAbortable` entries, each with an added `executionId` naming the member. Both arrays are absent when every member stopped cleanly:
 
 ```json
 {
@@ -1243,7 +1273,18 @@ When `groupId` is supplied, every active execution in the group is aborted and t
         "skippedInaccessibleCount": 1,
         "moreRemaining": true
     },
-    "warnings": ["a1b2c3d4e5f60718293a4b5c6d7e8f90: Sub-process may still be running"]
+    "warnings": [
+        "a1b2c3d4e5f60718293a4b5c6d7e8f90: Sub-process of type 'slurmJob' (slurm-00042) could not be aborted: VAMS cannot stop this resource type; it may still be running."
+    ],
+    "notAbortable": [
+        {
+            "executionId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            "resourceType": "slurmJob",
+            "label": "Cluster training job",
+            "stageName": "Train",
+            "locator": "slurm-00042"
+        }
+    ]
 }
 ```
 
@@ -1382,6 +1423,8 @@ The route is keyed on the execution identifier because an execution may span inp
         "workflowDatabaseId": "GLOBAL",
         "workflowName": "Convert and preview",
         "workflowDescription": "Convert 3D files and generate preview thumbnails",
+        "workflowVersion": 3,
+        "workflowVersionCurrent": true,
         "workflowSystemConfig": {
             "inputFileArity": "one",
             "outputTarget": { "locationType": "asset", "allowOverride": false }
@@ -1560,6 +1603,8 @@ Two settings blocks in the response describe different points in time, so a view
 `pipelines[].effectiveSystemConfig` is the resolved `systemConfig` **that step ran under** — the pipeline's own block with the chosen template's `overrides` applied — captured when the execution launched. `pipelines[].templateOverrides` reports those overrides alone, so a reader can see what the template changed. Both are empty objects when a step's settings were not captured.
 
 `workflowSystemConfig` is the workflow's `systemConfig` **as it stands now**, read from the workflow definition rather than snapshotted, so it reflects any edit made since the run. It is the outer gate of the workflow → pipeline → template chain.
+
+`workflowVersion` is the published workflow state machine version the execution started on, and `workflowVersionCurrent` is `true` while the workflow still runs that version and `false` once its state machine has been redeployed since the run. A save from the workflow builder always redeploys it, as does an API or CLI update that supplies the step list (`specifiedPipelines`); a change to a setting one of its pipelines contributes to the state machine (execution type, target, callback mode, timeouts, Deadline Cloud job settings) redeploys it too. Running the workflow again then runs the newer definition. The flag does not track `workflowSystemConfig` or the pipeline names and descriptions: they are read live and can change without a redeploy, so they may differ from what the run used whatever the flag says. Each step's `effectiveSystemConfig` is the snapshot it ran under. Both fields are `null` for an execution started before versions were recorded, and `workflowVersionCurrent` is also `null` when the workflow no longer records a current version (for example, the workflow was deleted).
 :::
 
 :::note[Traceability, not internals]
@@ -1614,6 +1659,7 @@ With `includeSubExecutions=true`, each entry also carries `subExecutions` — on
             "resourceType": "stepFunctionsExecution",
             "label": "3D thumbnail processing",
             "stageName": "",
+            "abortable": true,
             "resourceName": "Preview3dThumbnailStateMachine",
             "status": "FAILED",
             "startDate": "2026-09-11T10:00:00Z",
@@ -1671,7 +1717,11 @@ Nothing about stages is stored. The stage frame is derived when the request is s
 
 A registered AWS Deadline Cloud job (`resourceType: "deadlineCloudJob"`) has no state machine and is reported with its summary only (`stageSource: "none"`), resolved live from the farm: `resourceName` is the job's name, `status` is the job's task-run status folded onto the same vocabulary — `RUNNING` while the job is pending, scheduled, running, suspended, or being interrupted; `SUCCEEDED`; `FAILED` for a failed or not-compatible job and for a job whose creation, update, or upload failed; `ABORTED` for a cancelled job; otherwise `UNKNOWN` — `startDate` and `stopDate` are the job's start and end, `cause` is its lifecycle status message, and `deadline` (\{`farmId`, `queueId`, `jobId`\}) names the job by id alone. The job's parameters are never returned.
 
-Every read behind this flag is best-effort and bounded: a sub-state-machine definition above 256 KiB is not parsed, at most 50 stages are reported to a depth of 3, and at most 5 history pages per sub-process (20 per request, terminal sub-processes first) are read — `stagesTruncated` and `historyTruncated` say when a bound was hit, and a Step Functions, Batch, or Deadline Cloud error yields `status: "UNKNOWN"` plus an entry in `subExecutionWarnings` rather than a failed request (a Deadline Cloud job in a partition without the service is reported the same way, with the warning `Deadline Cloud client unavailable`). All dates are ISO-8601 UTC strings. The flag is off by default because the derivation reads each sub-process's history; a client polling a running execution should request it only where it renders stages.
+A registered Amazon SageMaker training job (`resourceType: "sageMakerTrainingJob"`) or pipeline execution (`resourceType: "sageMakerPipelineExecution"`) is likewise reported with its summary only, resolved live from SageMaker in the deployment's account: `status` folds `InProgress` / `Executing` and `Stopping` onto `RUNNING`, `Completed` / `Succeeded` onto `SUCCEEDED`, `Failed` onto `FAILED` and `Stopped` onto `ABORTED` (otherwise `UNKNOWN`); `resourceName` is the training job name or the pipeline execution's display name; `cause` is the failure reason; and `sageMaker` names the job (\{`trainingJobName`\}) or the execution (\{`pipelineName`, `pipelineExecutionId`\}) by name and id tail only. ARNs, hyperparameters and pipeline parameters are never returned.
+
+Every sub-execution carries `abortable`: `true` for the types VAMS stops on abort (Step Functions executions, AWS Batch jobs, Deadline Cloud jobs, and the two SageMaker types), `false` for any other registered type, which is reported with its `label`, `stageName`, and raw `resourceType`, `status: "UNKNOWN"`, and `stageSource: "none"`. Aborting the execution leaves such a sub-process running, and the abort response lists it under `notAbortable`.
+
+Every read behind this flag is best-effort and bounded: a sub-state-machine definition above 256 KiB is not parsed, at most 50 stages are reported to a depth of 3, and at most 5 history pages per sub-process (20 per request, terminal sub-processes first) are read — `stagesTruncated` and `historyTruncated` say when a bound was hit, and a Step Functions, Batch, Deadline Cloud, or SageMaker error yields `status: "UNKNOWN"` plus an entry in `subExecutionWarnings` rather than a failed request (a Deadline Cloud job or SageMaker job in a partition without the service is reported the same way, with the warning `Deadline Cloud client unavailable` or `SageMaker client unavailable`). All dates are ISO-8601 UTC strings. The flag is off by default because the derivation reads each sub-process's history; a client polling a running execution should request it only where it renders stages.
 
 Under the response byte ceiling, `stages` are dropped from every sub-execution (the summaries stay) and `truncatedCollections` names `pipelines.subExecutions`, before any inline configuration body is shortened.
 :::
@@ -1921,6 +1971,8 @@ When `pipelineExecutionId` is supplied in truncated mode, the stored per-pipelin
     }
 }
 ```
+
+Every live read follows the Amazon CloudWatch Logs `nextToken` past pages that hold no events, because a `FilterLogEvents` page can be empty while a later page holds the run's events. The read stops at the first page that holds events or when no token remains, and is bounded to 10 pages per log source and to about six seconds for the follow-up reads of one request together. When the bound stops a read on an empty page, `nextToken` is returned so the caller can continue from there: an empty `events` list with a `nextToken` is an incomplete read, not an empty log.
 
 For the whole execution (no `pipelineExecutionId`), a full-mode response also includes `sfnHistoryEvents` — the Step Functions execution history rendered as a state-transition timeline. When `pipelineExecutionId` is supplied, `subProcessEvents` carries four kinds of log, merged and sorted by timestamp, and each event names its source by `logId` — a CloudWatch event carries the `logId` of the source it was read from, and a registered sub-state-machine's history line carries the `logId` of the log group that machine writes to (an empty string when it has no logging destination):
 

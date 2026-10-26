@@ -55,6 +55,7 @@ from common.workflows import workflowRecords as wr
 from common.workflows import pipelineRecords as pr
 from common.workflows import templateBodyStorage as tbs
 from common.workflows.defaultBucket import resolve_default_bucket, default_bucket_key
+from common.s3 import region_routing_s3_client
 from common.workflows.triggerTemplateValidation import (
     validate_trigger_default_templates,
     validate_trigger_required_templates,
@@ -65,7 +66,7 @@ logger = safeLogger(service_name="WorkflowTriggerService")
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
-s3_client = boto3.client("s3", config=retry_config)
+s3_client = region_routing_s3_client()
 
 # The headless-template checks read the parent workflow's pipeline records and their default templates
 # advisorily: an unreadable table skips the check. Those reads are bounded so an unreachable table

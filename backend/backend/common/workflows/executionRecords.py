@@ -175,6 +175,29 @@ def pipeline_output_prefixes(first_pipeline_name: str, first_job_name: str, exec
     }
 
 
+# Ceiling on the {{jobName}} tag value: the stored step job name's own cap, which is also the Step
+# Functions execution-name limit, so a template can name a sub-execution or an AWS Batch job with it.
+RUN_JOB_NAME_MAX_LENGTH = 80
+
+
+def run_job_name(step_job_name: str, pipeline_execution_id: str) -> str:
+    """The value the {{jobName}} template tag renders for one step of one execution:
+    '{stepJobName}-{pipelineExecutionId}', at most RUN_JOB_NAME_MAX_LENGTH characters.
+
+    step_job_name is the uuid-prefixed name the workflow's deploy stored in its jobNames. It is fixed
+    across runs, and two steps that share a pipeline or a job name usually carry the same one (one
+    deploy generates every step's uuid fragment within the same instant), so the pipeline execution
+    id, minted per step per run, is what makes the value distinct for every step of every execution.
+    The step job name is trimmed to fit, never the id. Both parts carry only the id character set
+    (letters, digits, '-', '_'), so the value is a single path segment with no '/', ':' or
+    whitespace.
+
+    The run-bucket output prefixes keep the stored step job name (pipeline_output_prefixes), because
+    the deployed state machine bakes that name into them."""
+    suffix = f"-{pipeline_execution_id}"
+    return step_job_name[:max(RUN_JOB_NAME_MAX_LENGTH - len(suffix), 0)] + suffix
+
+
 def aux_pipeline_prefix(pipeline_name: str, execution_id: str) -> str:
     """Auxiliary-bucket temporary working prefix for a pipeline execution, relative to the aux
     bucket (no scheme, no bucket): 'pipelines/{pipelineName}/{executionId}/'. Scoped to the
@@ -240,14 +263,18 @@ def pipeline_input_manifest_key(execution_id: str, pipeline_index: int) -> str:
 
 def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: str = "",
                          database_id: str = "", asset_id: str = "",
-                         asset_root_s3_key: str = "", aux_preview_prefix: str = "") -> dict:
+                         asset_root_s3_key: str = "", aux_preview_prefix: str = "",
+                         bucket_region: str = "", bucket_account_id: str = "") -> dict:
     """One self-locating input-manifest entry: an asset-relative path mapped to the S3
     location (bucket/key/versionId) and asset identity a pipeline reads for that path.
 
     Locations are carried as relative keys plus the file's own bucket (never a pre-built
     s3:// URI): `assetRootS3Key` is this file's asset-root prefix within `bucket`, and
     `auxPreviewPrefix` is this file's unique auxiliary-bucket preview prefix. Downstream
-    consumers reconstruct s3:// as needed from `bucket` + the relevant relative key."""
+    consumers reconstruct s3:// as needed from `bucket` + the relevant relative key.
+    `bucketRegion` is the Region the file's bucket is in, which a pipeline uses to build the
+    client that reads the file; a consumer treats an empty value as the deployment Region.
+    `bucketAccountId` is the bucket's owning account when it is not the deployment account."""
     return {
         "relativePath": normalize_file_key(relative_path),
         "databaseId": database_id or "",
@@ -255,6 +282,8 @@ def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: 
         "assetRootS3Key": asset_root_s3_key or "",
         "auxPreviewPrefix": aux_preview_prefix or "",
         "bucket": bucket,
+        "bucketRegion": bucket_region or "",
+        "bucketAccountId": bucket_account_id or "",
         "key": key,
         "versionId": version_id or "",
     }
@@ -279,13 +308,17 @@ def build_manifest_output_target(location_type="asset", asset_id="", database_id
     }
 
 
-def build_manifest_outputs(bucket="", files="", previews="", metadata="", results=""):
+def build_manifest_outputs(bucket="", files="", previews="", metadata="", results="",
+                           bucket_region=""):
     """outputs block for the manifest envelope: a single output `bucket` plus bucket-relative
     prefixes for each output kind (no pre-built s3:// URIs). Downstream consumers reconstruct
     s3://{bucket}/{prefix} as needed, so each prefix is a FULL key in `bucket` — a run-I/O prefix
-    passes through run_bucket_key first, the same way each input entry's `key` is a full key."""
+    passes through run_bucket_key first, the same way each input entry's `key` is a full key.
+    `bucketRegion` is the output bucket's Region (the default asset bucket is in the deployment
+    Region); a consumer treats an empty value as the deployment Region."""
     return {
         "bucket": bucket or "",
+        "bucketRegion": bucket_region or "",
         "files": files or "",
         "previews": previews or "",
         "metadata": metadata or "",
@@ -312,6 +345,7 @@ def build_manifest_envelope(input_files, input_metadata_s3_location, outputs,
         "inputMetadataS3Location": input_metadata_s3_location or "",
         "outputs": build_manifest_outputs(
             bucket=(outputs or {}).get("bucket", ""),
+            bucket_region=(outputs or {}).get("bucketRegion", ""),
             files=(outputs or {}).get("files", ""),
             previews=(outputs or {}).get("previews", ""),
             metadata=(outputs or {}).get("metadata", ""),
@@ -652,7 +686,7 @@ def build_workflow_execution_record(
     execution_id, workflow_database_id, workflow_id, workflow_arn,
     workflow_execution_arn, execution_start_date, execution_status,
     triggered_by_user_id, trigger_type, execution_log_group_arn,
-    last_sfn_sync_check_date="", execution_group_id="",
+    last_sfn_sync_check_date="", execution_group_id="", workflow_version_arn="",
 ):
     """Main WorkflowExecutionsStorageTableV2 row (workflow-keyed; no asset coupling).
 
@@ -695,6 +729,10 @@ def build_workflow_execution_record(
     # ungrouped executions do not populate the WorkflowExecutionsByGroupGSI.
     if execution_group_id:
         record["executionGroupId"] = execution_group_id
+    # The published state machine version the execution was started on: the exact definition it ran.
+    # Absent for an execution started on the unqualified state machine ARN.
+    if workflow_version_arn:
+        record["workflowVersionArn"] = workflow_version_arn
     return record
 
 

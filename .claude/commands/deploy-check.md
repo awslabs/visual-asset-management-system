@@ -12,7 +12,9 @@ Run these validation checks. For each check, report PASS or FAIL with details.
 
 #### 1. Config Validation
 
-Read `infra/config/config.json` and verify it contains all required fields:
+The configuration file is `infra/config/config.json` unless $ARGUMENTS names another one (for example `config.staging.json`), which is the value the deployment passes as CDK context `configFile`. A name or relative path resolves relative to `infra/config/`. Use that file for every check below and report its path in the results.
+
+Read the configuration file and verify it contains all required fields:
 
 **Required top-level fields:**
 
@@ -38,10 +40,10 @@ Check for common config mistakes:
 #### 2. CDK Synth
 
 ```bash
-cd infra && npx cdk synth --quiet 2>&1
+cd infra && npx cdk synth --quiet -c configFile=<file> 2>&1
 ```
 
-This validates that all CDK TypeScript compiles and generates valid CloudFormation. Check exit code for success.
+`<file>` is the configuration file from check 1 (`config.json` when none was named). This validates that all CDK TypeScript compiles and generates valid CloudFormation. Check exit code for success.
 
 If it fails, report the error output focusing on:
 
@@ -111,13 +113,13 @@ If the build runs out of memory, use `npm run build.lowmem`.
 
 Perform these static checks without running commands:
 
-**Handler-to-CDK mapping**: For each Python handler file in `backend/backend/handlers/`, verify there is a corresponding Lambda builder function in `infra/lib/lambdaBuilder/` that references it.
+**Handler-to-CDK mapping**: For each Python handler file in `backend/backend/handlers/`, verify there is a corresponding Lambda builder function in `infra/lib/lambdaBuilder/` that references it. Two lanes are built elsewhere: an add-on handler under `handlers/addon/` is built by its add-on nested stack under `infra/lib/nestedStacks/addon/`, and a fork handler under `handlers/custom/` by `infra/lib/nestedStacks/custom/customResources.ts` (empty upstream, so upstream has no `handlers/custom/` handler to map).
 
-**API route completeness**: Verify that every route registered through an `attachFunctionToApi(` call under `infra/lib/` references a Lambda function that exists, and that each registered route has a matching `ApiRoute` constant in `backend/backend/common/apiRoutes.py` (in a category group array). The calls are not confined to the two API builder stacks: the search stack and add-on stacks such as the Physna one register their own routes, and `rest-api-gateway-construct.ts` registers `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` asserts the same pairing against the synthesized REST API.
+**API route completeness**: Verify that every route registered through an `attachFunctionToApi(` call under `infra/lib/` references a Lambda function that exists, and that each registered route has a matching `ApiRoute` constant in `backend/backend/common/apiRoutes.py` (in a category group array), in `common/addonApiRoutes.py` (`ADDON_ROUTES`) for an add-on route, or in `custom/customApiRoutes.py` (`CUSTOM_ROUTES`) for a route the custom stack registers. The calls are not confined to the two API builder stacks: the search stack and add-on stacks such as the Physna one register their own routes, and `rest-api-gateway-construct.ts` registers `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` asserts the same pairing against the synthesized REST API.
 
 **Resource name resolution**: Spot-check that non-pipeline handlers resolve table/bucket/log-group names via `get_table_name(ResourceKeys.*)` / `get_bucket_name` / `get_log_group_name` from `common.resourceNames` (not hardcoded names), and that any handler-specific env vars set in CDK Lambda builders match the `os.environ` calls in the corresponding Python handlers.
 
-**Config template consistency**: Verify any config fields present in `config.json` also exist in all three templates (`config.template.commercial.json`, `config.template.govcloud.json`, `config.template.eusovereign.json`).
+**Config template consistency**: Verify any config fields present in the configuration file from check 1 also exist in all three templates (`config.template.commercial.json`, `config.template.govcloud.json`, `config.template.eusovereign.json`).
 
 ### Report Format
 
@@ -177,7 +179,7 @@ If a check cannot be run (e.g., tool not installed), report it as SKIP with inst
 2. Collect results
 3. Present the checklist report
 4. Offer to fix any auto-fixable issues
-5. If $ARGUMENTS contains "fix", automatically apply auto-fixes for lint/prettier issues
+5. If $ARGUMENTS contains "fix", automatically apply auto-fixes for lint/prettier issues. Any other word in $ARGUMENTS that ends in `.json` is the configuration file for check 1
 
 ## User Request
 

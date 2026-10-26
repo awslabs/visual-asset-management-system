@@ -27,7 +27,7 @@
  *
  * Where getConfig() rejects a feature combination rather than adjusting the config,
  * the ConfigBuilder mirrors the rejection as a validation.ts error rule and derives
- * nothing. The VPC requirement is the worked example: getConfig() collects the 15
+ * nothing. The VPC requirement is the worked example: getConfig() collects the 16
  * VPC-requiring features and throws when app.useGlobalVpc.enabled is false, and
  * validation.ts carries one error rule per feature. derived.ts performs no config
  * mutation at all, so nothing here needs to reconcile the two lists — but a feature
@@ -82,6 +82,10 @@ const KNOWN_NON_FORM_PATHS: ReadonlySet<string> = new Set([
     "app.assetBuckets.externalAssetBuckets.bucketAccountId",
     "app.assetBuckets.externalAssetBuckets.bucketRegion",
     "app.assetBuckets.externalAssetBuckets.bucketKmsKeyArn",
+    // Component: fields/ExternalBridgesField.tsx
+    "app.pipelines.externalPipelineBridges.accountId",
+    "app.pipelines.externalPipelineBridges.roleArnPattern",
+    "app.pipelines.externalPipelineBridges.invokeTargets",
 ]);
 
 function readJson(filePath: string): Record<string, unknown> {

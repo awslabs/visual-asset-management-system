@@ -20,7 +20,7 @@ from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_actions
-from common.dynamodb import validate_pagination_info
+from common.dynamodb import validate_pagination_info, batch_get_items
 from common.logRedaction import redact_log_text, redact_log_events
 from common.workflows import executionRecords as er
 from common.workflows import executionOutputs as eo
@@ -84,6 +84,10 @@ _batch_job_describe_cache = {}
 # under two views is asked about once per request.
 _deadline_job_cache = {}
 _deadline_sessions_cache = {}
+
+# Per-request memo of SageMaker DescribeTrainingJob / DescribePipelineExecution results keyed by the
+# registered ARN, reset with the memos above. Only the summary fields are kept.
+_sagemaker_describe_cache = {}
 
 # Memo of Casbin decisions, held per ENFORCER rather than in one module-level dict. A list request
 # evaluates the same rule over the same few entities once per ROW, so the memo collapses that to one
@@ -177,6 +181,14 @@ try:
 except Exception as e:
     logger.info(f"Deadline Cloud client unavailable in this partition: {e}")
     deadline_client = None
+# Used to stop a registered SageMaker training job or pipeline execution on abort and to describe
+# either for the details view. Built the same way for the same reason; a None client reports the job
+# as left running, or its status as unavailable, rather than silently doing nothing.
+try:
+    sagemaker_client = boto3.client('sagemaker', config=retry_config)
+except Exception as e:
+    logger.info(f"SageMaker client unavailable in this partition: {e}")
+    sagemaker_client = None
 
 try:
     asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
@@ -279,17 +291,6 @@ GLOBAL_LIST_QUERY_LIMIT = 500
 # is strictly worse than a short page — hence the ~2x margin. A page cut short here says so in
 # `warnings` and carries a continuation.
 GLOBAL_LIST_WALK_BUDGET_SECONDS = 10
-
-# Keys per BatchGetItem request. 100 is the DynamoDB hard limit for a single BatchGetItem; a larger
-# key set is split across sequential requests.
-BATCH_GET_CHUNK_SIZE = 100
-
-# Attempts spent re-requesting a BatchGetItem's UnprocessedKeys (throttling / a response that hit the
-# 16 MB size limit) before the remainder falls back to per-item reads.
-BATCH_GET_MAX_RETRIES = 3
-
-# Base seconds for the exponential backoff between UnprocessedKeys retries.
-BATCH_GET_RETRY_BACKOFF_SECONDS = 0.05
 
 # Upper bound on the DISTINCT assets one global-list page resolves for authorization. The page size is
 # already capped, but a page's cost is the number of assets its executions reference, not the number of
@@ -600,34 +601,18 @@ def get_asset_details(databaseId, assetId):
 
 
 def _batch_get_rows(table_name, keys):
-    """BatchGetItem `keys` (a list of full primary-key dicts) from one table. Chunks at the DynamoDB
-    per-call key limit and re-requests UnprocessedKeys — throttling, or a response that reached the
-    16 MB size limit — with exponential backoff.
+    """BatchGetItem `keys` (a list of full primary-key dicts) from one table through the shared
+    `batch_get_items`, which chunks at the per-call key limit and re-requests UnprocessedKeys.
 
     Returns the rows that came back. Never raises: a failed or incomplete batch simply yields fewer
     rows, leaving the caller to resolve the remainder with its per-item read."""
-    items = []
-    for start in range(0, len(keys), BATCH_GET_CHUNK_SIZE):
-        pending = keys[start:start + BATCH_GET_CHUNK_SIZE]
-        attempt = 0
-        while pending:
-            try:
-                response = dynamodb.batch_get_item(RequestItems={table_name: {'Keys': pending}})
-            except Exception as e:
-                logger.warning(f"Batch read of {table_name} failed "
-                               f"(falling back to per-item reads): {e}")
-                break
-            items.extend(response.get('Responses', {}).get(table_name, []))
-            pending = (response.get('UnprocessedKeys', {}).get(table_name, {}).get('Keys', []))
-            if not pending:
-                break
-            attempt += 1
-            if attempt > BATCH_GET_MAX_RETRIES:
-                logger.info(f"Batch read of {table_name} left {len(pending)} keys unprocessed after "
-                            f"{BATCH_GET_MAX_RETRIES} retries; reading them individually")
-                break
-            time.sleep(BATCH_GET_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1)))
-    return items
+    try:
+        rows, _unresolved_keys = batch_get_items(dynamodb, table_name, keys)
+    except Exception as e:
+        logger.warning(f"Batch read of {table_name} failed "
+                       f"(falling back to per-item reads): {e}")
+        return []
+    return rows
 
 
 def prewarm_asset_details(pairs):
@@ -1425,16 +1410,22 @@ def _cancel_deadline_job_reporting(farm_id, queue_id, job_id):
                                             deadline_client=deadline_client)
 
 
-# Sub-process resource types the abort path can stop today (mirrors registerPipelineExecution).
-# Other registered types are tracked but not yet abortable.
-RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION = "stepFunctionsExecution"
+# Sub-process resource types the abort path can stop (mirrors registerPipelineExecution). The set and
+# the per-type constants are shared with the failure path in common.workflows.executionOutputs so the
+# two cannot diverge on what is abortable; other registered types are tracked and displayed but left
+# running, and the abort response names them under `notAbortable`.
+RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION = eo.RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION
 # An AWS Batch job a pipeline submitted ITSELF. A job submitted by a nested state machine through the
 # Step Functions `.sync` integration needs no entry here: Step Functions owns that job's lifecycle, so
 # stopping the sub-execution already terminates it.
-RESOURCE_TYPE_BATCH_JOB = "batchJob"
+RESOURCE_TYPE_BATCH_JOB = eo.RESOURCE_TYPE_BATCH_JOB
 # A Deadline Cloud farm job the workflow submitted through createJob.waitForTaskToken. Step Functions
 # owns the token, not the job, so stopping the execution leaves the job running on the farm.
-RESOURCE_TYPE_DEADLINE_CLOUD_JOB = "deadlineCloudJob"
+RESOURCE_TYPE_DEADLINE_CLOUD_JOB = eo.RESOURCE_TYPE_DEADLINE_CLOUD_JOB
+# A SageMaker training job / pipeline execution a pipeline registered in the deployment account.
+RESOURCE_TYPE_SAGEMAKER_TRAINING_JOB = eo.RESOURCE_TYPE_SAGEMAKER_TRAINING_JOB
+RESOURCE_TYPE_SAGEMAKER_PIPELINE_EXECUTION = eo.RESOURCE_TYPE_SAGEMAKER_PIPELINE_EXECUTION
+ABORTABLE_RESOURCE_TYPES = eo.ABORTABLE_RESOURCE_TYPES
 
 # The discovery constants and helpers are shared with the failure path in
 # common.workflows.executionOutputs, so the two cannot diverge on which jobs they find. Re-exported
@@ -1471,10 +1462,11 @@ def _discover_deadline_job_id(farm_id, queue_id, pipeline_execution_id):
 def _abort_registered_sub_process(sub):
     """Best-effort abort of one registered sub-process. Dispatches on the entry's resourceType.
 
-    Returns a non-fatal warning string when the sub-process could not be stopped (a real
-    StopExecution failure, or a resource type not yet abortable), or "" when nothing needs to be
-    surfaced (stopped cleanly, or no actionable locator). The returned message names the sub-process
-    by its display identifier (never a full ARN); the full ARN is logged. Never raises."""
+    Returns a non-fatal warning string when the sub-process could not be stopped (a real stop failure,
+    or a resource type VAMS cannot stop), or "" when nothing needs to be surfaced (stopped cleanly, or
+    no actionable locator). The structured record of a type VAMS cannot stop is `_not_abortable_entry`,
+    kept separate so this return stays a plain string. The returned message names the sub-process by
+    its display identifier (never a full ARN); the full ARN is logged. Never raises."""
     resource_type = sub.get("resourceType", "") or RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION
     if resource_type == RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION:
         execution_arn = sub.get("executionArn", "")
@@ -1517,12 +1509,32 @@ def _abort_registered_sub_process(sub):
             return (f"Sub-process abort failed for Deadline Cloud job {job_id}: {err}; it may still "
                     f"be running on the farm.")
         return ""
-    # Not yet abortable (e.g. ecsTask). Surface what was left running.
-    locator = (sub.get("executionArn") or sub.get("jobArn") or sub.get("jobId")
-               or sub.get("taskArn") or sub.get("arn") or resource_type)
-    logger.info(f"Registered sub-process of type '{resource_type}' is not yet abortable: {locator}")
+    if resource_type in (RESOURCE_TYPE_SAGEMAKER_TRAINING_JOB,
+                         RESOURCE_TYPE_SAGEMAKER_PIPELINE_EXECUTION):
+        # Shared with the failure path so the two cannot diverge on how a SageMaker job is stopped or
+        # which stop errors are the normal already-finished race. The abort path's client is the one
+        # used; a None client is reported as left running.
+        return eo.stop_registered_sub_process(sub, sagemaker_client=sagemaker_client)
+    # A type VAMS cannot stop (an external bridge's own compute, say). Surface what was left running.
+    locator = eo.sub_process_locator(sub)
+    logger.info(f"Registered sub-process of type '{resource_type}' cannot be aborted by VAMS: {locator}")
     return (f"Sub-process of type '{resource_type}' ({eo.display_identifier(locator)}) could not be "
-            f"aborted: abort for this resource type is not yet supported; it may still be running.")
+            f"aborted: VAMS cannot stop this resource type; it may still be running.")
+
+
+def _not_abortable_entry(sub):
+    """The structured record of a registered sub-process VAMS cannot stop, for the abort response's
+    `notAbortable` list: {resourceType, label, stageName, locator}; None for an abortable type."""
+    sub = sub or {}
+    resource_type = sub.get("resourceType", "") or RESOURCE_TYPE_STEP_FUNCTIONS_EXECUTION
+    if resource_type in ABORTABLE_RESOURCE_TYPES:
+        return None
+    return {
+        "resourceType": str(resource_type),
+        "label": str(sub.get("label", "") or ""),
+        "stageName": str(sub.get("stageName", "") or ""),
+        "locator": str(eo.sub_process_display_locator(sub)),
+    }
 
 
 def _metadata_source_entities(config_row):
@@ -1759,8 +1771,9 @@ def abort_execution(event, execution_id):
       3. Stop the main (outer) Step Functions execution FIRST, so it schedules no further
          pipeline task while the sub-processes below are being stopped.
       4. Stop each still-running pipeline's registered sub-processes (Step Functions executions,
-         Batch jobs and Deadline Cloud jobs are stopped; other resource types warn) and mark
-         every non-terminal pipeline row ABORTED (with a stop date).
+         Batch jobs, Deadline Cloud jobs and SageMaker training jobs / pipeline executions are
+         stopped; other resource types warn and are listed under `notAbortable`) and mark every
+         non-terminal pipeline row ABORTED (with a stop date).
       5. Re-read the pipeline rows and stop anything registered since step 4's read.
       6. Mark the main row ABORTED (with a stop date).
 
@@ -1778,8 +1791,12 @@ def abort_execution(event, execution_id):
 
     now = er.iso_now()
     main_table = dynamodb.Table(workflow_execution_database_v2)
-    # Non-fatal warnings surfaced to the caller alongside the success response.
+    # Non-fatal warnings surfaced to the caller alongside the success response, and the registered
+    # sub-processes of a type VAMS cannot stop, listed once per locator so the caller can name what was
+    # left running.
     warnings = []
+    not_abortable_subs = []
+    not_abortable_locators = set()
 
     # 1) Stop the main (outer) Step Functions execution FIRST. A running parent is what schedules the
     # next pipeline task, so stopping it before reading the pipeline rows closes the window in which a
@@ -1813,12 +1830,19 @@ def abort_execution(event, execution_id):
             if identity in attempted_subs:
                 continue
             attempted_subs.add(identity)
-            # Step Functions executions, self-submitted Batch jobs and Deadline Cloud farm jobs are
-            # stopped; a resource type with no stop API surfaces a warning naming what was left
-            # running, so the caller is not told the abort was complete when it was not.
+            # Step Functions executions, self-submitted Batch jobs, Deadline Cloud farm jobs and
+            # SageMaker training jobs / pipeline executions are stopped; a resource type with no stop
+            # API surfaces a warning naming what was left running AND a structured notAbortable entry,
+            # so the caller is not told the abort was complete when it was not.
             warning = _abort_registered_sub_process(sub)
             if warning:
                 warnings.append(warning)
+            not_abortable = _not_abortable_entry(sub)
+            # Deduplicated on the registered locator itself, not the display tail the entry carries.
+            registered_locator = str(eo.sub_process_locator(sub))
+            if not_abortable and registered_locator not in not_abortable_locators:
+                not_abortable_locators.add(registered_locator)
+                not_abortable_subs.append(not_abortable)
 
         # A DeadlineCloud step whose job was never REGISTERED still has a live job on the farm.
         # Registration is driven by Deadline's job-status events, and a job that is submitted but not
@@ -1911,10 +1935,13 @@ def abort_execution(event, execution_id):
         "workflowDatabaseId": main_item.get('workflowDatabaseId', ''),
         "operation": "abort",
     })
-    # Include a "warnings" list only when a best-effort sub-process abort failed.
+    # Include a "warnings" list only when a best-effort sub-process abort failed, and a "notAbortable"
+    # list only when a registered sub-process is of a type VAMS cannot stop.
     body = {'message': "Execution aborted"}
     if warnings:
         body['warnings'] = warnings
+    if not_abortable_subs:
+        body['notAbortable'] = not_abortable_subs
     return success(body=body)
 
 
@@ -1936,6 +1963,33 @@ MAX_LOG_EVENTS_PER_CALL = 1000
 # Slack subtracted from an execution's recorded start when bounding a live log search, covering clock
 # skew between the recorded start and the first emitted event.
 LOG_SEARCH_WINDOW_MARGIN_MS = 5 * 60 * 1000
+
+# Bounds on following FilterLogEvents' nextToken past pages that hold no events. CloudWatch Logs
+# returns a page per slice of the group it searched, and "a returned page might only be partially full,
+# or even empty ... If the results don't include a nextToken, then pagination is finished"
+# (FilterLogEvents API reference). On a group holding many streams -- the shared workflow log group, a
+# shared Lambda log group -- the first page of a search for one run is often empty with the run's
+# events on a later page, so a read that stops there reports none. A read therefore follows the token
+# until a page holds events or the token is absent, and stops on whichever bound below comes first,
+# returning the token it would have read next so the caller continues from there:
+#
+#   MAX_LOG_PAGES_PER_READ              pages one source's read issues, counting the first. Bounds the
+#                                       walk when the clock does not, e.g. against a fast empty group.
+#   LOG_EMPTY_PAGE_WALK_BUDGET_SECONDS  wall-clock budget for the reads that follow an empty page,
+#                                       shared by every source of ONE logs request. A pipeline-scoped
+#                                       request reads the shared group plus up to
+#                                       MAX_REGISTERED_LOGS_INSPECTED registered sources, and the whole
+#                                       request must answer inside the 29 s API Gateway ceiling (see
+#                                       GLOBAL_LIST_WALK_BUDGET_SECONDS for what is reserved outside a
+#                                       walk). The clock is checked before each follow-up read, so the
+#                                       overshoot is one read. FilterLogEvents is also throttled per
+#                                       account and Region (5 to 25 transactions per second depending on
+#                                       the Region, not adjustable) and that quota is shared with every
+#                                       other caller in the account, which is why the walk is bounded in
+#                                       time rather than left to the adaptive retry. The first read of
+#                                       each source is never charged to this budget.
+MAX_LOG_PAGES_PER_READ = 10
+LOG_EMPTY_PAGE_WALK_BUDGET_SECONDS = 6
 
 # Upper bound on registered sub-process logs / sub-executions read per logs request. A pipeline may
 # register an unbounded number of these; each read is a CloudWatch/SFN API call, so a single logs GET
@@ -2661,6 +2715,41 @@ def _enrich_output_files_with_asset_versions(output_files, execution_id, config_
     return output_files
 
 
+def _state_machine_version_number(version_arn):
+    """arn:p:states:r:a:stateMachine:<machine>:<n> -> n; None for an unqualified state machine ARN, an
+    alias ARN, or any value that is not a published version ARN."""
+    parts = version_arn.split(":") if isinstance(version_arn, str) else []
+    if len(parts) != 8 or parts[2] != "states" or parts[5] != "stateMachine":
+        return None
+    number = parts[7]
+    if not (number.isascii() and number.isdigit()):
+        return None
+    return int(number)
+
+
+def _workflow_version_fields(main_item, workflow_def):
+    """The published state machine version the run started on, as the detail view reports it.
+
+    workflowVersion is the number from the execution row's workflowVersionArn: None for a run started
+    on the unqualified state machine ARN, or a stored value that does not parse. workflowVersionCurrent
+    compares that ARN with the workflow record's current workflowVersionArn: True or False when both
+    are recorded, None when either is missing. A False means the workflow's state machine has been
+    redeployed since the run: every save from the workflow builder redeploys it, as does an API or CLI
+    update that supplies the step list, and so does a change to a setting a step's pipeline contributes
+    to the state machine. It says nothing about workflowSystemConfig or the pipeline names and
+    descriptions, which are read live and change without a redeploy; each step's effectiveSystemConfig
+    is the snapshot it ran under. The ARNs themselves are not returned: like every other ARN this view
+    omits, they carry the account id and Region."""
+    run_arn = main_item.get('workflowVersionArn') or ''
+    current_arn = (workflow_def or {}).get('workflowVersionArn') or ''
+    run_arn = run_arn if isinstance(run_arn, str) else ''
+    current_arn = current_arn if isinstance(current_arn, str) else ''
+    return {
+        "workflowVersion": _state_machine_version_number(run_arn),
+        "workflowVersionCurrent": (run_arn == current_arn) if run_arn and current_arn else None,
+    }
+
+
 def assemble_execution_details(execution_id, main_item, config_row=None, include_sub_executions=False):
     """Assemble the full, traceability-focused detail view for an execution.
 
@@ -2707,6 +2796,7 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
     and the execution history; that view pages Step Functions history, so it is opt-in."""
     workflow_def = get_workflow_definition(
         main_item.get('workflowDatabaseId', ''), main_item.get('workflowId', ''))
+    workflow_version = _workflow_version_fields(main_item, workflow_def)
 
     # Per-pipeline rows, with name/description cross-fetched (cache by pipeline key).
     pipeline_rows = get_pipeline_execution_rows(execution_id)
@@ -3013,6 +3103,10 @@ def assemble_execution_details(execution_id, main_item, config_row=None, include
         # Human-readable name for UI display (breadcrumbs/headers); falls back to the id downstream.
         "workflowName": workflow_def.get('workflowName', ''),
         "workflowDescription": workflow_def.get('description', ''),
+        # The published state machine version the run started on, and whether it is still the
+        # workflow's current deployment (see _workflow_version_fields).
+        "workflowVersion": workflow_version["workflowVersion"],
+        "workflowVersionCurrent": workflow_version["workflowVersionCurrent"],
         # The workflow's systemConfig as it stands NOW. The workflow-level settings are the outer gate
         # of the workflow -> pipeline -> template chain; each pipeline step's own resolved settings are
         # snapshotted per step (see effectiveSystemConfig on each pipeline entry). This one is read live
@@ -3424,7 +3518,41 @@ def _log_search_window_start(main_item):
     return int(parsed.timestamp() * 1000) - LOG_SEARCH_WINDOW_MARGIN_MS
 
 
-def _full_log_search(log_group_arn, filter_terms, query_params, default_start_time=None):
+def _log_walk_deadline():
+    """The monotonic-clock deadline for one logs request's empty-page follow-up reads."""
+    return time.monotonic() + LOG_EMPTY_PAGE_WALK_BUDGET_SECONDS
+
+
+def _filter_log_events_past_empty_pages(kwargs, walk_deadline=None):
+    """FilterLogEvents with ``kwargs``, following nextToken past pages that hold no events.
+
+    Returns the last page read. Its ``events`` are the first non-empty page's, and its ``nextToken``
+    is present whenever more may follow -- including when MAX_LOG_PAGES_PER_READ or the
+    ``walk_deadline`` (``time.monotonic()`` seconds; one request's shared budget, else
+    LOG_EMPTY_PAGE_WALK_BUDGET_SECONDS from now) stopped the walk on an empty page. The first read's
+    exception propagates to the caller. A later read that fails ends the walk on the page before it,
+    whose token is the one that read was continuing from."""
+    if walk_deadline is None:
+        walk_deadline = _log_walk_deadline()
+    resp = logs_client.filter_log_events(**kwargs)
+    pages_read = 1
+    while not resp.get('events'):
+        if 'nextToken' not in resp:
+            break
+        if pages_read >= MAX_LOG_PAGES_PER_READ or time.monotonic() >= walk_deadline:
+            break
+        try:
+            following = logs_client.filter_log_events(**dict(kwargs, nextToken=resp['nextToken']))
+        except Exception as e:
+            logger.info(f"Log read stopped after an empty page (non-critical): {e}")
+            break
+        resp = following
+        pages_read += 1
+    return resp
+
+
+def _full_log_search(log_group_arn, filter_terms, query_params, default_start_time=None,
+                     walk_deadline=None):
     """Live CloudWatch FilterLogEvents search within the shared workflow log group.
 
     filter_terms is the list of REQUIRED literal terms the search is scoped to (e.g. the
@@ -3439,7 +3567,11 @@ def _full_log_search(log_group_arn, filter_terms, query_params, default_start_ti
     older streams, an unbounded search returns those streams' events and reports nothing for a run
     that finished seconds ago, even though the events are present (verified against a group where a
     stream-scoped query returned 12 events and the same unbounded group-wide query returned 0).
-    Anchoring on the execution's own start makes the search look where its events actually are."""
+    Anchoring on the execution's own start makes the search look where its events actually are.
+
+    A page with no events and a nextToken is followed (``_filter_log_events_past_empty_pages``,
+    bounded by MAX_LOG_PAGES_PER_READ and ``walk_deadline``), so the result is the first page that
+    holds events, or the outstanding token when the bound stopped the walk first."""
     if not log_group_arn:
         return {"events": [], "nextToken": None}
     parts = log_group_arn.split(":log-group:")
@@ -3479,7 +3611,7 @@ def _full_log_search(log_group_arn, filter_terms, query_params, default_start_ti
         kwargs['nextToken'] = query_params['nextToken']
 
     try:
-        resp = logs_client.filter_log_events(**kwargs)
+        resp = _filter_log_events_past_empty_pages(kwargs, walk_deadline)
     except Exception as e:
         logger.info(f"Full log search failed (non-critical): {e}")
         return {"events": [], "nextToken": None}
@@ -3540,7 +3672,7 @@ def step_invocation_log_group_arn(pipeline_row, reference_log_group_arn=""):
 
 def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, log_stream_prefix="",
                                  scope_terms=None, default_start_time=None, next_token=None,
-                                 log_stream_names=None):
+                                 log_stream_names=None, walk_deadline=None):
     """Best-effort fetch of events from a registered sub-process log location. Returns
     (True, events, nextToken) on success or (False, reason, None) on a real failure (e.g.
     AccessDenied), never raising; the caller surfaces a failure as a warning and classifies it.
@@ -3552,7 +3684,8 @@ def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, l
     id) are AND-ed into the filter pattern as required literal terms so a group SHARED across
     executions (a nested state machine's own log group) returns only this execution's events, not
     every execution's; the caller passes none for a stream it registered itself. `next_token`
-    continues an earlier page of this same read."""
+    continues an earlier page of this same read. A page with no events and a nextToken is followed
+    as `_full_log_search` follows one, within MAX_LOG_PAGES_PER_READ and `walk_deadline`."""
     parts = (log_group_arn or "").split(":log-group:")
     if len(parts) < 2:
         return False, "unparseable log group ARN", None
@@ -3584,7 +3717,7 @@ def _fetch_registered_log_events(log_group_arn, log_stream_name, query_params, l
     if next_token:
         kwargs['nextToken'] = next_token
     try:
-        resp = logs_client.filter_log_events(**kwargs)
+        resp = _filter_log_events_past_empty_pages(kwargs, walk_deadline)
     except botocore.exceptions.ClientError as e:
         code = e.response.get('Error', {}).get('Code', '')
         logger.warning(f"Could not read registered log {log_group_arn}: {e}")
@@ -3835,6 +3968,36 @@ def _list_deadline_sessions_cached(farm_id, queue_id, job_id):
     return result
 
 
+SAGEMAKER_CLIENT_UNAVAILABLE = "SageMaker client unavailable"
+
+
+def _describe_sagemaker_cached(key, describe, fields):
+    """One SageMaker Describe* call per invocation per registered ARN: (described, errorCode).
+    `describe(client)` performs the call; only `fields` of the response are kept, so a training job's
+    hyperparameters and a pipeline execution's parameters never reach the memo or the response.
+    `described` is None when the call failed or the client is unavailable in this partition, in which
+    case `errorCode` names the failure and is "" otherwise. Best-effort: never raises; a failure is
+    memoised too."""
+    cached = _sagemaker_describe_cache.get(key)
+    if cached is not None:
+        return cached
+    if sagemaker_client is None:
+        result = (None, SAGEMAKER_CLIENT_UNAVAILABLE)
+        _sagemaker_describe_cache[key] = result
+        return result
+    try:
+        resp = describe(sagemaker_client)
+    except Exception as e:
+        logger.info(f"SageMaker describe failed for {key} (non-critical): {e}")
+        result = (None, _error_code(e))
+        _sagemaker_describe_cache[key] = result
+        return result
+    resp = resp if isinstance(resp, dict) else {}
+    result = ({field: resp.get(field) for field in fields}, "")
+    _sagemaker_describe_cache[key] = result
+    return result
+
+
 def _resolve_sfn_log_group_arn(state_machine_arn):
     """Resolve a Step Functions state machine's CloudWatch log group ARN from its logging
     configuration, so a registered sub-SFN's logs can be read even when the pipeline reported only
@@ -3857,9 +4020,12 @@ def _sub_execution_summary(sub):
     the per-request batch:DescribeJobs memo, its status folded onto the execution vocabulary and its
     container log stream kept; a Deadline Cloud job is described through the per-request
     deadline:GetJob memo, its task-run and lifecycle statuses folded onto the vocabulary and its farm,
-    queue and job ids kept (ids only — never the job's parameters, which carry the task token); any
-    other type is reported UNKNOWN. Dates are ISO strings at capture — the detail view's byte budget
-    serialises this block before the response encoder runs, and that encoder handles only Decimal.
+    queue and job ids kept (ids only — never the job's parameters, which carry the task token); a
+    SageMaker training job or pipeline execution is described through the per-request SageMaker memo,
+    its status folded onto the vocabulary and its name or id tails kept (never the ARN, which carries the
+    account id and Region, and never its hyperparameters or pipeline parameters); any other type is
+    reported UNKNOWN with `abortable` false. Dates are ISO strings at capture — the detail view's byte
+    budget serialises this block before the response encoder runs, and that encoder handles only Decimal.
     Every AWS failure becomes a warning string; nothing here raises. `stages` and the stage
     bookkeeping start empty; _sub_execution_stages fills them for Step Functions executions."""
     sub = sub or {}
@@ -3868,6 +4034,9 @@ def _sub_execution_summary(sub):
         "resourceType": resource_type,
         "label": sub.get("label", "") or "",
         "stageName": sub.get("stageName", "") or "",
+        # Whether VAMS can stop this type on abort. Rendered as a note on the sub-process card and
+        # mirrored by the abort response's `notAbortable` list.
+        "abortable": resource_type in ABORTABLE_RESOURCE_TYPES,
         "resourceName": "",
         "status": ses.STATUS_UNKNOWN,
         "startDate": "",
@@ -3945,6 +4114,62 @@ def _sub_execution_summary(sub):
         summary["startDate"] = ses.iso_utc(job.get("startedAt"))
         summary["stopDate"] = ses.iso_utc(job.get("endedAt"))
         summary["cause"] = redact_log_text(job.get("lifecycleStatusMessage") or "")[:MAX_SUB_STAGE_ERROR_CHARS]
+        return summary, warnings
+    if resource_type == RESOURCE_TYPE_SAGEMAKER_TRAINING_JOB:
+        training_job_arn = str(sub.get("trainingJobArn", "") or "")
+        job_name = ses.sagemaker_training_job_name_from_arn(training_job_arn)
+        summary["resourceName"] = job_name
+        if not training_job_arn:
+            return summary, warnings
+        # The name only: the ARN carries the account id and Region, which no sub-process summary exposes.
+        summary["sageMaker"] = {"trainingJobName": job_name}
+        if not job_name:
+            warnings.append("SageMaker training job status unavailable: its registration is not a "
+                            "training-job ARN")
+            return summary, warnings
+        job, error_code = _describe_sagemaker_cached(
+            training_job_arn, lambda client: client.describe_training_job(TrainingJobName=job_name),
+            ("TrainingJobName", "TrainingJobStatus", "TrainingStartTime", "TrainingEndTime",
+             "FailureReason"))
+        if error_code or job is None:
+            warnings.append(f"SageMaker training job status unavailable for {job_name}: "
+                            f"{error_code or 'no job described'}")
+            return summary, warnings
+        summary["status"] = ses.map_sagemaker_training_status(job.get("TrainingJobStatus", ""))
+        summary["resourceName"] = job.get("TrainingJobName") or job_name
+        summary["startDate"] = ses.iso_utc(job.get("TrainingStartTime"))
+        summary["stopDate"] = ses.iso_utc(job.get("TrainingEndTime"))
+        summary["cause"] = redact_log_text(job.get("FailureReason") or "")[:MAX_SUB_STAGE_ERROR_CHARS]
+        return summary, warnings
+    if resource_type == RESOURCE_TYPE_SAGEMAKER_PIPELINE_EXECUTION:
+        pipeline_execution_arn = str(sub.get("pipelineExecutionArn", "") or "")
+        pipeline_name, execution_id = ses.sagemaker_pipeline_execution_ids_from_arn(pipeline_execution_arn)
+        summary["resourceName"] = execution_id
+        if not pipeline_execution_arn:
+            return summary, warnings
+        # Pipeline name and execution id tails only; the ARN stays on the registration row.
+        summary["sageMaker"] = {"pipelineName": pipeline_name, "pipelineExecutionId": execution_id}
+        if not execution_id:
+            warnings.append("SageMaker pipeline execution status unavailable: its registration is not a "
+                            "pipeline-execution ARN")
+            return summary, warnings
+        execution, error_code = _describe_sagemaker_cached(
+            pipeline_execution_arn,
+            lambda client: client.describe_pipeline_execution(
+                PipelineExecutionArn=pipeline_execution_arn),
+            ("PipelineExecutionDisplayName", "PipelineExecutionStatus", "CreationTime",
+             "LastModifiedTime", "FailureReason"))
+        if error_code or execution is None:
+            warnings.append(f"SageMaker pipeline execution status unavailable for {execution_id}: "
+                            f"{error_code or 'no execution described'}")
+            return summary, warnings
+        summary["status"] = ses.map_sagemaker_pipeline_status(
+            execution.get("PipelineExecutionStatus", ""))
+        summary["resourceName"] = execution.get("PipelineExecutionDisplayName") or execution_id
+        summary["startDate"] = ses.iso_utc(execution.get("CreationTime"))
+        if summary["status"] in (ses.STATUS_SUCCEEDED, ses.STATUS_FAILED, ses.STATUS_ABORTED):
+            summary["stopDate"] = ses.iso_utc(execution.get("LastModifiedTime"))
+        summary["cause"] = redact_log_text(execution.get("FailureReason") or "")[:MAX_SUB_STAGE_ERROR_CHARS]
         return summary, warnings
     return summary, warnings
 
@@ -4253,6 +4478,9 @@ def get_execution_logs(event, execution_id, query_params):
     log_group_arn = main_item.get('executionLogGroupArn', '')
     # Lower bound shared by every live read below, so none of them scans unbounded history.
     window_start = _log_search_window_start(main_item)
+    # One budget for every read below that follows an empty page, so the sources together stay inside
+    # LOG_EMPTY_PAGE_WALK_BUDGET_SECONDS however many of them this request reads.
+    walk_deadline = _log_walk_deadline()
     scope_terms = [execution_id]
     if pipeline_execution_id:
         scope_terms.append(pipeline_execution_id)
@@ -4260,7 +4488,7 @@ def get_execution_logs(event, execution_id, query_params):
     search = {"events": [], "nextToken": None}
     if not log_id:
         search = _full_log_search(log_group_arn, scope_terms, query_params,
-                                  default_start_time=window_start)
+                                  default_start_time=window_start, walk_deadline=walk_deadline)
 
     # When scoped to a pipeline, read every log source that pipeline offers (its invocation log, what
     # it registered, and each sub-state-machine's own group) and report how each read went.
@@ -4325,7 +4553,8 @@ def get_execution_logs(event, execution_id, query_params):
                 scope_terms=source_terms if plan["scoped"] else None,
                 default_start_time=window_start,
                 next_token=(query_params.get('nextToken') if log_id else None),
-                log_stream_names=plan.get("logStreamNames"))
+                log_stream_names=plan.get("logStreamNames"),
+                walk_deadline=walk_deadline)
             status = al.classify_read(ok, payload, token, unscoped=plan["unscoped"])
             events = [dict(e, logId=source["logId"]) for e in payload] if ok else []
             if not ok:
@@ -5359,13 +5588,19 @@ def abort_group(event, group_id):
     """Abort every active execution in a group. A group is enumerated via the ByGroupGSI (all members
     regardless of the caller's access), so authorization is checked FIRST on each member: members the
     caller cannot access are NOT reported by id (that would leak the existence/ids/count of other
-    users' executions) — they are counted opaquely. Only authorized members appear in `results`."""
+    users' executions) — they are counted opaquely. Only authorized members appear in `results`.
+
+    Each aborted member's `warnings` (prefixed with its execution id) and `notAbortable` entries
+    (annotated with its `executionId`) are collected into top-level arrays of the same names, each
+    present only when non-empty, so a group abort reports what it left running exactly as a single
+    abort does."""
     executions = _executions_in_group(group_id)
     if not executions:
         return validation_error(status_code=404, body={"message": "No executions found for group"}, event=event)
 
     results = []
     warnings = []
+    not_abortable = []
     skipped_inaccessible = 0
     aborted_this_pass = 0
     more_remaining = False
@@ -5393,6 +5628,8 @@ def abort_group(event, group_id):
         if resp.get("statusCode") == 200 and resp.get("body"):
             member_body = json.loads(resp["body"])
             warnings.extend(f"{execution_id}: {warning}" for warning in member_body.get("warnings", []))
+            not_abortable.extend({"executionId": execution_id, **entry}
+                                 for entry in member_body.get("notAbortable", []) if isinstance(entry, dict))
         results.append({"executionId": execution_id,
                         "status": "aborted" if resp.get("statusCode") == 200 else "error"})
     message = {"groupId": group_id, "results": results}
@@ -5411,7 +5648,11 @@ def abort_group(event, group_id):
         "moreRemaining": bool(more_remaining),
         "operation": "abortGroup",
     })
-    body = {"message": message, "warnings": warnings} if warnings else {"message": message}
+    body = {"message": message}
+    if warnings:
+        body["warnings"] = warnings
+    if not_abortable:
+        body["notAbortable"] = not_abortable
     return success(body=body)
 
 
@@ -5499,6 +5740,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     _batch_job_describe_cache.clear()
     _deadline_job_cache.clear()
     _deadline_sessions_cache.clear()
+    _sagemaker_describe_cache.clear()
     _disarm_authz_entity_budget()
 
     try:

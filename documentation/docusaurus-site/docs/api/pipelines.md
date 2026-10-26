@@ -344,13 +344,13 @@ Set `enabled` to `true` or `false` to enable or disable a pipeline without chang
 Both are stored whole. A request that supplies either one persists exactly the keys it sends, and any key it omits is gone rather than retained — send the complete block, not the subset being changed. `executionConfig.lambda.resourceId` is the one exception: when a `Lambda` binding names no function, the update keeps the function the pipeline already runs, so a partial execution-config edit does not repoint a deployed state machine at an empty target.
 :::
 
-:::note[Changing the execution binding needs each referencing workflow re-saved]
-A pipeline's execution target and its callback and timeout values are compiled into the AWS Step Functions definition of every workflow that references it when that workflow is saved. Changing `executionConfig` returns a warning naming those workflows: their deployed state machines keep invoking the previous target until each workflow is saved again.
+:::note[Changing the execution binding redeploys the referencing workflows]
+A pipeline's execution type, target, callback mode, timeouts, and AWS Deadline Cloud job settings are compiled into the AWS Step Functions definition of every workflow that references it. When an update changes any of them, VAMS redeploys each referencing workflow in the background and the response carries a warning such as `"3 referencing workflow(s) are being redeployed against the new execution configuration."` A launch also checks that the workflow's definition was built from its pipelines' current settings and redeploys it first when it was not, so no execution runs the previous settings. A workflow whose redeploy fails is marked with `deploymentStale` and its reason; see [Get a workflow](workflows.md#get-a-workflow).
 :::
 
 ### Response
 
-Returns the updated pipeline, in the same shape as [Get a pipeline](#get-a-pipeline), plus an optional `warnings` array. See [Trigger consistency warnings](#trigger-consistency-warnings).
+Returns the updated pipeline, in the same shape as [Get a pipeline](#get-a-pipeline), plus an optional `warnings` array. See [Trigger consistency warnings](#trigger-consistency-warnings) and [Workflow consistency warnings](#workflow-consistency-warnings).
 
 ### Error responses
 
@@ -377,6 +377,20 @@ Creating or updating a pipeline succeeds (`200`) even when it is inconsistent wi
     ]
 }
 ```
+
+### Workflow consistency warnings
+
+An update that changes `systemConfig` re-runs the workflow save checks of each referencing workflow against the new configuration and returns a warning for each finding the previous configuration did not already produce, prefixed with the workflow it concerns. The save is never blocked. At most 25 findings are listed; a final entry counts any that are not.
+
+```json
+{
+    "warnings": [
+        "workflow my-database:convert-and-preview: pipeline 'GLOBAL:my-conversion-pipeline' accepts a single input file but the workflow allows multiple; multi-file executions may fail this pipeline."
+    ]
+}
+```
+
+An update that changes the execution binding returns the redeploy warning described in [Update a pipeline](#update-a-pipeline). It counts the non-archived referencing workflows; when the lookup reads only part of a very large workflow table, the count is reported as `At least N`.
 
 ---
 
@@ -1055,8 +1069,8 @@ A key a pipeline sets to `false` suppresses that metadata for the pipeline even 
 
 -   **Asset span is one intent.** `crossAssetAllowed` and `singleAssetOnly` are opposite intents. Both `true` is contradictory (`singleAssetOnly` wins and cross-asset input is rejected). Set `singleAssetOnly: true` (with `crossAssetAllowed: false`) for single-asset pipelines, or `crossAssetAllowed: true` (with `singleAssetOnly: false`) to allow multiple assets.
 -   **`wholeAssetAllowed` / `folderAllowed`** gate `/` (whole-asset) and `/folder/` selections respectively.
--   **`inputFileArity`** at execute time: `none` rejects any input file; `one` requires exactly one; `multi` requires at least one.
--   **Input-file filters** — a non-empty `allow` list restricts eligibility to matching files; a pipeline whose filters exclude every selected input fails the execution.
+-   **`inputFileArity`** at execute time: `none` receives no input files; `one` requires exactly one; `multi` requires at least one. The first step of a workflow is checked at launch, against the selected files its filters admit. A later step is checked when the run reaches it, against the files it receives — the selection plus every file the earlier steps wrote, narrowed by its filters; launch also rejects an execution in which two or more selected files already pass the filters of a later step whose arity is `one`.
+-   **Input-file filters** — a non-empty `allow` list restricts eligibility to matching files. A first step whose filters exclude every selected input rejects the execution at launch; a later step whose filters leave it nothing fails the execution at that step. Because a later step also receives earlier steps' output, it may accept only the type an earlier step writes — see [Input-file filters](workflows.md#input-file-filters) in the Workflows API.
 -   **Templates** — a chosen template's `overrides` may replace only `inputFileArity`, `metadataInputs`, `assetScope`, and `inputFileFilters` (never `requireTemplate` / `allowCustomTemplateOverride`).
 
 ---

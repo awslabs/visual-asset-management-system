@@ -44,18 +44,51 @@ def _warnings(result: Dict[str, Any]) -> Any:
     return result.get('warnings') if isinstance(result, dict) else None
 
 
+def _not_abortable(result: Dict[str, Any]) -> Any:
+    """The top-level `notAbortable` array an abort returns as a sibling of `message`: the registered
+    sub-processes of a type VAMS cannot stop, each {resourceType, label, stageName, locator}."""
+    return result.get('notAbortable') if isinstance(result, dict) else None
+
+
+def _message_siblings(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Every non-empty top-level key a handler returns BESIDE `message` (`warnings`, `notAbortable`,
+    ...). The envelope is the handler's only copy of these, so unwrapping must carry them all; a
+    field added upstream reaches `--json-output` without a CLI change."""
+    if not isinstance(result, dict):
+        return {}
+    return {key: value for key, value in result.items()
+            if key != 'message' and value not in (None, "", [], {})}
+
+
 def _payload_with_warnings(result: Dict[str, Any]) -> Any:
-    """Unwrap the `message` envelope, carrying any top-level `warnings` into the payload."""
+    """Unwrap the `message` envelope, carrying every top-level sibling of `message` (`warnings`,
+    `notAbortable`, and any later addition) into the payload. Siblings override a same-named key
+    inside `message`, since the envelope is the handler's authoritative copy."""
     message = _message(result)
-    warnings = _warnings(result)
-    if not warnings:
+    siblings = _message_siblings(result)
+    if not siblings:
         return message
     if isinstance(message, dict):
         payload = dict(message)
     else:
         payload = {'message': message}
-    payload['warnings'] = warnings
+    payload.update(siblings)
     return payload
+
+
+def _left_running_line(not_abortable: Any) -> str:
+    """One human-readable line naming what an abort left running because VAMS cannot stop its type:
+    'Left running (VAMS cannot stop these sub-process types): Mock Slurm job (slurmJob, in MockTrain); ...'.
+    A group abort's entries carry the member `executionId`, which prefixes each name the way the
+    group's warnings are prefixed: 'e1: Mock Slurm job (slurmJob, in MockTrain)'."""
+    named = []
+    for entry in not_abortable or []:
+        entry = entry if isinstance(entry, dict) else {}
+        name = entry.get('label') or entry.get('locator') or entry.get('resourceType') or '?'
+        stage = f", in {entry['stageName']}" if entry.get('stageName') else ""
+        member = f"{entry['executionId']}: " if entry.get('executionId') else ""
+        named.append(f"{member}{name} ({entry.get('resourceType', '?')}{stage})")
+    return "Left running (VAMS cannot stop these sub-process types): " + "; ".join(named)
 
 
 @click.group()
@@ -283,6 +316,14 @@ def list_executions(ctx: click.Context, workflow_id: Optional[str], workflow_dat
 def details(ctx: click.Context, execution_id: str, include_sub_executions: bool, json_output: bool):
     """Get an execution's full detail and traceability (pipelines, inputs, outputs, metadata).
 
+    Workflow version is the published workflow state machine version the run started on: latest while
+    the workflow still runs that version, superseded once its state machine has been redeployed
+    (every workflow builder save redeploys it, as do an update that supplies the step list and a
+    pipeline change to a setting the state machine encodes), a bare number when the workflow no
+    longer records a current version, and not recorded for a run started before versions were
+    recorded. Workflow settings and pipeline names are read live and can change without a redeploy,
+    so they may differ from what the run used whatever the version shows.
+
     Asset/file metadata (inputMetadata) and database metadata (inputDatabaseMetadata) are separate
     collections, and each is reported as a row count here — use --json-output for the rows themselves.
     The metadata sources the run read from are listed alongside them.
@@ -331,6 +372,17 @@ def details(ctx: click.Context, execution_id: str, include_sub_executions: bool,
             out = [
                 f"Execution ID: {message.get('workflowExecutionId', 'N/A')}",
                 f"Workflow: {message.get('workflowDatabaseId', 'N/A')}:{message.get('workflowId', 'N/A')}",
+            ]
+            # The published state machine version the run started on. Null for a run started before
+            # versions were recorded; the key is absent only from a service that does not report it.
+            if 'workflowVersion' in message:
+                version = message.get('workflowVersion')
+                state = {True: 'latest', False: 'superseded'}.get(message.get('workflowVersionCurrent'))
+                if version is None:
+                    out.append("Workflow version: not recorded")
+                else:
+                    out.append(f"Workflow version: {version}" + (f" ({state})" if state else ""))
+            out += [
                 f"Status: {message.get('executionStatus', 'N/A')}",
                 f"Started: {message.get('executionStartDate', 'N/A')}",
                 f"Stopped: {message.get('executionStopDate', 'N/A')}",
@@ -795,6 +847,9 @@ def abort(ctx: click.Context, execution_id: Optional[str], group_id: Optional[st
             if warnings:
                 out.append("Warnings:")
                 out.extend(f"  - {w}" for w in warnings)
+            not_abortable = _not_abortable(result)
+            if not_abortable:
+                out.append(_left_running_line(not_abortable))
             return '\n'.join(out)
 
         output_result(_payload_with_warnings(result), json_output,

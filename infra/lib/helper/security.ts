@@ -18,6 +18,7 @@ import * as s3AssetBuckets from "./s3AssetBuckets";
 import { readFileSync, rmSync } from "fs";
 import { join } from "path";
 import { INDEX_HTML_INLINE_SCRIPT_HASHES } from "./cspInlineScriptHashes";
+import { addonCspSources } from "../nestedStacks/addon/addonCsp";
 
 /**
  * Interface for additional CSP configuration
@@ -240,6 +241,16 @@ export function globalLambdaEnvironmentsAndPermissions(
     lambdaFunction.addEnvironment(
         "DEFAULT_ROLE_NAME",
         config.app.authProvider.authorizerOptions?.defaultUserRoleName || ""
+    );
+
+    // Whether the handler Lambdas run inside the VPC. In the VPC an asset bucket in another Region
+    // is reached through an Amazon S3 interface endpoint, which does not serve CopyObject between
+    // Regions, so the handlers stream such copies instead (common/s3.py copy_s3_object).
+    lambdaFunction.addEnvironment(
+        "VAMS_LAMBDAS_IN_VPC",
+        config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+            ? "true"
+            : "false"
     );
 }
 
@@ -570,7 +581,7 @@ export function generateContentSecurityPolicy(
     // on img-src and media-src above: the HTML viewer frames an asset file by its
     // presigned S3 URL, and without the origin the frame is blocked and the panel
     // renders empty. A viewer that frames a third-party document needs that
-    // document's origin added, as the Physna add-on branch below does.
+    // document's origin added, as the add-on sources below do.
     let frameSrc = ["'self'", "blob:", `https://${Service("S3", false).Endpoint}/`];
 
     //Add cognito
@@ -594,35 +605,10 @@ export function generateContentSecurityPolicy(
         connectSrc.push(`https://maps.${Service("GEO", false).Endpoint}/`);
     }
 
-    // When the Physna add-on is enabled the viewer plugin embeds Physna's
-    // hosted viewer URL directly in an `<iframe src>`. Allow that origin
-    // in `frame-src` so the iframe isn't blocked by CSP, and in
-    // `connect-src` so any auxiliary fetches the VAMS frontend makes
-    // against Physna also pass. We add only the origin portion (not the
-    // full config URL, which may include a path) because CSP source
-    // expressions match on scheme + host + port.
-    if (
-        config.app.addons?.usePhysnaSync?.enabled &&
-        config.app.addons.usePhysnaSync.apiBaseEndpoint
-    ) {
-        try {
-            const physnaUrl = new URL(config.app.addons.usePhysnaSync.apiBaseEndpoint);
-            const origin = `${physnaUrl.protocol}//${physnaUrl.host}`;
-            connectSrc.push(origin);
-            frameSrc.push(origin);
-        } catch {
-            // Config validation in getConfig() already rejects invalid URLs,
-            // so this is defensive — never raise during CSP generation.
-        }
-
-        // The add-on relaxes no script-src source. The viewer's `<iframe src>`
-        // is Physna's own HTTPS origin, so that document loads under Physna's
-        // CSP and its inline scripts are outside this policy's reach — the
-        // frame-src and connect-src origins above are all it needs from here.
-        // `'unsafe-inline'` would have no effect on it, and none on a VAMS page
-        // either: a source list that carries a hash source never allows all
-        // inline script, so browsers ignore the keyword wherever it appears.
-    }
+    // Sources the enabled add-ons need (lib/nestedStacks/addon/addonCsp.ts)
+    const addonSources = addonCspSources(config);
+    connectSrc.push(...addonSources.connectSrc);
+    frameSrc.push(...addonSources.frameSrc);
 
     // Merge additional CSP sources if configuration is loaded
     if (additionalCSPConfig) {
@@ -946,6 +932,11 @@ export function suppressCdkNagErrorsByGrantReadWrite(scope: Construct) {
                     {
                         // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
                         regex: "/^Resource::<.*Bucket.*\\.Arn>/\\*$/g",
+                    },
+                    {
+                        // The same grant on an imported external asset bucket, whose ARN is a
+                        // configured literal rather than a stack reference.
+                        regex: "/^Resource::arn:[a-z-]+:s3:::[^/]+/\\*$/g",
                     },
                 ],
             },

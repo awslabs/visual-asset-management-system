@@ -33,24 +33,39 @@ backend/
 │   │   ├── auth/authorizerCore.py                  #   JWT/API-key/IP validation
 │   │   ├── auth/clientIp.py                        #   True client-IP resolution
 │   │   ├── apiRoutes.py                            # MASTER API route registry: ApiRoute constants,
-│   │   │                                           #   category group arrays, ALL_API_ROUTES.
+│   │   │                                           #   category group arrays, ALL_API_ROUTES
+│   │   │                                           #   (core + ADDON_ROUTES + CUSTOM_ROUTES).
 │   │   │                                           #   Handlers dispatch via ApiRoute.matches().
-│   │   ├── constants.py                            # ABAC policy, allowed values, file blocklists
-│   │   ├── dynamodb.py                             # query_all_items, query_has_match,
+│   │   ├── apiRouteTypes.py                        # ApiRoute + GET/POST/... (re-exported by apiRoutes.py)
+│   │   ├── addonApiRoutes.py                       # Add-on routes (Physna viewer) → ADDON_ROUTES
+│   │   ├── addonConstants.py                       # Add-on object types, constraint fields, blocklist entries
+│   │   ├── addonResourceNames.py                   # AddonResourceKeys (mirrors infra/common/addonResourceParamKeys.ts)
+│   │   ├── constants.py                            # ABAC policy, allowed values, file blocklists:
+│   │   │                                           #   CORE_* lists merged with the add-on + custom lanes
+│   │   ├── dynamodb.py                             # query_all_items, query_has_match, batch_get_items,
 │   │   │                                           #   to_update_expr, get_asset_object_from_id
 │   │   ├── resourceNames.py                        # SSM resource-name resolver + ResourceKeys
-│   │   ├── s3.py                                   # S3 file validation + paged list helpers
-│   │   ├── s3MetadataKeys.py, s3PathPatterns.py    # Canonical S3 keys, .previewFile. patterns (mirror web/src/common/constants/fileFormats.ts)
+│   │   ├── s3.py                                   # S3 file validation + paged list helpers; per-Region S3 client
+│   │   │                                           #   factory and the Region-routing client the asset handlers hold
+│   │   ├── s3MetadataKeys.py, s3PathPatterns.py    # Canonical S3 keys, .previewFile. patterns + select_newest_preview_file (mirror web/src/common/constants/fileFormats.ts)
 │   │   ├── dynamoDbMetadataKeys.py                 # Reserved DynamoDB metadata keys
 │   │   ├── assetHistory.py, syncTracking.py        # Best-effort history / outbound-sync writers
 │   │   ├── validators.py                           # validate() dispatcher + regex patterns
 │   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure); incl. subExecutionStages.py (ASL frame + history → per-stage status) and availableLogs.py (log-source identity, dedup, read planning)
 │   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes
-│   │       ├── executionOutputs.py                 #   output attribution + resolved manifest build
+│   │       ├── executionOutputs.py                 #   output attribution + resolved manifest build; the shared
+│   │       │                                       #   sub-process stop helper + ABORTABLE_RESOURCE_TYPES (SFN,
+│   │       │                                       #   Batch, Deadline Cloud, SageMaker training job / pipeline
+│   │       │                                       #   execution) used by both the abort API and the failure path
 │   │       └── stepfunctions_builder.py            #   partition-aware ASL builder (Lambda/SQS/EventBridge/DeadlineCloud)
 │   ├── customLogging/
 │   │   ├── auditLogging.py                         # CloudWatch audit (9 event types, silent-fail)
 │   │   └── logger.py                               # safeLogger with sensitive-data redaction
+│   ├── customConfigCommon/                         # Override hooks for EXISTING behaviour (MFA check, login profile)
+│   ├── custom/                                     # FORK EXTENSION POINT (shipped empty, never edited upstream):
+│   │   ├── customApiRoutes.py                      #   CUSTOM_ROUTES, spliced into ALL_API_ROUTES
+│   │   ├── customConstants.py                      #   object types, constraint fields, blocklist entries
+│   │   └── customResourceNames.py                  #   CustomResourceKeys (mirrors infra/common/customResourceParamKeys.ts)
 │   ├── handlers/                                   # Lambda handlers, one folder per domain
 │   │   ├── assets/                                 # assetService.py (GOLD STANDARD),
 │   │   │                                           #   assetVersions, assetHistory, etc.
@@ -71,12 +86,15 @@ backend/
 │   │   │                                           #   deadlineCloudJobCallback
 │   │   ├── addon/garnetFramework/                  # Garnet NGSI-LD indexer Lambdas
 │   │   ├── addon/physna/                           # Physna Sync Lambdas (physnaCommon.py shared)
+│   │   ├── custom/                                 # FORK EXTENSION POINT: fork handlers (handlers.custom.<name>)
 │   │   └── assetLinks, comments, config, databases, indexing, metadata,
 │   │       metadataschema, roles, search, sendEmail, subscription, tags,
 │   │       tagTypes, userRoles                     # Domain handlers (folder per domain)
 │   └── models/                                     # Pydantic v1 models, one file per domain
 │       ├── assetsV3.py                             # GOLD STANDARD model file
+│       ├── addon/                                  # Add-on models (physnaViewer.py)
 │       ├── common.py                               # Response helpers, APIGatewayProxyResponseV2
+│       ├── custom/                                 # FORK EXTENSION POINT: fork models
 │       └── apiKeys, pipelines, workflows, executions, assetHistory, [domain].py
 ├── lambdaLayers/                                   # Lambda layer definitions
 └── tests/                                          # See backend/tests/CLAUDE.md
@@ -138,7 +156,11 @@ backend/
     API path, define the `ApiRoute` constant in `common/apiRoutes.py` AND add it to the
     matching category group array (`ASSET_FILE_ROUTES`, `AUTH_ROUTES`, …) so it is included
     in `ALL_API_ROUTES` and served by the `GET /auth/routes/api` listing. Keep route
-    templates in sync with the routes attached in the CDK api builder stacks.
+    templates in sync with the routes attached in the CDK api builder stacks. An add-on's
+    routes go in `common/addonApiRoutes.py` (`ADDON_ROUTES`); a fork's go in
+    `custom/customApiRoutes.py` (`CUSTOM_ROUTES`) and never in `apiRoutes.py` (see "Fork
+    extension points" below). Route lists import `ApiRoute` and the method constants from
+    `common/apiRouteTypes.py`, never from `apiRoutes.py`, which imports them.
 
 13. **ALWAYS use a leading `/` for normalized asset-relative file paths.** Normalized file
     paths (DynamoDB composite keys like `databaseId:assetId:filePath`, the `filePath`
@@ -492,13 +514,28 @@ return success(body=item)
 -   `request_to_claims(event)` returns `{"tokens": ["userId", ...], "roles": [...], "mfaEnabled": bool}`. `roles` comes from the `vams:roles` authorizer context value, which the authorizer (`common/auth/authorizerCore.py`) resolves from the user roles table with a 60-second per-user cache — so it is populated for every auth mode (Cognito, external OAuth IDP, API key), not only where a Cognito pre-token-generation trigger runs. It is informational for handlers and audit logs: `CasbinEnforcer` re-reads a user's roles from DynamoDB when building policy, so authorization does not depend on it.
 -   **MFA-aware**: roles with `mfaRequired=True` are only active when `mfaEnabled=True` in claims.
 -   **Object annotation**: set `item['object__type']` before every `enforce()` call.
--   Valid object types (`ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`, and the only values `GET /auth/constraints/permissionObjects` offers): `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`. Anything else is rejected at constraint create/update with a `400`. There is no `apiKey` object type — API key access is governed at Tier 1 through `api` route constraints on `/auth/api-keys*` and `/auth/user/api-keys*`.
+-   Valid object types (`ALLOWED_CONSTRAINT_OBJECT_TYPES` in `common/constants.py`, and the only values `GET /auth/constraints/permissionObjects` offers): `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, plus any type the add-on or fork constants lane registers (see "Fork Extension Points"). Anything else is rejected at constraint create/update with a `400`. There is no `apiKey` object type — API key access is governed at Tier 1 through `api` route constraints on `/auth/api-keys*` and `/auth/user/api-keys*`.
 
 ### System User (`SYSTEM_USER`)
 
 `SYSTEM_USER` is the **only** valid user ID for system-process actions — never `SYSTEM`, `system`, or any other variant. It is seeded into the user and user-roles tables during CDK deployment and assigned to the `admin` role, so actions attributed to it pass Casbin authorization. Use it for: Lambda cross-calls (`{'lambdaCrossCall': {'userName': 'SYSTEM_USER'}}` — also the default in `request_to_claims()` when `userName` is omitted); username fallbacks (`claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]`); provenance/audit values (`createdBy`, `modifiedBy`, `changeUserId` fallbacks); and identity comparisons (`skip_schema_validation = (username == "SYSTEM_USER")` in `metadataService.py`, the pipeline-execution bypass in `processWorkflowExecutionOutput.py`).
 
 Handlers compare against this exact string, so a mismatched variant silently fails the comparison (or attributes records to a user ID with no admin role). IAM permissions on direct Lambda invocation are the security boundary for who can inject a `lambdaCrossCall` event.
+
+### Internal Actions (Direct Invokes No API Route Reaches)
+
+A handler that serves another VAMS Lambda an operation with no API route dispatches it from a top-level event key before any API handling: `workflowService` serves `vamsInternalAction` (`refreshPipelineReferences`, `redeployWorkflow`; names and the event builder in `common/workflows/workflowRecords.py`). The action runs only when the event is a `SYSTEM_USER` `lambdaCrossCall` with **no** `requestContext` — API Gateway builds every proxy event with a `requestContext` and cannot add top-level keys, so no route reaches it — and its payload ids pass the `ID` validator. Derive the targets server-side from the payload's own entity (the refresh takes a pipeline and finds its workflows) rather than accepting a target list, and grant callers `lambda:InvokeFunction` on the handler's function ARN only.
+
+### Workflow State Machine Deployment
+
+A workflow's AWS Step Functions definition encodes each referenced pipeline's execution settings, so it must be rebuilt when any of them changes. The contract:
+
+-   **One deploy routine.** Create, update, the pipeline-change refresh and the launch-time check all deploy through `workflowService._deploy_fields`, which calls `workflowAsl.deploy_state_machine` and returns the attributes written together: `workflow_arn`, `workflowVersionArn` (every deploy publishes a version; older ones past `MAX_RETAINED_STATE_MACHINE_VERSIONS` are deleted), `jobNames` (reused while the steps are unchanged, so output prefixes do not move), `pipelineFingerprints` (`{"pipelineDatabaseId:pipelineId": sha256}` of `workflowAsl.to_asl_pipeline_dict` minus `name`) and `deploymentRevision`. The refresh writes conditionally on the revision it read.
+-   **Everything the ASL builders read from a pipeline record goes through `to_asl_pipeline_dict`.** That dict is what is fingerprinted; a setting read around it would change the definition without changing the fingerprint, and no workflow would be redeployed for it.
+-   **A pipeline change refreshes its workflows.** `pipelineService.update_pipeline` compares fingerprints before and after the save and, on a difference, invokes `refreshPipelineReferences` asynchronously; the workflow service walks every non-archived referencing workflow to exhaustion. A failed redeploy sets `deploymentStale` + `deploymentStaleReason` on the workflow.
+-   **The redeploy path reads strongly consistent.** `workflowService.redeploy_workflow` (behind both `refreshPipelineReferences` and `redeployWorkflow`) reads the workflow and each pipeline with `ConsistentRead=True` (the `consistent_read` parameter of `get_workflow_item`, `_get_pipeline_record` and `_resolve_snapshot_pipeline_records`). The refresh is invoked right after the pipeline write, and the re-read after a lost conditional write must see the other writer's deployment; an eventually consistent read can return the previous row in either place, so the walk finds every workflow "current" and redeploys nothing. API reads keep the default.
+-   **A launch never runs a stale definition.** `executeWorkflow._ensure_current_deployment` compares the stored fingerprints with the live pipeline records (a record without a version or fingerprints never matches), invokes `redeployWorkflow` synchronously on a mismatch, and starts on `workflowVersionArn`; when the deployment cannot be made current it returns `409` and starts nothing. The main execution row records `workflowVersionArn`.
+-   **Settings read at launch need no redeploy.** `systemConfig` (filters, arity, metadata gates, viewer suffix), templates, and enabled/archived state reach each run through the Step Functions input or the execute handler's own reads; keep it that way rather than baking them into the ASL.
 
 ### Casbin Policy Model
 
@@ -667,6 +704,12 @@ your_table.update_item(
 )
 ```
 
+The helper names its placeholders `#u<i>` / `:u<i>`, so a boto3 condition object
+(`ConditionExpression=Attr("rev").eq(n)`) is safe in the same call: boto3 renders it with
+`#n<i>` / `:v<i>` and merges those into the maps, replacing any entry of the same name. A
+hand-built update expression combined with a condition object must avoid `#n<i>` / `:v<i>`
+for the same reason.
+
 ### Pagination Patterns
 
 Two different jobs with two different shapes. Decide which by asking who needs the complete
@@ -741,6 +784,25 @@ above exists for exactly that reason — it makes the key a string, and opaque, 
 cannot come to depend on its interior. Pin it with a test that takes the token from page one,
 feeds it back, and asserts page two begins where page one stopped; asserting only that
 `NextToken` is present passes on a token that cannot be used.
+
+### Batch Reads
+
+Resolving many rows by full primary key (the assets a page of executions references, the
+pipelines a page of workflows references, the assets in a link tree, the current-version rows
+of a page of listed assets) goes through
+`common.dynamodb.batch_get_items(dynamodb, table_name, keys, *, max_retries=3,
+backoff_seconds=0.05)`, never a hand-rolled `batch_get_item` loop. It chunks at the 100-key
+per-call limit, deduplicates keys (DynamoDB rejects a chunk carrying a duplicate), and
+re-requests `UnprocessedKeys` with exponential backoff — the shape a partial throttle or a
+16 MB response takes, which arrives as HTTP 200 and so sits outside the botocore retry config.
+
+It returns `(rows, unresolved_keys)`. A key absent from both is an item that does not exist;
+a key in `unresolved_keys` is one the read did not complete within the budget. Keep the two
+apart in the caller — a throttled read must not be reported as a deleted asset or, after
+authorization, as a denial — and decide what to do with the leftover: read it per-item
+(`executionService`, `assetExportService`, `assetService` listings), report it as unresolved
+(`assetLinksService`), or log and degrade with `max_retries=0` where the data is a display-only
+hint (`workflowService`). A `ClientError` propagates; the caller owns its fallback.
 
 ### Archived Assets Pattern
 
@@ -825,7 +887,7 @@ asset_table = dynamodb.Table(asset_table_name)
 
 ### Common Environment Variables
 
-`VAMS_RESOURCE_PARAM_PREFIX` (required, non-pipeline handlers): SSM parameter prefix for resource-name resolution. `AWS_REGION` (auto, set by Lambda runtime). `COGNITO_AUTH_ENABLED` (authorizer Lambda only): whether the Cognito MFA-preference check is reachable. Handler-specific vars like `SEND_EMAIL_FUNCTION_NAME` are read directly from `os.environ`.
+`VAMS_RESOURCE_PARAM_PREFIX` (required, non-pipeline handlers): SSM parameter prefix for resource-name resolution. `AWS_REGION` (auto, set by Lambda runtime). `COGNITO_AUTH_ENABLED` (authorizer Lambda only): whether the Cognito MFA-preference check is reachable. Handler-specific vars like `SEND_EMAIL_FUNCTION_NAME` are read directly from `os.environ`. `WORKFLOW_SERVICE_V2_FUNCTION_NAME` is set on `pipelineService`, `executeWorkflow` and `importGlobalPipelineWorkflow`; the first two read it with `os.environ.get` and degrade (the refresh is not scheduled; a stale launch returns `409`) when it is absent.
 
 `PRESIGNED_URL_TIMEOUT_SECONDS` (S3 presigned URL TTL) is **not** set for every handler — only `infra/lib/lambdaBuilder/assetFunctions.ts` sets it, covering the five asset handlers that mint presigned URLs (`downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, `uploadFile`, `assetExportService`). All five index it (`os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]`) at module level, so a handler built by any other lambda builder that copies that idiom raises `KeyError` during module import and returns `500` on every request from cold start. Add the variable to the handler's own builder before reading it.
 
@@ -835,9 +897,13 @@ asset_table = dynamodb.Table(asset_table_name)
 
 ## File Security
 
-Uploads must be validated against **both** `UNALLOWED_FILE_EXTENSION_LIST` (`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`) and `UNALLOWED_MIME_LIST` (Java archives, MS-executable, shell/JS/PowerShell/VBScript, etc.). Both lists live in `common/constants.py`; extend them there, never bypass. The one helper that applies them, `common/s3.py` `validateUnallowedFileExtensionAndContentType`, compares case-insensitively: the file extension and the media-type part of the content type (parameters such as `; charset=binary` stripped) are lower-cased before the membership test, so `.EXE` and `Application/X-Msdownload` are rejected like their lower-case forms. The extension is **everything from the last dot of the key's final non-empty segment, read after every trailing dot and whitespace character is removed** (`str.isspace`, so a non-ASCII space counts): `payload.exe.`, `payload.exe `, `.exe`, `..exe` and `payload.exe/` are all checked as `.exe`, while `.gitignore` is checked as `.gitignore` and stays allowed; because the trailing `/` is ignored, a folder whose own name ends in a blocked extension (`builds.exe/`) is refused for prefix download. The segment is split on `:` and every colon-separated piece of the name is checked against the list, each read after its own trailing dots and whitespace are removed and lower-cased (on NTFS a `:` opens a stream name, so `payload.exe::$DATA` and `payload.exe:evil` write `payload.exe`; a browser that cannot write `:` substitutes it and keeps the whole name, so `a:b.exe` lands as `a_b.exe` — both shapes, and `x:payload.exe:evil`, are checked as `.exe`), while a `:` in an ordinary name (`notes:v2.txt`) is still accepted by the helper for an object already in a bucket. The request models complement this on the paths that CREATE a key: `models/assetsV3.py` `validate_asset_file_path(..., new_object=True)` refuses a final path segment ending in a dot or whitespace for upload initialize/completion `relativeKey` and move/copy `destinationPath` (Windows drops that character on download, so `payload.exe.` would land as `payload.exe`), and `file_only=True` additionally refuses a `relativeKey` ending in `/` on the three upload paths (a file key is never a folder; `CreateFolderRequestModel` keeps its own trailing-slash rule); the read paths — download `key`, file info, archive, move/copy `sourcePath` — set neither flag so an object already stored under such a key stays reachable. `new_object=True` also refuses a `:` anywhere in the value, on every created-key path including `CreateFolderRequestModel` (Windows forbids it in any path segment, so no legitimate name is lost), while the read paths keep accepting it. Keep every list entry lower-case and listed once — `tests/common/test_s3_blocklist_case_insensitive.py` fails on an entry that is not; `tests/common/test_s3_blocklist_trailing_dot.py` and `tests/models/test_assetsV3_trailing_dot_write_paths.py` pin the basename rule and the write-path refusal, `tests/common/test_s3_blocklist_ads_suffix.py` and `tests/models/test_assetsV3_ads_suffix_write_paths.py` pin the per-piece `:` check and the created-key `:` refusal, and `tests/models/test_validate_asset_file_path_call_sites.py` fails on a `validate_asset_file_path` call whose field neither passes `new_object=True` nor is declared a read path.
+Uploads must be validated against **both** `UNALLOWED_FILE_EXTENSION_LIST` (`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`) and `UNALLOWED_MIME_LIST` (Java archives, MS-executable, shell/JS/PowerShell/VBScript, etc.). Both lists are built in `common/constants.py` from the core lists plus the add-on (`common/addonConstants.py`) and fork (`custom/customConstants.py`) lanes, append-only; extend the core list there or a lane list, never bypass or remove an entry. The one helper that applies them, `common/s3.py` `validateUnallowedFileExtensionAndContentType`, compares case-insensitively: the file extension and the media-type part of the content type (parameters such as `; charset=binary` stripped) are lower-cased before the membership test, so `.EXE` and `Application/X-Msdownload` are rejected like their lower-case forms. The extension is **everything from the last dot of the key's final non-empty segment, read after every trailing dot and whitespace character is removed** (`str.isspace`, so a non-ASCII space counts): `payload.exe.`, `payload.exe `, `.exe`, `..exe` and `payload.exe/` are all checked as `.exe`, while `.gitignore` is checked as `.gitignore` and stays allowed; because the trailing `/` is ignored, a folder whose own name ends in a blocked extension (`builds.exe/`) is refused for prefix download. The segment is split on `:` and every colon-separated piece of the name is checked against the list, each read after its own trailing dots and whitespace are removed and lower-cased (on NTFS a `:` opens a stream name, so `payload.exe::$DATA` and `payload.exe:evil` write `payload.exe`; a browser that cannot write `:` substitutes it and keeps the whole name, so `a:b.exe` lands as `a_b.exe` — both shapes, and `x:payload.exe:evil`, are checked as `.exe`), while a `:` in an ordinary name (`notes:v2.txt`) is still accepted by the helper for an object already in a bucket. The request models complement this on the paths that CREATE a key: `models/assetsV3.py` `validate_asset_file_path(..., new_object=True)` refuses a final path segment ending in a dot or whitespace for upload initialize/completion `relativeKey` and move/copy `destinationPath` (Windows drops that character on download, so `payload.exe.` would land as `payload.exe`), and `file_only=True` additionally refuses a `relativeKey` ending in `/` on the three upload paths (a file key is never a folder; `CreateFolderRequestModel` keeps its own trailing-slash rule); the read paths — download `key`, file info, archive, move/copy `sourcePath` — set neither flag so an object already stored under such a key stays reachable. `new_object=True` also refuses a `:` anywhere in the value, on every created-key path including `CreateFolderRequestModel` (Windows forbids it in any path segment, so no legitimate name is lost), while the read paths keep accepting it. Keep every list entry lower-case and listed once — `tests/common/test_s3_blocklist_case_insensitive.py` fails on an entry of the merged lists that is not (a lane entry that is not is refused at import first); `tests/common/test_s3_blocklist_trailing_dot.py` and `tests/models/test_assetsV3_trailing_dot_write_paths.py` pin the basename rule and the write-path refusal, `tests/common/test_s3_blocklist_ads_suffix.py` and `tests/models/test_assetsV3_ads_suffix_write_paths.py` pin the per-piece `:` check and the created-key `:` refusal, and `tests/models/test_validate_asset_file_path_call_sites.py` fails on a `validate_asset_file_path` call whose field neither passes `new_object=True` nor is declared a read path.
 
 Upload completion (`handlers/assets/uploadFile.py` `complete_upload` / `complete_external_upload`) runs the name-level blocklist (and the preview-extension rule) on every object it creates — zero-byte, abandoned-multipart and regular alike — before anything is written, and accepts only the `relativeKey`s the initialize step recorded on the upload record (`AssetUploadTableModel.files`); a record without that attribute predates the binding and is completed with the blocklist checks but without the membership check, logged as a warning, until it expires: `complete_upload` refuses a record whose `expiresAt` (epoch seconds; 7 days from initialize, 1 day for workflow-output records) has passed, and refuses an external (`isExternalUpload`) record outright — the mirror of the check `complete_external_upload` makes — so the one record class designed without the list cannot be completed by the route that skips membership. `AssetUploadsStorageTable` has no TTL; `expiresAt` is enforced only here.
+
+### Choosing a file's `.previewFile.<ext>`
+
+A file can hold several `<file>.previewFile.<ext>` objects (a pipeline re-run in another format writes a `.png` beside an existing `.gif`; nothing deletes the other). Every path that attaches a file's preview goes through `select_newest_preview_file((key, lastModified, isArchived) …)`: in `handlers/assets/assetFiles.py` the current listing, the version-snapshot listing in basic and detailed mode, and the single-file info that set `previewFile`, and in `handlers/assets/assetExportService.py` the export's per-file preview path. A live preview beats an archived one, then the latest `lastModified` wins, ties keep key order. Do not pick "the first in key order" in a new path. Tests: `tests/handlers/assets/test_assetFiles_newest_preview.py`, `tests/handlers/assets/test_assetExportService_newest_preview.py`.
 
 ---
 
@@ -853,6 +919,8 @@ Handlers run in `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign, region `eusc-de-e
     `AWS_PARTITION` is currently set on the `workflowService` Lambda only (`infra/lib/lambdaBuilder/workflowFunctions.ts`). A handler that needs the partition either gets the env var added in its CDK builder or derives it from an ARN — do not read `os.environ["AWS_PARTITION"]` in a handler whose builder does not set it.
 
 2. **Never hardcode an endpoint hostname or DNS suffix.** Suffixes differ per partition — `amazonaws.com`, `amazonaws.com.cn`, **`amazonaws.eu`** (EU Sovereign), `c2s.ic.gov`, `sc2s.sgov.gov`, `cloud.adc-e.uk`, `csp.hci.ic.gov`. Construct plain boto3 clients (`boto3.client("s3", config=retry_config)`) with **no `endpoint_url`** and let the SDK resolve per region; take service endpoints (e.g. the OpenSearch host) from SSM rather than composing them. Region comes from `os.environ["AWS_REGION"]`, which the Lambda runtime always sets — avoid a `"us-east-1"` default, which silently points at the wrong partition when the variable is missing.
+
+    **Asset buckets may be in another Region, so every S3 call on an asset bucket goes through `common.s3`'s Region-routing client**, never a module-level `boto3.client('s3', ...)` of the handler's own. `region_routing_s3_client()` / `region_routing_s3_resource()` return the module-level client/resource a handler holds (`s3 = region_routing_s3_client()`); each call is signed for the Region of the `Bucket` it names (`Params['Bucket']` for a presigned URL), resolved from the bucket details the handler read (`bucket_region_fields(row)` spreads `bucketRegion`/`bucketAccountId` into every bucket-details dict and registers the name) or, for a name-only call, from the buckets table's `bucketNameGSI`. `copy_s3_object()` is the one copy path: a managed copy by the destination-Region client, or a streamed GET→PUT when `VAMS_LAMBDAS_IN_VPC` is `true` and the Regions differ, because an S3 interface endpoint does not serve `CopyObject` across Regions. The client config is `S3_ASSET_CLIENT_CONFIG` (SigV4, path style, adaptive retries, the regional `us-east-1` endpoint). `tests/handlers/databases/test_buckets_listing_region.py` holds the listed handlers at zero plain S3 clients, and the test mock `tests/mocks/common/s3.py` carries the same surface (`tests/common/test_s3_region_routing.py` asserts the parity).
 
 3. **New ARN/URL validators must accept every partition.** `common/validators.py` defines `aws_partition_group` (`aws`, `-us-gov`, `-cn`, `-eusc`, `-iso[-x]`) and `aws_dns_suffix_group` (all seven suffixes). Compose new patterns from these groups — never inline `arn:aws:`. A pattern that hardcodes the commercial partition passes every commercial test and rejects legitimate input **only** in the affected partition, which is the hardest failure mode to attribute.
 
@@ -879,6 +947,56 @@ Run `pytest` from `backend/` after `pip install -r requirements-dev.txt`. Tests 
 ## Templates
 
 New-handler / model / test skeletons: `backend/HANDLER_TEMPLATES.md`. Gold Standard: `backend/handlers/assets/assetService.py`.
+
+## Fork Extension Points
+
+Upstream VAMS ships these files empty and never edits them again, so a fork that adds net-new
+endpoints writes only here and merges upstream releases without conflicts. Each opens with the same
+"Fork extension point" header. Full walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
+
+| What a fork adds                                   | Fork-owned file                                                       | Spliced in by                                       |
+| -------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------- |
+| API routes                                         | `custom/customApiRoutes.py` (`CUSTOM_ROUTES`)                         | `common/apiRoutes.py` → `ALL_API_ROUTES`            |
+| Resource-name keys                                 | `custom/customResourceNames.py` (`CustomResourceKeys`)                | resolved with `get_resource_name()` like a core key |
+| Handlers                                           | `handlers/custom/<name>.py` (`handlers.custom.<name>.lambda_handler`) | the shared `backend/backend` code asset             |
+| Models                                             | `models/custom/<name>.py`                                             | imported by the fork's handlers                     |
+| Object types, constraint fields, deny-list entries | `custom/customConstants.py`                                           | `common/constants.py` (merged at import)            |
+
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
+The add-on lane sits beside each core list and is upstream-owned: `common/addonApiRoutes.py`,
+`common/addonResourceNames.py` (`AddonResourceKeys`), `common/addonConstants.py`, `handlers/addon/`
+and `models/addon/` (the Physna viewer model). Every list merges in the order core, add-on, custom.
+
+-   Fork handlers follow every rule above, including both Casbin tiers with the fail-closed
+    pre-set flag (Rule 4) and dispatch on the `ApiRoute` constants from `custom/customApiRoutes.py`
+    (Rule 12). Tier 2 uses a core entity type or a permission object type the fork registers in
+    `custom/customConstants.py` (`CUSTOM_CONSTRAINT_OBJECT_TYPE_FIELDS` + `CUSTOM_PERMISSION_CONSTRAINT_FIELDS`).
+-   **Constants lanes.** `common/constants.py` keeps the core lists as `CORE_ALLOWED_CONSTRAINT_OBJECT_TYPES`,
+    `CORE_PERMISSION_CONSTRAINT_FIELDS`, `CORE_CONSTRAINT_OBJECT_TYPE_FIELDS`, `CORE_UNALLOWED_FILE_EXTENSION_LIST`
+    and `CORE_UNALLOWED_MIME_LIST`, and builds the public names (no `CORE_` prefix) as core + add-on + custom at
+    import. Consumers import the public names only (`tests/common/test_constants_extension_lanes.py` checks).
+    A lane entry that breaks a rule raises `ConstantsExtensionError` naming the file and entry, which fails
+    every Lambda's import (fail closed): names match `^[A-Za-z][A-Za-z0-9]{1,63}$` (no underscore, so no
+    `x__y` shape and nothing that leaves the `r.obj.<field>` position in a rule), are not `object__type`,
+    `route__path` or `method`, not a Python keyword or `EVALUATOR_RESERVED_ATTRIBUTES` name, and not a core or
+    other-lane entry; a type's fields exist in the merged field set; samples are `""` or `[]` (list fields
+    take only `is_one_of` / `is_not_one_of`). Type and field names are compared ignoring letter case when
+    checking for a repeat, so `Asset` repeats `asset` and `DatabaseId` repeats `databaseId`; authorization
+    still matches a name exactly. Deny-list entries are append-only, lower-case, `.ext` / `type/subtype`.
+-   **No automatic grant.** An extension object type gets no seeded constraint: the
+    `dynamodb-authdefaults-*` constructs are not extended, so every role, admin included, is denied on it until
+    the fork adds a constraint (`tests/handlers/authz/test_extension_object_types.py`). Never add one.
+-   Tests that pin constants must hold for any lane content: pin the `CORE_*` lists, or load a private copy of
+    `constants.py` with stand-in lane modules; never assert that the merged lists equal core.
+-   `custom/` modules import `ApiRoute` from `common/apiRouteTypes.py` and `ResourceParamKey` from
+    `common/resourceNames.py`; nothing in core imports a fork handler or model.
+-   `customConfigCommon/` is different: it holds override hooks for **existing** behaviour (the
+    authorizer MFA check, the login profile), which a fork edits in place.
+-   Recommended (not enforced) names: routes under `/custom/`, resource keys under `custom/`.
+    An exact duplicate of a core route or key is rejected (`tests/common/test_custom_extension_points.py`,
+    and at CDK synth). A resource-name key resolves a name, never a secret; a handler reads a secret
+    from AWS Secrets Manager at runtime.
 
 ---
 

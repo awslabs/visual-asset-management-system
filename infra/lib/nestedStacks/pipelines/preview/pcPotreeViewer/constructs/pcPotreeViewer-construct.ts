@@ -136,7 +136,14 @@ export class PcPotreeViewerConstruct extends NestedStack {
         const stateTaskPolicy = new iam.PolicyDocument({
             statements: [
                 new iam.PolicyStatement({
-                    actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
+                    // The container reports its result AND heartbeats the parent workflow's
+                    // task token while PDAL/Potree run (pipelines/core.py); without the
+                    // heartbeat grant every SendTaskHeartbeat is an AccessDenied in the job log.
+                    actions: [
+                        "states:SendTaskSuccess",
+                        "states:SendTaskFailure",
+                        "states:SendTaskHeartbeat",
+                    ],
                     resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
                 }),
             ],
@@ -698,7 +705,9 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
-                        `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                        {
+                            regex: "/^Resource::arn:<AWS::Partition>:batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job-definition\\/\\*$/g",
+                        },
                         { regex: "/^Resource::arn:.*:batch:.*:job/\\*$/g" },
                         {
                             regex: "/^Resource::<.*Function.*.Arn>:.*$/g",

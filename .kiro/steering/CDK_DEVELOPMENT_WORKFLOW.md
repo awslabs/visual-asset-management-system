@@ -14,14 +14,22 @@ infra/
 │   └── infra.ts              # CDK entry point with stack orchestration
 ├── config/
 │   ├── config.ts             # Main configuration system with interfaces
+│   ├── configFile.ts         # resolveConfigFilePath(): CDK context `configFile` names the file (default config.json;
+│   │                         #   a name or relative path resolves relative to config/, an absolute path is used as given;
+│   │                         #   config.<name>.json files other than config.template.*.json are gitignored)
 │   ├── config.json           # Deployment-specific configuration
 │   ├── saml-config.ts        # SAML authentication configuration
 │   └── policy/               # IAM policy templates and configurations
 ├── common/
-│   └── vamsAppFeatures.ts    # Feature switch constants and enums
+│   ├── vamsAppFeatures.ts    # Feature switch constants and enums (core)
+│   ├── addonAppFeatures.ts   # Add-on feature switches (ADDON_APP_FEATURES)
+│   ├── addonResourceParamKeys.ts   # Add-on SSM resource-name keys (shipped empty)
+│   ├── customAppFeatures.ts  # FORK EXTENSION POINT: custom feature switches (shipped empty)
+│   └── customResourceParamKeys.ts  # FORK EXTENSION POINT: custom SSM resource-name keys (shipped empty)
 ├── lib/
 │   ├── core-stack.ts         # Main orchestration stack
 │   ├── cf-waf-stack.ts       # Web Application Firewall stack
+│   ├── crossRegionBucketNotifications-stack.ts  # Per-Region S3 notification topics (+ regional CMK) for asset buckets outside the deployment Region
 │   ├── nestedStacks/         # Modular nested stack implementations
 │   │   ├── auth/             # Authentication (Cognito/External OAuth)
 │   │   ├── apiLambda/        # API Gateway, Lambda layers, handlers
@@ -55,7 +63,7 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 64 SSM resource-name parameters)
+  |     +-- ResourceNamesBuilder (publishes 66 SSM resource-name parameters)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
@@ -65,9 +73,11 @@ CoreVAMSStack (root)
   |     +-- PipelineBuilder (all use-case pipelines)         -> storage, ApiBuilder2
   |     |    (its vamsSchema registration custom resources invoke an ApiBuilder2 Lambda)
   |     +-- AddonBuilder (Garnet, Physna Sync)               -> storage, resourceNames
+  |     +-- CustomBuilder (fork extension point)             -> storage, resourceNames
   |     +-- RestApi (ApiNestedStack: API Gateway + authorizer)
   |     |                                                    -> storage, AuthBuilder, ApiBuilder,
-  |     |                                                       ApiBuilder2, SearchBuilder, AddonBuilder
+  |     |                                                       ApiBuilder2, SearchBuilder, AddonBuilder,
+  |     |                                                       CustomBuilder
   |     +-- StaticWeb (CloudFront or ALB hosting)            -> storage
   |
   +-- LocationService (conditional: useLocationService.enabled)
@@ -75,6 +85,12 @@ CoreVAMSStack (root)
 ```
 
 `RestApi` materializes the routes every API stack registered into `RouteRegistry`, which is why it depends on all of them rather than the reverse.
+
+### **Fork Extension Points (core + add-on + custom)**
+
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
+Every aggregated list is composed from a core part, an add-on part beside it (`lib/nestedStacks/addon/addonCsp.ts`, `addonDefaultRoutes.ts`, `addonStackHelpers.ts`; `common/addonAppFeatures.ts` (`ADDON_APP_FEATURES`, `PHYSNA_ADDON`, pushed by `AddonBuilderNestedStack.enabledFeatures`, which refuses a core value); `common/addonResourceParamKeys.ts`, mirrored in `backend/backend/common/addonResourceNames.py` and published with `publishAddonResourceName()`) and a fork-owned custom part shipped empty. Merge order is core, add-on, custom; `infra/test/addon/appFeatureLanes.test.ts` keeps the three feature enums disjoint. Core files name no add-on (`infra/test/addon/addonCoreSeparation.test.ts`). A fork adds CDK resources only in `lib/nestedStacks/custom/customResources.ts` (`buildCustomResources(scope, props)`), called inside the `CustomBuilder` stack with `config`, `storageResources`, `lambdaCommonBaseLayer`, `vpc`, `isolatedSubnets`, `privateSubnets` and the shared `registry`. Its Lambdas use the standard builder pattern and five security calls; its routes go through `attachFunctionToApi` and cannot be anonymous, nor make an earlier route anonymous (synth fails; `RouteRegistry` stores frozen descriptors); it publishes resource names with `publishCustomResourceName()` (a core key or an add-on key throws; both publish helpers share `nestedStacks/resourceNames/laneResourceNames.ts`), declared in `common/customResourceParamKeys.ts` and mirrored in `backend/backend/custom/customResourceNames.py`, and those parameters hold names only (a secret goes in a `secretsmanager.Secret` with the KMS key imported by ARN); it returns `CUSTOM_APP_FEATURES` values (`common/customAppFeatures.ts`; a `VAMS_APP_FEATURES` or `ADDON_APP_FEATURES` value fails synth); and it reads fork settings with `loadCustomConfig()` from `config/custom/customConfig.json`, which is outside `ConfigPublic`. `infra/test/api/apiRouteBackendCdkParity.test.ts` synthesizes with the committed `customConfig.json`, so every custom route must be registered under it. Walkthrough: `documentation/docusaurus-site/docs/developer/customizing-vams.md`.
 
 ### **Cross-Stack Shared Interfaces**
 
@@ -221,7 +237,7 @@ The legacy `WorkflowExecutionsStorageTable` is retained intact as the migration 
 #### **Step 1: Configuration Interface Design**
 
 -   [ ] **Add Configuration Types**: Add new interfaces to `ConfigPublic` in `config.ts`
--   [ ] **Add Feature Constants**: Add feature switches to `vamsAppFeatures.ts`
+-   [ ] **Add Feature Constants**: Add feature switches to `vamsAppFeatures.ts` (in a fork: `customAppFeatures.ts`, returned from `buildCustomResources()`)
 -   [ ] **Add Validation Logic**: Include configuration validation in `getConfig()`
 -   [ ] **Update Templates**: Update **all** configuration templates — `config.template.commercial.json`, `config.template.govcloud.json`, **and** `config.template.eusovereign.json` — plus the active `config.json`. A missed template silently falls back to `getConfig()` defaults and drops any operator-set value.
 
@@ -316,8 +332,10 @@ Six rules for writing one:
    `Template.fromStack(root)` sees ~17 resources out of ~600.
 4. **Flatten `Fn::Join` before matching a property value.** A raw substring search finds the literal prefix
    and then a token boundary, so the assertion passes while checking nothing. Use `SynthResult.flatten()`.
-5. **Enabling `useSplatToolbox` requires `useCodeBuild: true`.** Splat is the only one of the fifteen
-   pipeline Dockerfiles that is **not in the repository** —
+5. **Enabling `useSplatToolbox` requires `useCodeBuild: true`.** Splat is the only one of the sixteen
+   pipeline Dockerfiles that is **not in the repository** (recompute as
+   `git ls-files backendPipelines | grep -c Dockerfile` tracked files plus the one gitignored splat file;
+   an on-disk `find` over-counts whenever a sync has left the splat file behind) —
    `backendPipelines/3dRecon/splatToolbox/container/.gitignore` ignores `Dockerfile` under "Pipeline Source
    Download Ignore", because it arrives from an upstream sync. With the flag false,
    `batch-gpu-pipeline.ts:179` takes the `AssetImage.fromAsset(..., {file: dockerfileName})` branch, which
@@ -383,6 +401,14 @@ export interface ConfigPublic {
         // optional bucketAccountId/bucketRegion/bucketKmsKeyArn),
         // presignedUrlNetworkRestrictions (allowedIpRanges/allowedVpceIds; mutually exclusive;
         // non-empty list adds a presigned-only bucket policy Deny to the created asset + auxiliary buckets)
+        // pipelines.externalPipelineBridges: [{accountId, roleArnPattern, invokeTargets?}] — one
+        // events:PutEvents statement per entry on the orchestration bus resource policy (bridge account
+        // root + aws:PrincipalArn condition on the pattern) and the exact invokeTargets ARNs on the shared
+        // workflow role; validateExternalPipelineBridges() rejects any other wildcard
+        // pipelines.executionLogReadPrefixes: string[] of /aws/<service>/... log-group names used verbatim
+        // as the executionService log-read resources (trailing * = prefix); default
+        // DEFAULT_EXECUTION_LOG_READ_PREFIXES; validateExecutionLogReadPrefixes() rejects *, / and
+        // anything outside /aws/
     };
 }
 
@@ -410,6 +436,8 @@ if (props.config.app.newFeature.enabled) {
     this.enabledFeatures.push(VAMS_APP_FEATURES.NEW_FEATURE);
 }
 ```
+
+In a fork, the switch goes in `infra/common/customAppFeatures.ts` (`CUSTOM_APP_FEATURES`) and is returned from `buildCustomResources()` (`lib/nestedStacks/custom/customResources.ts`), gated on the fork's settings in `infra/config/custom/customConfig.json`. `vamsAppFeatures.ts` stays core-owned and add-on switches go in `addonAppFeatures.ts`; a core or add-on value returned from the custom stack fails synth. Permission object types for fork or add-on entities are backend constants (`backend/backend/custom/customConstants.py`, `common/addonConstants.py`) with no seeded constraint: never extend the `dynamodb-authdefaults-*` constructs for one.
 
 ### **Nested Stack Implementation Standards**
 
@@ -539,7 +567,26 @@ type to choose; they take the key and fall back to their service default without
 (`encryption` + `encryptionKey`), S3 buckets (the same, plus `bucketKeyEnabled`) and SQS queues
 (`encryption` + `encryptionMasterKey`) choose the encryption type from the key, as above; without it they use
 `AWS_MANAGED`, `S3_MANAGED` (no bucket key) and `SQS_MANAGED`. SNS topics take it as `masterKey` and have no
-server-side encryption without it.
+server-side encryption without it. ECR repositories take `encryption: kmsKey ? KMS : AES_256` with the key
+imported by ARN (Amazon ECR creates its own grants on it, so the build and pull roles need no key permission).
+Given `KMS` and no key, CDK creates no key for a repository, which then uses the AWS managed `aws/ecr` key
+instead of the VAMS key. A repository's encryption is immutable, so changing it replaces the repository, and
+AWS CloudFormation cannot replace an explicitly named resource under the same name: a custom `repositoryName`
+must change with the encryption (the coordinate transform repository adds `-kms`), and a CodeBuild build
+trigger that does not wait for the image carries the repository URI as a property, so the replacement re-fires
+the build into the new repository.
+
+```typescript
+// ✅ CORRECT - ECR repository, key imported by ARN; an explicit name follows the encryption
+const encryptionKey = props.storageResources.encryption.kmsKey
+    ? kms.Key.fromKeyArn(this, "MyEcrKmsKeyRef", props.storageResources.encryption.kmsKey.keyArn)
+    : undefined;
+const repository = new ecr.Repository(this, "MyRepo", {
+    repositoryName: ["my-repo", ...(encryptionKey ? ["kms"] : [])].join("-"),
+    encryption: encryptionKey ? ecr.RepositoryEncryption.KMS : ecr.RepositoryEncryption.AES_256,
+    encryptionKey,
+});
+```
 
 ```typescript
 // ✅ CORRECT - CloudWatch log group
@@ -590,7 +637,8 @@ Three traps, each of which passes `cdk synth` and fails later:
 
 Verify before deploying: a cycle is invisible to `cdk synth` and appears only at changeset creation. Synth
 and confirm the storage nested stack takes no parameter fed from another nested stack's output. Regression
-coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`.
+coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`, and `infra/test/pipelines/codeBuildEcrEncryption.test.ts`
+for the CodeBuild repositories and their CMK flip.
 
 ### **Dependency Management Standards**
 
@@ -783,6 +831,33 @@ def send_response(event: Dict[str, Any], context: Any, status: str, reason: str 
 
 ## 🔧 **Pipeline Development Patterns**
 
+**In a fork, or for an external solution.** Pipelines have no custom lane and are not add-ons. A fork adds a pipeline without editing these core files by deploying it as its own stack and registering it through the API (`documentation/docusaurus-site/docs/pipelines/custom-pipelines.md`), or as an externally owned pipeline bridge (`app.pipelines.externalPipelineBridges`); the custom nested stack (`infra/lib/nestedStacks/custom/customResources.ts`) is not a pipeline seam. An upstream pipeline that calls a vendor's service is still a core pipeline behind its own `app.pipelines.*` switch. The `/add-pipeline` skill's fork mode and `documentation/docusaurus-site/docs/developer/customizing-vams.md` (Known Limits) say the same; the add-on definition is in `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
+### **Fetching Files an Input References**
+
+A container job role usually reads every asset bucket, so a path written inside an uploaded file (a glTF URI, a USD sublayer/reference/payload or texture path, an OBJ `mtllib`, an FBX texture name) is untrusted input that could pull another asset's content into this one's output. `backendPipelines/preview/3dThumbnail/container/preview_pipeline/dependencies.py` is the worked example (ARCC BSC1, allowlist validation):
+
+-   Accept only relative paths that, normalised against the referring file's directory, stay inside the input's asset prefix (the key up to the `assetId` segment; the run's output files folder for a file an earlier step wrote; else the input's own directory — the case for an asset on a `bucketExistingKey` folder). Reject absolute paths, `..` escapes, any URI scheme, control characters and values over 1,024 characters. Percent-decode only formats whose references are URIs (glTF), and check the decoded value.
+-   Bound the fetch: a file count, a byte total from HeadObject before each download, a free-disk check, and a recursion depth for formats whose fetched files reference more files (USD layers).
+-   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference.
+-   When a third-party tool opens the referenced files itself (splat-transform reads an `.lcc2` scene's chunk files by the names its description lists), check every name the description lists before the tool starts, and refuse the conversion when one would leave the work directory or a needed file is missing. Do not rely on the fetch having skipped it: the tool would still open the path. `backendPipelines/preview/3dThumbnail/container/preview_pipeline/format_handlers/splat_handler.prepare_lcc2` is the worked example.
+
+### **Parsing XML From Uploaded Files**
+
+An uploaded XML file (COLLADA, 3MF, any XML sidecar) can carry a DTD that expands entities without bound or an external entity that reads local files or URLs. Parse it as `backendPipelines/preview/3dThumbnail/container/preview_pipeline/format_handlers/xml_mesh_handler.py` does (ARCC BSC12, secure XML parsing): an `xml.parsers.expat` parser whose `StartDoctypeDeclHandler`, `EntityDeclHandler`, `UnparsedEntityDeclHandler` and `ExternalEntityRefHandler` raise, with `SetParamEntityParsing(XML_PARAM_ENTITY_PARSING_NEVER)`, feeding an `ElementTree.TreeBuilder`. Never call `ElementTree.parse`/`fromstring` or `lxml` on input. The C-accelerated `ElementTree.XMLParser` does not expose its expat parser, so the handlers cannot be set on it. Check a zip-based input's central directory (total uncompressed size against free disk, compression ratio per member) before decompressing it (`utils/archive.py`). A format whose elements reference one another (3MF components, COLLADA `instance_node`) also bounds its expansion; see "Sizing a Container's Work to Its Task" below.
+
+### **Sizing a Container's Work to Its Task**
+
+A Batch/Fargate container reads its limits from its own cgroup rather than from a tier name or a constant, so it stays inside whichever job size started it. `backendPipelines/preview/3dThumbnail/container/preview_pipeline/resources.py` is the worked example:
+
+-   Memory from `/sys/fs/cgroup/memory.max` (v1 `memory/memory.limit_in_bytes` fallback; "max" or a near-2^63 value means unlimited); CPUs from the scheduler affinity capped by `cpu.max` (v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us`). `os.cpu_count()` alone reports the host's CPUs inside a quota.
+-   Derive work budgets (points, triangles) from both, and set `LP_NUM_THREADS` (Mesa llvmpipe) to the CPU count before the first GL context exists.
+-   Bound what a library allocates for the work, not only what it returns. VTK's `vtkQuadricClustering` allocates its grid densely (88 bytes per bin, occupied or not) and counts the bins in a C `int`, so a grid sized from the triangle budget alone overflows at the shipping budgets and aborts the process with an uncaught `std::bad_alloc` that no `except MemoryError` sees. `geometry_budget.py` also bounds the grid by the task's memory (`cluster_bin_limit`) and keeps the grid arithmetic in pure functions a test checks at each tier's budget without allocating.
+-   Bound how far an instancing format expands before any budget applies. A 3MF component, a COLLADA `instance_node`, a STEP assembly component or an FBX model connected to several parents may place the same child several times per level, so a few-KB file describes 2^depth placements and a depth limit alone allows billions. Each walk counts its nodes and placed geometry against one `format_handlers/scene_limits.SceneLimit` (the triangle budget, three vertices per triangle of it, 1,000,000 nodes) and parses each object or geometry once (ARCC BSC1). Where a library expands the scene itself (OCCT's STEP transfer visits every placement; Assimp builds every FBX model placement and copies instanced geometry), count the placements from the file before handing it over (`cad_handler.assembly_occurrences`, `format_handlers/fbx_scene.scene_size`) and refuse a file over the bound. A recursive native parser can also be exhausted by nesting depth alone, independent of placement count: in the same pass `fbx_scene.scene_size` refuses an FBX whose scopes (ASCII) or node records (binary) nest past a fixed depth (`MAX_FBX_NESTING_DEPTH`), since the reader descends into each level as it opens.
+-   Check the input size plus output headroom against `shutil.disk_usage` before downloading, and fail with a message naming both sizes; do not keep a fixed maximum-size constant.
+-   Download with a `TransferConfig` (parallel ranged GETs); stream line-oriented inputs from S3 (`get_object` + `iter_chunks`, resuming with a `Range` header after a dropped stream) and sample as they are read (`format_handlers/point_streams.py`).
+-   Log a compute-tier environment variable when the orchestration sets one, but never branch on it; log each phase's duration (`utils/timing.py`).
+
 ### **Reporting Failure on a Task-Token Pipeline**
 
 A pipeline registered with `waitForCallback: "Enabled"` receives an AWS Step Functions task token, and the
@@ -838,6 +913,17 @@ conditional on a token being present — a direct invoke carries none. The abort
 carries the child's own output and bounds that text itself to fit the 32768-character limit, as
 `backendPipelines/multi/rapidPipelineEKS`'s CHECK_JOB path does.
 
+A value over either `SendTaskFailure` limit (`error` 256 characters, `cause` 32768) is rejected by the
+service — botocore checks only the minimum length — and the rejection lands in the callback's own `except`,
+so the token goes unreported as if no callback existed. A route that forwards an error it did not compose (a
+`PipelineEnd` handler passing on `$.error`) cannot know its size.
+`backendPipelines/multi/rapidPipelineEKS/lambda/taskFailureBounds.py` is the pattern: every
+`send_task_failure` in that pipeline's `consolidated_handler.py` and `openPipeline.py` takes its `error` and
+`cause` from `bounded_task_failure`, which returns a value within its limit unchanged, keeps the head of a
+longer one with a `... [truncated from N characters]` marker inside the limit, and converts a non-string
+with `str()`. A durable syntax-tree guard in `tests/test_rapidpipeline_eks_task_failure_bounds.py` holds
+every call to that form.
+
 **On the SUCCESS path, report the outcome and not the job's output.** A `SendTaskSuccess` output and the
 lambda's own return value both land in the execution record, which is durable and readable by anyone who can
 read the execution, and on a run that worked a third-party tool's stdout has no diagnostic value there.
@@ -887,7 +973,7 @@ four does not reach it.
 
 ### **Pipeline Test Conventions**
 
-**A rule that must hold for EVERY pipeline goes in `backendPipelines/tests/`.** Pipelines are near-copies of one another, so a loose check spreads by copying — and a per-pipeline test structurally cannot catch that. `test_open_pipeline_extension_gates.py` is the worked example: it loads all seven `openPipeline.py` handlers by path and asserts each tests EXACT membership of its parsed `ALLOWED_INPUT_FILEEXTENSIONS` list, rather than `in` against the joined env string (which is substring containment — `.us` passes for `.usd,.usda`). Two of seven pipelines had been fixed and five had not, with every per-pipeline suite green.
+**A rule that must hold for EVERY pipeline goes in `backendPipelines/tests/`.** Pipelines are near-copies of one another, so a loose check spreads by copying — and a per-pipeline test structurally cannot catch that. `test_open_pipeline_extension_gates.py` is the worked example: it loads all eight `openPipeline.py` handlers by path and asserts each tests EXACT membership of its parsed `ALLOWED_INPUT_FILEEXTENSIONS` list, rather than `in` against the joined env string (which is substring containment — `.us` passes for `.usd,.usda`). When the test was written it covered seven pipelines: two had been fixed and five had not, with every per-pipeline suite green. The handler count is the `PIPELINES` tuple in that file (`grep -c '^    ("[A-Za-z0-9]*", "backendPipelines/' backendPipelines/tests/test_open_pipeline_extension_gates.py`).
 
 **Give every test module a suite-private basename.** `test_extension_gate.py`, `test_manifest_refactor.py`, `test_construct_pipeline_failure_reporting.py`, `test_open_pipeline_function_error.py`, `test_pipeline_end_token_routes.py`, `test_output_relative_subdir.py`, and both `pcPotreeViewer` `conftest.py` files each exist in two or more pipelines. No tests directory carries an `__init__.py`, so one pytest process collecting two same-named modules errors with `import file mismatch` — `pytest backendPipelines/` therefore cannot run as a single command, and under a different invocation order a suite can import another pipeline's same-named module and assert against the wrong file while passing. Prefix a new file with its pipeline (`test_splat_extension_gate.py`).
 
@@ -909,6 +995,10 @@ backendPipelines/
 │   │   ├── lambda/
 │   │   ├── container/
 │   │   └── blender/            # Pipeline-specific tools
+│   ├── videoSopBom/            # Video SOP/BOM extraction (Amazon Transcribe + Amazon Bedrock)
+│   │   ├── lambda/
+│   │   ├── container/
+│   │   └── vamsSchema/
 │   └── nvidia/cosmos/          # NVIDIA Cosmos pipelines
 │       ├── 3/                  # Cosmos 3 (omni generation)
 │       │   ├── lambda/
@@ -1020,7 +1110,8 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
    `inputFileFilters`.
 7. **A workflow's `defaultOutputFileBaseExecutionPathExtension` supplies the output path prefix when
    an execution names none.** It is stored UNRESOLVED, so its `{{tag}}` placeholders resolve per run --
-   one stored `/{{jobName}}/` gives every execution its own output folder. The prefix is inserted
+   one stored `/{{jobName}}/` gives every execution its own output folder, because the `{{jobName}}`
+   tag renders a value unique to each run and step (rule 9). The prefix is inserted
    immediately before each output file's own name, so a container's own output folders are preserved.
    **A container must therefore not create its own per-job folder** -- the workflow prefix is what
    separates runs, and a container-side folder shows up as a stray level inside every asset. The
@@ -1059,7 +1150,10 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
    the step — blank already falls back to the pipeline id, keeping each step's output distinct. It
    takes the id charset only (3-63 chars), so **`{{tag}}` placeholders are rejected**: use the
    workflow's `defaultOutputFileBaseExecutionPathExtension` (rule 7) to vary the path per run. Do not
-   confuse the FIELD with the `{{jobName}}` TAG, which resolves to the run's generated job name.
+   confuse the FIELD with the `{{jobName}}` TAG, which renders `executionRecords.run_job_name()`: the
+   step's stored `jobNames[]` entry joined to that step's `pipelineExecutionId`, at most 80 characters,
+   so it differs on every run and for every step of one run. The run-bucket prefix above keeps the
+   stored name, which the deployed state machine bakes in.
 10. **A workflow may not list the same pipeline twice.** Per-step execute params, resolved template
     configs, and filtered inputs are all keyed by `pipelineDatabaseId:pipelineId`, so a repeated
     pipeline silently overwrites the earlier step's resolved config and both steps run identically —
@@ -1073,7 +1167,11 @@ Several `systemConfig` conditions each produce a silently unusable pipeline or w
     (even to the millisecond) is not enough, so keep the random suffix. The name also namespaces
     per-execution S3 objects in some pipelines (`rp_config_{jobName}.json`), where a collision has
     concurrent runs overwrite each other's config instead of merely failing to start. Keep it within the
-    80-character Step Functions limit and free of `:` and `/`.
+    80-character Step Functions limit and free of `:` and `/`. In `multi/rapidPipeline` the name is also
+    the Fargate task's ECS task group, which is how the state machine finds a task still running at its
+    task-level timeout to stop it (it matches the group of the cluster's running tasks to the execution
+    name), so keep it unique per execution and within ECS's 255-character task group limit: pinned by
+    `multi/rapidPipeline/lambda/tests/test_rapidpipeline_ecs_timeout_stop_route.py`.
 
 ```bash
 vamscli pipeline get -d GLOBAL -p {pipelineId} --json-output
@@ -1121,9 +1219,10 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
      "sourceType": "batch", "label": "<Batch state name> container"}
     ```
 
-    Which group that is depends on the compute family. The five **Fargate** job definitions (coordinate
-    transform, Blender renderer, 3D thumbnail, PDAL, Potree) write through the `awslogs` driver to a
-    VAMS-owned, KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and register **that** group;
+    Which group that is depends on the compute family. The six **Fargate** job definitions (coordinate
+    transform, Blender renderer, 3D thumbnail, PDAL, Potree, video SOP/BOM extraction) write through the
+    `awslogs` driver to a VAMS-owned, KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and
+    register **that** group;
     the **GPU** Batch pipelines (NVIDIA Cosmos, GR00T, Isaac Lab, Splat Toolbox) set no log configuration,
     so theirs is AWS Batch's default `/aws/batch/job`. In both families the stream is
     `<jobDefinitionName>/default/<ecs-task-id>` — the Fargate construct sets `awslogs-stream-prefix` to the
@@ -1131,6 +1230,12 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
     resolves to. Container output does not print the VAMS execution ids, so a registered prefix that the
     real stream falls under is what lets the read skip the execution-scope terms; a prefix the stream does
     not start with reads as `scoped`, and the filter drops every container line.
+
+-   **Batch states that submit the same job definition share one stream prefix**, so register only the
+    state the run is routed to. The registration handler dedups log entries by location and keeps the
+    first entry's `stageName`, so registering every such state attributes the run's container lines to
+    whichever state was listed first. The 3D thumbnail pipeline's standard and large tiers are the case
+    in the tree (`preview/3dThumbnail/lambda/openPipeline.py`).
 
 CDK rules for those env values (`infra/lib/nestedStacks/pipelines/**`):
 
@@ -1171,6 +1276,19 @@ Producer tests (`lambda/tests/test_manifest_refactor.py`, `test_batch_job_regist
 keys and that the emitted `logGroupArn` passes `CLOUDWATCH_LOG_GROUP_ARN` and `logStreamPrefix` passes
 `LOG_STREAM_NAME`. Run each pipeline's `tests/` in its own pytest process (module-name collision across
 pipelines).
+
+**Work a stopped execution leaves running.** Abort and a failure elsewhere in the workflow stop a
+registered `stepFunctionsExecution`, and a stopped execution runs no further states, so anything its
+states started outside a Step Functions `.sync` integration keeps running unless the pipeline cleans it
+up itself. `multi/rapidPipelineEKS` is the example for its Kubernetes job: CONSTRUCT_PIPELINE records each
+job name under `$$.Execution.Name` in the auxiliary bucket, and an EventBridge rule on the state
+machine's own `ABORTED` / `TIMED_OUT` / `FAILED` status changes invokes the handler's
+`EXECUTION_END_CLEANUP`, which rejects any other state machine and deletes the recorded jobs. The rule's
+`targets.LambdaFunction` permission carries `SourceArn` only, so the construct adds `SourceAccount`
+(`infra/test/pipelines/eksExecutionEndCleanup.test.ts`). The target's `retryAttempts` covers only
+EventBridge's delivery; a handler that returns an error body has succeeded as far as Lambda is concerned,
+so `lambda_handler` raises for a 5xx `EXECUTION_END_CLEANUP` result (never for its 400/403 rejections)
+and the construct pins Lambda's asynchronous retries with `configureAsyncInvoke` (no destination).
 
 ### **Pipeline Configuration Management**
 
@@ -1381,6 +1499,18 @@ backendPipelines/newPipeline/
 └── README.md                   # Pipeline documentation
 ```
 
+#### **Lambda Container Image Functions**
+
+The 3dBasic and CAD/mesh metadata extraction pipelines deploy as `lambda.DockerImageFunction`. Three
+settings name the instruction set and must agree: `FROM --platform=linux/amd64` in the Dockerfile,
+`platform: Platform.LINUX_AMD64` on the image asset, and `architecture: lambda.Architecture.X86_64` on the
+function. `infra/test/pipelines/t1LambdaContainerImageArchitecture.test.ts` fails any `PackageType: Image`
+function without `Architectures: ["x86_64"]` in all three templates. Lambda also rejects an image pushed as
+an OCI image index (`InvalidImage` / unsupported media type). The pinned AWS CDK CLI (2.179.0 and later)
+runs `docker build` for image assets with `BUILDX_NO_DEFAULT_ATTESTATIONS=1`, so Docker's default
+provenance attestation is not attached on any image store; anything that builds or pushes these images
+outside the CDK CLI must pass `--provenance=false`.
+
 #### **CodeBuild Image Tag Coordination**
 
 A pipeline whose image is built by AWS CodeBuild pushes and consumes ONE content-addressed tag. The
@@ -1407,6 +1537,39 @@ succeeds. The same holds for `COPY --from=<image>:<tag>` and for any installer U
 version. Coverage: the NVIDIA block of `infra/test/pipelines/containerBuildSources.test.ts`, which
 names the Dockerfiles explicitly because a `**/Dockerfile` glob passes locally and fails in CI on
 the gitignored splat Dockerfile.
+
+#### **Pinning a Container's Dependencies**
+
+Install a container's dependencies so that two builds of one commit ship the same code. `backendPipelines/preview/3dThumbnail/container/Dockerfile` is the worked example:
+
+-   Python packages come from a lock generated from `requirements.txt` with `uv pip compile --generate-hashes`, installed with `pip install --require-hashes`; `requirements.txt` holds only the direct dependencies, and the lock's header carries the command that regenerates it.
+-   npm tools come from a committed `package-lock.json`, installed with `npm ci`.
+-   A release tarball (Node.js) is downloaded at a fixed version and its SHA-256 is checked in the same `RUN`.
+-   Compilers and build tools stay in a builder stage; the runtime stage copies only the installed results, from the same digest-pinned base image.
+-   Each stage's package-install `RUN` runs `apt-get update && apt-get upgrade -y` before `apt-get install -y --no-install-recommends` and removes the package lists in the same layer. The digest pin fixes the Debian packages at the day the digest was built, so the upgrade is what brings in the security updates published since; AWS Batch on AWS Fargate patches the host, not the image. `backendPipelines/preview/3dThumbnail/container/tests/test_thumbnail_dockerfile_security_updates.py` holds both stages to it.
+    -   Debian packages are the exception to "the same code": the upgrade layer takes what Debian has published on the build day, so two builds of one commit can differ in Debian patch level, and the build log's `apt-get upgrade` lines list what moved.
+    -   A deployed image takes later Debian updates only when the container directory changes and the build runs on a cold cache: `ecs.AssetImage.fromAsset` skips the build when the directory's asset hash is already in the CDK bootstrap ECR repository, and Docker reuses the cached upgrade layer, whose instruction and digest-pinned parent do not change and which comes before every `COPY`. To take new updates deliberately, move the digest, or rebuild with `--no-cache` after a change to the container directory.
+-   A package manager used only to install a tool is removed in the builder stage, in the `RUN` that used it, so the runtime image does not ship it: npm, npx and corepack arrive with the Node.js tarball and are deleted after `npm ci` installs `splat-transform`, because the pipeline runs only `node`. The same test file holds the Dockerfile to it.
+
+#### **Size-Tiered Fargate Compute**
+
+One job definition, one Batch state per tier. The 3D thumbnail pipeline is the worked example
+(`infra/lib/nestedStacks/pipelines/preview/3dThumbnail/constructs/preview3dThumbnail-construct.ts`).
+One `BatchFargatePipelineConstruct` job definition is registered at the standard tier's size with
+`attemptDuration` = the longest tier's bound; each tier is its own `tasks.BatchSubmitJob` with fixed
+`containerOverrides.vcpus` / `memory` (aws-cdk-lib renders them as `ResourceRequirements` `VCPU` /
+`MEMORY` in MiB, the form AWS Batch accepts for Fargate — never the deprecated top-level
+`Vcpus`/`Memory`), a `VAMS_COMPUTE_TIER` env value and its own `taskTimeout`, behind a `sfn.Choice` on
+the tier the lambdas carry in the state. Ephemeral storage is a job-definition property and cannot be
+overridden per job, so size it for the largest tier. AWS Batch checks a vCPU/memory override against
+the Fargate task sizes only at submit, so every configurable tier size is validated in `getConfig()`
+with `isFargateCpuMemory` (`infra/config/config.ts`, mirrored in the ConfigBuilder
+`documentation/docusaurus-site/src/components/ConfigBuilder/validation.ts`). The state machine
+timeout covers the longest tier and the `vamsSchema` `taskTimeout` covers the state machine. Each
+tier's Batch construct id is a module-level `*_STATE_NAME` literal in the registering lambda, which
+registers the container log source of the state its tier routes to. Tests:
+`infra/test/pipelines/preview3dThumbnailComputeTiers.test.ts`,
+`infra/test/config/preview3dThumbnailComputeTierValidation.test.ts`.
 
 #### **Read Bits on COPY'd Source in a Non-Root Container**
 
@@ -1531,7 +1694,7 @@ The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, gran
 2. **Configuration Driven**: All pipelines must be configurable via `config.ts`
 3. **VPC Awareness**: Distinguish between VPC-required and optional pipelines
 4. **Container Separation**: Keep container code separate from Lambda orchestration
-5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`. All `customLogging/logger.py` copies must stay byte-identical (verify with `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`, which must print one hash): the logger redacts task tokens from every log line, so edit one copy, propagate to the rest in the same change, and add the new pipeline's path to `LOGGER_COPIES` in `backendPipelines/tests/test_pipeline_logger_identity.py` (the one list; `test_pipeline_logger_formatter.py` reads it too). Log an event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never log a task token on its own. The same byte-identity rule applies to every vendored `manifestHelper.py`.
+5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`. All `customLogging/logger.py` copies must stay byte-identical (verify with `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`, which must print one hash): the logger redacts task tokens from every log line, so edit one copy, propagate to the rest in the same change, and add the new pipeline's path to `LOGGER_COPIES` in `backendPipelines/tests/test_pipeline_logger_identity.py` (the one list; `test_pipeline_logger_formatter.py` reads it too). Log an event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never log a task token on its own. The same byte-identity rule applies to every vendored `manifestHelper.py`. The Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) log through `lambdaContainer/common/logger.py` instead, and VAMS reads a Lambda step's log group only for lines that contain the workflow execution id: each handler puts the body's `workflowExecutionId` on every line with `logger.append_keys` after the task-token check and removes it with `remove_keys` first thing in each invocation, and a module that logs on the handler's behalf uses a Powertools child logger of the handler's service (`child=True`) so its lines carry the id too. Full rule: `backendPipelines/CLAUDE.md` "Files a Model Input References".
 6. **Error Handling**: Implement comprehensive error handling and logging
 7. **Resource Cleanup**: Ensure proper cleanup of temporary resources
 8. **VPC Builder Updates (CRITICAL)**: A pipeline using AWS Batch, ECS, or Fargate goes into some of the three condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in.** Determine that from what `pipelineBuilder-nestedStack.ts` passes as its `pipelineSubnets` (`pipelineNetwork.isolatedSubnets.pipeline` vs `pipelineNetwork.privateSubnets.pipeline`). Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments.
@@ -1540,7 +1703,9 @@ The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, gran
     - **Pipeline-only endpoints** (~line 651): creates Batch, ECR API, ECR Docker endpoints in the isolated subnets. **Required for every pipeline, either placement** — without it Batch cannot pull the container image.
     - **ECS endpoint** (~line 736): the `needsEcsPrivate` variable. **Private-subnet pipelines only** — this is the ECS control-plane endpoint an EC2-launch-type container instance's agent needs; Fargate tasks do not use it. One ENI per AZ, ~$15/month.
 
-    Four Batch pipelines run in isolated subnets (Potree viewer, 3D thumbnail, GenAI metadata labeling, coordinate transform) and appear in the endpoint block only; seven run in private subnets (Splat Toolbox, ModelOps, RapidPipeline ECS and EKS, NVIDIA Cosmos, NVIDIA Cosmos 3, NVIDIA GR00T) and appear in all three. Isaac Lab training runs its compute in private subnets and appears in the subnet-creation and endpoint conditions, with its ECS endpoint gated separately by `needsEcsIsolated`. The Lambda-container pipelines (3dBasic, CAD/mesh metadata extraction) use no Batch and appear in none. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts`.
+    Which blocks a flag belongs in is derived from the source, not from a list kept here. Read the placement off `pipelineBuilder-nestedStack.ts`: a stack given `pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline` is an isolated-subnet pipeline (endpoint block only); one given `privateSubnets.pipeline`, or both `pipelineSubnetsPrivate` and `pipelineSubnetsIsolated`, is a private-subnet pipeline (all three). A containerized Lambda pipeline (3dBasic, CAD/mesh metadata extraction) is placed in isolated subnets but runs no Batch job, so it appears in no block. A pipeline whose container calls a service that has no interface endpoint yet also gets a service-endpoint gate beside the Bedrock Runtime / Rekognition `if` — the Bedrock Runtime endpoint is created when `bedrockRuntimeFromLambda` (`useForAllLambdas && useGenAiMetadata3dLabeling.enabled`) **or** `bedrockRuntimeFromContainer` (`useGenAiVideoSopBom.enabled`) holds, and the Transcribe endpoint when `bedrockRuntimeFromContainer` holds. Isaac Lab training is the one placement the derivation does not predict: its EC2 Batch compute is placed in `privateSubnets.pipeline` (its EFS in isolated subnets) and the flag appears in the subnet-creation and endpoint blocks, while its ECS endpoint is gated separately by `needsEcsIsolated` rather than `needsEcsPrivate`. Recompute the membership with `grep -n "pipelineSubnets" infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts` against `grep -n "subnetConfigurations.push(subnetPublicConfig)\|Pipeline-Only Required Endpoints\|const needsEcsPrivate\|bedrockRuntimeFromContainer" infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts`. Regression coverage asserting both directions: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts` (no NAT for an isolated-subnet pipeline, NAT present for a private-subnet one) and `infra/test/pipelines/videoSopBomVpcPlacement.test.ts` (the service-endpoint gate widened for the container without widening the Lambda gate). `infra/test/security/vpcEndpointsAndAuthGrants.test.ts` asserts each flag's block membership from its `privateSubnetBatchFlags` / `isolatedSubnetBatchFlags` lists — add a new pipeline's flag to the matching list.
+
+    **Placement also decides how the pipeline treats an asset bucket in another Region.** The manifest names every input file's `bucketRegion` and the output bucket's; `vamsExecute` passes `inputBucketRegion` / `outputBucketRegion` to `openPipeline`, `constructPipeline` writes the definition's `bucketRegions` map, and the container signs each bucket's requests for its Region. An isolated-subnet pipeline additionally calls `manifestHelper.enforce_inputs_in_region(resolved)` right after `enforce_single_input_file` (a multi-file pipeline such as Video SOP/BOM calls it right after the manifest resolves, before its own count and HeadObject gates): its compute reaches Amazon S3 in the deployment Region and in the Regions the VPC builder created a cross-Region S3 interface endpoint for (`app.useGlobalVpc.addCrossRegionS3Endpoints`), so its lambda builder sets `CROSS_REGION_S3_ENDPOINT_REGIONS` on the `vamsExecute` function from `Config.crossRegionS3EndpointRegions(config)` — the helper the VPC builder iterates — and the gate rejects any other Region before the job is submitted. `infra/test/pipelines/isolatedPipelinesCrossRegionEndpointEnv.test.ts` holds the env value to the endpoint list. A pipeline that hands `s3://` locations to a third-party container image (ModelOps, RapidPipeline ECS/EKS) is same-Region only and calls `manifestHelper.enforce_same_region_io(resolved)` there instead, rejecting a cross-Region input or output bucket. `backendPipelines/tests/test_pipeline_cross_region_inputs.py` requires every `vamsExecute*.py` to be in exactly one class (isolated-subnet gate, Region-consuming, same-Region-only). Full rule: `backendPipelines/CLAUDE.md` step 2.
 
 9. **A directory containing `.synced-commit` is overwritten from upstream on every `cdk synth` — and on every `cdk list`.** `SplatToolboxConstruct.syncContainerSources` clones the pinned commit and copies every upstream file over `backendPipelines/3dRecon/splatToolbox/container/`. An edit to one of those files survives until the next CDK invocation and is then gone, with `git status` clean afterwards because the restored copy matches `HEAD`.
 
@@ -1550,9 +1715,11 @@ The CDK lambda builder sets `OPEN_PIPELINE_FUNCTION_NAME` on `vamsExecute`, gran
 
     Declare the constant **above the first client**, not merely after the imports: a few modules interleave imports with executable code (`multi/rapidPipelineEKS/lambda/consolidated_handler.py` builds a client and then keeps importing), and a constant placed after the last import lands below the client that uses it — `NameError` at module import, which in a Lambda is a cold-start 500 on every request. A deliberate departure (a non-idempotent call a retry would duplicate) needs a comment saying why, because the ratchet cannot tell it from an oversight. Coverage: `backend/tests/common/workflows/test_pipeline_boto_clients_configured.py`.
 
-11. **Sub-Process and Log Registration**: `openPipeline.py` (or `executeBatchJob.py` when that lambda submits the job itself) registers the state-machine log entry with `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state naming the group that job definition writes to — the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration — (`logStreamPrefix` `"<jobDefinitionName>/default/"`, `stageName` = the ASL state name, declared as a module-level `*_STATE_NAME` literal). The builder supplies `ORCHESTRATION_BUS_NAME` + `orchestrationBus.grantPutEventsTo(fun)`, `STATE_MACHINE_LOG_GROUP_NAME` / `_ARN`, `...vendedBatchJobLogGroupEnvironment(logGroup)` (Fargate) or `...batchJobLogGroupEnvironment()` (GPU) and the job-definition-name env the producer reads (`BATCH_JOB_DEFINITION_NAME`). Add the construct to `infra/test/pipelines/batchLogRegistrationEnv{Fargate,Gpu}.test.ts` (or `containerLogRegistrationEnvEcs.test.ts` for an ECS task) and assert the emitted entries in `lambda/tests/test_manifest_refactor.py`. Without it, abort leaves the compute running and the execution shows no stages or container logs. See "Registering Sub-Processes and Logs" above.
+11. **Sub-Process and Log Registration**: `openPipeline.py` (or `executeBatchJob.py` when that lambda submits the job itself) registers the state-machine log entry with `sourceType`/`label`, the `subExecution` with `label`, and one container entry per Batch state (only the state the run is routed to when several states share one job definition) naming the group that job definition writes to — the pipeline's vended `/aws/vendedlogs/Pipelines/<Name><hash>` group for a Fargate job, `/aws/batch/job` for a GPU job with no log configuration — (`logStreamPrefix` `"<jobDefinitionName>/default/"`, `stageName` = the ASL state name, declared as a module-level `*_STATE_NAME` literal). The builder supplies `ORCHESTRATION_BUS_NAME` + `orchestrationBus.grantPutEventsTo(fun)`, `STATE_MACHINE_LOG_GROUP_NAME` / `_ARN`, `...vendedBatchJobLogGroupEnvironment(logGroup)` (Fargate) or `...batchJobLogGroupEnvironment()` (GPU) and the job-definition-name env the producer reads (`BATCH_JOB_DEFINITION_NAME`). Add the construct to `infra/test/pipelines/batchLogRegistrationEnv{Fargate,Gpu}.test.ts` (or `containerLogRegistrationEnvEcs.test.ts` for an ECS task) and assert the emitted entries in `lambda/tests/test_manifest_refactor.py`. Without it, abort leaves the compute running and the execution shows no stages or container logs. See "Registering Sub-Processes and Logs" above.
 
 12. **Non-Root Containers Normalize Read Bits After COPY**: a container that drops to a non-root `USER` runs `RUN chmod -R a+rX <path>` on the line immediately after every `COPY` of source it reads. `COPY` preserves the build host's umask, so a hardened host (umask `077`/`027`) yields root-owned `600`/`640` files that raise `PermissionError: [Errno 13]` at import under the non-root user — invisible to the build, failing only at container runtime. `COPY --chown` alone is not sufficient. See "Read Bits on COPY'd Source in a Non-Root Container" above.
+
+13. **CodeBuild Build Triggers Use the Shared Handler**: every `*CodeBuild-construct.ts` gives its build-trigger function `code: codeBuildTriggerCode()` (`infra/lib/nestedStacks/pipelines/constructs/codeBuildTrigger.ts`), which inlines the single handler `constructs/codeBuildTrigger/index.py`. The handler returns its data, retries `start_build` on throttling and transient errors, and raises otherwise so `cr.Provider` reports `FAILED`; a Delete never raises. Never paste a handler that calls `cfnresponse.send(...)` — behind the provider framework that reports to nothing, and a caught exception then deploys as a success. Coverage: `infra/test/pipelines/codeBuildTriggerHandler.test.ts`, `backendPipelines/tests/test_codebuild_build_trigger_handler.py`.
 
 #### **Pipeline Configuration Rules**
 
@@ -1866,7 +2033,7 @@ export class Wafv2BasicConstruct extends Construct {
 
 The shipped `wafPolicyConfig.json` overrides eight Common Rule Set rules to `count`; every other Common Rule Set rule and the whole Known Bad Inputs and Amazon IP Reputation List groups keep blocking. VAMS carries asset file keys URL-encoded in the URI path (`.../download/stream/{proxy+}`, `.../auxiliaryPreviewAssets/stream/{proxy+}`), in query strings (`listFiles`, `fileInfo`) and in JSON bodies (move/copy/upload/download), and the backend validates every key, so these rules fire on legitimate requests without adding protection. `SizeRestrictions_BODY` is the only Common Rule Set rule that blocks purely on body size (>8 KB), so counting it lets multi-part upload bodies up to the API Gateway REST 10 MB payload cap pass. `SizeRestrictions_QUERYSTRING` blocks query strings over 2048 bytes, and the SuperSplat viewer loads a file by passing a presigned Amazon S3 URL in a `?load=` parameter — double-encoded to survive the viewer's two decode passes — so the iframe request for the static viewer page exceeds it. `SizeRestrictions_URIPATH` blocks URI paths over 1024 bytes, which an encoded key in a deep folder tree exceeds on the stream routes. `RestrictedExtensions_URIPATH` / `RestrictedExtensions_QUERYARGUMENTS` block file names ending `.log`, `.ini`, `.cfg`, `.conf`, `.config`, …; the backend upload blocklist `UNALLOWED_FILE_EXTENSION_LIST` (`backend/common/constants.py`) admits these, so a blocked read path leaves a file that uploads but never views or downloads, and VAMS executes nothing it serves from S3. `GenericLFI_URIPATH` / `GenericLFI_QUERYARGUMENTS` / `GenericLFI_BODY` block any encoded `../`; every backend path validator rejects `..` segments (`backend/common/validators.py`) and keys resolve against S3 object keys, not a local filesystem. `count` (never `allow`) keeps a matching request flowing through the rate rule and recorded in CloudWatch metrics and the WAF log. The override set is pinned exactly by `infra/test/waf/wafCommonRuleSetOverrides.test.ts` — widening or narrowing it is a deliberate edit of both the policy and that test.
 
-The shipped `VAMS-RateLimit` rate-based rule is built with `aggregateKeyType: IP`, the address AWS WAF observes on the connection, for both the CloudFront-scoped and regional web ACLs. A `FORWARDED_IP` key is accepted in the policy file but not emitted, and the construct raises a synth warning naming the rule when one is set: a header-derived address is supplied by the caller, so it can be rotated to evade the limit, and AWS WAF omits a request that carries no such header from the rule's evaluation entirely — which is every direct `execute-api` caller. The `fallbackBehavior` covers only a malformed address in a header that is present, not a missing header. The limit is set well above a single active user's request rate (VAMS polls execution status, does multi-part uploads, and streams large viewer files). Rate blocks return `429` (`blockResponseCode`, default 429) with a shared `CustomResponseBody` (`VamsRateLimitBody`) registered on the ACL — distinct from the `403` used for auth denials, so the web `apiClient` and the VAMS CLI treat it as a retryable throttle (honor `Retry-After`) rather than an auth failure. The custom response carries static `responseHeaders` (`WAF_RATE_LIMIT_RESPONSE_HEADERS` in the construct): `Retry-After: 1` and `Access-Control-Expose-Headers: Retry-After`, and nothing else. The REGIONAL ACL is associated with the REST API stage, and API Gateway renders a WAF block — custom response included — through its `WAF_FILTERED` gateway response, which `GatewayResponseDefault4XX` (`rest-api-gateway-construct.ts`) decorates with `Access-Control-Allow-Origin` and `Access-Control-Allow-Headers` on every 4XX it renders. A browser can therefore read the 429 in every topology (same-origin on CloudFront `/api/*`, cross-origin on the ALB topology or for a direct `execute-api` caller), and the WAF response must not repeat the CORS allow headers: API Gateway appends WAF's copy to its own and the browser rejects `Access-Control-Allow-Origin: *, *` outright. `Access-Control-Allow-Methods` is likewise left off — it matters only on a preflight, and a throttled `OPTIONS` is answered by WAF before the API's MOCK integration, so it can never be a successful preflight. What API Gateway does not add is `Retry-After`, which the web `apiClient` sleeps on before its single retry, and `Access-Control-Expose-Headers`, without which a cross-origin caller cannot read it (`Retry-After` is not CORS-safelisted). Header values are literal strings (WAF expands no variables) and `Content-Type` must not be listed (WAF sets it from the body's `contentType`). Managed-group blocks keep the WAF default 403 (no custom body or headers of their own — a group-level `overrideAction` cannot carry a custom response, and a per-rule `block.customResponse` override for every rule in every group is not maintained); on the REST API they are rendered through the same gateway response and carry the API's CORS allow headers. Unit tests: `infra/test/waf/wafRateLimit.test.ts` (rule, body, the exact two headers, and a guard that the three CORS allow headers stay absent), `infra/test/waf/wafCommonRuleSetOverrides.test.ts` (override set).
+The shipped `VAMS-RateLimit` rate-based rule is built with `aggregateKeyType: IP`, the address AWS WAF observes on the connection, for both the CloudFront-scoped and regional web ACLs. A `FORWARDED_IP` key is accepted in the policy file but not emitted, and the construct raises a synth warning naming the rule when one is set: a header-derived address is supplied by the caller, so it can be rotated to evade the limit, and AWS WAF omits a request that carries no such header from the rule's evaluation entirely — which is every direct `execute-api` caller. The `fallbackBehavior` covers only a malformed address in a header that is present, not a missing header. The limit is set well above a single active user's request rate (VAMS polls execution status, does multi-part uploads, and streams large viewer files). Rate blocks return `429` (`blockResponseCode`, default 429) with a shared `CustomResponseBody` (`VamsRateLimitBody`) registered on the ACL — distinct from the `403` used for auth denials, so the web `apiClient` and the VAMS CLI treat it as a retryable throttle (honor `Retry-After`) rather than an auth failure. The custom response carries static `responseHeaders` (`WAF_RATE_LIMIT_RESPONSE_HEADERS` in the construct): `Retry-After: 1` and `Access-Control-Expose-Headers: Retry-After`, and nothing else. The REGIONAL ACL is associated with the REST API stage, and API Gateway renders a WAF block — custom response included — through its `WAF_FILTERED` gateway response (`gatewayResponseDefinitions` in `rest-api-gateway-construct.ts`), which keeps the rule's `429` and adds `Access-Control-Allow-Origin` and `Access-Control-Allow-Headers`. The web app calls the stage cross-origin in every topology — the CloudFront `/api/*` behavior forwards under the stage's own `/api` routes, so it reaches only `/api/amplify-config` and `/api/version` — so those headers are what let a browser read the 429, and the WAF response must not repeat the CORS allow headers: API Gateway appends WAF's copy to its own and the browser rejects `Access-Control-Allow-Origin: *, *` outright. `Access-Control-Allow-Methods` is likewise left off — it matters only on a preflight, and a throttled `OPTIONS` is answered by WAF before the API's MOCK integration, so it can never be a successful preflight. What API Gateway does not add is `Retry-After`, which the web `apiClient` sleeps on before its single retry, and `Access-Control-Expose-Headers`, without which a cross-origin caller cannot read it (`Retry-After` is not CORS-safelisted). Header values are literal strings (WAF expands no variables) and `Content-Type` must not be listed (WAF sets it from the body's `contentType`). Managed-group blocks carry no custom body or headers of their own (a group-level `overrideAction` cannot carry a custom response, and a per-rule `block.customResponse` override for every rule in every group is not maintained). A managed-group block at the API stage is answered by the `WAF_FILTERED` gateway response (a `403` naming the web ACL and the request ID); on CloudFront and the ALB it keeps the WAF default 403. Unit tests: `infra/test/waf/wafRateLimit.test.ts` (rule, body, the exact two headers, and a guard that the three CORS allow headers stay absent), `infra/test/waf/wafCommonRuleSetOverrides.test.ts` (override set).
 
 ### **Security Helper Integration**
 
@@ -1879,6 +2046,8 @@ The shipped `VAMS-RateLimit` rate-based rule is built with `aggregateKeyType: IP
 -   **`suppressCdkNagLambda`**: Applies the standard per-Lambda IAM4/IAM5 suppressions (AWSLambdaBasicExecutionRole, AWSLambdaVPCAccessExecutionRole, wildcard KMS actions), scoped to the function instead of the whole stack
 -   **`suppressCdkNagErrorsByGrantReadWrite`**: Suppresses AwsSolutions-IAM5 for S3 and resource wildcards
 -   **`suppressCdkNagLambdaFrameworkResources`**: Called once on the core stack. Applies the same IAM4/IAM5 suppressions only to CDK-generated framework roles (custom-resource providers, bucket deployments, `AwsCustomResource`) and VAMS custom-resource roles that the per-function helper cannot reach
+
+**Workflow service internal-action invoke** (mirrors `infra/CLAUDE.md`): `grantWorkflowServiceInternalInvoke` (`lambdaBuilder/workflowFunctions.ts`) gives `pipelineService` and `executeWorkflow`, the callers of the workflow service's internal redeploy actions, `lambda:InvokeFunction` on the workflow service's exact `functionArn` in an explicit `PolicyStatement` (env `WORKFLOW_SERVICE_V2_FUNCTION_NAME`). It is written out instead of `grantInvoke()`, which adds `{functionArn}:*`, because the internal actions have no API Gateway authorizer: this grant and the handler's `SYSTEM_USER` cross-call check are their whole boundary. Neither caller gets a Step Functions or `iam:PassRole` grant; `test/security/workflowLambdaGrants.test.ts` pins it. Other Lambda-to-Lambda grants use `grantInvoke()`, as in the examples in this guide.
 
 #### **KMS Key Permissions Pattern**
 
@@ -2284,7 +2453,7 @@ export class AmplifyConfigLambdaConstruct extends Construct {
 CORS on the REST API is set in **three** places because REST responses come from three layers (the migration from HTTP API v2 removed the automatic ACAO injection HTTP APIs performed):
 
 1. **OPTIONS preflight** — `buildOpenApiSpec.ts` emits a per-path OPTIONS **MOCK** method with **no `security`** (a preflight must be unauthenticated) that returns `Access-Control-Allow-Origin` (and allow-headers/methods). If OPTIONS carried an authorizer, the preflight itself would get 401/403 with no CORS headers.
-2. **Gateway-level responses** — `rest-api-gateway-construct.ts` adds `GatewayResponse` resources for `DEFAULT_4XX` and `DEFAULT_5XX` that inject ACAO. Authorizer denials (401/403), missing-auth-token, and errors are produced by API Gateway itself and never reach a Lambda, so `commonHeaders()` cannot cover them; without this a token-expiry 401 is CORS-blocked in the browser and looks like a CORS bug.
+2. **Gateway-level responses** — `rest-api-gateway-construct.ts` adds `GatewayResponse` resources for `DEFAULT_4XX`, `DEFAULT_5XX` and `WAF_FILTERED` that inject ACAO. Authorizer denials (401/403), missing-auth-token, web ACL blocks, and errors are produced by API Gateway itself and never reach a Lambda, so `commonHeaders()` cannot cover them; without this a token-expiry 401 is CORS-blocked in the browser and looks like a CORS bug. The gateway responses come from `gatewayResponseDefinitions(corsHeaders)` and are created by `addGatewayResponses(scope, restApi, deployment, definitions)`, which makes the explicit Deployment depend on each response and adds the definitions to its logical id, because a gateway response reaches the stage only through a new deployment; a new gateway response goes in `gatewayResponseDefinitions`, never as a bare `new apigw.GatewayResponse`. `openApiGatewayResponses(definitions)` writes the same responses into the API definition as `x-amazon-apigateway-gateway-responses`: AWS CloudFormation imports the definition again whenever it changes, and the import resets every gateway response the definition omits to its default, while an unchanged `AWS::ApiGateway::GatewayResponse` is not applied again. The resources stay, so that no update deletes one after the import has set it. `WAF_FILTERED` answers a request the regional web ACL blocks at the stage with a `403` and the body `WAF_FILTERED_RESPONSE_TEMPLATE` (`{"message":"Request blocked by the deployment's AWS WAF web ACL","blockedBy":"waf","requestId":"$context.extendedRequestId"}`), which the CLI, the MCP server and the web client read as a block rather than a permission denial; a rule's own custom response, such as the rate rule's `429`, takes precedence (test: `infra/test/api/gatewayResponses.test.ts`).
 3. **Lambda proxy response** — the handler adds ACAO to its own response body via `commonHeaders()`; API Gateway returns proxy responses verbatim.
 
 **Resource policy** is always written explicitly to match `endpointType` (`buildOpenApiSpec.ts`): an `aws:SourceVpce`-restricted policy for `PRIVATE`, a public allow-all policy for `REGIONAL`. Amazon API Gateway does **not** remove a previously-set resource policy when an update omits one, so emitting it for both endpoint types ensures a `PRIVATE`↔`REGIONAL` switch overwrites the prior policy. A stale `PRIVATE` policy left on a now-`REGIONAL` API denies every request (including the CORS preflight) with `403 AccessDeniedException` at the resource-policy layer — a browser misreports this as a failed CORS preflight rather than an authorization error.
@@ -2739,6 +2908,8 @@ if (props.config.app.newFeature.enabled) {
 const newFeatureStack = new NewFeatureStack(); // VIOLATION - should check config
 ```
 
+In a fork, the same holds for `CUSTOM_APP_FEATURES` values returned from `buildCustomResources()`, gated on `infra/config/custom/customConfig.json`.
+
 ### **Rule 3: CDK Nag Suppressions MUST Be Justified**
 
 ```typescript
@@ -3112,13 +3283,15 @@ VAMS deploys to `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign Cloud, region `eus
 
 4. **Gate unavailable services in `getConfig()`** so a bad combination fails at synth with a clear message rather than mid-deploy; mirror the rule into `ConfigBuilder/validation.ts` by hand.
 
-5. **Service versions and model ids can differ.** `OPENSEARCH_VERSION_EUSOVEREIGN` (2.19 vs 3.5) is selected on `Partition() === "aws-eusc"`; the Bedrock model id is downgraded in both restricted templates.
+5. **Cross-Region AWS PrivateLink is commercial-only.** A cross-Region interface endpoint (`serviceRegion` on `InterfaceVpcEndpoint`) exists in the `aws` partition only. The cross-Region Amazon S3 endpoint the VPC builder adds for an external asset bucket in another Region is gated in `getConfig()` on `config.env.partition !== "aws"` (not `govCloud.enabled`); `app.useGlobalVpc.addCrossRegionS3Endpoints: false` is the operator's way through, and the bucket's notification topics still come from its per-Region `CrossRegionBucketNotificationsStack`. Paired assertion: `infra/test/vpc/crossRegionS3Endpoint.test.ts`. The VPC builder and the isolated-subnet pipelines' `vamsExecute` builders both read `Config.crossRegionS3EndpointRegions(config)`, so with the flag off the pipelines' `CROSS_REGION_S3_ENDPOINT_REGIONS` is empty and their input gate rejects every cross-Region input (`infra/test/pipelines/isolatedPipelinesCrossRegionEndpointEnv.test.ts`).
 
-6. **Update all three config templates together** — `commercial`, `govcloud`, `eusovereign`. `useFips` is the one capability flag where the restricted templates disagree (`true` GovCloud, `false` EU Sovereign). It only adds the AWS KMS FIPS interface endpoint, and `getConfig()` warns when it is `true` in `aws-eusc`, which offers FIPS endpoints for only four services (AWS KMS, Amazon EFS, Amazon ElastiCache and AWS WAF).
+6. **Service versions and model ids can differ.** `OPENSEARCH_VERSION_EUSOVEREIGN` (2.19 vs 3.5) is selected on `Partition() === "aws-eusc"`; the Bedrock model id is downgraded in both restricted templates.
 
-7. **No internet egress at build time.** A `curl`/download in a Docker bundling command pinned to a commercial S3 host fails on a restricted-partition build host.
+7. **Update all three config templates together** — `commercial`, `govcloud`, `eusovereign`. `useFips` is the one capability flag where the restricted templates disagree (`true` GovCloud, `false` EU Sovereign). It only adds the AWS KMS FIPS interface endpoint, and `getConfig()` warns when it is `true` in `aws-eusc`, which offers FIPS endpoints for only four services (AWS KMS, Amazon EFS, Amazon ElastiCache and AWS WAF).
 
-8. **IAM resource matching is case-sensitive.** Log-group grants are explicit allow-lists: the `/aws/vendedlogs/*` prefixes (pipeline constructs are split across `VAMSStateMachine-*` and `VAMSstateMachine-*`, both granted) plus AWS Batch's default container group `/aws/batch/job`, which the executionService reads because the built-in Batch pipelines register it as a per-stage log source (`infra/lib/helper/batchJobLogGroup.ts` names it; no VAMS job definition sets a log configuration). A new pipeline inventing a third casing silently loses log-read access.
+8. **No internet egress at build time.** A `curl`/download in a Docker bundling command pinned to a commercial S3 host fails on a restricted-partition build host.
+
+9. **IAM resource matching is case-sensitive, and the log-read grant is config-driven.** The executionService reads registered sub-process logs only from the groups in `app.pipelines.executionLogReadPrefixes`, used verbatim as IAM resource names (`workflowFunctions.ts` `buildExecutionServiceFunction`), plus the shared workflow log group and the `*<name>*` pattern. The default list carries both state-machine casings (`/aws/vendedlogs/VAMSStateMachine-*`, `/aws/vendedlogs/VAMSstateMachine-*`), `/aws/vendedlogs/Pipelines/*`, AWS Batch's default container group `/aws/batch/job` (`infra/lib/helper/batchJobLogGroup.ts` names it) and `/aws/sagemaker/TrainingJobs`. A pipeline writing to a group outside the list still runs but its log source reads `denied` — reuse an existing casing or `/aws/vendedlogs/Pipelines/*`, or add the group to the configured list (templates and `DEFAULT_EXECUTION_LOG_READ_PREFIXES` together). `getConfig()` rejects `*`, `/`, `/aws/*` and anything outside `/aws/`.
 
 ### **Verifying a partition change**
 

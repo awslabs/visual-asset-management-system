@@ -69,8 +69,9 @@ Both default roles are seeded at deployment time. `admin` receives the administr
 `app.adminUserId`, plus the reserved `SYSTEM_USER` identity so system processes satisfy both
 authorization tiers. `basicReadOnly` grants GET on the read paths (assets, files, metadata, databases,
 pipelines, workflows, executions, tags, comments, subscriptions, metadata schemas), the non-mutating
-POST paths (`/auth/routes`, `/search`, `/check-subscription`), and management of the caller's own API
-keys.
+POST paths (`/auth/routes`, `/search`, `/check-subscription`), the file download request
+(`POST /database/{databaseId}/assets/{assetId}/download`, which the file viewers use), and management
+of the caller's own API keys.
 
 Two routes are administrative and belong to `admin` alone: detailed execution logs
 (`GET /workflows/executions/{executionId}/logs`) and execution permanent delete
@@ -155,6 +156,10 @@ Each object type supports specific constraint fields that can be used in criteri
 | `userRole`       | `roleName`, `userId`                                                    | User-to-role assignment management.                                              |
 
 This object-type and field matrix — along with the criteria operators, the permissions, and the permission types — is served by the `GET /auth/constraints/permissionObjects` API and is the authoritative source the constraint editor and CLI use. Constraints are validated against it: a criterion whose field is not valid for its object type is rejected at create/update time and ignored during authorization evaluation.
+
+### Extension object types
+
+A deployment can register more object types for the entities its own extensions add, with their constraint fields, in the add-on or fork constants files (see [Extending VAMS in a Fork](../developer/customizing-vams.md#permission-object-types)). A registered type appears in the matrix above, in the constraint editor and in the `permissionObjects` response, and its constraints are validated and evaluated like those of a core type. **A registered type grants nothing by default.** The seeded constraints cover only the core types, so no role, the `admin` role included, can act on an entity of the new type until a constraint on that type allows it.
 
 ## Constraint criteria operators
 
@@ -368,7 +373,7 @@ needs to set a database's default bucket without holding the route can still do 
 | `/database/{databaseId}/assets/{assetId}/revertFileVersion/{versionId}`          | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 | `/database/{databaseId}/assets/{assetId}/download/stream/{proxy+}`               | GET, HEAD | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 | `/database/{databaseId}/assets/{assetId}/auxiliaryPreviewAssets/stream/{proxy+}` | GET, HEAD | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
-| `/database/{databaseId}/assets/{assetId}/download`                               | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
+| `/database/{databaseId}/assets/{assetId}/download`                               | POST      | `asset` (`GET`)    | `assetName`, `databaseId`, `assetType`, `tags` |
 | `/database/{databaseId}/assets/{assetId}/export`                                 | POST      | `asset`            | `assetName`, `databaseId`, `assetType`, `tags` |
 
 ### Asset version routes

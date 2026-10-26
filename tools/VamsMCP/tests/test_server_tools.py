@@ -54,6 +54,50 @@ def test_tool_result_wraps_errors(mock_client):
     assert result["error_type"] == "RuntimeError"
 
 
+def test_tool_result_carries_what_a_blocked_request_names(mock_client):
+    """A request the deployment's AWS WAF web ACL blocked reaches the agent with the keys the CLI's
+    --json-output gives it, so the agent can tell a block from a permission denial and report the
+    request ID rather than retry."""
+    from vamscli.utils.exceptions import RequestBlockedError
+
+    mock_client.api.get_database.side_effect = RequestBlockedError("m", request_id="r-1")
+    assert server.get_database("db1") == {
+        "error": "m", "error_type": "RequestBlockedError", "blockedBy": "waf", "requestId": "r-1"}
+
+
+def test_tool_result_carries_an_unconfirmed_block_without_a_request_id(mock_client):
+    """A bare API Gateway "Forbidden" is a block or a base URL that names no stage, and says so."""
+    from vamscli.utils.exceptions import RequestBlockedError
+
+    mock_client.api.get_database.side_effect = RequestBlockedError("m", confirmed=False)
+    assert server.get_database("db1") == {
+        "error": "m", "error_type": "RequestBlockedError", "blockedBy": "waf-or-stage"}
+
+
+def test_tool_result_never_lets_json_fields_replace_the_error_or_its_type():
+    class Colliding(Exception):
+        json_fields = {"error": "replaced", "error_type": "Replaced", "extra": 1}
+
+    @server.tool_result
+    def tool():
+        raise Colliding("kept")
+
+    assert tool() == {"error": "kept", "error_type": "Colliding", "extra": 1}
+
+
+def test_tool_result_returns_an_error_whose_json_fields_are_not_a_mapping():
+    """The wrapper must never raise: a json_fields that is not a mapping is left out, not read."""
+
+    class Odd(Exception):
+        json_fields = ["blockedBy"]
+
+    @server.tool_result
+    def tool():
+        raise Odd("kept")
+
+    assert tool() == {"error": "kept", "error_type": "Odd"}
+
+
 def test_search_assets_builds_request(mock_client):
     mock_client.api.search_query.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
     mock_client.trim_search_results.return_value = {"total": 0, "returned": 0, "results": []}
@@ -755,6 +799,17 @@ def test_get_execution_details_forwards_the_sub_execution_flag(mock_client):
     assert params == {"includeSubExecutions": "true"}
 
 
+def test_get_execution_details_passes_the_workflow_version_fields_through(mock_client):
+    mock_client.unwrap_message.side_effect = lambda page: page
+    mock_client.api.get_execution_details.return_value = {
+        "pipelines": [], "workflowVersion": 3, "workflowVersionCurrent": False}
+
+    result = server.get_execution_details("e1")
+
+    assert result["workflowVersion"] == 3
+    assert result["workflowVersionCurrent"] is False
+
+
 def test_get_execution_logs_forwards_log_id_and_stage_name_in_full_mode(mock_client):
     mock_client.unwrap_message.side_effect = lambda page: page
     mock_client.api.get_execution_logs.return_value = {"events": []}
@@ -1248,6 +1303,18 @@ def test_unwrap_message_with_warnings_handles_a_string_message(sibling_warning_c
     dict (warnings included) passes through."""
     abort = {"message": "Execution aborted", "warnings": ["sub-process left running"]}
     assert server._unwrap_message_with_warnings(abort) == abort
+
+
+def test_unwrap_message_with_warnings_keeps_only_the_named_siblings(sibling_warning_client):
+    """The default keeps `warnings` alone (pipeline saves); an abort names `notAbortable` as well."""
+    group = {"message": {"groupId": "g1"}, "warnings": ["e1: w"], "notAbortable": [{"executionId": "e2"}],
+             "other": "x"}
+    assert server._unwrap_message_with_warnings(group) == {"groupId": "g1", "warnings": ["e1: w"]}
+    assert server._unwrap_message_with_warnings(group, siblings=("warnings", "notAbortable")) == {
+        "groupId": "g1", "warnings": ["e1: w"], "notAbortable": [{"executionId": "e2"}]}
+    clean = {"message": {"groupId": "g1"}, "warnings": [], "notAbortable": []}
+    assert server._unwrap_message_with_warnings(clean, siblings=("warnings", "notAbortable")) == {
+        "groupId": "g1"}
 
 
 @pytest.mark.parametrize("tool", ["create_pipeline", "update_pipeline", "unarchive_pipeline", "abort_execution"])

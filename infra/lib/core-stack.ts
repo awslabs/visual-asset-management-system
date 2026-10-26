@@ -27,6 +27,7 @@ import { PipelineBuilderNestedStack } from "./nestedStacks/pipelines/pipelineBui
 import { LambdaLayersBuilderNestedStack } from "./nestedStacks/apiLambda/lambdaLayersBuilder-nestedStack";
 import { VPCBuilderNestedStack } from "./nestedStacks/vpc/vpcBuilder-nestedStack";
 import { AddonBuilderNestedStack } from "./nestedStacks/addon/addonBuilder-nestedStack";
+import { CustomBuilderNestedStack } from "./nestedStacks/custom/customBuilder-nestedStack";
 import { IamRoleTransform } from "./aspects/iam-role-transform.aspect";
 import { LogRetentionAspect } from "./aspects/log-retention.aspect";
 import * as s3AssetBuckets from "./helper/s3AssetBuckets";
@@ -44,6 +45,10 @@ export interface EnvProps {
     // CloudFront-scoped WAF web ACL ARN (us-east-1) — attaches to the CloudFront
     // distribution. Empty string when CloudFront or WAF is disabled.
     ssmWafArnCloudfront: string;
+    // Notification topic ARNs for external asset buckets in other Regions, created by the
+    // per-Region CrossRegionBucketNotificationsStack and keyed by bucket ARN + prefix. Empty
+    // (or omitted) when every asset bucket is in the deployment Region.
+    crossRegionBucketTopics?: s3AssetBuckets.CrossRegionBucketTopics;
     config: Config.Config;
     description: string;
     synthesizer?: cdk.IStackSynthesizer;
@@ -131,7 +136,8 @@ export class CoreVAMSStack extends cdk.Stack {
             lambdaLayers.lambdaCommonBaseLayer,
             this.vpc,
             this.subnetsIsolated,
-            resourceNameRegistry
+            resourceNameRegistry,
+            props.crossRegionBucketTopics || {}
         );
 
         //Deploy Resource Names SSM Parameters (nested stack). Deploys directly after storage
@@ -306,12 +312,21 @@ export class CoreVAMSStack extends cdk.Stack {
             addonBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
             addonBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
 
-            // The Physna add-on frontend features (viewer today, more planned)
-            // are gated by a single feature flag so the web UI only surfaces
-            // them when the add-on is deployed.
-            if (props.config.app.addons.usePhysnaSync.enabled) {
-                this.enabledFeatures.push(VAMS_APP_FEATURES.PHYSNA_ADDON);
-            }
+            this.enabledFeatures.push(...addonBuilderNestedStack.enabledFeatures);
+
+            ///Fork extension point (Nested Stack; resources defined in custom/customResources.ts)
+            const customBuilderNestedStack = new CustomBuilderNestedStack(this, "CustomBuilder", {
+                config: props.config,
+                storageResources: storageResourcesNestedStack.storageResources,
+                lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                vpc: this.vpc,
+                isolatedSubnets: this.subnetsIsolated,
+                privateSubnets: this.subnetsPrivate,
+                registry: apiRouteRegistry,
+            });
+            customBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
+            customBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
+            this.enabledFeatures.push(...customBuilderNestedStack.enabledFeatures);
 
             // Deadline Cloud pipeline execution-type support (createJob workflow task
             // states + the job-callback lambda deployed in the API builder stack).
@@ -338,6 +353,7 @@ export class CoreVAMSStack extends cdk.Stack {
             apiNestedStack.addStackDependency(apiBuilder2NestedStack);
             apiNestedStack.addStackDependency(searchBuilderNestedStack);
             apiNestedStack.addStackDependency(addonBuilderNestedStack);
+            apiNestedStack.addStackDependency(customBuilderNestedStack);
 
             //Deploy Static Website and any API proxies (nested stack; after REST API for apiUrl)
             if (props.config.app.useAlb.enabled || props.config.app.useCloudFront.enabled) {

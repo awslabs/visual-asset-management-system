@@ -176,6 +176,7 @@ const COMMERCIAL: ConfigShape = {
             enabled: false,
             useForAllLambdas: false,
             addVpcEndpoints: true,
+            addCrossRegionS3Endpoints: true,
             optionalExternalVpcId: null,
             optionalExternalIsolatedSubnetIds: null,
             optionalExternalPrivateSubnetIds: null,
@@ -224,6 +225,14 @@ const COMMERCIAL: ConfigShape = {
         },
         pipelines: {
             deadlineCloudExecutionTypeEnabled: false,
+            externalPipelineBridges: [],
+            executionLogReadPrefixes: [
+                "/aws/vendedlogs/VAMSStateMachine-*",
+                "/aws/vendedlogs/VAMSstateMachine-*",
+                "/aws/vendedlogs/Pipelines/*",
+                "/aws/batch/job",
+                "/aws/sagemaker/TrainingJobs",
+            ],
             useConversion3dBasic: {
                 enabled: true,
                 autoRegisterWithVAMS: true,
@@ -232,6 +241,11 @@ const COMMERCIAL: ConfigShape = {
                 enabled: false,
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: true,
+                computeTiers: {
+                    standard: { vcpu: 4, memoryGiB: 16 },
+                    large: { vcpu: 16, memoryGiB: 120 },
+                },
+                largeTierThresholdGiB: 2,
             },
             useConversionCadMeshMetadataExtraction: {
                 enabled: false,
@@ -254,6 +268,16 @@ const COMMERCIAL: ConfigShape = {
                 bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: false,
+            },
+            useGenAiVideoSopBom: {
+                enabled: false,
+                useCodeBuild: false,
+                autoRegisterWithVAMS: true,
+                bedrockModelId: "global.anthropic.claude-sonnet-5-5",
+                limits: {
+                    maxVideoFiles: 4,
+                    maxTotalDurationMinutes: 240,
+                },
             },
             useSplatToolbox: {
                 enabled: false,
@@ -404,6 +428,9 @@ function buildGovCloud(): ConfigShape {
     // partition when they enable the pipeline (it ships disabled).
     cfg.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId = "";
     cfg.app.pipelines.useGenAiMetadata3dLabeling.autoRegisterAutoTriggerOnFileUpload = true;
+    // The same reason: one model id serves this pipeline's text and vision calls, and the commercial
+    // default is a "global." inference profile.
+    cfg.app.pipelines.useGenAiVideoSopBom.bedrockModelId = "";
     return cfg;
 }
 

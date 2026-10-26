@@ -96,7 +96,8 @@ npx cdk bootstrap aws://ACCOUNT_ID/us-east-1
 #    See documentation/docusaurus-site/docs/deployment/configuration-reference.md
 
 # 5. Deploy
-npx cdk deploy --all --require-approval never
+#    -c configFile names the configuration file in infra/config/ to deploy (default: config.json)
+npx cdk deploy --all --require-approval never -c configFile=config.json
 ```
 
 After deployment, find your URL in the CDK output and check your email for temporary credentials.

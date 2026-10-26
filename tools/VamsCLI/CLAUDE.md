@@ -24,9 +24,11 @@ VamsCLI is a Python command-line interface built with the **Click** framework fo
 ```
 tools/VamsCLI/
   vamscli/
-    main.py                  # CLI entry point, @click.group, command registration
+    main.py                  # CLI entry point, @click.group, command registration (+ CUSTOM_COMMANDS)
     version.py               # __version__ and CLI_VERSION
-    constants.py             # All API endpoints, limits, config constants
+    constants.py             # All API endpoints, limits, config constants (re-exports addon_constants)
+    addon_constants.py       # Add-on FEATURE_* names (FEATURE_PHYSNA_ADDON), mirrors infra/common/addonAppFeatures.ts
+    custom_constants.py      # FORK EXTENSION POINT: a fork's API_* paths + FEATURE_CUSTOM_* (shipped empty)
     auth/
       base.py                # BaseAuthenticator abstract class
       cognito.py             # CognitoAuthenticator (SRP, USER_PASSWORD_AUTH)
@@ -55,6 +57,7 @@ tools/VamsCLI/
       execution.py           # Execution ops: list (global), details, details-metadata (paged), logs, abort, rerun, permanent-delete
       user.py                # Cognito user management
       roleUserConstraints.py # Roles, constraints, user-role assignment
+      custom/__init__.py     # FORK EXTENSION POINT: CUSTOM_COMMANDS, registered on the root group by main.py
       industry/
         industry.py          # Industry command group
         engineering/
@@ -64,7 +67,8 @@ tools/VamsCLI/
         spatial/
           glb.py             # GLB file combination operations
     utils/
-      api_client.py          # APIClient class (HTTP, retries, error mapping)
+      api_client.py          # APIClient class (HTTP, retries, error mapping); inherits CustomAPIClientMixin
+      custom_api_client.py   # FORK EXTENSION POINT: CustomAPIClientMixin (shipped empty)
       profile.py             # ProfileManager (multi-profile, config dirs)
       exceptions.py          # Two-tier exception hierarchy (~140 classes)
       global_exceptions.py   # @handle_global_exceptions() decorator
@@ -103,7 +107,7 @@ Pipeline / workflow / execution cover the overhauled pipeline/workflow/execution
 
 -   `pipeline create|get|list|update|delete|unarchive`, `pipeline template create|get|list|update|delete`, `pipeline tag-schema get|set`
 -   `workflow create|get|list|update|delete|unarchive`, `workflow trigger list|get|set|delete`, `workflow execute` (asset-less multi-file), `workflow list-executions` (per-asset history)
--   `execution list` (global, permission-filtered, filterable), `execution details`, `execution details-metadata` (pages one metadata collection of the detail view past the bound `details` applies), `execution logs`, `execution abort` (single or `--group-id`), `execution rerun`, `execution permanent-delete`
+-   `execution list` (global, permission-filtered, filterable), `execution details`, `execution details-metadata` (pages one metadata collection of the detail view past the bound `details` applies), `execution logs`, `execution abort` (single or `--group-id`; `--json-output` carries every top-level sibling of the handler's `message` — `warnings`, `notAbortable` — through `_payload_with_warnings`, so a field added upstream reaches scripts, the MCP server and the connectors without a CLI change), `execution rerun`, `execution permanent-delete`
 
 Comment and subscription cover the comments and subscriptions APIs:
 
@@ -136,6 +140,7 @@ VamsCLIError (base)
     OverrideTokenError
     TokenExpiredError
     PermissionDeniedError
+    RequestBlockedError
     VersionMismatchError
     RetryExhaustedError
     RateLimitExceededError
@@ -217,12 +222,25 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
 -   Pre-flight token validation for override tokens (checks expiry before request)
 -   HTTP 429: Exponential backoff with jitter, respects `Retry-After` header
 -   HTTP 401: Auto-refresh token (Cognito only), fails immediately for override tokens
--   HTTP 403: Distinguishes expired tokens vs. permission denied
+-   HTTP 403: Classified by the party that answered it (see the table below); only the authorizer's deny and an unclassified (`unknown`) 403 are refreshed and resent
 -   HTTP status to exception mapping in response handlers:
     -   `404` --> `NotFoundError` variants
     -   `409` --> `AlreadyExistsError` variants
-    -   `403` --> `PermissionDeniedError` or `TokenExpiredError`
+    -   `403` --> `RequestBlockedError`, `PermissionDeniedError`, `TokenExpiredError` or `APIError`, raised by `_make_request` itself
     -   `429` --> `RateLimitExceededError` / `RetryExhaustedError`
+
+**HTTP 403 classification.** `_classify_403(response)` (module level in `api_client.py`, never raises) names the party that answered from the response alone, and `_make_request` raises before the `raise_http_errors` re-raise. A 403 from another host that a followed redirect reached (`_redirected_host`: a non-empty `response.history` and a final host other than the request's, such as the presigned Amazon S3 URL of a staged `assets export` payload) is not classified: it is `APIError` (`_REDIRECT_TARGET_REFUSED_MESSAGE`) naming that host, never the URL, after one send. Only the authorizer's deny can be cured by a fresh token, so only it and an unclassified (`unknown`) 403, which may be one, are refreshed and resent:
+
+| Kind (first match)                                                       | Raised                                                                                                                                                                                                                                             |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `waf`: JSON `blockedBy == "waf"`, or CloudFront's "request blocked" text | `RequestBlockedError(confirmed=True)`, with or without auth; one send                                                                                                                                                                              |
+| `waf_or_stage`: the body is exactly `{"message": "Forbidden"}`           | With auth, `RequestBlockedError(confirmed=False)`, one send; without auth, `APIError` + `_STAGE_HINT` naming both causes (the original `HTTPError` with `raise_http_errors=True`)                                                                  |
+| `no_route`: `Missing Authentication Token`, or its `x-amzn-ErrorType`    | `APIError` naming the method and URL path, never the body; one send                                                                                                                                                                                |
+| `resource_policy`: `execute-api:invoke` in `Message` or `message`, auth  | `PermissionDeniedError(_RESOURCE_POLICY_MESSAGE)`; one send                                                                                                                                                                                        |
+| `handler`: any other lowercase `message`, with auth                      | `PermissionDeniedError("Access forbidden. " + message)`; one send                                                                                                                                                                                  |
+| `authorizer`, `unknown`, with auth                                       | The override-token checks, then a Cognito refresh up to `MAX_AUTH_RETRIES`; a failed refresh is `TokenExpiredError` or `PermissionDeniedError` as before, and a deny that outlasts the retries `PermissionDeniedError(_AUTHORIZER_DENIED_MESSAGE)` |
+
+`RequestBlockedError` carries `json_fields` `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` (the marker body's request ID, else the first non-blank `x-amz-apigw-id`, `x-amz-cf-id` or `x-amzn-RequestId` header: the IDs the regional web ACL log, the CloudFront web ACL log and the API Gateway access log record), never clears stored credentials (`call_login_profile` re-raises global errors), and is printed under `Request Blocked`, ahead of the `AuthenticationError` branch, with `WAF_ADMIN_HINT` (`WAF_OR_STAGE_ADMIN_HINT`, which also names the stage-path check, when `confirmed` is false) and the request ID. Its texts carry no sign-in wording (`auth login`, `401`, `token has expired`, `Authentication failed`), which the IsaacSim connector would class as a credential failure; `tests/test_api_403_classification.py::TestBlockWording` holds them to that. `check_api_availability` raises `RequestBlockedError` for the marker and `APIUnavailableError` naming both causes for a bare `Forbidden`, and `requires_api_access` re-raises both, so a blocked version check stops `auth login`, `auth change-password` and `auth forgot-password` before any Cognito call; `setup` refuses a URL whose stage probe the web ACL blocked.
 
 **Rules**:
 
@@ -230,6 +248,7 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
 2. Never make raw `requests` calls -- always go through `APIClient`
 3. API endpoint constants are in `constants.py` as format strings (e.g., `API_DATABASE_ASSETS = "/database/{databaseId}/assets"`)
 4. New API methods go in `api_client.py`, not in command files
+5. In an `APIClient` method, every broad handler that raises -- a bare `except`, or one naming `Exception`, `BaseException` or `VamsCLIError` -- is preceded by `except GlobalInfrastructureError: raise` in the same `try`, and a handler naming `GlobalInfrastructureError` or a subclass re-raises with a bare `raise`; a handler that swallows the error or returns a value is exempt. The ratchet `tests/test_api_client_global_error_guards.py` fails otherwise. This keeps a web ACL block, a permission denial or an expired token typed through every `APIClient` method; `utils/upload_manager.py`, `utils/download_manager.py` and a few command wrappers still record one per file, upload sequence or item, with its message but without its heading or `json_fields`
 
 ### 4. JSON Output Contract
 
@@ -250,6 +269,7 @@ output_info("Hint text", json_output)          # Suppressed in JSON mode
 2. Never use `click.echo()` directly in commands that support `--json-output` -- it would pollute JSON output
 3. Status/warning/info messages are suppressed when `json_output=True`
 4. CLI mode uses colored output via `click.secho()` with `fg='green'`, `fg='red'`, etc.
+5. The JSON error object is `{"error", "error_type"}` plus the exception's `json_fields`, merged without replacing those two and only when it is a dict, whether it is set on the class or on the instance (any other value is left out) -- `RequestBlockedError` carries `{"blockedBy": "waf" | "waf-or-stage", "requestId"?}` on the instance; `tests/test_json_output_error_fields.py` holds `output_error` to that. A global error's document (`_global_error_data` in `utils/global_exceptions.py`) is `{"error": "<Heading>: <message>", "error_type", ...json_fields, "additional_info"?}`, also on stdout; in text mode its `✗ <Heading>: <message>` line goes to stderr and its `additional_info` lines to stdout. Both exit 1
 
 ### 5. Decorator Usage
 
@@ -350,9 +370,9 @@ API_ASSET_VERSION_UNARCHIVE = "/database/{databaseId}/assets/{assetId}/assetvers
 
 **Rules**:
 
-1. New endpoints go in `constants.py`, never hardcoded in commands or api_client
+1. New endpoints go in `constants.py` (in a fork: `custom_constants.py`), never hardcoded in commands or api_client
 2. Upload/download limits are constants, not magic numbers
-3. Feature switch names are constants (e.g., `FEATURE_GOVCLOUD = "GOVCLOUD"`)
+3. Feature switch names are constants (e.g., `FEATURE_GOVCLOUD = "GOVCLOUD"`; in a fork, `FEATURE_CUSTOM_*` in `custom_constants.py`)
 4. Retry config defaults are constants, overridable via env vars
 5. **Every `API_*` path constant must name a route the API actually registers.** `constants.py` is
    the authority a new consumer trusts, so a path the backend never declared is a trap that fails
@@ -808,6 +828,25 @@ Follow this checklist:
 
     To validate the command surface, walk `cli.commands[group].commands[cmd].params` for every group/subcommand/flag the connectors pass, then spot-check a live `--json-output` response for the keys each connector parses.
 
+### Adding Commands in a Fork
+
+An add-on is optional, upstream-maintained code enabled by configuration: it either integrates VAMS with an external solution deployed and run separately (Garnet Framework, Physna), supplying the VAMS-side components, or is a stand-alone non-core component that VAMS deploys in full when enabled (the licensed VNTANA and VEERUM viewers). Custom is fork code, which upstream ships empty. Upstream adding an integration with an external solution uses the add-on lane; a fork uses the custom lane. Definition and current add-ons: `documentation/docusaurus-site/docs/developer/addons-overview.md`.
+
+A fork adds commands without editing `main.py`, `constants.py` or `utils/api_client.py`; each splices in a fork-owned file that upstream ships empty and never edits:
+
+| What                     | Fork-owned file                                                                                   | Spliced in by                                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Endpoint paths, switches | `vamscli/custom_constants.py` (`API_*`, `FEATURE_CUSTOM_*`)                                       | read by the fork's client methods and commands (Rule 7)                                                                       |
+| API client methods       | `vamscli/utils/custom_api_client.py` (`CustomAPIClientMixin`)                                     | `APIClient` inherits it, so the methods get retries and typed errors and the MCP server reaches them as `CLIENT.api.<method>` |
+| Command groups           | `vamscli/commands/custom/<group>.py`, listed in `commands/custom/__init__.py` (`CUSTOM_COMMANDS`) | `main.py` registers every entry on the root `cli` group                                                                       |
+
+-   Command files follow the same patterns as core ones (`roleUserConstraints.py`: decorators, `--json-output`, typed errors).
+-   `custom_constants.py` imports nothing from `vamscli`, and `custom_api_client.py` must not import from `vamscli.commands` (which imports `APIClient`): either would create an import cycle.
+-   `tests/test_constants_contract.py` checks every custom `API_*` path against the backend route lists (including `backend/backend/custom/customApiRoutes.py`) and every `FEATURE_*` in `custom_constants.py` against `infra/common/customAppFeatures.ts`.
+-   A custom command never replaces a core one: `main.py` registers `CUSTOM_COMMANDS` after every core command and raises at import on a name that is already registered (`tests/test_custom_commands.py`).
+-   A `CustomAPIClientMixin` method with the name of an `APIClient` method is never called, because `APIClient` comes first in the MRO; `tests/test_custom_api_client.py` fails on such a name.
+-   Command names prefixed `custom-` are recommended, not enforced. Pattern 7 still applies: a custom command an agent should reach gets an MCP tool in `tools/VamsMCP/vams_mcp/custom_tools.py`.
+
 ### Adding a New Exception Class
 
 1. Choose the correct tier:
@@ -817,7 +856,7 @@ Follow this checklist:
 
 2. Add the class in the correct section of `utils/exceptions.py`
 
-3. If `GlobalInfrastructureError`: add handler in `utils/global_exceptions.py`
+3. If `GlobalInfrastructureError`: add a branch in `utils/global_exceptions.py` (`_handle_global_error("<Heading>", str(e), <info>, exc=e)`) ahead of any branch for a class it subclasses; `exc=e` puts its class name in `error_type` and merges its `json_fields`
 
 4. If `BusinessLogicError`: catch and handle in the relevant command file
 
@@ -1036,25 +1075,29 @@ Each item duplicates a Critical Rule; the rule is authoritative. Do NOT:
 
 ### Feature Switches
 
-One constant per member of `VAMS_APP_FEATURES` (`infra/common/vamsAppFeatures.ts`), which is the set a
-deployment publishes through `/secure-config`. The two lists must stay equal in both directions — a
-missing constant is a gate no command can name, and an extra one names a gate no deployment publishes.
-`tests/test_constants_contract.py` parses the enum and fails on either drift.
+One constant per published feature switch, lane by lane: `constants.py` declares one per member of
+`VAMS_APP_FEATURES` (`infra/common/vamsAppFeatures.ts`), `addon_constants.py` one per member of
+`ADDON_APP_FEATURES` (`infra/common/addonAppFeatures.ts`) and `custom_constants.py` one per member of a
+fork's `CUSTOM_APP_FEATURES`. `constants.py` re-exports every add-on name, so
+`from vamscli.constants import FEATURE_PHYSNA_ADDON` keeps working. Together they are the set a deployment
+publishes through `/secure-config`, and each lane must equal its enum in both directions — a missing
+constant is a gate no command can name, and an extra one names a gate no deployment publishes.
+`tests/test_constants_contract.py` parses the three enums and fails on either drift.
 
-| Constant                                | Value                             | Meaning                  |
-| --------------------------------------- | --------------------------------- | ------------------------ |
-| `FEATURE_GOVCLOUD`                      | `"GOVCLOUD"`                      | Restricted partition     |
-| `FEATURE_ALLOWUNSAFEEVAL`               | `"ALLOWUNSAFEEVAL"`               | CSP allows `unsafe-eval` |
-| `FEATURE_LOCATIONSERVICES`              | `"LOCATIONSERVICES"`              | Location Service enabled |
-| `FEATURE_ALBDEPLOY`                     | `"ALBDEPLOY"`                     | ALB deployment mode      |
-| `FEATURE_CLOUDFRONTDEPLOY`              | `"CLOUDFRONTDEPLOY"`              | CloudFront deployment    |
-| `FEATURE_NOOPENSEARCH`                  | `"NOOPENSEARCH"`                  | OpenSearch disabled      |
-| `FEATURE_AUTHPROVIDER_COGNITO`          | `"AUTHPROVIDER_COGNITO"`          | Cognito auth enabled     |
-| `FEATURE_AUTHPROVIDER_COGNITO_SAML`     | `"AUTHPROVIDER_COGNITO_SAML"`     | Cognito SAML auth        |
-| `FEATURE_AUTHPROVIDER_COGNITO_OIDC`     | `"AUTHPROVIDER_COGNITO_OIDC"`     | Cognito OIDC auth        |
-| `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP` | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP       |
-| `FEATURE_PHYSNA_ADDON`                  | `"PHYSNA_ADDON"`                  | Physna add-on features   |
-| `FEATURE_DEADLINECLOUD_PIPELINES`       | `"DEADLINECLOUD_PIPELINES"`       | Deadline Cloud exec type |
+| Constant                                      | Value                             | Meaning                  |
+| --------------------------------------------- | --------------------------------- | ------------------------ |
+| `FEATURE_GOVCLOUD`                            | `"GOVCLOUD"`                      | Restricted partition     |
+| `FEATURE_ALLOWUNSAFEEVAL`                     | `"ALLOWUNSAFEEVAL"`               | CSP allows `unsafe-eval` |
+| `FEATURE_LOCATIONSERVICES`                    | `"LOCATIONSERVICES"`              | Location Service enabled |
+| `FEATURE_ALBDEPLOY`                           | `"ALBDEPLOY"`                     | ALB deployment mode      |
+| `FEATURE_CLOUDFRONTDEPLOY`                    | `"CLOUDFRONTDEPLOY"`              | CloudFront deployment    |
+| `FEATURE_NOOPENSEARCH`                        | `"NOOPENSEARCH"`                  | OpenSearch disabled      |
+| `FEATURE_AUTHPROVIDER_COGNITO`                | `"AUTHPROVIDER_COGNITO"`          | Cognito auth enabled     |
+| `FEATURE_AUTHPROVIDER_COGNITO_SAML`           | `"AUTHPROVIDER_COGNITO_SAML"`     | Cognito SAML auth        |
+| `FEATURE_AUTHPROVIDER_COGNITO_OIDC`           | `"AUTHPROVIDER_COGNITO_OIDC"`     | Cognito OIDC auth        |
+| `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP`       | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP       |
+| `FEATURE_PHYSNA_ADDON` (`addon_constants.py`) | `"PHYSNA_ADDON"`                  | Physna add-on features   |
+| `FEATURE_DEADLINECLOUD_PIPELINES`             | `"DEADLINECLOUD_PIPELINES"`       | Deadline Cloud exec type |
 
 ---
 

@@ -1,14 +1,15 @@
 openapi: "3.0.1"
 info:
     title: "Amazon Visual Asset Management System API"
-    description: "REST API (v1) for the Visual Asset Management System (VAMS). All endpoints are secured by a custom Lambda authorizer that validates JWT tokens from Amazon Cognito or external OAuth providers, and enforces two-tier ABAC/RBAC authorization. Surrounding whitespace is removed from a submitted `description` or version `comment` before any length constraint is applied and before the value is stored, so the value returned by a subsequent read is the trimmed one; a padded value whose trimmed length falls below the declared minLength is rejected. This applies to asset, asset version, database, tag, tag type, role, permission constraint and API key requests. Pipeline, pipeline template and workflow descriptions are stored as submitted. File paths, S3 keys, echoed upload tokens and search terms are never trimmed, because a surrounding space is part of the key or changes which rows match."
+    description: "REST API (v1) for the Visual Asset Management System (VAMS). All endpoints are secured by a custom Lambda authorizer that validates JWT tokens from Amazon Cognito or external OAuth providers, and enforces two-tier ABAC/RBAC authorization. Surrounding whitespace is removed from a submitted `description` or version `comment` before any length constraint is applied and before the value is stored, so the value returned by a subsequent read is the trimmed one; a padded value whose trimmed length falls below the declared minLength is rejected. This applies to asset, asset version, database, tag, tag type, role, permission constraint and API key requests. Pipeline, pipeline template and workflow descriptions are stored as submitted. File paths, S3 keys, echoed upload tokens and search terms are never trimmed, because a surrounding space is part of the key or changes which rows match. With AWS WAF enabled (`app.useWaf`), any operation can answer `403` before the request reaches VAMS when the deployment's web ACL blocks it at the API Gateway stage; that answer is the `RequestBlocked` response (`#/components/responses/RequestBlocked`), whose body carries `message`, `blockedBy: waf` and `requestId`, API Gateway's extended request ID, while a `403` from an authorization denial carries no `blockedBy`."
     version: "2022-01-27 01:29:36UTC"
 servers:
     - url: "{apiGatewayUrl}"
-      description: "Amazon API Gateway REST API invoke URL. The stage path (default: /api) is absorbed by the web distribution fronting (CloudFront or ALB)."
+      description: "Amazon API Gateway REST API invoke URL, including the fixed `api` stage path: `https://{restApiId}.execute-api.{region}.amazonaws.com/api`, with the domain suffix of the deployment's partition. Every path in this document is relative to it, so `/assets` is requested at `.../api/assets` and `/api/amplify-config` at `.../api/api/amplify-config`. The URL is the same whether the web application is served through Amazon CloudFront, through an Application Load Balancer (ALB), or not deployed. The web application URL reaches only a few of these paths: the CloudFront `/api/*` behavior forwards to the stage, which serves only `/api/amplify-config` and `/api/version` under that prefix, and the ALB answers `/api*` and `/secure-config*` with a 302 redirect to the stage. Call every other path on the invoke URL. A `PRIVATE` endpoint is reachable only through an execute-api VPC interface endpoint, either one VAMS created or one supplied through `optionalExternalPrivateApigVPCEId`. `GET /api/amplify-config` returns this URL, with a trailing slash, in `api`. Stage Path Fronting in the VAMS networking architecture documentation describes how each front maps the web application's paths onto the stage."
       variables:
           apiGatewayUrl:
-              default: ""
+              default: "https://abc123.execute-api.us-east-1.amazonaws.com/api"
+              description: "The stage-inclusive invoke URL with no trailing slash: the `api` value that `GET /api/amplify-config` returns, without its trailing slash, or the core stack's `APIGatewayEndpointOutput` output."
 security:
     - DefaultCognitoAuthorizer: []
 paths:
@@ -30,7 +31,7 @@ paths:
                                         example: "us-east-1"
                                     api:
                                         type: string
-                                        description: "API base URL, including the stage path"
+                                        description: "Stage-inclusive Amazon API Gateway invoke URL with a trailing slash (`https://{restApiId}.execute-api.{region}.amazonaws.com/api/`), built from the API Gateway domain name and stage of the request, so it is the same whether the request arrived through CloudFront, through an ALB redirect or directly. It is the base URL of every other path in this document; see Stage Path Fronting in the VAMS networking architecture documentation."
                                     cognitoUserPoolId:
                                         type: string
                                         description: "Amazon Cognito user pool identifier; 'undefined' when Cognito is not the authentication provider"
@@ -1062,6 +1063,9 @@ paths:
                 on each), the criteria operators, the permissions (HTTP actions), and the
                 permission types. Used by the constraints editor and CLI to drive
                 objectType, field, operator, permission, and permissionType selection.
+                The object types are the core types followed by any permission object types
+                the deployment registers (fork or add-on constants files); a registered type
+                is listed here even though no constraint grants access to it yet.
             responses:
                 "200":
                     description: Constraint object types, operators, permissions, and permission types
@@ -1273,7 +1277,7 @@ paths:
     /user/cognito/{userId}/resetPassword:
         post:
             summary: "Reset a Cognito user's password."
-            description: "Reset a user's password using Cognito's built-in password reset. Cognito auto-generates a new temporary password and sends it to the user's email. The user must change the password on next login. Only available when Cognito is enabled."
+            description: "Reset a user's password. The current password stops working, and Cognito generates a new temporary password and emails it to the user in the registration (invitation) message. The user must change the password on next login. The user account and its attributes are kept. Only available when Cognito is enabled."
             requestBody:
                 required: true
                 content:
@@ -1700,19 +1704,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/updateDatabaseResponse"
                 "400":
-                    description: Invalid parameters or bucket ID not found.
+                    description: Validation error, no updatable field supplied, or database or bucket not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update database.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Database not found.
+                    description: Not authorized to update database. Nothing is written.
                     content:
                         application/json:
                             schema:
@@ -4444,6 +4442,18 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+                "409":
+                    description: >
+                        The workflow's state machine could not be brought up to date with its
+                        pipelines' current execution settings, so no execution was started. A launch
+                        whose workflow was deployed from different pipeline settings redeploys it first
+                        and starts on the published state machine version built from the current ones;
+                        this is returned when that redeploy fails or a pipeline changed again during it.
+                        Retryable; the message carries any reason.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
                     content:
@@ -4753,6 +4763,11 @@ paths:
                     default: false
         put:
             summary: "Update a pipeline."
+            description: >
+                A change to a setting that workflow state machines encode (execution type, target,
+                callback mode, timeouts, Deadline Cloud job settings) schedules a background redeploy
+                of every non-archived workflow that references the pipeline; the response warns how
+                many are being redeployed. Other changes are read when each execution starts.
             requestBody:
                 required: true
                 content:
@@ -4771,7 +4786,7 @@ paths:
                                         $ref: '#/components/schemas/pipelineV2'
                                     warnings:
                                         type: array
-                                        description: "Non-fatal trigger-consistency warnings, returned alongside message. For example, a require-template pipeline that is part of an auto-triggered workflow whose trigger has chosen no default template for it — triggered executions fail until the trigger picks one."
+                                        description: "Non-fatal warnings, returned alongside message: trigger-consistency warnings (for example, a require-template pipeline that is part of an auto-triggered workflow whose trigger has chosen no default template for it — triggered executions fail until the trigger picks one); 'N referencing workflow(s) are being redeployed against the new execution configuration.' when the execution binding changed; and, when systemConfig changed, each new finding of a referencing workflow's save checks, prefixed 'workflow <databaseId>:<workflowId>:' (at most 25 listed). None blocks the save."
                                         items:
                                             type: string
                 "400":
@@ -7983,12 +7998,20 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         OK. A single abort carries a warnings array only when a registered sub-process
                         could not be stopped; the sub-process is then left running and the warning names
                         it by its registered id or the final segment of its registered ARN, never the
-                        ARN. A group abort carries the group id and a per-member result for every member
+                        ARN. It additionally carries a notAbortable array when a registered sub-process is
+                        of a type VAMS cannot stop — one {resourceType, label, stageName, locator} entry
+                        per registered locator, where locator is the registered id or the final segment
+                        of a registered ARN, never the ARN — so a caller can name what was left running
+                        without parsing the warning text. A group abort carries the group id and a per-member result for every member
                         the caller is authorized on, skippedInaccessibleCount when members were withheld
                         for access, and moreRemaining when active members remain beyond the request's
                         cap of 200 — re-invoke to continue. If a member's sub-process abort is
                         incomplete, the group response also carries a top-level warnings array,
-                        each entry prefixed with that member's execution id (issue #445).
+                        each entry prefixed with that member's execution id (issue #445), and a
+                        top-level notAbortable array when a member registered a sub-process of a type
+                        VAMS cannot stop — the member's own notAbortable entries, each with an added
+                        executionId naming that member. Both arrays are absent when every member
+                        stopped cleanly.
                 "400":
                     description: Invalid or missing executionId.
                     content:
@@ -8016,7 +8039,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /workflows/executions/{executionId}/details:
         get:
             summary: "Get full detail and input/output traceability for an execution."
-            description: "Returns the underlying pipelines (with status, timing, names/descriptions cross-fetched from the pipeline definitions, and each pipeline's resolved configuration as renderedConfig, which is post-template-tag and pre-system-tag), the execution's output target (outputLocationType plus outputDatabaseId/outputAssetId for asset outputs), input files, input metadata (asset and file metadata under inputMetadata, database metadata under inputDatabaseMetadata; each row reports its entity's metadata under 'metadata' and that file's attributes under 'attributes', kept separate because a pipeline's metadataInputs grants fileMetadata and fileAttributes independently - a row with attributes and no metadata still appears with an empty metadata map, and asset/database-scope rows always report an empty attributes map), the metadata sources of the run (metadataSourceDatabases lists every database captured and matches the inputDatabaseMetadata rows; metadataSourceAssets lists the assets named purely as sources; metadataSourceDatabaseId is the single database an execution with no input files named, and is empty for an execution whose databases came from its input files), input configurations, and a listing of all outputs (files, metadata, results) each tagged with the producing pipelineId. Input metadata is attributed PER PIPELINE: every row carries the pipelineId of the pipeline that read the entity, because a workflow's pipelines do not read the same entities - each receives the subset of input files passing its own inputFileFilters, and an inputFileArity 'none' pipeline receives none. A file's metadata belongs only to the pipeline that received that file; an asset's own ('/') row to a pipeline receiving at least one file from that asset or, for a named metadata-source asset, to every pipeline (a file-less pipeline reads the first asset group, so that group's row is recorded for it); a database's metadata to EVERY pipeline, since database metadata describes an entity rather than a file selection and every step is handed the run's whole set of databases. The same entity therefore legitimately appears once per pipeline that read it - a 3-pipeline run returns each database row 3 times, identical but for the pipelineId - and those rows are distinct facts rather than one row repeated. Works for running and completed executions; running executions may be partially populated. Every pipeline entry carries availableLogs, the log sources known for that step ({logId, kind, label, sourceType, stageName, logGroupName, logStreamName, logStreamPrefix}): kind is 'invocation' (the step's own invocation log), 'registered' (a location the pipeline reported for itself), 'subStateMachine' (the logging destination of a registered Step Functions sub-execution) or 'deadlineCloudJob' (the session logs of a registered AWS Deadline Cloud job: the queue's /aws/deadline/{farmId}/{queueId} log group under the session- stream prefix, read by the exact streams of the job's sessions); sourceType is one of stateMachine, lambda, batch, ecs, container, custom, deadlineCloud; and logId is the stable identifier GET /workflows/executions/{executionId}/logs accepts as its logId parameter. With includeSubExecutions=true each entry additionally carries subExecutions - one per registered sub-process, with resourceType, label, stageName, resourceName, status (RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, NOT_STARTED or UNKNOWN), startDate, stopDate, error, cause, stageSource ('definition' when the stage order came from the sub-state-machine definition, 'history' when only its execution history was readable, 'none'), stagesTruncated, historyTruncated and stages, the ordered stage frame derived at read time from the sub-state-machine definition and its execution history, each stage reporting stageName, stateType, status, caught (a failure the sub-process handled and continued past), startDate, stopDate, error, cause, attempts and, for a Map state, iterations or distributed, and for an AWS Batch task the resolved batch {jobId, logStreamName}; a registered AWS Deadline Cloud job (resourceType deadlineCloudJob) has no state machine and is reported with its summary only (stageSource 'none'), resolved live from the farm: resourceName is the job name, status is the job's task-run status folded onto the same vocabulary (RUNNING while pending, scheduled, running, suspended or being interrupted; SUCCEEDED; FAILED for a failed or not-compatible job and for a failed create, update or upload; ABORTED for a cancelled job; otherwise UNKNOWN), startDate/stopDate its start and end, cause its lifecycle status message, and deadline {farmId, queueId, jobId} names the job by id alone (its parameters are never returned) - plus subExecutionsTruncated and subExecutionWarnings. Nothing about stages is stored; the flag is off by default because the derivation reads Step Functions history, and every such read is best-effort (a failure yields status UNKNOWN and a warning, never an error). All dates are ISO-8601 UTC strings. Internal details (Step Functions and resource ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted; availableLogs names log groups and stream prefixes, which embed function and job-definition names, but never ARNs. Every collection is bounded so the response fits the AWS Lambda synchronous-response limit: each is read to at most 2000 rows, and each is then trimmed to at most 1000 returned rows apart from outputs.files, which the read cap and the byte budget bound on their own. The assembled response is additionally held to a byte ceiling below the Lambda limit, so a collection whose rows are large is trimmed further than the row caps alone would: the file collections are served first out of that ceiling and the metadata collections divide what they leave, with outputs.results granted ahead of them. truncatedCollections names every collection that came back partial -- 'inputFiles', 'inputMetadata', 'inputDatabaseMetadata', 'outputs.files', 'outputs.metadata', 'outputs.results', and, when the step section exceeded its byte share, 'pipelines' and 'inputConfigurations' together with (only under includeSubExecutions=true) 'pipelines.subExecutions', which means every sub-execution kept its summary but its stages were dropped, before any inline configuration body was shortened -- and is empty when the view is complete. The three metadata collections (inputMetadata, inputDatabaseMetadata, outputs.metadata) are retrievable in full from GET /workflows/executions/{executionId}/details/metadata, which pages one collection at a time with a continuation token; inputFiles, outputs.files, and outputs.results have no paged route, which is why the response budget is spent on them first. inputMetadata and inputDatabaseMetadata are read together, so a read-cap hit names both while a return-trim names only the trimmed collection. Both are per-pipeline collections, so their bounds are spent evenly across the run's pipelines rather than in collection order - each pipeline reads its own share of the 2000-row read budget, and a return trim takes a share from each pipeline instead of a prefix, so a trimmed collection still holds rows for every pipeline rather than reading as though the later steps took no metadata. A pipeline entry's renderedConfig is the configuration body after the caller's template-tag values were substituted and BEFORE the reserved system tags were: template substitution is two-stage, so the system tags ({{assetMetadataObject}}, {{jobName}}, the output paths) resolve per step at launch once that step's manifest and execution context exist. renderedConfig therefore still shows those as literal {{tag}} placeholders, which is expected rather than a failed substitution. It is held inline up to a size limit, and renderedConfigTruncated reports whether that inline copy was shortened. The entry also carries renderedConfigLocation ({bucket, key}) whenever the object exists - not only on truncation - because it is the Amazon S3 object holding the FULLY substituted body the pipeline itself read. The two fields describe different stages of the same body: renderedConfig is pre-system-tag, renderedConfigLocation post, so they are not two views of one value and a caller wanting what the step actually ran with needs the pointer even when the inline copy is complete. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
+            description: "Returns the underlying pipelines (with status, timing, names/descriptions cross-fetched from the pipeline definitions, and each pipeline's resolved configuration as renderedConfig, which is post-template-tag and pre-system-tag), the execution's output target (outputLocationType plus outputDatabaseId/outputAssetId for asset outputs), input files, input metadata (asset and file metadata under inputMetadata, database metadata under inputDatabaseMetadata; each row reports its entity's metadata under 'metadata' and that file's attributes under 'attributes', kept separate because a pipeline's metadataInputs grants fileMetadata and fileAttributes independently - a row with attributes and no metadata still appears with an empty metadata map, and asset/database-scope rows always report an empty attributes map), the metadata sources of the run (metadataSourceDatabases lists every database captured and matches the inputDatabaseMetadata rows; metadataSourceAssets lists the assets named purely as sources; metadataSourceDatabaseId is the single database an execution with no input files named, and is empty for an execution whose databases came from its input files), input configurations, and a listing of all outputs (files, metadata, results) each tagged with the producing pipelineId. Input metadata is attributed PER PIPELINE: every row carries the pipelineId of the pipeline that read the entity, because a workflow's pipelines do not read the same entities - each receives the subset of input files passing its own inputFileFilters, and an inputFileArity 'none' pipeline receives none. A file's metadata belongs only to the pipeline that received that file; an asset's own ('/') row to a pipeline receiving at least one file from that asset or, for a named metadata-source asset, to every pipeline (a file-less pipeline reads the first asset group, so that group's row is recorded for it); a database's metadata to EVERY pipeline, since database metadata describes an entity rather than a file selection and every step is handed the run's whole set of databases. The same entity therefore legitimately appears once per pipeline that read it - a 3-pipeline run returns each database row 3 times, identical but for the pipelineId - and those rows are distinct facts rather than one row repeated. Works for running and completed executions; running executions may be partially populated. workflowVersion is the published workflow state machine version the execution started on (an integer), null for an execution started before versions were recorded; workflowVersionCurrent is true while the workflow still runs that version, false once its state machine has been redeployed since the execution, and null when either version is unrecorded (for example, the workflow was deleted). A save from the workflow builder always redeploys the state machine, as does an API or CLI update that supplies the step list (specifiedPipelines); a change to a setting one of its pipelines contributes to the state machine (execution type, target, callback mode, timeouts, Deadline Cloud job settings) redeploys it too. The flag does not track workflowSystemConfig or the pipeline names and descriptions in this response: they are read live and can change without a redeploy, so they may differ from what the execution used whatever the flag says; each pipeline entry's effectiveSystemConfig is the snapshot that step ran under. Every pipeline entry carries availableLogs, the log sources known for that step ({logId, kind, label, sourceType, stageName, logGroupName, logStreamName, logStreamPrefix}): kind is 'invocation' (the step's own invocation log), 'registered' (a location the pipeline reported for itself), 'subStateMachine' (the logging destination of a registered Step Functions sub-execution) or 'deadlineCloudJob' (the session logs of a registered AWS Deadline Cloud job: the queue's /aws/deadline/{farmId}/{queueId} log group under the session- stream prefix, read by the exact streams of the job's sessions); sourceType is one of stateMachine, lambda, batch, ecs, container, custom, deadlineCloud; and logId is the stable identifier GET /workflows/executions/{executionId}/logs accepts as its logId parameter. With includeSubExecutions=true each entry additionally carries subExecutions - one per registered sub-process, with resourceType, label, stageName, abortable (true for the types VAMS stops on abort: Step Functions executions, AWS Batch jobs, Deadline Cloud jobs, SageMaker training jobs and pipeline executions; false for any other registered type, which is reported by its label, stageName and raw resourceType with status UNKNOWN and is listed under notAbortable when the execution is aborted), resourceName, status (RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, NOT_STARTED or UNKNOWN), startDate, stopDate, error, cause, stageSource ('definition' when the stage order came from the sub-state-machine definition, 'history' when only its execution history was readable, 'none'), stagesTruncated, historyTruncated and stages, the ordered stage frame derived at read time from the sub-state-machine definition and its execution history, each stage reporting stageName, stateType, status, caught (a failure the sub-process handled and continued past), startDate, stopDate, error, cause, attempts and, for a Map state, iterations or distributed, and for an AWS Batch task the resolved batch {jobId, logStreamName}; a registered AWS Deadline Cloud job (resourceType deadlineCloudJob) has no state machine and is reported with its summary only (stageSource 'none'), resolved live from the farm: resourceName is the job name, status is the job's task-run status folded onto the same vocabulary (RUNNING while pending, scheduled, running, suspended or being interrupted; SUCCEEDED; FAILED for a failed or not-compatible job and for a failed create, update or upload; ABORTED for a cancelled job; otherwise UNKNOWN), startDate/stopDate its start and end, cause its lifecycle status message, and deadline {farmId, queueId, jobId} names the job by id alone (its parameters are never returned); a registered Amazon SageMaker training job (resourceType sageMakerTrainingJob) or pipeline execution (resourceType sageMakerPipelineExecution) is likewise reported with its summary only, resolved live from SageMaker in the deployment account: status folds InProgress/Executing and Stopping onto RUNNING, Completed/Succeeded onto SUCCEEDED, Failed onto FAILED and Stopped onto ABORTED, resourceName is the training job name or the pipeline execution display name, cause is the failure reason, and sageMaker names the job ({trainingJobName}) or the execution ({pipelineName, pipelineExecutionId}) by name and id tail only - ARNs, hyperparameters and pipeline parameters are never returned - plus subExecutionsTruncated and subExecutionWarnings. Nothing about stages is stored; the flag is off by default because the derivation reads Step Functions history, and every such read is best-effort (a failure yields status UNKNOWN and a warning, never an error). All dates are ISO-8601 UTC strings. Internal details (Step Functions and resource ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted; availableLogs names log groups and stream prefixes, which embed function and job-definition names, but never ARNs. Every collection is bounded so the response fits the AWS Lambda synchronous-response limit: each is read to at most 2000 rows, and each is then trimmed to at most 1000 returned rows apart from outputs.files, which the read cap and the byte budget bound on their own. The assembled response is additionally held to a byte ceiling below the Lambda limit, so a collection whose rows are large is trimmed further than the row caps alone would: the file collections are served first out of that ceiling and the metadata collections divide what they leave, with outputs.results granted ahead of them. truncatedCollections names every collection that came back partial -- 'inputFiles', 'inputMetadata', 'inputDatabaseMetadata', 'outputs.files', 'outputs.metadata', 'outputs.results', and, when the step section exceeded its byte share, 'pipelines' and 'inputConfigurations' together with (only under includeSubExecutions=true) 'pipelines.subExecutions', which means every sub-execution kept its summary but its stages were dropped, before any inline configuration body was shortened -- and is empty when the view is complete. The three metadata collections (inputMetadata, inputDatabaseMetadata, outputs.metadata) are retrievable in full from GET /workflows/executions/{executionId}/details/metadata, which pages one collection at a time with a continuation token; inputFiles, outputs.files, and outputs.results have no paged route, which is why the response budget is spent on them first. inputMetadata and inputDatabaseMetadata are read together, so a read-cap hit names both while a return-trim names only the trimmed collection. Both are per-pipeline collections, so their bounds are spent evenly across the run's pipelines rather than in collection order - each pipeline reads its own share of the 2000-row read budget, and a return trim takes a share from each pipeline instead of a prefix, so a trimmed collection still holds rows for every pipeline rather than reading as though the later steps took no metadata. A pipeline entry's renderedConfig is the configuration body after the caller's template-tag values were substituted and BEFORE the reserved system tags were: template substitution is two-stage, so the system tags ({{assetMetadataObject}}, {{jobName}}, the output paths) resolve per step at launch once that step's manifest and execution context exist. renderedConfig therefore still shows those as literal {{tag}} placeholders, which is expected rather than a failed substitution. It is held inline up to a size limit, and renderedConfigTruncated reports whether that inline copy was shortened. The entry also carries renderedConfigLocation ({bucket, key}) whenever the object exists - not only on truncation - because it is the Amazon S3 object holding the FULLY substituted body the pipeline itself read. The two fields describe different stages of the same body: renderedConfig is pre-system-tag, renderedConfigLocation post, so they are not two views of one value and a caller wanting what the step actually ran with needs the pointer even when the inline copy is complete. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
             parameters:
               - in: path
                 name: executionId
@@ -8185,7 +8208,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /workflows/executions/{executionId}/logs:
         get:
             summary: "Get execution logs (truncated stored text, or full live search)."
-            description: "mode=truncated (default) returns the stored execution log and error, or a stored per-pipeline log when pipelineExecutionId is given. Because the stored log is captured as the run completes, before Amazon CloudWatch Logs finishes ingesting the run's events, it is frequently empty even for a succeeded run; in that case truncated mode transparently falls back to a live CloudWatch Logs search for the same scope, and for the whole execution then to the Step Functions execution history when CloudWatch is also empty. logsSource reports the origin: 'stored', 'live', or 'sfnHistory'. mode=full always runs a live CloudWatch Logs search scoped to the execution within the shared workflow log group; supplying pipelineExecutionId restricts the search strictly to that single pipeline execution. In full mode the whole-execution response also includes sfnHistoryEvents (the Step Functions state-transition timeline), and a per-pipeline response includes subProcessEvents, which merges four sources: the step invocation log (the log of the resource the state machine invoked for that step — for a Lambda step, that function's own log group; derived from the recorded execution type and resource, so the pipeline does not register it, and absent for SQS, EventBridge, and DeadlineCloud which have no derivable invocation log), any logs the pipeline registered for itself, and, for a step running its own Step Functions sub-execution, that sub-execution's history and resolved log group, and, for a step that registered an AWS Deadline Cloud job, the job's session logs (kind deadlineCloudJob, sourceType deadlineCloud): the job's sessions are listed, the 10 most recent by start time are taken, and their exact log streams in the queue's /aws/deadline/{farmId}/{queueId} group are read without the execution-scope terms - notFound when the job has no session yet, denied when listing the sessions or reading the group is refused, never unscoped. subProcessEvents are sorted by timestamp; each CloudWatch event carries the logId of the source it came from alongside its logGroupName, and a sub-state-machine history line carries the logId of the log group that machine writes to (an empty string when it has no logging destination). A per-pipeline full-mode response also carries logSources: every log source known for the step (the entries the details route reports as availableLogs) with a status of 'read' (with eventCount), 'denied' (AccessDenied), 'notFound' (ResourceNotFound), 'error' (the read failed for another reason — throttling, an invalid CloudWatch token, or a registered location that could not be parsed; the cause is named in warnings), 'empty' (no events and no continuation token), 'skipped' (beyond the per-request registered-log cap) or 'unscoped' (a container log-stream prefix searched with the execution-scope terms because no exact stream could be resolved; container output does not carry the execution id, so an empty result there means unresolved rather than silent). logId narrows the read to one source: events holds that source's events, nextToken is that source's CloudWatch token, and when the source is the logging destination of a registered sub-state-machine (kind subStateMachine, or registered when the pipeline reported that group itself) the response also carries that sub-execution's sfnHistoryEvents. stageName restricts logSources to the entries registered for that sub-state-machine stage and the sub-execution history to the events between that state's entry and exit. Both parameters apply only in full mode with pipelineExecutionId; supplying one otherwise is rejected with 400, and a logId unknown for the pipeline execution with 404. A warnings array is present only when a log could not be read (a missing permission, or a registration list beyond the per-request cap); each entry names the log, and a warning never fails the request. All returned log text passes through credential redaction. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
+            description: "mode=truncated (default) returns the stored execution log and error, or a stored per-pipeline log when pipelineExecutionId is given. Because the stored log is captured as the run completes, before Amazon CloudWatch Logs finishes ingesting the run's events, it is frequently empty even for a succeeded run; in that case truncated mode transparently falls back to a live CloudWatch Logs search for the same scope, and for the whole execution then to the Step Functions execution history when CloudWatch is also empty. logsSource reports the origin: 'stored', 'live', or 'sfnHistory'. mode=full always runs a live CloudWatch Logs search scoped to the execution within the shared workflow log group; supplying pipelineExecutionId restricts the search strictly to that single pipeline execution. Every live read follows the CloudWatch Logs nextToken past pages that hold no events, since a FilterLogEvents page can be empty while a later page holds the run's events; it stops at the first page that holds events or when no token remains, bounded to 10 pages per log source and to about six seconds for the follow-up reads of one request together, and when the bound stops it on an empty page the response carries nextToken, so an empty events list with a nextToken is an incomplete read rather than an empty log. In full mode the whole-execution response also includes sfnHistoryEvents (the Step Functions state-transition timeline), and a per-pipeline response includes subProcessEvents, which merges four sources: the step invocation log (the log of the resource the state machine invoked for that step — for a Lambda step, that function's own log group; derived from the recorded execution type and resource, so the pipeline does not register it, and absent for SQS, EventBridge, and DeadlineCloud which have no derivable invocation log), any logs the pipeline registered for itself, and, for a step running its own Step Functions sub-execution, that sub-execution's history and resolved log group, and, for a step that registered an AWS Deadline Cloud job, the job's session logs (kind deadlineCloudJob, sourceType deadlineCloud): the job's sessions are listed, the 10 most recent by start time are taken, and their exact log streams in the queue's /aws/deadline/{farmId}/{queueId} group are read without the execution-scope terms - notFound when the job has no session yet, denied when listing the sessions or reading the group is refused, never unscoped. subProcessEvents are sorted by timestamp; each CloudWatch event carries the logId of the source it came from alongside its logGroupName, and a sub-state-machine history line carries the logId of the log group that machine writes to (an empty string when it has no logging destination). A per-pipeline full-mode response also carries logSources: every log source known for the step (the entries the details route reports as availableLogs) with a status of 'read' (with eventCount), 'denied' (AccessDenied), 'notFound' (ResourceNotFound), 'error' (the read failed for another reason — throttling, an invalid CloudWatch token, or a registered location that could not be parsed; the cause is named in warnings), 'empty' (no events and no continuation token), 'skipped' (beyond the per-request registered-log cap) or 'unscoped' (a container log-stream prefix searched with the execution-scope terms because no exact stream could be resolved; container output does not carry the execution id, so an empty result there means unresolved rather than silent). logId narrows the read to one source: events holds that source's events, nextToken is that source's CloudWatch token, and when the source is the logging destination of a registered sub-state-machine (kind subStateMachine, or registered when the pipeline reported that group itself) the response also carries that sub-execution's sfnHistoryEvents. stageName restricts logSources to the entries registered for that sub-state-machine stage and the sub-execution history to the events between that state's entry and exit. Both parameters apply only in full mode with pipelineExecutionId; supplying one otherwise is rejected with 400, and a logId unknown for the pipeline execution with 404. A warnings array is present only when a log could not be read (a missing permission, or a registration list beyond the per-request cap); each entry names the log, and a warning never fails the request. All returned log text passes through credential redaction. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required."
             parameters:
               - in: path
                 name: executionId
@@ -9516,8 +9539,15 @@ components:
                     description: "Constraint description (1-256 characters)"
                 objectType:
                     type: string
-                    enum: [database, asset, api, web, tag, tagType, role, userRole, pipeline, workflow, metadataSchema]
-                    description: "Type of object this constraint applies to"
+                    pattern: "^[A-Za-z][A-Za-z0-9]{1,63}$"
+                    example: asset
+                    description: >-
+                        Type of object this constraint applies to. The core types are database,
+                        asset, api, web, tag, tagType, role, userRole, pipeline, workflow and
+                        metadataSchema; a deployment can register more (permission object types in
+                        the fork or add-on constants files), so the set is not fixed. GET
+                        /auth/constraints/permissionObjects lists the types the deployment accepts,
+                        with the fields valid on each. Any other value is rejected with 400.
                 criteriaAnd:
                     type: array
                     items:
@@ -9577,8 +9607,15 @@ components:
                     description: "Constraint description"
                 objectType:
                     type: string
-                    enum: [database, asset, api, web, tag, tagType, role, userRole, pipeline, workflow, metadataSchema]
-                    description: "Type of object this constraint applies to"
+                    pattern: "^[A-Za-z][A-Za-z0-9]{1,63}$"
+                    example: asset
+                    description: >-
+                        Type of object this constraint applies to. The core types are database,
+                        asset, api, web, tag, tagType, role, userRole, pipeline, workflow and
+                        metadataSchema; a deployment can register more (permission object types in
+                        the fork or add-on constants files), so the set is not fixed. GET
+                        /auth/constraints/permissionObjects lists the types the deployment accepts,
+                        with the fields valid on each. Any other value is rejected with 400.
                 criteriaAnd:
                     type: array
                     items:
@@ -9935,6 +9972,25 @@ components:
                     type: string
             required:
                 - message
+        requestBlockedError:
+            type: object
+            description: "The body of the 403 API Gateway returns when the deployment's AWS WAF web ACL blocks a request at the stage (the WAF_FILTERED gateway response)."
+            properties:
+                message:
+                    type: string
+                    example: "Request blocked by the deployment's AWS WAF web ACL"
+                blockedBy:
+                    type: string
+                    enum:
+                        - waf
+                requestId:
+                    type: string
+                    description: "API Gateway's extended request ID, the value of the x-amz-apigw-id response header, which an administrator looks up as httpRequest.requestId in the web ACL's aws-waf-logs-vams-* log group. The web ACL's sampled requests carry no request ID."
+                    example: "E7BBKGcCvHcEXAMPLE="
+            required:
+                - message
+                - blockedBy
+                - requestId
         triggerTemplateError:
             type: object
             description: "A 400 error body for a headless-runnability rejection. The message object carries a triggerTemplateErrors list of human-readable strings. Common to every operation that returns this body: a template chosen as a trigger default, or referenced by a trigger as a default, has a required tag with no default value - the string names the offending template, its pipeline (or the workflow(s) using it), and the tag keys at fault. Setting a workflow trigger reports one further rejection in the same list, naming a pipeline of the trigger's parent workflow that requires a template for which no default is set from any source; see that operation's own 400 description. That rejection does not apply to the template create and update operations, which reach this body only through the required-tag check."
@@ -11208,6 +11264,14 @@ components:
                 workflow_arn:
                     type: string
                     description: "ARN of the workflow's Step Functions state machine."
+                deploymentStale:
+                    type: boolean
+                    nullable: true
+                    description: "True when the state machine could not be redeployed after a referenced pipeline's execution settings changed; null when the deployment is current. A stale workflow is redeployed on its next save or launch, and a launch never runs the stale definition."
+                deploymentStaleReason:
+                    type: string
+                    nullable: true
+                    description: "Why the last redeploy failed. Present only with deploymentStale true."
                 dateCreated:
                     type: string
                     description: "ISO-8601 creation timestamp."
@@ -12329,7 +12393,7 @@ components:
                     nullable: true
                 previewFile:
                     type: string
-                    description: "Path to the preview file for this file, if any. Empty string if no preview file exists."
+                    description: "Path to the preview file for this file: the newest non-archived `.previewFile.` object when several exist. Empty string if no preview file exists."
                 changeSource:
                     type: string
                     description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileUnarchive, fileRevert, fileMetadataUpdate). Blank or absent for versions created before change provenance tracking was introduced."
@@ -12438,7 +12502,7 @@ components:
                     nullable: true
                 previewFile:
                     type: string
-                    description: "Path to the preview file for this file, if any. Empty string if no preview file exists."
+                    description: "Path to the preview file for this file: the newest non-archived `.previewFile.` object when several exist. Empty string if no preview file exists."
                 changeSource:
                     type: string
                     description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileUnarchive, fileRevert, fileMetadataUpdate). Blank or absent for versions created before change provenance tracking was introduced."
@@ -13000,6 +13064,14 @@ components:
                     type: boolean
                     description: "Whether this is the VAMS default asset bucket, which houses pipeline template data and execution-time run I/O under the {baseAssetsPrefix}pipelines/ prefix. Exactly one bucket in a deployment is the default."
                     default: false
+                bucketRegion:
+                    type: string
+                    nullable: true
+                    description: "The AWS Region the bucket is in. Presigned URLs and S3 requests for this bucket are signed for it. Null on a row written without a Region, which readers treat as the deployment Region."
+                bucketAccountId:
+                    type: string
+                    nullable: true
+                    description: "The 12-digit AWS account that owns the bucket when it is not the deployment account; null otherwise."
             required:
                 - bucketId
                 - bucketName
@@ -14823,6 +14895,13 @@ components:
                     type: array
                     items:
                         $ref: "#/components/schemas/constraintPermissionType"
+    responses:
+        RequestBlocked:
+            description: "The deployment's AWS WAF web ACL blocked the request at the API Gateway stage before it reached VAMS. Any operation can return it while app.useWaf is enabled; signing in again does not change the result."
+            content:
+                application/json:
+                    schema:
+                        $ref: "#/components/schemas/requestBlockedError"
     parameters:
       maxItemsParam:
         name: maxItems
