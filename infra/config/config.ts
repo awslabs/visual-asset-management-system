@@ -1496,10 +1496,9 @@ export function getConfig(app: cdk.App): Config {
         config.app.authProvider.useExternalOAuthIdp.idpDisplayName = "SSO";
     }
 
-    // External OAuth claim settings (backward compatibility: a config.json written before they
-    // existed). The user id claim "" means not set: the authorizer and the web application use the
-    // first of cognito:username, username and sub. The audience claims default to aud, the only
-    // claim the authorizer compared before the setting existed.
+    // External OAuth claim settings when config.json omits them. The user id claim "" means not
+    // set: the authorizer and the web application use the first of cognito:username, username and
+    // sub. The audience claims default to ["aud"].
     if (config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim == undefined) {
         config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim = "";
     }

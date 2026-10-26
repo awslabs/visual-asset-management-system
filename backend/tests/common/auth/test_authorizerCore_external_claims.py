@@ -67,11 +67,11 @@ def _token(drop=(), key=_PRIVATE_KEY, **overrides):
     return jwt.encode(_claims(drop, **overrides), key, algorithm="RS256", headers={"kid": KID})
 
 
-def _access_token(**overrides):
+def _access_token(drop=(), **overrides):
     """An access token shaped like an Amazon Cognito user pool's: client_id, no aud."""
     key = overrides.pop("key", _PRIVATE_KEY)
     claims = {"client_id": AUDIENCE, "token_use": "access", **overrides}
-    return _token(drop=("aud",), key=key, **claims)
+    return _token(drop=("aud", *drop), key=key, **claims)
 
 
 @pytest.fixture(autouse=True)
@@ -179,6 +179,67 @@ class TestAudOrClientId:
         """A malformed JWT_AUDIENCE_CLAIMS parses to None; nothing is accepted on it."""
         with _audience_claims(None):
             assert core.verify_external_jwt(_token()) is None
+
+
+@pytest.mark.unit
+class TestExpiryAndIssuerAreRequired:
+    """An external token must carry exp and iss; neither is only checked when present."""
+
+    @pytest.mark.parametrize("audience_claims", [["aud"], ["aud", "client_id"]],
+                             ids=["aud", "aud-or-client_id"])
+    def test_control_a_token_with_both_verifies(self, audience_claims):
+        with _audience_claims(audience_claims):
+            assert core.verify_external_jwt(_token()) is not None
+
+    @pytest.mark.parametrize("claim", ["exp", "iss"])
+    @pytest.mark.parametrize("audience_claims", [["aud"], ["aud", "client_id"]],
+                             ids=["aud", "aud-or-client_id"])
+    def test_a_token_without_the_claim_is_refused(self, claim, audience_claims):
+        with _audience_claims(audience_claims):
+            assert core.verify_external_jwt(_token(drop=(claim,))) is None
+
+    @pytest.mark.parametrize("claim", ["exp", "iss"])
+    def test_an_access_token_without_the_claim_is_refused(self, claim):
+        with _audience_claims(["aud", "client_id"]):
+            assert core.verify_external_jwt(_access_token()) is not None  # control
+            assert core.verify_external_jwt(_access_token(drop=(claim,))) is None
+
+
+@pytest.mark.unit
+class TestVerifiedTokenLogNamesTheResolvedUserId:
+    """The log line for a verified token names the user id roles are read for, not sub."""
+
+    @staticmethod
+    def _info_lines(log_info):
+        return " ".join(str(call.args[0]) for call in log_info.call_args_list)
+
+    def test_verify_external_jwt_logs_the_configured_claim_value(self):
+        token = _token(email="first.last@example.com")
+        with _user_id_claim("email"), patch.object(core, "AUTH_MODE", "external"), \
+             patch.object(core.logger, "info") as log_info:
+            assert core.verify_external_jwt(token) is not None
+
+        logged = self._info_lines(log_info)
+        assert "first.last@example.com" in logged
+        assert "sub-1" not in logged
+        assert token.split(".")[1] not in logged
+
+    def test_verify_external_jwt_logs_the_chain_value_when_not_set(self):
+        with patch.object(core, "AUTH_MODE", "external"), \
+             patch.object(core.logger, "info") as log_info:
+            assert core.verify_external_jwt(_token(username="plain-name")) is not None
+        logged = self._info_lines(log_info)
+        assert "plain-name" in logged
+        assert "sub-1" not in logged
+
+    def test_authenticate_request_logs_the_resolved_id(self):
+        with _user_id_claim("email"), patch.object(core.logger, "info") as log_info:
+            result, _ = _authenticate(dict(ALL_NAMES))
+        assert result["authorized"] is True
+
+        logged = self._info_lines(log_info)
+        assert "first.last@example.com" in logged
+        assert "sub-1" not in logged
 
 
 @pytest.mark.unit

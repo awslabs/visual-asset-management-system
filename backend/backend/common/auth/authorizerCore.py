@@ -702,9 +702,9 @@ def verify_external_audience(claims: Dict[str, Any]) -> bool:
     """Compare the token's audience with JWT_AUDIENCE through the configured claims, in order.
 
     The first claim of JWT_AUDIENCE_CLAIMS present in the token decides: it must name the audience,
-    and a later claim cannot rescue a mismatch. A token carrying none of them is refused. With the
-    default ['aud'] this is the check PyJWT's own audience verification made before
-    lambdaAuthorizorJWTAudienceClaims existed. Only claim names are logged, never values.
+    and a later claim cannot rescue a mismatch. A token carrying none of them is refused. The
+    default ['aud'] is the same comparison as PyJWT's own audience verification. Only claim names
+    are logged, never values.
     """
     for claim_name in JWT_AUDIENCE_CLAIMS:
         if claim_name in claims:
@@ -730,7 +730,9 @@ def resolve_user_id(claims: Dict[str, Any]) -> Optional[str]:
 
     Keep this in step with resolveExternalUserId in web/src/utils/authTokenUtils.ts, which applies
     the same rule to the access token in the browser: the web application's user id must be the one
-    this function returns, or its login profile request is refused.
+    this function returns, or its login profile request is refused. String claims give the same
+    result on both sides; for a non-string value this chain takes the first truthy claim and the web
+    application the first non-empty string.
     """
     if AUTH_MODE == 'external' and JWT_USER_ID_CLAIM:
         return _external_user_id_claim_value(claims)
@@ -745,9 +747,10 @@ def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
     """
     Verify External IDP JWT token using PyJWT library.
 
-    PyJWT verifies the signature (RS256 only), expiry and issuer; the audience is compared by
-    verify_external_audience through the claims lambdaAuthorizorJWTAudienceClaims names. When
-    lambdaAuthorizorJWTUserIdClaim is set, a token without that claim is refused here.
+    PyJWT verifies the signature (RS256 only), expiry and issuer, and requires the exp and iss
+    claims; the audience is compared by verify_external_audience through the claims
+    lambdaAuthorizorJWTAudienceClaims names. When lambdaAuthorizorJWTUserIdClaim is set, a token
+    without that claim is refused here.
     """
     try:
         if not JWT_ISSUER_URL or not JWT_AUDIENCE:
@@ -774,7 +777,8 @@ def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
                 'verify_signature': True,
                 'verify_exp': True,
                 'verify_aud': False,
-                'verify_iss': True
+                'verify_iss': True,
+                'require': ['exp', 'iss'],
             }
         )
 
@@ -785,7 +789,7 @@ def verify_external_jwt(token: str) -> Optional[Dict[str, Any]]:
             logger.error(f"Token is missing the configured user id claim '{JWT_USER_ID_CLAIM}'")
             return None
 
-        logger.info(f'External IDP token successfully verified for user: {claims.get("sub", "unknown")}')
+        logger.info(f'External IDP token successfully verified for user: {resolve_user_id(claims) or "unknown"}')
         return claims
 
     except pyjwt.ExpiredSignatureError:
@@ -1149,8 +1153,6 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
         logger.error("Token verification failed")
         return {"authorized": False, "context": None, "reason": "Token verification failed"}
 
-    logger.info(f"Token verified successfully for user: {claims.get('sub', 'unknown')}")
-
     # Build context with string coercion
     context = {}
     for key, value in claims.items():
@@ -1158,6 +1160,8 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
             context[key] = str(value)
 
     username = resolve_user_id(claims)
+
+    logger.info(f"Token verified successfully for user: {username or 'unknown'}")
 
     # External mode with lambdaAuthorizorJWTUserIdClaim set: no fallback to another claim.
     # verify_external_jwt already refuses such a token (and every token when the setting is
