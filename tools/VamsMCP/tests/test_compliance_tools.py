@@ -438,6 +438,7 @@ async def test_compliance_mutating_tools_are_gated_off_by_default():
         "bind_compliance_schema",
         "evaluate_asset_compliance",
         "sweep_compliance_schema",
+        "evaluate_database_compliance",
         "release_quarantine",
         "grant_quarantine_exception",
         "revoke_quarantine_exception",
@@ -534,6 +535,8 @@ def test_evaluate_and_sweep_forward_their_arguments(gated):
     srv.sweep_compliance_schema("cad-quality")
     client.api.evaluate_asset_compliance.assert_called_once_with("db1", "a1", schema_name="cad-quality")
     client.api.sweep_compliance_schema.assert_called_once_with("cad-quality")
+    srv.evaluate_database_compliance("db1")
+    client.api.evaluate_database_compliance.assert_called_once_with("db1")
 
 
 def test_quarantine_tools_forward_the_reason(gated):
@@ -612,8 +615,8 @@ def test_delete_compliance_schema_calls_the_api(gated):
 
 @pytest.mark.parametrize(
     "tool",
-    ["evaluate_asset_compliance", "sweep_compliance_schema", "create_compliance_cascade",
-     "approve_compliance_cascade"],
+    ["evaluate_asset_compliance", "sweep_compliance_schema", "evaluate_database_compliance",
+     "create_compliance_cascade", "approve_compliance_cascade"],
 )
 def test_compute_starting_compliance_tools_warn_about_auto_approve(tool):
     """A pipeline rule runs a workflow execution per evaluated asset; the docstring is the only place

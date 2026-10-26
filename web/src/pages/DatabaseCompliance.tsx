@@ -23,12 +23,13 @@ import Modal from "@cloudscape-design/components/modal";
 import Synonyms from "../synonyms";
 import {
     fetchDatabaseComplianceOverview,
-    sweepSchema,
+    evaluateDatabaseCompliance,
     getDatabaseBindings,
     fetchComplianceSchemas,
     bindSchemaToDatabase,
     unbindSchemaFromDatabase,
     DatabaseComplianceOverview,
+    EvaluateDatabaseResponse,
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../services/ComplianceService";
 import {
@@ -43,6 +44,21 @@ import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 // schema list fills the selector, PUT binds or changes the schema, DELETE removes it.
 const COMPLIANCE_SCHEMAS_API_ROUTE = "/compliance/schemas";
 const COMPLIANCE_BIND_DATABASE_API_ROUTE = "/compliance/bind/{databaseId}";
+
+/**
+ * The success message of Evaluate All: the API's count, plus how many tracked assets were not
+ * reached (the request is bounded like a sweep) and how many were registered under the binding.
+ */
+export const evaluateAllMessage = (result: EvaluateDatabaseResponse): string => {
+    const parts = [result.message || `Evaluation triggered for ${result.assetsTriggered.length}`];
+    if (result.registered) {
+        parts.push(`${result.registered} newly registered under the ${Synonyms.database} schema`);
+    }
+    if (result.assetsRemaining) {
+        parts.push(`${result.assetsRemaining} not reached yet; choose Evaluate All again`);
+    }
+    return parts.join("; ") + ".";
+};
 
 const DatabaseCompliancePage: React.FC = () => {
     const { databaseId } = useParams();
@@ -202,27 +218,21 @@ const DatabaseCompliancePage: React.FC = () => {
         loadPage(newIndex - 1, tokens[newIndex - 1]);
     };
 
+    // Evaluates the tracked assets of this database only, each against its own bound schema (the
+    // database binding or the asset's override); a schema-wide sweep would also evaluate the other
+    // databases bound to the same schema and skip this database's overrides.
     const handleEvaluateAll = async () => {
-        if (!databaseSchema) {
-            setError(
-                `No compliance schema bound to this ${Synonyms.database}. Bind a schema first.`
-            );
-            return;
-        }
+        if (!databaseId) return;
         setSweeping(true);
         setActionMessage(null);
         setError(null);
 
-        const [success, result] = await sweepSchema(databaseSchema);
-        if (success) {
-            const msg =
-                typeof result === "object" && result?.message
-                    ? result.message
-                    : "Evaluation sweep triggered";
-            setActionMessage(msg);
+        const [success, result] = await evaluateDatabaseCompliance(databaseId);
+        if (success && typeof result !== "string") {
+            setActionMessage(evaluateAllMessage(result));
             await loadData();
         } else {
-            setError(typeof result === "string" ? result : "Sweep failed");
+            setError(typeof result === "string" ? result : "Evaluation failed");
         }
         setSweeping(false);
     };
@@ -349,7 +359,7 @@ const DatabaseCompliancePage: React.FC = () => {
                                 variant="primary"
                                 loading={sweeping}
                                 onClick={handleEvaluateAll}
-                                disabled={!databaseSchema}
+                                disabled={!databaseSchema && totalTracked === 0}
                             >
                                 Evaluate All {Synonyms.Assets}
                             </Button>

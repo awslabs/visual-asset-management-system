@@ -68,7 +68,7 @@ Comment and subscription cover the comments and subscriptions APIs:
 Compliance covers the schema registry, bindings, evaluation, quarantine, cascades and the audit trail:
 
 -   `compliance schema list|get|create|update|delete` (`create`/`update` take `--schema-file`; `delete` requires `--confirm`)
--   `compliance bind|unbind|bindings` (`-d` for a database, `-d -a` for one asset's override), `compliance evaluate|sweep|state|evaluations`
+-   `compliance bind|unbind|bindings` (`-d` for a database, `-d -a` for one asset's override), `compliance evaluate|sweep|state|evaluations` (`sweep -n` for a schema, `sweep -d` for one database's tracked assets)
 -   `compliance quarantine list|release|exception|revoke-exception`, `compliance cascade list|get|create|approve|reject`, `compliance audit`
 -   The compliance `schema list` and `cascade list` routes return their whole list in one response and take no paging parameters, so those commands carry none; `bindings`, `state -d`, `quarantine list`, `evaluations` and `audit` page on `--max-items`/`--starting-token` (`--limit` is `audit`'s alias) and print the `NextToken` hint; `cascade create --no-approval` / `cascade approve` return 202 with `state` `executing` and no result — poll `cascade get`. Mirrors `tools/VamsCLI/CLAUDE.md`.
 

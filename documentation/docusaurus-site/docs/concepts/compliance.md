@@ -482,6 +482,7 @@ All compliance endpoints are under the `/compliance` prefix. The [Compliance API
 | PUT    | `/compliance/bind/{databaseId}/{assetId}`                 | Bind a schema to an asset (override)         |
 | DELETE | `/compliance/bind/{databaseId}/{assetId}`                 | Remove the asset override                    |
 | POST   | `/compliance/evaluate/{databaseId}/{assetId}`             | Evaluate an asset                            |
+| POST   | `/compliance/evaluate/{databaseId}`                       | Evaluate every tracked asset of a database   |
 | POST   | `/compliance/sweep/{schemaName}`                          | Evaluate every asset bound to a schema       |
 | GET    | `/compliance/evaluations/{databaseId}/{assetId}`          | List the evaluations of an asset (paged)     |
 | GET    | `/compliance/state/{databaseId}/{assetId}`                | Get the compliance state of an asset         |

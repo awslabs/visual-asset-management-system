@@ -302,19 +302,21 @@ A rule whose tooling failed — its input selection did not resolve to the files
 
 ## compliance sweep
 
-Re-evaluate every asset bound to a schema — the usual follow-up to `compliance schema update`.
+Re-evaluate every asset bound to a schema (`-n`) — the usual follow-up to `compliance schema update` — or every tracked asset of one database (`-d`), each against the schema it is bound to, which is what **Evaluate All Assets** on the database compliance overview runs. Give exactly one of the two.
 
 ```bash
 vamscli compliance sweep [OPTIONS]
 ```
 
-| Option                | Type | Required | Description                        |
-| --------------------- | ---- | -------- | ---------------------------------- |
-| `-n`, `--schema-name` | TEXT | Yes      | Schema whose assets to re-evaluate |
-| `--json-output`       | FLAG | No       | Output raw JSON response           |
+| Option                | Type | Required          | Description                                                                                                             |
+| --------------------- | ---- | ----------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `-n`, `--schema-name` | TEXT | One of `-n`, `-d` | Schema whose assets to re-evaluate, in every database it is bound to                                                    |
+| `-d`, `--database-id` | TEXT | One of `-n`, `-d` | Database whose tracked assets to re-evaluate (`POST /compliance/evaluate/{databaseId}`); no other database is evaluated |
+| `--json-output`       | FLAG | No                | Output raw JSON response                                                                                                |
 
 ```bash
 vamscli compliance sweep -n cad-quality
+vamscli compliance sweep -d my-database
 vamscli compliance sweep -n cad-quality --json-output
 ```
 
@@ -322,7 +324,7 @@ vamscli compliance sweep -n cad-quality --json-output
 A schema with pipeline rules starts one workflow execution per asset it is bound to. Check `compliance bindings` on the databases that use the schema before sweeping a large one.
 :::
 
-The response lists the assets triggered and counts the rest: `skipped` is the number of bound assets the caller is not authorized to evaluate (counted, never listed), and `assetsRemaining` the number beyond the per-call cap, which a repeated sweep works through. An asset whose evaluation found a newer evaluation of it already started is marked `(superseded)` in the list and counted on a `Superseded (a newer evaluation had started)` line: its evaluation did not run, and the asset's state is the newer evaluation's. A superseded asset is not an error.
+The response lists the assets triggered and counts the rest: `skipped` is the number of bound assets the caller is not authorized to evaluate (counted, never listed), and `assetsRemaining` the number beyond the per-call cap, which a repeated sweep works through. An asset whose evaluation found a newer evaluation of it already started is marked `(superseded)` in the list and counted on a `Superseded (a newer evaluation had started)` line: its evaluation did not run, and the asset's state is the newer evaluation's. A superseded asset is not an error. With `-d`, the response also counts `registered` (assets of a bound database registered under the binding because they had no compliance record) and `withoutSchema` (tracked assets whose record names no schema, not evaluated), and has no `skipped`.
 
 ---
 

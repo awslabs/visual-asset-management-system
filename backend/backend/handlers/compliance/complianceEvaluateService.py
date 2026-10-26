@@ -4,6 +4,7 @@
 """Compliance Evaluate Service handler.
 
 - POST /compliance/evaluate/{databaseId}/{assetId}     — evaluate an asset
+- POST /compliance/evaluate/{databaseId}               — evaluate every tracked asset of a database
 - POST /compliance/sweep/{schemaName}                  — evaluate every asset bound to a schema
 - GET  /compliance/evaluations/{databaseId}/{assetId}  — evaluation history of an asset
 - GET  /compliance/state/{databaseId}/{assetId}        — compliance state of an asset
@@ -23,6 +24,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from boto3.dynamodb.conditions import Key
 from common.apiRoutes import (
     API_COMPLIANCE_EVALUATE_ASSET,
+    API_COMPLIANCE_EVALUATE_DATABASE,
     API_COMPLIANCE_EVALUATIONS_ASSET,
     API_COMPLIANCE_STATE_ASSET,
     API_COMPLIANCE_STATE_DATABASE,
@@ -48,6 +50,7 @@ from models.common import (
 )
 from models.compliance import (
     EvaluateAssetRequestModel,
+    EvaluateDatabaseRequestModel,
     EvaluationVerdict,
     SweepSchemaRequestModel,
 )
@@ -159,6 +162,9 @@ def handle_post_request(event):
         request = parse(_parse_body(event), model=EvaluateAssetRequestModel)
         return evaluate_asset(event, path_params.get("databaseId"), path_params.get("assetId"),
                               request)
+    if API_COMPLIANCE_EVALUATE_DATABASE.matches(path):
+        parse(_parse_body(event), model=EvaluateDatabaseRequestModel)
+        return evaluate_database(event, path_params.get("databaseId"))
     if API_COMPLIANCE_SWEEP_SCHEMA.matches(path):
         parse(_parse_body(event), model=SweepSchemaRequestModel)
         return sweep_schema(event, path_params.get("schemaName"))
@@ -354,6 +360,99 @@ def sweep_schema(event, schema_name):
         "skipped": skipped,
         "superseded": superseded,
     })
+
+
+def evaluate_database(event, database_id):
+    """Evaluate every tracked asset of one database — every asset-state row of it, each against
+    the schema its row binds (the database binding or the asset's own override) — with the sweep's
+    bounds: `pending_evaluation` rows first, at most MAX_SWEEP_ASSETS evaluations, no launch after
+    SWEEP_TIME_BUDGET_SECONDS, `assetsRemaining` the tracked assets not reached.
+
+    A database binding governs every asset of the database, so an asset of a bound database that
+    has no compliance record yet is registered under the binding first (`registered`). A tracked
+    asset whose row names no schema (an on-demand evaluation against a named schema in a database
+    without a binding records one) cannot be evaluated without a schema and is counted under
+    `withoutSchema`. An asset whose evaluation found a newer one of it already started is listed
+    with verdict `superseded` and counted under `superseded`, as in a sweep.
+
+    Authorized on the database's compliance evaluation object, like the evaluation of one asset;
+    no other database is read or evaluated."""
+    started_at = monotonic()
+    (valid, message) = validate({
+        "databaseId": {"value": database_id, "validator": "ID"},
+    })
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
+
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    if not _enforce_evaluation(database_id, "POST"):
+        return authorization_error()
+
+    db_item = store.get_database_item(database_id)
+    if not db_item:
+        return general_error(body={"message": "Database not found"}, event=event)
+
+    registered = 0
+    if db_item.get("complianceSchemaName"):
+        registered = store.register_unrecorded_assets(database_id, db_item["complianceSchemaName"])
+
+    actor = claims_and_roles["tokens"][0]
+    triggered = []
+    superseded = 0
+    without_schema = 0
+    beyond_cap = 0
+    beyond_budget = 0
+    budget_spent = False
+    for row in _database_rows_pending_first(database_id):
+        schema_name = row.get("schemaName")
+        if not schema_name:
+            without_schema += 1
+            continue
+        if len(triggered) >= MAX_SWEEP_ASSETS:
+            beyond_cap += 1
+            continue
+        if not budget_spent and monotonic() - started_at > SWEEP_TIME_BUDGET_SECONDS:
+            budget_spent = True
+        if budget_spent:
+            beyond_budget += 1
+            continue
+        result = run_evaluation_for_asset(database_id, row["assetId"], schema_name, actor)
+        entry = {
+            "databaseId": database_id,
+            "assetId": row["assetId"],
+            "schemaName": schema_name,
+            "evaluationId": result.get("evaluationId"),
+            "verdict": result.get("verdict"),
+        }
+        if result.get("superseded"):
+            entry["superseded"] = True
+            superseded += 1
+        triggered.append(entry)
+
+    remaining = beyond_cap + beyond_budget
+    logger.info(f"Evaluation of database {database_id}: {registered} registered, {len(triggered)} "
+                f"triggered ({superseded} superseded), {without_schema} without a schema, "
+                f"{remaining} remaining ({beyond_cap} beyond the cap, {beyond_budget} beyond the "
+                f"time budget)")
+    return success(body={
+        "message": f"Evaluation triggered for {len(triggered)} assets",
+        "databaseId": database_id,
+        "assetsTriggered": triggered,
+        "assetsRemaining": remaining,
+        "superseded": superseded,
+        "registered": registered,
+        "withoutSchema": without_schema,
+    })
+
+
+def _database_rows_pending_first(database_id):
+    """Every asset-state row of a database (read to exhaustion), the `pending_evaluation` rows
+    first and the rest after, each in asset-id order."""
+    rows = query_all_items(asset_state_table, KeyConditionExpression=Key("databaseId").eq(database_id))
+    pending = [r for r in rows if r.get("complianceState") == engine.STATE_PENDING_EVALUATION]
+    rest = [r for r in rows if r.get("complianceState") != engine.STATE_PENDING_EVALUATION]
+    return pending + rest
 
 
 def _bound_assets_pending_first(schema_name):

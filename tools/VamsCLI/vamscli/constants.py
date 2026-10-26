@@ -187,6 +187,7 @@ API_COMPLIANCE_BIND_ASSET = "/compliance/bind/{databaseId}/{assetId}"
 # Evaluation: evaluate one asset (POST); sweep re-evaluates every asset bound to a schema (POST);
 # the evaluations route is an asset's evaluation history (GET).
 API_COMPLIANCE_EVALUATE_ASSET = "/compliance/evaluate/{databaseId}/{assetId}"
+API_COMPLIANCE_EVALUATE_DATABASE = "/compliance/evaluate/{databaseId}"
 API_COMPLIANCE_SWEEP_SCHEMA = "/compliance/sweep/{schemaName}"
 API_COMPLIANCE_EVALUATIONS_ASSET = "/compliance/evaluations/{databaseId}/{assetId}"
 # Compliance state: one asset's record, and the per-database summary with every tracked asset.

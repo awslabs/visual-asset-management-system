@@ -210,6 +210,13 @@ class TestComplianceRequestPathsAndMethods:
         assert calls[0]['endpoint'] == '/compliance/sweep/cad-quality'
         assert calls[0]['kwargs']['json'] == {}
 
+    def test_evaluate_database_posts_the_database_route_with_an_empty_body(self):
+        client, calls = _recording_client({'assetsTriggered': []})
+        client.evaluate_database_compliance('my-database')
+        assert calls[0]['method'] == 'POST'
+        assert calls[0]['endpoint'] == '/compliance/evaluate/my-database'
+        assert calls[0]['kwargs']['json'] == {}
+
     def test_evaluations_and_state_routes(self):
         client, calls = _recording_client({})
         client.list_compliance_evaluations('my-database', 'my-asset')
@@ -975,6 +982,32 @@ class TestComplianceEvaluationCommands:
                 "Schema 'gone' not found")
             result = cli_runner.invoke(cli, ['compliance', 'sweep', '-n', 'gone'])
             assert result.exit_code != 0
+
+    def test_sweep_a_database_evaluates_its_tracked_assets(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].evaluate_database_compliance.return_value = {
+                'message': 'Evaluation triggered for 2 assets', 'databaseId': 'my-database',
+                'assetsTriggered': [{'databaseId': 'my-database', 'assetId': 'a'},
+                                    {'databaseId': 'my-database', 'assetId': 'b'}],
+                'assetsRemaining': 3, 'registered': 1, 'withoutSchema': 1}
+            result = cli_runner.invoke(cli, ['compliance', 'sweep', '-d', 'my-database'])
+            assert result.exit_code == 0
+            mocks['api_client'].evaluate_database_compliance.assert_called_once_with('my-database')
+            mocks['api_client'].sweep_compliance_schema.assert_not_called()
+            assert 'Assets Triggered: 2' in result.output
+            assert 'Registered under the database binding: 1' in result.output
+            assert 'Without a bound schema (not evaluated): 1' in result.output
+            assert "Remaining (beyond this call's cap): 3" in result.output
+
+    @pytest.mark.parametrize("args", [[], ['-n', 'cad-quality', '-d', 'my-database']],
+                             ids=["neither", "both"])
+    def test_sweep_needs_exactly_one_of_schema_and_database(self, cli_runner,
+                                                            generic_command_mocks, args):
+        with generic_command_mocks('compliance') as mocks:
+            result = cli_runner.invoke(cli, ['compliance', 'sweep', *args])
+            assert result.exit_code != 0
+            mocks['api_client'].sweep_compliance_schema.assert_not_called()
+            mocks['api_client'].evaluate_database_compliance.assert_not_called()
 
     def test_state_for_an_asset(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:

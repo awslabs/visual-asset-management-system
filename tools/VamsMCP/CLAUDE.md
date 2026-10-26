@@ -129,7 +129,8 @@ asymmetry other callers rely on):
    The compliance tools that evaluate assets belong on that compute list too: a
    pipeline rule runs one workflow execution per evaluated asset, so
    `evaluate_asset_compliance` (one asset), `sweep_compliance_schema` (every asset
-   bound to the schema), `create_compliance_cascade` (starts the run at once with
+   bound to the schema), `evaluate_database_compliance` (every tracked asset of one
+   database), `create_compliance_cascade` (starts the run at once with
    `require_approval=False`) and `approve_compliance_cascade` (starts the run; both
    return 202 and the run continues in the background — poll
    `get_compliance_cascade`) are write-tier and stay out of `autoApprove`; `unbind_compliance_schema`

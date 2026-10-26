@@ -716,6 +716,12 @@ class SweepSchemaRequestModel(BaseModel, extra='ignore'):
     pass
 
 
+class EvaluateDatabaseRequestModel(BaseModel, extra='ignore'):
+    """Request model for evaluating every tracked asset of a database
+    (POST /compliance/evaluate/{databaseId}); no fields."""
+    pass
+
+
 # --- Quarantine request models ---
 
 

@@ -550,6 +550,49 @@ export const evaluateAssetCompliance = async (
     }
 };
 
+/** The response of POST /compliance/evaluate/{databaseId}. */
+export interface EvaluateDatabaseResponse {
+    message: string;
+    databaseId: string;
+    assetsTriggered: {
+        databaseId: string;
+        assetId: string;
+        schemaName: string;
+        evaluationId?: string;
+        verdict?: string;
+        superseded?: boolean;
+    }[];
+    assetsRemaining: number;
+    superseded?: number;
+    registered?: number;
+    withoutSchema?: number;
+}
+
+/**
+ * Evaluates every tracked asset of one database, each against its own bound schema (the database
+ * binding or the asset's override); no other database is evaluated. Bounded like a sweep:
+ * `assetsRemaining` above 0 means call again.
+ */
+export const evaluateDatabaseCompliance = async (
+    databaseId: string
+): Promise<[boolean, EvaluateDatabaseResponse | string]> => {
+    try {
+        const response = await apiClient.post(`compliance/evaluate/${databaseId}`, {
+            body: {},
+        });
+        if (
+            response?.message &&
+            (response.message.includes("error") || response.message.includes("Error"))
+        ) {
+            return [false, response.message];
+        }
+        return [true, response];
+    } catch (error: any) {
+        console.log("evaluateDatabaseCompliance error:", error);
+        return [false, error?.message || "Failed to evaluate the assets"];
+    }
+};
+
 export const sweepSchema = async (schemaName: string): Promise<[boolean, any]> => {
     try {
         const response = await apiClient.post(`compliance/sweep/${schemaName}`, {

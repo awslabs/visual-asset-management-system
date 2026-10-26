@@ -523,9 +523,13 @@ API_COMPLIANCE_BIND_DATABASE = ApiRoute(
 API_COMPLIANCE_BIND_ASSET = ApiRoute(
     "/compliance/bind/{databaseId}/{assetId}", (PUT, DELETE), "compliance"
 )
-# Evaluation: on-demand evaluate for one asset; sweep re-evaluates every asset bound to a schema.
+# Evaluation: on-demand evaluate for one asset, or for every tracked asset of a database (each
+# against its own bound schema); sweep re-evaluates every asset bound to a schema.
 API_COMPLIANCE_EVALUATE_ASSET = ApiRoute(
     "/compliance/evaluate/{databaseId}/{assetId}", (POST,), "compliance"
+)
+API_COMPLIANCE_EVALUATE_DATABASE = ApiRoute(
+    "/compliance/evaluate/{databaseId}", (POST,), "compliance"
 )
 API_COMPLIANCE_SWEEP_SCHEMA = ApiRoute("/compliance/sweep/{schemaName}", (POST,), "compliance")
 API_COMPLIANCE_EVALUATIONS_ASSET = ApiRoute(
@@ -566,6 +570,7 @@ COMPLIANCE_ROUTES: Tuple[ApiRoute, ...] = (
     API_COMPLIANCE_BIND_DATABASE,
     API_COMPLIANCE_BIND_ASSET,
     API_COMPLIANCE_EVALUATE_ASSET,
+    API_COMPLIANCE_EVALUATE_DATABASE,
     API_COMPLIANCE_SWEEP_SCHEMA,
     API_COMPLIANCE_EVALUATIONS_ASSET,
     API_COMPLIANCE_STATE_ASSET,

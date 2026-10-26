@@ -365,7 +365,8 @@ its member's execution id and each `notAbortable` entry carries its member's
 `executionId`.
 The compliance tools that evaluate assets start compute the same way — a pipeline
 rule runs one workflow execution per evaluated asset — so `evaluate_asset_compliance`,
-`sweep_compliance_schema` (every asset bound to the schema), `create_compliance_cascade`
+`sweep_compliance_schema` (every asset bound to the schema), `evaluate_database_compliance`
+(every tracked asset of one database), `create_compliance_cascade`
 (starts at once with `require_approval=False`) and `approve_compliance_cascade`
 (starts the run) stay out of `autoApprove` as well.
 
@@ -426,7 +427,8 @@ its next call.
 
 Compliance: `create_compliance_schema`, `update_compliance_schema`,
 `bind_compliance_schema`, `unbind_compliance_schema`, `evaluate_asset_compliance`,
-`sweep_compliance_schema`, `release_quarantine`, `grant_quarantine_exception`,
+`sweep_compliance_schema`, `evaluate_database_compliance`, `release_quarantine`,
+`grant_quarantine_exception`,
 `revoke_quarantine_exception`, `create_compliance_cascade`,
 `approve_compliance_cascade`, `reject_compliance_cascade`.
 
@@ -464,7 +466,9 @@ changing the asset's binding; its response carries `schemaVersion`,
 `exceptionApplied` and `hasRuleErrors`, and when every rule errored the asset's
 state is left unchanged with `lastEvaluationStatus` `error`. `sweep_compliance_schema` returns `assetsTriggered` plus
 `skipped` (bound assets the caller may not evaluate, counted but never listed) and
-`assetsRemaining` (beyond the per-call cap). `release_quarantine` returns an asset to
+`assetsRemaining` (beyond the per-call cap). `evaluate_database_compliance` evaluates
+the tracked assets of one database, each against its own bound schema, with the same
+bounds, and adds `registered` and `withoutSchema`. `release_quarantine` returns an asset to
 compliant until its next evaluation; `grant_quarantine_exception` records a
 deliberate waiver with its required `reason` and moves the asset to state
 `exception`, scoped to its bound schema at its current version — a re-evaluation

@@ -244,7 +244,8 @@ class TestRouteDispatch:
     @pytest.mark.parametrize("method,path", [
         ("GET", EVALUATE_PATH), ("GET", SWEEP_PATH), ("POST", EVALUATIONS_PATH),
         ("POST", STATE_DB_PATH), ("PUT", STATE_ASSET_PATH), ("DELETE", EVALUATE_PATH),
-        ("GET", "/compliance/state"), ("POST", f"/compliance/evaluate/{DB}"),
+        ("GET", "/compliance/state"), ("GET", f"/compliance/evaluate/{DB}"),
+        ("POST", f"/compliance/evaluate/{DB}/{ASSET}/extra"),
     ])
     def test_an_unknown_method_or_path_is_refused(self, method, path):
         response, mocks = _run(rest_event(method, path, body={}))

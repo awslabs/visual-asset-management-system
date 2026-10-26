@@ -64,6 +64,8 @@ DISPATCH = {
     (api_routes.API_COMPLIANCE_BIND_ASSET, "DELETE"): (
         complianceSchemaBindingService, "unbind_schema_from_asset"),
     (api_routes.API_COMPLIANCE_EVALUATE_ASSET, "POST"): (complianceEvaluateService, "evaluate_asset"),
+    (api_routes.API_COMPLIANCE_EVALUATE_DATABASE, "POST"): (
+        complianceEvaluateService, "evaluate_database"),
     (api_routes.API_COMPLIANCE_SWEEP_SCHEMA, "POST"): (complianceEvaluateService, "sweep_schema"),
     (api_routes.API_COMPLIANCE_EVALUATIONS_ASSET, "GET"): (
         complianceEvaluateService, "get_evaluations"),
@@ -133,8 +135,8 @@ class TestTheDispatchTableMatchesTheRegistry:
         registry_pairs = {(route, method) for route in api_routes.COMPLIANCE_ROUTES
                           for method in route.methods}
         assert set(DISPATCH) == registry_pairs
-        assert len(api_routes.COMPLIANCE_ROUTES) == 18
-        assert len(registry_pairs) == 26
+        assert len(api_routes.COMPLIANCE_ROUTES) == 19
+        assert len(registry_pairs) == 27
 
     def test_every_route_is_served_by_one_handler(self):
         handlers_by_route = {}

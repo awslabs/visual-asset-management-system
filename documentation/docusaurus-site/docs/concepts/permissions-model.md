@@ -540,6 +540,7 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 | `/compliance/bind/{databaseId}`                           | GET, PUT, DELETE | `complianceSchema` + `database` (`GET`); `PUT` and `DELETE` also `complianceBinding` | `complianceSchemaName`, `databaseId` |
 | `/compliance/bind/{databaseId}/{assetId}`                 | PUT, DELETE      | `complianceBinding` + `complianceSchema` + `asset` (`GET`)                           | `complianceSchemaName`, `databaseId` |
 | `/compliance/evaluate/{databaseId}/{assetId}`             | POST             | `complianceEvaluation`                                                               | `databaseId`                         |
+| `/compliance/evaluate/{databaseId}`                       | POST             | `complianceEvaluation`                                                               | `databaseId`                         |
 | `/compliance/evaluations/{databaseId}/{assetId}`          | GET              | `complianceEvaluation`                                                               | `databaseId`                         |
 | `/compliance/state/{databaseId}/{assetId}`                | GET              | `complianceEvaluation`                                                               | `databaseId`                         |
 | `/compliance/state/{databaseId}`                          | GET              | `complianceEvaluation`                                                               | `databaseId`                         |

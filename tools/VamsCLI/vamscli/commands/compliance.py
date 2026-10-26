@@ -839,29 +839,43 @@ def evaluate(ctx: click.Context, database_id: str, asset_id: str, schema_name: O
 
 
 @compliance.command('sweep')
-@click.option('-n', '--schema-name', required=True, help='[REQUIRED] Schema whose assets to re-evaluate')
+@click.option('-n', '--schema-name', default=None,
+              help='Schema whose assets to re-evaluate (in every database it is bound to)')
+@click.option('-d', '--database-id', default=None,
+              help='Database whose tracked assets to re-evaluate, each against its own schema')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def sweep(ctx: click.Context, schema_name: str, json_output: bool):
-    """Re-evaluate every asset bound to a schema.
+def sweep(ctx: click.Context, schema_name: Optional[str], database_id: Optional[str],
+          json_output: bool):
+    """Re-evaluate every asset bound to a schema (-n), or every tracked asset of a database (-d).
 
-    Run after 'compliance schema update' so existing assets are checked against the new version.
-    Assets awaiting evaluation are evaluated first. Bound assets the caller is not authorized to
-    evaluate are counted as skipped and never listed; bound assets a call does not reach (its
-    per-call cap or its time budget) are counted as remaining, and a repeated sweep works through
-    them. An asset whose evaluation found a newer one of it already started is listed as
-    superseded and counted: its state is that newer evaluation's.
+    Give exactly one of -n and -d. With -n, run after 'compliance schema update' so existing
+    assets are checked against the new version; bound assets the caller is not authorized to
+    evaluate are counted as skipped and never listed. With -d, every asset of that database with a
+    compliance record is evaluated against the schema it is bound to (the database binding or its
+    own override) and no other database is touched: the web overview's Evaluate All. Assets
+    awaiting evaluation are evaluated first; assets a call does not reach (its per-call cap or its
+    time budget) are counted as remaining, and a repeated call works through them. An asset whose
+    evaluation found a newer one of it already started is listed as superseded and counted: its
+    state is that newer evaluation's.
 
     Examples:
         vamscli compliance sweep -n cad-quality
+        vamscli compliance sweep -d my-database
         vamscli compliance sweep -n cad-quality --json-output
     """
+    if bool(schema_name) == bool(database_id):
+        raise click.UsageError("Give exactly one of -n/--schema-name and -d/--database-id")
     # Setup/auth already validated by decorator
     api_client = _api(ctx)
-    output_status(f"Sweeping assets bound to schema '{schema_name}'...", json_output)
+    if database_id:
+        output_status(f"Evaluating the tracked assets of database '{database_id}'...", json_output)
+    else:
+        output_status(f"Sweeping assets bound to schema '{schema_name}'...", json_output)
     try:
-        result = api_client.sweep_compliance_schema(schema_name)
+        result = (api_client.evaluate_database_compliance(database_id) if database_id
+                  else api_client.sweep_compliance_schema(schema_name))
 
         def _fmt(r):
             triggered = r.get('assetsTriggered') or []
@@ -873,6 +887,10 @@ def sweep(ctx: click.Context, schema_name: str, json_output: bool):
                 lines.append(f"  Superseded (a newer evaluation had started): {r['superseded']}")
             if r.get('skipped'):
                 lines.append(f"  Skipped (not authorized to evaluate): {r['skipped']}")
+            if r.get('registered'):
+                lines.append(f"  Registered under the database binding: {r['registered']}")
+            if r.get('withoutSchema'):
+                lines.append(f"  Without a bound schema (not evaluated): {r['withoutSchema']}")
             if r.get('assetsRemaining'):
                 lines.append(f"  Remaining (beyond this call's cap): {r['assetsRemaining']}")
             return '\n'.join(lines)

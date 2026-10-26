@@ -66,6 +66,7 @@ WRITE_TOOLS = (
     "unbind_compliance_schema",
     "evaluate_asset_compliance",
     "sweep_compliance_schema",
+    "evaluate_database_compliance",
     "release_quarantine",
     "grant_quarantine_exception",
     "create_compliance_cascade",

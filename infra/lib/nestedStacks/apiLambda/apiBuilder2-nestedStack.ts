@@ -687,7 +687,8 @@ export class ApiBuilder2NestedStack extends NestedStack {
             });
         }
 
-        // Evaluate on demand, sweep a schema's bound assets, and read evaluations + state.
+        // Evaluate on demand (one asset, or every tracked asset of a database), sweep a schema's
+        // bound assets, and read evaluations + state.
         const complianceEvaluateService = buildComplianceEvaluateServiceFunction(
             this,
             lambdaCommonBaseLayer,
@@ -699,6 +700,11 @@ export class ApiBuilder2NestedStack extends NestedStack {
         );
         attachFunctionToApi(this, complianceEvaluateService, {
             routePath: "/compliance/evaluate/{databaseId}/{assetId}",
+            method: apigateway.HttpMethod.POST,
+            registry: registry,
+        });
+        attachFunctionToApi(this, complianceEvaluateService, {
+            routePath: "/compliance/evaluate/{databaseId}",
             method: apigateway.HttpMethod.POST,
             registry: registry,
         });

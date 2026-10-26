@@ -241,7 +241,8 @@ from ..constants import (
     API_AUTH_API_KEYS, API_AUTH_API_KEY,
     API_COMPLIANCE_SCHEMAS, API_COMPLIANCE_SCHEMA_BY_NAME,
     API_COMPLIANCE_BIND_DATABASE, API_COMPLIANCE_BIND_ASSET,
-    API_COMPLIANCE_EVALUATE_ASSET, API_COMPLIANCE_SWEEP_SCHEMA, API_COMPLIANCE_EVALUATIONS_ASSET,
+    API_COMPLIANCE_EVALUATE_ASSET, API_COMPLIANCE_EVALUATE_DATABASE, API_COMPLIANCE_SWEEP_SCHEMA,
+    API_COMPLIANCE_EVALUATIONS_ASSET,
     API_COMPLIANCE_STATE_ASSET, API_COMPLIANCE_STATE_DATABASE,
     API_COMPLIANCE_QUARANTINE, API_COMPLIANCE_QUARANTINE_RELEASE, API_COMPLIANCE_QUARANTINE_EXCEPTION,
     API_COMPLIANCE_CASCADES, API_COMPLIANCE_CASCADE_BY_ID,
@@ -7418,6 +7419,23 @@ class APIClient(CustomAPIClientMixin):
         """
         endpoint = API_COMPLIANCE_SWEEP_SCHEMA.format(schemaName=schema_name)
         return self._compliance_request('POST', endpoint, f"Sweeping schema '{schema_name}'")
+
+    def evaluate_database_compliance(self, database_id: str) -> Dict[str, Any]:
+        """
+        Evaluate every tracked asset of one database, each against its own bound schema (the
+        database binding or the asset's override), using the /compliance/evaluate/{databaseId}
+        POST endpoint. No other database is evaluated.
+
+        Returns:
+            API response data: {message, databaseId, assetsTriggered: [{databaseId, assetId,
+            schemaName, evaluationId, verdict, superseded?}], assetsRemaining, superseded,
+            registered, withoutSchema}. `assetsRemaining` above 0 means call again; `registered`
+            counts assets of a bound database registered under the binding by this call;
+            `withoutSchema` counts tracked assets whose record names no schema (not evaluated).
+        """
+        endpoint = API_COMPLIANCE_EVALUATE_DATABASE.format(databaseId=database_id)
+        return self._compliance_request(
+            'POST', endpoint, f"Evaluating the assets of database '{database_id}'")
 
     def list_compliance_evaluations(self, database_id: str, asset_id: str,
                                     max_items: Optional[int] = None,

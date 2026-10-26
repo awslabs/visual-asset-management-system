@@ -2542,6 +2542,26 @@ if CONFIG.enable_writes:
 
     @mcp.tool()
     @tool_result
+    def evaluate_database_compliance(database_id: str) -> Dict[str, Any]:
+        """Re-evaluate EVERY tracked asset of one database — each asset with a compliance record,
+        against the schema it is bound to (the database binding or its own override) — and nothing
+        in any other database. Returns `assetsTriggered` (databaseId, assetId, schemaName),
+        `superseded`, `registered`, `withoutSchema` and `assetsRemaining`.
+
+        This is the web overview's Evaluate All, scoped to the database; sweep_compliance_schema()
+        instead evaluates every database bound to one schema. In a bound database, assets that
+        have no compliance record yet are registered under the binding first (`registered`);
+        `withoutSchema` counts tracked assets whose record names no schema (not evaluated).
+        Assets awaiting evaluation are evaluated first; `assetsRemaining` counts the tracked assets
+        this call did not reach (its per-call cap or its time budget) — call again to work through
+        them. Each asset is evaluated as by evaluate_asset_compliance(), so a schema with pipeline
+        rules starts one workflow execution per asset — real AWS compute. Keep this tool out of
+        `autoApprove` and check get_database_compliance_overview() for the asset count first.
+        """
+        return CLIENT.api.evaluate_database_compliance(database_id)
+
+    @mcp.tool()
+    @tool_result
     def release_quarantine(
         database_id: str, asset_id: str, reason: Optional[str] = None
     ) -> Dict[str, Any]:

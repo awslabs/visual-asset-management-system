@@ -9577,6 +9577,44 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: "#/components/schemas/error"
             security:
                 - DefaultCognitoAuthorizer: []
+    /compliance/evaluate/{databaseId}:
+        post:
+            summary: "Evaluate every tracked asset of a database."
+            description: "Evaluates every asset of the database that has a compliance record, each against the schema its record binds (the database binding or the asset's own override); no other database is read or evaluated. In a bound database, an asset with no compliance record yet is first registered under the binding (`registered`). Assets in `pending_evaluation` first, then the rest, at most 200 per call, and a call stops launching evaluations after about 20 seconds; `assetsRemaining` reports how many tracked assets were not reached — a value above 0 means call again. `withoutSchema` counts tracked assets whose record names no schema (not evaluated). Authorized on the database's `complianceEvaluation` object."
+            parameters:
+                - name: databaseId
+                  in: path
+                  description: "Database identifier."
+                  required: true
+                  schema:
+                      type: string
+            responses:
+                "200":
+                    description: Evaluation completed.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/evaluateDatabaseResponse"
+                "400":
+                    description: Invalid database id, or the database does not exist.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "403":
+                    description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "500":
+                    description: Internal server error.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+            security:
+                - DefaultCognitoAuthorizer: []
     /compliance/sweep/{schemaName}:
         post:
             summary: "Sweep the assets bound to a schema."
@@ -16739,6 +16777,49 @@ components:
                 - ruleResults
                 - pipelineRulesPending
 
+        evaluateDatabaseResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                databaseId:
+                    type: string
+                assetsTriggered:
+                    type: array
+                    items:
+                        type: object
+                        properties:
+                            databaseId:
+                                type: string
+                            assetId:
+                                type: string
+                            schemaName:
+                                type: string
+                                description: "The schema the asset was evaluated against: its own override, else the database binding."
+                            evaluationId:
+                                type: string
+                                format: uuid
+                            verdict:
+                                type: string
+                                enum: [compliant, non_compliant, quarantined, pending_pipeline, error, superseded]
+                            superseded:
+                                type: boolean
+                assetsRemaining:
+                    type: integer
+                    description: "Tracked assets the call did not reach, beyond the 200-asset cap or after the time budget; a value above 0 means call again."
+                superseded:
+                    type: integer
+                registered:
+                    type: integer
+                    description: "Assets of a bound database registered under the binding by this call because they had no compliance record."
+                withoutSchema:
+                    type: integer
+                    description: "Tracked assets whose compliance record names no schema; not evaluated."
+            required:
+                - message
+                - databaseId
+                - assetsTriggered
+                - assetsRemaining
         sweepSchemaResponse:
             type: object
             properties:

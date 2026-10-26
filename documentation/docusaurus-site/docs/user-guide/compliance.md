@@ -415,6 +415,14 @@ The same evaluation is started with the API:
 POST /compliance/evaluate/{databaseId}/{assetId}
 ```
 
+### Database evaluation
+
+**Evaluate All Assets** on the [database compliance overview](#database-compliance-overview) evaluates every tracked asset of that database, each against its own bound schema (the database binding, or the asset's override), and no asset of any other database. In a bound database, assets without a compliance record are registered under the binding first. Like a sweep, one request evaluates up to 200 assets and reports how many remain.
+
+```bash
+POST /compliance/evaluate/{databaseId}
+```
+
 ### Schema sweep
 
 A sweep evaluates every asset bound to a schema — for example after registering or updating the schema.
