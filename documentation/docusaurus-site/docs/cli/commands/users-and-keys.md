@@ -44,10 +44,10 @@ vamscli user cognito list
 vamscli user cognito list --auto-paginate
 vamscli user cognito list --auto-paginate --max-items 5000
 vamscli user cognito list --page-size 50 --starting-token "token123"
-vamscli user cognito list --json-output | jq '.Items[] | select(.userStatus == "CONFIRMED")'
+vamscli user cognito list --json-output | jq '.users[] | select(.userStatus == "CONFIRMED")'
 ```
 
-Each entry reports `userId`, `email`, `phone` (if set), `userStatus`, `enabled`, `mfaEnabled`, and creation/modification timestamps.
+Each entry reports `userId`, `email`, `phone` (if set), `userStatus`, `enabled`, `mfaEnabled`, and creation/modification timestamps. With `--json-output` the users are listed under `users`, as the API returns them, with `NextToken` when another page exists; `--auto-paginate` adds `totalItems`, `pageCount` and `autoPaginated`.
 
 ---
 
@@ -121,7 +121,7 @@ vamscli user cognito delete -u user@example.com --confirm --json-output
 ```
 
 :::danger[Permanent Deletion]
-This action is permanent and cannot be undone. All user data and sessions are removed. The `--confirm` flag is required, and in interactive (non-JSON) mode an additional confirmation prompt appears before deletion proceeds.
+This action is permanent and cannot be undone. All user data and sessions are removed. The `--confirm` flag is required. When the command runs in an interactive terminal without `--json-output`, an additional confirmation prompt appears before deletion proceeds; in a script, pipe or CI job, or with `--json-output`, `--confirm` alone proceeds.
 :::
 
 ---
