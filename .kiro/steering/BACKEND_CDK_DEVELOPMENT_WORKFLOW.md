@@ -978,15 +978,31 @@ def handle_get_request(event):
         return internal_error(event=event)
 ```
 
+**A check walks only the policy lines that can match its object type.**
+`ObjectTypeRoutingEnforcer` (`handlers/authz/__init__.py`, the enforcer
+`_create_casbin_enforcer_helper` builds) reads each line's compiled matcher expression when the
+policy loads and lists the line under the one object type its
+`regexMatch(r.obj.object__type, '^<type>\\Z')` gate names. A line that is not provably gated on one
+literal type (regex syntax in the type name, a gate that is not the first conjunct, a top-level
+`||`, an unparsable rule, a wrong field count, the deny-all line) is shared by every type in its
+original position. A request of type T walks T's lines plus the shared ones in policy order; a type
+no line names is denied without a walk. A skipped line would have evaluated `g()` and a false gate
+and added only `INDETERMINATE`, so no decision changes.
+`tests/handlers/authz/test_casbin_object_type_routing.py` compares it with the all-lines
+`ExpressionCachingEnforcer` over every shipped permission template, the seeded roles and synthetic
+and hand-written policy sets, and fails when a deny line is dropped or a type misrouted. Keep the
+object-type gate as the first criterion of every generated line; a line built otherwise is still
+correct but is walked for every type.
+
 **Compiled matcher expressions are cached per user enforcer, never decisions.**
-`ExpressionCachingEnforcer` (`handlers/authz/__init__.py`, the `FastEnforcer` subclass that
-`_create_casbin_enforcer_helper` builds) keeps an **instance-level** dict of compiled `SimpleEval`
-expressions keyed on the full inlined rule string, so each distinct policy line is parsed once per
-enforcer while every `enforce()` still evaluates every line. The enforcer is owned by one
-`CasbinEnforcerService`, so the cache is per user and is discarded with the service on the
-60-second TTL / MFA invalidation. Never move the cache to class or module level: the compiled
-expression holds the enforcer's function map whose `g` is bound to that user's role manager, so a
-shared cache would evaluate one user's role links for another.
+`ExpressionCachingEnforcer` (`handlers/authz/__init__.py`, the parent of
+`ObjectTypeRoutingEnforcer`) keeps an **instance-level** dict of compiled `SimpleEval` expressions
+keyed on the full inlined rule string, so each distinct policy line is parsed once per enforcer
+while every `enforce()` still evaluates every line it walks. The enforcer is owned by one
+`CasbinEnforcerService`, so the cache and the routes are per user and are discarded with the
+service on the 60-second TTL / MFA invalidation. Never move the cache to class or module level: the
+compiled expression holds the enforcer's function map whose `g` is bound to that user's role
+manager, so a shared cache would evaluate one user's role links for another.
 `tests/handlers/authz/test_casbin_expression_cache.py` pins the instance-level shape, decision
 parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA freshness.
 

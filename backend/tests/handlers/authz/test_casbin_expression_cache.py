@@ -41,6 +41,7 @@ from backend.backend.handlers.authz import (
     CasbinEnforcer,
     CasbinEnforcerService,
     ExpressionCachingEnforcer,
+    ObjectTypeRoutingEnforcer,
 )
 
 OBJECT_TYPES = ("asset", "database", "pipeline", "workflow", "api", "web", "tag", "metadataSchema")
@@ -310,7 +311,6 @@ def test_decision_parity_matrix(effect, operator, object_type, role_count, mfa_e
     for _ in range(2):
         for obj, act in requests:
             assert cached.enforce(dict(obj), act) is plain.enforce(dict(obj), act), (obj, act)
-    assert len(cached._enforcer._expression_cache) > 0
 
     # The decisions the policy prescribes. A line is live only when its role survived the MFA
     # filter; the deny variant's baseline sits on roles[0], which is always MFA-free here.
@@ -324,6 +324,11 @@ def test_decision_parity_matrix(effect, operator, object_type, role_count, mfa_e
         assert satisfied is (not line_live)
         assert unsatisfied is True
     assert put is False
+
+    # The cached enforcer compiled a line exactly when the request's object type has one: the
+    # company lines are routed to their own types, so an allow cell whose line the MFA filter
+    # dropped walks nothing.
+    assert (len(cached._enforcer._expression_cache) > 0) is (line_live or effect == "deny")
 
 
 @pytest.mark.unit
@@ -540,24 +545,29 @@ def _hundred_thirty_line_policies():
 
 @pytest.mark.unit
 def test_second_enforce_on_130_line_policy_makes_zero_ast_parse_calls():
-    """First ``enforce()`` that walks every line parses each distinct rule text once; the second
-    ``enforce()`` -- same request or a different one -- parses nothing. Patches the exact symbol
-    casbin 1.36.0 calls: ``casbin.util.expression.ast.parse`` (``util/expression.py`` L34)."""
+    """The first walk of every line -- one request per object type, each walking that type's lines
+    -- parses each distinct rule text once; after it no ``enforce()`` parses anything. Patches the
+    exact symbol casbin 1.36.0 calls: ``casbin.util.expression.ast.parse`` (``util/expression.py``
+    L34)."""
     user_id = "perf-user"
     text = _policy_text(user_id, ROLES_5, _hundred_thirty_line_policies(), True)
     p_lines = [line for line in text.splitlines() if line.startswith("p,")]
     assert len(p_lines) == 130
     svc = _production_service(user_id, text)
 
-    # A request no line can match walks all 130 lines (no deny short-circuit).
-    walker = {"object__type": "nonesuch"}
+    # No line holds HEAD, so no line matches and each request walks all of its type's lines.
+    walkers = [{"object__type": object_type} for object_type in OBJECT_TYPES]
     with patch.object(casbin_expression.ast, "parse", side_effect=PARSE) as spy:
-        assert svc.enforce(dict(walker), "GET") is False
+        for walker in walkers:
+            assert svc.enforce(dict(walker), "HEAD") is False
     assert spy.call_count == 130
     assert len(svc._enforcer._expression_cache) == 130
 
     with patch.object(casbin_expression.ast, "parse", side_effect=PARSE) as spy:
-        assert svc.enforce(dict(walker), "GET") is False
+        for walker in walkers:
+            assert svc.enforce(dict(walker), "HEAD") is False
+        # A type no line names walks no line.
+        assert svc.enforce({"object__type": "nonesuch"}, "GET") is False
     assert spy.call_count == 0
 
     with patch.object(casbin_expression.ast, "parse", side_effect=PARSE) as spy:
@@ -604,7 +614,7 @@ def test_cache_keys_are_full_inlined_rule_strings():
     ]
     text = _policy_text("keys", ("roleA",), policies, True)
     svc = _production_service("keys", text)
-    svc.enforce({"object__type": "nonesuch"}, "GET")  # walks all three lines
+    svc.enforce({"object__type": "asset"}, "HEAD")  # walks all three asset lines
 
     keys = sorted(svc._enforcer._expression_cache)
     assert len(keys) == 2
@@ -623,11 +633,12 @@ def test_cache_keys_are_full_inlined_rule_strings():
 def test_production_factory_and_deny_all_fallback_use_the_caching_enforcer():
     svc = _bare_service("factory", True)
     svc._create_casbin_enforcer("p, 'role::r', (regexMatch(r.obj.object__type, '^asset\\\\Z')), GET, allow")
-    assert type(svc._enforcer) is ExpressionCachingEnforcer
+    assert type(svc._enforcer) is ObjectTypeRoutingEnforcer
+    assert isinstance(svc._enforcer, ExpressionCachingEnforcer)
 
     broken = _bare_service("broken", True)
     broken._create_casbin_enforcer("p, this, line, has, far, too, many, fields")
-    assert type(broken._enforcer) is ExpressionCachingEnforcer
+    assert type(broken._enforcer) is ObjectTypeRoutingEnforcer
     assert broken.enforce({"object__type": "asset", "databaseId": "db1"}, "GET") is False
 
 

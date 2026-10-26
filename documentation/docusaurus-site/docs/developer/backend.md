@@ -244,6 +244,7 @@ You must add `object__type` to the item dictionary before calling `enforce()`. V
 ### Key Authorization Concepts
 
 -   **CasbinEnforcer** uses a 60-second policy cache TTL per user
+-   Each `enforce()` evaluates only the policy lines for the object's `object__type`; lines for other object types cannot match it and are not evaluated
 -   Policy is stored in Amazon DynamoDB (`ConstraintsStorageTable`)
 -   Claims are extracted via `request_to_claims(event)` which returns user tokens, roles, and MFA status
 -   Roles with `mfaRequired=True` are only active when `mfaEnabled=True` in claims
