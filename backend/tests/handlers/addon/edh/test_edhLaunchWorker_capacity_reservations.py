@@ -114,7 +114,8 @@ class TestRefusedCreateOfAReservationBoundRow:
                    if name.startswith("#r")]
         assert removed == ["capacityReservationId"]
         written = updates(fakes)
-        assert {"capacityReservationFallback": True, "capacityReservationRequested": CR_FULL}.items() <= \
+        assert {"capacityReservationFallback": True, "capacityReservationRequested": CR_FULL,
+                "capacityReservationFallbackReason": "full"}.items() <= \
             next(w for w in written if "capacityReservationFallback" in w).items()
         assert result["outcome"] == "launched" and result["state"] != "ORPHANED"
         assert fakes.reservations.ec2.ids_asked() == [[CR_FULL]]

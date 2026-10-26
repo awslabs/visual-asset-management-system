@@ -107,12 +107,15 @@ class TestRecordReservationFields:
                                                    capacityReservationLabel="Farm").dict()
         assert (record["capacityReservationId"], record["capacityReservationLabel"]) == (CR_ID, "Farm")
 
-    def test_a_fallback_row_projects_the_fallback_and_never_the_requested_id(self):
+    def test_a_fallback_row_projects_the_fallback_and_the_requested_id(self):
         record = edh_models.WorkstationRecordModel(**RECORD, capacityReservationFallback=True,
                                                    capacityReservationRequested=CR_ID).dict()
         assert record["capacityReservationFallback"] is True
         assert record["capacityReservationId"] is None
-        assert "capacityReservationRequested" not in record
+        assert record["capacityReservationRequested"] == CR_ID
+
+    def test_a_row_without_a_reservation_requested_none(self):
+        assert edh_models.WorkstationRecordModel(**RECORD).dict()["capacityReservationRequested"] is None
 
 
 @pytest.mark.unit
@@ -121,5 +124,40 @@ class TestCapacityReservationViewModel:
         assert list(edh_models.CapacityReservationViewModel.__fields__) == [
             "capacityReservationId", "label", "fallbackToOnDemand", "enabled", "instanceType", "availabilityZone",
             "instancePlatform", "state", "totalInstanceCount", "availableInstanceCount", "instanceMatchCriteria",
-            "endDate", "reservationType",
+            "endDate", "reservationType", "edhSubnetAvailable",
         ]
+
+    def test_the_catalog_item_adds_whether_the_role_may_launch_into_it(self):
+        assert list(edh_models.CatalogCapacityReservationViewModel.__fields__) == [
+            *edh_models.CapacityReservationViewModel.__fields__, "launchAllowed"]
+        view = {"capacityReservationId": CR_ID, "fallbackToOnDemand": True, "enabled": True, "state": "active"}
+        assert edh_models.CatalogCapacityReservationViewModel(**view, launchAllowed=False).dict()[
+            "launchAllowed"] is False
+        with pytest.raises(ValidationError):
+            edh_models.CatalogCapacityReservationViewModel(**view, launchAllowed="yes")
+        with pytest.raises(ValidationError):
+            edh_models.CatalogCapacityReservationViewModel(**view)
+
+    @pytest.mark.parametrize("value", [True, False, None])
+    def test_the_subnet_field_is_a_bool_or_null(self, value):
+        view = {"capacityReservationId": CR_ID, "fallbackToOnDemand": True, "enabled": True, "state": "active"}
+        assert edh_models.CapacityReservationViewModel(**view, edhSubnetAvailable=value).dict()[
+            "edhSubnetAvailable"] is value
+
+
+@pytest.mark.unit
+class TestRecordFallbackReason:
+    @pytest.mark.parametrize("reason", ["full", "ended", None])
+    def test_the_reasons(self, reason):
+        record = edh_models.WorkstationRecordModel(**RECORD, capacityReservationFallback=reason is not None,
+                                                   capacityReservationFallbackReason=reason).dict()
+        assert record["capacityReservationFallbackReason"] == reason
+
+    def test_another_reason_is_refused(self):
+        with pytest.raises(ValueError):
+            edh_models.WorkstationRecordModel(**RECORD, capacityReservationFallback=True,
+                                              capacityReservationFallbackReason="cancelled")
+
+    def test_the_reasons_are_the_session_states(self):
+        from backend.backend.handlers.addon.edh.common.edhSessionState import CAPACITY_RESERVATION_FALLBACK_REASONS
+        assert edh_models.CAPACITY_RESERVATION_FALLBACK_REASONS == CAPACITY_RESERVATION_FALLBACK_REASONS

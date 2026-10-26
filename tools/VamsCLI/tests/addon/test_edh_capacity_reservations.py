@@ -305,16 +305,19 @@ RESERVATION_COLUMNS = ['LABEL', 'RESERVATION', 'INSTANCE TYPE', 'AZ', 'PLATFORM'
 class TestCatalogCapacityReservations:
     def test_lists_the_reservations_in_the_web_table_s_columns(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('addon.edh') as mocks:
-            mocks['api_client'].list_edh_catalog_capacity_reservations.return_value = {'Items': [RENDER_POOL]}
+            mocks['api_client'].list_edh_catalog_capacity_reservations.return_value = {
+                'Items': [{**RENDER_POOL, 'launchAllowed': True}]}
             result = cli_runner.invoke(cli, ['edh', 'catalog', 'capacity-reservations'])
             assert result.exit_code == 0, result.output
             assert 'Found 1 capacity reservation(s)' in result.output
             lines = result.output.splitlines()
             header = next(line for line in lines if line.startswith('LABEL'))
-            assert [c for c in RESERVATION_COLUMNS if c not in header] == []
+            # The catalog adds LAUNCH (whether the role may launch into the reservation) as its last column.
+            assert [c for c in RESERVATION_COLUMNS + ['LAUNCH'] if c not in header] == []
+            assert header.split()[-1] == 'LAUNCH'
             row = next(line for line in lines if line.startswith('Render pool'))
             assert row.split() == ['Render', 'pool', CR_ID, 'g5.16xlarge', 'us-east-1a', 'Linux/UNIX', 'active',
-                                   '3/4', '2026-10-24T16:00:00Z', 'on-demand', 'yes']
+                                   '3/4', '2026-10-24T16:00:00Z', 'on-demand', 'yes', 'yes']
             mocks['api_client'].list_edh_catalog_capacity_reservations.assert_called_once_with(
                 instance_type=None, os_family=None)
 

@@ -22,6 +22,8 @@ from backend.tests.handlers.addon.edh.edhReservationTestSupport import (
 
 COLLECTION = "/addon/edh/admin/capacity-reservations"
 NOT_FOUND_MESSAGE = "Capacity reservation not found in this account and Region"
+# EDH's private subnets, by id, and the Availability Zone each is in: none in us-east-1d.
+SUBNET_ZONES = {"subnet-0a1b2c3d4e5f60718": "us-east-1a", "subnet-0f1e2d3c4b5a69788": "us-east-1b"}
 
 
 def _one(cr_id):
@@ -34,10 +36,12 @@ def aws():
         yield
 
 
-def _install(monkeypatch, *, records=None, failure=None, registered=(), edh=None, rows=None):
+def _install(monkeypatch, *, records=None, failure=None, registered=(), edh=None, rows=None, **subnet_fakes):
+    """The admin fakes with the registry, EC2 and EDH's private subnets (``subnet_fakes``, as
+    ``install_reservation_fakes`` takes them) behind the reservation module."""
     fakes = install_admin_fakes(monkeypatch, edh=edh, rows=rows)
     fakes.reservations = install_reservation_fakes(monkeypatch, records=records, failure=failure,
-                                                   registered=registered)
+                                                   registered=registered, **subnet_fakes)
     return fakes
 
 
@@ -322,3 +326,81 @@ class TestInstanceItems:
         [inner] = expression["values"]
         assert inner.get_expression()["operator"] == "begins_with"
         assert inner.get_expression()["values"][1] == reservations.SETTINGS_KEY_PREFIX
+
+    def test_an_instance_says_why_it_runs_on_demand(self, monkeypatch, aws):
+        rows = [
+            session_row(bootstrapId="b-1", sessionId="s-1", capacityReservationFallback=True,
+                        capacityReservationRequested=CR_FREE, capacityReservationFallbackReason="ended"),
+            session_row(bootstrapId="b-2", sessionId="s-2", capacityReservationFallback=True,
+                        capacityReservationRequested=CR_FREE),
+            session_row(bootstrapId="b-3", sessionId="s-3", capacityReservationId=CR_FREE),
+        ]
+        desktops = [edh_desktop(f"s-{n}", rows[0]["edhUid"], "stopped") for n in range(1, 4)]
+        fakes = _install(monkeypatch, registered=[(CR_FREE, {"label": "Render farm"})], rows=rows,
+                         edh=FakeEdhClient(list_all_desktops=desktops))
+
+        items = {item["sessionId"]: item for item in response_body(_call(fakes, "GET", INSTANCES_PATH))["Items"]}
+
+        assert [items[f"s-{n}"]["capacityReservationFallbackReason"] for n in range(1, 4)] == ["ended", "full", None]
+        # A fallback session carries the reservation it asked for, and the label is joined from it.
+        assert [(items[f"s-{n}"]["capacityReservationRequested"], items[f"s-{n}"]["capacityReservationLabel"])
+                for n in range(1, 4)] == [(CR_FREE, "Render farm"), (CR_FREE, "Render farm"), (None, "Render farm")]
+
+
+@pytest.mark.unit
+class TestTheSubnetOfAReservationsZone:
+    """EDH launches into a reservation only from one of its private subnets in the reservation's Availability Zone:
+    registering one in a zone EDH has no private subnet in is refused, and every listed reservation says whether
+    EDH has one there; when EDH's subnets cannot be read, a reservation registers as before and says null."""
+
+    def test_registering_a_reservation_in_a_zone_without_a_subnet_is_a_400(self, monkeypatch, aws):
+        fakes = _install(monkeypatch, records={CR_FREE: ec2_reservation(CR_FREE, AvailabilityZone="us-east-1d")},
+                         subnets=SUBNET_ZONES)
+
+        response = _call(fakes, "POST", COLLECTION, body={"capacityReservationId": CR_FREE, "label": "Far"})
+
+        assert response["statusCode"] == 400
+        assert response_body(response)["message"] == (
+            "The capacity reservation's Availability Zone (us-east-1d) has no EDH private subnet, so EDH cannot "
+            "launch into it")
+        assert reservations.get_registration(CR_FREE) is None
+        assert _audits(fakes, "edhCapacityReservationRegister") == []
+
+    def test_registering_a_reservation_in_a_zone_with_a_subnet_says_so(self, monkeypatch, aws):
+        fakes = _install(monkeypatch, records={CR_FREE: ec2_reservation(CR_FREE)}, subnets=SUBNET_ZONES)
+
+        response = _call(fakes, "POST", COLLECTION, body={"capacityReservationId": CR_FREE, "label": "Near"})
+
+        assert response["statusCode"] == 201
+        assert response_body(response)["edhSubnetAvailable"] is True
+
+    def test_a_reservation_registers_when_the_subnets_are_not_known(self, monkeypatch, aws):
+        fakes = _install(monkeypatch, records={CR_FREE: ec2_reservation(CR_FREE, AvailabilityZone="us-east-1d")},
+                         ssm_failure=client_error("AccessDeniedException", "GetParameter"))
+
+        response = _call(fakes, "POST", COLLECTION, body={"capacityReservationId": CR_FREE, "label": "Far"})
+
+        assert response["statusCode"] == 201
+        assert response_body(response)["edhSubnetAvailable"] is None
+        assert reservations.get_registration(CR_FREE) is not None
+
+    def test_the_list_says_for_every_reservation_whether_edh_has_a_subnet_in_its_zone(self, monkeypatch, aws):
+        records = {CR_FREE: ec2_reservation(CR_FREE), CR_FULL: ec2_reservation(CR_FULL, AvailabilityZone="us-east-1d")}
+        fakes = _install(monkeypatch, records=records,
+                         registered=[(CR_FREE, {"label": "A"}), (CR_FULL, {"label": "B", "enabled": False}),
+                                     (CR_OTHER, {"label": "C"})], subnets=SUBNET_ZONES)
+
+        items = response_body(_call(fakes, "GET", COLLECTION))["Items"]
+
+        assert [(item["capacityReservationId"], item["edhSubnetAvailable"]) for item in items] == [
+            (CR_FREE, True), (CR_FULL, False), (CR_OTHER, None)]
+        assert all("launchAllowed" not in item for item in items)
+
+    def test_an_update_answers_the_field(self, monkeypatch, aws):
+        fakes = _install(monkeypatch, records={CR_FREE: ec2_reservation(CR_FREE)}, registered=[(CR_FREE, {})],
+                         subnets=SUBNET_ZONES)
+
+        response = _call(fakes, "PUT", _one(CR_FREE), body={"label": "Renamed"},
+                         path_params={"capacityReservationId": CR_FREE})
+
+        assert response_body(response)["edhSubnetAvailable"] is True

@@ -5,13 +5,14 @@ docstrings and README say about them. The gate each tool sits behind is held by 
 (EDH_READ_TOOLS, EDH_WRITE_TOOLS, EDH_DESTRUCTIVE_TOOLS).
 """
 
+import json
 import types
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from vamscli.addon_constants import EDH_WORKSTATIONS_DISABLED_MESSAGE
-from vamscli.utils.addon.edh_exceptions import EdhReservationFullError
+from vamscli.utils.addon.edh_exceptions import EdhReservationFullError, EdhReservationNotPermittedError
 
 from vams_mcp import server
 from vams_mcp.addon_tools import edh
@@ -19,6 +20,10 @@ from vams_mcp.client import VamsClient
 from vams_mcp.config import Config
 
 README_TEXT = (Path(server.__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+# The capacity-display fixture the web and CLI tests read (feature #536, D17/D18/D19).
+CAPACITY_CASES = json.loads(
+    (Path(server.__file__).resolve().parents[3] / "web/src/addons/edh/capacityDisplayCases.json").read_text(
+        encoding="utf-8"))
 
 CR_ID = "cr-0123456789abcdef0"
 VIEW = {"capacityReservationId": CR_ID, "label": "Render pool", "fallbackToOnDemand": True,
@@ -123,6 +128,33 @@ def test_a_full_reservation_is_returned_as_its_error_type_with_the_code(client, 
     assert answer["code"] == "RESERVATION_FULL"
 
 
+def test_the_catalog_tool_passes_launch_allowed_and_the_edh_subnet_field_unchanged(client, tools):
+    items = [case["view"] for case in CAPACITY_CASES["catalogOptions"]]
+    client.api.list_edh_catalog_capacity_reservations.return_value = {"Items": items}
+    answer = tools["list_edh_catalog_capacity_reservations"]()
+    assert answer == {"Items": items}
+    assert {item["launchAllowed"] for item in answer["Items"]} == {True, False}
+    assert {item["edhSubnetAvailable"] for item in answer["Items"]} == {True, False, None}
+
+
+def test_the_workstation_tools_pass_the_fallback_reason_unchanged(client, tools):
+    records = [case["record"] for case in CAPACITY_CASES["records"]]
+    client.api.list_edh_workstations.return_value = {"Items": records}
+    assert tools["list_edh_workstations"]() == {"Items": records}
+    assert "ended" in {r.get("capacityReservationFallbackReason") for r in records}
+
+
+def test_a_view_only_reservation_is_returned_as_its_error_type_with_the_code(client, tools):
+    client.api.create_edh_workstation.side_effect = EdhReservationNotPermittedError(
+        "Access forbidden. Your role may view this capacity reservation but not launch into it",
+        code="RESERVATION_NOT_PERMITTED")
+    answer = tools["create_edh_workstation"]("12", "g5.16xlarge", "Render desk", 200, "linux",
+                                             capacity_reservation_id=CR_ID)
+    assert answer["error_type"] == "EdhReservationNotPermittedError"
+    assert answer["code"] == "RESERVATION_NOT_PERMITTED"
+    assert "may view this capacity reservation but not launch into it" in answer["error"]
+
+
 @pytest.mark.parametrize("tool", [
     "list_edh_catalog_capacity_reservations", "list_edh_admin_capacity_reservations",
     "register_edh_capacity_reservation", "update_edh_capacity_reservation",
@@ -144,6 +176,14 @@ def test_each_tool_answers_the_disabled_sentence_before_any_request(client, tool
     ("list_edh_catalog_capacity_reservations", "on-demand"),
     ("create_edh_workstation", "RESERVATION_FULL"),
     ("create_edh_workstation", "capacity_reservation_id"),
+    ("create_edh_workstation", "RESERVATION_NOT_PERMITTED"),
+    ("create_edh_workstation", "EdhReservationNotPermittedError"),
+    ("list_edh_catalog_capacity_reservations", "launchAllowed"),
+    ("list_edh_catalog_capacity_reservations", "edhSubnetAvailable"),
+    ("list_edh_admin_capacity_reservations", "edhSubnetAvailable"),
+    ("list_edh_workstations", "RESERVATION_ENDED"),
+    ("list_edh_workstations", "capacityReservationFallbackReason"),
+    ("start_edh_workstation", "RESERVATION_ENDED"),
     ("register_edh_capacity_reservation", "never changes the reservation in EC2"),
     ("unregister_edh_capacity_reservation", "EC2 reservation itself is not changed"),
 ])
@@ -153,5 +193,7 @@ def test_the_docstrings_state_the_contract(tools, tool, fragment):
 
 def test_the_readme_states_the_capacity_reservation_tools():
     for fragment in ("`list_edh_catalog_capacity_reservations`", "`capacity_reservation_id`",
-                     "`RESERVATION_FULL`", "`unregister_edh_capacity_reservation`"):
+                     "`RESERVATION_FULL`", "`unregister_edh_capacity_reservation`",
+                     "`RESERVATION_NOT_PERMITTED`", "`EdhReservationNotPermittedError`", "`launchAllowed`",
+                     "`edhSubnetAvailable`", "`RESERVATION_ENDED`", "`capacityReservationFallbackReason`"):
         assert fragment in README_TEXT

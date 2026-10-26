@@ -4,7 +4,7 @@
 """Capacity reservations on the user routes: the launch catalog of reservations, a launch that names one,
 the record of a workstation launched into one, and a start EDH refuses because the reservation is full.
 
-A launch that names a reservation runs seven checks after the existing recipe-type and root-size checks and
+A launch that names a reservation runs eight checks after the existing recipe-type and root-size checks and
 before any row, credential mint, worker hand-over or further EDH call, in a fixed order, each with its own
 answer; a launch that names none is today's launch, with no registry read, no EC2 read and no reservation
 field on the row. The registry is a moto session table and EC2 a fake (``edhReservationTestSupport``).
@@ -35,10 +35,21 @@ LAUNCH = {"bootstrapId": BOOTSTRAP_NEW, "imageId": "42", "instanceType": "g5.xla
 VIEW_KEYS = {
     "capacityReservationId", "label", "fallbackToOnDemand", "enabled", "instanceType", "availabilityZone",
     "instancePlatform", "state", "totalInstanceCount", "availableInstanceCount", "instanceMatchCriteria",
-    "endDate", "reservationType",
+    "endDate", "reservationType", "edhSubnetAvailable",
 }
+# A catalog item is the view and whether the caller may launch into it.
+CATALOG_KEYS = VIEW_KEYS | {"launchAllowed"}
 RESERVATION_OBJECT_TYPE = "edhCapacityReservation"
 FULL_BODY = {"message": "The capacity reservation has no free capacity", "code": "RESERVATION_FULL"}
+# EDH's private subnets: one in the zone the fixtures' reservations sit in (us-east-1a), one elsewhere.
+SUBNET_IN_ZONE = "subnet-0a1b2c3d4e5f60718"
+SUBNET_ELSEWHERE = "subnet-0f1e2d3c4b5a69788"
+SUBNETS_IN_ZONE = {SUBNET_IN_ZONE: "us-east-1a", SUBNET_ELSEWHERE: "us-east-1b"}
+SUBNETS_ELSEWHERE = {SUBNET_ELSEWHERE: "us-east-1b"}
+NO_SUBNET_MESSAGE = ("The capacity reservation's Availability Zone (us-east-1a) has no EDH private subnet; choose "
+                     "another reservation or On-demand")
+NOT_PERMITTED_BODY = {"message": "Your role may view this capacity reservation but not launch into it",
+                      "code": "RESERVATION_NOT_PERMITTED"}
 
 
 def _grant(*, denied_reservations=(), denied_actions=()):
@@ -61,10 +72,12 @@ def aws():
         yield
 
 
-def _install(monkeypatch, *, records=None, failure=None, registered=(), enforce=None, edh=None):
+def _install(monkeypatch, *, records=None, failure=None, registered=(), enforce=None, edh=None, **subnet_fakes):
+    """The service's fakes with the registry, EC2 and EDH's private subnets (``subnet_fakes``, as
+    ``install_reservation_fakes`` takes them) behind the reservation module."""
     fakes = install_service_fakes(monkeypatch, enforce=enforce or _grant(), edh=edh)
     fakes.reservations = install_reservation_fakes(monkeypatch, records=records, failure=failure,
-                                                   registered=registered)
+                                                   registered=registered, **subnet_fakes)
     fakes.mint = MagicMock(return_value=("disabled", {}))
     monkeypatch.setattr(service.bootstrap, "bootstrap_session", fakes.mint)
     return fakes
@@ -247,8 +260,10 @@ class TestLaunchChecks:
         assert "capacityReservationId" not in row
         assert row["capacityReservationFallback"] is True
         assert row["capacityReservationRequested"] == CR_FULL
+        assert row["capacityReservationFallbackReason"] == "full"
         body = response_body(response)
         assert body["capacityReservationId"] is None and body["capacityReservationFallback"] is True
+        assert body["capacityReservationFallbackReason"] == "full"
         assert fakes.lambda_client.invoke.called
 
     def test_7_a_full_reservation_that_does_not_fall_back_is_a_409(self, monkeypatch, aws):
@@ -343,17 +358,19 @@ class TestCatalog:
         assert response["statusCode"] == 200
         items = response_body(response)["Items"]
         assert [item["capacityReservationId"] for item in items] == [CR_FULL, CR_FREE, CR_OTHER]
-        assert all(set(item) == VIEW_KEYS for item in items)
+        assert all(set(item) == CATALOG_KEYS for item in items)
         free = items[1]
         assert free == {"capacityReservationId": CR_FREE, "label": "B farm", "fallbackToOnDemand": True,
                         "enabled": True, "instanceType": "g5.xlarge", "availabilityZone": "us-east-1a",
                         "instancePlatform": "Linux/UNIX", "state": "active", "totalInstanceCount": 2,
                         "availableInstanceCount": 1, "instanceMatchCriteria": "targeted",
-                        "endDate": END_DATE.isoformat(), "reservationType": "default"}
+                        "endDate": END_DATE.isoformat(), "reservationType": "default", "edhSubnetAvailable": None,
+                        "launchAllowed": True}
         asked = fakes.reservations.ec2.ids_asked()
         assert len(asked) == 1 and sorted(asked[0]) == sorted([CR_FREE, CR_FULL, CR_OTHER])
         assert {(obj["edhCapacityReservationId"], action) for obj, action in _reservation_calls(fakes)} == {
-            (CR_FREE, "GET"), (CR_FULL, "GET"), (CR_OTHER, "GET")}
+            (CR_FREE, "GET"), (CR_FULL, "GET"), (CR_OTHER, "GET"),
+            (CR_FREE, "POST"), (CR_FULL, "POST"), (CR_OTHER, "POST")}
 
     def test_leaves_out_disabled_unpermitted_and_inactive_reservations(self, monkeypatch, aws):
         records = self._records()
@@ -471,7 +488,21 @@ class TestRecordLabels:
         assert body["capacityReservationId"] == CR_FREE
         assert body["capacityReservationLabel"] == "Render farm"
         assert body["capacityReservationFallback"] is False
-        assert "capacityReservationRequested" not in body
+        assert body["capacityReservationRequested"] is None
+
+    def test_get_joins_the_label_of_the_reservation_a_fallback_asked_for(self, monkeypatch, aws):
+        fakes = _install(monkeypatch, registered=[(CR_FREE, {"label": "Render farm"})])
+        fakes.table.query.return_value = {"Items": [own_row(
+            capacityReservationFallback=True, capacityReservationRequested=CR_FREE,
+            capacityReservationFallbackReason="ended")]}
+        event = make_event("GET", workstation_path(SESSION_OWN), path_params={"sessionId": SESSION_OWN})
+
+        body = response_body(service.lambda_handler(event, MagicMock()))
+
+        assert body["capacityReservationId"] is None
+        assert body["capacityReservationRequested"] == CR_FREE
+        assert body["capacityReservationLabel"] == "Render farm"
+        assert body["capacityReservationFallbackReason"] == "ended"
 
     def test_list_joins_labels_and_leaves_an_unregistered_one_null(self, monkeypatch, aws):
         fakes = _install(monkeypatch, registered=[(CR_FREE, {"label": "Render farm"})])
@@ -490,7 +521,9 @@ class TestRecordLabels:
 
         assert [(item["capacityReservationId"], item["capacityReservationLabel"], item["capacityReservationFallback"])
                 for item in items] == [(CR_FREE, "Render farm", False), (CR_OTHER, None, False),
-                                       (None, None, True), (None, None, False)]
+                                       (None, "Render farm", True), (None, None, False)]
+        # The fallback row's label is joined from the reservation it asked for.
+        assert [item["capacityReservationRequested"] for item in items] == [None, None, CR_FREE, None]
 
     def test_a_list_without_a_reservation_reads_no_registry(self, monkeypatch):
         fakes = install_service_fakes(monkeypatch)
@@ -521,3 +554,160 @@ class TestRecordLabels:
         assert response["statusCode"] == 200
         item = response_body(response)["Items"][0]
         assert item["capacityReservationId"] == CR_FREE and item["capacityReservationLabel"] is None
+
+
+def _grant_per_reservation(allowed):
+    """An enforcer that allows everything but reservations, on which it allows exactly ``allowed``: a map of
+    reservation id to the actions granted on it."""
+    def enforce(obj, action):
+        if obj.get("object__type") == RESERVATION_OBJECT_TYPE:
+            return action in allowed.get(obj["edhCapacityReservationId"], ())
+        return True
+    return enforce
+
+
+@pytest.mark.unit
+class TestTheSubnetOfAReservationsZone:
+    """EDH launches into a reservation from one of its private subnets in the reservation's Availability Zone, and
+    refuses when it has none there; VAMS reads EDH's subnets and their zones, leaves a reservation in a zone without
+    one out of the catalog, and refuses a launch into it before any row, mint or worker call."""
+
+    def test_the_catalog_says_a_reservation_has_a_subnet(self, monkeypatch, aws):
+        fakes = _install(monkeypatch, records={CR_FREE: ec2_reservation(CR_FREE)}, registered=[(CR_FREE, {})],
+                         subnets=SUBNETS_IN_ZONE)
+
+        [item] = response_body(_catalog(fakes))["Items"]
+
+        assert item["edhSubnetAvailable"] is True
+        assert fakes.reservations.ssm.names == ["/edh/edh-test/configuration/PrivateSubnets"]
+
+    def test_the_catalog_leaves_out_a_reservation_in_a_zone_without_a_subnet(self, monkeypatch, aws):
+        records = {CR_FREE: ec2_reservation(CR_FREE), CR_OTHER: ec2_reservation(CR_OTHER, AvailabilityZone="us-east-1b")}
+        fakes = _install(monkeypatch, records=records, registered=[(CR_FREE, {}), (CR_OTHER, {})],
+                         subnets=SUBNETS_ELSEWHERE)
+
+        items = response_body(_catalog(fakes))["Items"]
+
+        assert [(item["capacityReservationId"], item["edhSubnetAvailable"]) for item in items] == [(CR_OTHER, True)]
+
+    def test_the_catalog_keeps_a_reservation_when_the_subnets_are_not_known(self, monkeypatch, aws):
+        fakes = _install(monkeypatch, records={CR_FREE: ec2_reservation(CR_FREE)}, registered=[(CR_FREE, {})],
+                         ssm_failure=client_error("AccessDeniedException", "GetParameter"))
+
+        [item] = response_body(_catalog(fakes))["Items"]
+
+        assert item["capacityReservationId"] == CR_FREE and item["edhSubnetAvailable"] is None
+
+    def test_a_launch_into_a_zone_without_a_subnet_is_a_400(self, monkeypatch, aws):
+        fakes = _install(monkeypatch, records={CR_FREE: ec2_reservation(CR_FREE)}, registered=[(CR_FREE, {})],
+                         subnets=SUBNETS_ELSEWHERE)
+
+        response = _launch(fakes, capacityReservationId=CR_FREE)
+
+        assert response["statusCode"] == 400
+        assert response_body(response)["message"] == NO_SUBNET_MESSAGE
+        _assert_nothing_launched(fakes)
+
+    def test_the_subnet_check_follows_the_state_check(self, monkeypatch, aws):
+        fakes = _install(monkeypatch, records={CR_FREE: ec2_reservation(CR_FREE, State="expired")},
+                         registered=[(CR_FREE, {})], subnets=SUBNETS_ELSEWHERE)
+
+        response = _launch(fakes, capacityReservationId=CR_FREE)
+
+        assert response_body(response)["message"] == "The capacity reservation is not active"
+
+    def test_the_subnet_check_precedes_the_instance_type_check(self, monkeypatch, aws):
+        fakes = _install(monkeypatch, records={CR_FREE: ec2_reservation(CR_FREE, InstanceType="g5.2xlarge")},
+                         registered=[(CR_FREE, {})], subnets=SUBNETS_ELSEWHERE)
+
+        response = _launch(fakes, capacityReservationId=CR_FREE)
+
+        assert response_body(response)["message"] == NO_SUBNET_MESSAGE
+
+    def test_a_launch_goes_ahead_when_the_subnets_are_not_known(self, monkeypatch, aws):
+        fakes = _install(monkeypatch, records={CR_FREE: ec2_reservation(CR_FREE)}, registered=[(CR_FREE, {})],
+                         subnet_failure=client_error("UnauthorizedOperation", "DescribeSubnets"),
+                         subnet_parameter_value=f"['{SUBNET_IN_ZONE}']")
+
+        response = _launch(fakes, capacityReservationId=CR_FREE)
+
+        assert response["statusCode"] == 202
+        assert _written_row(fakes)["capacityReservationId"] == CR_FREE
+
+    def test_a_launch_into_a_zone_with_a_subnet_goes_ahead(self, monkeypatch, aws):
+        fakes = _install(monkeypatch, records={CR_FREE: ec2_reservation(CR_FREE)}, registered=[(CR_FREE, {})],
+                         subnets=SUBNETS_IN_ZONE)
+
+        assert _launch(fakes, capacityReservationId=CR_FREE)["statusCode"] == 202
+
+    def test_a_launch_naming_no_reservation_reads_no_subnet(self, monkeypatch):
+        fakes = install_service_fakes(monkeypatch)
+        monkeypatch.setattr(service.reservations, "ssm", Untouchable())
+        monkeypatch.setattr(service.reservations, "ec2", Untouchable())
+        monkeypatch.setattr(service.reservations, "_session_table", Untouchable())
+
+        assert _launch(fakes)["statusCode"] == 202
+
+
+@pytest.mark.unit
+class TestAReservationTheRoleMayViewButNotLaunchInto:
+    def test_each_catalog_item_says_whether_the_role_may_launch_into_it(self, monkeypatch, aws):
+        records = {CR_FREE: ec2_reservation(CR_FREE), CR_OTHER: ec2_reservation(CR_OTHER)}
+        fakes = _install(monkeypatch, records=records,
+                         registered=[(CR_FREE, {"label": "A"}), (CR_OTHER, {"label": "B"})],
+                         enforce=_grant_per_reservation({CR_FREE: ("GET", "POST"), CR_OTHER: ("GET",)}))
+
+        items = response_body(_catalog(fakes))["Items"]
+
+        assert [(item["capacityReservationId"], item["launchAllowed"]) for item in items] == [
+            (CR_FREE, True), (CR_OTHER, False)]
+
+    def test_a_reservation_the_role_may_not_see_is_still_left_out(self, monkeypatch, aws):
+        fakes = _install(monkeypatch, records={CR_FREE: ec2_reservation(CR_FREE)}, registered=[(CR_FREE, {})],
+                         enforce=_grant_per_reservation({CR_FREE: ("POST",)}))
+
+        assert response_body(_catalog(fakes))["Items"] == []
+
+    def test_a_launch_by_a_role_that_may_view_it_says_so(self, monkeypatch, aws):
+        fakes = _install(monkeypatch, records={CR_FREE: ec2_reservation(CR_FREE)}, registered=[(CR_FREE, {})],
+                         enforce=_grant_per_reservation({CR_FREE: ("GET",)}))
+
+        response = _launch(fakes, capacityReservationId=CR_FREE)
+
+        assert response["statusCode"] == 403
+        assert response_body(response) == NOT_PERMITTED_BODY
+        _assert_nothing_launched(fakes)
+        assert fakes.reservations.ec2.calls == []
+
+    def test_a_launch_by_a_role_that_may_not_view_it_discloses_nothing(self, monkeypatch, aws):
+        fakes = _install(monkeypatch, records={CR_FREE: ec2_reservation(CR_FREE)}, registered=[(CR_FREE, {})],
+                         enforce=_grant_per_reservation({}))
+
+        response = _launch(fakes, capacityReservationId=CR_FREE)
+
+        assert response["statusCode"] == 403
+        body = response_body(response)
+        assert "code" not in body and "capacity reservation" not in body["message"].lower()
+        _assert_nothing_launched(fakes)
+
+
+@pytest.mark.unit
+class TestTheRecordSaysWhyItRunsOnDemand:
+    @pytest.mark.parametrize("stored,expected", [
+        ({"capacityReservationFallback": True, "capacityReservationRequested": CR_FREE,
+          "capacityReservationFallbackReason": "ended"}, "ended"),
+        ({"capacityReservationFallback": True, "capacityReservationRequested": CR_FREE,
+          "capacityReservationFallbackReason": "full"}, "full"),
+        # A fallback row stored before the reason was recorded fell back for a full reservation.
+        ({"capacityReservationFallback": True, "capacityReservationRequested": CR_FREE}, "full"),
+        ({"capacityReservationId": CR_FREE}, None),
+        ({}, None),
+    ], ids=["ended", "full", "full-before-the-field", "in-a-reservation", "on-demand"])
+    def test_get_returns_the_fallback_reason(self, monkeypatch, aws, stored, expected):
+        fakes = _install(monkeypatch, registered=[(CR_FREE, {"label": "Render farm"})])
+        fakes.table.query.return_value = {"Items": [own_row(**stored)]}
+        event = make_event("GET", workstation_path(SESSION_OWN), path_params={"sessionId": SESSION_OWN})
+
+        body = response_body(service.lambda_handler(event, MagicMock()))
+
+        assert body["capacityReservationFallbackReason"] == expected

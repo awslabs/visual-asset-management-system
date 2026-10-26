@@ -74,9 +74,12 @@ from .common import edhCapacityReservations as reservations
 from .common import edhSessionBootstrap as bootstrap
 from .common.edhLeasePolicy import LeaseValidationError, read_lease_policy, write_lease_policy
 from .common.edhSessionState import (
-    ACTIVITY_FIELD, EDH_CONNECTION_STRING_FIELD, EDH_SESSION_STATE_FIELD, EDH_SESSION_STATE_RUNNING,
+    ACTIVITY_FIELD, CAPACITY_RESERVATION_FALLBACK_REASON_FIELD, EDH_CONNECTION_STRING_FIELD, EDH_SESSION_STATE_FIELD,
+    EDH_SESSION_STATE_RUNNING,
     EXPIRES_AT_FIELD, IMAGE_NAME_FIELD, START_FAILURE_FIELD, STATE_CREATING, STATE_DELETED, STATE_ORPHANED,
-    STATE_STOPPED, STOP_REQUESTED_FIELD, deleted_row_expiry, start_accepted_cleared, start_stall_cleared,
+    STATE_STOPPED, STOP_REQUESTED_FIELD, capacity_reservation_fallback_reason, capacity_reservation_named,
+    deleted_row_expiry,
+    start_accepted_cleared, start_stall_cleared,
     start_stamp_cleared, state_for_edh_session_state, workstation_activity, workstation_image,
 )
 
@@ -150,6 +153,8 @@ RESERVATION_NOT_ACTIVE_MESSAGE = "The capacity reservation is not active"
 RESERVATION_READ_FAILED_MESSAGE = "The capacity reservation could not be read; try again"
 RESERVATION_NOT_REGISTERED_MESSAGE = "Capacity reservation is not registered"
 RESERVATION_ALREADY_REGISTERED_MESSAGE = "Capacity reservation is already registered"
+RESERVATION_NO_SUBNET_MESSAGE = ("The capacity reservation's Availability Zone ({zone}) has no EDH private subnet, "
+                                 "so EDH cannot launch into it")
 
 # Path identifiers (EDH software-stack ids, session uuids, bootstrap ids) as they appear in a route.
 PATH_ID_PATTERN = re.compile(r'^[A-Za-z0-9._-]{1,128}$')
@@ -457,11 +462,11 @@ def update_lease_settings(event):
 # ---------------------------------------------------------------------------
 # Capacity reservation routes
 # ---------------------------------------------------------------------------
-def _reservation_view(registration, live):
-    """The API view of one registration, from the live read's facts for it; a read that failed (``live`` None)
-    is state unknown."""
+def _reservation_view(registration, live, zones):
+    """The API view of one registration, from the live read's facts for it and the Availability Zones EDH has a
+    private subnet in (``zones``, None when not known); a read that failed (``live`` None) is state unknown."""
     facts = None if live is None else live.get(registration["capacityReservationId"])
-    return CapacityReservationViewModel(**reservations.view(registration, facts)).dict()
+    return CapacityReservationViewModel(**reservations.view(registration, facts, zones)).dict()
 
 
 def _read_live_or_none(capacity_reservation_ids):
@@ -477,14 +482,16 @@ def list_capacity_reservations(event):
     """Every registered reservation, disabled ones included, with its live view, by label."""
     registrations = reservations.list_registrations()
     live = _read_live_or_none([r["capacityReservationId"] for r in registrations]) if registrations else {}
-    items = [_reservation_view(registration, live) for registration in registrations]
+    zones = reservations.subnet_zones() if registrations else None
+    items = [_reservation_view(registration, live, zones) for registration in registrations]
     items.sort(key=lambda item: (_natural_key(item["label"]), item["capacityReservationId"]))
     return success(body={"Items": items})
 
 
 def register_capacity_reservation(event):
     """Register a reservation EC2 holds in the deployment's account and Region and that is active or yet to
-    become active; one in a state it never leaves (``EC2_TERMINAL_STATES``) is refused."""
+    become active; one in a state it never leaves (``EC2_TERMINAL_STATES``) is refused, and so is one in an
+    Availability Zone EDH is known to have no private subnet in (not known registers)."""
     request = parse(event=_parse_body(event), model=RegisterCapacityReservationRequestModel)
     cr_id = request.capacityReservationId
     try:
@@ -496,6 +503,10 @@ def register_capacity_reservation(event):
         return validation_error(body={"message": RESERVATION_NOT_IN_EC2_MESSAGE}, event=event)
     if facts.get("state") in reservations.EC2_TERMINAL_STATES:
         return validation_error(body={"message": RESERVATION_NOT_ACTIVE_MESSAGE}, event=event)
+    zones = reservations.subnet_zones()
+    if reservations.subnet_available(facts, zones) is False:
+        return validation_error(
+            body={"message": RESERVATION_NO_SUBNET_MESSAGE.format(zone=facts.get("availabilityZone"))}, event=event)
     try:
         registration = reservations.register(cr_id, request.label, request.fallbackToOnDemand, request.enabled,
                                              _requesting_user_id())
@@ -504,7 +515,7 @@ def register_capacity_reservation(event):
     except reservations.RegistryFull as err:
         return validation_error(body={"message": str(err)}, event=event)
     log_actions(event, "edhCapacityReservationRegister", {"capacityReservation": registration})
-    return success(status_code=201, body=_reservation_view(registration, {cr_id: facts}))
+    return success(status_code=201, body=_reservation_view(registration, {cr_id: facts}, zones))
 
 
 def _reservation_path_id(event):
@@ -525,7 +536,7 @@ def update_capacity_reservation(event):
     except reservations.RegistrationNotFound:
         return general_error(status_code=404, body={"message": RESERVATION_NOT_REGISTERED_MESSAGE}, event=event)
     log_actions(event, "edhCapacityReservationUpdate", {"capacityReservation": registration})
-    return success(body=_reservation_view(registration, _read_live_or_none([cr_id])))
+    return success(body=_reservation_view(registration, _read_live_or_none([cr_id]), reservations.subnet_zones()))
 
 
 def delete_capacity_reservation(event):
@@ -792,10 +803,13 @@ def _instance_item(record, row):
         "imageId": image_id,
         "osFamily": row.get('osFamily') or record_str(EDH_FIELD_SESSION_OS_FAMILY),
         "instanceType": row.get('instanceType') or record_str(EDH_FIELD_SESSION_INSTANCE_TYPE),
-        # The reservation the launch was sent with; its label is joined by _with_reservation_labels.
+        # The reservation the launch was sent with, and the one a fallback asked for; the label of the first of them
+        # the row carries is joined by _with_reservation_labels.
         "capacityReservationId": row.get('capacityReservationId'),
+        "capacityReservationRequested": row.get('capacityReservationRequested'),
         "capacityReservationLabel": None,
         "capacityReservationFallback": bool(row.get('capacityReservationFallback')),
+        CAPACITY_RESERVATION_FALLBACK_REASON_FIELD: capacity_reservation_fallback_reason(row),
         **workstation_image(stored_image, image_id, {}, {}),
     }
 
@@ -828,11 +842,12 @@ def _with_recipe_images(items):
 
 
 def _with_reservation_labels(items):
-    """The items, each carrying the registry label of its capacity reservation (None once unregistered); the
-    registry is read only for the reservations the items name."""
-    labels = reservations.labels_for(item["capacityReservationId"] for item in items)
+    """The items, each carrying the registry label of the capacity reservation it names (``capacity_reservation_named``:
+    the one it was sent with, else the one a fallback asked for; None once unregistered); the registry is read only
+    for the reservations the items name."""
+    labels = reservations.labels_for(capacity_reservation_named(item) for item in items)
     for item in items:
-        item["capacityReservationLabel"] = labels.get(item["capacityReservationId"])
+        item["capacityReservationLabel"] = labels.get(capacity_reservation_named(item))
     return items
 
 

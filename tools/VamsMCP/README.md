@@ -493,16 +493,22 @@ empty, or it contains the image's architecture; pass only such a type to
 `get_edh_catalog_lease` returns the user-readable lease policy (no audit fields).
 `list_edh_catalog_capacity_reservations` returns the EC2 capacity reservations the
 user may launch into — registered by an administrator, enabled, granted to the
-user's role (object type `edhCapacityReservation`) and active in EC2 — as `Items`
+user's role (object type `edhCapacityReservation`), active in EC2, and in an
+Availability Zone where EDH has a private subnet — as `Items`
 carrying `capacityReservationId`, `label`, `fallbackToOnDemand`, `instanceType`,
 `availabilityZone`, `instancePlatform`, `state`, `totalInstanceCount`,
-`availableInstanceCount`, `instanceMatchCriteria`, `endDate` and `reservationType`;
+`availableInstanceCount`, `instanceMatchCriteria`, `endDate`, `reservationType`,
+`edhSubnetAvailable` (true, or null when VAMS could not read EDH's private
+subnets) and `launchAllowed` (false for a reservation the role may see but not
+launch into; `create_edh_workstation` refuses it with 403, `error_type`
+`EdhReservationNotPermittedError`, `code` `RESERVATION_NOT_PERMITTED`);
 its optional `instance_type` and `os_family` (`linux` or `windows`) keep the
 reservations a launch of that type and image family can take. An empty list means
 every launch is on-demand, which is also the answer when EC2 could not be read.
 `list_edh_admin_capacity_reservations` lists every registered reservation the same
-way, with `state` `notFound` for one EC2 no longer knows and `unknown` when the read
-failed.
+way, without `launchAllowed`, with `state` `notFound` for one EC2 no longer knows
+and `unknown` when the read failed, and with `edhSubnetAvailable` false for one in
+an Availability Zone with no EDH private subnet, which the user catalog leaves out.
 A row's `session_id` is its `sessionId`, or its `bootstrapId` while a launch has no
 session id yet (`create_edh_workstation` answers 202 with `sessionId` null and
 `state` CREATING; `lastError` names why a launch ended ORPHANED).
@@ -521,8 +527,8 @@ read: `starting` from a start request until EDH reports the desktop connectable
 (a STOPPED row whose start is in progress, a CREATING row with a `sessionId`, an
 ACTIVE row not yet connectable), `stopping` while EDH still stops the desktop, and
 null otherwise; and `startFailure`, why the last start left a STOPPED row stopped
-(`lastError` `CAPACITY_UNAVAILABLE`, `RESERVATION_FULL` or `START_FAILED`), as
-`{errorCode, availabilityZone, observedAt}`, null when it did not.
+(`lastError` `CAPACITY_UNAVAILABLE`, `RESERVATION_FULL`, `RESERVATION_ENDED` or
+`START_FAILED`), as `{errorCode, availabilityZone, observedAt}`, null when it did not.
 A CREATING row with `activity` null and `lastError` `START_STALLED` is a start EDH
 accepted and has not finished after 30 minutes: EDH never reported the desktop
 ready, and VAMS does not stop it, so stop it with `stop_edh_workstation`, then
@@ -627,15 +633,24 @@ is refused (403) for a session authenticated with a VAMS API key.
 Its optional `capacity_reservation_id` launches into a reservation
 `list_edh_catalog_capacity_reservations` lists whose `instanceType` and platform
 match the launch; omitted, the launch is on-demand, exactly as before. It is refused
-(400) when the reservation is not registered, not active, or of another instance
-type or platform, (403) when the user's role does not grant it, and (503) when EC2
-could not be read. A full reservation whose `fallbackToOnDemand` is true launches
-on-demand, and the record carries `capacityReservationFallback: true`; one whose
-`fallbackToOnDemand` is false is refused (409, `error_type`
+(400) when the reservation is not registered, not active, of another instance type
+or platform, or in an Availability Zone with no EDH private subnet; (403,
+`error_type` `EdhReservationNotPermittedError`, `code` `RESERVATION_NOT_PERMITTED`)
+when the user's role may see it but not launch into it (`launchAllowed` false);
+(403, `PermissionDeniedError`) when the role does not grant it at all; and (503)
+when EC2 could not be read. A full reservation whose `fallbackToOnDemand` is true
+launches on-demand, and the record carries `capacityReservationFallback: true`; one
+whose `fallbackToOnDemand` is false is refused (409, `error_type`
 `EdhReservationFullError`, `code` `RESERVATION_FULL`). A record names the
 reservation it launched into in `capacityReservationId` and
-`capacityReservationLabel`. A start of a stopped desktop whose reservation is full
-leaves it stopped with `lastError` `RESERVATION_FULL` (see below).
+`capacityReservationLabel`, and a record that runs on-demand after asking for one
+carries `capacityReservationFallbackReason`: `full` (the reservation was full at
+launch) or `ended` (VAMS moved the stopped desktop to on-demand because its
+reservation ended; a fallback without the field was a full reservation's). A start
+of a stopped desktop whose reservation is full leaves it stopped with `lastError`
+`RESERVATION_FULL`; one whose reservation has ended starts on-demand, or stays
+stopped with `lastError` `RESERVATION_ENDED` when VAMS could not move it to
+on-demand capacity (see below).
 `register_edh_capacity_reservation` (`capacity_reservation_id`, `label`, and the
 optional `fallback_to_on_demand` and `enabled`, both server default true) and
 `update_edh_capacity_reservation` (a partial patch of `label`,
@@ -647,7 +662,9 @@ the start runs in the background, so follow it with `list_edh_workstations` unti
 the row is ACTIVE with `activity` null. A start EDH refuses leaves the row STOPPED
 with `activity` null, `lastError` `CAPACITY_UNAVAILABLE` (AWS had no capacity for
 the instance type in the desktop's Availability Zone; the desktop keeps its disk
-there, so start it again later), `RESERVATION_FULL` or `START_FAILED`, and
+there, so start it again later), `RESERVATION_FULL`, `RESERVATION_ENDED` (its
+capacity reservation has ended and VAMS could not move it to on-demand capacity; ask
+an administrator) or `START_FAILED`, and
 `startFailure` `{errorCode, availabilityZone, observedAt}`; the desktop is never
 deleted for a refused start. While EDH still lists the desktop stopped, a start is refused (409,
 `error_type` `EdhStartInProgressError`, `startInProgress: true`) when another start

@@ -98,6 +98,22 @@ describe("workstations service", () => {
                 "instanceType is not permitted in this deployment",
             ]);
         });
+
+        it("returns the message of a reservation the role may view but not launch into", async () => {
+            // The 403 coded RESERVATION_NOT_PERMITTED names the reason; the wizard shows it as sent.
+            const message = "Your role may view this capacity reservation but not launch into it";
+            (apiClient.post as jest.Mock).mockRejectedValue(
+                Object.assign(rejection(message, 403), {
+                    body: { message, code: "RESERVATION_NOT_PERMITTED" },
+                })
+            );
+            expect(
+                await createWorkstation({
+                    ...LAUNCH_BODY,
+                    capacityReservationId: "cr-0123456789abcdef0",
+                })
+            ).toEqual([false, message]);
+        });
     });
 
     describe("isUnknownOutcomeStatus", () => {

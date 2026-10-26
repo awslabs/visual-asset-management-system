@@ -20,7 +20,7 @@ from ...utils.json_output import output_status, output_result, output_error, out
 from ...utils.addon.edh_exceptions import (
     EdhError, EdhWorkstationNotFoundError, EdhImageNotFoundError, EdhContainerJobNotFoundError,
     EdhAmiRecipeNotFoundError, EdhAmiRecipeBuildNotFoundError, EdhReservationFullError,
-    EdhCapacityReservationNotFoundError, EdhStartFailedError, EdhStartStalledError,
+    EdhReservationNotPermittedError, EdhCapacityReservationNotFoundError, EdhStartFailedError, EdhStartStalledError,
     EdhStartWaitTimeoutError,
     EdhUnavailableError,
 )
@@ -48,15 +48,35 @@ MIN_JOB_MEMORY_MIB = 512
 # A capacity reservation label: the display-name charset, 1-64 characters, as the request model takes it.
 CAPACITY_RESERVATION_LABEL_MAX = 64
 
-# What the Capacity line says for a launch that asked for a full reservation and ran on-demand; the web
-# Capacity detail says the same.
+# What the Capacity line says for a launch that asked for a full reservation and ran on-demand, and the
+# fallback reason of a stopped workstation VAMS moved to on-demand because its reservation ended; the
+# web Capacity detail says the same (web/src/addons/edh/capacityDisplayCases.json).
 ON_DEMAND_FALLBACK_TEXT = 'On-demand (reservation full)'
+FALLBACK_REASON_ENDED = 'ended'
+
+
+def on_demand_ended_text(reservation: Any) -> str:
+    """The Capacity line of a workstation moved to on-demand because its reservation ended: the
+    reservation by label, else by id, else unnamed."""
+    if isinstance(reservation, str) and reservation:
+        return f'On-demand (reservation {reservation} ended)'
+    return 'On-demand (reservation ended)'
 
 # The remedies printed with a launch refused because its capacity reservation is full.
 RESERVATION_FULL_LAUNCH_HINT = (
     "Launch without --capacity-reservation-id for an on-demand workstation, choose another reservation "
     "('vamscli edh catalog capacity-reservations'), or try again once a slot is free.")
 CAPACITY_RESERVATION_LISTING_HINT = "Use 'vamscli edh admin capacity-reservation list' to see the registry."
+# The remedies printed with a launch refused because the role may see the reservation but not launch
+# into it (403 RESERVATION_NOT_PERMITTED).
+RESERVATION_NOT_PERMITTED_LAUNCH_HINT = (
+    "Launch without --capacity-reservation-id for an on-demand workstation, choose a reservation whose "
+    "LAUNCH column reads yes in 'vamscli edh catalog capacity-reservations', or ask an administrator to "
+    "grant your role launching into this one.")
+
+# The catalog's LAUNCH column: whether the role may launch into the reservation, not only see it.
+LAUNCH_ALLOWED_TEXT = 'yes'
+LAUNCH_VIEW_ONLY_TEXT = 'view only'
 
 # `start --wait` reads the workstation every START_WAIT_POLL_SECONDS until it is ACTIVE, the start has
 # left it stopped, or START_WAIT_TIMEOUT_SECONDS have passed. The clock and the sleep are module names
@@ -72,10 +92,15 @@ ACTIVITY_LABELS = {'starting': 'STARTING', 'stopping': 'STOPPING'}
 
 # The lastError codes a start the service could not carry out leaves on a STOPPED workstation, and the
 # sentences the web shows beneath its badge for the two that do not name the instance type.
-START_FAILURE_CODES = ('CAPACITY_UNAVAILABLE', 'RESERVATION_FULL', 'START_FAILED')
+START_FAILURE_CODES = ('CAPACITY_UNAVAILABLE', 'RESERVATION_FULL', 'RESERVATION_ENDED', 'START_FAILED')
 RESERVATION_FULL_START_MESSAGE = (
     "The capacity reservation has no free capacity; the workstation stays stopped. Start it again once "
     "a slot is free, or ask an administrator.")
+# A start VAMS refused because the workstation's reservation has ended and VAMS could not move the
+# stopped instance to on-demand capacity; a start that could move it runs on-demand instead.
+RESERVATION_ENDED_START_MESSAGE = (
+    "The capacity reservation this workstation was launched into has ended, and VAMS could not move the "
+    "workstation to on-demand capacity. Ask an administrator.")
 START_FAILED_MESSAGE = (
     "The workstation did not start; it is still stopped with its disk. Start it again, or ask an "
     "administrator.")
@@ -139,6 +164,8 @@ def describe_start_failure(record: Dict[str, Any]) -> Optional[Tuple[str, Option
         message = capacity_start_failure_message(record.get('instanceType'), zone)
     elif code == 'RESERVATION_FULL':
         message = RESERVATION_FULL_START_MESSAGE
+    elif code == 'RESERVATION_ENDED':
+        message = RESERVATION_ENDED_START_MESSAGE
     else:
         message = START_FAILED_MESSAGE
     error_code = failure.get('errorCode')
@@ -216,9 +243,14 @@ def _capacity_reservation_label(ctx, param, value):
 
 def describe_capacity(record: Dict[str, Any]) -> Optional[str]:
     """The Capacity a workstation launched with: its reservation by label and id (the id alone once
-    unregistered), that it ran on-demand because the reservation was full, or None for an on-demand
-    launch. The web Capacity detail formats the same fields."""
+    unregistered), that it ran on-demand because the reservation was full, that VAMS moved it to
+    on-demand because its reservation ended (`capacityReservationFallbackReason` `ended`), or None for
+    an on-demand launch. A fallback without a reason predates the field and was a full reservation's.
+    The web Capacity detail formats the same fields (capacityDisplayCases.json)."""
     if record.get('capacityReservationFallback'):
+        if record.get('capacityReservationFallbackReason') == FALLBACK_REASON_ENDED:
+            return on_demand_ended_text(record.get('capacityReservationLabel')
+                                        or record.get('capacityReservationRequested'))
         return ON_DEMAND_FALLBACK_TEXT
     reservation_id = record.get('capacityReservationId')
     if not reservation_id:
@@ -594,7 +626,9 @@ def create(ctx: click.Context, image_id: str, instance_type: str, name: str, roo
     the reason in lastError. --os-family is the chosen image's family as `edh catalog images` lists it.
     With --capacity-reservation-id the launch goes into that reservation; when it is full, a
     reservation that falls back launches on-demand and one that does not is refused (409,
-    RESERVATION_FULL). Launching is refused for a session authenticated with a VAMS API key.
+    RESERVATION_FULL); one your role may see but not launch into (LAUNCH `view only` in `edh catalog
+    capacity-reservations`) is refused with 403 RESERVATION_NOT_PERMITTED. Launching is refused for a
+    session authenticated with a VAMS API key.
 
     Examples:
         vamscli edh workstation create --image-id 12 --instance-type g5.2xlarge --name "Design desk" --root-size-gb 200 --os-family linux
@@ -631,6 +665,10 @@ def create(ctx: click.Context, image_id: str, instance_type: str, name: str, roo
     except EdhReservationFullError as e:
         output_error(e, json_output, error_type="Capacity Reservation Full",
                      helpful_message=RESERVATION_FULL_LAUNCH_HINT)
+        raise click.ClickException(str(e))
+    except EdhReservationNotPermittedError as e:
+        output_error(e, json_output, error_type="Capacity Reservation Not Permitted",
+                     helpful_message=RESERVATION_NOT_PERMITTED_LAUNCH_HINT)
         raise click.ClickException(str(e))
     except EdhError as e:
         output_error(e, json_output, error_type="EDH Error")
@@ -700,7 +738,9 @@ def start(ctx: click.Context, session_id: str, wait: bool, json_output: bool):
     `starting`, and `edh workstation get` or `list` shows STARTING until the workstation is ACTIVE. A
     start EDH refuses leaves it STOPPED with the reason under Last Error and Start Failure (for lack
     of capacity, CAPACITY_UNAVAILABLE: the workstation keeps its disk in its Availability Zone; start
-    it again later). The workstation is never deleted for a refused start. A start EDH accepts and
+    it again later). A workstation whose capacity reservation has ended starts on-demand; when VAMS
+    cannot move it to on-demand capacity the start is refused (RESERVATION_ENDED). The workstation is
+    never deleted for a refused start. A start EDH accepts and
     has not finished after 30 minutes stays CREATING and reads STALLED (Last Error START_STALLED):
     stop it, then start it again. --wait follows the start and exits 0 only once the workstation is
     ACTIVE.
@@ -1134,33 +1174,61 @@ def _dash(value: Any) -> str:
     return '-' if value is None or value == '' else str(value)
 
 
-def format_capacity_reservations(result: Dict[str, Any]) -> str:
+def edh_subnet_note(item: Dict[str, Any]) -> Optional[str]:
+    """The note on a reservation EDH cannot launch into for want of a private subnet in its
+    Availability Zone (`edhSubnetAvailable` false): `No EDH subnet in <az>`; None when EDH has one or
+    when VAMS could not read EDH's subnets (null). The web Settings table's State cell shows the same."""
+    if item.get('edhSubnetAvailable') is not False:
+        return None
+    zone = item.get('availabilityZone')
+    return f"No EDH subnet in {zone if isinstance(zone, str) and zone else 'its Availability Zone'}"
+
+
+def _launch_text(item: Dict[str, Any]) -> str:
+    """The catalog's LAUNCH cell: `yes`, `view only` for a reservation the role may see but not launch
+    into, `-` from a service that predates `launchAllowed`."""
+    allowed = item.get('launchAllowed')
+    if allowed is None:
+        return '-'
+    return LAUNCH_ALLOWED_TEXT if allowed else LAUNCH_VIEW_ONLY_TEXT
+
+
+def format_capacity_reservations(result: Dict[str, Any], launch_column: bool = False) -> str:
     """One row per capacity reservation in the web Capacity reservations table's columns: FREE/TOTAL
     is EC2's available and total instance counts, FALLBACK what a launch into a full reservation does
     (`on-demand` or `refuse`), and STATE EC2's state, `notFound` when EC2 no longer knows the id, or
-    `unknown` when the read failed."""
+    `unknown` when the read failed, followed by `(No EDH subnet in <az>)` when EDH has no private
+    subnet in the reservation's Availability Zone. With `launch_column` (the user catalog) a last
+    LAUNCH column reads `yes`, or `view only` for a reservation the role may see but not launch into."""
     items = result.get('Items', []) if isinstance(result, dict) else []
     if not items:
         return "No capacity reservations found."
     rows = [['LABEL', 'RESERVATION', 'INSTANCE TYPE', 'AZ', 'PLATFORM', 'STATE', 'FREE/TOTAL', 'END DATE',
-             'FALLBACK', 'ENABLED']]
+             'FALLBACK', 'ENABLED'] + (['LAUNCH'] if launch_column else [])]
     for item in items:
         if not isinstance(item, dict):
             continue
         available, total = item.get('availableInstanceCount'), item.get('totalInstanceCount')
+        note = edh_subnet_note(item)
+        state = _dash(item.get('state'))
         rows.append([
             str(item.get('label') or ''), str(item.get('capacityReservationId') or ''),
             _dash(item.get('instanceType')), _dash(item.get('availabilityZone')),
-            _dash(item.get('instancePlatform')), _dash(item.get('state')),
+            _dash(item.get('instancePlatform')), f"{state} ({note})" if note else state,
             '-' if available is None or total is None else f"{available}/{total}",
             _dash(item.get('endDate')),
             'on-demand' if item.get('fallbackToOnDemand') else 'refuse',
             'yes' if item.get('enabled') else 'no',
-        ])
+        ] + ([_launch_text(item)] if launch_column else []))
     # Each column but the last is at least as wide as its longest value, so a long label stays aligned.
     widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]) - 1)]
     return '\n'.join(' '.join(cell.ljust(width) for cell, width in zip(row, widths)) + ' ' + row[-1]
                      for row in rows)
+
+
+def format_catalog_capacity_reservations(result: Dict[str, Any]) -> str:
+    """The user catalog's listing: format_capacity_reservations with the LAUNCH column."""
+    return format_capacity_reservations(result, launch_column=True)
 
 
 @catalog.command(name='capacity-reservations')
@@ -1175,9 +1243,11 @@ def format_capacity_reservations(result: Dict[str, Any]) -> str:
 def catalog_capacity_reservations(ctx: click.Context, instance_type: Optional[str], os_family: Optional[str],
                                   json_output: bool):
     """List the capacity reservations you may launch into: registered by an administrator, enabled,
-    granted to your role, and active in EC2. Pass one as `edh workstation create
-    --capacity-reservation-id`; its instance type and platform must match the launch. An empty list
-    means every launch is on-demand.
+    granted to your role, active in EC2, and in an Availability Zone where EDH has a private subnet.
+    Pass one as `edh workstation create --capacity-reservation-id`; its instance type and platform
+    must match the launch. The LAUNCH column reads `yes`, or `view only` for a reservation your role
+    may see but not launch into (a launch into it is refused with 403 RESERVATION_NOT_PERMITTED). An
+    empty list means every launch is on-demand.
 
     Examples:
         vamscli edh catalog capacity-reservations
@@ -1194,7 +1264,7 @@ def catalog_capacity_reservations(ctx: click.Context, instance_type: Optional[st
             instance_type=instance_type, os_family=os_family)
         items = result.get('Items', []) if isinstance(result, dict) else []
         output_result(result, json_output, success_message=f"Found {len(items)} capacity reservation(s)",
-                      cli_formatter=format_capacity_reservations)
+                      cli_formatter=format_catalog_capacity_reservations)
     except EdhError as e:
         output_error(e, json_output, error_type="EDH Error")
         raise click.ClickException(str(e))

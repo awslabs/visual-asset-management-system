@@ -178,7 +178,10 @@ class EdhAPIClientMixin:
         if status_code == 401:
             return AuthenticationError(f"Authentication failed: {e}")
         if status_code == 403:
-            return PermissionDeniedError(f"Access forbidden. {error_message}")
+            # As _make_request raises a handler's 403: the subclass its body's code names, such as
+            # EdhReservationNotPermittedError for RESERVATION_NOT_PERMITTED, else the plain denial.
+            code = _edh_body_code(e.response)
+            return PermissionDeniedError.for_code(code)(f"Access forbidden. {error_message}", code=code)
         if status_code == 409:
             if list_command is not None and _edh_body_flag(e.response, "startInProgress"):
                 return EdhStartInProgressError(
@@ -249,6 +252,8 @@ class EdhAPIClientMixin:
                 instance type or platform
             EdhReservationFullError: When the capacity reservation has no free slot and does not
                 fall back to on-demand (409 RESERVATION_FULL)
+            EdhReservationNotPermittedError: When the caller's role may see the capacity reservation
+                but not launch into it (403 RESERVATION_NOT_PERMITTED)
             EdhOperationError: When the launch is refused for the record's current state
             EdhUnavailableError: When the EDH cluster did not answer, or the capacity reservation
                 could not be read (503)
@@ -318,7 +323,9 @@ class EdhAPIClientMixin:
                 disabled), the outcome of placing a fresh session key. The start runs in the
                 background; poll get_edh_workstation until it is ACTIVE with no activity. A start
                 EDH refuses leaves the record STOPPED with lastError CAPACITY_UNAVAILABLE,
-                RESERVATION_FULL or START_FAILED and the startFailure it recorded; one EDH accepts
+                RESERVATION_FULL or START_FAILED, and one VAMS refused because the workstation's
+                capacity reservation has ended and VAMS could not move it to on-demand capacity
+                RESERVATION_ENDED, with the startFailure it recorded; one EDH accepts
                 and has not finished after 30 minutes stays CREATING with no activity and lastError
                 START_STALLED (stop it, then start it again)
 

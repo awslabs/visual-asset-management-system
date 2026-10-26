@@ -59,6 +59,9 @@ export const LAST_ERROR_COPY: Record<WorkstationLastError, string> = {
     LEASE_EXPIRED: "The workstation's lease has expired and it was automatically stopped.",
     RESERVATION_FULL:
         "The capacity reservation had no free capacity and does not allow an on-demand launch. Launch again later, choose On-demand, or ask an administrator.",
+    // A start VAMS refused: the reservation ended and VAMS could not move the instance to on-demand.
+    RESERVATION_ENDED:
+        "The capacity reservation this workstation was launched into has ended, and VAMS could not move the workstation to on-demand capacity. Ask an administrator.",
     START_FAILED:
         "The workstation did not start; it is still stopped with its disk. Start it again, or ask an administrator.",
     START_STALLED:
@@ -78,6 +81,7 @@ const present = (value: unknown): value is string => typeof value === "string" &
 export const START_FAILURE_CODES: ReadonlyArray<WorkstationLastError> = [
     "CAPACITY_UNAVAILABLE",
     "RESERVATION_FULL",
+    "RESERVATION_ENDED",
     "START_FAILED",
 ];
 
@@ -129,6 +133,8 @@ export function describeStartFailure(
             ? capacityStartFailureMessage(row.instanceType, failure?.availabilityZone)
             : code === "RESERVATION_FULL"
             ? RESERVATION_FULL_START_MESSAGE
+            : code === "RESERVATION_ENDED"
+            ? LAST_ERROR_COPY.RESERVATION_ENDED
             : LAST_ERROR_COPY.START_FAILED;
     const detail = present(failure?.errorCode)
         ? `AWS: ${failure?.errorCode}${

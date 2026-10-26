@@ -94,6 +94,7 @@ class TestVocabulary:
             "START_STALLED",
             "LEASE_EXPIRED",
             "RESERVATION_FULL",
+            "RESERVATION_ENDED",
         }
 
     def test_the_worker_payload_is_the_row_identity(self):

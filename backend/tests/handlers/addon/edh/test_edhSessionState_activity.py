@@ -73,7 +73,8 @@ class TestActivityDerivation:
 
 @pytest.mark.unit
 class TestStoppedRowCodes:
-    @pytest.mark.parametrize("code", ["CAPACITY_UNAVAILABLE", "RESERVATION_FULL", "START_FAILED", "LEASE_EXPIRED"])
+    @pytest.mark.parametrize("code", ["CAPACITY_UNAVAILABLE", "RESERVATION_FULL", "RESERVATION_ENDED", "START_FAILED",
+                                      "LEASE_EXPIRED"])
     def test_a_start_failure_code_stays_while_edh_reports_the_desktop_stopped(self, code):
         row = _row(state="STOPPED", edhState="stopped", lastError=code,
                    startFailure={"observedAt": NOW.isoformat()})
@@ -81,7 +82,7 @@ class TestStoppedRowCodes:
         assert "lastError" not in changed and "startFailure" not in changed
 
     @pytest.mark.parametrize("edh_state, mapped", [("pending", "CREATING"), ("running", "ACTIVE")])
-    @pytest.mark.parametrize("code", ["CAPACITY_UNAVAILABLE", "RESERVATION_FULL", "START_FAILED"])
+    @pytest.mark.parametrize("code", ["CAPACITY_UNAVAILABLE", "RESERVATION_FULL", "RESERVATION_ENDED", "START_FAILED"])
     def test_the_code_and_the_failure_go_once_the_desktop_moves_on(self, code, edh_state, mapped):
         row = _row(state="STOPPED", edhState="stopped", lastError=code,
                    startFailure={"observedAt": NOW.isoformat()})
@@ -97,7 +98,7 @@ class TestStoppedRowCodes:
     def test_start_failed_is_a_stored_code(self):
         assert "START_FAILED" in state.LAST_ERROR_CODES
         assert state.STOPPED_ROW_LAST_ERRORS == {"LEASE_EXPIRED", "CAPACITY_UNAVAILABLE", "RESERVATION_FULL",
-                                                 "START_FAILED"}
+                                                 "RESERVATION_ENDED", "START_FAILED"}
 
 
 @pytest.mark.unit

@@ -35,6 +35,8 @@ DELETED_ROW = {
     "bootstrapId": "7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f", "userId": "alice", "state": "DELETED",
     "createdAt": "2026-10-23T09:00:00+00:00", "updatedAt": "2026-10-23T09:00:00+00:00",
 }
+# EDH's private subnets, by id, and the Availability Zone each is in.
+ZONES = {"subnet-0ec4ae30b8a915cb8": "us-east-1a", "subnet-0a68023ff4ff97377": "us-east-1b"}
 
 
 @pytest.fixture
@@ -314,7 +316,7 @@ class TestView:
         view = reservations.view(registration, facts)
 
         assert view == {"capacityReservationId": CR_FREE, "label": "Render farm", "fallbackToOnDemand": True,
-                        "enabled": True, **facts}
+                        "enabled": True, **facts, "edhSubnetAvailable": None}
 
     def test_a_not_found_reservation_keeps_its_state_and_nulls_the_rest(self):
         registration = reservations.normalise_registration(registry_item(CR_OTHER))
@@ -353,3 +355,91 @@ class TestView:
     def test_free_and_full(self, facts, free, full):
         assert reservations.has_free_slot(facts) is free
         assert reservations.is_full(facts) is full
+
+
+@pytest.mark.unit
+class TestEdhsPrivateSubnets:
+    """EDH keeps its private subnets in a String parameter whose value is a Python list repr; VAMS reads the ids
+    with a pattern, never by evaluating the text, maps them to their Availability Zones with DescribeSubnets, and
+    keeps the zones for five minutes per container. A read that fails, or a value naming no subnet, is not known."""
+
+    @pytest.mark.parametrize("value,expected", [
+        ("['subnet-0ec4ae30b8a915cb8', 'subnet-0a68023ff4ff97377']",
+         ["subnet-0ec4ae30b8a915cb8", "subnet-0a68023ff4ff97377"]),
+        ('["subnet-0ec4ae30b8a915cb8"]', ["subnet-0ec4ae30b8a915cb8"]),
+        ("subnet-0ec4ae30b8a915cb8,subnet-0ec4ae30b8a915cb8", ["subnet-0ec4ae30b8a915cb8"]),
+        ("[]", []),
+        ("", []),
+        ("__import__('os').system('true')", []),
+        ("[SUBNET-0EC4AE30B8A915CB8]", []),
+        (None, []),
+        (42, []),
+    ], ids=["list-repr", "json", "duplicate", "empty-list", "empty", "code", "uppercase", "none", "number"])
+    def test_the_parameter_value_is_read_with_a_pattern(self, value, expected):
+        assert reservations.parse_subnet_ids(value) == expected
+
+    def test_the_parameter_is_edhs_own_under_its_cluster_id(self, monkeypatch):
+        with mock_aws():
+            fakes = install_reservation_fakes(monkeypatch, subnets=ZONES)
+            assert reservations.subnet_zones() == frozenset({"us-east-1a", "us-east-1b"})
+        assert fakes.ssm.names == ["/edh/edh-test/configuration/PrivateSubnets"]
+        assert [sorted(call["SubnetIds"]) for call in fakes.ec2.subnet_calls] == [sorted(ZONES)]
+
+    def test_the_zones_are_kept_for_the_cache_window(self, monkeypatch):
+        clock = [1000.0]
+        monkeypatch.setattr(reservations, "_monotonic", lambda: clock[0])
+        with mock_aws():
+            fakes = install_reservation_fakes(monkeypatch, subnets=ZONES)
+            reservations.subnet_zones()
+            clock[0] += reservations.SUBNET_ZONES_CACHE_SECONDS - 1
+            reservations.subnet_zones()
+            assert len(fakes.ssm.names) == 1, "control: one read inside the window"
+            clock[0] += 1
+            reservations.subnet_zones()
+        assert len(fakes.ssm.names) == 2
+        assert reservations.SUBNET_ZONES_CACHE_SECONDS == 300
+
+    @pytest.mark.parametrize("fake", [
+        {"ssm_failure": client_error("AccessDeniedException", "GetParameter")},
+        {"subnets": None},
+        {"subnet_parameter_value": "[]"},
+        {"subnet_parameter_value": "not a list"},
+        {"subnet_parameter_value": "['subnet-0aaaaaaaaaaaaaaa1']", "subnets": ZONES},
+        {"subnets": ZONES, "subnet_failure": client_error("UnauthorizedOperation", "DescribeSubnets")},
+    ], ids=["ssm-denied", "no-parameter", "empty-list", "garbage", "unknown-subnet", "ec2-denied"])
+    def test_a_read_that_fails_is_not_known_and_is_kept_for_the_window(self, monkeypatch, fake):
+        with mock_aws():
+            fakes = install_reservation_fakes(monkeypatch, **fake)
+            assert reservations.subnet_zones() is None
+            assert reservations.subnet_zones() is None
+        # The failure is read, and so logged, once per window.
+        assert len(fakes.ssm.names) == 1
+
+    @pytest.mark.parametrize("zone,zones,expected", [
+        ("us-east-1a", frozenset({"us-east-1a"}), True),
+        ("us-east-1d", frozenset({"us-east-1a", "us-east-1b"}), False),
+        ("us-east-1a", None, None),
+        (None, frozenset({"us-east-1a"}), None),
+    ])
+    def test_whether_a_reservation_has_a_subnet(self, zone, zones, expected):
+        assert reservations.subnet_available({"availabilityZone": zone}, zones) is expected
+
+    def test_the_view_carries_it(self):
+        registration = reservations.normalise_registration(registry_item(CR_FREE))
+        facts = {"state": "active", "availabilityZone": "us-east-1d"}
+        assert reservations.view(registration, facts, frozenset({"us-east-1a"}))["edhSubnetAvailable"] is False
+        assert reservations.view(registration, facts, frozenset({"us-east-1d"}))["edhSubnetAvailable"] is True
+        assert reservations.view(registration, None, frozenset({"us-east-1d"}))["edhSubnetAvailable"] is None
+
+
+@pytest.mark.unit
+class TestAReservationThatHasEnded:
+    @pytest.mark.parametrize("state,ended", [
+        ("expired", True), ("cancelled", True), ("failed", True), ("notFound", True),
+        ("active", False), ("pending", False), ("scheduled", False), ("unknown", False), (None, False),
+    ])
+    def test_the_states_that_have_ended(self, state, ended):
+        assert reservations.has_ended({"state": state}) is ended
+
+    def test_no_facts_have_not_ended(self):
+        assert reservations.has_ended(None) is False

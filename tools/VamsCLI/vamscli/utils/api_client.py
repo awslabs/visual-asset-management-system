@@ -84,6 +84,17 @@ def _is_cognito_unavailable(error_message: str) -> bool:
     return "cognito user management is not available" in text or "cognito configuration error" in text
 
 
+def _api_error_code(response) -> Optional[str]:
+    """The machine-readable `code` an HTTP error body carries (a handler-defined string such as
+    `SOME_CODE`), or None. Never raises, for the reason `_api_error_message` gives."""
+    try:
+        data = response.json() if getattr(response, "content", None) else None
+    except Exception:
+        return None
+    code = data.get("code") if isinstance(data, dict) else None
+    return code if isinstance(code, str) and code else None
+
+
 def _api_error_message(response, fallback: str) -> str:
     """The server's error text from an HTTP error response, or `fallback` when it carries none.
 
@@ -502,8 +513,10 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                 if include_auth and forbidden == FORBIDDEN_RESOURCE_POLICY:
                     raise PermissionDeniedError(_RESOURCE_POLICY_MESSAGE)
                 if include_auth and forbidden == FORBIDDEN_HANDLER:
-                    raise PermissionDeniedError(
-                        f"Access forbidden. {_api_error_message(response, _GATEWAY_UNKNOWN_ROUTE_MESSAGE)}")
+                    code = _api_error_code(response)
+                    raise PermissionDeniedError.for_code(code)(
+                        f"Access forbidden. {_api_error_message(response, _GATEWAY_UNKNOWN_ROUTE_MESSAGE)}",
+                        code=code)
                 if include_auth and retry_count < MAX_AUTH_RETRIES:
                     # For override tokens, check if expired
                     if self.profile_manager.is_override_token():

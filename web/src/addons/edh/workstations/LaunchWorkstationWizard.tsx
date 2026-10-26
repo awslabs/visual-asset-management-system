@@ -35,8 +35,10 @@ import type {
 import { hoursWord, osFamilyLabel } from "../labels";
 import {
     ON_DEMAND_LABEL,
+    VIEW_ONLY_HINT,
     matchingReservations,
     preselectReservation,
+    reservationLaunchAllowed,
     reservationOptionLabel,
     reservationReviewText,
     reservationSelectable,
@@ -736,6 +738,8 @@ const LaunchWorkstationWizard: React.FC<LaunchWorkstationWizardProps> = ({
                             Launch into a capacity reservation an administrator registered for this
                             instance type, or on-demand. A full reservation either launches the
                             workstation on-demand or cannot be chosen, as the administrator set it.
+                            {offeredReservations.some((r) => !reservationLaunchAllowed(r)) &&
+                                ` ${VIEW_ONLY_HINT}`}
                         </p>
                     </div>
                 )}

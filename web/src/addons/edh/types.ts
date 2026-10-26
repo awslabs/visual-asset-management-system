@@ -21,6 +21,7 @@ export type WorkstationLastError =
     | "CREATE_TIMED_OUT"
     | "LEASE_EXPIRED"
     | "RESERVATION_FULL"
+    | "RESERVATION_ENDED"
     | "START_FAILED"
     | "START_STALLED";
 
@@ -119,8 +120,19 @@ export interface WorkstationRecord {
     capacityReservationId?: string | null;
     /** The reservation's label, read from the registry; null once it is unregistered. */
     capacityReservationLabel?: string | null;
-    /** True when the launch asked for a reservation and ran on-demand because it was full. */
+    /**
+     * True when the workstation asked for a reservation and runs on-demand: the reservation was full
+     * at launch, or it had ended when a start of the stopped workstation moved it to on-demand.
+     */
     capacityReservationFallback?: boolean | null;
+    /**
+     * Why it runs on-demand: `full` (a launch into a full reservation that falls back) or `ended`
+     * (VAMS moved the stopped workstation to on-demand because its reservation ended). Absent on a
+     * fallback recorded before the field, which was a full reservation's.
+     */
+    capacityReservationFallbackReason?: CapacityReservationFallbackReason | string | null;
+    /** The reservation a fallback row asked for, when the service returns it. */
+    capacityReservationRequested?: string | null;
     /**
      * Present on the launch and start responses, and on a renew response when the renew re-issued,
      * or tried to re-issue, the desktop's VAMS sign-in. A start is accepted (202) with `activity`
@@ -142,6 +154,9 @@ export interface CreateWorkstationRequest {
     /** The registered capacity reservation to launch into; omitted for an on-demand launch. */
     capacityReservationId?: string;
 }
+
+/** Why a workstation that asked for a capacity reservation runs on-demand. */
+export type CapacityReservationFallbackReason = "full" | "ended";
 
 /** EC2's reservation state, `notFound` when EC2 no longer knows the id, `unknown` when the read failed. */
 export type CapacityReservationState =
@@ -180,6 +195,17 @@ export interface CapacityReservationView {
     /** ISO-8601, or null for a reservation without an end date. */
     endDate: string | null;
     reservationType: "default" | "capacity-block" | string | null;
+    /**
+     * Whether EDH has a private subnet in the reservation's Availability Zone, which it needs to
+     * launch into it: null when VAMS could not read EDH's subnets. The catalog lists no reservation
+     * for which it is false.
+     */
+    edhSubnetAvailable?: boolean | null;
+    /**
+     * Catalog only: whether the user's role may launch into the reservation, not only see it.
+     * Absent on the admin list, and from a service that predates the field.
+     */
+    launchAllowed?: boolean;
     createdAt?: string;
     createdBy?: string;
     updatedAt?: string;

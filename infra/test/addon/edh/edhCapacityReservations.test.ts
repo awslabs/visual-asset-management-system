@@ -15,11 +15,16 @@
  *   * `ec2:DescribeCapacityReservations` is granted on `*` (EC2 offers no resource-level scope for a
  *     Describe call) to exactly the workstation service, the launch worker and the admin service,
  *     and to no other role of the deployment; with the add-on off no role holds it;
- *   * no add-on role may create, modify, cancel or move a capacity reservation, and the three roles'
- *     own policies hold no other EC2 action, so VAMS never changes a reservation or retargets an
- *     instance (the managed VPC-access policy every in-VPC Lambda carries is not one of them).
+ *   * no add-on role may create, modify, cancel or move a capacity reservation; the one EC2 write
+ *     any add-on role holds is the launch worker's move of a stopped desktop off a reservation that
+ *     has ended (`ec2:ModifyInstanceCapacityReservationAttributes`), on this account's and Region's
+ *     instances tagged with EDH's cluster id, and the three roles' own policies hold no other EC2
+ *     action than their reads (the managed VPC-access policy every in-VPC Lambda carries is not one
+ *     of them);
+ *   * the workstation service and the admin service read EDH's private subnets parameter, by its
+ *     exact name, and `ec2:DescribeSubnets` on `*`; with the add-on off no role holds either.
  *
- * The CDK Nag suppression for the `*` is held by `edhNag.test.ts`.
+ * The CDK Nag suppressions are held by `edhNag.test.ts`.
  */
 
 import {
@@ -65,7 +70,8 @@ const CAPACITY_RESERVATION_ROUTES: Array<[string, string]> = [
 
 /**
  * EC2 actions that change a capacity reservation, or what an instance is placed in. None may be
- * granted to an add-on role, by name or through a wildcard.
+ * granted to an add-on role, by name or through a wildcard; the launch worker's one EC2 write, which
+ * moves a stopped desktop off an ended reservation, is pinned on its own below.
  */
 const CAPACITY_WRITES = [
     "ec2:CreateCapacityReservation",
@@ -77,10 +83,23 @@ const CAPACITY_WRITES = [
     "ec2:CancelCapacityReservationFleets",
     "ec2:MoveCapacityReservationInstances",
     "ec2:AssociateCapacityReservationBillingOwner",
-    "ec2:ModifyInstanceCapacityReservationAttributes",
     "ec2:RunInstances",
     "ec2:StartInstances",
 ];
+
+/** The launch worker's move of a stopped desktop off an ended reservation, onto on-demand capacity. */
+const MOVE_TO_ON_DEMAND = "ec2:ModifyInstanceCapacityReservationAttributes";
+/** The cluster id the EDH synth configures (`support/edhSynth.ts`), which EDH tags every desktop with. */
+const EDH_CLUSTER_ID = "edh-t1";
+/** The instances of the deployment's account and Region, as the template flattens the ARN. */
+const INSTANCE_ARN = /^arn:\$\{AWS::Partition\}:ec2:[a-z0-9-]+:123456789012:instance\/\*$/;
+/** The two roles that read which Availability Zones EDH has a private subnet in. */
+const SUBNET_READERS = ["edhAdminService", "edhWorkstationService"];
+const DESCRIBE_SUBNETS = "ec2:DescribeSubnets";
+/** EDH's private subnets parameter, exactly, as the template flattens its ARN. */
+const PRIVATE_SUBNETS_PARAMETER_ARN = new RegExp(
+    `^arn:\\$\\{AWS::Partition\\}:ssm:[a-z0-9-]+:123456789012:parameter/edh/${EDH_CLUSTER_ID}/configuration/PrivateSubnets$`
+);
 
 const edhSynth = (name: TemplateName): SynthResult =>
     synthTemplate(name, { mutate: enableEdh, mutateKey: "edhWorkstationsEnabled" });
@@ -275,7 +294,99 @@ describe("EDH capacity reservation IAM", () => {
         expect(writes).toEqual([]);
     });
 
-    test("the three reader roles' own policies hold no EC2 action but the reservation read, and the worker's instance read", () => {
+    test("only the launch worker may move an instance off a reservation, and only an EDH desktop of this cluster", () => {
+        const s = allFeaturesSynth();
+        const holders = edhFunctions(s)
+            .filter((fn) =>
+                allowed(s, fn)
+                    .flatMap(actionsOf)
+                    .some((a) => covers(a, MOVE_TO_ON_DEMAND))
+            )
+            .map(moduleOf);
+        expect(holders).toEqual(["edhLaunchWorker"]);
+        const [worker] = edhFunctions(s).filter((fn) => moduleOf(fn) === "edhLaunchWorker");
+        const statements = allowed(s, worker).filter((st) =>
+            actionsOf(st).some((a) => covers(a, MOVE_TO_ON_DEMAND))
+        );
+        expect(statements).toHaveLength(1);
+        const [move] = statements;
+        // The one action, by name, on the instances of the deployment's account and Region only.
+        expect(actionsOf(move)).toEqual([MOVE_TO_ON_DEMAND]);
+        const resources = resourcesOf(move);
+        expect(resources).toHaveLength(1);
+        expect(resources[0]).toMatch(INSTANCE_ARN);
+        // Conditioned on the two tags EDH puts on every desktop: the configured cluster id, and the
+        // desktop node type, which EDH's controller, login node, broker and gateway do not carry.
+        expect(move.Condition).toEqual({
+            StringEquals: {
+                "aws:ResourceTag/edh:ClusterId": EDH_CLUSTER_ID,
+                "aws:ResourceTag/edh:NodeType": "dcv_node",
+            },
+        });
+    });
+
+    test.each(EDH_TEMPLATES)(
+        "%s: the workstation service and the admin service read EDH's private subnets parameter, and only it",
+        (name) => {
+            const s = edhSynth(name);
+            const parameterReads = Object.fromEntries(
+                edhFunctions(s)
+                    .map((fn) => [
+                        moduleOf(fn),
+                        allowed(s, fn)
+                            .filter((st) => actionsOf(st).includes("ssm:GetParameter"))
+                            .flatMap(resourcesOf)
+                            .filter((r) => r.includes(":parameter/edh/")),
+                    ])
+                    .filter(([, reads]) => reads.length > 0)
+            );
+            expect(Object.keys(parameterReads).sort()).toEqual(SUBNET_READERS);
+            for (const module of SUBNET_READERS) {
+                expect(parameterReads[module]).toHaveLength(1);
+                expect(parameterReads[module][0]).toMatch(PRIVATE_SUBNETS_PARAMETER_ARN);
+            }
+            const subnetReaders = edhFunctions(s)
+                .filter((fn) =>
+                    allowed(s, fn).some((st) => actionsOf(st).includes(DESCRIBE_SUBNETS))
+                )
+                .map(moduleOf)
+                .sort();
+            expect(subnetReaders).toEqual(SUBNET_READERS);
+            for (const fn of edhFunctions(s).filter((f) => SUBNET_READERS.includes(moduleOf(f)))) {
+                const describes = allowed(s, fn).filter((st) =>
+                    actionsOf(st).includes(DESCRIBE_SUBNETS)
+                );
+                // EC2 has no resource-level scope for a Describe call.
+                expect([moduleOf(fn), [...new Set(describes.flatMap(resourcesOf))]]).toEqual([
+                    moduleOf(fn),
+                    ["*"],
+                ]);
+            }
+        }
+    );
+
+    test("with the add-on off, no role of the deployment holds the move or the subnet reads", () => {
+        const stock = synthTemplate("commercial");
+        const named = (s: SynthResult, match: (st: any) => boolean): string[] =>
+            [...s.ofType("AWS::IAM::Policy"), ...s.ofType("AWS::IAM::ManagedPolicy")].flatMap((p) =>
+                ((p.properties.PolicyDocument?.Statement ?? []) as any[])
+                    .filter(match)
+                    .map(() => `${p.stack}/${p.logicalId}`)
+            );
+        const addonStatement = (st: any): boolean =>
+            actionsOf(st).includes(MOVE_TO_ON_DEMAND) ||
+            resourcesOf(st).some((r) => r.includes(":parameter/edh/"));
+        expectAbsent(
+            "the add-on's instance move and EDH parameter read in the stock template",
+            named(stock, addonStatement),
+            {
+                description: "the commercial hybrid grants them",
+                count: named(edhSynth("commercial"), addonStatement).length,
+            }
+        );
+    });
+
+    test("the three reader roles' own policies hold no EC2 action but the reservation and subnet reads, and the worker's instance read and move", () => {
         const s = allFeaturesSynth();
         const ec2Actions = Object.fromEntries(
             edhFunctions(s)
@@ -292,14 +403,19 @@ describe("EDH capacity reservation IAM", () => {
                 ])
         );
         // The launch worker also reads a stopped desktop's instance, for the Availability Zone a
-        // refused start names; neither read is a write.
+        // refused start names, and moves one off an ended reservation; the workstation and admin
+        // services also read the zones of EDH's private subnets.
         expect(ec2Actions).toEqual(
             Object.fromEntries(
                 RESERVATION_READERS.map((module) => [
                     module,
                     module === "edhLaunchWorker"
-                        ? [DESCRIBE_CAPACITY_RESERVATIONS, "ec2:DescribeInstances"]
-                        : [DESCRIBE_CAPACITY_RESERVATIONS],
+                        ? [
+                              DESCRIBE_CAPACITY_RESERVATIONS,
+                              "ec2:DescribeInstances",
+                              MOVE_TO_ON_DEMAND,
+                          ]
+                        : [DESCRIBE_CAPACITY_RESERVATIONS, DESCRIBE_SUBNETS],
                 ])
             )
         );

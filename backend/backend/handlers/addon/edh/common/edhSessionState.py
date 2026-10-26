@@ -71,6 +71,9 @@ LAST_ERROR_CREATE_TIMED_OUT = "CREATE_TIMED_OUT"
 LAST_ERROR_LEASE_EXPIRED = "LEASE_EXPIRED"
 # A launch into a capacity reservation the user named that failed because the reservation had no free slot.
 LAST_ERROR_RESERVATION_FULL = "RESERVATION_FULL"
+# A start of a stopped desktop launched into a capacity reservation that has ended (expired, cancelled, failed or
+# no longer held by EC2), which VAMS could not move to on-demand capacity, so the start was not sent.
+LAST_ERROR_RESERVATION_ENDED = "RESERVATION_ENDED"
 # A start of a stopped desktop that did not happen for a reason other than capacity: EDH refused it, it could
 # not be sent, or EDH still reported the desktop stopped once the start's window had passed.
 LAST_ERROR_START_FAILED = "START_FAILED"
@@ -81,14 +84,23 @@ LAST_ERROR_START_STALLED = "START_STALLED"
 LAST_ERROR_CODES = frozenset({
     LAST_ERROR_USER_NOT_PROVISIONED, LAST_ERROR_QUOTA_EXCEEDED, LAST_ERROR_IMAGE_UNAVAILABLE,
     LAST_ERROR_CAPACITY_UNAVAILABLE, LAST_ERROR_EDH_REFUSED, LAST_ERROR_LAUNCH_ERROR,
-    LAST_ERROR_CREATE_TIMED_OUT, LAST_ERROR_LEASE_EXPIRED, LAST_ERROR_RESERVATION_FULL, LAST_ERROR_START_FAILED,
-    LAST_ERROR_START_STALLED,
+    LAST_ERROR_CREATE_TIMED_OUT, LAST_ERROR_LEASE_EXPIRED, LAST_ERROR_RESERVATION_FULL, LAST_ERROR_RESERVATION_ENDED,
+    LAST_ERROR_START_FAILED, LAST_ERROR_START_STALLED,
 })
 # The codes a STOPPED row keeps for as long as it stays stopped: the lease expiry, and why the last start of
 # the desktop did not happen. The next start EDH accepts, or EDH reporting the desktop past stopped, clears them.
 STOPPED_ROW_LAST_ERRORS = frozenset({
-    LAST_ERROR_LEASE_EXPIRED, LAST_ERROR_CAPACITY_UNAVAILABLE, LAST_ERROR_RESERVATION_FULL, LAST_ERROR_START_FAILED,
+    LAST_ERROR_LEASE_EXPIRED, LAST_ERROR_CAPACITY_UNAVAILABLE, LAST_ERROR_RESERVATION_FULL,
+    LAST_ERROR_RESERVATION_ENDED, LAST_ERROR_START_FAILED,
 })
+# Why a row that asked for a capacity reservation runs on-demand (``capacityReservationFallbackReason``, set with
+# ``capacityReservationFallback``): the reservation was full at launch, or it had ended when a stopped desktop
+# launched into it was started, and VAMS moved the desktop to on-demand capacity. A fallback row stored before the
+# field existed reads as full.
+CAPACITY_RESERVATION_FALLBACK_REASON_FIELD = "capacityReservationFallbackReason"
+CAPACITY_RESERVATION_FALLBACK_FULL = "full"
+CAPACITY_RESERVATION_FALLBACK_ENDED = "ended"
+CAPACITY_RESERVATION_FALLBACK_REASONS = (CAPACITY_RESERVATION_FALLBACK_FULL, CAPACITY_RESERVATION_FALLBACK_ENDED)
 # What a start that did not happen, or stalled, recorded beside its code (``startFailure``): the AWS error code
 # EDH's answer names, the Availability Zone of the desktop's instance, and when VAMS recorded it. Kept and cleared
 # with the code.
@@ -144,6 +156,8 @@ EDH_FAILURE_TEXT_LOG_LIMIT = 300
 EDH_FAILURE_AWS_ERROR_PATTERN = re.compile(
     r"An error occurred \(([A-Za-z][A-Za-z0-9.]{0,63})\) when calling the ([A-Za-z][A-Za-z0-9]{0,63}) operation")
 EDH_FAILURE_CHECKPOINT_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+# An AWS error code as a start failure keeps it, whether parsed from EDH's text or read from a ClientError.
+AWS_ERROR_CODE_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9.]{0,63}")
 
 # The launch worker's invocation payload: the row's identity, echoed so the worker's log names it.
 WORKER_PAYLOAD_KEYS = ("bootstrapId", "userId", "edhUid", "imageId", "instanceType", "osFamily", "rootSizeGb", "name")
@@ -529,13 +543,17 @@ def start_stall_due(row, now=None) -> bool:
     return age is not None and age >= timedelta(seconds=START_STALL_SECONDS)
 
 
-def start_failure(error_text, availability_zone, now) -> Dict[str, str]:
-    """The ``startFailure`` a start that did not happen records at ``now``: the AWS error code EDH's answer
-    names in botocore's words (``EDH_FAILURE_AWS_ERROR_PATTERN``, absent when it names none), the desktop's
-    Availability Zone (absent when it was not read) and ``observedAt``. EDH's text itself is never kept."""
+def start_failure(error_text, availability_zone, now, error_code=None) -> Dict[str, str]:
+    """The ``startFailure`` a start that did not happen records at ``now``: the AWS error code -- ``error_code``
+    when it is one (``AWS_ERROR_CODE_PATTERN``), as a ClientError of VAMS's own AWS call names it, else the one
+    EDH's answer names in botocore's words (``EDH_FAILURE_AWS_ERROR_PATTERN``), absent when neither names one --,
+    the desktop's Availability Zone (absent when it was not read) and ``observedAt``. No error text itself is
+    ever kept."""
     failure = {"observedAt": now.isoformat()}
     match = EDH_FAILURE_AWS_ERROR_PATTERN.search(error_text) if isinstance(error_text, str) else None
-    if match:
+    if isinstance(error_code, str) and AWS_ERROR_CODE_PATTERN.fullmatch(error_code):
+        failure["errorCode"] = error_code
+    elif match:
         failure["errorCode"] = match.group(1)
     if isinstance(availability_zone, str) and availability_zone:
         failure["availabilityZone"] = availability_zone
@@ -630,6 +648,23 @@ def reservation_refusal_last_error(facts) -> Optional[str]:
     reservation has been read again: ``RESERVATION_FULL`` when it is full, None when it is not (or was not read),
     which leaves the refusal's own classification standing."""
     return LAST_ERROR_RESERVATION_FULL if facts is not None and reservation_is_full(facts) else None
+
+
+def capacity_reservation_fallback_reason(row) -> Optional[str]:
+    """Why the row runs on-demand although it asked for a capacity reservation, as its record returns it: the
+    stored ``capacityReservationFallbackReason`` (``full`` or ``ended``) of a fallback row, ``full`` for a fallback
+    row stored without one, and None for a row that did not fall back."""
+    if not row.get('capacityReservationFallback'):
+        return None
+    reason = row.get(CAPACITY_RESERVATION_FALLBACK_REASON_FIELD)
+    return reason if reason in CAPACITY_RESERVATION_FALLBACK_REASONS else CAPACITY_RESERVATION_FALLBACK_FULL
+
+
+def capacity_reservation_named(row) -> Optional[str]:
+    """The capacity reservation a row's record names, whose registry label it carries: the one the launch was sent
+    with (``capacityReservationId``), else, on a row that fell back to on-demand, the one it asked for
+    (``capacityReservationRequested``); None for a row that named none."""
+    return row.get('capacityReservationId') or row.get('capacityReservationRequested') or None
 
 
 def edh_failure_read_due(row, now=None) -> bool:

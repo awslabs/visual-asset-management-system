@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from botocore.exceptions import ClientError, EndpointConnectionError
 
 import backend.backend.handlers.addon.edh.edhLaunchWorker as worker
 from backend.backend.handlers.addon.edh.common import edhCapacityReservations as reservations
@@ -39,6 +40,14 @@ ICE_TEXT = ("Unable to start instance due to An error occurred (InsufficientInst
 RESERVATION_TEXT = ("Unable to start instance due to An error occurred (ReservationCapacityExceeded) when calling "
                     "the StartInstances operation: The requested reservation does not have sufficient capacity.")
 FULL_RESERVATION = {"state": "active", "availableInstanceCount": 0, "totalInstanceCount": 1}
+# The states of a reservation that has ended, and the reservation specification VAMS gives a stopped desktop's
+# instance launched into one before its start: on-demand capacity.
+ENDED_STATES = ("expired", "cancelled", "failed", "notFound")
+ON_DEMAND_SPECIFICATION = {"CapacityReservationPreference": "open"}
+# EC2's refusal of the move, as botocore raises it; its text must never reach the row.
+MODIFY_REFUSAL = ClientError({"Error": {"Code": "UnauthorizedOperation", "Message": "You are not authorized to perform "
+                                        "this operation. Encoded authorization failure message: secret-detail"}},
+                             "ModifyInstanceCapacityReservationAttributes")
 
 
 def _stamp(seconds_ago=5):
@@ -72,7 +81,7 @@ class _Clock:
 
 
 def _run(monkeypatch, row, *, edh=None, context=None, zone="us-west-2b", describe_error=None, facts=None,
-         revoke_error=None, deliveries=1, event_stamp=None):
+         revoke_error=None, deliveries=1, event_stamp=None, modify=None, read_error=None):
     edh = edh if edh is not None else FakeEdhClient()
     fakes = install_worker_fakes(monkeypatch, edh=edh)
     table = ConditionalRowTable(**{k: v for k, v in row.items() if k != "bootstrapId"})
@@ -89,9 +98,14 @@ def _run(monkeypatch, row, *, edh=None, context=None, zone="us-west-2b", describ
     else:
         ec2.describe_instances.return_value = {
             "Reservations": [{"Instances": [{"InstanceId": INSTANCE_ID, "Placement": {"AvailabilityZone": zone}}]}]}
+    if modify is not None:
+        # EC2's answer to the move off an ended reservation: an error it raises, or a callable answering it.
+        ec2.modify_instance_capacity_reservation_attributes.side_effect = modify
     monkeypatch.setattr(worker, "ec2", ec2)
     fakes.ec2 = ec2
     read_live = MagicMock(return_value={RESERVATION: facts or FULL_RESERVATION})
+    if read_error is not None:
+        read_live.side_effect = read_error
     monkeypatch.setattr(reservations, "read_live", read_live)
     fakes.read_live = read_live
     revoke = MagicMock(side_effect=revoke_error, return_value=dict(bootstrap.CLEARED_KEY_ATTRIBUTES))
@@ -216,7 +230,9 @@ class TestAStartOfAReservationBoundDesktop:
         assert stored["lastError"] == "RESERVATION_FULL"
         assert stored["startFailure"]["errorCode"] == "ReservationCapacityExceeded"
         assert stored["capacityReservationId"] == RESERVATION
-        fakes.read_live.assert_called_once_with([RESERVATION])
+        # The refusal is classified on a read of the reservation made after EDH refused (the start's own read,
+        # before EDH's start, looks only for a reservation that has ended).
+        fakes.read_live.assert_called_with([RESERVATION])
         fakes.revoke.assert_called_once()
 
     def test_a_refusal_while_the_reservation_has_a_slot_keeps_edhs_classification(self, monkeypatch):
@@ -229,6 +245,112 @@ class TestAStartOfAReservationBoundDesktop:
         edh = FakeEdhClient(start_desktop=EdhCapacityError("no capacity", status=500, body_text=ICE_TEXT))
         _, fakes = _run(monkeypatch, _start_row(_stamp()), edh=edh)
         fakes.read_live.assert_not_called()
+
+
+@pytest.mark.unit
+class TestAStartIntoAReservationThatHasEnded:
+    """A stopped desktop launched into a capacity reservation keeps that reservation as its instance's only
+    capacity for life, and EDH leaves it untouched, so once the reservation has ended every start would fail. The
+    worker moves the instance to on-demand capacity first, records the fallback, and sends EDH's start; when EC2
+    refuses the move, EDH's start is not sent and the row records RESERVATION_ENDED."""
+
+    @pytest.mark.parametrize("ended", ENDED_STATES)
+    def test_the_desktop_is_moved_to_on_demand_and_started(self, monkeypatch, ended):
+        edh = FakeEdhClient()
+        seen_at_move = []
+
+        def move(**kwargs):
+            # What EDH had been asked when EC2 was: nothing yet, so the start finds the instance on-demand.
+            seen_at_move.append(list(edh.calls))
+            return {"Return": True}
+
+        result, fakes = _run(monkeypatch, _start_row(_stamp(), capacityReservationId=RESERVATION), edh=edh,
+                             facts={"state": ended}, modify=move)
+
+        assert result["outcome"] == "started"
+        fakes.ec2.modify_instance_capacity_reservation_attributes.assert_called_once_with(
+            InstanceId=INSTANCE_ID, CapacityReservationSpecification=ON_DEMAND_SPECIFICATION)
+        assert seen_at_move == [[]]
+        assert fakes.edh.calls_to("start_desktop") == [(own_row()["edhUid"], SESSION_OWN)]
+        stored = _stored(fakes)
+        assert "capacityReservationId" not in stored
+        assert stored["capacityReservationRequested"] == RESERVATION
+        assert stored["capacityReservationFallback"] is True
+        assert stored["capacityReservationFallbackReason"] == "ended"
+        assert stored["state"] == "CREATING" and stored["lastError"] is None
+        fakes.read_live.assert_any_call([RESERVATION])
+
+    @pytest.mark.parametrize("facts", [
+        {"state": "active", "availableInstanceCount": 1, "totalInstanceCount": 2},
+        {"state": "pending"},
+        {"state": "scheduled"},
+        {"state": "unknown"},
+    ])
+    def test_a_reservation_that_has_not_ended_changes_nothing(self, monkeypatch, facts):
+        result, fakes = _run(monkeypatch, _start_row(_stamp(), capacityReservationId=RESERVATION), facts=facts)
+        assert result["outcome"] == "started"
+        fakes.ec2.modify_instance_capacity_reservation_attributes.assert_not_called()
+        stored = _stored(fakes)
+        assert stored["capacityReservationId"] == RESERVATION
+        assert not stored.get("capacityReservationFallback")
+        assert len(fakes.edh.calls_to("start_desktop")) == 1
+
+    def test_a_reservation_that_could_not_be_read_changes_nothing(self, monkeypatch):
+        result, fakes = _run(monkeypatch, _start_row(_stamp(), capacityReservationId=RESERVATION),
+                             read_error=reservations.CapacityReservationReadError("ThrottlingException"))
+        assert result["outcome"] == "started"
+        fakes.ec2.modify_instance_capacity_reservation_attributes.assert_not_called()
+        assert _stored(fakes)["capacityReservationId"] == RESERVATION
+        assert len(fakes.edh.calls_to("start_desktop")) == 1
+
+    def test_a_full_active_reservation_still_records_reservation_full(self, monkeypatch):
+        edh = FakeEdhClient(start_desktop=EdhCapacityError("no capacity", status=500, body_text=RESERVATION_TEXT))
+        _, fakes = _run(monkeypatch, _start_row(_stamp(), capacityReservationId=RESERVATION), edh=edh)
+        fakes.ec2.modify_instance_capacity_reservation_attributes.assert_not_called()
+        assert _stored(fakes)["lastError"] == "RESERVATION_FULL"
+        assert _stored(fakes)["capacityReservationId"] == RESERVATION
+
+    def test_a_move_ec2_refuses_records_reservation_ended_and_sends_no_start(self, monkeypatch):
+        result, fakes = _run(monkeypatch, _start_row(_stamp(), capacityReservationId=RESERVATION),
+                             facts={"state": "expired"}, modify=MODIFY_REFUSAL)
+        stored = _stored(fakes)
+        assert result["outcome"] == "refused" and result["lastError"] == "RESERVATION_ENDED"
+        assert fakes.edh.calls_to("start_desktop") == []
+        assert fakes.client_factory.call_args_list == []
+        assert stored["state"] == "STOPPED" and stored["lastError"] == "RESERVATION_ENDED"
+        assert stored["startFailure"]["errorCode"] == "UnauthorizedOperation"
+        assert stored["startFailure"]["availabilityZone"] == "us-west-2b"
+        assert "secret-detail" not in str(stored["startFailure"])
+        # The row keeps its reservation: nothing moved.
+        assert stored["capacityReservationId"] == RESERVATION
+        assert not stored.get("capacityReservationFallback")
+        # The key is taken back and the claim released, as for any start that did not happen.
+        fakes.revoke.assert_called_once()
+        assert stored["activity"] is None and stored["startRequestedAt"] is None
+
+    def test_a_move_that_fails_without_an_aws_answer_names_no_error_code(self, monkeypatch):
+        _, fakes = _run(monkeypatch, _start_row(_stamp(), capacityReservationId=RESERVATION),
+                        facts={"state": "cancelled"},
+                        modify=EndpointConnectionError(endpoint_url="https://ec2.us-west-2.amazonaws.com"))
+        stored = _stored(fakes)
+        assert stored["lastError"] == "RESERVATION_ENDED"
+        assert "errorCode" not in stored["startFailure"]
+        assert fakes.edh.calls_to("start_desktop") == []
+
+    def test_a_row_without_an_instance_reads_no_reservation_before_the_start(self, monkeypatch):
+        row = _start_row(_stamp(), capacityReservationId=RESERVATION)
+        row.pop("instanceId")
+        result, fakes = _run(monkeypatch, row, facts={"state": "expired"})
+        assert result["outcome"] == "started"
+        fakes.ec2.modify_instance_capacity_reservation_attributes.assert_not_called()
+        fakes.read_live.assert_not_called()
+
+    def test_a_second_delivery_of_the_same_start_moves_nothing(self, monkeypatch):
+        _, fakes = _run(monkeypatch, _start_row(_stamp(), capacityReservationId=RESERVATION),
+                        facts={"state": "expired"}, deliveries=2)
+        assert fakes.ec2.modify_instance_capacity_reservation_attributes.call_count == 1
+        assert fakes.results[1]["outcome"] == "settled"
+        assert len(fakes.edh.calls_to("start_desktop")) == 1
 
 
 @pytest.mark.unit

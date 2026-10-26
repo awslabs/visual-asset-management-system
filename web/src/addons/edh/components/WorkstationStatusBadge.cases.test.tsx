@@ -54,6 +54,7 @@ describe("workstationStatusCases.json (shared with the CLI tests)", () => {
         for (const code of [
             "CAPACITY_UNAVAILABLE",
             "RESERVATION_FULL",
+            "RESERVATION_ENDED",
             "START_FAILED",
             "LEASE_EXPIRED",
             null,

@@ -51,8 +51,10 @@ def register(
         EDH_REFUSED, LAUNCH_ERROR or CREATE_TIMED_OUT; LEASE_EXPIRED on a desktop the lease sweep stopped;
         on a STOPPED row, why its last start left it stopped: CAPACITY_UNAVAILABLE (AWS had no
         capacity for the instance type in the desktop's Availability Zone), RESERVATION_FULL (its
-        capacity reservation was full) or START_FAILED (any other refusal, or a start that never
-        took effect), kept until the next start is accepted; on a CREATING row with `activity` null,
+        capacity reservation was full), RESERVATION_ENDED (its capacity reservation has ended and VAMS
+        could not move the stopped desktop to on-demand capacity) or START_FAILED (any other refusal,
+        or a start that never took effect), kept until the next start is accepted; on a CREATING row
+        with `activity` null,
         START_STALLED (EDH accepted a start and has not finished it after 30 minutes; the desktop is
         not stopped for it, so stop it with stop_edh_workstation, then start it again), kept until EDH
         moves the row out of CREATING; null otherwise), `startFailure` (for
@@ -71,7 +73,14 @@ def register(
         QUOTA_EXCEEDED; EDH's own wording is never returned),
         `launchAttempts`, `imageId`, `osFamily`, `instanceType`, `rootSizeGb`, `createdAt`, `updatedAt`,
         `connectionAvailable`, and `leaseExpiresAt`, `leaseStoppedAt` and `leaseHoursAtLaunch` (null
-        when no lease applies). Each row also names the image it was launched from: `imageName` (the
+        when no lease applies). `capacityReservationId` is the capacity reservation the launch was
+        sent into (null for an on-demand one), `capacityReservationLabel` its registry label (null
+        once unregistered), `capacityReservationFallback` true when the workstation asked for a
+        reservation and runs on-demand, and `capacityReservationFallbackReason` why: `full` (the
+        reservation was full at launch and falls back) or `ended` (VAMS moved the stopped desktop to
+        on-demand because its reservation ended; the start then went ahead on-demand); a fallback
+        without the field was a full reservation's. Each row also names the image it was launched
+        from: `imageName` (the
         EDH image name), `recipeId` (the AMI recipe whose build produced the image, null for a
         baseline image), `recipeDisplayName`, `recipeVersion` (the build version it runs),
         `latestRecipeVersion` (the recipe's newest AVAILABLE build version, derived on each read) and
@@ -166,7 +175,12 @@ def register(
         reservation runs on-demand when it has no free slot), `enabled`, `instanceType`,
         `availabilityZone`, `instancePlatform` (`Linux/UNIX`, `Windows`, ...), `state`,
         `totalInstanceCount`, `availableInstanceCount`, `instanceMatchCriteria`, `endDate` (ISO-8601
-        or null) and `reservationType` (`default` or `capacity-block`). `instance_type` keeps the
+        or null), `reservationType` (`default` or `capacity-block`), `edhSubnetAvailable` (true, or
+        null when VAMS could not read EDH's private subnets; a reservation in an Availability Zone
+        with no EDH private subnet is not listed, since EDH cannot launch into it) and `launchAllowed`
+        (false for a reservation the role may see but not launch into: create_edh_workstation is then
+        refused with 403, `error_type` `EdhReservationNotPermittedError`, `code`
+        `RESERVATION_NOT_PERMITTED`, so do not pass it). `instance_type` keeps the
         reservations of that type, and `os_family` (`linux` or `windows`) those whose platform suits
         an image of that family; a launch takes a reservation only when both match. An empty list
         means every launch is on-demand, which is also the answer when EC2 could not be read. Not
@@ -179,9 +193,11 @@ def register(
     @tool_result
     def list_edh_admin_capacity_reservations() -> Dict[str, Any]:
         """ADMIN: list every registered EC2 capacity reservation with EC2's live view of it, as
-        `Items` shaped as list_edh_catalog_capacity_reservations items. `state` is EC2's, or
-        `notFound` when EC2 no longer knows the id, or `unknown` when the read failed (the EC2 fields
-        are then null). Requires the EDH admin routes; a user without them gets a 403. Not
+        `Items` shaped as list_edh_catalog_capacity_reservations items, without `launchAllowed`, and
+        including a reservation whose `edhSubnetAvailable` is false: its Availability Zone has no EDH
+        private subnet, so EDH cannot launch into it and the user catalog leaves it out. `state` is
+        EC2's, or `notFound` when EC2 no longer knows the id, or `unknown` when the read failed (the
+        EC2 fields are then null). Requires the EDH admin routes; a user without them gets a 403. Not
         paginated."""
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
         return client.api.list_edh_admin_capacity_reservations()
@@ -397,8 +413,12 @@ def register(
             `capacity_reservation_id` launches into a reservation from
             list_edh_catalog_capacity_reservations whose `instanceType` and platform match the launch;
             omitted, the launch is on-demand. It is refused (400) when it is not registered, not
-            active, or of another instance type or platform, (403) when the user's role does not grant
-            it, and (503) when EC2 could not be read. A full reservation whose `fallbackToOnDemand` is
+            active, of another instance type or platform, or in an Availability Zone with no EDH
+            private subnet; (403, `error_type` `EdhReservationNotPermittedError`, `code`
+            `RESERVATION_NOT_PERMITTED`) when the user's role may see it but not launch into it (its
+            catalog item's `launchAllowed` is false); (403, `PermissionDeniedError`) when the role
+            does not grant it at all; and (503) when EC2 could not be read. A full reservation whose
+            `fallbackToOnDemand` is
             true launches on-demand (the record then carries `capacityReservationFallback` true);
             one whose `fallbackToOnDemand` is false is refused (409, `error_type`
             `EdhReservationFullError`, `code` `RESERVATION_FULL`): launch without it, or later.
@@ -435,9 +455,13 @@ def register(
             `starting` until it is ACTIVE with `activity` null. A start EDH refuses leaves the row
             STOPPED with `activity` null, `lastError` CAPACITY_UNAVAILABLE (AWS had no capacity for
             the instance type in the desktop's Availability Zone; the desktop keeps its disk there,
-            so start it again later), RESERVATION_FULL (its capacity reservation is full) or
-            START_FAILED, and `startFailure` `{errorCode, availabilityZone, observedAt}`; the
-            desktop is never deleted for a refused start. A start EDH accepts and has not finished
+            so start it again later), RESERVATION_FULL (its capacity reservation is full),
+            RESERVATION_ENDED (its capacity reservation has ended and VAMS could not move it to
+            on-demand capacity; ask an administrator) or START_FAILED, and `startFailure`
+            `{errorCode, availabilityZone, observedAt}`; the desktop is never deleted for a refused
+            start. A desktop whose reservation has ended starts on-demand: the row then carries
+            `capacityReservationFallback` true and `capacityReservationFallbackReason` `ended`. A start
+            EDH accepts and has not finished
             after 30 minutes leaves the row CREATING with `activity` null and `lastError`
             START_STALLED (EDH never reported the desktop ready; the desktop is not stopped for it):
             stop it with stop_edh_workstation, then start it again. An error whose `error_type` is

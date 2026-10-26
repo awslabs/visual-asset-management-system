@@ -47,6 +47,12 @@ const EDH_AMI_VAMS_TAG_KEYS = [
     EDH_AMI_DEPLOYMENT_TAG,
 ];
 const EDH_VISIBILITY_TAG_PREFIX = "edh:visibility:";
+// The tags EDH puts on every desktop instance it launches: its cluster id, and the node type
+// `dcv_node` (EDH's controller, login node, broker and gateway carry the cluster tag with other
+// node types). The launch worker's one EC2 write is conditioned on both.
+const EDH_CLUSTER_TAG_KEY = "edh:ClusterId";
+const EDH_NODE_TYPE_TAG_KEY = "edh:NodeType";
+const EDH_DESKTOP_NODE_TYPE = "dcv_node";
 
 /** VPC placement shared by every add-on Lambda: isolated subnets behind the add-on security group. */
 export interface EdhLambdaNetwork {
@@ -160,9 +166,10 @@ export function buildCommonEdhLambda(props: BuildEdhLambdaProps): lambda.Functio
 
 /**
  * Lets a function read EC2 capacity reservations live: the launch checks and the catalog of the
- * workstation service, the launch worker's re-read before its one retry, and the admin registry. EC2
- * offers no resource-level scope for a Describe call, so the grant names `*`; it is the one EC2
- * action in these roles' own policies, and no add-on role may create, modify or cancel a reservation.
+ * workstation service, the launch worker's re-read before its one retry and its read before the
+ * start of a desktop launched into one, and the admin registry. EC2 offers no resource-level scope
+ * for a Describe call, so the grant names `*`; no add-on role may create, modify or cancel a
+ * reservation.
  */
 export function grantDescribeCapacityReservations(fun: lambda.Function): void {
     fun.addToRolePolicy(
@@ -177,8 +184,103 @@ export function grantDescribeCapacityReservations(fun: lambda.Function): void {
         [
             {
                 id: "AwsSolutions-IAM5",
-                reason: "ec2:DescribeCapacityReservations accepts no resource ARN or resource-level condition, so the read of the capacity reservations an administrator registers names every resource; it is read-only, and the role holds no EC2 write.",
+                reason: "ec2:DescribeCapacityReservations accepts no resource ARN or resource-level condition, so the read of the capacity reservations an administrator registers names every resource; it is read-only, and the role holds no write to a capacity reservation.",
                 appliesTo: [{ regex: "/^Resource::\\*$/g" }],
+            },
+        ],
+        true
+    );
+}
+
+/**
+ * Lets a function read which Availability Zones EDH has a private subnet in: EDH launches into a
+ * capacity reservation only from one of its private subnets in the reservation's zone, so the
+ * registry refuses a reservation in a zone without one and the launch checks refuse a launch into
+ * it. EDH keeps its private subnets in the String parameter
+ * `/edh/<edhClusterId>/configuration/PrivateSubnets`, read on exactly that name (no KMS key is
+ * involved), and the subnets' zones come from `ec2:DescribeSubnets`, which accepts no resource ARN
+ * or resource-level condition, so it names `*`; both are reads.
+ */
+export function grantReadEdhPrivateSubnets(fun: lambda.Function, edhClusterId: string): void {
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["ssm:GetParameter"],
+            resources: [
+                cdk.Stack.of(fun).formatArn({
+                    service: "ssm",
+                    resource: "parameter",
+                    resourceName: `edh/${edhClusterId}/configuration/PrivateSubnets`,
+                    arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
+                }),
+            ],
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["ec2:DescribeSubnets"],
+            resources: ["*"],
+        })
+    );
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "ec2:DescribeSubnets accepts no resource ARN or resource-level condition, so the read of the Availability Zones of EDH's private subnets names every resource; it is read-only.",
+                appliesTo: [{ regex: "/^Resource::\\*$/g" }],
+            },
+        ],
+        true
+    );
+}
+
+/**
+ * Lets the launch worker move a stopped desktop off a capacity reservation that has ended, onto
+ * on-demand capacity, before its start (EDH's own resume fallback for the reservations it makes:
+ * the instance's reservation preference becomes `open`). The grant is the one action on instances
+ * of this account and Region that carry both tags EDH puts on every desktop it launches:
+ * `edh:ClusterId` = the configured `edhClusterId` and `edh:NodeType` = `dcv_node`, so EDH's own
+ * controller, login node, broker and gateway are out of reach; EC2 authorizes the action on the
+ * instance resource with that condition key. The instance id is the desktop's, known only once EDH
+ * has launched it, so the ARN ends in `*`.
+ */
+export function grantMoveStoppedDesktopToOnDemand(
+    fun: lambda.Function,
+    edhClusterId: string
+): void {
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["ec2:ModifyInstanceCapacityReservationAttributes"],
+            resources: [
+                cdk.Stack.of(fun).formatArn({
+                    service: "ec2",
+                    resource: "instance",
+                    resourceName: "*",
+                    arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
+                }),
+            ],
+            conditions: {
+                StringEquals: {
+                    [`aws:ResourceTag/${EDH_CLUSTER_TAG_KEY}`]: edhClusterId,
+                    [`aws:ResourceTag/${EDH_NODE_TYPE_TAG_KEY}`]: EDH_DESKTOP_NODE_TYPE,
+                },
+            },
+        })
+    );
+    // AwsSolutions-IAM5 reads the resource ARN alone and not the condition, so it reports the
+    // instance wildcard; the suppression names that one ARN shape, on this role only.
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: `ec2:ModifyInstanceCapacityReservationAttributes on the instances of this account and Region that carry EDH's desktop tags (${EDH_CLUSTER_TAG_KEY} = the configured edhClusterId and ${EDH_NODE_TYPE_TAG_KEY} = ${EDH_DESKTOP_NODE_TYPE}), which EDH puts on every desktop it launches; a desktop's instance id is known only once EDH has launched it. The worker sets only the open reservation preference, before the start of a stopped desktop whose capacity reservation has ended.`,
+                appliesTo: [
+                    { regex: "/^Resource::arn:<AWS::Partition>:ec2:[^:]+:[^:]+:instance\\/\\*$/g" },
+                ],
             },
         ],
         true
@@ -208,8 +310,10 @@ export function buildEdhWorkstationServiceFunction(
         // The launch catalog reads which images recipe builds registered; only with AMI builds on.
         amiRecipeTable: config.app.addons.useEdhWorkstations.amiBuilds.enabled ? "read" : "none",
     });
-    // The capacity reservation catalog and the launch checks read each reservation live.
+    // The capacity reservation catalog and the launch checks read each reservation live, and which
+    // Availability Zones EDH has a private subnet in.
     grantDescribeCapacityReservations(fun);
+    grantReadEdhPrivateSubnets(fun, config.app.addons.useEdhWorkstations.edhClusterId);
     return fun;
 }
 
@@ -266,13 +370,15 @@ export function buildEdhLaunchWorkerFunction(
     // A start EDH refuses names the Availability Zone of the stopped desktop's instance, the one zone it can
     // start in, read from EC2.
     grantDescribeInstances(fun);
+    // A stopped desktop whose capacity reservation has ended is moved to on-demand capacity before its start.
+    grantMoveStoppedDesktopToOnDemand(fun, config.app.addons.useEdhWorkstations.edhClusterId);
     return fun;
 }
 
 /**
  * Lets the launch worker read a stopped desktop's instance for the Availability Zone a refused start
  * names. `ec2:DescribeInstances` accepts no resource ARN or resource-level condition, so the grant
- * names `*`; it is read-only, and the role holds no EC2 write.
+ * names `*`; it is read-only.
  */
 export function grantDescribeInstances(fun: lambda.Function): void {
     fun.addToRolePolicy(
@@ -287,7 +393,7 @@ export function grantDescribeInstances(fun: lambda.Function): void {
         [
             {
                 id: "AwsSolutions-IAM5",
-                reason: "ec2:DescribeInstances accepts no resource ARN or resource-level condition, so the read of a stopped workstation's instance, for the Availability Zone a refused start names, names every resource; it is read-only, and the role holds no EC2 write.",
+                reason: "ec2:DescribeInstances accepts no resource ARN or resource-level condition, so the read of a stopped workstation's instance, for the Availability Zone a refused start names, names every resource; it is read-only.",
                 appliesTo: [{ regex: "/^Resource::\\*$/g" }],
             },
         ],
@@ -486,8 +592,10 @@ export function buildEdhAdminServiceFunction(
         // The instance views name each session's image from the recipe builds; only with AMI builds on.
         amiRecipeTable: config.app.addons.useEdhWorkstations.amiBuilds.enabled ? "read" : "none",
     });
-    // The capacity reservation registry checks a reservation exists on register and lists each live.
+    // The capacity reservation registry checks a reservation exists on register and lists each live, and
+    // refuses one in an Availability Zone EDH has no private subnet in.
     grantDescribeCapacityReservations(fun);
+    grantReadEdhPrivateSubnets(fun, config.app.addons.useEdhWorkstations.edhClusterId);
     return fun;
 }
 

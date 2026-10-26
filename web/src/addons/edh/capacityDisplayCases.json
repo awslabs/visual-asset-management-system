@@ -1,0 +1,224 @@
+{
+    "description": "The capacity-reservation display contract (feature #536, D17/D18/D19). `records`: workstation records with the Capacity detail both clients show for them (`capacity`, null when none): the web's `Capacity: <text>` beneath the instance type and `vamscli edh workstation get`'s `Capacity:` line. `catalogOptions`: the catalog's reservations for a launch of `launch.instanceType` with an image of `launch.osFamily`, in the catalog's order, each with the web launch wizard's Capacity option text (`wizardOption`, null when the wizard does not offer it) and whether it is disabled (`wizardDisabled`), the web Settings table's State cell (`stateCell`) and its no-subnet note (`subnetNote`, null when none), and what `vamscli edh catalog capacity-reservations` prints in its STATE and LAUNCH columns (`cliState`, `cliLaunch`). `preselected` is the option the wizard chooses for the user. Read by web/src/addons/edh/capacityDisplayCases.test.tsx and tools/VamsCLI/tests/addon/test_edh_capacity_display.py, so the two clients cannot drift apart.",
+    "records": [
+        {
+            "name": "a launch sent into a registered reservation",
+            "record": {
+                "capacityReservationId": "cr-0123456789abcdef0",
+                "capacityReservationLabel": "Render pool",
+                "capacityReservationFallback": false,
+                "capacityReservationFallbackReason": null
+            },
+            "capacity": "Render pool (cr-0123456789abcdef0)"
+        },
+        {
+            "name": "a launch into a reservation an administrator has unregistered since",
+            "record": {
+                "capacityReservationId": "cr-0123456789abcdef0",
+                "capacityReservationLabel": null,
+                "capacityReservationFallback": false,
+                "capacityReservationFallbackReason": null
+            },
+            "capacity": "cr-0123456789abcdef0"
+        },
+        {
+            "name": "a launch that asked for a full reservation and ran on-demand",
+            "record": {
+                "capacityReservationId": null,
+                "capacityReservationLabel": null,
+                "capacityReservationFallback": true,
+                "capacityReservationFallbackReason": "full",
+                "capacityReservationRequested": "cr-0123456789abcdef0"
+            },
+            "capacity": "On-demand (reservation full)"
+        },
+        {
+            "name": "a full-reservation fallback recorded before the reason was",
+            "record": {
+                "capacityReservationId": null,
+                "capacityReservationLabel": null,
+                "capacityReservationFallback": true
+            },
+            "capacity": "On-demand (reservation full)"
+        },
+        {
+            "name": "a stopped workstation moved to on-demand because its reservation ended",
+            "record": {
+                "capacityReservationId": null,
+                "capacityReservationLabel": "Render pool",
+                "capacityReservationFallback": true,
+                "capacityReservationFallbackReason": "ended",
+                "capacityReservationRequested": "cr-0123456789abcdef0"
+            },
+            "capacity": "On-demand (reservation Render pool ended)"
+        },
+        {
+            "name": "an ended reservation an administrator has unregistered since",
+            "record": {
+                "capacityReservationId": null,
+                "capacityReservationLabel": null,
+                "capacityReservationFallback": true,
+                "capacityReservationFallbackReason": "ended",
+                "capacityReservationRequested": "cr-0123456789abcdef0"
+            },
+            "capacity": "On-demand (reservation cr-0123456789abcdef0 ended)"
+        },
+        {
+            "name": "an ended reservation the record names neither by label nor by id",
+            "record": {
+                "capacityReservationId": null,
+                "capacityReservationLabel": null,
+                "capacityReservationFallback": true,
+                "capacityReservationFallbackReason": "ended"
+            },
+            "capacity": "On-demand (reservation ended)"
+        },
+        {
+            "name": "an on-demand launch",
+            "record": {
+                "capacityReservationId": null,
+                "capacityReservationLabel": null,
+                "capacityReservationFallback": false,
+                "capacityReservationFallbackReason": null
+            },
+            "capacity": null
+        }
+    ],
+    "launch": {
+        "instanceType": "g5.16xlarge",
+        "osFamily": "linux"
+    },
+    "catalogOptions": [
+        {
+            "name": "a reservation the role may view but not launch into, with a free slot",
+            "view": {
+                "capacityReservationId": "cr-00000000000000001",
+                "label": "Viewers pool",
+                "fallbackToOnDemand": true,
+                "enabled": true,
+                "instanceType": "g5.16xlarge",
+                "availabilityZone": "us-east-1a",
+                "instancePlatform": "Linux/UNIX",
+                "state": "active",
+                "totalInstanceCount": 2,
+                "availableInstanceCount": 2,
+                "instanceMatchCriteria": "targeted",
+                "endDate": null,
+                "reservationType": "default",
+                "edhSubnetAvailable": true,
+                "launchAllowed": false
+            },
+            "wizardOption": "Viewers pool (view only)",
+            "wizardDisabled": true,
+            "stateCell": "active",
+            "subnetNote": null,
+            "cliState": "active",
+            "cliLaunch": "view only"
+        },
+        {
+            "name": "a reservation in an Availability Zone with no EDH private subnet, with a free slot",
+            "view": {
+                "capacityReservationId": "cr-00000000000000002",
+                "label": "Zone without subnet",
+                "fallbackToOnDemand": true,
+                "enabled": true,
+                "instanceType": "g5.16xlarge",
+                "availabilityZone": "us-east-1f",
+                "instancePlatform": "Linux/UNIX",
+                "state": "active",
+                "totalInstanceCount": 1,
+                "availableInstanceCount": 1,
+                "instanceMatchCriteria": "targeted",
+                "endDate": null,
+                "reservationType": "default",
+                "edhSubnetAvailable": false,
+                "launchAllowed": true
+            },
+            "wizardOption": null,
+            "wizardDisabled": null,
+            "stateCell": "active",
+            "subnetNote": "No EDH subnet in us-east-1f",
+            "cliState": "active (No EDH subnet in us-east-1f)",
+            "cliLaunch": "yes"
+        },
+        {
+            "name": "a full reservation that falls back to on-demand, its EDH subnet not known",
+            "view": {
+                "capacityReservationId": "cr-00000000000000003",
+                "label": "Overflow",
+                "fallbackToOnDemand": true,
+                "enabled": true,
+                "instanceType": "g5.16xlarge",
+                "availabilityZone": "us-east-1a",
+                "instancePlatform": "Linux/UNIX",
+                "state": "active",
+                "totalInstanceCount": 1,
+                "availableInstanceCount": 0,
+                "instanceMatchCriteria": "targeted",
+                "endDate": null,
+                "reservationType": "default",
+                "edhSubnetAvailable": null,
+                "launchAllowed": true
+            },
+            "wizardOption": "Overflow (full, will launch on-demand)",
+            "wizardDisabled": false,
+            "stateCell": "active",
+            "subnetNote": null,
+            "cliState": "active",
+            "cliLaunch": "yes"
+        },
+        {
+            "name": "a full reservation that refuses the launch",
+            "view": {
+                "capacityReservationId": "cr-00000000000000004",
+                "label": "Reserved only",
+                "fallbackToOnDemand": false,
+                "enabled": true,
+                "instanceType": "g5.16xlarge",
+                "availabilityZone": "us-east-1a",
+                "instancePlatform": "Linux/UNIX",
+                "state": "active",
+                "totalInstanceCount": 1,
+                "availableInstanceCount": 0,
+                "instanceMatchCriteria": "targeted",
+                "endDate": null,
+                "reservationType": "default",
+                "edhSubnetAvailable": true,
+                "launchAllowed": true
+            },
+            "wizardOption": "Reserved only (full)",
+            "wizardDisabled": true,
+            "stateCell": "active",
+            "subnetNote": null,
+            "cliState": "active",
+            "cliLaunch": "yes"
+        },
+        {
+            "name": "a reservation with free slots the role may launch into",
+            "view": {
+                "capacityReservationId": "cr-00000000000000005",
+                "label": "Render pool",
+                "fallbackToOnDemand": true,
+                "enabled": true,
+                "instanceType": "g5.16xlarge",
+                "availabilityZone": "us-east-1a",
+                "instancePlatform": "Linux/UNIX",
+                "state": "active",
+                "totalInstanceCount": 4,
+                "availableInstanceCount": 3,
+                "instanceMatchCriteria": "targeted",
+                "endDate": null,
+                "reservationType": "default",
+                "edhSubnetAvailable": true,
+                "launchAllowed": true
+            },
+            "wizardOption": "Render pool (3/4 free)",
+            "wizardDisabled": false,
+            "stateCell": "active",
+            "subnetNote": null,
+            "cliState": "active",
+            "cliLaunch": "yes"
+        }
+    ],
+    "preselected": "cr-00000000000000005"
+}

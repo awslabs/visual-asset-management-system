@@ -317,4 +317,68 @@ describe("LaunchWorkstationWizard capacity", () => {
         expect(await screen.findByRole("alert")).toHaveTextContent(RESERVATION_FULL_LAUNCH_MESSAGE);
         expect(screen.getByRole("button", { name: "Launch" })).toBeInTheDocument();
     });
+
+    it("disables a view-only reservation, labels it so, and never preselects it", async () => {
+        const user = userEvent.setup();
+        const viewOnly = reservation("cr-00000000000000006", "Viewers", {
+            availableInstanceCount: 2,
+            launchAllowed: false,
+        });
+        mount(loaded([viewOnly, FULL_FALLBACK]));
+        await sizeStepFor(user, /Ubuntu GPU desktop/);
+        await user.selectOptions(screen.getByLabelText("Instance type"), "g5.2xlarge");
+        expect(capacityOptions()).toEqual([
+            { label: "On-demand", value: "", disabled: false },
+            { label: "Viewers (view only)", value: viewOnly.capacityReservationId, disabled: true },
+            {
+                label: "Overflow (full, will launch on-demand)",
+                value: FULL_FALLBACK.capacityReservationId,
+                disabled: false,
+            },
+        ]);
+        // Its free slot does not make it the default: the user cannot launch into it.
+        expect(capacity()).toHaveValue("");
+        expect(screen.getByText(/marked \(view only\)/)).toBeInTheDocument();
+    });
+
+    it("leaves the view-only sentence out of the hint when no option is view only", async () => {
+        const user = userEvent.setup();
+        mount();
+        await sizeStepFor(user, /Ubuntu GPU desktop/);
+        await user.selectOptions(screen.getByLabelText("Instance type"), "g5.2xlarge");
+        expect(screen.queryByText(/view only/)).not.toBeInTheDocument();
+    });
+
+    it("does not offer a reservation in an Availability Zone with no EDH subnet", async () => {
+        const user = userEvent.setup();
+        const noSubnet = reservation("cr-00000000000000007", "No subnet", {
+            availabilityZone: "us-east-1f",
+            edhSubnetAvailable: false,
+        });
+        const unknownSubnet = reservation("cr-00000000000000008", "Subnet unknown", {
+            edhSubnetAvailable: null,
+        });
+        mount(loaded([noSubnet, unknownSubnet]));
+        await sizeStepFor(user, /Ubuntu GPU desktop/);
+        await user.selectOptions(screen.getByLabelText("Instance type"), "g5.2xlarge");
+        expect(capacityOptions().map((o) => o.label)).toEqual([
+            "On-demand",
+            "Subnet unknown (1/2 free)",
+        ]);
+        expect(capacity()).toHaveValue(unknownSubnet.capacityReservationId);
+    });
+
+    it("shows the service's refusal of a view-only reservation on Review", async () => {
+        const user = userEvent.setup();
+        const message = "Your role may view this capacity reservation but not launch into it";
+        const mutateAsync = jest.fn().mockRejectedValue(new Error(message));
+        mount(loaded(RESERVATIONS), mutateAsync);
+        await sizeStepFor(user, /Ubuntu GPU desktop/);
+        await user.selectOptions(screen.getByLabelText("Instance type"), "g5.2xlarge");
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        await user.click(screen.getByRole("button", { name: "Launch" }));
+
+        expect(await screen.findByRole("alert")).toHaveTextContent(message);
+        expect(screen.getByRole("button", { name: "Launch" })).toBeInTheDocument();
+    });
 });

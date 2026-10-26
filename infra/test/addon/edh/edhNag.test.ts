@@ -92,6 +92,14 @@ const RESERVATION_READERS = ["edhWorkstationService", "edhLaunchWorker", "edhAdm
 const readerPolicyPath = (module: string): RegExp =>
     new RegExp(`/EdhWorkstationsBuilderNestedStack/${module}/ServiceRole/DefaultPolicy/`);
 const WILDCARD_RESOURCE_SUPPRESSED = /\[Resource::\*\]: AwsSolutions-IAM5 was triggered/;
+/**
+ * The launch worker's one EC2 write: moving a stopped desktop off an ended capacity reservation. Its
+ * resource is the instance wildcard of this account and Region, conditioned on EDH's cluster tag; the
+ * rule reads the ARN alone, so its suppression names that ARN shape.
+ */
+const MOVE_TO_ON_DEMAND = "ec2:ModifyInstanceCapacityReservationAttributes";
+const INSTANCE_RESOURCE_SUPPRESSED =
+    /\[Resource::arn:<AWS::Partition>:ec2:[^:\]]+:[^:\]]+:instance\/\*\]: AwsSolutions-IAM5 was triggered/;
 
 const nagSynth = (): SynthResult =>
     synthTemplate("commercial", {
@@ -195,6 +203,30 @@ describe("CDK Nag over the EDH Workstations add-on", () => {
                 ),
             ])
         ).toEqual(RESERVATION_READERS.map((module) => [module, true]));
+    });
+
+    test("[control] the launch worker's tag-conditioned instance write was evaluated and only its ARN logged as suppressed", () => {
+        const s = nagSynth();
+        // The statement the suppression covers is in the template, on the worker's role, with its condition.
+        const moves = s.where("AWS::IAM::Policy", (r) =>
+            (r.properties.PolicyDocument?.Statement ?? []).some(
+                (st: any) =>
+                    [st.Action].flat().includes(MOVE_TO_ON_DEMAND) &&
+                    st.Condition?.StringEquals?.["aws:ResourceTag/edh:ClusterId"] !== undefined
+            )
+        );
+        expect(moves).toHaveLength(1);
+        expect(loggedUnder(s, readerPolicyPath("edhLaunchWorker"))).toEqual(
+            expect.arrayContaining([expect.stringMatching(INSTANCE_RESOURCE_SUPPRESSED)])
+        );
+        // No other role's instance ARN is covered by it.
+        const elsewhere = s.infos.filter(
+            (m) =>
+                ADDON_PATH.test(m.path) &&
+                !readerPolicyPath("edhLaunchWorker").test(m.path) &&
+                INSTANCE_RESOURCE_SUPPRESSED.test(m.message)
+        );
+        expect(elsewhere).toEqual([]);
     });
 
     test("no error-level finding lands under the add-on's construct path", () => {

@@ -6,6 +6,7 @@
 import {
     ON_DEMAND_FALLBACK_TEXT,
     describeCapacity,
+    edhSubnetNote,
     matchingReservations,
     preselectReservation,
     reservationOptionLabel,
@@ -107,6 +108,49 @@ describe("the Capacity choices", () => {
         expect(preselectReservation([fullFallback, fullStrict])).toBe("");
         expect(preselectReservation([])).toBe("");
     });
+
+    const viewOnly = view({
+        capacityReservationId: "cr-00000000000000005",
+        label: "Viewers",
+        launchAllowed: false,
+    });
+    const noSubnet = view({
+        capacityReservationId: "cr-00000000000000006",
+        label: "No subnet",
+        availabilityZone: "us-east-1f",
+        edhSubnetAvailable: false,
+    });
+
+    it("labels a view-only reservation so and never offers or preselects it", () => {
+        expect(reservationOptionLabel(viewOnly)).toBe("Viewers (view only)");
+        expect(reservationSelectable(viewOnly)).toBe(false);
+        expect(preselectReservation([viewOnly, free])).toBe(free.capacityReservationId);
+        expect(preselectReservation([viewOnly])).toBe("");
+        // A catalog item from a service that predates the field is launchable, as it always was.
+        expect(reservationSelectable(view({ launchAllowed: undefined }))).toBe(true);
+    });
+
+    it("leaves out a reservation whose Availability Zone has no EDH subnet, keeping an unknown one", () => {
+        const unknown = view({
+            capacityReservationId: "cr-00000000000000007",
+            edhSubnetAvailable: null,
+        });
+        expect(
+            matchingReservations([noSubnet, unknown, free], "g5.16xlarge", "linux").map(
+                (r) => r.capacityReservationId
+            )
+        ).toEqual([unknown.capacityReservationId, free.capacityReservationId]);
+    });
+
+    it("notes a reservation whose Availability Zone has no EDH subnet", () => {
+        expect(edhSubnetNote(noSubnet)).toBe("No EDH subnet in us-east-1f");
+        expect(edhSubnetNote(view({ availabilityZone: null, edhSubnetAvailable: false }))).toBe(
+            "No EDH subnet in its Availability Zone"
+        );
+        expect(edhSubnetNote(view({ edhSubnetAvailable: null }))).toBeNull();
+        expect(edhSubnetNote(view({ edhSubnetAvailable: true }))).toBeNull();
+        expect(edhSubnetNote(view())).toBeNull();
+    });
 });
 
 describe("describeCapacity", () => {
@@ -135,6 +179,36 @@ describe("describeCapacity", () => {
                 capacityReservationId: null,
                 capacityReservationLabel: null,
                 capacityReservationFallback: true,
+            })
+        ).toBe(ON_DEMAND_FALLBACK_TEXT);
+    });
+
+    it("says a stopped workstation whose reservation ended was moved to on-demand", () => {
+        const ended = {
+            capacityReservationId: null,
+            capacityReservationFallback: true,
+            capacityReservationFallbackReason: "ended",
+        };
+        expect(
+            describeCapacity({
+                ...ended,
+                capacityReservationLabel: "Render pool",
+                capacityReservationRequested: "cr-0123456789abcdef0",
+            })
+        ).toBe("On-demand (reservation Render pool ended)");
+        expect(
+            describeCapacity({
+                ...ended,
+                capacityReservationLabel: null,
+                capacityReservationRequested: "cr-0123456789abcdef0",
+            })
+        ).toBe("On-demand (reservation cr-0123456789abcdef0 ended)");
+        expect(describeCapacity(ended)).toBe("On-demand (reservation ended)");
+        // A fallback row without the reason predates it and was a full reservation's.
+        expect(
+            describeCapacity({
+                capacityReservationFallback: true,
+                capacityReservationFallbackReason: "full",
             })
         ).toBe(ON_DEMAND_FALLBACK_TEXT);
     });

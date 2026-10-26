@@ -92,3 +92,50 @@ class TestRefusalOfAReservationBoundDesktop:
     def test_free_and_full(self, facts, free, full):
         assert state.reservation_has_free_slot(facts) is free
         assert state.reservation_is_full(facts) is full
+
+
+@pytest.mark.unit
+class TestReservationEndedCode:
+    def test_the_code_is_stored_vocabulary_a_stopped_row_keeps(self):
+        assert state.LAST_ERROR_RESERVATION_ENDED == "RESERVATION_ENDED"
+        assert state.LAST_ERROR_RESERVATION_ENDED in state.LAST_ERROR_CODES
+        assert state.LAST_ERROR_RESERVATION_ENDED in state.STOPPED_ROW_LAST_ERRORS
+
+    def test_the_failure_takes_the_code_of_vams_own_aws_call(self):
+        failure = state.start_failure(None, "us-west-2b", NOW, error_code="UnauthorizedOperation")
+        assert failure == {"observedAt": NOW.isoformat(), "errorCode": "UnauthorizedOperation",
+                           "availabilityZone": "us-west-2b"}
+
+    @pytest.mark.parametrize("code", ["", "Unauthorized Operation", "1Bad", "x" * 65, None, 42])
+    def test_a_code_that_is_not_one_is_left_out(self, code):
+        failure = state.start_failure(None, None, NOW, error_code=code)
+        assert failure == {"observedAt": NOW.isoformat()}
+
+    def test_without_a_code_the_failure_still_reads_edhs_text(self):
+        text = "An error occurred (ReservationCapacityExceeded) when calling the StartInstances operation: full"
+        assert state.start_failure(text, None, NOW)["errorCode"] == "ReservationCapacityExceeded"
+
+
+@pytest.mark.unit
+class TestWhyARowRunsOnDemand:
+    @pytest.mark.parametrize("row,expected", [
+        ({"capacityReservationFallback": True, "capacityReservationFallbackReason": "ended"}, "ended"),
+        ({"capacityReservationFallback": True, "capacityReservationFallbackReason": "full"}, "full"),
+        ({"capacityReservationFallback": True}, "full"),
+        ({"capacityReservationFallback": True, "capacityReservationFallbackReason": "other"}, "full"),
+        ({"capacityReservationFallback": False, "capacityReservationFallbackReason": "ended"}, None),
+        ({"capacityReservationId": CR_ID}, None),
+        ({}, None),
+    ])
+    def test_the_reason(self, row, expected):
+        assert state.capacity_reservation_fallback_reason(row) == expected
+
+    @pytest.mark.parametrize("row,expected", [
+        ({"capacityReservationId": CR_ID}, CR_ID),
+        ({"capacityReservationFallback": True, "capacityReservationRequested": CR_ID}, CR_ID),
+        ({"capacityReservationId": CR_ID, "capacityReservationRequested": "cr-00000000000000aaa"}, CR_ID),
+        ({"capacityReservationId": None, "capacityReservationRequested": ""}, None),
+        ({}, None),
+    ])
+    def test_the_reservation_a_record_names(self, row, expected):
+        assert state.capacity_reservation_named(row) == expected

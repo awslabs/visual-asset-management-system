@@ -63,7 +63,9 @@ tools/VamsMCP/
                              # the writes, no Windows sign-in, and the README's EDH section
       test_edh_capacity_reservation_tools.py
                              # the capacity reservation tools and create's capacity_reservation_id:
-                             # requests, passthrough, the RESERVATION_FULL error and the README
+                             # requests, passthrough (launchAllowed, edhSubnetAvailable and the
+                             # fallback reason, from web/src/addons/edh/capacityDisplayCases.json),
+                             # the RESERVATION_FULL and RESERVATION_NOT_PERMITTED errors, the README
       test_edh_start_status_tools.py
                              # the asynchronous start: start's 202 record passed through unchanged,
                              # `activity` / `startFailure` passthrough, the descriptions and README
@@ -374,15 +376,23 @@ ships an add-on with tools; a fork does not.
     rest `FEATURE_EDH_WORKSTATIONS`. The add-on's list routes return every row in one
     `{"Items": [...]}` page and no `message` envelope, so the tools return the body as it comes,
     without `paginate()` or `unwrap_message()`. `EdhOutcomeUnknownError`,
-    `EdhStartInProgressError` and `EdhReservationFullError` carry `outcomeUnknown` /
-    `startInProgress` / `code` (`RESERVATION_FULL`) in their `json_fields`, which `@tool_result`
-    passes through (Mandatory Rule 5).
+    `EdhStartInProgressError`, `EdhReservationFullError` and `EdhReservationNotPermittedError`
+    carry `outcomeUnknown` / `startInProgress` / `code` (`RESERVATION_FULL`,
+    `RESERVATION_NOT_PERMITTED`) in their `json_fields`, which `@tool_result` passes through
+    (Mandatory Rule 5).
+-   Capacity reservations: the catalog items carry `launchAllowed` (false: the role may see the
+    reservation but not launch into it; create answers 403 `RESERVATION_NOT_PERMITTED`) and both
+    listings `edhSubnetAvailable` (false only on the admin list: the user catalog leaves such a
+    reservation out); workstation records carry `capacityReservationFallbackReason` (`full` |
+    `ended`). The tools pass them through, and the catalog, admin list, create, list and start
+    descriptions name them.
 -   Start status: `start_edh_workstation` returns the record the route accepts the start with
     (HTTP 202, still STOPPED with `activity` `starting`) and does not poll; the agent follows it
     with `list_edh_workstations`. Every workstation record and admin instance item carries
     `activity` (`starting` | `stopping` | null) and `startFailure` (why the last start left a
-    STOPPED row stopped, beside `lastError` `CAPACITY_UNAVAILABLE`, `RESERVATION_FULL` or
-    `START_FAILED`); the tools pass both through, and the workstation tools' descriptions name them.
+    STOPPED row stopped, beside `lastError` `CAPACITY_UNAVAILABLE`, `RESERVATION_FULL`,
+    `RESERVATION_ENDED` or `START_FAILED`); the tools pass both through, and the workstation
+    tools' descriptions name them.
     A CREATING row with `activity` null and `lastError` `START_STALLED` is a start EDH accepted and
     has not finished after 30 minutes (D16); the list, get, admin-instances, start and stop
     descriptions name the code, and stop's says it accepts that row.

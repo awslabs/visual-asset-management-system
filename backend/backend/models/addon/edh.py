@@ -61,6 +61,9 @@ EDH_FAILURE_EVENTS = ('placement_failed', 'session-failed')
 START_FAILURE_FIELDS = ('errorCode', 'availabilityZone', 'observedAt')
 # What a workstation is doing between two states, derived when its record is read.
 WORKSTATION_ACTIVITIES = ('starting', 'stopping')
+# Why a workstation that asked for a capacity reservation runs on-demand: the reservation was full at launch, or
+# had ended when the stopped workstation was started.
+CAPACITY_RESERVATION_FALLBACK_REASONS = ('full', 'ended')
 
 AMI_RECIPE_KINDS = ('vdi', 'simulation')
 EDH_ARCHITECTURES = ('x86_64', 'arm64')
@@ -187,12 +190,17 @@ class WorkstationRecordModel(BaseModel, extra='ignore'):
     leaseHoursAtLaunch: Optional[int] = None
     # The reason EDH recorded for a failed launch, once VAMS captured it; its read stamp is not declared.
     edhFailure: Optional[Dict[str, str]] = None
-    # The capacity reservation the launch was sent with, its label (joined from the registry when the record
-    # is read, None once unregistered) and whether the launch fell back to on-demand because the reservation
-    # it asked for was full; the id it asked for then (``capacityReservationRequested``) is not declared.
+    # The capacity reservation the launch was sent with; the one a fallback asked for (``capacityReservationRequested``,
+    # kept on the row when the workstation runs on-demand instead); the registry label of the first of them the row
+    # carries (joined when the record is read, None once unregistered); and whether the workstation runs on-demand
+    # although it asked for a reservation, and why (``capacityReservationFallbackReason``): ``full``, the reservation
+    # was full at launch, or ``ended``, the reservation had ended when the stopped workstation was started; None when
+    # it did not fall back.
     capacityReservationId: Optional[str] = None
+    capacityReservationRequested: Optional[str] = None
     capacityReservationLabel: Optional[str] = None
     capacityReservationFallback: bool = False
+    capacityReservationFallbackReason: Optional[str] = None
     # What the workstation is doing between two states (``starting`` or ``stopping``), derived from the row when
     # the record is read, never taken from the row as stored; and what its last start that did not happen
     # recorded, kept beside ``lastError`` while the row stays STOPPED, or, for a start EDH accepted that stalled
@@ -219,6 +227,7 @@ class WorkstationRecordModel(BaseModel, extra='ignore'):
         _require_one_of(values, 'state', WORKSTATION_STATES)
         _require_one_of(values, 'osFamily', EDH_OS_FAMILIES)
         _require_one_of(values, 'activity', WORKSTATION_ACTIVITIES)
+        _require_one_of(values, 'capacityReservationFallbackReason', CAPACITY_RESERVATION_FALLBACK_REASONS)
         return values
 
 
@@ -339,7 +348,9 @@ class UpdateCapacityReservationRequestModel(BaseModel, extra='ignore'):
 class CapacityReservationViewModel(BaseModel, extra='ignore'):
     """A registered capacity reservation as the API returns it: the registration and EC2's live facts.
     ``state`` is EC2's, or ``notFound`` when EC2 holds no such reservation, or ``unknown`` when it could not be
-    read, which leaves the facts None. ``endDate`` is ISO-8601, None for a reservation without an end."""
+    read, which leaves the facts None. ``endDate`` is ISO-8601, None for a reservation without an end.
+    ``edhSubnetAvailable`` says whether EDH has a private subnet in the reservation's Availability Zone, which a
+    launch into it needs; None when that is not known."""
     capacityReservationId: str
     label: Optional[str] = None
     fallbackToOnDemand: bool
@@ -353,6 +364,13 @@ class CapacityReservationViewModel(BaseModel, extra='ignore'):
     instanceMatchCriteria: Optional[str] = None
     endDate: Optional[str] = None
     reservationType: Optional[str] = None
+    edhSubnetAvailable: Optional[StrictBool] = None
+
+
+class CatalogCapacityReservationViewModel(CapacityReservationViewModel):
+    """A capacity reservation as the launch catalog returns it: the view, and whether the caller's role may launch
+    into it (``launchAllowed``, the Tier-2 ``POST``) beside seeing it (the ``GET`` the catalog lists by)."""
+    launchAllowed: StrictBool
 
 
 class SubmitContainerJobRequestModel(BaseModel, extra='ignore'):

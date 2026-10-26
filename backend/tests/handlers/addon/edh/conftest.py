@@ -72,15 +72,26 @@ import backend.backend.handlers  # noqa: E402,F401
 
 
 @pytest.fixture(autouse=True)
-def _fresh_edh_module_state():
+def _fresh_edh_module_state(monkeypatch):
     """The module-level singletons and caches the EDH handlers lean on start empty and are emptied
-    again after each test: the client's Secrets Manager handle, HTTP pool, root key and CA bundle, and
-    the SSM resource-name cache. Imported lazily so the environment above is in place first, and by the
-    package paths every EDH test and support module patches."""
+    again after each test: the client's Secrets Manager handle, HTTP pool, root key and CA bundle, the SSM
+    resource-name cache, and the capacity-reservation module's cache of EDH's private-subnet zones, whose SSM
+    client is a stand-in holding no parameter (zones unknown) unless a test installs its own. Imported lazily so
+    the environment above is in place first, and by the package paths every EDH test and support module
+    patches."""
     import backend.backend.handlers.addon.edh.common.edhClient as ec
+
+    # Only once a test module has imported it: importing it here would resolve its ``common`` imports before the
+    # handler package has set them up for a test run that collects nothing else of the add-on.
+    reservations = sys.modules.get("backend.backend.handlers.addon.edh.common.edhCapacityReservations")
+    if reservations is not None:
+        from backend.tests.handlers.addon.edh.edhReservationTestSupport import FakeSsm
+        monkeypatch.setattr(reservations, "ssm", FakeSsm())
 
     def reset():
         ec._reset_client_state_for_tests()
+        if reservations is not None:
+            reservations._subnet_zones_cache.update(zones=None, readAt=None)
         resource_names = sys.modules.get("common.resourceNames")
         if isinstance(getattr(resource_names, "_cache", None), dict):
             resource_names._cache.clear()

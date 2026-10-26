@@ -63,8 +63,12 @@ export interface EdhAdminInstance {
     capacityReservationId?: string | null;
     /** The reservation's registry label; null once it is unregistered. */
     capacityReservationLabel?: string | null;
-    /** True when the launch asked for a reservation and ran on-demand because it was full. */
+    /** True when the launch asked for a reservation and runs on-demand, from the joined VAMS row. */
     capacityReservationFallback?: boolean | null;
+    /** Why it runs on-demand: `full` or `ended` (see `WorkstationRecord`). */
+    capacityReservationFallbackReason?: string | null;
+    /** The reservation a fallback row asked for, when the service returns it. */
+    capacityReservationRequested?: string | null;
     stale?: boolean;
     staleReason?: "stopped" | "missingInEdh";
 }

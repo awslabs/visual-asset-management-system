@@ -117,7 +117,8 @@ def test_the_shared_fixture_covers_every_state_activity_and_start_failure_code()
         "CREATING", "ACTIVE", "STOPPED", "DELETED", "ORPHANED"}
     assert {case["record"]["activity"] for case in CASES} == {"starting", "stopping", None}
     stopped_codes = {case["record"]["lastError"] for case in CASES if case["record"]["state"] == "STOPPED"}
-    assert {"CAPACITY_UNAVAILABLE", "RESERVATION_FULL", "START_FAILED", "LEASE_EXPIRED", None} <= stopped_codes
+    assert {"CAPACITY_UNAVAILABLE", "RESERVATION_FULL", "RESERVATION_ENDED", "START_FAILED", "LEASE_EXPIRED",
+            None} <= stopped_codes
     # A start EDH accepted and never finished is a CREATING row the sweep marked stalled.
     stalled = [case for case in CASES if case["record"]["lastError"] == "START_STALLED"]
     assert stalled and all(case["record"]["state"] == "CREATING" for case in stalled)
@@ -257,10 +258,16 @@ class TestStartWait:
          "The capacity reservation has no free capacity; the workstation stays stopped. Start it again "
          "once a slot is free, or ask an administrator.",
          "AWS: ReservationCapacityExceeded in us-west-2b"),
+        ({**STOPPED, "lastError": "RESERVATION_ENDED",
+          "startFailure": {"errorCode": "UnauthorizedOperation", "availabilityZone": "us-west-2b",
+                           "observedAt": "2026-10-26T15:19:30Z"}},
+         "The capacity reservation this workstation was launched into has ended, and VAMS could not move "
+         "the workstation to on-demand capacity. Ask an administrator.",
+         "AWS: UnauthorizedOperation in us-west-2b"),
         ({**STOPPED, "lastError": "START_FAILED", "startFailure": None},
          "The workstation did not start; it is still stopped with its disk. Start it again, or ask an "
          "administrator.", None),
-    ], ids=["capacity", "reservation-full", "start-failed"])
+    ], ids=["capacity", "reservation-full", "reservation-ended", "start-failed"])
     def test_exits_non_zero_with_the_failure_once_the_start_left_it_stopped(
             self, cli_runner, generic_command_mocks, clock, refused, sentence, detail):
         with generic_command_mocks('addon.edh') as mocks:

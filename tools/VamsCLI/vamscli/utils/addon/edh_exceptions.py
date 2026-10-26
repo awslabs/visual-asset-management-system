@@ -4,7 +4,7 @@ Every class derives from ``EdhError``, a ``BusinessLogicError`` that the ``edh``
 report. The class names are what ``--json-output`` and the MCP tools report as ``error_type``.
 """
 
-from ..exceptions import BusinessLogicError
+from ..exceptions import BusinessLogicError, PermissionDeniedError
 
 
 class EdhError(BusinessLogicError):
@@ -56,6 +56,18 @@ class EdhReservationFullError(EdhOperationError):
     for a full reservation is recorded on the workstation (`lastError` RESERVATION_FULL) instead."""
     # Carried into --json-output beside the error, as the API's own error body carries it.
     json_fields = {"code": "RESERVATION_FULL"}
+
+
+class EdhReservationNotPermittedError(PermissionDeniedError, EdhError):
+    """Raised when a launch is refused (403) because the caller's role may see the capacity
+    reservation but not launch into it (`code` RESERVATION_NOT_PERMITTED). Both a permission denial,
+    so the client's guards let it through as one, and an EdhError, so the `edh` commands report it
+    with its remedy. A role that may not see the reservation either gets the generic 403, a
+    PermissionDeniedError, which names nothing."""
+    # PermissionDeniedError.for_code picks this class for a handler's 403 coded so.
+    forbidden_code = "RESERVATION_NOT_PERMITTED"
+    # Carried into --json-output beside the error, as the API's own error body carries it.
+    json_fields = {"code": "RESERVATION_NOT_PERMITTED"}
 
 
 # The record fields a `start --wait` error carries into --json-output beside its outcome.

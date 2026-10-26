@@ -9153,7 +9153,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
         post:
             summary: "Launch an EDH workstation."
-            description: "Launches an Amazon DCV desktop on the EDH cluster for the caller. The launch is asynchronous: the record is written in state CREATING and the EDH calls run in a background function after the response, so the caller polls the record until it reports ACTIVE and a sessionId, or ORPHANED with a lastError. The client-generated `bootstrapId` is the idempotency key: a repeat with the caller's own value returns the stored record with `200` and launches nothing; another user's value answers `409`. Callers authenticated with an API key are refused with `403`. The request makes one EDH read, of the desktop software-stack catalog, to check that `imageId` is a registered desktop image and to derive its OS family, which the body's `osFamily` must match; it mutates nothing in EDH. A launch that names `capacityReservationId` then runs, in order and before any record, session key or EDH desktop call: the reservation is registered and enabled (400); the caller's roles grant object-tier `POST` on edhCapacityReservation for it (403); EC2 can be read (503, never a fallback); it is `active` (400); its instance type equals `instanceType` (400); its platform suits the image's OS family (400); and it has a free instance slot, or, when it has none, its registration allows a fallback, which launches on-demand and returns `capacityReservationFallback` true (otherwise 409 `RESERVATION_FULL`). A launch without `capacityReservationId` is on-demand and reads no reservation. Enforces VAMS two-tier Casbin authorization (object-tier on edhWorkstation from the body's imageId and instanceType and the image's OS family, and on edhCapacityReservation when a reservation is named). This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            description: "Launches an Amazon DCV desktop on the EDH cluster for the caller. The launch is asynchronous: the record is written in state CREATING and the EDH calls run in a background function after the response, so the caller polls the record until it reports ACTIVE and a sessionId, or ORPHANED with a lastError. The client-generated `bootstrapId` is the idempotency key: a repeat with the caller's own value returns the stored record with `200` and launches nothing; another user's value answers `409`. Callers authenticated with an API key are refused with `403`. The request makes one EDH read, of the desktop software-stack catalog, to check that `imageId` is a registered desktop image and to derive its OS family, which the body's `osFamily` must match; it mutates nothing in EDH. A launch that names `capacityReservationId` then runs, in order and before any record, session key or EDH desktop call: the reservation is registered and enabled (400); the caller's roles grant object-tier `POST` on edhCapacityReservation for it (403; when they grant `GET` on it but not `POST`, the 403 says so, with `code` `RESERVATION_NOT_PERMITTED`); EC2 can be read (503, never a fallback); it is `active` (400); EDH has a private subnet in its Availability Zone, when EDH's private subnets could be read (400; not known passes); its instance type equals `instanceType` (400); its platform suits the image's OS family (400); and it has a free instance slot, or, when it has none, its registration allows a fallback, which launches on-demand and returns `capacityReservationFallback` true (otherwise 409 `RESERVATION_FULL`). A launch without `capacityReservationId` is on-demand and reads no reservation. Enforces VAMS two-tier Casbin authorization (object-tier on edhWorkstation from the body's imageId and instanceType and the image's OS family, and on edhCapacityReservation when a reservation is named). This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
             requestBody:
                 required: true
                 content:
@@ -9174,17 +9174,17 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/edhWorkstationRecord"
                 "400":
-                    description: "Validation failed (`Request body is not valid JSON`), the instance type is outside the deployment allow-list, the image is not a registered desktop image with a determinable OS family equal to `osFamily` (`imageId is not a registered VDI image`, `The image's OS family cannot be determined`, `osFamily does not match the image`), the image's EDH profile lists the instance type only under architectures of another family than the image's, with `x86_64` and `i386` one family (`instanceType does not match the image's architecture`), an AMI recipe whose `AVAILABLE` build registered the image lists `launchInstanceTypes` that leave the instance type out (`instanceType is not offered for this image`; a recipe read that fails refuses nothing), or `leaseHours` is outside what the lease policy allows (`leaseHours must be 1-<cap>`, `Leases are disabled for this deployment`), or `rootSizeGb` is below the image's registered root size (`Root disk size must be at least <n> GB for this image`); or the named capacity reservation is not registered or is disabled (`capacityReservationId is not registered`), is not `active` or EC2 holds no such reservation (`The capacity reservation is not active`), is of another instance type (`instanceType does not match the capacity reservation`), or has a platform that does not suit the image's OS family (`The capacity reservation's platform does not match the image`)."
+                    description: "Validation failed (`Request body is not valid JSON`), the instance type is outside the deployment allow-list, the image is not a registered desktop image with a determinable OS family equal to `osFamily` (`imageId is not a registered VDI image`, `The image's OS family cannot be determined`, `osFamily does not match the image`), the image's EDH profile lists the instance type only under architectures of another family than the image's, with `x86_64` and `i386` one family (`instanceType does not match the image's architecture`), an AMI recipe whose `AVAILABLE` build registered the image lists `launchInstanceTypes` that leave the instance type out (`instanceType is not offered for this image`; a recipe read that fails refuses nothing), or `leaseHours` is outside what the lease policy allows (`leaseHours must be 1-<cap>`, `Leases are disabled for this deployment`), or `rootSizeGb` is below the image's registered root size (`Root disk size must be at least <n> GB for this image`); or the named capacity reservation is not registered or is disabled (`capacityReservationId is not registered`), is not `active` or EC2 holds no such reservation (`The capacity reservation is not active`), is in an Availability Zone EDH has no private subnet in (`The capacity reservation's Availability Zone (<az>) has no EDH private subnet; choose another reservation or On-demand`), is of another instance type (`instanceType does not match the capacity reservation`), or has a platform that does not suit the image's OS family (`The capacity reservation's platform does not match the image`)."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
-                    description: "Caller lacks access, may not launch into the named capacity reservation, or authenticated with an API key."
+                    description: "Caller lacks access, may not launch into the named capacity reservation, or authenticated with an API key. A caller whose roles grant `GET` but not `POST` on the named reservation is told so (`Your role may view this capacity reservation but not launch into it`, with `code` `RESERVATION_NOT_PERMITTED`); any other refusal is the generic `Not Authorized`, which does not disclose the reservation."
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/error"
+                                $ref: "#/components/schemas/edhError"
                 "409":
                     description: "The `bootstrapId` belongs to another user's launch, or the named capacity reservation has no free slot and its registration allows no fallback (`The capacity reservation has no free capacity`, with `code` `RESERVATION_FULL`)."
                     content:
@@ -9360,7 +9360,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   type: string
         post:
             summary: "Start a stopped EDH workstation."
-            description: "Starts the caller's stopped workstation asynchronously, as a launch is: the request runs every check below, claims the record, mints a fresh session key when session bootstrap is enabled (its outcome is reported in `sessionBootstrap`), marks the record starting and hands the start to a background function, then answers `202` with the record -- `state` `STOPPED` with `activity` `starting`. The request itself never calls EDH's start. The background function sends EDH's start once, waits for EDH's answer (EDH answers only once its own capacity work is done, which can take minutes) and records the outcome: a start EDH accepts moves the record to `CREATING` with `edhState` `pending`, and to `ACTIVE` once EDH reports the desktop running; a start EDH refuses leaves the record `STOPPED`, with its disk, with `lastError` `CAPACITY_UNAVAILABLE` (AWS had no capacity for the instance type in the workstation's Availability Zone), `RESERVATION_FULL` (the capacity reservation the workstation was launched into is full) or `START_FAILED` (any other reason) and the detail in `startFailure`, and takes the fresh key back -- a refused start never deletes, terminates or orphans the desktop; a start whose answer is lost is followed by reads of the desktop's state, and one EDH still reports stopped 10 minutes after the start is recorded `START_FAILED` by the session sweep. Poll `GET /addon/edh/workstations/{sessionId}` until `activity` is null. Callers authenticated with an API key are refused with `403`. Enforces VAMS two-tier Casbin authorization. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            description: "Starts the caller's stopped workstation asynchronously, as a launch is: the request runs every check below, claims the record, mints a fresh session key when session bootstrap is enabled (its outcome is reported in `sessionBootstrap`), marks the record starting and hands the start to a background function, then answers `202` with the record -- `state` `STOPPED` with `activity` `starting`. The request itself never calls EDH's start. The background function sends EDH's start once, waits for EDH's answer (EDH answers only once its own capacity work is done, which can take minutes) and records the outcome: a start EDH accepts moves the record to `CREATING` with `edhState` `pending`, and to `ACTIVE` once EDH reports the desktop running; a start EDH refuses leaves the record `STOPPED`, with its disk, with `lastError` `CAPACITY_UNAVAILABLE` (AWS had no capacity for the instance type in the workstation's Availability Zone), `RESERVATION_FULL` (the capacity reservation the workstation was launched into is full) or `START_FAILED` (any other reason) and the detail in `startFailure`, and takes the fresh key back -- a refused start never deletes, terminates or orphans the desktop; a workstation launched into a capacity reservation that has since ended (EC2 reports it `expired`, `cancelled` or `failed`, or no longer holds it) is first moved to on-demand capacity, and its record then reads `capacityReservationFallback` true with `capacityReservationFallbackReason` `ended`; when EC2 refuses that move, EDH's start is not sent and the record stays `STOPPED` with `lastError` `RESERVATION_ENDED`; a start whose answer is lost is followed by reads of the desktop's state, and one EDH still reports stopped 10 minutes after the start is recorded `START_FAILED` by the session sweep. Poll `GET /addon/edh/workstations/{sessionId}` until `activity` is null. Callers authenticated with an API key are refused with `403`. Enforces VAMS two-tier Casbin authorization. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
             responses:
                 "202":
                     description: "The start was handed over: the workstation record (`state` STOPPED, `activity` starting) plus `sessionBootstrap`, the outcome of placing a session key, as for a launch. A `lastError` and `startFailure` an earlier start left stay until this start is accepted."
@@ -9634,7 +9634,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /addon/edh/catalog/capacity-reservations:
         get:
             summary: "List the capacity reservations the caller may launch into."
-            description: "The registered EC2 capacity reservations that are enabled, that the caller's roles grant `GET` on through object-tier authorization on edhCapacityReservation (keyed by `edhCapacityReservationId`), and that EC2 reports `active`, each with its live view, ordered by label. A full reservation is listed with `availableInstanceCount` 0 and its `fallbackToOnDemand`. EC2 is read once for the reservations the caller may see; a read that fails answers 200 with no items, and a launch then stays on-demand. API-tier and object-tier authorization. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            description: "The registered EC2 capacity reservations that are enabled, that the caller's roles grant `GET` on through object-tier authorization on edhCapacityReservation (keyed by `edhCapacityReservationId`), and that EC2 reports `active`, each with its live view and whether the caller's roles also grant `POST` on it (`launchAllowed`; a reservation the caller may only view cannot be launched into), ordered by label. A reservation in an Availability Zone EDH has no private subnet in (`edhSubnetAvailable` false) is left out; one whose subnet is not known (`edhSubnetAvailable` null, EDH's private subnets not read) is listed. A full reservation is listed with `availableInstanceCount` 0 and its `fallbackToOnDemand`. EC2 is read once for the reservations the caller may see; a read that fails answers 200 with no items, and a launch then stays on-demand. API-tier and object-tier authorization. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
             parameters:
                 - name: instanceType
                   in: query
@@ -9658,7 +9658,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                     content:
                         application/json:
                             schema:
-                                $ref: "#/components/schemas/edhCapacityReservationList"
+                                $ref: "#/components/schemas/edhCatalogCapacityReservationList"
                 "400":
                     description: "`instanceType` is not an EC2 instance type, or `osFamily` is neither `linux` nor `windows`."
                     content:
@@ -10183,7 +10183,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/edhCapacityReservation"
                 "400":
-                    description: "Validation failed, EC2 holds no such reservation (`Capacity reservation not found in this account and Region`), EC2 reports it `expired`, `cancelled` or `failed` (`The capacity reservation is not active`; an `active`, `pending` or `scheduled` reservation registers), or 100 reservations are registered already (`At most 100 capacity reservations can be registered`)."
+                    description: "Validation failed, EC2 holds no such reservation (`Capacity reservation not found in this account and Region`), EC2 reports it `expired`, `cancelled` or `failed` (`The capacity reservation is not active`; an `active`, `pending` or `scheduled` reservation registers), the reservation is in an Availability Zone EDH has no private subnet in (`The capacity reservation's Availability Zone (<az>) has no EDH private subnet, so EDH cannot launch into it`; when EDH's private subnets cannot be read, the reservation registers and reads `edhSubnetAvailable` null), or 100 reservations are registered already (`At most 100 capacity reservations can be registered`)."
                     content:
                         application/json:
                             schema:
@@ -11721,7 +11721,9 @@ components:
                 - edhFailure
                 - capacityReservationId
                 - capacityReservationLabel
+                - capacityReservationRequested
                 - capacityReservationFallback
+                - capacityReservationFallbackReason
                 - activity
                 - startFailure
                 - imageName
@@ -11776,7 +11778,7 @@ components:
                 lastError:
                     type: string
                     nullable: true
-                    description: "Why a launch ended ORPHANED, why a running workstation was stopped (`LEASE_EXPIRED`), or why the last start of a `STOPPED` workstation did not happen: `CAPACITY_UNAVAILABLE` (AWS had no capacity for the instance type in the workstation's Availability Zone, the one zone a stopped workstation starts in), `RESERVATION_FULL` (the capacity reservation it was launched into is full) or `START_FAILED` (EDH refused the start for another reason, or still reported the workstation stopped 10 minutes after the start). A start code stays while the workstation stays stopped and is cleared once a start is accepted. `START_STALLED` on a `CREATING` workstation: EDH accepted the start of the stopped workstation but still reports it `pending` or `placing` 30 minutes later; `activity` is then null, the workstation is not stopped, deleted or orphaned for it, and the code stays until EDH reports the workstation in another state or the owner stops it (stop it, then start it again). Null otherwise."
+                    description: "Why a launch ended ORPHANED, why a running workstation was stopped (`LEASE_EXPIRED`), or why the last start of a `STOPPED` workstation did not happen: `CAPACITY_UNAVAILABLE` (AWS had no capacity for the instance type in the workstation's Availability Zone, the one zone a stopped workstation starts in), `RESERVATION_FULL` (the capacity reservation it was launched into is full), `RESERVATION_ENDED` (the capacity reservation it was launched into has ended, and VAMS could not move it to on-demand capacity, so the start was not sent; ask an administrator) or `START_FAILED` (EDH refused the start for another reason, or still reported the workstation stopped 10 minutes after the start). A start code stays while the workstation stays stopped and is cleared once a start is accepted. `START_STALLED` on a `CREATING` workstation: EDH accepted the start of the stopped workstation but still reports it `pending` or `placing` 30 minutes later; `activity` is then null, the workstation is not stopped, deleted or orphaned for it, and the code stays until EDH reports the workstation in another state or the owner stops it (stop it, then start it again). Null otherwise."
                     enum:
                         - USER_NOT_PROVISIONED
                         - QUOTA_EXCEEDED
@@ -11787,6 +11789,7 @@ components:
                         - CREATE_TIMED_OUT
                         - LEASE_EXPIRED
                         - RESERVATION_FULL
+                        - RESERVATION_ENDED
                         - START_FAILED
                         - START_STALLED
                         - null
@@ -11820,10 +11823,23 @@ components:
                 capacityReservationLabel:
                     type: string
                     nullable: true
-                    description: "The registry label of `capacityReservationId`, read when the record is read; null without a reservation or once it is unregistered."
+                    description: "The registry label of `capacityReservationId`, or, when that is null, of `capacityReservationRequested`, read when the record is read; null without either or once the reservation is unregistered."
+                capacityReservationRequested:
+                    type: string
+                    nullable: true
+                    pattern: "^cr-[0-9a-f]{17}$"
+                    description: "The capacity reservation a workstation that runs on-demand instead asked for (`capacityReservationFallback` true); null otherwise."
                 capacityReservationFallback:
                     type: boolean
-                    description: "True when the launch named a capacity reservation that was full and whose registration allows a fallback, so it was launched on-demand instead."
+                    description: "True when the workstation asked for a capacity reservation and runs on-demand instead: the reservation was full at launch and its registration allows a fallback, or it had ended when the stopped workstation was started."
+                capacityReservationFallbackReason:
+                    type: string
+                    nullable: true
+                    enum:
+                        - full
+                        - ended
+                        - null
+                    description: "Why `capacityReservationFallback` is true: `full` (the reservation was full at launch; a record from before VAMS stored the reason reads `full`) or `ended` (the reservation had ended when the stopped workstation was started, and VAMS moved it to on-demand capacity). Null when it did not fall back."
                 activity:
                     type: string
                     nullable: true
@@ -11870,7 +11886,7 @@ components:
                 errorCode:
                     type: string
                     pattern: "^[A-Za-z][A-Za-z0-9.]{0,63}$"
-                    description: "The AWS error code EDH's answer names, such as `InsufficientInstanceCapacity` or `ReservationCapacityExceeded`; absent when it names none."
+                    description: "The AWS error code EDH's answer names, such as `InsufficientInstanceCapacity` or `ReservationCapacityExceeded`, or, for `RESERVATION_ENDED`, the one EC2 answered VAMS's move of the workstation to on-demand capacity with, such as `UnauthorizedOperation`; absent when it names none."
                 availabilityZone:
                     type: string
                     description: "The Availability Zone of the workstation's instance, the one zone a stopped workstation starts in, such as `us-west-2b`; absent when it could not be read."
@@ -12012,7 +12028,8 @@ components:
                     type: string
                     enum:
                         - RESERVATION_FULL
-                    description: "`RESERVATION_FULL` on the 409 that refuses a launch into a full capacity reservation whose registration allows no fallback; absent on every other answer. A start refused because the workstation's reservation is full is recorded on the workstation (`lastError` `RESERVATION_FULL`), not answered."
+                        - RESERVATION_NOT_PERMITTED
+                    description: "`RESERVATION_FULL` on the 409 that refuses a launch into a full capacity reservation whose registration allows no fallback; `RESERVATION_NOT_PERMITTED` on the 403 that refuses a launch into a reservation the caller's roles may view (`GET`) but not launch into (`POST`); absent on every other answer. A start refused because the workstation's reservation is full is recorded on the workstation (`lastError` `RESERVATION_FULL`), not answered."
         edhConnectResponse:
             type: object
             required:
@@ -12316,10 +12333,22 @@ components:
                 capacityReservationLabel:
                     type: string
                     nullable: true
-                    description: "The registry label of `capacityReservationId`; null without one or once it is unregistered."
+                    description: "The registry label of `capacityReservationId`, or, when that is null, of `capacityReservationRequested`; null without either or once the reservation is unregistered."
+                capacityReservationRequested:
+                    type: string
+                    nullable: true
+                    description: "The capacity reservation the joined VAMS record asked for when it runs on-demand instead; null otherwise or with no joined record."
                 capacityReservationFallback:
                     type: boolean
-                    description: "True when the joined VAMS record asked for a full capacity reservation and was launched on-demand instead."
+                    description: "True when the joined VAMS record asked for a capacity reservation and runs on-demand instead."
+                capacityReservationFallbackReason:
+                    type: string
+                    nullable: true
+                    enum:
+                        - full
+                        - ended
+                        - null
+                    description: "Why `capacityReservationFallback` is true: `full` (full at launch) or `ended` (ended before a start); the workstation record's field. Null when it did not fall back."
                 imageName:
                     type: string
                     nullable: true
@@ -12520,6 +12549,7 @@ components:
                 - instanceMatchCriteria
                 - endDate
                 - reservationType
+                - edhSubnetAvailable
             properties:
                 capacityReservationId:
                     type: string
@@ -12571,6 +12601,10 @@ components:
                         - default
                         - capacity-block
                         - null
+                edhSubnetAvailable:
+                    type: boolean
+                    nullable: true
+                    description: "Whether EDH has a private subnet in the reservation's Availability Zone, which EDH needs to launch into it, read from EDH's `/edh/<edhClusterId>/configuration/PrivateSubnets` parameter and `ec2:DescribeSubnets` at most every five minutes; null when that is not known (EDH's subnets or the reservation's zone could not be read)."
         edhCapacityReservationList:
             type: object
             required:
@@ -12580,6 +12614,26 @@ components:
                     type: array
                     items:
                         $ref: "#/components/schemas/edhCapacityReservation"
+        edhCatalogCapacityReservation:
+            description: "A capacity reservation as the launch catalog lists it: the registered reservation and whether the caller may launch into it."
+            allOf:
+                - $ref: "#/components/schemas/edhCapacityReservation"
+                - type: object
+                  required:
+                      - launchAllowed
+                  properties:
+                      launchAllowed:
+                          type: boolean
+                          description: "Whether the caller's roles grant object-tier `POST` on edhCapacityReservation for the reservation, beside the `GET` the catalog lists it by. A launch into a reservation with `launchAllowed` false is refused 403 `RESERVATION_NOT_PERMITTED`."
+        edhCatalogCapacityReservationList:
+            type: object
+            required:
+                - Items
+            properties:
+                Items:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/edhCatalogCapacityReservation"
         edhRegisterCapacityReservationRequest:
             type: object
             required:

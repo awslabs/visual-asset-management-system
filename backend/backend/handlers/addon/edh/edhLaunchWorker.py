@@ -26,7 +26,11 @@ sweep ages toward START_STALLED), and finishes the credential as the service use
 leaves the row STOPPED -- the desktop and its disk are never deleted, terminated or orphaned for it -- with a
 ``lastError`` (CAPACITY_UNAVAILABLE, RESERVATION_FULL or START_FAILED) and a ``startFailure``, and takes back
 the key; a start whose answer is lost is followed by reads of the desktop's state every 15 seconds, inside the
-start's window, and one EDH still reports stopped at the end is left to the session sweep.
+start's window, and one EDH still reports stopped at the end is left to the session sweep. A stopped desktop
+launched into a capacity reservation that has since ended (expired, cancelled, failed, or no longer held by EC2)
+keeps that reservation as its instance's only capacity, which EDH leaves untouched, so before EDH's start the
+worker moves the instance to on-demand capacity and records the fallback (reason ``ended``); when EC2 refuses
+that move, EDH's start is not sent and the row records RESERVATION_ENDED.
 """
 
 import os
@@ -57,10 +61,12 @@ from .common.edhClient import (
 from .common.edhCatalogFields import OS_FAMILY_WINDOWS
 from .common.edhIdentity import display_name_for
 from .common.edhSessionState import (
-    ACTIVITY_FIELD, ACTIVITY_STARTING, EDH_FIELD_INSTANCE_ID, EDH_SCHEDULE_FIELD, EDH_SESSION_ID_FIELD,
+    ACTIVITY_FIELD, ACTIVITY_STARTING, CAPACITY_RESERVATION_FALLBACK_ENDED, CAPACITY_RESERVATION_FALLBACK_FULL,
+    CAPACITY_RESERVATION_FALLBACK_REASON_FIELD, EDH_FIELD_INSTANCE_ID, EDH_SCHEDULE_FIELD, EDH_SESSION_ID_FIELD,
     EDH_SESSION_STATE_FIELD, EDH_SESSION_STATE_PENDING,
     LAST_ERROR_CAPACITY_UNAVAILABLE, LAST_ERROR_EDH_REFUSED, LAST_ERROR_IMAGE_UNAVAILABLE, LAST_ERROR_LAUNCH_ERROR,
-    LAST_ERROR_QUOTA_EXCEEDED, LAST_ERROR_RESERVATION_FULL, LAST_ERROR_START_FAILED, LAST_ERROR_USER_NOT_PROVISIONED,
+    LAST_ERROR_QUOTA_EXCEEDED, LAST_ERROR_RESERVATION_ENDED, LAST_ERROR_RESERVATION_FULL, LAST_ERROR_START_FAILED,
+    LAST_ERROR_USER_NOT_PROVISIONED,
     MAX_LAUNCH_ATTEMPTS, START_ACCEPTED_FIELD, START_FAILURE_FIELD, START_IN_PROGRESS_SECONDS, START_PAYLOAD_KEYS,
     START_SENT_FIELD, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED, STOP_REQUESTED_FIELD,
     WORKER_ACTION_START, WORKER_PAYLOAD_KEYS,
@@ -70,9 +76,14 @@ from .common.edhSessionState import (
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
-# The read of a stopped desktop's instance, for the Availability Zone a refused start names.
+# The read of a stopped desktop's instance, for the Availability Zone a refused start names, and the move of a
+# stopped desktop off a capacity reservation that has ended, onto on-demand capacity, before its start.
 ec2 = boto3.client('ec2', config=retry_config)
 logger = safeLogger(service_name="EdhLaunchWorker")
+
+# The reservation preference a stopped desktop's instance is given when the capacity reservation it was launched
+# into has ended: open, so it starts on on-demand capacity (EDH's own resume fallback for the reservations it makes).
+EC2_CAPACITY_RESERVATION_PREFERENCE_OPEN = "open"
 
 # EDH desktop create form fields (a subset of the client's EDH_DESKTOP_CREATE_FIELDS).
 EDH_CREATE_FIELD_SESSION_NAME = "session_name"
@@ -260,20 +271,22 @@ def _falls_back(capacity_reservation_id):
     return bool(registration and registration['fallbackToOnDemand'])
 
 
-def _record_fallback(row, capacity_reservation_id):
-    """Move the row off its reservation before the on-demand create: it records the fallback and the reservation
-    it asked for, and no longer carries ``capacityReservationId``, so a retried invocation creates on-demand too."""
+def _record_fallback(row, capacity_reservation_id, reason):
+    """Move the row off its reservation: it records the fallback, why (``reason``, full or ended) and the
+    reservation it asked for, and no longer carries ``capacityReservationId``, so a retried invocation creates, or
+    a later start runs, on-demand too."""
     updated_at = _utc_now()
     edh_session_table.update_item(
         Key={'bootstrapId': row['bootstrapId']},
-        UpdateExpression="SET #a0 = :v0, #a1 = :v1, #a2 = :v2 REMOVE #r0",
+        UpdateExpression="SET #a0 = :v0, #a1 = :v1, #a2 = :v2, #a3 = :v3 REMOVE #r0",
         ExpressionAttributeNames={'#a0': 'capacityReservationFallback', '#a1': 'capacityReservationRequested',
-                                  '#a2': 'updatedAt', '#r0': 'capacityReservationId'},
-        ExpressionAttributeValues={':v0': True, ':v1': capacity_reservation_id, ':v2': updated_at},
+                                  '#a2': CAPACITY_RESERVATION_FALLBACK_REASON_FIELD, '#a3': 'updatedAt',
+                                  '#r0': 'capacityReservationId'},
+        ExpressionAttributeValues={':v0': True, ':v1': capacity_reservation_id, ':v2': reason, ':v3': updated_at},
     )
     row.pop('capacityReservationId', None)
-    row.update(capacityReservationFallback=True, capacityReservationRequested=capacity_reservation_id,
-               updatedAt=updated_at)
+    row.update({'capacityReservationFallback': True, 'capacityReservationRequested': capacity_reservation_id,
+                CAPACITY_RESERVATION_FALLBACK_REASON_FIELD: reason, 'updatedAt': updated_at})
 
 
 def _create_desktop(audit_event, client, edh_uid, row):
@@ -294,7 +307,7 @@ def _create_desktop(audit_event, client, edh_uid, row):
         if not fallback:
             raise ReservationFullError(capacity_reservation_id) from err
         logger.info(f"The capacity reservation of bootstrap {row['bootstrapId']} is full, so it launches on-demand")
-        _record_fallback(row, capacity_reservation_id)
+        _record_fallback(row, capacity_reservation_id, CAPACITY_RESERVATION_FALLBACK_FULL)
     _call_edh(audit_event, client, "create_desktop", "workstationCreate", edh_uid, edh_uid, _create_form(row))
 
 
@@ -532,6 +545,39 @@ def _start_refusal_code(row, err):
     return LAST_ERROR_START_FAILED
 
 
+def _ended_reservation(row):
+    """The id of the capacity reservation the row's stopped desktop was launched into, when that reservation has
+    ended (``reservations.has_ended``) as read live now; None for a row without a reservation or an instance, and
+    for a reservation that is active, not yet active or not read (logged), which leaves the start as it is."""
+    capacity_reservation_id = row.get('capacityReservationId')
+    if not capacity_reservation_id or not row.get('instanceId'):
+        return None
+    try:
+        facts = reservations.read_live([capacity_reservation_id])[capacity_reservation_id]
+    except reservations.CapacityReservationReadError as err:
+        logger.warning(f"The capacity reservation of bootstrap {row['bootstrapId']} was not read before its start "
+                       f"({err}); the start is sent as it is")
+        return None
+    return capacity_reservation_id if reservations.has_ended(facts) else None
+
+
+def _aws_error_code(err):
+    """The AWS error code a ClientError names; None for any other failure."""
+    return err.response.get('Error', {}).get('Code') if isinstance(err, ClientError) else None
+
+
+def _move_to_on_demand(row, capacity_reservation_id):
+    """Move the stopped desktop's instance off the ended reservation it was launched into: its reservation
+    preference becomes open, so it starts on on-demand capacity (EC2 changes it only on a stopped instance, which
+    it is). Raises what EC2 raises; the row is the caller's to write."""
+    instance_id = str(row['instanceId'])
+    ec2.modify_instance_capacity_reservation_attributes(
+        InstanceId=instance_id,
+        CapacityReservationSpecification={'CapacityReservationPreference': EC2_CAPACITY_RESERVATION_PREFERENCE_OPEN})
+    logger.info(f"The capacity reservation {capacity_reservation_id} of bootstrap {row['bootstrapId']} has ended; "
+                f"instance {instance_id} moved to on-demand capacity before its start")
+
+
 def _take_back_start_key(audit_event, row):
     """Revoke the key the start minted -- the one the row names, and only that one: the desktop stays stopped, so
     the bootstrap's other keys are the sweep's -- and answer the row attributes that clear it; nothing when the row
@@ -631,7 +677,9 @@ def _desktop_taken_start(audit_event, row, deadline):
 def start(row, stamp, context=None):
     """Run the start of ``stamp`` for the row, a stopped desktop the workstation service claimed and marked
     starting, and return its outcome. EDH's start is sent once, and only while the start's window still holds the
-    whole start budget; a start that no longer fits is recorded START_FAILED unsent."""
+    whole start budget; a start that no longer fits is recorded START_FAILED unsent. A desktop whose capacity
+    reservation has ended is moved to on-demand capacity first, and recorded RESERVATION_ENDED unsent when EC2
+    refuses the move."""
     audit_event = _audit_event(row)
     deadline = _start_deadline(stamp, context)
     if deadline - _monotonic() < EDH_START_BUDGET_SECONDS:
@@ -641,6 +689,18 @@ def start(row, stamp, context=None):
                                      start_failure(None, None, datetime.now(timezone.utc)))
     if not _claim_start_send(row, stamp):
         return {"bootstrapId": row['bootstrapId'], "outcome": "settled", "state": row.get('state')}
+    ended = _ended_reservation(row)
+    if ended is not None:
+        try:
+            _move_to_on_demand(row, ended)
+        except Exception as err:
+            # EDH's start would fail on the ended reservation, so it is not sent.
+            logger.warning(f"The instance of bootstrap {row['bootstrapId']} was not moved off the ended capacity "
+                           f"reservation {ended} ({type(err).__name__}); the start is not sent")
+            failure = start_failure(None, _instance_zone(row), datetime.now(timezone.utc),
+                                    error_code=_aws_error_code(err))
+            return _record_start_refused(audit_event, row, stamp, LAST_ERROR_RESERVATION_ENDED, failure)
+        _record_fallback(row, ended, CAPACITY_RESERVATION_FALLBACK_ENDED)
     edh_uid = row['edhUid']
     client = EdhClient(profile="start", deadline=min(_monotonic() + EDH_START_BUDGET_SECONDS, deadline))
     try:

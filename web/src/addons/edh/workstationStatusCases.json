@@ -256,6 +256,27 @@
             "startFailureDetail": "AWS: ReservationCapacityExceeded in us-west-2b"
         },
         {
+            "name": "a start refused because the workstation's capacity reservation ended and VAMS could not move it to on-demand",
+            "record": {
+                "state": "STOPPED",
+                "edhState": "stopped",
+                "activity": null,
+                "lastError": "RESERVATION_ENDED",
+                "startFailure": {
+                    "errorCode": "UnauthorizedOperation",
+                    "availabilityZone": "us-west-2b",
+                    "observedAt": "2026-10-26T15:19:30Z"
+                },
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Stopped",
+            "state": "STOPPED",
+            "startFailureMessage": "The capacity reservation this workstation was launched into has ended, and VAMS could not move the workstation to on-demand capacity. Ask an administrator.",
+            "startFailureDetail": "AWS: UnauthorizedOperation in us-west-2b"
+        },
+        {
             "name": "a start EDH refused for another reason, naming no AWS error",
             "record": {
                 "state": "STOPPED",

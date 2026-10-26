@@ -22,6 +22,7 @@ import {
     useEdhCapacityReservationMutations,
 } from "../api/adminQueries";
 import { useInFlight } from "../components/useInFlight";
+import { edhSubnetNote } from "../capacityReservations";
 import type { CapacityReservationView } from "../types";
 import ConfirmActionDialog from "./ConfirmActionDialog";
 
@@ -305,7 +306,21 @@ const CapacityReservationsSection: React.FC<CapacityReservationsSectionProps> = 
             {
                 accessorKey: "state",
                 header: "State",
-                cell: ({ row }) => STATE_TEXT[row.original.state] ?? row.original.state,
+                cell: ({ row }) => {
+                    const note = edhSubnetNote(row.original);
+                    const state = STATE_TEXT[row.original.state] ?? row.original.state;
+                    if (!note) return state;
+                    // The words carry the warning; the colour and the sign only repeat it.
+                    return (
+                        <>
+                            <span className="block">{state}</span>
+                            <span className="flex items-center gap-1 text-xs text-yellow-800 dark:text-yellow-300">
+                                <span aria-hidden="true">⚠</span>
+                                <span>{note}</span>
+                            </span>
+                        </>
+                    );
+                },
             },
             {
                 id: "free",
@@ -439,8 +454,9 @@ const CapacityReservationsSection: React.FC<CapacityReservationsSectionProps> = 
             </div>
             <p className="text-sm text-text-secondary max-w-3xl">
                 The EC2 capacity reservations users may launch workstations into. A user sees a
-                reservation only when their role grants it, and only while it is enabled and active.
-                Without a registered reservation every launch is on-demand.
+                reservation only when their role grants it, and only while it is enabled, active,
+                and in an Availability Zone where EDH has a private subnet. Without a registered
+                reservation every launch is on-demand.
             </p>
 
             {isLoading ? (

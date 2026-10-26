@@ -1707,7 +1707,7 @@ describe("EDH Workstations documentation matches the code it describes", () => {
                 capture(reservations(), /^REGISTRY_FIELDS = \(([\s\S]*?)\)/m).matchAll(/"(\w+)"/g),
                 (m) => m[1]
             );
-        /** The fields of the capacity reservation view: the registration's, then EC2's. */
+        /** The fields of the capacity reservation view: the registration's, then EC2's, then EDH's subnet. */
         const viewFields = (): string[] => [
             ...Array.from(
                 capture(reservations(), /^VIEW_FIELDS = \(([^)]*)\)/m).matchAll(/"(\w+)"/g),
@@ -1719,7 +1719,24 @@ describe("EDH Workstations documentation matches the code it describes", () => {
                 ),
                 (m) => m[1]
             ),
+            capture(reservations(), /^SUBNET_AVAILABLE_FIELD = "(\w+)"$/m),
         ];
+        /**
+         * The no-subnet refusals the two services word with the reservation's Availability Zone, as
+         * the docs quote them: the zone written `<az>`.
+         */
+        const subnetRefusals = (): string[] =>
+            [EDH_SERVICE, EDH_ADMIN_SERVICE].map((rel) =>
+                Array.from(
+                    capture(
+                        pythonCode(read(rel)),
+                        /^RESERVATION_NO_SUBNET_MESSAGE = \(([\s\S]*?)\)$/m
+                    ).matchAll(/"([^"]*)"/g),
+                    (m) => m[1]
+                )
+                    .join("")
+                    .replace("{zone}", "<az>")
+            );
         const keyPrefix = (): string =>
             capture(reservations(), /^REGISTRY_KEY_PREFIX = "([^"]+)"$/m);
         const ceiling = (): string =>
@@ -1744,6 +1761,7 @@ describe("EDH Workstations documentation matches the code it describes", () => {
             // reservation is full is the launch worker's to record, through the shared classifier.
             expect(serviceRefusals()).toEqual([
                 "capacityReservationId is not registered",
+                "Your role may view this capacity reservation but not launch into it",
                 "The capacity reservation could not be read; try again",
                 "The capacity reservation is not active",
                 "instanceType does not match the capacity reservation",
@@ -1780,8 +1798,12 @@ describe("EDH Workstations documentation matches the code it describes", () => {
         ])("%s %s quotes every launch and registry answer", (rel, heading) => {
             const text = sectionOf(page(rel), heading);
             expect(text).not.toBe("");
+            // Control: both services word a no-subnet refusal with the zone.
+            expect(subnetRefusals().map((m) => m.includes("(<az>)"))).toEqual([true, true]);
             expect(
-                [...serviceRefusals(), ...adminRefusals()].filter((m) => !text.includes(m))
+                [...serviceRefusals(), ...adminRefusals(), ...subnetRefusals()].filter(
+                    (m) => !text.includes(m)
+                )
             ).toEqual([]);
         });
 
