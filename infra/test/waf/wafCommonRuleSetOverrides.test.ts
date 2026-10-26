@@ -78,10 +78,14 @@ const shippedGroups = shippedPolicy.managedRuleGroups || [];
 const groupByManagedName = (managedRuleGroupName: string) =>
     shippedGroups.find((g) => g.managedRuleGroupName === managedRuleGroupName);
 
-const buildTemplate = (scope: WAFScope): Template => {
+const buildTemplate = (scope: WAFScope, originVerifySecretArn?: string): Template => {
     const app = newTestApp();
     const stack = new cdk.Stack(app, "WafTestStack");
-    new Wafv2BasicConstruct(stack, "Waf", { wafScope: scope, wafPolicy: shippedPolicy });
+    new Wafv2BasicConstruct(stack, "Waf", {
+        wafScope: scope,
+        wafPolicy: shippedPolicy,
+        originVerifySecretArn,
+    });
     return Template.fromStack(stack);
 };
 
@@ -139,10 +143,19 @@ describe("shipped WAF policy: Common Rule Set per-rule overrides", () => {
     );
 });
 
-describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])(
-    "%s-scoped web ACL renders the shipped overrides",
-    (wafScope) => {
-        const template = buildTemplate(wafScope);
+// The REGIONAL ACL of a CloudFront deployment adds the origin verification scope-down to its rate
+// rules (issue #714); its managed rule groups and overrides are the same.
+describe.each([
+    [WAFScope.CLOUDFRONT, undefined],
+    [WAFScope.REGIONAL, undefined],
+    [
+        WAFScope.REGIONAL,
+        "arn:aws:secretsmanager:us-east-1:111111111111:secret:origin-verify-AbCdEf",
+    ],
+] as Array<[WAFScope, string | undefined]>)(
+    "%s-scoped web ACL renders the shipped overrides (origin verification secret: %s)",
+    (wafScope, originVerifySecretArn) => {
+        const template = buildTemplate(wafScope, originVerifySecretArn);
 
         test("is emitted at the scope under test", () => {
             expect(getWebAcl(template).Properties.Scope).toBe(wafScope.toString());

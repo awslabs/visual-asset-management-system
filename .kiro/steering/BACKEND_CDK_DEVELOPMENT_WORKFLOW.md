@@ -736,7 +736,13 @@ HTTP API v2 layout handlers are written against in **two** ways that `normalize_
 1.  **`requestContext.http` block.** Handlers read
     `event['requestContext']['http']['path']` / `['method']` / `['sourceIp']`; the REST event
     exposes these as top-level `path` / `httpMethod` and `requestContext.identity.sourceIp`.
-    `normalize_event` injects the v2-style `requestContext.http` block.
+    `normalize_event` injects the v2-style `requestContext.http` block. The injected path is
+    stage-relative on every host: through the optional REST API custom domain the event's
+    `path` keeps the base path (`/api/database` where execute-api delivers `/database`), and
+    `normalize_event` removes that one segment when `requestContext.domainName` is the
+    configured domain (`API_CUSTOM_DOMAIN_NAME` / `API_CUSTOM_DOMAIN_BASE_PATH`, set by the CDK
+    only when the domain is enabled). The top-level `path` is left as delivered, so dispatch
+    on `requestContext.http.path`, never on `event['path']`.
 2.  **Null `pathParameters` / `queryStringParameters`.** The REST event sends these as an
     explicit JSON `null` when empty (HTTP API v2 omitted them), so `event.get('pathParameters', {})`
     / `event.get('queryStringParameters', {})` returns `None` — the default applies only when

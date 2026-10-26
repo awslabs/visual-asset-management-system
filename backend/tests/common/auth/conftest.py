@@ -33,9 +33,37 @@ _common_dir = os.path.join(
 _common_dir = os.path.abspath(_common_dir)
 
 # Package marker first, then dependencies (resourceNames), then pure modules, then authorizerCore (depends on clientIp and resourceNames).
+# originVerify precedes clientIp, which imports it.
 if "common.auth" not in sys.modules:
     _load("common.auth", os.path.join(_auth_dir, "__init__.py"))
 _load("common.resourceNames", os.path.join(_common_dir, "resourceNames.py"))
+_load("common.auth.originVerify", os.path.join(_auth_dir, "originVerify.py"))
 _load("common.auth.clientIp", os.path.join(_auth_dir, "clientIp.py"))
 _load("common.auth.apiEvent", os.path.join(_auth_dir, "apiEvent.py"))
 _load("common.auth.authorizerCore", os.path.join(_auth_dir, "authorizerCore.py"))
+
+import pytest  # noqa: E402
+
+# The origin verification value the tests below configure, and the secret ARN that enables it.
+ORIGIN_VERIFY_TEST_VALUE = "originVerifyTestValue0123456789"
+ORIGIN_VERIFY_TEST_SECRET_ARN = (
+    "arn:aws:secretsmanager:us-east-1:123456789012:secret:vams-origin-verify-AbCdEf"
+)
+
+
+@pytest.fixture
+def origin_verify_value(monkeypatch):
+    """Configure the origin verification module clientIp uses to accept one known value.
+
+    Patches the module object ``resolve_client_ip`` reads (``clientIp.originVerify``), whichever
+    import path loaded clientIp, and returns the value a CloudFront-forwarded request carries in
+    ``x-vams-origin-verify``.
+    """
+    origin_verify = sys.modules["common.auth.originVerify"]
+    monkeypatch.setenv(origin_verify.SECRET_ARN_ENV, ORIGIN_VERIFY_TEST_SECRET_ARN)
+    monkeypatch.setattr(
+        origin_verify, "_fetch_accepted_values", lambda secret_arn: (ORIGIN_VERIFY_TEST_VALUE,)
+    )
+    monkeypatch.setitem(origin_verify._cache, "values", ())
+    monkeypatch.setitem(origin_verify._cache, "fetched_at", None)
+    return ORIGIN_VERIFY_TEST_VALUE
