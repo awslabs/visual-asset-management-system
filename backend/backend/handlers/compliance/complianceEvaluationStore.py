@@ -917,6 +917,61 @@ CASCADE_APPROVAL_TIMED_OUT_REASON = "approval timed out"
 AUDIT_CASCADE_TIMED_OUT = "cascade_timed_out"
 
 
+# --- Per-parent pending-cascade marker ---
+
+# Key prefix of the row that holds a parent's claim while the automatic cascade opened for it awaits
+# approval: `<prefix><databaseId>:<assetId>` (a database id holds no `:`), with `markerFor` naming
+# the cascade. The row lives in the cascade table but carries no `state`, so the StateIndex — and
+# every listing, all of which read it — never holds it, and its key is not a UUID, so no cascade
+# route can address it. The trigger writes it in one transaction with the cascade, conditional on
+# no marker for the parent, which is what makes opening an automatic cascade atomic per parent.
+CASCADE_PENDING_MARKER_PREFIX = "pendingCascadeMarker:"
+
+
+def cascade_pending_marker_key(database_id: str, asset_id: str) -> Dict[str, str]:
+    """The key of a parent's pending-cascade marker."""
+    return {"cascadeId": f"{CASCADE_PENDING_MARKER_PREFIX}{database_id}:{asset_id}"}
+
+
+def cascade_pending_marker(cascade: Dict[str, Any]) -> Dict[str, Any]:
+    """The marker an automatic cascade holds on its parent while it awaits approval."""
+    return {
+        **cascade_pending_marker_key(cascade["triggeredByDatabaseId"], cascade["triggeredByAssetId"]),
+        "markerFor": cascade["cascadeId"],
+        "triggeredByDatabaseId": cascade["triggeredByDatabaseId"],
+        "triggeredByAssetId": cascade["triggeredByAssetId"],
+        "claimedAt": cascade.get("createdAt") or now_iso(),
+    }
+
+
+def clear_cascade_pending_marker(cascade_table, cascade: Dict[str, Any]) -> bool:
+    """Release the parent's marker once `cascade` has left `pending_approval` (approved, rejected or
+    aborted on its approval timeout). The delete is conditional on the marker being this cascade's,
+    so a cascade without one (created through the API, or opened before markers existed) touches no
+    other cascade's claim. Best-effort, and never raised: the transition it follows has already
+    happened, and a marker left behind is released by the parent's next automatic open, which finds
+    the cascade it names no longer pending. Returns whether a marker was deleted."""
+    cascade_id = cascade.get("cascadeId")
+    database_id = cascade.get("triggeredByDatabaseId")
+    asset_id = cascade.get("triggeredByAssetId")
+    if not (cascade_id and database_id and asset_id):
+        return False
+    try:
+        cascade_table.delete_item(
+            Key=cascade_pending_marker_key(database_id, asset_id),
+            ConditionExpression="markerFor = :cascadeId",
+            ExpressionAttributeValues={":cascadeId": cascade_id},
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            logger.exception(f"Could not release the pending-cascade marker of cascade {cascade_id}")
+        return False
+    except Exception:
+        logger.exception(f"Could not release the pending-cascade marker of cascade {cascade_id}")
+        return False
+
+
 def cascade_approval_timed_out(cascade: Dict[str, Any], now: Optional[datetime] = None) -> bool:
     """Whether a cascade is still `pending_approval` at or after its `approvalTimeoutAt`. A
     cascade without a timeout (created with `requireApproval: false`) or with an unreadable one
@@ -944,8 +999,8 @@ def expire_timed_out_cascade(cascade_table, cascade: Dict[str, Any],
     "approval timed out" and a `cascade_timed_out` audit entry. The update is conditional on the
     row still being `pending_approval` with the same timeout, so of the readers that find it
     timed out (a listing, a get, an approve or reject, the trigger's pending check) exactly one
-    aborts it and writes the entry; the others re-read the row it left. Any other cascade is
-    returned unchanged."""
+    aborts it, writes the entry and releases its parent's pending-cascade marker; the others re-read
+    the row it left. Any other cascade is returned unchanged."""
     if not cascade_approval_timed_out(cascade, now):
         return cascade
     cascade_id = cascade.get("cascadeId")
@@ -980,6 +1035,7 @@ def expire_timed_out_cascade(cascade_table, cascade: Dict[str, Any],
         details={"reason": CASCADE_APPROVAL_TIMED_OUT_REASON,
                  "approvalTimeoutAt": cascade.get("approvalTimeoutAt")},
     )
+    clear_cascade_pending_marker(cascade_table, cascade)
     logger.info(f"Cascade {cascade_id} aborted: approval timed out")
     return response.get("Attributes") or {**cascade, "state": CASCADE_STATE_ABORTED,
                                           "abortReason": CASCADE_APPROVAL_TIMED_OUT_REASON,

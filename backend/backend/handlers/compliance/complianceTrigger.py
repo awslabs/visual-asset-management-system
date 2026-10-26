@@ -163,6 +163,10 @@ AUDIT_EVENT_ASSET_DELETED = "asset_deleted"
 
 # A cascade awaiting approval expires after this many hours.
 CASCADE_APPROVAL_TIMEOUT_HOURS = 24
+# Attempts at the marker-and-cascade transaction of one automatic open: a refused attempt is
+# retried only after a marker that no longer stands for an approvable cascade was released, or
+# after a conflict with another opener's transaction in flight.
+CASCADE_OPEN_ATTEMPTS = 3
 
 # Suffix on the partition key of an archived asset row.
 ARCHIVED_DATABASE_SUFFIX = "#deleted"
@@ -1014,7 +1018,12 @@ def trigger_evaluation(database_id, asset_id, schema_name):
 def check_and_trigger_cascade(database_id: str, asset_id: str):
     """Open a cascade awaiting approval when the asset has downstream children — `parentChild`
     links where it is the parent (`store.is_cascade_link`; a `related` link opens none) — and none
-    is already pending for it."""
+    is already pending for it.
+
+    At most one opens however many evaluations of the parent overlap: the cascade is written in one
+    transaction with the parent's pending-cascade marker, conditional on no marker
+    (`_open_cascade_claiming_parent`). The StateIndex check before it also finds a pending cascade
+    opened before markers existed, and aborts a timed-out one."""
     children = [link for link in store.get_child_links(database_id, asset_id)
                 if store.is_cascade_link(link)]
     if not children:
@@ -1028,7 +1037,7 @@ def check_and_trigger_cascade(database_id: str, asset_id: str):
 
     now = datetime.now(timezone.utc)
     cascade_id = str(uuid.uuid4())
-    cascade_table.put_item(Item={
+    opened = _open_cascade_claiming_parent({
         "cascadeId": cascade_id,
         "state": CASCADE_STATE_PENDING_APPROVAL,
         "triggeredByDatabaseId": database_id,
@@ -1041,6 +1050,9 @@ def check_and_trigger_cascade(database_id: str, asset_id: str):
         "nodes": json.dumps({}),
         "executionOrder": json.dumps([]),
     })
+    if not opened:
+        logger.info(f"Asset {asset_key} already has a cascade awaiting approval; not opening another")
+        return
 
     store.write_audit(
         database_id, asset_id,
@@ -1057,6 +1069,66 @@ def check_and_trigger_cascade(database_id: str, asset_id: str):
         logger.exception(f"Failed sending cascade notification: {e}")
 
     logger.info(f"Created cascade {cascade_id} for parent {asset_key}")
+
+
+def _open_cascade_claiming_parent(cascade) -> bool:
+    """Write an automatic cascade together with its parent's pending-cascade marker, in one
+    transaction whose marker put is conditional on no marker for the parent. Returns whether this
+    call opened the cascade; False when another cascade holds the parent.
+
+    The pending check and the write were separate steps, so evaluations of one parent finishing a
+    few milliseconds apart each opened a cascade. Now the marker decides: of overlapping opens
+    exactly one transaction commits, and the others are refused before writing anything. A refused
+    open retries only after `_marker_released` removed a marker whose cascade can no longer be
+    approved (one whose release after an approve, reject or timeout was lost)."""
+    database_id = cascade["triggeredByDatabaseId"]
+    asset_id = cascade["triggeredByAssetId"]
+    marker = store.cascade_pending_marker(cascade)
+    for _ in range(CASCADE_OPEN_ATTEMPTS):
+        try:
+            # The table resource's client: it takes the items as plain values, like the table.
+            cascade_table.meta.client.transact_write_items(TransactItems=[
+                {"Put": {"TableName": cascade_table.name, "Item": marker,
+                         "ConditionExpression": "attribute_not_exists(cascadeId)"}},
+                {"Put": {"TableName": cascade_table.name, "Item": cascade,
+                         "ConditionExpression": "attribute_not_exists(cascadeId)"}},
+            ])
+            return True
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") != "TransactionCanceledException":
+                raise
+            if not _marker_released(database_id, asset_id):
+                return False
+    logger.warning(f"Could not claim {database_id}:{asset_id} for a cascade after "
+                   f"{CASCADE_OPEN_ATTEMPTS} attempts; not opening one")
+    return False
+
+
+def _marker_released(database_id: str, asset_id: str) -> bool:
+    """After a refused open: whether the parent is free to claim again. False while the marker
+    names a cascade still awaiting approval within its timeout. A marker naming a cascade that timed
+    out is released by aborting that cascade; one naming a cascade that is gone or has left
+    `pending_approval` is deleted (conditionally, so a fresh claim by another opener stays). No
+    marker at all means the refusal was a conflict with another opener's transaction: try again,
+    and that opener's marker answers."""
+    marker = cascade_table.get_item(Key=store.cascade_pending_marker_key(database_id, asset_id),
+                                    ConsistentRead=True).get("Item")
+    if not marker:
+        return True
+    holder_id = marker.get("markerFor", "")
+    holder = cascade_table.get_item(Key={"cascadeId": holder_id},
+                                    ConsistentRead=True).get("Item") if holder_id else None
+    if holder and holder.get("state") == CASCADE_STATE_PENDING_APPROVAL:
+        if not store.cascade_approval_timed_out(holder):
+            return False
+        store.expire_timed_out_cascade(cascade_table, holder)
+        return True
+    logger.info(f"Releasing the pending-cascade marker of {database_id}:{asset_id}: its cascade "
+                f"{holder_id} is no longer awaiting approval")
+    store.clear_cascade_pending_marker(cascade_table, {
+        "cascadeId": holder_id, "triggeredByDatabaseId": database_id,
+        "triggeredByAssetId": asset_id})
+    return True
 
 
 def pending_cascade_exists(database_id: str, asset_id: str) -> bool:

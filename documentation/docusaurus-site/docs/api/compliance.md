@@ -1033,7 +1033,7 @@ The listing is not paged. Each row carries `databaseId` and `assetId` naming the
 
 ## Create a cascade
 
-Creates a cascade that re-evaluates the downstream assets of an asset — every descendant reachable through `parentChild` asset links, in dependency order. With `requireApproval` (the default) the cascade waits in `pending_approval` for [approval](#approve-a-pending-cascade) and the response is `200`. With `requireApproval: false` the cascade is written in the `executing` state, its execution is started in the background and the response is `202`; the evaluations do not run inside the request. This route always opens a new cascade; only the cascade an evaluation opens automatically for an asset with children is de-duplicated — while one for the same parent is pending approval, further evaluations of that parent open no new one.
+Creates a cascade that re-evaluates the downstream assets of an asset — every descendant reachable through `parentChild` asset links, in dependency order. With `requireApproval` (the default) the cascade waits in `pending_approval` for [approval](#approve-a-pending-cascade) and the response is `200`. With `requireApproval: false` the cascade is written in the `executing` state, its execution is started in the background and the response is `202`; the evaluations do not run inside the request. This route always opens a new cascade; only the cascade an evaluation opens automatically for an asset with children is de-duplicated — while one for the same parent is pending approval, further evaluations of that parent open no new one, including evaluations that finish at the same moment. A cascade created here neither waits for nor blocks that automatic one.
 
 ```
 POST /compliance/cascades

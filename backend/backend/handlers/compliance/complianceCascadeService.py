@@ -15,6 +15,10 @@ A cascade awaiting approval past its `approvalTimeoutAt` is aborted with abortRe
 "approval timed out" wherever it is read: the listing (which then omits it), a get, an approve or
 reject (refused), and the trigger's check for a pending cascade.
 
+An automatic cascade (opened by the trigger) holds a marker row on its parent while it awaits
+approval (store.cascade_pending_marker); approving, rejecting or timing it out releases it. A
+cascade created here is not automatic: it opens regardless of a pending one and claims no marker.
+
 A cascade runs in the executor Lambda (complianceCascadeExecutor), invoked asynchronously once
 the row is in the `executing` state; the request returns 202 and the client observes completion
 through GET /compliance/cascades/{cascadeId} (`state` executing -> completed | aborted).
@@ -357,6 +361,9 @@ def approve_cascade(event, cascade_id, request: ApproveCascadeRequestModel):
     except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
         return general_error(
             body={"message": "Cascade not found or not in pending_approval state"}, event=event)
+    # The cascade left pending_approval: release its parent's claim, so the parent's next
+    # evaluation can open a new automatic cascade.
+    store.clear_cascade_pending_marker(cascade_table, cascade)
 
     store.write_audit(
         cascade.get("triggeredByDatabaseId", ""),
@@ -424,6 +431,9 @@ def reject_cascade(event, cascade_id, request: RejectCascadeRequestModel):
     except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
         return general_error(
             body={"message": "Cascade not found or not in pending_approval state"}, event=event)
+    # The cascade left pending_approval: release its parent's claim, so the parent's next
+    # evaluation can open a new automatic cascade.
+    store.clear_cascade_pending_marker(cascade_table, cascade)
 
     store.write_audit(
         cascade.get("triggeredByDatabaseId", ""),

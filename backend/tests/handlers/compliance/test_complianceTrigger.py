@@ -54,6 +54,14 @@ CASCADE_TABLE_DEFINITION = {
 }
 
 
+def opened_cascades(table):
+    """The cascades the trigger opened through a mock table: the cascade item (the one with a
+    `state`; the other is the parent's pending marker) of each TransactWriteItems call."""
+    return [entry["Put"]["Item"]
+            for call in table.meta.client.transact_write_items.call_args_list
+            for entry in call.kwargs["TransactItems"] if "state" in entry["Put"]["Item"]]
+
+
 def _sns_event(*messages):
     """The SQS event the trigger's queue delivers: one record per indexer-topic message, each body
     the SNS `Notification` the topic subscription wrapped it in."""
@@ -386,7 +394,7 @@ class TestCascadeCheck:
             {"assetName": {"S": "Root"}, "snsTopic": {"S": "arn:aws:sns:us-east-1:1:t"}}]}
         mocks = _run(_sns_event({"databaseId": DB, "assetId": ASSET}), database_item=AUTO_EVAL_DB,
                      compliance_record={"schemaName": SCHEMA}, children=self.CHILDREN)
-        cascade = put_items(mocks["cascade"])[0]
+        cascade = opened_cascades(mocks["cascade"])[0]
         assert cascade["state"] == "pending_approval"
         assert cascade["triggeredByDatabaseId"] == DB
         assert cascade["triggeredByAssetId"] == ASSET
@@ -407,7 +415,7 @@ class TestCascadeCheck:
         mocks = _run(_sns_event(_stream_message()), database_item=AUTO_EVAL_DB,
                      compliance_record={"schemaName": SCHEMA}, children=related)
         mocks["run_evaluation"].assert_called_once()
-        mocks["cascade"].put_item.assert_not_called()
+        assert opened_cascades(mocks["cascade"]) == []
         mocks["audit"].assert_not_called()
 
     def test_a_cascade_counts_the_parent_child_children_only(self, notifications_aws):
@@ -415,26 +423,26 @@ class TestCascadeCheck:
                                   "relationshipType": "related"}]
         mocks = _run(_sns_event(_stream_message()), database_item=AUTO_EVAL_DB,
                      compliance_record={"schemaName": SCHEMA}, children=mixed)
-        mocks["cascade"].put_item.assert_called_once()
+        assert len(opened_cascades(mocks["cascade"])) == 1
         assert mocks["audit"].call_args.kwargs["details"]["childCount"] == len(self.CHILDREN)
 
     def test_an_asset_without_children_opens_no_cascade(self):
         mocks = _run(_sns_event({"databaseId": DB, "assetId": ASSET}), database_item=AUTO_EVAL_DB,
                      compliance_record={"schemaName": SCHEMA})
-        mocks["cascade"].put_item.assert_not_called()
+        assert opened_cascades(mocks["cascade"]) == []
         mocks["audit"].assert_not_called()
 
     def test_an_evaluation_error_opens_no_cascade(self):
         mocks = _run(_sns_event({"databaseId": DB, "assetId": ASSET}), database_item=AUTO_EVAL_DB,
                      compliance_record={"schemaName": SCHEMA}, children=self.CHILDREN,
                      evaluation=dict(EVALUATION, verdict="error", error="Schema not found"))
-        mocks["cascade"].put_item.assert_not_called()
+        assert opened_cascades(mocks["cascade"]) == []
 
     def test_a_failed_notification_does_not_fail_the_cascade(self, notifications_aws):
         notifications_aws.dynamodb_client.query.side_effect = RuntimeError("down")
         mocks = _run(_sns_event({"databaseId": DB, "assetId": ASSET}), database_item=AUTO_EVAL_DB,
                      compliance_record={"schemaName": SCHEMA}, children=self.CHILDREN)
-        assert put_items(mocks["cascade"])[0]["state"] == "pending_approval"
+        assert opened_cascades(mocks["cascade"])[0]["state"] == "pending_approval"
         notifications_aws.sns_client.publish.assert_not_called()
 
     def test_the_pending_cascade_lookup_reads_the_state_index_for_the_trigger_asset(self):
@@ -472,7 +480,10 @@ class TestOnePendingCascadePerTriggerAsset:
             mocks = _run(_sns_event({"databaseId": DB, "assetId": ASSET}), database_item=AUTO_EVAL_DB,
                          compliance_record={"schemaName": SCHEMA}, children=self.CHILDREN,
                          cascade_table=table)
-            mocks["cascades"] = table.scan()["Items"]
+            items = table.scan()["Items"]
+            # The cascade rows; the parent's pending-cascade marker rows carry no state.
+            mocks["cascades"] = [item for item in items if "state" in item]
+            mocks["markers"] = [item for item in items if "state" not in item]
         return mocks
 
     def test_a_pending_cascade_for_the_same_asset_keeps_a_second_from_opening(self):
@@ -806,7 +817,7 @@ class TestAPendingEvaluationCoversOnlyTheChangesItRead:
                      database_item=AUTO_EVAL_DB, compliance_record=self._pending_record(),
                      asset_rows=ASSET_ROWS)
         mocks["run_evaluation"].assert_not_called()
-        mocks["cascade"].put_item.assert_not_called()
+        assert opened_cascades(mocks["cascade"]) == []
         mocks["get_evaluation"].assert_not_called()
         assert len(_coverage_lines(mocks, "covered")) == 1
 
