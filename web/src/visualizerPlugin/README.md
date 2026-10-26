@@ -1321,7 +1321,7 @@ To add external API endpoints for your viewer plugins:
 
 ```bash
 cd infra
-cdk deploy --all
+npx cdk deploy --all
 ```
 
 ### CSP Categories for Different API Types

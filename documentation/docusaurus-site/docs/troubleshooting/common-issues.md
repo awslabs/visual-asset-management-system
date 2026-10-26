@@ -18,9 +18,9 @@ When redeploying with pipeline configuration changes, you may encounter AWS Clou
 **Resolution:**
 
 1. Temporarily disable the affected pipelines (Isaac Lab Training, Gaussian Splat Toolbox) in `infra/config/config.json`.
-2. Deploy with pipelines disabled: `cdk deploy --all --require-approval never`.
+2. Deploy with pipelines disabled: `npx cdk deploy --all --require-approval never` (from `infra/`).
 3. Re-enable the pipelines in the configuration file.
-4. Deploy again: `cdk deploy --all --require-approval never`.
+4. Deploy again: `npx cdk deploy --all --require-approval never`.
 
 :::tip
 This issue typically occurs only when toggling multiple pipelines simultaneously. Deploying pipeline changes incrementally can help avoid it.
@@ -52,7 +52,7 @@ Perform a staged "drain, redeploy, re-enable" procedure so the dependent ENIs ar
 2. Remove any Lambda functions and their VPC ENIs. Deploy with networking disabled so AWS CloudFormation detaches the Lambda functions from the VPC and deletes their ENIs:
 
     ```bash
-    cd infra && cdk deploy --all --require-approval never
+    cd infra && npx cdk deploy --all --require-approval never
     ```
 
     If a Lambda ENI lingers (Lambda Hyperplane ENIs can take several minutes to detach after the function is removed from the VPC), wait for it to clear, or delete the orphaned ENI manually from the Amazon EC2 console (**Network Interfaces**, filter by the VPC, delete interfaces in the `available` state) before continuing.
@@ -61,7 +61,7 @@ Perform a staged "drain, redeploy, re-enable" procedure so the dependent ENIs ar
 4. Deploy again so the VPC is provisioned with the new subnet layout:
 
     ```bash
-    cd infra && cdk deploy --all --require-approval never
+    cd infra && npx cdk deploy --all --require-approval never
     ```
 
 5. If Amazon OpenSearch Service was disabled and re-enabled, re-index the search data. The domain is created empty, so run the re-index tool (or set `openSearch.reindexOnCdkDeploy = true` for one deployment). See [Reindexing OpenSearch](../developer/utilities/reindex.md).
@@ -221,7 +221,7 @@ Amazon OpenSearch Service Multi-AZ with Standby requires every index to have cop
 **Resolution:**
 
 1. Recover the stuck stack: in the AWS CloudFormation console, choose **Continue update rollback** on the `UPDATE_ROLLBACK_FAILED` stack, skipping the OpenSearch domain and dependent indexer/search resources if prompted, so the stack returns to `UPDATE_ROLLBACK_COMPLETE`.
-2. To stay on the existing domain unchanged, set `app.openSearch.useProvisioned.availabilityZoneCount` back to `2` (the default) and redeploy: `cd infra && cdk deploy --all --require-approval never`.
+2. To stay on the existing domain unchanged, set `app.openSearch.useProvisioned.availabilityZoneCount` back to `2` (the default) and redeploy: `cd infra && npx cdk deploy --all --require-approval never`.
 3. To move to a 3-AZ Multi-AZ-with-Standby domain, create it fresh: deploy once with OpenSearch disabled (`useProvisioned.enabled = false`) to remove the existing domain, then re-enable it with `availabilityZoneCount: 3` and deploy again. Run the reindex tool (or set `reindexOnCdkDeploy = true` for one deployment) to repopulate the new domain from source data — no asset data is lost.
 
 :::note
