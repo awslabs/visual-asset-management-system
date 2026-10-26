@@ -105,7 +105,7 @@ This software includes third party software subject to the following copyrights:
 | tailwindcss                         | ^3.4.14       | MIT                     |
 | tough-cookie                        | ^4.1.3        | BSD-3-Clause            |
 | typescript                          | ^5.0.0        | Apache-2.0              |
-| vite                                | ^8.0.16       | MIT                     |
+| vite                                | ^8.1.6        | MIT                     |
 | web-vitals                          | ^1.1.2        | Apache-2.0              |
 | zod                                 | ^3.23.8       | MIT                     |
 
