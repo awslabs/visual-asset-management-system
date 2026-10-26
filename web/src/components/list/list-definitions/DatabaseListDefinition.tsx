@@ -17,6 +17,7 @@ import Synonyms from "../../../synonyms";
  * @param {React.ComponentType} options.MapThumbnailComponent - Component to render map thumbnails
  * @param {string} options.mapStyleUrl - Map style URL for thumbnails
  * @param {boolean} options.showCompliance - Whether to show the compliance page link column
+ * @param {boolean} options.showMetadata - Whether to show the metadata link column (the default)
  * @param {"assets" | "compliance" | "none"} options.nameLinkTarget - Page the database name links
  *   to: the database's assets (the default), its compliance page, or no link
  */
@@ -27,6 +28,7 @@ export const createDatabaseListDefinition = (options: any = {}) => {
         MapThumbnailComponent,
         mapStyleUrl,
         showCompliance,
+        showMetadata = true,
         nameLinkTarget = "assets",
     } = options;
 
@@ -168,7 +170,7 @@ export const createDatabaseListDefinition = (options: any = {}) => {
         "databaseId",
         "description",
         "assetCount",
-        "metadata",
+        ...(showMetadata ? ["metadata"] : []),
         ...(showCompliance ? ["compliance"] : []),
         "restrictMetadataOutsideSchemas",
         "restrictFileUploadsToExtensions",

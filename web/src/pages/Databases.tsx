@@ -18,6 +18,7 @@ import { featuresEnabled } from "../common/constants/featuresEnabled";
 import DatabaseMapThumbnail from "../components/search/SearchResults/DatabaseMapThumbnail";
 import { usePageTitle } from "../hooks/usePageTitle";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
+import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 
 // The API route the database compliance page reads; the column linking to it is shown only
 // when the caller may call it.
@@ -26,11 +27,11 @@ const COMPLIANCE_STATE_DATABASE_API_ROUTE = "/compliance/state/{databaseId}";
 // databases (for example the Compliance Admin template) sees the list without them.
 const DATABASE_API_ROUTE = "/database";
 const DATABASE_BY_ID_API_ROUTE = "/database/{databaseId}";
-// The routes the database's assets page lists from: search, or the database's asset listing when
-// the deployment runs without OpenSearch. A caller who may call neither gets the database name
-// linked to the compliance page instead, or not linked.
-const SEARCH_API_ROUTE = "/search";
-const DATABASE_ASSETS_API_ROUTE = "/database/{databaseId}/assets";
+// The route the database metadata modal reads; the Metadata column opening it is shown only when
+// the caller may call it.
+const DATABASE_METADATA_API_ROUTE = "/database/{databaseId}/metadata";
+// The database name links to the database's assets page when the caller may open it
+// (useAssetPageAccess); otherwise to the compliance page, or it is not a link.
 
 export default function Databases() {
     usePageTitle(Synonyms.Databases);
@@ -45,11 +46,13 @@ export default function Databases() {
     const canCreate = canCallRoute("POST", DATABASE_API_ROUTE);
     const canEdit = canCallRoute("PUT", DATABASE_BY_ID_API_ROUTE);
     const canDelete = canCallRoute("DELETE", DATABASE_BY_ID_API_ROUTE);
-    const useNoOpenSearch = config?.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH);
-    const canOpenAssets = useNoOpenSearch
-        ? canCallRoute("GET", DATABASE_ASSETS_API_ROUTE)
-        : canCallRoute("POST", SEARCH_API_ROUTE);
-    const nameLinkTarget = canOpenAssets ? "assets" : showCompliance ? "compliance" : "none";
+    const showMetadata = canCallRoute("GET", DATABASE_METADATA_API_ROUTE);
+    const { canOpenDatabaseAssets } = useAssetPageAccess();
+    const nameLinkTarget = canOpenDatabaseAssets
+        ? "assets"
+        : showCompliance
+        ? "compliance"
+        : "none";
 
     const listDefinition = useMemo(
         () =>
@@ -59,9 +62,10 @@ export default function Databases() {
                 MapThumbnailComponent: DatabaseMapThumbnail,
                 mapStyleUrl,
                 showCompliance,
+                showMetadata,
                 nameLinkTarget,
             }),
-        [showMapThumbnails, useMapView, mapStyleUrl, showCompliance, nameLinkTarget]
+        [showMapThumbnails, useMapView, mapStyleUrl, showCompliance, showMetadata, nameLinkTarget]
     );
 
     const mapThumbnailToggle =

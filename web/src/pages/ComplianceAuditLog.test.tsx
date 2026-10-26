@@ -14,6 +14,15 @@ jest.mock("../services/ComplianceService", () => ({
     fetchAuditLog: jest.fn(),
 }));
 
+// The routes the caller may call, as "METHOD path-template" strings.
+let mockAllowed: string[] = [];
+jest.mock("../features/orchestration/permissions/useAllowedRoutes", () => ({
+    useAllowedRoutes: () => ({
+        loading: false,
+        can: (method: string, path: string) => mockAllowed.includes(`${method} ${path}`),
+    }),
+}));
+
 const service = () =>
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     require("../services/ComplianceService");
@@ -183,5 +192,31 @@ describe("ComplianceAuditLog event type filter", () => {
                 "cascade_completed"
             );
         });
+    });
+});
+
+describe("ComplianceAuditLog asset links", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        service().fetchAuditLog.mockResolvedValue([
+            true,
+            { entries: [entry("e1", "someone")], nextToken: undefined },
+        ]);
+    });
+
+    it("shows the asset as text to a caller who may not open the asset page", async () => {
+        mockAllowed = [];
+        render(<ComplianceAuditLog />);
+        const asset = await screen.findByText("asset-e1");
+        expect(asset.closest("a")).toBeNull();
+    });
+
+    it("links the asset for a caller who may open the asset page", async () => {
+        mockAllowed = ["GET /database/{databaseId}/assets/{assetId}"];
+        render(<ComplianceAuditLog />);
+        expect(await screen.findByRole("link", { name: "asset-e1" })).toHaveAttribute(
+            "href",
+            "#/databases/db1/assets/asset-e1"
+        );
     });
 });

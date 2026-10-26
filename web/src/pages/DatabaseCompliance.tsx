@@ -37,6 +37,7 @@ import {
     EvaluationErrorIndicator,
 } from "../components/compliance/complianceStateBadge";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
+import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 
 // The routes behind the database binding control (backend/backend/common/apiRoutes.py): the
 // schema list fills the selector, PUT binds or changes the schema, DELETE removes it.
@@ -58,6 +59,9 @@ const DatabaseCompliancePage: React.FC = () => {
     const canListSchemas = canCallRoute("GET", COMPLIANCE_SCHEMAS_API_ROUTE);
     const canBind = canListSchemas && canCallRoute("PUT", COMPLIANCE_BIND_DATABASE_API_ROUTE);
     const canUnbind = canListSchemas && canCallRoute("DELETE", COMPLIANCE_BIND_DATABASE_API_ROUTE);
+    // The breadcrumb and asset names link to the assets and asset pages only when the caller may
+    // open them.
+    const { canOpenDatabaseAssets, canOpenAsset } = useAssetPageAccess();
     const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
     const [loadingSchemas, setLoadingSchemas] = useState(false);
     const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
@@ -233,11 +237,21 @@ const DatabaseCompliancePage: React.FC = () => {
     return (
         <SpaceBetween size="l">
             <BreadcrumbGroup
-                items={[
-                    { text: Synonyms.Databases, href: "#/databases" },
-                    { text: databaseId || "", href: `#/databases/${databaseId}/assets/` },
-                    { text: "Compliance", href: "" },
-                ]}
+                items={
+                    canOpenDatabaseAssets
+                        ? [
+                              { text: Synonyms.Databases, href: "#/databases" },
+                              {
+                                  text: databaseId || "",
+                                  href: `#/databases/${databaseId}/assets/`,
+                              },
+                              { text: "Compliance", href: "" },
+                          ]
+                        : [
+                              { text: Synonyms.Databases, href: "#/databases" },
+                              { text: `${databaseId || ""} Compliance`, href: "" },
+                          ]
+                }
             />
 
             {error && (
@@ -455,11 +469,14 @@ const DatabaseCompliancePage: React.FC = () => {
                         {
                             id: "assetName",
                             header: `${Synonyms.Asset} Name`,
-                            cell: (item: any) => (
-                                <Link href={`#/databases/${databaseId}/assets/${item.assetId}`}>
-                                    {item.assetName || item.assetId}
-                                </Link>
-                            ),
+                            cell: (item: any) =>
+                                canOpenAsset ? (
+                                    <Link href={`#/databases/${databaseId}/assets/${item.assetId}`}>
+                                        {item.assetName || item.assetId}
+                                    </Link>
+                                ) : (
+                                    item.assetName || item.assetId
+                                ),
                             sortingField: "assetName",
                         },
                         {

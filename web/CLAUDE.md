@@ -174,7 +174,8 @@ web/
       utils/                  # utils.ts fileSize.ts
 
     constants/uploadLimits.ts
-    hooks/                  # usePageTitle.ts, useThemeSettings.ts
+    hooks/                  # usePageTitle.ts, useThemeSettings.ts,
+                            #   useAssetPageAccess.ts (may the caller open an assets/asset page)
     layout/Navigation.tsx   # Left sidebar navigation
 
     utils/

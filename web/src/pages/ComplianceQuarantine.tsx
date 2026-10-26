@@ -22,8 +22,11 @@ import {
 } from "../services/ComplianceService";
 import ReasonModal from "../components/compliance/ReasonModal";
 import { ComplianceStateBadge } from "../components/compliance/complianceStateBadge";
+import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 
 const ComplianceQuarantine: React.FC = () => {
+    // Asset names link to the asset page only when the caller may open it.
+    const { canOpenAsset } = useAssetPageAccess();
     const [items, setItems] = useState<QuarantinedAsset[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -180,11 +183,16 @@ const ComplianceQuarantine: React.FC = () => {
                     {
                         id: "assetName",
                         header: `${Synonyms.Asset} Name`,
-                        cell: (item) => (
-                            <Link href={`#/databases/${item.databaseId}/assets/${item.assetId}`}>
-                                {item.assetName || item.assetId}
-                            </Link>
-                        ),
+                        cell: (item) =>
+                            canOpenAsset ? (
+                                <Link
+                                    href={`#/databases/${item.databaseId}/assets/${item.assetId}`}
+                                >
+                                    {item.assetName || item.assetId}
+                                </Link>
+                            ) : (
+                                item.assetName || item.assetId
+                            ),
                         sortingField: "assetName",
                     },
                     {

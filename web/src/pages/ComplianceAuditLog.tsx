@@ -20,6 +20,7 @@ import {
     AuditEntry,
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../services/ComplianceService";
+import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 
 /** Every event type the audit trail records, in the order the filter offers them. */
 export const eventTypeOptions: SelectProps.Option[] = [
@@ -40,6 +41,8 @@ export const eventTypeOptions: SelectProps.Option[] = [
 ];
 
 const ComplianceAuditLog: React.FC = () => {
+    // Asset ids link to the asset page only when the caller may open it.
+    const { canOpenAsset } = useAssetPageAccess();
     const [items, setItems] = useState<AuditEntry[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -189,7 +192,7 @@ const ComplianceAuditLog: React.FC = () => {
                         id: "assetId",
                         header: Synonyms.Asset,
                         cell: (item) =>
-                            item.assetId && item.assetId !== "*" ? (
+                            item.assetId && item.assetId !== "*" && canOpenAsset ? (
                                 <Link
                                     href={`#/databases/${item.databaseId}/assets/${item.assetId}`}
                                 >

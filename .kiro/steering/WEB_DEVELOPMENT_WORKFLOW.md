@@ -141,7 +141,8 @@ web/
 
     common/                 # Shared utilities, helpers, and feature-switch constants
     constants/uploadLimits.ts
-    hooks/                  # usePageTitle.ts, useThemeSettings.ts
+    hooks/                  # usePageTitle.ts, useThemeSettings.ts,
+                            #   useAssetPageAccess.ts (may the caller open an assets/asset page)
     layout/
       Navigation.tsx        # Left sidebar navigation
     utils/

@@ -16,6 +16,15 @@ jest.mock("../services/ComplianceService", () => ({
     grantException: jest.fn(),
 }));
 
+// The routes the caller may call, as "METHOD path-template" strings.
+let mockAllowed: string[] = [];
+jest.mock("../features/orchestration/permissions/useAllowedRoutes", () => ({
+    useAllowedRoutes: () => ({
+        loading: false,
+        can: (method: string, path: string) => mockAllowed.includes(`${method} ${path}`),
+    }),
+}));
+
 const service = () =>
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     require("../services/ComplianceService");
@@ -34,6 +43,30 @@ const quarantined = (assetId: string) => ({
 describe("ComplianceQuarantine", () => {
     beforeEach(() => {
         jest.clearAllMocks();
+        mockAllowed = [];
+    });
+
+    it("shows asset names as text to a caller who may not open the asset page", async () => {
+        service().fetchQuarantinedAssets.mockResolvedValue([
+            true,
+            { quarantinedAssets: [quarantined("asset-1")], nextToken: undefined },
+        ]);
+        render(<ComplianceQuarantine />);
+        const name = await screen.findByText("Name of asset-1");
+        expect(name.closest("a")).toBeNull();
+    });
+
+    it("links asset names to a caller who may open the asset page", async () => {
+        mockAllowed = ["GET /database/{databaseId}/assets/{assetId}"];
+        service().fetchQuarantinedAssets.mockResolvedValue([
+            true,
+            { quarantinedAssets: [quarantined("asset-1")], nextToken: undefined },
+        ]);
+        render(<ComplianceQuarantine />);
+        expect(await screen.findByRole("link", { name: "Name of asset-1" })).toHaveAttribute(
+            "href",
+            "#/databases/db1/assets/asset-1"
+        );
     });
 
     it("pages the listing with the backend token", async () => {

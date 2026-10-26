@@ -58,6 +58,7 @@ const ADMINISTRATOR = [
     "DELETE /database/{databaseId}",
     "GET /buckets",
     "POST /search",
+    "GET /database/{databaseId}/metadata",
 ];
 
 const nameCell = () => screen.getByText("db1");
@@ -166,6 +167,24 @@ describe(`${Synonyms.Databases} page name link to the ${Synonyms.assets} page`, 
         mount();
         await screen.findByText("db1");
         expect(nameCell().closest("a")).toHaveAttribute("href", "#/databases/db1/compliance");
+    });
+});
+
+describe(`${Synonyms.Databases} page Metadata link`, () => {
+    // The Metadata link opens a modal, so it has no href and renders with the button role.
+    it("is not shown to a caller who may not read the database's metadata", async () => {
+        mockAllowed = LIST_ONLY;
+        mount();
+        await screen.findByText("db1");
+        expect(screen.queryByRole("button", { name: "Metadata" })).not.toBeInTheDocument();
+        expect(screen.queryByText("Metadata")).not.toBeInTheDocument();
+    });
+
+    it("is shown to a caller who may read the database's metadata", async () => {
+        mockAllowed = [...LIST_ONLY, "GET /database/{databaseId}/metadata"];
+        mount();
+        await screen.findByText("db1");
+        expect(screen.getByRole("button", { name: "Metadata" })).toBeInTheDocument();
     });
 });
 
