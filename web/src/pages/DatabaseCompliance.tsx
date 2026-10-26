@@ -42,6 +42,7 @@ import { useAllowedRoutes } from "../features/orchestration/permissions/useAllow
 import EvaluationHistoryModal from "../components/compliance/EvaluationHistoryModal";
 import { schemaSourceLabel } from "../components/compliance/complianceStateBadge";
 import RevokeExceptionModal from "../components/compliance/RevokeExceptionModal";
+import { ROW_ACTIONS_STICKY_COLUMNS } from "../components/compliance/rowActions";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 
 // The routes behind the database binding control (backend/backend/common/apiRoutes.py): the
@@ -71,8 +72,11 @@ export const evaluateAllMessage = (result: EvaluateDatabaseResponse): string => 
     return parts.join("; ") + ".";
 };
 
-/** Width (px) of the asset rows' Actions column: History and Revoke exception side by side. */
-export const ASSET_ROW_ACTIONS_COLUMN_WIDTH = 260;
+/**
+ * Width (px) of the asset rows' Actions column: the History and Revoke exception inline links side
+ * by side (about 180 px of labels and gap) with the cell padding. See ROW_ACTIONS_STICKY_COLUMNS.
+ */
+export const ASSET_ROW_ACTIONS_COLUMN_WIDTH = 240;
 
 const DatabaseCompliancePage: React.FC = () => {
     const { databaseId } = useParams();
@@ -506,6 +510,8 @@ const DatabaseCompliancePage: React.FC = () => {
                 }
             >
                 <Table
+                    wrapLines
+                    stickyColumns={ROW_ACTIONS_STICKY_COLUMNS}
                     loading={loading}
                     items={pageAssets}
                     pagination={
@@ -590,10 +596,10 @@ const DatabaseCompliancePage: React.FC = () => {
                                       width: ASSET_ROW_ACTIONS_COLUMN_WIDTH,
                                       minWidth: ASSET_ROW_ACTIONS_COLUMN_WIDTH,
                                       cell: (item: any) => (
-                                          <SpaceBetween direction="horizontal" size="xs">
+                                          <SpaceBetween direction="horizontal" size="s">
                                               {canViewHistory && (
                                                   <Button
-                                                      variant="normal"
+                                                      variant="inline-link"
                                                       ariaLabel={`Evaluation history of ${
                                                           item.assetName || item.assetId
                                                       }`}
@@ -605,7 +611,7 @@ const DatabaseCompliancePage: React.FC = () => {
                                               {canRevokeException &&
                                                   item.complianceState === "exception" && (
                                                       <Button
-                                                          variant="normal"
+                                                          variant="inline-link"
                                                           ariaLabel={`Revoke the exception of ${
                                                               item.assetName || item.assetId
                                                           }`}

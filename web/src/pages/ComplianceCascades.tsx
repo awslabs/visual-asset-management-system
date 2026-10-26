@@ -21,6 +21,7 @@ import {
     CascadeRecord,
 } from "../services/ComplianceService";
 import ReasonModal from "../components/compliance/ReasonModal";
+import { ROW_ACTIONS_STICKY_COLUMNS } from "../components/compliance/rowActions";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
 
 const statusIndicatorMap: Record<string, { type: string; label: string }> = {
@@ -73,10 +74,10 @@ export const cascadeProgress = (record: CascadeRecord | null): string | null => 
 };
 
 /**
- * Width (px) of the Actions column: room for the Approve and Reject buttons side by side, so neither
- * label wraps when the table is narrow.
+ * Width (px) of the Actions column: the Approve and Reject inline links side by side (about 120 px
+ * of labels and gap) with the cell padding. See ROW_ACTIONS_STICKY_COLUMNS.
  */
-export const CASCADE_ACTIONS_COLUMN_WIDTH = 220;
+export const CASCADE_ACTIONS_COLUMN_WIDTH = 180;
 
 // The routes behind the row actions (backend/backend/common/apiRoutes.py); each is offered only to a
 // caller who may call it, none while the routes load.
@@ -274,6 +275,8 @@ const ComplianceCascades: React.FC = () => {
             {Object.values(tracked).map(renderTracked)}
 
             <Table
+                wrapLines
+                stickyColumns={ROW_ACTIONS_STICKY_COLUMNS}
                 header={
                     <Header
                         variant="h1"
@@ -370,10 +373,10 @@ const ComplianceCascades: React.FC = () => {
                                   minWidth: CASCADE_ACTIONS_COLUMN_WIDTH,
                                   cell: (item: CascadeRecord) =>
                                       item.state === "pending_approval" ? (
-                                          <SpaceBetween direction="horizontal" size="xs">
+                                          <SpaceBetween direction="horizontal" size="s">
                                               {canApprove && (
                                                   <Button
-                                                      variant="primary"
+                                                      variant="inline-link"
                                                       onClick={() => setApproveTarget(item)}
                                                   >
                                                       Approve
@@ -381,7 +384,7 @@ const ComplianceCascades: React.FC = () => {
                                               )}
                                               {canReject && (
                                                   <Button
-                                                      variant="normal"
+                                                      variant="inline-link"
                                                       onClick={() => setRejectTarget(item)}
                                                   >
                                                       Reject

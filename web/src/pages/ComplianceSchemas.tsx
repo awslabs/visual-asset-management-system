@@ -31,6 +31,7 @@ import {
     ComplianceSchema,
 } from "../services/ComplianceService";
 import ComplianceSchemaEditor from "../components/compliance/ComplianceSchemaEditor";
+import { ROW_ACTIONS_STICKY_COLUMNS } from "../components/compliance/rowActions";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
 import { EXAMPLE_PIPELINE_RULE } from "../components/compliance/complianceSchemaRules";
 
@@ -41,11 +42,12 @@ export const COMPLIANCE_SCHEMA_API_ROUTE = "/compliance/schemas/{schemaName}";
 export const COMPLIANCE_SWEEP_API_ROUTE = "/compliance/sweep/{schemaName}";
 
 /**
- * Width (px) of the Actions column: room for the Edit and Sweep buttons side by side. A width alone
- * is a preference the table shrinks on a narrow window (the labels then wrapped one letter per
- * line at 768 px); the same minimum keeps it.
+ * Width (px) of the Actions column: the Edit and Sweep inline links side by side (about 85 px of
+ * labels and gap) with the cell padding. A width alone is a preference the table shrinks on a narrow
+ * window (the labels then wrapped one letter per line at 768 px); the same minimum keeps it. See
+ * ROW_ACTIONS_STICKY_COLUMNS.
  */
-export const SCHEMA_ACTIONS_COLUMN_WIDTH = 180;
+export const SCHEMA_ACTIONS_COLUMN_WIDTH = 150;
 
 /** Shown on a schema row whose body is not a vams-rules-v1 document. */
 export const LEGACY_SCHEMA_LABEL = "Legacy — cannot be bound or evaluated";
@@ -617,6 +619,8 @@ export default function ComplianceSchemas() {
 
                 <Container>
                     <Table
+                        wrapLines
+                        stickyColumns={ROW_ACTIONS_STICKY_COLUMNS}
                         loading={loading}
                         items={filteredSchemas}
                         empty={
@@ -683,10 +687,10 @@ export default function ComplianceSchemas() {
                                               const legacy =
                                                   complianceSchemaFormat(item) === "legacy";
                                               return (
-                                                  <SpaceBetween direction="horizontal" size="xs">
+                                                  <SpaceBetween direction="horizontal" size="s">
                                                       {canUpdate && (
                                                           <Button
-                                                              variant="link"
+                                                              variant="inline-link"
                                                               disabled={legacy}
                                                               onClick={() => openEditModal(item)}
                                                           >
@@ -695,7 +699,7 @@ export default function ComplianceSchemas() {
                                                       )}
                                                       {canSweep && (
                                                           <Button
-                                                              variant="link"
+                                                              variant="inline-link"
                                                               disabled={legacy}
                                                               onClick={() =>
                                                                   handleSweep(item.schemaName)

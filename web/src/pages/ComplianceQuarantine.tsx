@@ -24,12 +24,13 @@ import ReasonModal from "../components/compliance/ReasonModal";
 import { ComplianceStateBadge } from "../components/compliance/complianceStateBadge";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
+import { ROW_ACTIONS_STICKY_COLUMNS } from "../components/compliance/rowActions";
 
 /**
- * Width (px) of the Actions column: room for the Release and Exception buttons side by side.
- * Without it the table squeezed the column until each button label wrapped one letter per line.
+ * Width (px) of the Actions column: the Release and Exception inline links side by side (about
+ * 140 px of labels and gap) with the cell padding. See ROW_ACTIONS_STICKY_COLUMNS.
  */
-export const QUARANTINE_ACTIONS_COLUMN_WIDTH = 240;
+export const QUARANTINE_ACTIONS_COLUMN_WIDTH = 200;
 
 // The routes behind the row actions (backend/backend/common/apiRoutes.py); each is offered only to a
 // caller who may call it, none while the routes load.
@@ -163,6 +164,8 @@ const ComplianceQuarantine: React.FC = () => {
             )}
 
             <Table
+                wrapLines
+                stickyColumns={ROW_ACTIONS_STICKY_COLUMNS}
                 header={
                     <Header
                         variant="h1"
@@ -271,10 +274,10 @@ const ComplianceQuarantine: React.FC = () => {
                                   width: QUARANTINE_ACTIONS_COLUMN_WIDTH,
                                   minWidth: QUARANTINE_ACTIONS_COLUMN_WIDTH,
                                   cell: (item: QuarantinedAsset) => (
-                                      <SpaceBetween direction="horizontal" size="xs">
+                                      <SpaceBetween direction="horizontal" size="s">
                                           {canRelease && (
                                               <Button
-                                                  variant="normal"
+                                                  variant="inline-link"
                                                   onClick={() => setReleaseTarget(item)}
                                               >
                                                   Release
@@ -282,7 +285,7 @@ const ComplianceQuarantine: React.FC = () => {
                                           )}
                                           {canGrantException && (
                                               <Button
-                                                  variant="normal"
+                                                  variant="inline-link"
                                                   onClick={() => setExceptionTarget(item)}
                                               >
                                                   Exception

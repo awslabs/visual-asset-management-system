@@ -150,7 +150,8 @@ web/
                             #   EvaluationHistoryModal.tsx (one asset's paged evaluation history with schema
                             #   version and rule results, opened from the database overview);
                             #   RevokeExceptionModal.tsx (the revoke confirmation shared by the asset tab
-                            #   and the database overview)
+                            #   and the database overview); rowActions.ts (ROW_ACTIONS_STICKY_COLUMNS: the
+                            #   compliance tables pin their inline-link Actions column last and wrap the rest)
       createupdate/         # CreateDatabase.tsx, UpdateAsset.tsx + form definitions
       filemanager/          # File tree and file operations; EnhancedFileManager lazy-loads the
                             #   orchestration execution quick view for a file's "View execution" link
