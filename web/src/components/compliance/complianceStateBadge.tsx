@@ -9,6 +9,7 @@ import StatusIndicator, {
     StatusIndicatorProps,
 } from "@cloudscape-design/components/status-indicator";
 import { ComplianceStateValue } from "../../services/ComplianceService";
+import Synonyms from "../../synonyms";
 
 export interface ComplianceStateIndicator {
     type: StatusIndicatorProps.Type;
@@ -16,6 +17,16 @@ export interface ComplianceStateIndicator {
     /** Color of the state where it is shown as a Cloudscape Badge rather than a status indicator. */
     badgeColor: NonNullable<BadgeProps["color"]>;
 }
+
+/**
+ * Where an asset's schema binding comes from, as the compliance pages say it: `database` is the
+ * database's binding the asset inherits, `asset` a binding set on the asset itself.
+ */
+export const schemaSourceLabel = (source: string | undefined | null): string => {
+    if (source === "database") return `Inherited from the ${Synonyms.database}`;
+    if (source === "asset") return `Set on the ${Synonyms.asset}`;
+    return source || "-";
+};
 
 /** Indicator type, label and badge color of every compliance state, as rendered wherever a state is shown. */
 export const COMPLIANCE_STATE_INDICATORS: Record<ComplianceStateValue, ComplianceStateIndicator> = {

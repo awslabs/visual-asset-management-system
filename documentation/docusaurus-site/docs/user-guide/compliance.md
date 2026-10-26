@@ -110,7 +110,7 @@ The **Compliance Schemas** page lists every schema you may read with its name, d
 
 ### Adding rules in the Visual Builder
 
-In the schema editor, open the **Visual Builder** tab and choose a rule type from **Add rule**. Each new rule starts from a working example that you then adjust; **Add check** adds a check to a rule and **Remove check** removes one. The builder shows the validation message the API would return next to the field it concerns. Path, name and description patterns are regular expressions — see [Path and attribute patterns](../concepts/compliance.md#path-and-attribute-patterns) — and are checked as such when you save the schema; a pattern the API refuses is reported at the top of the dialog, which scrolls the message into view.
+In the schema editor, open the **Visual Builder** tab and choose a rule type from **Add rule**. Each new rule starts from a working example that you then adjust; **Add check** adds a check to a rule and **Remove check** removes one. The builder shows the validation message the API would return next to the field it concerns. Every rule needs a name of its own: while a rule name is empty or repeated, **Create** and **Save** are refused with that message, since the schema body keys rules by name and would drop or merge the rule. Path, name and description patterns are regular expressions — see [Path and attribute patterns](../concepts/compliance.md#path-and-attribute-patterns) — and are checked as such when you save the schema; a pattern the API refuses is reported at the top of the dialog, which scrolls the message into view.
 
 | Rule type                 | What you edit in the builder                                                                                                                                                                                                                                                                                     |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -138,6 +138,7 @@ A metadata rule's **Scope** decides what it validates. Choose the metadata schem
 | **File attributes**     | The attributes of every current file of the asset | **Include paths (optional)**, **Exclude paths (optional)** |
 | **Asset link metadata** | The metadata of every asset link of the asset     | **Link direction**, **Relationship type**                  |
 
+**Link direction** offers **Both directions** (the default), **Parents** and **Children**. A body that sets `linkDirection` to `related` also reads both directions, and the builder shows it as **Both directions**.
 For the two file scopes, every current, non-archived file the schema's file type restriction admits is checked, including files that carry no metadata yet — such a file fails a required field. **Include paths** and **Exclude paths** take one regular expression per line, matched against the file path without its leading `/`: when include paths are given, only matching files are checked; files matching an exclude path are skipped (for example `\.previewFile\.` for preview images). For **Asset link metadata**, **Link direction** chooses the links to this asset (**Parents**), from it (**Children**) or both, and **Relationship type** chooses **Parent-child**, **Related** or either; an asset with more than 500 such links is reported as not evaluated. Every file or link checked must pass for the rule to pass, and the violation names up to ten that failed. Switching the scope removes the filters the new scope does not take.
 
 :::warning[Legacy schemas]
@@ -453,7 +454,8 @@ An asset that fails a rule with `quarantine` enforcement enters the `quarantined
 
 1. In the quarantine list, locate the asset you want to release.
 2. Choose **Release**.
-3. The asset state changes from `quarantined` to `compliant`.
+3. Enter the reason for the release in the confirmation dialog. It is required and recorded in the audit log.
+4. Choose **Release asset**. The asset state changes from `quarantined` to `compliant`.
 
 :::tip[Release by re-evaluation]
 Fixing the underlying issue — adding the missing metadata, creating the required parent link — and evaluating the asset again clears the quarantine when every `quarantine`-level rule passes. No manual release is needed in that case.
@@ -488,7 +490,9 @@ A cascade re-evaluates the downstream assets of a parent — every descendant li
 ### Reviewing pending cascades
 
 1. Navigate to **Compliance > Cascade Approvals** in the left sidebar.
-2. The page lists cascades in `pending_approval` with the asset that triggered them, the reason, and the approval timeout timestamp recorded 24 hours after creation.
+2. The page lists cascades in `pending_approval` with the asset that triggered them, the reason, and the **Approval timeout**: 24 hours after creation.
+
+A cascade nobody approves or rejects before its approval timeout is aborted with the reason `approval timed out` and recorded as `cascade_timed_out`. It leaves the list, and the next evaluation of its parent may open a new one.
 
 ### Approving a cascade
 
@@ -537,6 +541,7 @@ The compliance audit log records every compliance action across the deployment.
 | `cascade_auto_triggered`       | A cascade was opened after the evaluation of an asset with children                                    |
 | `cascade_approved`             | A pending cascade was approved and executed                                                            |
 | `cascade_rejected`             | A pending cascade was rejected                                                                         |
+| `cascade_timed_out`            | A pending cascade reached its approval timeout unapproved and was aborted                              |
 | `cascade_completed`            | A cascade finished evaluating its downstream assets                                                    |
 | `asset_deleted`                | An asset was permanently deleted and its compliance record removed                                     |
 

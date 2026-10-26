@@ -502,6 +502,30 @@ class TestOnePendingCascadePerTriggerAsset:
         pending = [c for c in mocks["cascades"] if c["state"] == "pending_approval"]
         assert len(pending) == 1 and pending[0]["cascadeId"] != "c-1"
 
+    def test_a_pending_cascade_past_its_approval_timeout_is_aborted_and_a_new_one_opens(self):
+        """A cascade nobody approved in time no longer blocks its parent for ever: the pending check
+        aborts it ("approval timed out") and the evaluation opens a fresh one."""
+        expired = dict(_cascade_row("c-1"), approvalTimeoutAt=(
+            datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat())
+        mocks = self._run_with_cascades(expired)
+        by_id = {c["cascadeId"]: c for c in mocks["cascades"]}
+        assert by_id["c-1"]["state"] == "aborted"
+        assert by_id["c-1"]["abortReason"] == "approval timed out"
+        assert "completedAt" in by_id["c-1"]
+        pending = [c for c in mocks["cascades"] if c["state"] == "pending_approval"]
+        assert len(pending) == 1 and pending[0]["cascadeId"] != "c-1"
+        events = [call.kwargs["event_type"] for call in mocks["audit"].call_args_list]
+        assert events == ["cascade_timed_out", "cascade_auto_triggered"]
+        assert mocks["audit"].call_args_list[0].kwargs["cascade_id"] == "c-1"
+
+    def test_a_pending_cascade_within_its_approval_timeout_still_keeps_a_second_from_opening(self):
+        current = dict(_cascade_row("c-1"), approvalTimeoutAt=(
+            datetime.now(timezone.utc) + timedelta(hours=1)).isoformat())
+        mocks = self._run_with_cascades(current)
+        assert [(c["cascadeId"], c["state"]) for c in mocks["cascades"]] == [
+            ("c-1", "pending_approval")]
+        mocks["audit"].assert_not_called()
+
 
 def _file_message(key=f"{ASSET}/model/part.glb", event_time="2026-03-01T12:00:00.000Z",
                   version_id="v1", bucket="asset-bucket", wrapped=False):

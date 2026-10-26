@@ -37,6 +37,9 @@ export const QUARANTINE_RELEASE_API_ROUTE = "/compliance/quarantine/{databaseId}
 export const QUARANTINE_EXCEPTION_API_ROUTE =
     "/compliance/quarantine/{databaseId}/{assetId}/exception";
 
+/** How an asset is named in the page's messages: its name, else its id (never `db:asset`). */
+const assetLabel = (item: QuarantinedAsset): string => item.assetName || item.assetId;
+
 const ComplianceQuarantine: React.FC = () => {
     // Asset names link to the asset page only when the caller may open it.
     const { canOpenAsset } = useAssetPageAccess();
@@ -50,6 +53,8 @@ const ComplianceQuarantine: React.FC = () => {
     const [selectedItems, setSelectedItems] = useState<QuarantinedAsset[]>([]);
     const [exceptionTarget, setExceptionTarget] = useState<QuarantinedAsset | null>(null);
     const [granting, setGranting] = useState(false);
+    const [releaseTarget, setReleaseTarget] = useState<QuarantinedAsset | null>(null);
+    const [releasing, setReleasing] = useState(false);
 
     // Server-side token paging: tokens[i] is the startingToken that fetches page i
     // (tokens[0] is undefined). hasMore tracks whether the loaded page reported a
@@ -104,12 +109,22 @@ const ComplianceQuarantine: React.FC = () => {
         loadPage(newIndex - 1, tokens[newIndex - 1]);
     };
 
-    const handleRelease = async (item: QuarantinedAsset) => {
+    // A release needs a reason, as on the asset's Compliance tab; it is recorded in the audit log.
+    const handleRelease = async (reason: string) => {
+        if (!releaseTarget) return;
+        const item = releaseTarget;
+        setReleasing(true);
         setActionMessage(null);
         setError(null);
-        const [success, message] = await releaseFromQuarantine(item.databaseId, item.assetId);
+        const [success, message] = await releaseFromQuarantine(
+            item.databaseId,
+            item.assetId,
+            reason
+        );
+        setReleasing(false);
+        setReleaseTarget(null);
         if (success) {
-            setActionMessage(message);
+            setActionMessage(`${assetLabel(item)} released from quarantine.`);
             await loadData();
         } else {
             setError(message);
@@ -118,7 +133,8 @@ const ComplianceQuarantine: React.FC = () => {
 
     const handleException = async (reason: string) => {
         if (!exceptionTarget) return;
-        const { databaseId, assetId } = exceptionTarget;
+        const target = exceptionTarget;
+        const { databaseId, assetId } = target;
         setGranting(true);
         setActionMessage(null);
         setError(null);
@@ -126,7 +142,7 @@ const ComplianceQuarantine: React.FC = () => {
         setGranting(false);
         setExceptionTarget(null);
         if (success) {
-            setActionMessage(message);
+            setActionMessage(`Exception granted for ${assetLabel(target)}.`);
             await loadData();
         } else {
             setError(message);
@@ -259,7 +275,7 @@ const ComplianceQuarantine: React.FC = () => {
                                           {canRelease && (
                                               <Button
                                                   variant="normal"
-                                                  onClick={() => handleRelease(item)}
+                                                  onClick={() => setReleaseTarget(item)}
                                               >
                                                   Release
                                               </Button>
@@ -278,6 +294,17 @@ const ComplianceQuarantine: React.FC = () => {
                           ]
                         : []),
                 ]}
+            />
+
+            <ReasonModal
+                visible={releaseTarget !== null}
+                header={`Release ${releaseTarget ? assetLabel(releaseTarget) : ""} from quarantine`}
+                label="Reason for release"
+                description={`Why this ${Synonyms.asset} leaves quarantine. Recorded in the compliance audit log; the next evaluation may quarantine it again.`}
+                confirmLabel={`Release ${Synonyms.asset}`}
+                loading={releasing}
+                onConfirm={handleRelease}
+                onDismiss={() => setReleaseTarget(null)}
             />
 
             <ReasonModal

@@ -906,6 +906,86 @@ def write_audit(
             f"Failed writing audit entry {event_type} for {database_id}:{asset_id}: {e}")
 
 
+# --- Cascade approval timeout ---
+
+# State of a cascade awaiting approval, and the state a timed-out one is moved to.
+CASCADE_STATE_PENDING_APPROVAL = "pending_approval"
+CASCADE_STATE_ABORTED = "aborted"
+# abortReason of a cascade that was still awaiting approval at its `approvalTimeoutAt`.
+CASCADE_APPROVAL_TIMED_OUT_REASON = "approval timed out"
+# Audit event type written when such a cascade is aborted.
+AUDIT_CASCADE_TIMED_OUT = "cascade_timed_out"
+
+
+def cascade_approval_timed_out(cascade: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+    """Whether a cascade is still `pending_approval` at or after its `approvalTimeoutAt`. A
+    cascade without a timeout (created with `requireApproval: false`) or with an unreadable one
+    never times out."""
+    if cascade.get("state") != CASCADE_STATE_PENDING_APPROVAL:
+        return False
+    timeout = cascade.get("approvalTimeoutAt")
+    if not timeout:
+        return False
+    try:
+        deadline = datetime.fromisoformat(str(timeout))
+    except ValueError:
+        logger.warning(f"Cascade {cascade.get('cascadeId')} has an unreadable approvalTimeoutAt")
+        return False
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    return (now or datetime.now(timezone.utc)) >= deadline
+
+
+def expire_timed_out_cascade(cascade_table, cascade: Dict[str, Any],
+                             now: Optional[datetime] = None) -> Dict[str, Any]:
+    """The cascade as it stands once its approval timeout is enforced.
+
+    A cascade still `pending_approval` past its `approvalTimeoutAt` is aborted with abortReason
+    "approval timed out" and a `cascade_timed_out` audit entry. The update is conditional on the
+    row still being `pending_approval` with the same timeout, so of the readers that find it
+    timed out (a listing, a get, an approve or reject, the trigger's pending check) exactly one
+    aborts it and writes the entry; the others re-read the row it left. Any other cascade is
+    returned unchanged."""
+    if not cascade_approval_timed_out(cascade, now):
+        return cascade
+    cascade_id = cascade.get("cascadeId")
+    completed_at = (now or datetime.now(timezone.utc)).isoformat()
+    try:
+        response = cascade_table.update_item(
+            Key={"cascadeId": cascade_id},
+            UpdateExpression="SET #s = :aborted, abortReason = :reason, completedAt = :now",
+            ExpressionAttributeNames={"#s": "state"},
+            ExpressionAttributeValues={
+                ":aborted": CASCADE_STATE_ABORTED,
+                ":reason": CASCADE_APPROVAL_TIMED_OUT_REASON,
+                ":now": completed_at,
+                ":pending": CASCADE_STATE_PENDING_APPROVAL,
+                ":timeout": cascade.get("approvalTimeoutAt"),
+            },
+            ConditionExpression="#s = :pending AND approvalTimeoutAt = :timeout",
+            ReturnValues="ALL_NEW",
+        )
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
+        # Another reader aborted it, or it was approved or rejected first: return what it left.
+        current = cascade_table.get_item(Key={"cascadeId": cascade_id}).get("Item")
+        return current or cascade
+    write_audit(
+        cascade.get("triggeredByDatabaseId", ""),
+        cascade.get("triggeredByAssetId", ""),
+        event_type=AUDIT_CASCADE_TIMED_OUT,
+        actor=SYSTEM_ACTOR,
+        cascade_id=cascade_id,
+        details={"reason": CASCADE_APPROVAL_TIMED_OUT_REASON,
+                 "approvalTimeoutAt": cascade.get("approvalTimeoutAt")},
+    )
+    logger.info(f"Cascade {cascade_id} aborted: approval timed out")
+    return response.get("Attributes") or {**cascade, "state": CASCADE_STATE_ABORTED,
+                                          "abortReason": CASCADE_APPROVAL_TIMED_OUT_REASON,
+                                          "completedAt": completed_at}
+
+
 # --- Pipeline-rule execution launch ---
 
 

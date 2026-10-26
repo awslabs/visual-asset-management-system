@@ -6,7 +6,8 @@
 import React from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import ComplianceSchemas, { LEGACY_SCHEMA_LABEL } from "./ComplianceSchemas";
+import Synonyms from "../synonyms";
+import ComplianceSchemas, { LEGACY_SCHEMA_LABEL, sweepMessage } from "./ComplianceSchemas";
 
 jest.mock("@monaco-editor/react", () => ({
     __esModule: true,
@@ -133,7 +134,7 @@ describe("ComplianceSchemas row actions", () => {
         const sweep = () =>
             userEvent.click(within(rowOf("cad-quality")).getByRole("button", { name: "Sweep" }));
         await sweep();
-        const successText = 'Sweep triggered for schema "cad-quality"';
+        const successText = `Sweep of schema "cad-quality": 0 ${Synonyms.assets} evaluated.`;
         expect(await screen.findByText(successText)).toBeInTheDocument();
         await sweep();
         expect(await screen.findByText("Sweep failed for that schema")).toBeInTheDocument();
@@ -185,5 +186,58 @@ describe("ComplianceSchemas save errors", () => {
         expect(service().createComplianceSchema).toHaveBeenCalledTimes(1);
         expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
         expect(scrollIntoView.mock.instances[scrollIntoView.mock.instances.length - 1]).toBe(alert);
+    });
+});
+
+describe("ComplianceSchemas sweep message", () => {
+    it("reports the evaluated, skipped and remaining counts", () => {
+        expect(
+            sweepMessage("std", {
+                assetsTriggered: [{}, {}, {}],
+                skipped: 2,
+                assetsRemaining: 40,
+            })
+        ).toBe(
+            `Sweep of schema "std": 3 ${Synonyms.assets} evaluated; 2 skipped (in a ${Synonyms.database} you may not evaluate); 40 not reached yet; run the sweep again.`
+        );
+        expect(sweepMessage("std", { assetsTriggered: [{}] })).toBe(
+            `Sweep of schema "std": 1 ${Synonyms.asset} evaluated.`
+        );
+    });
+});
+
+describe("ComplianceSchemas rule-name errors", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    it("does not send Create while the builder shows a rule-name error", async () => {
+        service().fetchComplianceSchemas.mockResolvedValue([true, []]);
+        service().createComplianceSchema.mockResolvedValue([true, { schemaName: "s1" }]);
+        render(<ComplianceSchemas />);
+        await userEvent.click(await screen.findByRole("button", { name: "Create Schema" }));
+        const dialog = await screen.findByRole("dialog");
+        await userEvent.type(
+            within(dialog).getByPlaceholderText(/engineering-asset-standard/),
+            "s1"
+        );
+        await userEvent.click(within(dialog).getByRole("tab", { name: "Visual Builder" }));
+        const names = await within(dialog).findAllByPlaceholderText("rule-name");
+        expect(names.length).toBeGreaterThan(0);
+        await userEvent.clear(names[0]);
+        expect(within(dialog).getByText("Rule name is required")).toBeInTheDocument();
+
+        await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+        expect(
+            await within(dialog).findByText(
+                "Fix the rule names before saving: Rule name is required."
+            )
+        ).toBeInTheDocument();
+        expect(service().createComplianceSchema).not.toHaveBeenCalled();
+
+        await userEvent.type(names[0], "renamed-rule");
+        await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+        await waitFor(() => expect(service().createComplianceSchema).toHaveBeenCalledTimes(1));
+        expect(
+            Object.keys(service().createComplianceSchema.mock.calls[0][0].schemaBody.rules)
+        ).toContain("renamed-rule");
     });
 });

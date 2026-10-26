@@ -93,6 +93,8 @@ const ComplianceCascades: React.FC = () => {
     const [actionMessage, setActionMessage] = useState<string | null>(null);
     const [rejectTarget, setRejectTarget] = useState<CascadeRecord | null>(null);
     const [rejecting, setRejecting] = useState(false);
+    const [approveTarget, setApproveTarget] = useState<CascadeRecord | null>(null);
+    const [approving, setApproving] = useState(false);
     const [tracked, setTracked] = useState<Record<string, TrackedCascade>>({});
 
     const mountedRef = useRef(true);
@@ -171,10 +173,17 @@ const ComplianceCascades: React.FC = () => {
         });
     };
 
-    const handleApprove = async (cascadeId: string) => {
+    // Approve and Reject each take an optional reason; an empty one sends none (the API records
+    // "approved" / "rejected").
+    const handleApprove = async (reason: string) => {
+        if (!approveTarget) return;
+        const cascadeId = approveTarget.cascadeId;
+        setApproving(true);
         setActionMessage(null);
         setError(null);
-        const [success, result] = await approveCascade(cascadeId);
+        const [success, result] = await approveCascade(cascadeId, reason || undefined);
+        setApproving(false);
+        setApproveTarget(null);
         if (success && typeof result !== "string") {
             setActionMessage(
                 `${result.message}: execution started for cascade ${shortId(cascadeId)}.`
@@ -192,7 +201,7 @@ const ComplianceCascades: React.FC = () => {
         setRejecting(true);
         setActionMessage(null);
         setError(null);
-        const [success, message] = await rejectCascade(cascadeId, reason);
+        const [success, message] = await rejectCascade(cascadeId, reason || undefined);
         setRejecting(false);
         if (success) {
             setRejectTarget(null);
@@ -339,6 +348,15 @@ const ComplianceCascades: React.FC = () => {
                         sortingField: "createdAt",
                     },
                     {
+                        id: "approvalTimeoutAt",
+                        header: "Approval timeout",
+                        cell: (item) =>
+                            item.approvalTimeoutAt
+                                ? new Date(item.approvalTimeoutAt).toLocaleString()
+                                : "-",
+                        sortingField: "approvalTimeoutAt",
+                    },
+                    {
                         id: "actor",
                         header: "Actor",
                         cell: (item) => item.actor || "-",
@@ -356,7 +374,7 @@ const ComplianceCascades: React.FC = () => {
                                               {canApprove && (
                                                   <Button
                                                       variant="primary"
-                                                      onClick={() => handleApprove(item.cascadeId)}
+                                                      onClick={() => setApproveTarget(item)}
                                                   >
                                                       Approve
                                                   </Button>
@@ -380,12 +398,25 @@ const ComplianceCascades: React.FC = () => {
             />
 
             <ReasonModal
+                visible={approveTarget !== null}
+                header={`Approve cascade ${approveTarget ? shortId(approveTarget.cascadeId) : ""}`}
+                label="Reason for approval"
+                description="Recorded in the compliance audit log with the approval."
+                confirmLabel="Approve"
+                optional
+                loading={approving}
+                onConfirm={handleApprove}
+                onDismiss={() => setApproveTarget(null)}
+            />
+
+            <ReasonModal
                 visible={rejectTarget !== null}
                 header={`Reject cascade ${rejectTarget ? shortId(rejectTarget.cascadeId) : ""}`}
                 label="Reason for rejection"
                 description="Recorded in the compliance audit log with the rejection."
                 confirmLabel="Reject"
                 placeholder="Why this cascade must not run"
+                optional
                 loading={rejecting}
                 onConfirm={handleReject}
                 onDismiss={() => setRejectTarget(null)}

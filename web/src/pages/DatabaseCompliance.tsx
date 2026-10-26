@@ -40,6 +40,7 @@ import {
 } from "../components/compliance/complianceStateBadge";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
 import EvaluationHistoryModal from "../components/compliance/EvaluationHistoryModal";
+import { schemaSourceLabel } from "../components/compliance/complianceStateBadge";
 import RevokeExceptionModal from "../components/compliance/RevokeExceptionModal";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 
@@ -80,6 +81,9 @@ const DatabaseCompliancePage: React.FC = () => {
     const [loading, setLoading] = useState(true);
     const [sweeping, setSweeping] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // Whether the last overview read failed: the asset table then says nothing was loaded rather
+    // than that the database tracks no assets.
+    const [loadFailed, setLoadFailed] = useState(false);
     const [actionMessage, setActionMessage] = useState<string | null>(null);
 
     // The database's schema binding. The control is offered to a caller who may list schemas and
@@ -116,6 +120,7 @@ const DatabaseCompliancePage: React.FC = () => {
             if (!databaseId) return;
             setLoading(true);
             setError(null);
+            setLoadFailed(false);
             try {
                 const [overviewSuccess, overviewResult] = await fetchDatabaseComplianceOverview(
                     databaseId,
@@ -134,6 +139,7 @@ const DatabaseCompliancePage: React.FC = () => {
                         setHasMore(false);
                     }
                 } else {
+                    setLoadFailed(true);
                     setError(
                         typeof overviewResult === "string"
                             ? overviewResult
@@ -142,6 +148,7 @@ const DatabaseCompliancePage: React.FC = () => {
                     setHasMore(false);
                 }
             } catch (err: any) {
+                setLoadFailed(true);
                 setError(err?.message || "Failed to load compliance data");
             } finally {
                 setLoading(false);
@@ -265,7 +272,9 @@ const DatabaseCompliancePage: React.FC = () => {
         setRevoking(false);
         setRevokeTarget(null);
         if (success && typeof result !== "string") {
-            setActionMessage(result.message);
+            setActionMessage(
+                `Exception revoked for ${revokeTarget.assetName || revokeTarget.assetId}.`
+            );
             await loadData();
         } else {
             setError(typeof result === "string" ? result : "Failed to revoke exception");
@@ -411,7 +420,7 @@ const DatabaseCompliancePage: React.FC = () => {
                     </Header>
                 }
             >
-                <ColumnLayout columns={8} minColumnWidth={130} variant="text-grid">
+                <ColumnLayout columns={9} minColumnWidth={130} variant="text-grid">
                     <div>
                         <Box variant="awsui-key-label">Tracked {Synonyms.Assets}</Box>
                         <Box variant="awsui-value-large">{totalTracked}</Box>
@@ -449,12 +458,20 @@ const DatabaseCompliancePage: React.FC = () => {
                         </Box>
                     </div>
                     <div>
-                        <Box variant="awsui-key-label">Pending</Box>
+                        <Box variant="awsui-key-label">Pending Evaluation</Box>
                         <Box variant="awsui-value-large">
                             <StatusIndicator
                                 type={COMPLIANCE_STATE_INDICATORS.pending_evaluation.type}
                             >
                                 {summary?.pending_evaluation || 0}
+                            </StatusIndicator>
+                        </Box>
+                    </div>
+                    <div>
+                        <Box variant="awsui-key-label">Unknown</Box>
+                        <Box variant="awsui-value-large">
+                            <StatusIndicator type={COMPLIANCE_STATE_INDICATORS.unknown.type}>
+                                {summary?.unknown || 0}
                             </StatusIndicator>
                         </Box>
                     </div>
@@ -508,8 +525,9 @@ const DatabaseCompliancePage: React.FC = () => {
                     }
                     empty={
                         <Box textAlign="center" padding="l">
-                            No {Synonyms.assets} are being tracked for compliance in this{" "}
-                            {Synonyms.database}.
+                            {loadFailed
+                                ? `The ${Synonyms.asset} compliance states could not be loaded.`
+                                : `No ${Synonyms.assets} are being tracked for compliance in this ${Synonyms.database}.`}
                         </Box>
                     }
                     columnDefinitions={[
@@ -554,7 +572,7 @@ const DatabaseCompliancePage: React.FC = () => {
                         {
                             id: "schemaSource",
                             header: "Source",
-                            cell: (item: any) => item.schemaSource || "-",
+                            cell: (item: any) => schemaSourceLabel(item.schemaSource),
                             sortingField: "schemaSource",
                         },
                         {

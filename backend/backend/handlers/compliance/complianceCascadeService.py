@@ -11,6 +11,10 @@
 
 Cascade table (PK cascadeId; GSI StateIndex on state/createdAt).
 
+A cascade awaiting approval past its `approvalTimeoutAt` is aborted with abortReason
+"approval timed out" wherever it is read: the listing (which then omits it), a get, an approve or
+reject (refused), and the trigger's check for a pending cascade.
+
 A cascade runs in the executor Lambda (complianceCascadeExecutor), invoked asynchronously once
 the row is in the `executing` state; the request returns 202 and the client observes completion
 through GET /compliance/cascades/{cascadeId} (`state` executing -> completed | aborted).
@@ -72,6 +76,10 @@ CASCADE_STATE_ABORTED = "aborted"
 
 # A cascade awaiting approval expires after this many hours.
 CASCADE_APPROVAL_TIMEOUT_HOURS = 24
+
+# Message returned when an approve or reject finds the cascade past its approval timeout; the
+# cascade is aborted with abortReason "approval timed out" (store.expire_timed_out_cascade).
+CASCADE_TIMED_OUT_MESSAGE = "Cascade approval timed out; the cascade was aborted"
 
 # Message returned when the executor Lambda could not be invoked; the row is aborted with the reason.
 CASCADE_START_FAILED_MESSAGE = "Cascade could not be started"
@@ -317,6 +325,9 @@ def approve_cascade(event, cascade_id, request: ApproveCascadeRequestModel):
             body={"message": "Cascade not found or not in pending_approval state"}, event=event)
     if not _enforce_evaluation(cascade.get("triggeredByDatabaseId", ""), "POST"):
         return authorization_error()
+    if store.cascade_approval_timed_out(cascade):
+        store.expire_timed_out_cascade(cascade_table, cascade)
+        return general_error(body={"message": CASCADE_TIMED_OUT_MESSAGE}, event=event)
 
     actor = claims_and_roles["tokens"][0]
     reason = request.reason or "approved"
@@ -336,7 +347,12 @@ def approve_cascade(event, cascade_id, request: ApproveCascadeRequestModel):
                 ":reason": reason,
                 ":pending": CASCADE_STATE_PENDING_APPROVAL,
             },
-            ConditionExpression="attribute_exists(cascadeId) AND #s = :pending",
+            # Still pending and not past its timeout: a cascade that times out between the read
+            # above and this write is not started.
+            ConditionExpression=(
+                "attribute_exists(cascadeId) AND #s = :pending AND "
+                "(attribute_not_exists(approvalTimeoutAt) OR approvalTimeoutAt > :now)"
+            ),
         )
     except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
         return general_error(
@@ -375,6 +391,9 @@ def reject_cascade(event, cascade_id, request: RejectCascadeRequestModel):
             body={"message": "Cascade not found or not in pending_approval state"}, event=event)
     if not _enforce_evaluation(cascade.get("triggeredByDatabaseId", ""), "POST"):
         return authorization_error()
+    if store.cascade_approval_timed_out(cascade):
+        store.expire_timed_out_cascade(cascade_table, cascade)
+        return general_error(body={"message": CASCADE_TIMED_OUT_MESSAGE}, event=event)
 
     actor = claims_and_roles["tokens"][0]
     reason = request.reason or "rejected"
@@ -395,7 +414,12 @@ def reject_cascade(event, cascade_id, request: RejectCascadeRequestModel):
                 ":reason": reason,
                 ":pending": CASCADE_STATE_PENDING_APPROVAL,
             },
-            ConditionExpression="attribute_exists(cascadeId) AND #s = :pending",
+            # Still pending and not past its timeout: a cascade that times out between the read
+            # above and this write is not started.
+            ConditionExpression=(
+                "attribute_exists(cascadeId) AND #s = :pending AND "
+                "(attribute_not_exists(approvalTimeoutAt) OR approvalTimeoutAt > :now)"
+            ),
         )
     except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
         return general_error(
@@ -429,7 +453,7 @@ def get_cascade(event, cascade_id):
         return general_error(body={"message": "Cascade not found"}, event=event)
     if not _enforce_evaluation(item.get("triggeredByDatabaseId", ""), "GET"):
         return authorization_error()
-    return success(body=item)
+    return success(body=store.expire_timed_out_cascade(cascade_table, item))
 
 
 def list_pending_cascades(event):
@@ -438,7 +462,8 @@ def list_pending_cascades(event):
     A row is listed only when the caller may GET both the cascade object and the compliance
     evaluation object of the trigger asset's database — the same pair every single-cascade route
     enforces. Each row carries `databaseId` / `assetId` (the trigger asset) beside the
-    `triggeredBy*` attributes it is stored with.
+    `triggeredBy*` attributes it is stored with. A cascade past its `approvalTimeoutAt` is aborted
+    and not listed.
     """
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
 
@@ -450,6 +475,11 @@ def list_pending_cascades(event):
     )
     allowed = []
     for item in rows:
+        # A cascade past its approval timeout is aborted here and leaves the queue, whoever reads
+        # it: the pending partition holds only cascades that can still be approved.
+        if store.cascade_approval_timed_out(item):
+            store.expire_timed_out_cascade(cascade_table, item)
+            continue
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
         if casbin_enforcer and casbin_enforcer.enforce(_cascade_object(item.get("cascadeId")), "GET") \
                 and casbin_enforcer.enforce(

@@ -4,6 +4,7 @@
  */
 
 import {
+    LINK_DIRECTION_OPTIONS,
     METADATA_SCOPE_OPTIONS,
     bodyFromRulesDraft,
     metadataScopeOf,
@@ -103,5 +104,21 @@ describe("metadata rule scopes", () => {
         expect(
             validateMetadataScope({ scope: "links", linkDirection: "sideways" }).linkDirection
         ).toMatch(/permitted: 'parents', 'children', 'related'/);
+    });
+});
+
+describe("link direction choices", () => {
+    it("offers each direction once, and still accepts `related` as both directions", () => {
+        const labels = LINK_DIRECTION_OPTIONS.map((option) => option.label);
+        expect(new Set(labels).size).toBe(labels.length);
+        expect(LINK_DIRECTION_OPTIONS.map((option) => option.value)).toEqual([
+            "",
+            "parents",
+            "children",
+        ]);
+        expect(labels[0]).toBe("Both directions");
+        expect(
+            validateMetadataScope({ scope: "links", linkDirection: "related" }).linkDirection
+        ).toBeUndefined();
     });
 });

@@ -6,6 +6,8 @@
 import React from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import Synonyms from "../synonyms";
+import { REASON_REQUIRED_MESSAGE } from "../components/compliance/ReasonModal";
 import ComplianceQuarantine from "./ComplianceQuarantine";
 import { COMPLIANCE_LISTING_PAGE_SIZE } from "../services/ComplianceService";
 
@@ -140,7 +142,10 @@ describe("ComplianceQuarantine", () => {
                 "Legacy scan, accepted risk"
             );
         });
-        expect(await screen.findByText("Exception granted")).toBeInTheDocument();
+        // The message names the asset as people know it, not as databaseId:assetId.
+        expect(
+            await screen.findByText("Exception granted for Name of asset-1.")
+        ).toBeInTheDocument();
         // The listing restarts from the first page after the action.
         expect(service().fetchQuarantinedAssets).toHaveBeenCalledTimes(2);
         expect(service().fetchQuarantinedAssets.mock.calls[1][0].startingToken).toBeUndefined();
@@ -189,5 +194,44 @@ describe("ComplianceQuarantine", () => {
         // The badge shares its label with the row's "Exception" action button.
         expect(within(rowOf("Name of asset-1")).getAllByText("Exception")).toHaveLength(1);
         expect(within(rowOf("Name of asset-2")).getAllByText("Exception")).toHaveLength(2);
+    });
+});
+
+describe("ComplianceQuarantine release", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    it("requires a reason before releasing, sends it, and names the asset in the message", async () => {
+        service().fetchQuarantinedAssets.mockResolvedValue([
+            true,
+            { quarantinedAssets: [quarantined("asset-1")], nextToken: undefined },
+        ]);
+        service().releaseFromQuarantine.mockResolvedValue([
+            true,
+            "Asset db1:asset-1 released from quarantine",
+        ]);
+        render(<ComplianceQuarantine />);
+        await screen.findByText("Name of asset-1");
+        await userEvent.click(screen.getAllByRole("button", { name: "Release" })[0]);
+        expect(screen.getByText("Release Name of asset-1 from quarantine")).toBeInTheDocument();
+
+        const confirm = () =>
+            userEvent.click(screen.getByRole("button", { name: `Release ${Synonyms.asset}` }));
+        await confirm();
+        expect(screen.getByText(REASON_REQUIRED_MESSAGE)).toBeInTheDocument();
+        expect(service().releaseFromQuarantine).not.toHaveBeenCalled();
+
+        await userEvent.type(screen.getByLabelText("Reason for release"), "Fixed upstream");
+        await confirm();
+        await waitFor(() =>
+            expect(service().releaseFromQuarantine).toHaveBeenCalledWith(
+                "db1",
+                "asset-1",
+                "Fixed upstream"
+            )
+        );
+        expect(
+            await screen.findByText("Name of asset-1 released from quarantine.")
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/db1:asset-1/)).not.toBeInTheDocument();
     });
 });

@@ -27,14 +27,17 @@ export interface ReasonModalProps {
     placeholder?: string;
     /** Disables the buttons and shows the confirm button as busy while the action runs. */
     loading?: boolean;
-    /** Called with the trimmed, non-empty reason. */
+    /** The reason may be left empty (the field is marked optional and confirming never flags it). */
+    optional?: boolean;
+    /** Called with the trimmed reason: non-empty unless `optional`, where it may be "". */
     onConfirm: (reason: string) => void;
     onDismiss: () => void;
 }
 
 /**
- * Collects a mandatory free-text reason for a compliance action (rejecting a cascade, granting a
- * quarantine exception). Confirming with an empty field keeps the dialog open and flags the field.
+ * Collects a free-text reason for a compliance action. Mandatory by default (granting a quarantine
+ * exception, releasing from quarantine): confirming with an empty field keeps the dialog open and
+ * flags the field. With `optional` (approving or rejecting a cascade) it may be left empty.
  */
 const ReasonModal: React.FC<ReasonModalProps> = ({
     visible,
@@ -44,6 +47,7 @@ const ReasonModal: React.FC<ReasonModalProps> = ({
     confirmLabel,
     placeholder,
     loading = false,
+    optional = false,
     onConfirm,
     onDismiss,
 }) => {
@@ -60,7 +64,7 @@ const ReasonModal: React.FC<ReasonModalProps> = ({
 
     const handleConfirm = () => {
         const trimmed = reason.trim();
-        if (!trimmed) {
+        if (!trimmed && !optional) {
             setErrorText(REASON_REQUIRED_MESSAGE);
             return;
         }
@@ -90,7 +94,7 @@ const ReasonModal: React.FC<ReasonModalProps> = ({
                 label={label}
                 description={description}
                 errorText={errorText}
-                constraintText="Required."
+                constraintText={optional ? "Optional." : "Required."}
                 stretch
             >
                 <Textarea
@@ -102,7 +106,7 @@ const ReasonModal: React.FC<ReasonModalProps> = ({
                         }
                     }}
                     placeholder={placeholder}
-                    ariaRequired
+                    ariaRequired={!optional}
                     invalid={!!errorText}
                     rows={3}
                     autoFocus

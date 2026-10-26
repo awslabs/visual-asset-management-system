@@ -390,6 +390,8 @@ export interface CascadeRecord {
     actor?: string;
     requireApproval: boolean;
     createdAt: string;
+    /** When a cascade awaiting approval times out (24 hours after creation); past it, it is aborted. */
+    approvalTimeoutAt?: string;
     /** JSON-encoded map of node key ("databaseId:assetId") to that node's `CascadeNodeState`. */
     nodes?: string;
     totalNodes?: number;

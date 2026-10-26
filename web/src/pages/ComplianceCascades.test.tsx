@@ -45,6 +45,19 @@ const pendingCascade = () => ({
     requireApproval: true,
 });
 
+// Approve from the queue: the row's button opens the reason dialog, whose confirm button shares the
+// label (the table's button comes first in the DOM, the modal portal's last). The reason is left
+// empty: it is optional.
+const approveFromQueue = async (
+    user: { click: (element: Element) => Promise<void> } = userEvent
+) => {
+    await screen.findByText("manual trigger");
+    await user.click(screen.getAllByRole("button", { name: "Approve" })[0]);
+    expect(screen.getByText(`Approve cascade ${CASCADE_ID.slice(0, 8)}...`)).toBeInTheDocument();
+    const confirm = screen.getAllByRole("button", { name: "Approve" });
+    await user.click(confirm[confirm.length - 1]);
+};
+
 describe("ComplianceCascades", () => {
     beforeEach(() => {
         jest.clearAllMocks();
@@ -61,12 +74,8 @@ describe("ComplianceCascades", () => {
         const tableReject = screen.getAllByRole("button", { name: "Reject" })[0];
         await userEvent.click(tableReject);
 
-        // Confirming without a reason keeps the dialog open and sends nothing.
-        const confirmButtons = screen.getAllByRole("button", { name: "Reject" });
-        await userEvent.click(confirmButtons[confirmButtons.length - 1]);
-        expect(screen.getByText(REASON_REQUIRED_MESSAGE)).toBeInTheDocument();
-        expect(service().rejectCascade).not.toHaveBeenCalled();
-
+        // The reason is optional (the API records "rejected"): the field says so.
+        expect(screen.getAllByText("Optional.").length).toBeGreaterThan(0);
         await userEvent.type(screen.getByLabelText("Reason for rejection"), "Not needed");
         const confirm = screen.getAllByRole("button", { name: "Reject" });
         await userEvent.click(confirm[confirm.length - 1]);
@@ -76,6 +85,51 @@ describe("ComplianceCascades", () => {
         });
         expect(await screen.findByText("Cascade rejected")).toBeInTheDocument();
         expect(service().fetchCascades).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects without a reason when none is entered", async () => {
+        service().rejectCascade.mockResolvedValue([true, "Cascade rejected"]);
+        render(<ComplianceCascades />);
+        await screen.findByText("manual trigger");
+        await userEvent.click(screen.getAllByRole("button", { name: "Reject" })[0]);
+        const confirm = screen.getAllByRole("button", { name: "Reject" });
+        await userEvent.click(confirm[confirm.length - 1]);
+        await waitFor(() =>
+            expect(service().rejectCascade).toHaveBeenCalledWith(CASCADE_ID, undefined)
+        );
+        expect(screen.queryByText(REASON_REQUIRED_MESSAGE)).not.toBeInTheDocument();
+    });
+
+    it("sends the approval reason when one is entered", async () => {
+        service().approveCascade.mockResolvedValue([
+            true,
+            { message: "Cascade approved", cascadeId: CASCADE_ID, state: "executing" },
+        ]);
+        service().fetchCascade.mockResolvedValue([
+            true,
+            { ...pendingCascade(), state: "completed" },
+        ]);
+        render(<ComplianceCascades />);
+        await screen.findByText("manual trigger");
+        await userEvent.click(screen.getAllByRole("button", { name: "Approve" })[0]);
+        expect(service().approveCascade).not.toHaveBeenCalled();
+        await userEvent.type(screen.getByLabelText("Reason for approval"), "Parent fixed");
+        const confirm = screen.getAllByRole("button", { name: "Approve" });
+        await userEvent.click(confirm[confirm.length - 1]);
+        await waitFor(() =>
+            expect(service().approveCascade).toHaveBeenCalledWith(CASCADE_ID, "Parent fixed")
+        );
+    });
+
+    it("shows each pending cascade's approval timeout", async () => {
+        const timeout = "2026-01-02T00:00:00Z";
+        service().fetchCascades.mockResolvedValue([
+            true,
+            [{ ...pendingCascade(), approvalTimeoutAt: timeout }],
+        ]);
+        render(<ComplianceCascades />);
+        expect(await screen.findByText("Approval timeout")).toBeInTheDocument();
+        expect(screen.getByText(new Date(timeout).toLocaleString())).toBeInTheDocument();
     });
 
     it("reports execution started on approval and follows the cascade to completion", async () => {
@@ -94,10 +148,10 @@ describe("ComplianceCascades", () => {
         ]);
 
         render(<ComplianceCascades />);
-        await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
+        await approveFromQueue();
 
         await waitFor(() => {
-            expect(service().approveCascade).toHaveBeenCalledWith(CASCADE_ID);
+            expect(service().approveCascade).toHaveBeenCalledWith(CASCADE_ID, undefined);
         });
         expect(await screen.findByText(/execution started/)).toBeInTheDocument();
         await waitFor(() => {
@@ -125,7 +179,7 @@ describe("ComplianceCascades", () => {
         ]);
 
         render(<ComplianceCascades />);
-        await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
+        await approveFromQueue();
 
         expect(await screen.findByText(/completed$/)).toBeInTheDocument();
         expect(screen.getByText("2 of 2 nodes evaluated")).toBeInTheDocument();
@@ -157,7 +211,7 @@ describe("ComplianceCascades", () => {
                 ]);
 
             render(<ComplianceCascades />);
-            await user.click(await screen.findByRole("button", { name: "Approve" }));
+            await approveFromQueue(user);
 
             expect(await screen.findByText(/is executing/)).toBeInTheDocument();
             expect(screen.getByText("0 of 1 nodes evaluated")).toBeInTheDocument();

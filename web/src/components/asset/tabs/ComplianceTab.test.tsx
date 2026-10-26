@@ -6,6 +6,7 @@
 import React from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import Synonyms from "../../../synonyms";
 import { ComplianceTab } from "./ComplianceTab";
 import * as permissions from "../../../features/orchestration/permissions/useAllowedRoutes";
 import { COMPLIANCE_LISTING_PAGE_SIZE } from "../../../services/ComplianceService";
@@ -115,7 +116,9 @@ describe("ComplianceTab", () => {
                 "Accepted risk"
             );
         });
-        expect(await screen.findByText("Exception granted")).toBeInTheDocument();
+        expect(
+            await screen.findByText(`Exception granted for this ${Synonyms.asset}.`)
+        ).toBeInTheDocument();
     });
 
     it("collects the release reason in a modal and sends it", async () => {
@@ -145,7 +148,9 @@ describe("ComplianceTab", () => {
                 "Reviewed and cleared"
             );
         });
-        expect(await screen.findByText("Released from quarantine")).toBeInTheDocument();
+        expect(
+            await screen.findByText(`The ${Synonyms.asset} was released from quarantine.`)
+        ).toBeInTheDocument();
         expect(service().fetchComplianceState).toHaveBeenCalledTimes(2);
     });
 
@@ -434,5 +439,38 @@ describe("ComplianceTab evaluation errors", () => {
 
         expect(await screen.findByText("Not evaluated: converts")).toBeInTheDocument();
         expect(screen.getByText("Rule errors")).toBeInTheDocument();
+    });
+});
+
+describe("ComplianceTab schema source", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        (permissions.useAllowedRoutes as jest.Mock).mockReturnValue({
+            can: () => true,
+            loading: false,
+        });
+        service().fetchEvaluationHistory.mockResolvedValue([
+            true,
+            { evaluations: [], nextToken: undefined },
+        ]);
+    });
+
+    it.each([
+        ["database", `Inherited from the ${Synonyms.database}`],
+        ["asset", `Set on the ${Synonyms.asset}`],
+    ])("says a %s binding is %s", async (schemaSource, text) => {
+        service().fetchComplianceState.mockResolvedValue([
+            true,
+            {
+                databaseId: "db1",
+                assetId: "asset-1",
+                complianceState: "compliant",
+                schemaName: "std",
+                schemaSource,
+            },
+        ]);
+        renderTab();
+        expect(await screen.findByText("std")).toBeInTheDocument();
+        expect(screen.getByText(text)).toBeInTheDocument();
     });
 });

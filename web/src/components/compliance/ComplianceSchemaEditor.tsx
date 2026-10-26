@@ -85,6 +85,7 @@ import {
     validateInputFiles,
     validateMetadataScope,
     validatePipelineRef,
+    ruleNamesError,
     withMetadataScope,
 } from "./complianceSchemaRules";
 
@@ -608,12 +609,18 @@ interface ComplianceSchemaEditorProps {
     value: string;
     onChange: (value: string) => void;
     readOnly?: boolean;
+    /**
+     * Told the rule-name problem the Visual Builder shows (a nameless or repeated rule name), or
+     * null; the page refuses to save while one is shown.
+     */
+    onRulesProblemChange?: (problem: string | null) => void;
 }
 
 export default function ComplianceSchemaEditor({
     value,
     onChange,
     readOnly = false,
+    onRulesProblemChange,
 }: ComplianceSchemaEditorProps) {
     const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
     const [markers, setMarkers] = useState<editor.IMarkerData[]>([]);
@@ -623,6 +630,10 @@ export default function ComplianceSchemaEditor({
     const [properties, setProperties] = useState<PropertyDef[]>([]);
     const [additionalProperties, setAdditionalProperties] = useState(true);
     const [rulesDraft, setRulesDraft] = useState<RulesDraft>(EMPTY_RULES_DRAFT);
+    const rulesProblem = builderMode === "rules" ? ruleNamesError(rulesDraft) : null;
+    useEffect(() => {
+        onRulesProblemChange?.(rulesProblem);
+    }, [rulesProblem, onRulesProblemChange]);
     // The JSON the builder last wrote. A value equal to it is the builder's own output, so
     // re-deriving the builder state from it would only drop rows the user is still filling in.
     const lastEmittedJson = useRef<string | null>(null);

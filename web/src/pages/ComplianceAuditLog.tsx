@@ -22,6 +22,43 @@ import {
 } from "../services/ComplianceService";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 
+/** One value of an audit entry's details as a reader sees it: text as is, lists joined, objects as
+ * `key value` pairs, and anything else as JSON. */
+const detailValue = (value: any): string => {
+    if (value === null || value === undefined) return "-";
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    if (Array.isArray(value)) return value.map(detailValue).join(", ");
+    if (typeof value === "object") {
+        return Object.entries(value)
+            .map(([key, inner]) => `${key} ${detailValue(inner)}`)
+            .join(", ");
+    }
+    return JSON.stringify(value);
+};
+
+/**
+ * An audit entry's details (stored JSON-encoded) as one line per field, for the Details column;
+ * details that are not a JSON object are shown as one `details` line.
+ */
+export const auditDetailLines = (
+    details: string | Record<string, any> | undefined | null
+): { key: string; value: string }[] => {
+    if (details === undefined || details === null || details === "") return [];
+    let parsed: any = details;
+    if (typeof details === "string") {
+        try {
+            parsed = JSON.parse(details);
+        } catch {
+            return [{ key: "details", value: details }];
+        }
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return [{ key: "details", value: detailValue(parsed) }];
+    }
+    return Object.entries(parsed).map(([key, value]) => ({ key, value: detailValue(value) }));
+};
+
 /**
  * Every event type the audit trail records, in the order the filter offers them. The list is the
  * user guide's event-type table (docs/user-guide/compliance.md, "Event types"); the backend test
@@ -45,6 +82,7 @@ export const eventTypeOptions: SelectProps.Option[] = [
     { label: "Cascade Auto-Triggered", value: "cascade_auto_triggered" },
     { label: "Cascade Approved", value: "cascade_approved" },
     { label: "Cascade Rejected", value: "cascade_rejected" },
+    { label: "Cascade Timed Out", value: "cascade_timed_out" },
     { label: "Cascade Completed", value: "cascade_completed" },
     { label: `${Synonyms.Asset} Deleted`, value: "asset_deleted" },
 ];
@@ -227,18 +265,20 @@ const ComplianceAuditLog: React.FC = () => {
                         id: "details",
                         header: "Details",
                         cell: (item) => {
-                            if (!item.details) return "-";
-                            try {
-                                const parsed =
-                                    typeof item.details === "string"
-                                        ? JSON.parse(item.details)
-                                        : item.details;
-                                return JSON.stringify(parsed);
-                            } catch {
-                                return typeof item.details === "string"
-                                    ? item.details
-                                    : JSON.stringify(item.details);
-                            }
+                            const lines = auditDetailLines(item.details);
+                            if (lines.length === 0) return "-";
+                            return (
+                                <SpaceBetween size="xxxs">
+                                    {lines.map((line) => (
+                                        <Box key={line.key} fontSize="body-s">
+                                            <Box variant="span" fontWeight="bold">
+                                                {line.key}
+                                            </Box>
+                                            : {line.value}
+                                        </Box>
+                                    ))}
+                                </SpaceBetween>
+                            );
                         },
                     },
                 ]}

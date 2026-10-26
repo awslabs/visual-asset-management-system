@@ -117,11 +117,12 @@ web/
                               #   + complianceSchemaRules.ts (pure pipelineRef fields/validation,
                               #   rule-draft round-trip, example rule per type, metadata-scope
                               #   switching/validation and check validators carrying the API's messages);
-                              #   ReasonModal.tsx (Cloudscape modal collecting a mandatory reason:
-                              #   reject cascade, grant quarantine exception, release from
-                              #   quarantine); complianceStateBadge.tsx
+                              #   ReasonModal.tsx (Cloudscape modal collecting a reason: mandatory to
+                              #   grant a quarantine exception or release from quarantine, `optional`
+                              #   to approve or reject a cascade); complianceStateBadge.tsx
                               #   (shared compliance-state -> StatusIndicator map + Badge color accessor;
-                              #   `exception` renders as info/blue; EvaluationErrorIndicator flags a
+                              #   `exception` renders as info/blue; schemaSourceLabel says a binding is
+                              #   inherited or set on the asset; EvaluationErrorIndicator flags a
                               #   record whose lastEvaluationStatus is `error`);
                               #   EvaluationHistoryModal.tsx (one asset's paged evaluation history with schema
                               #   version and rule results, opened from the database overview);

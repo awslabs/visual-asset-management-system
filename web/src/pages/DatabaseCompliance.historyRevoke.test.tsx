@@ -162,7 +162,7 @@ it("offers Revoke exception only on an asset in exception, behind the confirmati
     expect(service().revokeException).not.toHaveBeenCalled();
     await userEvent.click(within(dialog).getByRole("button", { name: "Revoke" }));
     await waitFor(() => expect(service().revokeException).toHaveBeenCalledWith("db1", "a-exc"));
-    expect(await screen.findByText("Exception revoked")).toBeInTheDocument();
+    expect(await screen.findByText("Exception revoked for excepted-asset.")).toBeInTheDocument();
 });
 
 it("offers no row actions to a caller with neither route", async () => {

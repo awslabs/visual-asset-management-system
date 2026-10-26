@@ -476,7 +476,7 @@ vamscli compliance quarantine revoke-exception -d my-database -a my-asset
 
 ## Cascade Commands
 
-A cascade re-evaluates the dependents of a changed asset. By default it waits in `pending_approval` for `cascade approve` or `cascade reject`, and expires after the approval timeout. The cascade an evaluation opens automatically for an asset with children is not duplicated: while one for that parent is pending approval, further evaluations of it open no new one. `cascade create` always opens a new cascade.
+A cascade re-evaluates the dependents of a changed asset. By default it waits in `pending_approval` for `cascade approve` or `cascade reject`. At its approval timeout (`Approval Deadline`, 24 hours after creation) it is aborted with the reason `approval timed out`, and approving or rejecting it then fails with `Cascade approval timed out; the cascade was aborted`. The cascade an evaluation opens automatically for an asset with children is not duplicated: while one for that parent is pending approval and within its timeout, further evaluations of it open no new one. `cascade create` always opens a new cascade.
 
 ---
 

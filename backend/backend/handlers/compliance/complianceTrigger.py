@@ -1060,11 +1060,14 @@ def check_and_trigger_cascade(database_id: str, asset_id: str):
 
 
 def pending_cascade_exists(database_id: str, asset_id: str) -> bool:
-    """Whether a cascade in `pending_approval` was triggered by the given asset.
+    """Whether a cascade in `pending_approval` that can still be approved was triggered by the
+    given asset.
 
     Reads the cascade table's `StateIndex` (partition `state`) to exhaustion with a filter on the
     trigger asset: the filter is applied after each page is read, so a single page is not an
-    answer (backend Rule 14)."""
+    answer (backend Rule 14). A pending cascade past its approval timeout is aborted here
+    ("approval timed out") and does not count, so a parent whose cascade timed out opens a new one
+    on its next evaluation."""
     rows = query_all_items(
         cascade_table,
         IndexName=CASCADE_STATE_INDEX,
@@ -1072,4 +1075,10 @@ def pending_cascade_exists(database_id: str, asset_id: str) -> bool:
         FilterExpression=(Attr("triggeredByDatabaseId").eq(database_id)
                           & Attr("triggeredByAssetId").eq(asset_id)),
     )
-    return len(rows) > 0
+    pending = False
+    for row in rows:
+        if store.cascade_approval_timed_out(row):
+            store.expire_timed_out_cascade(cascade_table, row)
+        else:
+            pending = True
+    return pending

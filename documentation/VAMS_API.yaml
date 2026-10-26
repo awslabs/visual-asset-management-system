@@ -10090,7 +10090,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/approveCascadeResponse"
                 "400":
-                    description: Invalid cascade identifier, the cascade does not exist or is not pending approval, or the cascade could not be started (it is then recorded as `aborted`).
+                    description: Invalid cascade identifier, the cascade does not exist or is not pending approval, its approval timed out (it is then recorded as `aborted`), or the cascade could not be started (it is then recorded as `aborted`).
                     content:
                         application/json:
                             schema:
@@ -10134,7 +10134,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/rejectCascadeResponse"
                 "400":
-                    description: Invalid cascade identifier, or the cascade does not exist or is not pending approval.
+                    description: Invalid cascade identifier, the cascade does not exist or is not pending approval, or its approval timed out (it is then recorded as `aborted`).
                     content:
                         application/json:
                             schema:
@@ -17168,7 +17168,7 @@ components:
                 approvalTimeoutAt:
                     type: string
                     format: date-time
-                    description: "24 hours after creation. Present on cascades created with `requireApproval`."
+                    description: "24 hours after creation. Present on cascades created with `requireApproval`. A cascade still `pending_approval` at this time is aborted when next read (`abortReason` `approval timed out`, audit `cascade_timed_out`) and cannot be approved or rejected."
                 approvedBy:
                     type: string
                 approvedAt:
@@ -17316,6 +17316,7 @@ components:
                         - cascade_auto_triggered
                         - cascade_approved
                         - cascade_rejected
+                        - cascade_timed_out
                         - cascade_completed
                         - asset_deleted
                 databaseId:

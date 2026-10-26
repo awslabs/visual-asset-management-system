@@ -38,6 +38,7 @@ import RevokeExceptionModal from "../../compliance/RevokeExceptionModal";
 import {
     ComplianceStateBadge,
     EvaluationErrorIndicator,
+    schemaSourceLabel,
 } from "../../compliance/complianceStateBadge";
 import Synonyms from "../../../synonyms";
 
@@ -177,7 +178,7 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
         setReleasing(false);
         setReleaseModalVisible(false);
         if (success) {
-            setActionMessage(message);
+            setActionMessage(`The ${Synonyms.asset} was released from quarantine.`);
             await loadComplianceData();
         } else {
             setError(message);
@@ -190,7 +191,7 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
         setGranting(false);
         setExceptionModalVisible(false);
         if (success) {
-            setActionMessage(message);
+            setActionMessage(`Exception granted for this ${Synonyms.asset}.`);
             await loadComplianceData();
         } else {
             setError(message);
@@ -299,6 +300,11 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                         <div>
                             <Box variant="awsui-key-label">Assigned Schema</Box>
                             <div>{complianceState.schemaName}</div>
+                            {complianceState.schemaSource && (
+                                <Box variant="small" color="text-body-secondary">
+                                    {schemaSourceLabel(complianceState.schemaSource)}
+                                </Box>
+                            )}
                         </div>
                     )}
                     {lastEvaluated && (

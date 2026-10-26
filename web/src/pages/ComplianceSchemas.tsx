@@ -405,6 +405,26 @@ const DEFAULT_TEMPLATE_OPTION =
     TEMPLATE_OPTIONS.find((o) => o.value === DEFAULT_TEMPLATE_KEY) || TEMPLATE_OPTIONS[0];
 const DEFAULT_TEMPLATE_BODY = JSON.stringify(SCHEMA_TEMPLATES[DEFAULT_TEMPLATE_KEY].body, null, 2);
 
+/**
+ * The flash a sweep raises: how many assets it evaluated, how many it skipped (assets in databases
+ * the caller may not evaluate) and how many it did not reach (run it again for those).
+ */
+export const sweepMessage = (schemaName: string, result: any): string => {
+    const evaluated = Array.isArray(result?.assetsTriggered) ? result.assetsTriggered.length : 0;
+    const parts = [
+        `Sweep of schema "${schemaName}": ${evaluated} ${
+            evaluated === 1 ? Synonyms.asset : Synonyms.assets
+        } evaluated`,
+    ];
+    if (result?.skipped) {
+        parts.push(`${result.skipped} skipped (in a ${Synonyms.database} you may not evaluate)`);
+    }
+    if (result?.assetsRemaining) {
+        parts.push(`${result.assetsRemaining} not reached yet; run the sweep again`);
+    }
+    return parts.join("; ") + ".";
+};
+
 export default function ComplianceSchemas() {
     const { can: canCallRoute } = useAllowedRoutes();
     const canCreate = canCallRoute("POST", COMPLIANCE_SCHEMAS_API_ROUTE);
@@ -429,6 +449,8 @@ export default function ComplianceSchemas() {
     const [formBody, setFormBody] = useState(DEFAULT_TEMPLATE_BODY);
     const [selectedTemplate, setSelectedTemplate] = useState(DEFAULT_TEMPLATE_OPTION);
     const [formError, setFormError] = useState<string | null>(null);
+    // The rule-name problem the editor's Visual Builder shows; saving is refused while it is set.
+    const [rulesProblem, setRulesProblem] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
     const formErrorRef = useRef<HTMLDivElement>(null);
 
@@ -507,6 +529,12 @@ export default function ComplianceSchemas() {
             return;
         }
 
+        // The builder's rule-name error is shown on the rule; saving now would drop or merge it.
+        if (rulesProblem) {
+            setFormError(`Fix the rule names before saving: ${rulesProblem}.`);
+            return;
+        }
+
         let parsedBody: Record<string, any>;
         try {
             parsedBody = JSON.parse(formBody);
@@ -550,7 +578,7 @@ export default function ComplianceSchemas() {
     const handleSweep = async (schemaName: string) => {
         const [success, result] = await sweepSchema(schemaName);
         if (success) {
-            addFlashMessage("info", `Sweep triggered for schema "${schemaName}"`);
+            addFlashMessage("info", sweepMessage(schemaName, result));
         } else {
             addFlashMessage("error", typeof result === "string" ? result : "Sweep failed");
         }
@@ -745,6 +773,7 @@ export default function ComplianceSchemas() {
                                 value={formBody}
                                 onChange={setFormBody}
                                 readOnly={viewOnly}
+                                onRulesProblemChange={setRulesProblem}
                             />
                         </FormField>
                     </SpaceBetween>

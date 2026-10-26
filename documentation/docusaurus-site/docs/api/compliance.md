@@ -990,6 +990,8 @@ DELETE /compliance/quarantine/{databaseId}/{assetId}/exception
 
 Retrieves every cascade in the `pending_approval` state that the caller may read, newest first. A row is listed only when the caller may read both the cascade and the compliance evaluations of the trigger asset's database.
 
+A cascade still pending at its `approvalTimeoutAt` (24 hours after creation) can no longer be approved. Whichever request reads it first aborts it: this listing (which then leaves it out), [Get a cascade](#get-a-cascade), an approve or reject (refused with `400`), or the next evaluation of the parent, which then opens a new cascade. The cascade is recorded `aborted` with `abortReason` `approval timed out` and a `cascade_timed_out` audit entry.
+
 ```
 GET /compliance/cascades
 ```
@@ -1137,11 +1139,11 @@ POST /compliance/cascades/{cascadeId}/approve
 
 ### Error responses
 
-| Status | Description                                                                                                                               |
-| ------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid `cascadeId`, the cascade does not exist or is not in `pending_approval`, or the cascade could not be started (recorded `aborted`) |
-| `403`  | Not authorized                                                                                                                            |
-| `500`  | Internal server error                                                                                                                     |
+| Status | Description                                                                                                                                                                                                               |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid `cascadeId`, the cascade does not exist or is not in `pending_approval`, its approval timed out (`Cascade approval timed out; the cascade was aborted`), or the cascade could not be started (recorded `aborted`) |
+| `403`  | Not authorized                                                                                                                                                                                                            |
+| `500`  | Internal server error                                                                                                                                                                                                     |
 
 ---
 
@@ -1170,11 +1172,11 @@ POST /compliance/cascades/{cascadeId}/reject
 
 ### Error responses
 
-| Status | Description                                                                        |
-| ------ | ---------------------------------------------------------------------------------- |
-| `400`  | Invalid `cascadeId`, or the cascade does not exist or is not in `pending_approval` |
-| `403`  | Not authorized                                                                     |
-| `500`  | Internal server error                                                              |
+| Status | Description                                                                                                                                                        |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid `cascadeId`, the cascade does not exist or is not in `pending_approval`, or its approval timed out (`Cascade approval timed out; the cascade was aborted`) |
+| `403`  | Not authorized                                                                                                                                                     |
+| `500`  | Internal server error                                                                                                                                              |
 
 ---
 
@@ -1225,25 +1227,26 @@ GET /compliance/audit
 
 ### Event types
 
-| Event type                     | Written when                                                                                                                     |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `compliance_check`             | An asset is evaluated                                                                                                            |
-| `evaluation_error`             | A rule's tooling failed in an evaluation, or the schema could not be loaded; `details` names the errored rules as `ruleNames`    |
-| `quarantine_released`          | A quarantined asset is released, by request or by a passing re-evaluation                                                        |
-| `exception_granted`            | An exception is granted to a quarantined asset                                                                                   |
-| `exception_revoked`            | An active exception is revoked; the asset returns to its last verdict's state                                                    |
-| `exception_superseded`         | An evaluation against another schema or a newer schema version clears an active exception                                        |
-| `schema_bound_to_database`     | A schema is bound to a database                                                                                                  |
-| `schema_unbound_from_database` | A database binding is removed                                                                                                    |
-| `schema_bound_to_asset`        | A schema is bound to an asset as an override                                                                                     |
-| `schema_unbound_from_asset`    | An asset override is removed                                                                                                     |
-| `schema_deleted`               | A schema is deleted                                                                                                              |
-| `cascade_triggered`            | A cascade is created through the API                                                                                             |
-| `cascade_auto_triggered`       | A cascade is opened after the evaluation of an asset that has children                                                           |
-| `cascade_approved`             | A pending cascade is approved                                                                                                    |
-| `cascade_rejected`             | A pending cascade is rejected                                                                                                    |
-| `cascade_completed`            | A cascade finishes evaluating its downstream assets; `details` carries `nodesEvaluated` and `summary`, the node count per status |
-| `asset_deleted`                | An asset is permanently deleted; its compliance record (state, binding override, quarantine) is removed                          |
+| Event type                     | Written when                                                                                                                                   |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `compliance_check`             | An asset is evaluated                                                                                                                          |
+| `evaluation_error`             | A rule's tooling failed in an evaluation, or the schema could not be loaded; `details` names the errored rules as `ruleNames`                  |
+| `quarantine_released`          | A quarantined asset is released, by request or by a passing re-evaluation                                                                      |
+| `exception_granted`            | An exception is granted to a quarantined asset                                                                                                 |
+| `exception_revoked`            | An active exception is revoked; the asset returns to its last verdict's state                                                                  |
+| `exception_superseded`         | An evaluation against another schema or a newer schema version clears an active exception                                                      |
+| `schema_bound_to_database`     | A schema is bound to a database                                                                                                                |
+| `schema_unbound_from_database` | A database binding is removed                                                                                                                  |
+| `schema_bound_to_asset`        | A schema is bound to an asset as an override                                                                                                   |
+| `schema_unbound_from_asset`    | An asset override is removed                                                                                                                   |
+| `schema_deleted`               | A schema is deleted                                                                                                                            |
+| `cascade_triggered`            | A cascade is created through the API                                                                                                           |
+| `cascade_auto_triggered`       | A cascade is opened after the evaluation of an asset that has children                                                                         |
+| `cascade_approved`             | A pending cascade is approved                                                                                                                  |
+| `cascade_rejected`             | A pending cascade is rejected                                                                                                                  |
+| `cascade_timed_out`            | A pending cascade reached its `approvalTimeoutAt` unapproved and was aborted (`abortReason` `approval timed out`); written by the system actor |
+| `cascade_completed`            | A cascade finishes evaluating its downstream assets; `details` carries `nodesEvaluated` and `summary`, the node count per status               |
+| `asset_deleted`                | An asset is permanently deleted; its compliance record (state, binding override, quarantine) is removed                                        |
 
 ### Error responses
 

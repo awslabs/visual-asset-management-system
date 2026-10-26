@@ -8,7 +8,7 @@ import fs from "fs";
 import path from "path";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import ComplianceAuditLog, { eventTypeOptions } from "./ComplianceAuditLog";
+import ComplianceAuditLog, { auditDetailLines, eventTypeOptions } from "./ComplianceAuditLog";
 import { COMPLIANCE_LISTING_PAGE_SIZE } from "../services/ComplianceService";
 
 jest.mock("../services/ComplianceService", () => ({
@@ -231,5 +231,46 @@ describe("ComplianceAuditLog asset links", () => {
             "href",
             "#/databases/db1/assets/asset-e1"
         );
+    });
+});
+
+describe("ComplianceAuditLog details", () => {
+    it("lists each detail field instead of raw JSON", () => {
+        expect(
+            auditDetailLines(
+                JSON.stringify({
+                    reason: "Legacy part",
+                    childCount: 2,
+                    ruleNames: ["a", "b"],
+                    summary: { compliant: 2, skipped: 1 },
+                })
+            )
+        ).toEqual([
+            { key: "reason", value: "Legacy part" },
+            { key: "childCount", value: "2" },
+            { key: "ruleNames", value: "a, b" },
+            { key: "summary", value: "compliant 2, skipped 1" },
+        ]);
+        expect(auditDetailLines("not json")).toEqual([{ key: "details", value: "not json" }]);
+        expect(auditDetailLines(undefined)).toEqual([]);
+    });
+
+    it("renders the fields in the Details column", async () => {
+        mockAllowed = [];
+        service().fetchAuditLog.mockResolvedValue([
+            true,
+            {
+                entries: [
+                    {
+                        ...entry("1", "reviewer"),
+                        details: JSON.stringify({ reason: "Legacy part" }),
+                    },
+                ],
+                nextToken: undefined,
+            },
+        ]);
+        render(<ComplianceAuditLog />);
+        expect(await screen.findByText("Legacy part", { exact: false })).toBeInTheDocument();
+        expect(screen.queryByText('{"reason":"Legacy part"}')).not.toBeInTheDocument();
     });
 });

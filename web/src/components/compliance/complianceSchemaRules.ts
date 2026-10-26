@@ -320,6 +320,18 @@ export function bodyFromRulesDraft(draft: RulesDraft): VamsRulesV1SchemaBody {
     return body;
 }
 
+/**
+ * The rule-name problem the Visual Builder shows, or null. The body keys rules by name, so a
+ * nameless rule is dropped from it and of two rules with one name only one is kept: saving with
+ * either problem would save something other than what the builder shows.
+ */
+export function ruleNamesError(draft: RulesDraft): string | null {
+    const names = draft.rules.map((rule) => rule.name.trim());
+    if (names.some((name) => !name)) return "Rule name is required";
+    if (new Set(names).size !== names.length) return "Rule names must be unique";
+    return null;
+}
+
 export function newPipelineRuleDraft(existingNames: string[]): RuleDraft {
     return newRuleDraft("pipeline", existingNames);
 }
@@ -721,13 +733,19 @@ export const METADATA_SCOPE_OPTIONS: MetadataScopeOption[] = [
 /** The scopes that iterate the asset's current files and take include / exclude paths. */
 export const METADATA_FILE_SCOPES: ComplianceMetadataScope[] = ["files", "fileAttributes"];
 
-/** `linkDirection` choices; "" is the absent value (both directions). */
+/**
+ * `linkDirection` choices. "" (absent) reads links in both directions; the API also accepts
+ * `related` for the same thing, so it is not offered twice: a body carrying it shows as
+ * "Both directions" and keeps its value until another direction is chosen.
+ */
 export const LINK_DIRECTION_OPTIONS: { value: string; label: string }[] = [
-    { value: "", label: "Any direction" },
+    { value: "", label: "Both directions" },
     { value: "parents", label: "Parents (links to this asset)" },
     { value: "children", label: "Children (links from this asset)" },
-    { value: "related", label: "Both directions" },
 ];
+
+/** Every `linkDirection` value the API accepts. */
+export const LINK_DIRECTION_VALUES = ["parents", "children", "related"];
 
 /** `relationshipType` choices; "" is the absent value (either type). */
 export const LINK_RELATIONSHIP_TYPE_OPTIONS: { value: string; label: string }[] = [
@@ -804,7 +822,7 @@ export function validateMetadataScope(rest: Record<string, any>): MetadataScopeE
     if (scope === "links") {
         if (
             rest.linkDirection !== undefined &&
-            !LINK_DIRECTION_OPTIONS.some((o) => o.value && o.value === rest.linkDirection)
+            !LINK_DIRECTION_VALUES.includes(rest.linkDirection)
         ) {
             errors.linkDirection =
                 "linkDirection: unexpected value; permitted: 'parents', 'children', 'related'";
