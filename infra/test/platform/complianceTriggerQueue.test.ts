@@ -11,8 +11,8 @@
  * source that reads `batchItemFailures`. The only send access to the queue is each topic's, and the
  * trigger's role consumes it without a wildcard resource.
  *
- * Built from `buildComplianceTriggerFunction` alone against a stand-in storage stack, so it runs in
- * seconds; `complianceTriggerQueueNoOpenSearch.test.ts` asserts the same wiring survives a full
+ * Built from `buildComplianceTriggerQueue` and `buildComplianceTriggerFunction` against a stand-in
+ * storage stack, so it runs in seconds; `complianceTriggerQueueNoOpenSearch.test.ts` asserts the same wiring survives a full
  * synth with no OpenSearch.
  */
 
@@ -31,6 +31,7 @@ import * as Service from "../../lib/helper/service-helper";
 import { storageResources } from "../../lib/nestedStacks/storage/storageBuilder-nestedStack";
 import {
     buildComplianceTriggerFunction,
+    buildComplianceTriggerQueue,
     COMPLIANCE_TRIGGER_BATCH_SIZE,
     COMPLIANCE_TRIGGER_MAX_CONCURRENCY,
     COMPLIANCE_TRIGGER_QUEUE_MAX_RECEIVE_COUNT,
@@ -70,6 +71,10 @@ const buildStorageResources = (stack: cdk.Stack, kmsKey?: kms.Key): storageResou
         },
     });
     const logGroup = (id: string) => new logs.LogGroup(stack, id);
+    const topics = {
+        assetIndexerSnsTopic: new sns.Topic(stack, "AssetIndexerSnsTopic"),
+        fileIndexerSnsTopic: new sns.Topic(stack, "FileIndexerSnsTopic"),
+    };
     return {
         encryption: { kmsKey },
         s3: {
@@ -77,10 +82,9 @@ const buildStorageResources = (stack: cdk.Stack, kmsKey?: kms.Key): storageResou
             artefactsBucket: new s3.Bucket(stack, "ArtefactsBucket"),
             accessLogsBucket: new s3.Bucket(stack, "AccessLogsBucket"),
         },
-        sns: {
-            assetIndexerSnsTopic: new sns.Topic(stack, "AssetIndexerSnsTopic"),
-            fileIndexerSnsTopic: new sns.Topic(stack, "FileIndexerSnsTopic"),
-        },
+        sns: topics,
+        // As the storage stack builds it: the queue and its subscriptions beside the topics.
+        sqs: { complianceTriggerQueue: buildComplianceTriggerQueue(stack, topics, kmsKey) },
         eventBridge: {
             orchestrationBus: new events.EventBus(stack, "OrchestrationBus"),
             eventSourcePrefix: "vams.test",

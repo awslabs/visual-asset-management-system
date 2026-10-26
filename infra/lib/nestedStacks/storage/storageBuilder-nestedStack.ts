@@ -31,6 +31,7 @@ import { createPopulateS3AssetBucketsTableCustomResource } from "./customResourc
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as sqs from "aws-cdk-lib/aws-sqs";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
+import { buildComplianceTriggerQueue } from "../../lambdaBuilder/complianceFunctions";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { Service, Partition } from "../../helper/service-helper";
@@ -59,6 +60,11 @@ export interface storageResources {
         fileIndexerSnsTopic: sns.Topic;
         assetIndexerSnsTopic: sns.Topic;
         databaseIndexerSnsTopic: sns.Topic;
+    };
+    sqs: {
+        // The compliance trigger's queue, subscribed to the asset and file indexer topics here so it
+        // exists before the stacks that change what the request Lambdas record (buildComplianceTriggerQueue).
+        complianceTriggerQueue: sqs.Queue;
     };
     cloudWatchAuditLogGroups: {
         authentication: logs.LogGroup;
@@ -668,6 +674,16 @@ export function storageResourcesBuilder(
     const DatabaseIndexerSnsTopic = createSNSTopicWithPolicy(
         scope,
         "DatabaseIndexerSnsTopic",
+        kmsEncryptionKey
+    );
+
+    // The compliance trigger's queue and its two topic subscriptions live here, not with the trigger
+    // in ApiBuilder2: this stack updates before ApiBuilder (whose request Lambdas no longer record
+    // metadata and link changes) and ApiBuilder2 (whose event source starts the trigger reading), so
+    // the indexer messages of every change made while those stacks update wait in the queue.
+    const ComplianceTriggerQueue = buildComplianceTriggerQueue(
+        scope,
+        { assetIndexerSnsTopic: AssetIndexerSnsTopic, fileIndexerSnsTopic: FileIndexerSnsTopic },
         kmsEncryptionKey
     );
 
@@ -2474,6 +2490,9 @@ export function storageResourcesBuilder(
             fileIndexerSnsTopic: FileIndexerSnsTopic,
             assetIndexerSnsTopic: AssetIndexerSnsTopic,
             databaseIndexerSnsTopic: DatabaseIndexerSnsTopic,
+        },
+        sqs: {
+            complianceTriggerQueue: ComplianceTriggerQueue,
         },
         cloudWatchAuditLogGroups: auditLogGroups,
         eventBridge: {

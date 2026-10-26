@@ -15,6 +15,7 @@ import * as destinations from "aws-cdk-lib/aws-lambda-destinations";
 import * as eventsources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as sns from "aws-cdk-lib/aws-sns";
+import * as kms from "aws-cdk-lib/aws-kms";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
@@ -465,6 +466,65 @@ export function complianceTriggerFileTopicFilter(): { [key: string]: sns.FilterO
 }
 
 /**
+ * The compliance trigger's queue (`ComplianceTriggerQueue`, with `ComplianceTriggerDLQ`) and its two
+ * filtered topic subscriptions. Built in the storage stack, beside the indexer topics, not with the
+ * trigger in ApiBuilder2: CloudFormation updates the storage stack before ApiBuilder, whose request
+ * Lambdas no longer record metadata and link changes themselves, and ApiBuilder2 only after it. With
+ * the queue and its subscriptions created first, every indexer message from the storage update on
+ * waits in the queue until the trigger's event source starts reading it, so no change made while
+ * the stacks update goes unrecorded (it is stamped with its own instant when it is read).
+ */
+export function buildComplianceTriggerQueue(
+    scope: Construct,
+    topics: { assetIndexerSnsTopic: sns.ITopic; fileIndexerSnsTopic: sns.ITopic },
+    kmsKey?: kms.IKey
+): sqs.Queue {
+    // Encryption mirrors the source queue: a message moved into a DLQ the trigger's role cannot
+    // decrypt is unreadable dead letter.
+    const triggerDlq = new sqs.Queue(scope, "ComplianceTriggerDLQ", {
+        retentionPeriod: cdk.Duration.days(14),
+        encryption: kmsKey ? sqs.QueueEncryption.KMS : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: kmsKey,
+        enforceSSL: true,
+    });
+    NagSuppressions.addResourceSuppressions(triggerDlq, [
+        {
+            id: "AwsSolutions-SQS3",
+            reason:
+                "This queue IS the dead-letter queue of the compliance trigger queue. A DLQ is the " +
+                "terminal destination for records the trigger could not process after its receive " +
+                "limit, so giving it a redrive policy of its own would only defer the same failure " +
+                "to a further queue.",
+        },
+    ]);
+
+    const triggerQueue = new sqs.Queue(scope, "ComplianceTriggerQueue", {
+        visibilityTimeout: COMPLIANCE_TRIGGER_QUEUE_VISIBILITY_TIMEOUT,
+        encryption: kmsKey ? sqs.QueueEncryption.KMS : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: kmsKey,
+        enforceSSL: true,
+        deadLetterQueue: {
+            queue: triggerDlq,
+            maxReceiveCount: COMPLIANCE_TRIGGER_QUEUE_MAX_RECEIVE_COUNT,
+        },
+    });
+
+    // One subscription per topic. Each adds a queue-policy statement letting only that topic send
+    // (aws:SourceArn), so nothing else can write into the queue.
+    topics.assetIndexerSnsTopic.addSubscription(
+        new SqsSubscription(triggerQueue, {
+            filterPolicyWithMessageBody: complianceTriggerAssetTopicFilter(),
+        })
+    );
+    topics.fileIndexerSnsTopic.addSubscription(
+        new SqsSubscription(triggerQueue, {
+            filterPolicyWithMessageBody: complianceTriggerFileTopicFilter(),
+        })
+    );
+    return triggerQueue;
+}
+
+/**
  * Asset-event trigger. Consumes the asset and file indexer SNS topics through its own SQS queue
  * (`ComplianceTriggerQueue`, one filtered subscription per topic, a dead-letter queue, batched and
  * concurrency-capped); an asset or file change on a database or asset bound to a compliance schema
@@ -519,53 +579,7 @@ export function buildComplianceTriggerFunction(
     // workflow execution wrote, so a pipeline rule's own output does not re-trigger the evaluation.
     grantReadPermissionsToAllAssetBuckets(fun);
 
-    // Encryption mirrors the source queue: a message moved into a DLQ the trigger's role cannot
-    // decrypt is unreadable dead letter.
-    const triggerDlq = new sqs.Queue(scope, "ComplianceTriggerDLQ", {
-        retentionPeriod: cdk.Duration.days(14),
-        encryption: storageResources.encryption.kmsKey
-            ? sqs.QueueEncryption.KMS
-            : sqs.QueueEncryption.SQS_MANAGED,
-        encryptionMasterKey: storageResources.encryption.kmsKey,
-        enforceSSL: true,
-    });
-    NagSuppressions.addResourceSuppressions(triggerDlq, [
-        {
-            id: "AwsSolutions-SQS3",
-            reason:
-                "This queue IS the dead-letter queue of the compliance trigger queue. A DLQ is the " +
-                "terminal destination for records the trigger could not process after its receive " +
-                "limit, so giving it a redrive policy of its own would only defer the same failure " +
-                "to a further queue.",
-        },
-    ]);
-
-    const triggerQueue = new sqs.Queue(scope, "ComplianceTriggerQueue", {
-        visibilityTimeout: COMPLIANCE_TRIGGER_QUEUE_VISIBILITY_TIMEOUT,
-        encryption: storageResources.encryption.kmsKey
-            ? sqs.QueueEncryption.KMS
-            : sqs.QueueEncryption.SQS_MANAGED,
-        encryptionMasterKey: storageResources.encryption.kmsKey,
-        enforceSSL: true,
-        deadLetterQueue: {
-            queue: triggerDlq,
-            maxReceiveCount: COMPLIANCE_TRIGGER_QUEUE_MAX_RECEIVE_COUNT,
-        },
-    });
-
-    // One subscription per topic. Each adds a queue-policy statement letting only that topic send
-    // (aws:SourceArn), so nothing else can write into the queue.
-    storageResources.sns.assetIndexerSnsTopic.addSubscription(
-        new SqsSubscription(triggerQueue, {
-            filterPolicyWithMessageBody: complianceTriggerAssetTopicFilter(),
-        })
-    );
-    storageResources.sns.fileIndexerSnsTopic.addSubscription(
-        new SqsSubscription(triggerQueue, {
-            filterPolicyWithMessageBody: complianceTriggerFileTopicFilter(),
-        })
-    );
-
+    const triggerQueue = storageResources.sqs.complianceTriggerQueue;
     triggerQueue.grantConsumeMessages(fun);
     // The trigger holds an upload completion's record back on this queue until the completion has
     // settled (ChangeMessageVisibility, part of the consume grant), so consecutive completions of

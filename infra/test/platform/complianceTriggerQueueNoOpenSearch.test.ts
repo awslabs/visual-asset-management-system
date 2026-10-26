@@ -50,6 +50,16 @@ describe("compliance trigger without OpenSearch", () => {
         expect(synth.countOfType("AWS::Lambda::Function")).toBeGreaterThan(0);
     });
 
+    // The trigger's queue, as the storage stack builds it (the source queue, not its DLQ).
+    const triggerQueue = () => {
+        const queues = synth.where(
+            "AWS::SQS::Queue",
+            (r) => r.logicalId.startsWith("ComplianceTriggerQueue") && !!r.properties.RedrivePolicy
+        );
+        expect(queues).toHaveLength(1);
+        return queues[0];
+    };
+
     test("the trigger has an SQS event source on its own queue", () => {
         const trigger = synth.where(
             "AWS::Lambda::Function",
@@ -63,25 +73,72 @@ describe("compliance trigger without OpenSearch", () => {
                 r.properties.FunctionName?.Ref === trigger[0].logicalId
         );
         expect(mappings).toHaveLength(1);
-        const queueId = getAtt(mappings[0].properties.EventSourceArn);
-        const queue = synth.where(
-            "AWS::SQS::Queue",
-            (r) => inStack(r, trigger[0].stack) && r.logicalId === queueId
+        const queue = triggerQueue();
+        // The queue is in the storage stack, so the mapping reads its ARN through the nested-stack
+        // parameter CDK names after it.
+        const source = mappings[0].properties.EventSourceArn;
+        expect(typeof source?.Ref).toBe("string");
+        expect(source.Ref).toMatch(
+            /StorageResourcesBuilder.*ComplianceTriggerQueue[0-9A-F]{8}Arn$/
         );
-        expect(queue).toHaveLength(1);
-        expect(queue[0].logicalId.startsWith("ComplianceTriggerQueue")).toBe(true);
         expect(mappings[0].properties.FunctionResponseTypes).toEqual(["ReportBatchItemFailures"]);
 
         // Both indexer topics deliver into that queue.
         const subscriptions = synth.where(
             "AWS::SNS::Subscription",
-            (r) => inStack(r, queue[0].stack) && getAtt(r.properties.Endpoint) === queueId
+            (r) => inStack(r, queue.stack) && getAtt(r.properties.Endpoint) === queue.logicalId
         );
         expect(subscriptions).toHaveLength(2);
         const topics = subscriptions.map((s) => JSON.stringify(s.properties.TopicArn)).sort();
         expect(topics[0]).not.toEqual(topics[1]);
         expect(topics.some((t) => /AssetIndexerSnsTopic/i.test(t))).toBe(true);
         expect(topics.some((t) => /FileIndexerSnsTopic/i.test(t))).toBe(true);
+    });
+
+    test("the queue and its subscriptions are in place before the request Lambdas change", () => {
+        // An upgrade from a build whose metadata and link Lambdas recorded each change themselves
+        // updates those Lambdas (ApiBuilder) before the trigger starts reading its queue
+        // (ApiBuilder2). The queue and its two subscriptions are built in the storage stack, which
+        // both API stacks depend on, so CloudFormation creates them first and the messages of
+        // changes made while the API stacks update wait in the queue.
+        const queue = triggerQueue();
+        const topics = synth.where("AWS::SNS::Topic", (r) =>
+            /AssetIndexerSnsTopic/.test(r.logicalId)
+        );
+        expect(topics).toHaveLength(1);
+        expect(queue.stack).toBe(topics[0].stack);
+        const subscriptions = synth.where(
+            "AWS::SNS::Subscription",
+            (r) => getAtt(r.properties.Endpoint) === queue.logicalId
+        );
+        expect(subscriptions.map((s) => s.stack)).toEqual([queue.stack, queue.stack]);
+
+        const nestedStacks = synth.where("AWS::CloudFormation::Stack", () => true);
+        const nestedStack = (construct: string) => {
+            const found = nestedStacks.filter((r) =>
+                new RegExp(`^${construct}NestedStack${construct}NestedStackResource`).test(
+                    r.logicalId
+                )
+            );
+            expect(found).toHaveLength(1);
+            return found[0];
+        };
+        const storage = nestedStack("StorageResourcesBuilder");
+        const dependsOn = (r: Resource) => [r.raw.DependsOn ?? []].flat();
+        for (const construct of ["ApiBuilder", "ApiBuilder2"]) {
+            expect({ construct, dependsOn: dependsOn(nestedStack(construct)) }).toEqual({
+                construct,
+                dependsOn: expect.arrayContaining([storage.logicalId]),
+            });
+        }
+        // The control: the request Lambdas whose stamp moved to the trigger are in ApiBuilder, not
+        // in the storage stack.
+        const metadataService = synth.where(
+            "AWS::Lambda::Function",
+            (r) => r.properties.Handler === "handlers.metadata.metadataService.lambda_handler"
+        );
+        expect(metadataService).toHaveLength(1);
+        expect(metadataService[0].stack).not.toBe(queue.stack);
     });
 
     test("the tables whose REMOVE the trigger maps to assets stream the old image", () => {
