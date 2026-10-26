@@ -153,7 +153,7 @@ The database still contains assets, workflows, or pipelines, or the required `--
     ```
 
 :::warning
-Database deletion cannot be undone. In interactive mode, the CLI prompts for a second confirmation; with `--json-output`, the `--confirm` flag alone is sufficient.
+Database deletion cannot be undone. In an interactive terminal, the CLI prompts for a second confirmation; in a script, pipe or CI job, or with `--json-output`, the `--confirm` flag alone is sufficient.
 :::
 
 ### Bucket Configuration Issues
