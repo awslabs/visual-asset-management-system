@@ -76,6 +76,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **README Quick start Region** — The Quick start states that it deploys to `us-east-1` and that the deployment Region is `env.region` in `config.json`, or the AWS CLI default Region when it is empty, and sends every other Region, AWS GovCloud (US), the AWS European Sovereign Cloud and an imported VPC to the deployment guide's Bootstrap step; its commands run `npx cdk`. (PR #504)
 -   **Deployment instructions use the pinned AWS CDK CLI** — The README prerequisites, developer setup, security, networking, configuration reference, update, common issues, migration and viewer plugin instructions run `npx cdk` from `infra/`, so they use the version pinned in `infra/package.json`. (issue #797)
 -   **ALB web app bucket grant limited to object reads** — On an Application Load Balancer deployment, the web app bucket policy and its Amazon S3 interface endpoint policy allow only object reads (`s3:GetObject`) instead of every S3 `Get` and `List` action. (PR #823)
+-   **External OAuth token requirements documented** — The configuration reference and the FAQ state that the authorizer requires the access token's `aud` claim to equal `lambdaAuthorizorJWTAudience`, which claims identify the user, and that an Amazon Cognito user pool cannot be used as the external identity provider. (issue #788)
 
 **Other changes:**
 
