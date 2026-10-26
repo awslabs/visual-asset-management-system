@@ -40,6 +40,13 @@ export const COMPLIANCE_SCHEMAS_API_ROUTE = "/compliance/schemas";
 export const COMPLIANCE_SCHEMA_API_ROUTE = "/compliance/schemas/{schemaName}";
 export const COMPLIANCE_SWEEP_API_ROUTE = "/compliance/sweep/{schemaName}";
 
+/**
+ * Width (px) of the Actions column: room for the Edit and Sweep buttons side by side. A width alone
+ * is a preference the table shrinks on a narrow window (the labels then wrapped one letter per
+ * line at 768 px); the same minimum keeps it.
+ */
+export const SCHEMA_ACTIONS_COLUMN_WIDTH = 180;
+
 /** Shown on a schema row whose body is not a vams-rules-v1 document. */
 export const LEGACY_SCHEMA_LABEL = "Legacy — cannot be bound or evaluated";
 
@@ -669,7 +676,8 @@ export default function ComplianceSchemas() {
                                       {
                                           id: "actions",
                                           header: "Actions",
-                                          width: 150,
+                                          width: SCHEMA_ACTIONS_COLUMN_WIDTH,
+                                          minWidth: SCHEMA_ACTIONS_COLUMN_WIDTH,
                                           cell: (item: ComplianceSchema) => {
                                               // A legacy schema cannot be updated or evaluated.
                                               const legacy =
