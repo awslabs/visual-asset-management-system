@@ -1303,10 +1303,10 @@ By default, `cdk bootstrap` creates five roles per account and Region (for examp
 | `fileAssetsBucketName`           | Staging bucket name, only if your customized bootstrap template renamed it.                                                                                                                                            |
 | `imageAssetsRepositoryName`      | Staging ECR repository name, only if your customized bootstrap template renamed it.                                                                                                                                    |
 
-Any field left empty keeps the corresponding CDK default. ARNs may use the `${AWS::Partition}`, `${AWS::AccountId}`, and `${AWS::Region}` placeholders, which resolve at deployment time. To discover the required permissions for each role, export the default bootstrap template with `cdk bootstrap --show-template > bootstrap-template.yaml` and copy the role policies into your role-provisioning process.
+Any field left empty keeps the corresponding CDK default. ARNs may use the `${AWS::Partition}`, `${AWS::AccountId}`, and `${AWS::Region}` placeholders, which resolve at deployment time. To discover the required permissions for each role, export the default bootstrap template with `npx cdk bootstrap --show-template > bootstrap-template.yaml` from the `infra/` directory and copy the role policies into your role-provisioning process.
 
 :::tip[Simpler middle ground]
-If your only concern is that the CloudFormation execution role gets `AdministratorAccess` by default, you do not need this feature. Instead bootstrap with `cdk bootstrap --cloudformation-execution-policies <your-managed-policy-arns>` and/or `--custom-permissions-boundary <name>`.
+If your only concern is that the CloudFormation execution role gets `AdministratorAccess` by default, you do not need this feature. Instead bootstrap with `npx cdk bootstrap --cloudformation-execution-policies <your-managed-policy-arns>` and/or `--custom-permissions-boundary <name>`.
 :::
 
 ### VAMS stack role customization (`vamsStacks`)

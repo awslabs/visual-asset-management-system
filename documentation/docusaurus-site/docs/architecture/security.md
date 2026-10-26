@@ -43,7 +43,7 @@ SAML federation uses the Amazon Cognito hosted UI, which is not available in AWS
 | `metadataContent`     | URL of your SAML metadata. Can also point to a local file if `metadataType` is changed to `cognito.UserPoolIdentityProviderSamlMetadataType.FILE`                                |
 | `attributeMapping`    | Maps SAML attributes back to VAMS (email, fullname)                                                                                                                              |
 
-3. Deploy or redeploy the CDK stack with `cdk deploy --all`.
+3. Deploy or redeploy the CDK stack with `npx cdk deploy --all` from the `infra/` directory.
 
 #### OIDC Federation
 
@@ -80,7 +80,7 @@ SAML and OIDC federation are mutually exclusive: configuration validation reject
 
     Configuration validation rejects the placeholder values the file ships with, so a deployment cannot silently register an identity provider that cannot complete a login.
 
-4. Deploy or redeploy the CDK stack with `cdk deploy --all`.
+4. Deploy or redeploy the CDK stack with `npx cdk deploy --all` from the `infra/` directory.
 
 Programmatic access for a federated user goes through a token override rather than username/password, because a federated identity has no password in the user pool. See [Setup and authentication](../cli/commands/setup-and-auth.md#auth-login).
 
