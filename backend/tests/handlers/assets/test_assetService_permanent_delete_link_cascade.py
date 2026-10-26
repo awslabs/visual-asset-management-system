@@ -232,46 +232,31 @@ class TestPermanentDeleteRemovesEveryLink:
 
 
 @pytest.mark.unit
-class TestTheSurvivingEndIsRecorded:
-    """Each link a permanent deletion removes is recorded as a `linkChange` on the asset at its
-    other end, so that asset's relationship and links-scope metadata rules are re-evaluated the way
-    a link deleted through the asset-links API re-evaluates them (D14)."""
+class TestThePermanentDeleteWritesNoChangeStamp:
+    """A permanent deletion removes the asset's links and writes nothing else for them: the
+    compliance trigger records each removed link on the asset at its other end from the link
+    table's stream (D14 now holds there; see the trigger's indexed-change tests). The deletion costs
+    what it cost before compliance: no asset-table call per link."""
 
-    def _stamps(self, from_items, to_items, fail=()):
+    def _run_cleanup(self, from_items, to_items):
         from_pager = Pager({"Items": from_items}, name="fromAssetGSI")
         to_pager = Pager({"Items": to_items}, name="toAssetGSI")
         table = MagicMock(name="asset_links_table")
         table.query.side_effect = RoutedPager(on="IndexName", fromAssetGSI=from_pager,
                                               toAssetGSI=to_pager)
-
-        def delete(**kw):
-            if kw["Key"]["assetLinkId"] in fail:
-                raise RuntimeError("delete blew up")
-        table.delete_item.side_effect = delete
+        asset_table = MagicMock(name="asset_table")
         with patch.object(_svc(), "asset_links_table", table), \
                 patch.object(_svc(), "asset_links_table_name", "links-table"), \
-                patch.object(_svc(), "delete_asset_link_metadata_for_permanent_deletion"), \
-                patch.object(_svc(), "stamp_asset_change") as stamp:
+                patch.object(_svc(), "asset_table", asset_table), \
+                patch.object(_svc(), "delete_asset_link_metadata_for_permanent_deletion"):
             _svc()._delete_asset_links_for_permanent_deletion(
                 DATABASE_ID, ASSET_ID, {"dynamodb_tables": []})
-        return stamp
+        return table, asset_table
 
-    def test_the_other_end_of_every_removed_link_is_stamped(self):
-        stamp = self._stamps([_link("l-out", ASSET_KEY, "db-2:child")],
-                             [_link("l-in", "db-3:parent", ASSET_KEY)])
-        assert stamp.call_args_list, "no surviving end was stamped"
-        assert {c.args[1:4] for c in stamp.call_args_list} >= {
-            ("db-2", "child", "linkChange"), ("db-3", "parent", "linkChange")}
-        assert (DATABASE_ID, ASSET_ID) not in {c.args[1:3] for c in stamp.call_args_list}
-        assert all(c.args[0] is _svc().asset_table for c in stamp.call_args_list)
-
-    def test_the_deleted_asset_itself_is_not_stamped(self):
-        stamp = self._stamps([_link("l-self", ASSET_KEY, ASSET_KEY)], [])
-        stamp.assert_not_called()
-
-    def test_a_link_that_could_not_be_removed_is_not_recorded(self):
-        stamp = self._stamps([_link("bad", ASSET_KEY, "db-2:a"), _link("good", ASSET_KEY, "db-2:b")],
-                             [], fail=("bad",))
-        stamped = {c.args[1:3] for c in stamp.call_args_list}
-        assert ("db-2", "b") in stamped
-        assert ("db-2", "a") not in stamped
+    def test_removing_the_links_makes_no_asset_table_call(self):
+        links, asset_table = self._run_cleanup([_link("l-out", ASSET_KEY, "db-2:child")],
+                                               [_link("l-in", "db-3:parent", ASSET_KEY)])
+        # The control: both links were removed.
+        assert {c.kwargs["Key"]["assetLinkId"] for c in links.delete_item.call_args_list} == {
+            "l-out", "l-in"}
+        assert asset_table.mock_calls == []

@@ -11,7 +11,6 @@ from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
-from common.assetProvenance import ASSET_CHANGE_SOURCE_LINK_CHANGE, stamp_asset_change
 from common.dynamodb import query_all_items
 from common.validators import validate
 from handlers.auth import request_to_claims
@@ -306,13 +305,6 @@ def create_asset_link(request_model: CreateAssetLinkRequestModel, claims_and_rol
     except Exception as e:
         logger.exception(f"Error saving asset link: {e}")
         raise RuntimeError(f"Failed to create asset link.")
-
-    # Record the new link on both assets (best-effort: the link is written), so the compliance
-    # trigger re-evaluates the relationship and links-scope metadata rules of each.
-    for database_id, asset_id in ((request_model.fromAssetDatabaseId, request_model.fromAssetId),
-                                  (request_model.toAssetDatabaseId, request_model.toAssetId)):
-        stamp_asset_change(asset_storage_table, database_id, asset_id,
-                           ASSET_CHANGE_SOURCE_LINK_CHANGE)
 
     return CreateAssetLinkResponseModel(
         assetLinkId=asset_link_id,

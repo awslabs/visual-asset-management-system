@@ -22,10 +22,8 @@ from common.apiRoutes import (
 )
 from common.validators import validate
 from common.assetProvenance import (
-    ASSET_CHANGE_SOURCE_METADATA_EDIT,
     METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE,
     METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE,
-    stamp_asset_change,
 )
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -845,53 +843,6 @@ def get_database_config(database_id: str) -> dict:
 #######################
 # Asset Link Metadata CRUD Operations
 #######################
-
-def metadata_change_execution_id(event):
-    """How a metadata write's caller is recorded on the asset row: `(stamp, workflow_execution_id)`.
-
-    An API request (no `lambdaCrossCall`) stamps `metadataEdit`. A `lambdaCrossCall` carrying a
-    `workflowExecutionId` string — a workflow execution writing its metadata output back
-    (`processWorkflowExecutionOutput`) — stamps `workflowExecution` with that id, which the compliance
-    trigger skips, so a pipeline rule's own metadata output does not re-trigger its evaluation. Any
-    other `lambdaCrossCall` is a system write that stamps nothing."""
-    cross_call = event.get('lambdaCrossCall')
-    if cross_call is None:
-        return True, None
-    execution_id = cross_call.get('workflowExecutionId') if isinstance(cross_call, dict) else None
-    if isinstance(execution_id, str) and execution_id:
-        return True, execution_id
-    return False, None
-
-
-def record_metadata_change(event, response, endpoints):
-    """Stamp each `(databaseId, assetId)` in `endpoints` with the metadata write `event` made, once
-    the write succeeded for at least one key (`response.success`), so the compliance trigger
-    re-evaluates the asset (`metadata_change_execution_id` decides the stamp). Best-effort: the
-    metadata is already written, and `stamp_asset_change` logs a failure rather than raising."""
-    if not getattr(response, 'success', False):
-        return
-    stamp, workflow_execution_id = metadata_change_execution_id(event)
-    if not stamp:
-        return
-    for database_id, asset_id in dict.fromkeys(endpoints):
-        stamp_asset_change(asset_storage_table, database_id, asset_id,
-                           ASSET_CHANGE_SOURCE_METADATA_EDIT,
-                           workflow_execution_id=workflow_execution_id)
-
-
-def asset_link_endpoints(asset_link_id: str) -> list:
-    """The `(databaseId, assetId)` of both assets an asset link joins; [] when the link cannot be
-    read (logged), so a metadata write on it is recorded on neither."""
-    try:
-        link = asset_links_table.get_item(Key={'assetLinkId': asset_link_id}).get('Item') or {}
-    except Exception as e:
-        logger.warning(f"Could not read asset link {asset_link_id} to record its metadata change: {e}")
-        return []
-    return [(link[db_key], link[asset_key])
-            for db_key, asset_key in (('fromAssetDatabaseId', 'fromAssetId'),
-                                      ('toAssetDatabaseId', 'toAssetId'))
-            if link.get(db_key) and link.get(asset_key)]
-
 
 def get_asset_link_metadata(asset_link_id: str, query_params: dict, claims_and_roles: dict) -> GetAssetLinkMetadataResponseModel:
     """Get metadata for an asset link - Returns one page of records
@@ -1814,8 +1765,6 @@ def handle_asset_link_metadata_post(event):
         
         # Create metadata
         response = create_asset_link_metadata(path_request_model.assetLinkId, request_model, claims_and_roles)
-        record_metadata_change(event, response,
-                               asset_link_endpoints(path_request_model.assetLinkId))
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -1865,8 +1814,6 @@ def handle_asset_link_metadata_put(event):
         
         # Update metadata
         response = update_asset_link_metadata(path_request_model.assetLinkId, request_model, claims_and_roles)
-        record_metadata_change(event, response,
-                               asset_link_endpoints(path_request_model.assetLinkId))
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -1916,8 +1863,6 @@ def handle_asset_link_metadata_delete(event):
         
         # Delete metadata
         response = delete_asset_link_metadata(path_request_model.assetLinkId, request_model, claims_and_roles)
-        record_metadata_change(event, response,
-                               asset_link_endpoints(path_request_model.assetLinkId))
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -2954,8 +2899,6 @@ def handle_asset_metadata_post(event):
         
         # Create metadata
         response = create_asset_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
-        record_metadata_change(event, response,
-                               [(path_request_model.databaseId, path_request_model.assetId)])
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -3005,8 +2948,6 @@ def handle_asset_metadata_put(event):
         
         # Update metadata
         response = update_asset_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
-        record_metadata_change(event, response,
-                               [(path_request_model.databaseId, path_request_model.assetId)])
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -3056,8 +2997,6 @@ def handle_asset_metadata_delete(event):
         
         # Delete metadata
         response = delete_asset_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
-        record_metadata_change(event, response,
-                               [(path_request_model.databaseId, path_request_model.assetId)])
         return success(body=response.dict())
         
     except ValidationError as v:
@@ -4135,8 +4074,6 @@ def handle_file_metadata_post(event):
             logger.info(f"Stripped assetId prefix from filePath")
         
         response = create_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
-        record_metadata_change(event, response,
-                               [(path_request_model.databaseId, path_request_model.assetId)])
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -4178,8 +4115,6 @@ def handle_file_metadata_put(event):
             logger.info(f"Stripped assetId prefix from filePath")
         
         response = update_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
-        record_metadata_change(event, response,
-                               [(path_request_model.databaseId, path_request_model.assetId)])
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
@@ -4221,8 +4156,6 @@ def handle_file_metadata_delete(event):
             logger.info(f"Stripped assetId prefix from filePath")
         
         response = delete_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
-        record_metadata_change(event, response,
-                               [(path_request_model.databaseId, path_request_model.assetId)])
         return success(body=response.dict())
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")

@@ -6,11 +6,13 @@
 Shared by the synchronous upload completion (`handlers/assets/uploadFile.py`) and the
 asynchronous large-file completion (`handlers/assets/sqsUploadFileLarge.py`) so both paths stamp
 the asset row identically, by the asset-version create and revert paths
-(`handlers/assets/assetVersions.py`), by the asset edit (`handlers/assets/assetService.py`
-`update_asset`), by the metadata service (`handlers/metadata/metadataService.py`: a write of asset
-metadata, file metadata, file attributes or asset-link metadata) and by the asset-link create and
-delete (`handlers/assetLinks/createAssetLink.py`, `handlers/assetLinks/assetLinksService.py`); the
-compliance trigger reads them from the table's stream image and from the row.
+(`handlers/assets/assetVersions.py`) and by the asset edit (`handlers/assets/assetService.py`
+`update_asset`) — each an attribute set on a write the handler already makes — and by the
+compliance trigger (`handlers/compliance/complianceTrigger.py`), which records the metadata and
+link changes it reads from the indexer events (`record_indexed_change`): a write of asset metadata,
+file metadata, file attributes or asset-link metadata, and an asset-link create or delete. The
+metadata and link requests themselves write nothing here. The compliance trigger reads the
+attributes from the table's stream image and from the row.
 `lastChangeSource` / `lastChangeAt` describe the latest change of any of these kinds (`upload`,
 `workflowExecution`, `assetVersion`, `assetEdit`, `metadataEdit`, `linkChange`); `lastUploadAt` is
 written by a user upload's completion only, so a workflow execution's output write, a new asset
@@ -33,10 +35,6 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_UPLOAD,
     VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION,
 )
-from customLogging.logger import safeLogger
-
-logger = safeLogger(service_name="AssetProvenance")
-
 # `lastChangeSource` of an asset row whose latest change is a new asset version (created, or made by
 # reverting to an earlier one). An asset-row value only: no S3 object carries it as its
 # `vams-changesource`.
@@ -118,48 +116,6 @@ def record_indexed_change(table, database_id, asset_id, source, change_at,
         if (e.response or {}).get("Error", {}).get("Code") == "ConditionalCheckFailedException":
             return False
         raise
-    return True
-
-
-def stamp_asset_change(asset_table, database_id, asset_id, source, workflow_execution_id=None):
-    """Record a change made outside the asset row as the row's latest change, with one targeted
-    `update_item` on the live row: SET `lastChangeSource` (`source`) and `lastChangeAt` (now), and
-    REMOVE `lastChangeWorkflowExecutionId` — or, given `workflow_execution_id`, SET
-    `lastChangeSource` `workflowExecution` and `lastChangeWorkflowExecutionId` to it, the provenance a
-    workflow execution's file outputs carry. No other attribute is written, so `lastUploadAt`,
-    `lastAssetVersionAt` and every sibling field are left as they are.
-
-    The write is conditioned on `attribute_exists(assetId)` under `databaseId`: an archived asset's
-    row lives under `<databaseId>#deleted` and is not stamped, and no row is created for an asset
-    that does not exist. The stream MODIFY the stamp raises is what makes the compliance trigger
-    re-evaluate the asset (a `workflowExecution` stamp is skipped there, so a pipeline rule's own
-    metadata output does not re-trigger its evaluation).
-
-    Best-effort, like `common.assetHistory`: the change it records has already been written, so a
-    failed stamp — the condition included — is logged and returns False rather than raising.
-    Returns True when the row was stamped."""
-    names = {"#src": "lastChangeSource", "#at": "lastChangeAt",
-             "#wf": "lastChangeWorkflowExecutionId", "#asset": "assetId"}
-    values = {":at": datetime.now(timezone.utc).isoformat()}
-    if workflow_execution_id:
-        values[":src"] = VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION
-        values[":wf"] = workflow_execution_id
-        expression = "SET #src = :src, #at = :at, #wf = :wf"
-    else:
-        values[":src"] = source
-        expression = "SET #src = :src, #at = :at REMOVE #wf"
-    try:
-        asset_table.update_item(
-            Key={"databaseId": database_id, "assetId": asset_id},
-            UpdateExpression=expression,
-            ConditionExpression="attribute_exists(#asset)",
-            ExpressionAttributeNames=names,
-            ExpressionAttributeValues=values,
-        )
-    except Exception as e:
-        logger.warning(f"Could not record the {values[':src']} change on asset "
-                       f"{database_id}:{asset_id}: {e}")
-        return False
     return True
 
 

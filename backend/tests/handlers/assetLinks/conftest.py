@@ -13,15 +13,3 @@ def setup_environment():
     os.environ["COGNITO_AUTH_ENABLED"] = "true"
     # Add any other required environment variables here
 
-
-@pytest.fixture(autouse=True)
-def stamp_asset_change():
-    """The link create and delete stamp both linked assets through `stamp_asset_change`, an
-    `update_item` on the module's real asset-table handle. Replaced for every test here so none
-    reaches AWS; yields `{module name: mock}` for the tests that assert on the stamps."""
-    from backend.backend.handlers.assetLinks import assetLinksService, createAssetLink
-    stamps = {"createAssetLink": MagicMock(name="createAssetLink.stamp_asset_change"),
-              "assetLinksService": MagicMock(name="assetLinksService.stamp_asset_change")}
-    with patch.object(createAssetLink, "stamp_asset_change", stamps["createAssetLink"]), \
-            patch.object(assetLinksService, "stamp_asset_change", stamps["assetLinksService"]):
-        yield stamps
