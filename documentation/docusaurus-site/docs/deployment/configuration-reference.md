@@ -525,6 +525,14 @@ Only one federation method can be active at a time (`useSaml` and `useOidc` cann
 When external OAuth IdP is enabled, **all** fields in this section are required. Deployment will fail if any field is null or empty.
 :::
 
+:::note[Tokens the authorizer accepts]
+In external OAuth mode the web application sends the IdP's **access token** with every API request. The custom Lambda authorizer verifies the token's signature against `{lambdaAuthorizorJWTIssuerUrl}/.well-known/jwks.json`, its issuer and its expiry, and requires an `aud` claim equal to `lambdaAuthorizorJWTAudience`. An access token without an `aud` claim is refused with `403` on every request ([#788](https://github.com/awslabs/visual-asset-management-system/issues/788)).
+
+The authorizer identifies the user by the token's `cognito:username` claim, then `username`, then `sub`; the web application uses `sub`. Choose an IdP whose access tokens carry `aud` and whose user is identified the same way by both, that is, tokens with no `cognito:username` or `username` claim that differs from `sub`; otherwise the web application's login profile request is refused ([#816](https://github.com/awslabs/visual-asset-management-system/issues/816)). `app.adminUserId` and VAMS role assignments use the value the authorizer resolves.
+
+Amazon Cognito user pool access tokens carry `client_id` instead of `aud`, and a `username` claim that differs from `sub`, so a Cognito user pool cannot be used as the external IdP. Use `app.authProvider.useCognito` for Amazon Cognito sign-in.
+:::
+
 ## API configuration (`app.api`)
 
 :::note[Implemented by]

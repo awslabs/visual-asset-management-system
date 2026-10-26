@@ -157,6 +157,8 @@ Cognito federation uses the Amazon Cognito hosted UI, which is available only in
     - `lambdaAuthorizorJWTAudience` -- Expected JWT audience
 4. Deploy the stack with the updated configuration.
 
+The IdP's access tokens must carry an `aud` claim equal to `lambdaAuthorizorJWTAudience`, and the web application and the authorizer must resolve the same user from them; see the token requirements in the [Configuration Guide](../deployment/configuration-reference.md).
+
 Refer to the [Configuration Guide](../deployment/configuration-reference.md) for the complete field list for both paths, and to [Plan your deployment](../deployment/plan-your-deployment.md) for the authentication decision table.
 
 ---
