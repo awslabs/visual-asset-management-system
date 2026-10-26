@@ -10,7 +10,7 @@ The VAMS web interface is a React 18 application built with Vite and the AWS Clo
 
 ### Viewer Plugins
 
-VAMS includes built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview), covering 3D meshes, CAD, point clouds, Gaussian splats, USD, and IFC/BIM models. The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
+VAMS includes built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview), covering 3D meshes, CAD, point clouds, Gaussian splats, USD, IFC/BIM models, and robotics logs (MCAP, ROS 1 and ROS 2 bags, PX4 ULog). The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 
@@ -263,7 +263,7 @@ VAMS uses a feature flag system to conditionally enable capabilities at deployme
 | Feature Flag                    | Description                                                                                                                                                          |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments)                                                                       |
-| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Three.js CAD formats)                                                  |
+| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Three.js CAD formats)                            |
 | `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views                                                                                                            |
 | `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution                                                                                                                 |
 | `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                                                                                                                         |

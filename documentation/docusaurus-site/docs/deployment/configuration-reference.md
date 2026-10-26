@@ -598,7 +598,7 @@ Consumed by the static web hosting stack `infra/lib/nestedStacks/staticWebApp/st
 | Field                                   | Type    | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | --------------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `app.webUi.optionalBannerHtmlMessage`   | string  | `""`    | Optional HTML message displayed as a banner in the web interface. Use for system notifications or compliance messages (for example, `"AWS Sandbox System. Do not upload sensitive information."`).                                                                                                                                                                                                                                                                                                                                                                 |
-| `app.webUi.allowUnsafeEvalFeatures`     | boolean | `false` | Allows `unsafe-eval` in the Content Security Policy for script execution. Required for certain viewer plugins (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, and the Three.js CAD formats). Consult your security team before enabling.                                                                                                                                                                                                                                                                                                                         |
+| `app.webUi.allowUnsafeEvalFeatures`     | boolean | `false` | Allows `unsafe-eval` in the Content Security Policy for script execution. Required for certain viewer plugins (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, and the Three.js CAD formats). Consult your security team before enabling.                                                                                                                                                                                                                                                                                                   |
 | `app.webUi.allowLocalhostAuthCallbacks` | boolean | `false` | Registers `http://localhost:3001` as an Amazon Cognito callback and logout URL, so a web front run locally with `npm run start` can complete a federated sign-in against the deployed user pool. Read only when Cognito SAML or OIDC federation is enabled — without federation VAMS performs no OAuth redirect. The URLs are registered on the same user pool that serves application users, and the redirect target is on the developer's own machine, so leave this off for a deployment that serves real users and enable it only on a development deployment. |
 
 ## Metadata schema (`app.metadataSchema`)
@@ -1315,10 +1315,10 @@ By default, `cdk bootstrap` creates five roles per account and Region (for examp
 | `fileAssetsBucketName`           | Staging bucket name, only if your customized bootstrap template renamed it.                                                                                                                                            |
 | `imageAssetsRepositoryName`      | Staging ECR repository name, only if your customized bootstrap template renamed it.                                                                                                                                    |
 
-Any field left empty keeps the corresponding CDK default. ARNs may use the `${AWS::Partition}`, `${AWS::AccountId}`, and `${AWS::Region}` placeholders, which resolve at deployment time. To discover the required permissions for each role, export the default bootstrap template with `cdk bootstrap --show-template > bootstrap-template.yaml` and copy the role policies into your role-provisioning process.
+Any field left empty keeps the corresponding CDK default. ARNs may use the `${AWS::Partition}`, `${AWS::AccountId}`, and `${AWS::Region}` placeholders, which resolve at deployment time. To discover the required permissions for each role, export the default bootstrap template with `npx cdk bootstrap --show-template > bootstrap-template.yaml` from the `infra/` directory and copy the role policies into your role-provisioning process.
 
 :::tip[Simpler middle ground]
-If your only concern is that the CloudFormation execution role gets `AdministratorAccess` by default, you do not need this feature. Instead bootstrap with `cdk bootstrap --cloudformation-execution-policies <your-managed-policy-arns>` and/or `--custom-permissions-boundary <name>`.
+If your only concern is that the CloudFormation execution role gets `AdministratorAccess` by default, you do not need this feature. Instead bootstrap with `npx cdk bootstrap --cloudformation-execution-policies <your-managed-policy-arns>` and/or `--custom-permissions-boundary <name>`.
 :::
 
 ### VAMS stack role customization (`vamsStacks`)
@@ -1471,6 +1471,16 @@ The file supports the following categories:
 -   **Invalid JSON** -- Logs a warning and uses default CSP settings.
 -   **Empty arrays** -- Ignored; only default CSP sources are used for those categories.
 -   **Duplicate prevention** -- Additional sources are merged with existing ones, avoiding duplicates.
+
+**Example: a base map for the Robotics Data Viewer.** The viewer's Map panel draws its base map from map tile images, which the default policy blocks. To allow a tile server that your organization operates or licenses, add its origin to `imgSrc`:
+
+```json
+{
+    "imgSrc": ["https://tiles.example.com"]
+}
+```
+
+Map tiles are loaded as images, so `imgSrc` is the only category the panel needs. Choosing the tile layer in the panel is described in [Robotics data viewer](../concepts/viewers.md#robotics-data-viewer).
 
 :::warning[CSP security]
 Only add trusted domains to your CSP configuration. Avoid using wildcards (`*`) as they compromise security. Regularly audit your CSP configuration and test changes in a development environment before deploying to production.

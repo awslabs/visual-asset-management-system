@@ -232,7 +232,7 @@ When importing an existing VPC, subnet IDs must be provided for each subnet type
 | `optionalExternalPublicSubnetIds`   | Comma-separated public subnet IDs   |
 
 :::warning[Context Loading]
-When importing a VPC, you may need to run an initial `cdk synth` with `loadContextIgnoreVPCStacks = true` to populate the CDK context with VPC metadata before the full deployment.
+When importing a VPC, you may need to run an initial `npx cdk synth` with `loadContextIgnoreVPCStacks = true` to populate the CDK context with VPC metadata before the full deployment.
 :::
 
 ## VPC Endpoints
