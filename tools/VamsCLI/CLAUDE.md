@@ -75,6 +75,7 @@ tools/VamsCLI/
       global_exceptions.py   # @handle_global_exceptions() decorator
       decorators.py          # @requires_setup_and_auth, @requires_feature
       json_output.py         # output_result(), output_error(), output_status()
+      confirmation.py        # confirm_destructive_action(): extra prompt only on an interactive terminal
       logging.py             # Rotating file logger, verbose mode
       retry_config.py        # Retry settings with env var overrides
       features.py            # Feature switch utilities
@@ -220,6 +221,7 @@ def list(ctx: click.Context, json_output: bool):
 5. Never print directly with `print()` or bare `click.echo()` in commands that support `--json-output`
 6. Comment `# Setup/auth already validated by decorator` at top of command body
 7. Catch only `BusinessLogicError` subclasses in commands; never catch `GlobalInfrastructureError`
+8. A destructive command refuses to run without `--confirm`. Its extra "Are you sure you want to proceed?" question (text mode only; `--json-output` never asks) goes through `confirm_destructive_action()` in `utils/confirmation.py`, which asks only when stdin is an interactive terminal and otherwise treats the required `--confirm` as the confirmation. Never call `click.confirm` after a `--confirm` gate: with no terminal on stdin (a script, a pipe, CI, a connector) it reads end of input and aborts with `Operation cancelled by user.`, so `--confirm` alone could never complete the command. `CliRunner`'s stdin is not a terminal, so a test of the prompt itself takes the `interactive_stdin` fixture; `tests/test_destructive_confirmation.py` covers every site.
 
 ### 3. API Client Patterns
 
@@ -624,6 +626,7 @@ Treat a command whose output includes another command's output as this bug until
 | `no_setup_profile_manager` | function | ProfileManager mock with `has_config()=False`  |
 | `generic_command_mocks`    | function | Factory for comprehensive command mocks        |
 | `no_setup_command_mocks`   | function | Factory for no-setup scenario mocks            |
+| `interactive_stdin`        | function | Treats stdin as a terminal (prompt tests)      |
 
 ### The generic_command_mocks Pattern
 
@@ -1131,6 +1134,7 @@ constant is a gate no command can name, and an extra one names a gate no deploym
 | `vamscli/utils/global_exceptions.py` | `@handle_global_exceptions()` decorator                |
 | `vamscli/utils/decorators.py`        | `@requires_setup_and_auth`, `@requires_feature`        |
 | `vamscli/utils/json_output.py`       | `output_result()`, `output_error()`, `output_status()` |
+| `vamscli/utils/confirmation.py`      | `confirm_destructive_action()` (Command rule 8)        |
 | `vamscli/utils/logging.py`           | Rotating file logger, verbose mode support             |
 | `vamscli/utils/retry_config.py`      | Retry config with env var overrides                    |
 | `vamscli/utils/features.py`          | Feature switch utilities                               |

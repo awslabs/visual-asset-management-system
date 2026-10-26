@@ -117,7 +117,7 @@ vamscli role delete -r old-role --confirm
 ```
 
 :::note
-In interactive (non-JSON) mode, an additional confirmation prompt appears even after `--confirm`. The backend automatically cleans up any user-role assignments for the deleted role.
+When the command runs in an interactive terminal without `--json-output`, an additional confirmation prompt appears after `--confirm`; in a script, pipe or CI job, or with `--json-output`, `--confirm` alone proceeds. The backend automatically cleans up any user-role assignments for the deleted role.
 :::
 
 ---
@@ -221,7 +221,7 @@ vamscli role user delete -u user@example.com --confirm
 ```
 
 :::warning
-This removes all role assignments for the user. The user loses access to all resources granted through those roles. In interactive (non-JSON) mode, an additional confirmation prompt appears even after `--confirm`.
+This removes all role assignments for the user. The user loses access to all resources granted through those roles. When the command runs in an interactive terminal without `--json-output`, an additional confirmation prompt appears after `--confirm`; in a script, pipe or CI job, or with `--json-output`, `--confirm` alone proceeds.
 :::
 
 ---
@@ -375,7 +375,7 @@ vamscli role constraint delete -c old-constraint --confirm
 ```
 
 :::warning
-This permanently removes the constraint and all associated permissions. In interactive (non-JSON) mode, an additional confirmation prompt appears even after `--confirm`.
+This permanently removes the constraint and all associated permissions. When the command runs in an interactive terminal without `--json-output`, an additional confirmation prompt appears after `--confirm`; in a script, pipe or CI job, or with `--json-output`, `--confirm` alone proceeds.
 :::
 
 ---

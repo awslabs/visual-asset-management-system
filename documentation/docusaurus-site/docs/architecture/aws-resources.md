@@ -196,20 +196,23 @@ VAMS deploys Lambda functions across builder files. All functions use Python 3.1
 | Schema Deploy Lambda (Node.js 22.x) | Custom resource for OpenSearch index creation  |
 | Populate S3 Asset Buckets Lambda    | Custom resource for bucket table population    |
 
+On a CloudFront deployment, the StaticWeb nested stack also holds the **API origin verification rotation Lambda** (`apiOriginVerifyRotation`), the AWS Secrets Manager rotation function of the origin verification secret. Every 45 days it writes a new value, sets the regional web ACL's origin verification matches to the new and the previous value, and then points the CloudFront distribution's API origin headers at the new value. The previous value stays accepted until the next rotation, so a value is accepted for at most two rotation intervals (about 90 days). It runs outside the VPC in every configuration, because Amazon CloudFront and AWS WAF have no interface VPC endpoint for their APIs.
+
 ## Amazon API Gateway
 
-| Resource                    | Configuration                                                                                                                                                                                                        |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **API Type**                | REST API (API Gateway v1). Selected by `app.api.apiType` (`"APIGATEWAY_REST"`).                                                                                                                                      |
-| **Endpoint Type**           | `REGIONAL` (public, no VPC endpoint) or `PRIVATE` (VPC interface endpoint only). Configurable via `app.api.apiGatewayRest.endpointType`.                                                                             |
-| **Stage Name**              | Fixed internal value `api` (not configurable; shared with the VamsCLI endpoint constants). The CloudFront originPath or ALB redirect maps the web URL's `/api/*` paths onto it; other routes use the invoke URL.     |
-| **Authorizer**              | Custom Lambda authorizer (REQUEST type, returns IAM policy with wildcard resource for cache correctness). Validates JWT (Cognito/external OAuth), API keys, and optional IP allowlist.                               |
-| **Identity Source**         | `method.request.header.Authorization`                                                                                                                                                                                |
-| **CORS**                    | All origins (`*`), all standard HTTP methods, credentials disabled                                                                                                                                                   |
-| **Rate Limiting**           | Default 50 requests/second rate, 100 burst (configurable via `app.api.apiGatewayRest.globalRateLimit` and `app.api.apiGatewayRest.globalBurstLimit`)                                                                 |
-| **Access Logging**          | CloudWatch Logs with structured JSON format (CloudFormation-auto-named log group)                                                                                                                                    |
-| **Unauthenticated Paths**   | `/api/amplify-config`, `/api/version`                                                                                                                                                                                |
-| **Account CloudWatch Role** | `AWS::ApiGateway::Account` plus the IAM role it points at, granting API Gateway permission to deliver stage execution and access logs. Retained on teardown; explicitly named, so it is redeploy-collision relevant. |
+| Resource                    | Configuration                                                                                                                                                                                                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **API Type**                | REST API (API Gateway v1). Selected by `app.api.apiType` (`"APIGATEWAY_REST"`).                                                                                                                                                                                                 |
+| **Endpoint Type**           | `REGIONAL` (public, no VPC endpoint) or `PRIVATE` (VPC interface endpoint only). Configurable via `app.api.apiGatewayRest.endpointType`.                                                                                                                                        |
+| **Stage Name**              | Fixed internal value `api` (not configurable; shared with the VamsCLI endpoint constants). CloudFront forwards the web URL's `/api/*` paths onto it (the two unauthenticated routes with an `/api` origin path, every other path without one); the ALB redirects `/api*` to it. |
+| **Custom Domain Name**      | Optional (`app.api.apiGatewayRest.customDomain`). An `AWS::ApiGateway::DomainName` (Regional, ACM certificate from the deployment Region) and an `AWS::ApiGateway::BasePathMapping` from base path `api` to the `api` stage; optional Amazon Route 53 A and AAAA alias records. |
+| **Authorizer**              | Custom Lambda authorizer (REQUEST type, returns IAM policy with wildcard resource for cache correctness). Validates JWT (Cognito/external OAuth), API keys, and optional IP allowlist.                                                                                          |
+| **Identity Source**         | `method.request.header.Authorization`                                                                                                                                                                                                                                           |
+| **CORS**                    | All origins (`*`), all standard HTTP methods, credentials disabled                                                                                                                                                                                                              |
+| **Rate Limiting**           | Default 50 requests/second rate, 100 burst (configurable via `app.api.apiGatewayRest.globalRateLimit` and `app.api.apiGatewayRest.globalBurstLimit`)                                                                                                                            |
+| **Access Logging**          | CloudWatch Logs with structured JSON format (CloudFormation-auto-named log group)                                                                                                                                                                                               |
+| **Unauthenticated Paths**   | `/api/amplify-config`, `/api/version`                                                                                                                                                                                                                                           |
+| **Account CloudWatch Role** | `AWS::ApiGateway::Account` plus the IAM role it points at, granting API Gateway permission to deliver stage execution and access logs. Retained on teardown; explicitly named, so it is redeploy-collision relevant.                                                            |
 
 :::warning[The account CloudWatch role is retained and blocks a redeploy]
 `AWS::ApiGateway::Account` holds a single CloudWatch role ARN per AWS account and Region, and every REST API in that account and Region delivers its stage logs through it. Both that resource and its IAM role use a `RETAIN` removal policy, so tearing down one VAMS deployment leaves API Gateway logging in place for any other deployment sharing the account and Region.
@@ -447,12 +450,66 @@ Because these parameters are explicitly named, an orphaned parameter left from a
 
 ## AWS Secrets Manager
 
-A default deployment creates no secret. The following are created when the feature that uses them is enabled:
+The following secrets are created when the feature that uses them is enabled:
 
-| Resource                       | Created when                                                      | Removal on teardown      | Custom name (redeploy collision) | Purpose                                                                                               |
-| ------------------------------ | ----------------------------------------------------------------- | ------------------------ | -------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| **Physna credentials secret**  | `app.addons.usePhysnaSync.enabled` without `credentialsSecretArn` | Destroyed with the stack | No (auto-named)                  | Physna OAuth2 client id and secret, populated at deploy time                                          |
-| **Hugging Face token secrets** | An NVIDIA Cosmos or NVIDIA GR00T pipeline is enabled, one each    | Destroyed with the stack | No (auto-named)                  | Hugging Face API token the pipeline uses to download its models, populated at deploy time from config |
+| Resource                           | Created when                                                      | Removal on teardown      | Custom name (redeploy collision) | Purpose                                                                                                                                                                                              |
+| ---------------------------------- | ----------------------------------------------------------------- | ------------------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **API origin verification secret** | `app.useCloudFront.enabled` (the commercial template's default)   | Destroyed with the stack | No (auto-named)                  | Value CloudFront adds to the API requests it forwards (`x-vams-origin-verify`), generated by Secrets Manager and rotated every 45 days; in the `<name>-origin-verify-<baseStackName>-<region>` stack |
+| **Physna credentials secret**      | `app.addons.usePhysnaSync.enabled` without `credentialsSecretArn` | Destroyed with the stack | No (auto-named)                  | Physna OAuth2 client id and secret, populated at deploy time                                                                                                                                         |
+| **Hugging Face token secrets**     | An NVIDIA Cosmos or NVIDIA GR00T pipeline is enabled, one each    | Destroyed with the stack | No (auto-named)                  | Hugging Face API token the pipeline uses to download its models, populated at deploy time from config                                                                                                |
+
+The API origin verification secret is JSON: `current` is the value CloudFront sends, and `previous`, written by each rotation, the value it sent before. The regional web ACL stack and the core stack resolve it through `{{resolve:secretsmanager:...}}` dynamic references, which is why it has a stack of its own that deploys before both. It is encrypted with `useKmsCmkEncryption.optionalExternalCmkArn` when that is set; with `useKmsCmkEncryption.enabled` and no external key, with a key of the same stack (see [AWS KMS](#aws-kms)), because the VAMS-generated key is created by the core stack, which deploys after it; otherwise with the AWS managed `aws/secretsmanager` key.
+
+### Rotation of the API origin verification secret
+
+Secrets Manager runs the `apiOriginVerifyRotation` function every 45 days. Each rotation writes the new value as the `AWSPENDING` version, sets the regional web ACL to accept the new and the previous value, points the distribution's API origin headers at the new value, and then moves `AWSCURRENT` to the new version. Before it moves `AWSCURRENT`, it applies the web ACL and distribution changes again; when nothing has changed them since, this step changes nothing.
+
+:::warning[Do not deploy during a rotation]
+A stack update that lands while a rotation is in progress resolves the regional web ACL and the distribution to the version that is still `AWSCURRENT`, that is, the old value. The rotation corrects an update that has finished before its last step. An update that finishes after the rotation has completed can still leave the regional web ACL accepting only the old value while CloudFront sends the new one. Requests forwarded through CloudFront are then rate-limited per CloudFront edge address instead of per viewer, until the next rotation. Do not deploy while a rotation is in progress. If a deployment overlapped one, rotate again once the deployment has finished:
+
+```bash
+aws secretsmanager rotate-secret --secret-id <secret ARN>
+```
+
+:::
+
+#### Check that rotation is working
+
+A failed rotation is not reported anywhere else, so check the secret's rotation state, for example after a deployment and every rotation interval. `describe-secret` returns the secret's metadata, never its value:
+
+```bash
+# The secret ARN: the AWS::SecretsManager::Secret resource of the origin verification stack
+aws cloudformation describe-stack-resources --stack-name <name>-origin-verify-<baseStackName>-<region> \
+    --query "StackResources[?ResourceType=='AWS::SecretsManager::Secret'].PhysicalResourceId" --output text
+
+aws secretsmanager describe-secret --secret-id <secret ARN>
+```
+
+Rotation is working when `RotationEnabled` is `true`, `NextRotationDate` is in the future, `LastRotatedDate` is less than 46 days ago (once the first rotation has run; a rotation runs at any time during the UTC day it falls due, so an interval is 44 to 46 days), and no version in `VersionIdsToStages` carries `AWSPENDING` without `AWSCURRENT`. The rotation function logs to the log group `/aws/lambda/<function name>`, where the function name is the last part of the `RotationLambdaARN` that `describe-secret` returns. Each step logs `<step>: start (version <version id>)`, followed by its error if it fails; the function logs no secret value.
+
+A failed rotation leaves its version labelled `AWSPENDING` only, for example when `createSecret` runs while the distribution is still deploying an earlier change (`Distribution <id> is InProgress`), or when a step lacks a permission. While that version exists, Secrets Manager rejects every later rotation, scheduled ones included, so the value stops rotating. Fix the cause, then look for the line `Updated <n> origin verification header(s) of distribution <id>` after that version's `setSecret: start` line:
+
+-   No such line: CloudFront still sends the current value. Remove the label from the failed version and rotate again:
+
+    ```bash
+    aws secretsmanager update-secret-version-stage --secret-id <secret ARN> \
+        --version-stage AWSPENDING --remove-from-version-id <pending version id>
+    aws secretsmanager rotate-secret --secret-id <secret ARN>
+    ```
+
+-   The line is present: CloudFront already sends the pending value, and removing the label would leave that value accepted nowhere but the regional web ACL. Complete the rotation instead, by moving `AWSCURRENT` to the pending version:
+
+    ```bash
+    aws secretsmanager update-secret-version-stage --secret-id <secret ARN> \
+        --version-stage AWSCURRENT --move-to-version-id <pending version id> \
+        --remove-from-version-id <current version id>
+    ```
+
+:::note[Restricted deployment and application roles]
+AWS CloudFormation resolves the secret's `{{resolve:secretsmanager:...}}` references in the regional web ACL stack and the core stack with the AWS CloudFormation execution role. The default CDK bootstrap role can read them. A custom execution role (`app.iamRoleConfig.useCustomBootstrapRoles`, or `npx cdk bootstrap --cloudformation-execution-policies`) must allow `secretsmanager:GetSecretValue` on the secret, and `kms:Decrypt` on its key when the secret uses a customer managed key; with `useCliCredentialsSynthesizer` set in `infra/config/policy/iamRoleConfig.json`, the deploying credentials must.
+
+With `app.iamRoleConfig.useCustomVamsStackRoles`, the IAM policy report lists the rotation function's role (construct path containing `/StaticWeb/apiOriginVerifyRotation/ServiceRole`), which needs its own `precreatedRoles` entry. The REST authorizer's role also needs `secretsmanager:GetSecretValue` on the secret, plus `kms:Decrypt` on the key with a customer managed key. Regenerate the report and update a pre-created authorizer role before deploying. See [Advanced IAM role customization](../deployment/configuration-reference.md#advanced-iam-role-customization-appiamroleconfig).
+:::
 
 ## AWS KMS
 
@@ -461,6 +518,8 @@ Deployed when `useKmsCmkEncryption.enabled = true`:
 | Resource                    | Removal on teardown | Custom name (redeploy collision) | Purpose                                           |
 | --------------------------- | ------------------- | -------------------------------- | ------------------------------------------------- |
 | **VAMS Encryption KMS Key** | Retained            | No (no alias, generated key id)  | Customer-managed key for all VAMS data encryption |
+
+On a CloudFront deployment with `useKmsCmkEncryption.enabled` and no `optionalExternalCmkArn`, the `<name>-origin-verify-<baseStackName>-<region>` stack also creates a key for the API origin verification secret (retained, no alias, annual rotation), because that stack deploys before the core stack that creates the VAMS key.
 
 The KMS key policy grants access to the following service principals: Amazon S3, Amazon DynamoDB, Amazon SQS, Amazon SNS, Amazon ECS, Amazon EKS, Amazon ECS Tasks, Amazon CloudWatch Logs, AWS Lambda, AWS STS, and AWS CloudFormation. Conditionally, Amazon CloudFront, Amazon OpenSearch Service, and Amazon OpenSearch Serverless principals are also added.
 
@@ -496,7 +555,9 @@ Deployed when `useWaf = true`:
 
 A regional web ACL is always created and associated with the API Gateway stage (for both `REGIONAL` and `PRIVATE` endpoint types), so the API's `execute-api` endpoint is protected in every fronting configuration. When Amazon CloudFront is enabled, a second `CLOUDFRONT`-scoped web ACL is created in `us-east-1` for the distribution — AWS WAF requires a separate scope for CloudFront, and a CloudFront-associated web ACL cannot be shared with any other resource type. Both web ACLs use the same `config/policy/wafPolicyConfig.json` rule policy.
 
-The web ACLs are separate CloudFormation stacks. When CloudFront is disabled, the regional stack is `{name}-waf-{baseStackName}`. When CloudFront is enabled, the regional stack is `{name}-waf-regional-{baseStackName}` and the CloudFront stack is `{name}-waf-{baseStackName}` (in `us-east-1`).
+The web ACLs are separate CloudFormation stacks. When CloudFront is disabled, the regional stack is `{name}-waf-{baseStackName}-{region}`. When CloudFront is enabled, the regional stack is `{name}-waf-regional-{baseStackName}-{region}` and the CloudFront stack is `{name}-waf-{baseStackName}-{region}`, deployed to `us-east-1`. In every case `{region}` is the deployment Region, so the CloudFront stack's name carries the deployment Region although the stack is in `us-east-1`.
+
+When CloudFront is enabled, the regional web ACL's rate-based rules carry a scope-down statement that leaves requests carrying a valid origin verification header (`x-vams-origin-verify`, the value CloudFront adds to the API requests it forwards) to the CloudFront web ACL, and its logging configuration redacts that header beside `authorization`. The regional stack then deploys after the `{name}-origin-verify-{baseStackName}-{region}` stack whose secret the scope-down references.
 
 ## Amazon EFS
 
@@ -597,7 +658,9 @@ role (`app.iamRoleConfig.useCustomBootstrapRoles`, or `npx cdk bootstrap --cloud
 must allow them on the key; with `useCliCredentialsSynthesizer` set in `infra/config/policy/iamRoleConfig.json`,
 the deploying credentials must. An external key's policy must keep the statement that lets IAM policies in the
 account authorize use of the key. Amazon ECR encrypts and decrypts image layers through the grants it creates
-on the key, so the CodeBuild projects and the AWS Batch jobs get no permission on it.
+on the key, so the CodeBuild projects and the AWS Batch jobs get no permission on it. A custom execution role
+also needs read access to the API origin verification secret on a CloudFront deployment; see
+[Rotation of the API origin verification secret](#rotation-of-the-api-origin-verification-secret).
 :::
 
 ## AWS CloudTrail
@@ -614,11 +677,12 @@ Deployed when `addStackCloudTrailLogs = true`:
 
 ### Amazon CloudFront (Commercial)
 
-| Resource         | Purpose                                      |
-| ---------------- | -------------------------------------------- |
-| **Distribution** | Global CDN for web application and API proxy |
-| **S3 Origin**    | Web app bucket as origin                     |
-| **API Origin**   | API Gateway endpoint as origin               |
+| Resource                                  | Purpose                                                                                                                                                                                                                                            |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Distribution**                          | Global CDN for web application and API proxy                                                                                                                                                                                                       |
+| **S3 Origin**                             | Web app bucket as origin                                                                                                                                                                                                                           |
+| **API Origin**                            | API Gateway endpoint as origin, twice: with the `/api` stage as origin path for `/api/amplify-config` and `/api/version`, and without an origin path for every other `/api/*` path. Both add the origin verification header `x-vams-origin-verify` |
+| **API Cache and Origin Request Policies** | One custom cache policy and one custom origin request policy for the two unauthenticated paths; the `/api/*` behavior uses the managed `CachingDisabled` and `AllViewerExceptHostHeader` policies                                                  |
 
 ### Application Load Balancer (GovCloud / ALB Mode)
 

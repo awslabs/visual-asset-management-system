@@ -812,7 +812,7 @@ class TestDatabaseDeleteCommand:
             mocks['api_client'].delete_database.assert_not_called()
     
     @patch('click.confirm')
-    def test_delete_user_cancels(self, mock_confirm, cli_runner, generic_command_mocks):
+    def test_delete_user_cancels(self, mock_confirm, cli_runner, generic_command_mocks, interactive_stdin):
         """Test delete command when user cancels confirmation."""
         with generic_command_mocks('database') as mocks:
             mock_confirm.return_value = False  # User cancels deletion
