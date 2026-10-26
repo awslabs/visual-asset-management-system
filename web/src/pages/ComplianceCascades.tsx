@@ -21,7 +21,7 @@ import {
     CascadeRecord,
 } from "../services/ComplianceService";
 import ReasonModal from "../components/compliance/ReasonModal";
-import { ROW_ACTIONS_STICKY_COLUMNS } from "../components/compliance/rowActions";
+import { ROW_ACTIONS_STICKY_COLUMNS, VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
 
 const statusIndicatorMap: Record<string, { type: string; label: string }> = {
@@ -261,170 +261,175 @@ const ComplianceCascades: React.FC = () => {
     };
 
     return (
-        <SpaceBetween size="l">
-            {error && (
-                <Alert type="error" dismissible onDismiss={() => setError(null)}>
-                    {error}
-                </Alert>
-            )}
-            {actionMessage && (
-                <Alert type="success" dismissible onDismiss={() => setActionMessage(null)}>
-                    {actionMessage}
-                </Alert>
-            )}
-            {Object.values(tracked).map(renderTracked)}
+        // The page margins every VAMS list page uses (VAMS_PAGE_PADDING).
+        <Box padding={VAMS_PAGE_PADDING}>
+            <SpaceBetween size="l">
+                {error && (
+                    <Alert type="error" dismissible onDismiss={() => setError(null)}>
+                        {error}
+                    </Alert>
+                )}
+                {actionMessage && (
+                    <Alert type="success" dismissible onDismiss={() => setActionMessage(null)}>
+                        {actionMessage}
+                    </Alert>
+                )}
+                {Object.values(tracked).map(renderTracked)}
 
-            <Table
-                wrapLines
-                stickyColumns={ROW_ACTIONS_STICKY_COLUMNS}
-                header={
-                    <Header
-                        variant="h1"
-                        counter={`(${items.length})`}
-                        actions={
-                            <Button
-                                iconName="refresh"
-                                ariaLabel="Refresh cascades"
-                                onClick={loadData}
-                                loading={loading}
-                            />
-                        }
-                    >
-                        Cascade Approval Queue
-                    </Header>
-                }
-                loading={loading}
-                items={items}
-                empty={
-                    <Box textAlign="center" padding="l">
-                        <b>No cascades</b>
-                        <Box variant="p" color="inherit">
-                            No cascade operations are pending approval.
+                <Table
+                    wrapLines
+                    stickyColumns={ROW_ACTIONS_STICKY_COLUMNS}
+                    header={
+                        <Header
+                            variant="h1"
+                            counter={`(${items.length})`}
+                            actions={
+                                <Button
+                                    iconName="refresh"
+                                    ariaLabel="Refresh cascades"
+                                    onClick={loadData}
+                                    loading={loading}
+                                />
+                            }
+                        >
+                            Cascade Approval Queue
+                        </Header>
+                    }
+                    loading={loading}
+                    items={items}
+                    empty={
+                        <Box textAlign="center" padding="l">
+                            <b>No cascades</b>
+                            <Box variant="p" color="inherit">
+                                No cascade operations are pending approval.
+                            </Box>
                         </Box>
-                    </Box>
-                }
-                columnDefinitions={[
-                    {
-                        id: "cascadeId",
-                        header: "Cascade ID",
-                        cell: (item) => shortId(item.cascadeId),
-                        sortingField: "cascadeId",
-                    },
-                    {
-                        id: "state",
-                        header: "Status",
-                        cell: (item) => {
-                            const indicator = statusIndicatorMap[item.state] || {
-                                type: "stopped",
-                                label: item.state || "Unknown",
-                            };
-                            return (
-                                <StatusIndicator type={indicator.type as any}>
-                                    {indicator.label}
-                                </StatusIndicator>
-                            );
+                    }
+                    columnDefinitions={[
+                        {
+                            id: "cascadeId",
+                            header: "Cascade ID",
+                            cell: (item) => shortId(item.cascadeId),
+                            sortingField: "cascadeId",
                         },
-                        sortingField: "state",
-                    },
-                    {
-                        id: "databaseId",
-                        header: `Trigger ${Synonyms.Database}`,
-                        cell: (item) => cascadeTriggerDatabaseId(item) || "-",
-                        sortingField: "triggeredByDatabaseId",
-                    },
-                    {
-                        id: "assetId",
-                        header: `Trigger ${Synonyms.Asset}`,
-                        cell: (item) => cascadeTriggerAssetId(item) || "-",
-                        sortingField: "triggeredByAssetId",
-                    },
-                    {
-                        id: "triggerReason",
-                        header: "Reason",
-                        cell: (item) => item.triggerReason || "-",
-                    },
-                    {
-                        id: "createdAt",
-                        header: "Created",
-                        cell: (item) =>
-                            item.createdAt ? new Date(item.createdAt).toLocaleString() : "-",
-                        sortingField: "createdAt",
-                    },
-                    {
-                        id: "approvalTimeoutAt",
-                        header: "Approval timeout",
-                        cell: (item) =>
-                            item.approvalTimeoutAt
-                                ? new Date(item.approvalTimeoutAt).toLocaleString()
-                                : "-",
-                        sortingField: "approvalTimeoutAt",
-                    },
-                    {
-                        id: "actor",
-                        header: "Actor",
-                        cell: (item) => item.actor || "-",
-                    },
-                    ...(canApprove || canReject
-                        ? [
-                              {
-                                  id: "actions",
-                                  header: "Actions",
-                                  width: CASCADE_ACTIONS_COLUMN_WIDTH,
-                                  minWidth: CASCADE_ACTIONS_COLUMN_WIDTH,
-                                  cell: (item: CascadeRecord) =>
-                                      item.state === "pending_approval" ? (
-                                          <SpaceBetween direction="horizontal" size="s">
-                                              {canApprove && (
-                                                  <Button
-                                                      variant="inline-link"
-                                                      onClick={() => setApproveTarget(item)}
-                                                  >
-                                                      Approve
-                                                  </Button>
-                                              )}
-                                              {canReject && (
-                                                  <Button
-                                                      variant="inline-link"
-                                                      onClick={() => setRejectTarget(item)}
-                                                  >
-                                                      Reject
-                                                  </Button>
-                                              )}
-                                          </SpaceBetween>
-                                      ) : (
-                                          "-"
-                                      ),
-                              },
-                          ]
-                        : []),
-                ]}
-            />
+                        {
+                            id: "state",
+                            header: "Status",
+                            cell: (item) => {
+                                const indicator = statusIndicatorMap[item.state] || {
+                                    type: "stopped",
+                                    label: item.state || "Unknown",
+                                };
+                                return (
+                                    <StatusIndicator type={indicator.type as any}>
+                                        {indicator.label}
+                                    </StatusIndicator>
+                                );
+                            },
+                            sortingField: "state",
+                        },
+                        {
+                            id: "databaseId",
+                            header: `Trigger ${Synonyms.Database}`,
+                            cell: (item) => cascadeTriggerDatabaseId(item) || "-",
+                            sortingField: "triggeredByDatabaseId",
+                        },
+                        {
+                            id: "assetId",
+                            header: `Trigger ${Synonyms.Asset}`,
+                            cell: (item) => cascadeTriggerAssetId(item) || "-",
+                            sortingField: "triggeredByAssetId",
+                        },
+                        {
+                            id: "triggerReason",
+                            header: "Reason",
+                            cell: (item) => item.triggerReason || "-",
+                        },
+                        {
+                            id: "createdAt",
+                            header: "Created",
+                            cell: (item) =>
+                                item.createdAt ? new Date(item.createdAt).toLocaleString() : "-",
+                            sortingField: "createdAt",
+                        },
+                        {
+                            id: "approvalTimeoutAt",
+                            header: "Approval timeout",
+                            cell: (item) =>
+                                item.approvalTimeoutAt
+                                    ? new Date(item.approvalTimeoutAt).toLocaleString()
+                                    : "-",
+                            sortingField: "approvalTimeoutAt",
+                        },
+                        {
+                            id: "actor",
+                            header: "Actor",
+                            cell: (item) => item.actor || "-",
+                        },
+                        ...(canApprove || canReject
+                            ? [
+                                  {
+                                      id: "actions",
+                                      header: "Actions",
+                                      width: CASCADE_ACTIONS_COLUMN_WIDTH,
+                                      minWidth: CASCADE_ACTIONS_COLUMN_WIDTH,
+                                      cell: (item: CascadeRecord) =>
+                                          item.state === "pending_approval" ? (
+                                              <SpaceBetween direction="horizontal" size="s">
+                                                  {canApprove && (
+                                                      <Button
+                                                          variant="inline-link"
+                                                          onClick={() => setApproveTarget(item)}
+                                                      >
+                                                          Approve
+                                                      </Button>
+                                                  )}
+                                                  {canReject && (
+                                                      <Button
+                                                          variant="inline-link"
+                                                          onClick={() => setRejectTarget(item)}
+                                                      >
+                                                          Reject
+                                                      </Button>
+                                                  )}
+                                              </SpaceBetween>
+                                          ) : (
+                                              "-"
+                                          ),
+                                  },
+                              ]
+                            : []),
+                    ]}
+                />
 
-            <ReasonModal
-                visible={approveTarget !== null}
-                header={`Approve cascade ${approveTarget ? shortId(approveTarget.cascadeId) : ""}`}
-                label="Reason for approval"
-                description="Recorded in the compliance audit log with the approval."
-                confirmLabel="Approve"
-                optional
-                loading={approving}
-                onConfirm={handleApprove}
-                onDismiss={() => setApproveTarget(null)}
-            />
+                <ReasonModal
+                    visible={approveTarget !== null}
+                    header={`Approve cascade ${
+                        approveTarget ? shortId(approveTarget.cascadeId) : ""
+                    }`}
+                    label="Reason for approval"
+                    description="Recorded in the compliance audit log with the approval."
+                    confirmLabel="Approve"
+                    optional
+                    loading={approving}
+                    onConfirm={handleApprove}
+                    onDismiss={() => setApproveTarget(null)}
+                />
 
-            <ReasonModal
-                visible={rejectTarget !== null}
-                header={`Reject cascade ${rejectTarget ? shortId(rejectTarget.cascadeId) : ""}`}
-                label="Reason for rejection"
-                description="Recorded in the compliance audit log with the rejection."
-                confirmLabel="Reject"
-                placeholder="Why this cascade must not run"
-                optional
-                loading={rejecting}
-                onConfirm={handleReject}
-                onDismiss={() => setRejectTarget(null)}
-            />
-        </SpaceBetween>
+                <ReasonModal
+                    visible={rejectTarget !== null}
+                    header={`Reject cascade ${rejectTarget ? shortId(rejectTarget.cascadeId) : ""}`}
+                    label="Reason for rejection"
+                    description="Recorded in the compliance audit log with the rejection."
+                    confirmLabel="Reject"
+                    placeholder="Why this cascade must not run"
+                    optional
+                    loading={rejecting}
+                    onConfirm={handleReject}
+                    onDismiss={() => setRejectTarget(null)}
+                />
+            </SpaceBetween>
+        </Box>
     );
 };
 

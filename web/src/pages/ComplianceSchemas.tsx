@@ -35,7 +35,7 @@ import {
 import ComplianceSchemaEditor from "../components/compliance/ComplianceSchemaEditor";
 import ScopeBadge from "../components/common/ScopeBadge";
 import { fetchAllDatabases } from "../services/APIService";
-import { ROW_ACTIONS_STICKY_COLUMNS } from "../components/compliance/rowActions";
+import { ROW_ACTIONS_STICKY_COLUMNS, VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
 import { EXAMPLE_PIPELINE_RULE } from "../components/compliance/complianceSchemaRules";
 
@@ -640,7 +640,7 @@ export default function ComplianceSchemas() {
     ];
 
     return (
-        <Box padding={{ top: "m", horizontal: "l" }}>
+        <Box padding={VAMS_PAGE_PADDING}>
             <SpaceBetween size="l">
                 <Header
                     variant="h1"

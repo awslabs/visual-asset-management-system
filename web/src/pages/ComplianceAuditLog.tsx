@@ -4,6 +4,7 @@
  */
 
 import React, { useEffect, useState, useCallback } from "react";
+import { VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import Header from "@cloudscape-design/components/header";
@@ -154,136 +155,139 @@ const ComplianceAuditLog: React.FC = () => {
     };
 
     return (
-        <SpaceBetween size="l">
-            {error && (
-                <Alert type="error" dismissible onDismiss={() => setError(null)}>
-                    {error}
-                </Alert>
-            )}
+        // The page margins every VAMS list page uses (VAMS_PAGE_PADDING).
+        <Box padding={VAMS_PAGE_PADDING}>
+            <SpaceBetween size="l">
+                {error && (
+                    <Alert type="error" dismissible onDismiss={() => setError(null)}>
+                        {error}
+                    </Alert>
+                )}
 
-            <Table
-                header={
-                    <Header
-                        variant="h1"
-                        counter={`(${items.length}${hasMore ? "+" : ""})`}
-                        actions={
-                            <SpaceBetween direction="horizontal" size="xs">
-                                <FormField label="Event type">
-                                    <Select
-                                        selectedOption={selectedEventType}
-                                        onChange={({ detail }) =>
-                                            setSelectedEventType(detail.selectedOption)
-                                        }
-                                        options={eventTypeOptions}
-                                        filteringType="auto"
-                                        ariaLabel="Filter audit entries by event type"
+                <Table
+                    header={
+                        <Header
+                            variant="h1"
+                            counter={`(${items.length}${hasMore ? "+" : ""})`}
+                            actions={
+                                <SpaceBetween direction="horizontal" size="xs">
+                                    <FormField label="Event type">
+                                        <Select
+                                            selectedOption={selectedEventType}
+                                            onChange={({ detail }) =>
+                                                setSelectedEventType(detail.selectedOption)
+                                            }
+                                            options={eventTypeOptions}
+                                            filteringType="auto"
+                                            ariaLabel="Filter audit entries by event type"
+                                        />
+                                    </FormField>
+                                    <Button
+                                        iconName="refresh"
+                                        ariaLabel="Refresh audit log"
+                                        onClick={loadData}
+                                        loading={loading}
                                     />
-                                </FormField>
-                                <Button
-                                    iconName="refresh"
-                                    ariaLabel="Refresh audit log"
-                                    onClick={loadData}
-                                    loading={loading}
-                                />
-                            </SpaceBetween>
-                        }
-                    >
-                        Compliance Audit Log
-                    </Header>
-                }
-                loading={loading}
-                items={items}
-                pagination={
-                    <Pagination
-                        currentPageIndex={currentPageIndex}
-                        pagesCount={hasMore ? loadedPages + 1 : loadedPages}
-                        openEnd={hasMore}
-                        onChange={handlePageChange}
-                        disabled={loading}
-                        ariaLabels={{
-                            nextPageLabel: "Next page of audit entries",
-                            previousPageLabel: "Previous page of audit entries",
-                            pageLabel: (pageNumber) => `Page ${pageNumber} of audit entries`,
-                        }}
-                    />
-                }
-                empty={
-                    <Box textAlign="center" padding="l">
-                        <b>No audit entries</b>
-                        <Box variant="p" color="inherit">
-                            No compliance audit events have been recorded.
-                        </Box>
-                    </Box>
-                }
-                columnDefinitions={[
-                    {
-                        id: "timestamp",
-                        header: "Timestamp",
-                        cell: (item) =>
-                            item.timestamp ? new Date(item.timestamp).toLocaleString() : "-",
-                        sortingField: "timestamp",
-                    },
-                    {
-                        id: "eventType",
-                        header: "Event Type",
-                        cell: (item) => item.eventType || "-",
-                        sortingField: "eventType",
-                    },
-                    {
-                        id: "databaseId",
-                        header: Synonyms.Database,
-                        cell: (item) => item.databaseId || "-",
-                        sortingField: "databaseId",
-                    },
-                    {
-                        id: "assetId",
-                        header: Synonyms.Asset,
-                        cell: (item) =>
-                            item.assetId && item.assetId !== "*" && canOpenAsset ? (
-                                <Link
-                                    href={`#/databases/${item.databaseId}/assets/${item.assetId}`}
-                                >
-                                    {item.assetId}
-                                </Link>
-                            ) : (
-                                item.assetId || "-"
-                            ),
-                        sortingField: "assetId",
-                    },
-                    {
-                        id: "schemaName",
-                        header: "Schema",
-                        cell: (item) => item.schemaName || "-",
-                    },
-                    {
-                        id: "actor",
-                        header: "Actor",
-                        cell: (item) => item.actor || "-",
-                        sortingField: "actor",
-                    },
-                    {
-                        id: "details",
-                        header: "Details",
-                        cell: (item) => {
-                            const lines = auditDetailLines(item.details);
-                            if (lines.length === 0) return "-";
-                            return (
-                                <SpaceBetween size="xxxs">
-                                    {lines.map((line) => (
-                                        <Box key={line.key} fontSize="body-s">
-                                            <Box variant="span" fontWeight="bold">
-                                                {line.key}
-                                            </Box>
-                                            : {line.value}
-                                        </Box>
-                                    ))}
                                 </SpaceBetween>
-                            );
+                            }
+                        >
+                            Compliance Audit Log
+                        </Header>
+                    }
+                    loading={loading}
+                    items={items}
+                    pagination={
+                        <Pagination
+                            currentPageIndex={currentPageIndex}
+                            pagesCount={hasMore ? loadedPages + 1 : loadedPages}
+                            openEnd={hasMore}
+                            onChange={handlePageChange}
+                            disabled={loading}
+                            ariaLabels={{
+                                nextPageLabel: "Next page of audit entries",
+                                previousPageLabel: "Previous page of audit entries",
+                                pageLabel: (pageNumber) => `Page ${pageNumber} of audit entries`,
+                            }}
+                        />
+                    }
+                    empty={
+                        <Box textAlign="center" padding="l">
+                            <b>No audit entries</b>
+                            <Box variant="p" color="inherit">
+                                No compliance audit events have been recorded.
+                            </Box>
+                        </Box>
+                    }
+                    columnDefinitions={[
+                        {
+                            id: "timestamp",
+                            header: "Timestamp",
+                            cell: (item) =>
+                                item.timestamp ? new Date(item.timestamp).toLocaleString() : "-",
+                            sortingField: "timestamp",
                         },
-                    },
-                ]}
-            />
-        </SpaceBetween>
+                        {
+                            id: "eventType",
+                            header: "Event Type",
+                            cell: (item) => item.eventType || "-",
+                            sortingField: "eventType",
+                        },
+                        {
+                            id: "databaseId",
+                            header: Synonyms.Database,
+                            cell: (item) => item.databaseId || "-",
+                            sortingField: "databaseId",
+                        },
+                        {
+                            id: "assetId",
+                            header: Synonyms.Asset,
+                            cell: (item) =>
+                                item.assetId && item.assetId !== "*" && canOpenAsset ? (
+                                    <Link
+                                        href={`#/databases/${item.databaseId}/assets/${item.assetId}`}
+                                    >
+                                        {item.assetId}
+                                    </Link>
+                                ) : (
+                                    item.assetId || "-"
+                                ),
+                            sortingField: "assetId",
+                        },
+                        {
+                            id: "schemaName",
+                            header: "Schema",
+                            cell: (item) => item.schemaName || "-",
+                        },
+                        {
+                            id: "actor",
+                            header: "Actor",
+                            cell: (item) => item.actor || "-",
+                            sortingField: "actor",
+                        },
+                        {
+                            id: "details",
+                            header: "Details",
+                            cell: (item) => {
+                                const lines = auditDetailLines(item.details);
+                                if (lines.length === 0) return "-";
+                                return (
+                                    <SpaceBetween size="xxxs">
+                                        {lines.map((line) => (
+                                            <Box key={line.key} fontSize="body-s">
+                                                <Box variant="span" fontWeight="bold">
+                                                    {line.key}
+                                                </Box>
+                                                : {line.value}
+                                            </Box>
+                                        ))}
+                                    </SpaceBetween>
+                                );
+                            },
+                        },
+                    ]}
+                />
+            </SpaceBetween>
+        </Box>
     );
 };
 

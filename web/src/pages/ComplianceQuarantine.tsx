@@ -24,7 +24,7 @@ import ReasonModal from "../components/compliance/ReasonModal";
 import { ComplianceStateBadge } from "../components/compliance/complianceStateBadge";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
-import { ROW_ACTIONS_STICKY_COLUMNS } from "../components/compliance/rowActions";
+import { ROW_ACTIONS_STICKY_COLUMNS, VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
 
 /**
  * Width (px) of the Actions column: the Release and Exception inline links side by side (about
@@ -151,178 +151,183 @@ const ComplianceQuarantine: React.FC = () => {
     };
 
     return (
-        <SpaceBetween size="l">
-            {error && (
-                <Alert type="error" dismissible onDismiss={() => setError(null)}>
-                    {error}
-                </Alert>
-            )}
-            {actionMessage && (
-                <Alert type="success" dismissible onDismiss={() => setActionMessage(null)}>
-                    {actionMessage}
-                </Alert>
-            )}
+        // The page margins every VAMS list page uses (VAMS_PAGE_PADDING).
+        <Box padding={VAMS_PAGE_PADDING}>
+            <SpaceBetween size="l">
+                {error && (
+                    <Alert type="error" dismissible onDismiss={() => setError(null)}>
+                        {error}
+                    </Alert>
+                )}
+                {actionMessage && (
+                    <Alert type="success" dismissible onDismiss={() => setActionMessage(null)}>
+                        {actionMessage}
+                    </Alert>
+                )}
 
-            <Table
-                wrapLines
-                stickyColumns={ROW_ACTIONS_STICKY_COLUMNS}
-                header={
-                    <Header
-                        variant="h1"
-                        counter={`(${items.length}${hasMore ? "+" : ""})`}
-                        actions={
-                            <SpaceBetween direction="horizontal" size="xs">
-                                <Button
-                                    iconName="refresh"
-                                    ariaLabel={`Refresh quarantined ${Synonyms.assets}`}
-                                    onClick={loadData}
-                                    loading={loading}
-                                />
-                            </SpaceBetween>
-                        }
-                    >
-                        Quarantined {Synonyms.Assets}
-                    </Header>
-                }
-                loading={loading}
-                items={items}
-                selectedItems={selectedItems}
-                onSelectionChange={({ detail }) => setSelectedItems(detail.selectedItems)}
-                selectionType="single"
-                pagination={
-                    <Pagination
-                        currentPageIndex={currentPageIndex}
-                        pagesCount={hasMore ? loadedPages + 1 : loadedPages}
-                        openEnd={hasMore}
-                        onChange={handlePageChange}
-                        disabled={loading}
-                        ariaLabels={{
-                            nextPageLabel: `Next page of quarantined ${Synonyms.assets}`,
-                            previousPageLabel: `Previous page of quarantined ${Synonyms.assets}`,
-                            pageLabel: (pageNumber) =>
-                                `Page ${pageNumber} of quarantined ${Synonyms.assets}`,
-                        }}
-                    />
-                }
-                empty={
-                    <Box textAlign="center" padding="l">
-                        <b>No quarantined {Synonyms.assets}</b>
-                        <Box variant="p" color="inherit">
-                            {hasMore
-                                ? `None of the ${Synonyms.assets} on this page are visible to you. Open the next page to continue.`
-                                : `All ${Synonyms.assets} are currently compliant or pending evaluation.`}
+                <Table
+                    wrapLines
+                    stickyColumns={ROW_ACTIONS_STICKY_COLUMNS}
+                    header={
+                        <Header
+                            variant="h1"
+                            counter={`(${items.length}${hasMore ? "+" : ""})`}
+                            actions={
+                                <SpaceBetween direction="horizontal" size="xs">
+                                    <Button
+                                        iconName="refresh"
+                                        ariaLabel={`Refresh quarantined ${Synonyms.assets}`}
+                                        onClick={loadData}
+                                        loading={loading}
+                                    />
+                                </SpaceBetween>
+                            }
+                        >
+                            Quarantined {Synonyms.Assets}
+                        </Header>
+                    }
+                    loading={loading}
+                    items={items}
+                    selectedItems={selectedItems}
+                    onSelectionChange={({ detail }) => setSelectedItems(detail.selectedItems)}
+                    selectionType="single"
+                    pagination={
+                        <Pagination
+                            currentPageIndex={currentPageIndex}
+                            pagesCount={hasMore ? loadedPages + 1 : loadedPages}
+                            openEnd={hasMore}
+                            onChange={handlePageChange}
+                            disabled={loading}
+                            ariaLabels={{
+                                nextPageLabel: `Next page of quarantined ${Synonyms.assets}`,
+                                previousPageLabel: `Previous page of quarantined ${Synonyms.assets}`,
+                                pageLabel: (pageNumber) =>
+                                    `Page ${pageNumber} of quarantined ${Synonyms.assets}`,
+                            }}
+                        />
+                    }
+                    empty={
+                        <Box textAlign="center" padding="l">
+                            <b>No quarantined {Synonyms.assets}</b>
+                            <Box variant="p" color="inherit">
+                                {hasMore
+                                    ? `None of the ${Synonyms.assets} on this page are visible to you. Open the next page to continue.`
+                                    : `All ${Synonyms.assets} are currently compliant or pending evaluation.`}
+                            </Box>
                         </Box>
-                    </Box>
-                }
-                columnDefinitions={[
-                    {
-                        id: "assetName",
-                        header: `${Synonyms.Asset} Name`,
-                        cell: (item) =>
-                            canOpenAsset ? (
-                                <Link
-                                    href={`#/databases/${item.databaseId}/assets/${item.assetId}`}
-                                >
-                                    {item.assetName || item.assetId}
-                                </Link>
-                            ) : (
-                                item.assetName || item.assetId
-                            ),
-                        sortingField: "assetName",
-                    },
-                    {
-                        id: "assetId",
-                        header: `${Synonyms.Asset} ID`,
-                        cell: (item) => item.assetId,
-                        sortingField: "assetId",
-                    },
-                    {
-                        id: "databaseId",
-                        header: Synonyms.Database,
-                        cell: (item) => item.databaseId,
-                        sortingField: "databaseId",
-                    },
-                    {
-                        id: "schemaName",
-                        header: "Bound schema",
-                        cell: (item) => item.schemaName || "-",
-                        sortingField: "schemaName",
-                    },
-                    {
-                        id: "quarantineReason",
-                        header: "Reason",
-                        cell: (item) => item.quarantineReason || "-",
-                    },
-                    {
-                        id: "complianceState",
-                        header: "State",
-                        cell: (item) => <ComplianceStateBadge state={item.complianceState} />,
-                        sortingField: "complianceState",
-                    },
-                    {
-                        id: "updatedAt",
-                        header: "Quarantined At",
-                        cell: (item) =>
-                            item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "-",
-                        sortingField: "updatedAt",
-                    },
-                    ...(canRelease || canGrantException
-                        ? [
-                              {
-                                  id: "actions",
-                                  header: "Actions",
-                                  width: QUARANTINE_ACTIONS_COLUMN_WIDTH,
-                                  minWidth: QUARANTINE_ACTIONS_COLUMN_WIDTH,
-                                  cell: (item: QuarantinedAsset) => (
-                                      <SpaceBetween direction="horizontal" size="s">
-                                          {canRelease && (
-                                              <Button
-                                                  variant="inline-link"
-                                                  onClick={() => setReleaseTarget(item)}
-                                              >
-                                                  Release
-                                              </Button>
-                                          )}
-                                          {canGrantException && (
-                                              <Button
-                                                  variant="inline-link"
-                                                  onClick={() => setExceptionTarget(item)}
-                                              >
-                                                  Exception
-                                              </Button>
-                                          )}
-                                      </SpaceBetween>
-                                  ),
-                              },
-                          ]
-                        : []),
-                ]}
-            />
+                    }
+                    columnDefinitions={[
+                        {
+                            id: "assetName",
+                            header: `${Synonyms.Asset} Name`,
+                            cell: (item) =>
+                                canOpenAsset ? (
+                                    <Link
+                                        href={`#/databases/${item.databaseId}/assets/${item.assetId}`}
+                                    >
+                                        {item.assetName || item.assetId}
+                                    </Link>
+                                ) : (
+                                    item.assetName || item.assetId
+                                ),
+                            sortingField: "assetName",
+                        },
+                        {
+                            id: "assetId",
+                            header: `${Synonyms.Asset} ID`,
+                            cell: (item) => item.assetId,
+                            sortingField: "assetId",
+                        },
+                        {
+                            id: "databaseId",
+                            header: Synonyms.Database,
+                            cell: (item) => item.databaseId,
+                            sortingField: "databaseId",
+                        },
+                        {
+                            id: "schemaName",
+                            header: "Bound schema",
+                            cell: (item) => item.schemaName || "-",
+                            sortingField: "schemaName",
+                        },
+                        {
+                            id: "quarantineReason",
+                            header: "Reason",
+                            cell: (item) => item.quarantineReason || "-",
+                        },
+                        {
+                            id: "complianceState",
+                            header: "State",
+                            cell: (item) => <ComplianceStateBadge state={item.complianceState} />,
+                            sortingField: "complianceState",
+                        },
+                        {
+                            id: "updatedAt",
+                            header: "Quarantined At",
+                            cell: (item) =>
+                                item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "-",
+                            sortingField: "updatedAt",
+                        },
+                        ...(canRelease || canGrantException
+                            ? [
+                                  {
+                                      id: "actions",
+                                      header: "Actions",
+                                      width: QUARANTINE_ACTIONS_COLUMN_WIDTH,
+                                      minWidth: QUARANTINE_ACTIONS_COLUMN_WIDTH,
+                                      cell: (item: QuarantinedAsset) => (
+                                          <SpaceBetween direction="horizontal" size="s">
+                                              {canRelease && (
+                                                  <Button
+                                                      variant="inline-link"
+                                                      onClick={() => setReleaseTarget(item)}
+                                                  >
+                                                      Release
+                                                  </Button>
+                                              )}
+                                              {canGrantException && (
+                                                  <Button
+                                                      variant="inline-link"
+                                                      onClick={() => setExceptionTarget(item)}
+                                                  >
+                                                      Exception
+                                                  </Button>
+                                              )}
+                                          </SpaceBetween>
+                                      ),
+                                  },
+                              ]
+                            : []),
+                    ]}
+                />
 
-            <ReasonModal
-                visible={releaseTarget !== null}
-                header={`Release ${releaseTarget ? assetLabel(releaseTarget) : ""} from quarantine`}
-                label="Reason for release"
-                description={`Why this ${Synonyms.asset} leaves quarantine. Recorded in the compliance audit log; the next evaluation may quarantine it again.`}
-                confirmLabel={`Release ${Synonyms.asset}`}
-                loading={releasing}
-                onConfirm={handleRelease}
-                onDismiss={() => setReleaseTarget(null)}
-            />
+                <ReasonModal
+                    visible={releaseTarget !== null}
+                    header={`Release ${
+                        releaseTarget ? assetLabel(releaseTarget) : ""
+                    } from quarantine`}
+                    label="Reason for release"
+                    description={`Why this ${Synonyms.asset} leaves quarantine. Recorded in the compliance audit log; the next evaluation may quarantine it again.`}
+                    confirmLabel={`Release ${Synonyms.asset}`}
+                    loading={releasing}
+                    onConfirm={handleRelease}
+                    onDismiss={() => setReleaseTarget(null)}
+                />
 
-            <ReasonModal
-                visible={exceptionTarget !== null}
-                header={`Grant exception for ${
-                    exceptionTarget?.assetName || exceptionTarget?.assetId || ""
-                }`}
-                label="Reason for exception"
-                description={`Why this ${Synonyms.asset} may stay in use while quarantined. Recorded in the compliance audit log.`}
-                confirmLabel="Grant exception"
-                loading={granting}
-                onConfirm={handleException}
-                onDismiss={() => setExceptionTarget(null)}
-            />
-        </SpaceBetween>
+                <ReasonModal
+                    visible={exceptionTarget !== null}
+                    header={`Grant exception for ${
+                        exceptionTarget?.assetName || exceptionTarget?.assetId || ""
+                    }`}
+                    label="Reason for exception"
+                    description={`Why this ${Synonyms.asset} may stay in use while quarantined. Recorded in the compliance audit log.`}
+                    confirmLabel="Grant exception"
+                    loading={granting}
+                    onConfirm={handleException}
+                    onDismiss={() => setExceptionTarget(null)}
+                />
+            </SpaceBetween>
+        </Box>
     );
 };
 

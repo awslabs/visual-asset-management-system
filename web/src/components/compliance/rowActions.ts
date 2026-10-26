@@ -10,3 +10,10 @@
  * buttons did not fit: two of them need more than 200 px with the cell padding and the gap.
  */
 export const ROW_ACTIONS_STICKY_COLUMNS = { first: 0, last: 1 };
+
+/**
+ * The padding of a VAMS list page's content (the convention of the Compliance Schemas, Metadata
+ * Schema, Tags and auth pages): the compliance pages use it so their tables do not run into the
+ * window's edges.
+ */
+export const VAMS_PAGE_PADDING = { top: "m", horizontal: "l" } as const;

@@ -42,7 +42,7 @@ import { useAllowedRoutes } from "../features/orchestration/permissions/useAllow
 import EvaluationHistoryModal from "../components/compliance/EvaluationHistoryModal";
 import { schemaSourceLabel } from "../components/compliance/complianceStateBadge";
 import RevokeExceptionModal from "../components/compliance/RevokeExceptionModal";
-import { ROW_ACTIONS_STICKY_COLUMNS } from "../components/compliance/rowActions";
+import { ROW_ACTIONS_STICKY_COLUMNS, VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 
 // The routes behind the database binding control (backend/backend/common/apiRoutes.py): the
@@ -293,361 +293,374 @@ const DatabaseCompliancePage: React.FC = () => {
     const isPaging = hasMore || currentPageIndex > 1;
 
     return (
-        <SpaceBetween size="l">
-            <BreadcrumbGroup
-                items={
-                    canOpenDatabaseAssets
-                        ? [
-                              { text: Synonyms.Databases, href: "#/databases" },
-                              {
-                                  text: databaseId || "",
-                                  href: `#/databases/${databaseId}/assets/`,
-                              },
-                              { text: "Compliance", href: "" },
-                          ]
-                        : [
-                              { text: Synonyms.Databases, href: "#/databases" },
-                              { text: `${databaseId || ""} Compliance`, href: "" },
-                          ]
-                }
-            />
+        // The page margins every VAMS list page uses (VAMS_PAGE_PADDING).
+        <Box padding={VAMS_PAGE_PADDING}>
+            <SpaceBetween size="l">
+                <BreadcrumbGroup
+                    items={
+                        canOpenDatabaseAssets
+                            ? [
+                                  { text: Synonyms.Databases, href: "#/databases" },
+                                  {
+                                      text: databaseId || "",
+                                      href: `#/databases/${databaseId}/assets/`,
+                                  },
+                                  { text: "Compliance", href: "" },
+                              ]
+                            : [
+                                  { text: Synonyms.Databases, href: "#/databases" },
+                                  { text: `${databaseId || ""} Compliance`, href: "" },
+                              ]
+                    }
+                />
 
-            {error && (
-                <Alert type="error" dismissible onDismiss={() => setError(null)}>
-                    {error}
-                </Alert>
-            )}
-            {actionMessage && (
-                <Alert type="success" dismissible onDismiss={() => setActionMessage(null)}>
-                    {actionMessage}
-                </Alert>
-            )}
+                {error && (
+                    <Alert type="error" dismissible onDismiss={() => setError(null)}>
+                        {error}
+                    </Alert>
+                )}
+                {actionMessage && (
+                    <Alert type="success" dismissible onDismiss={() => setActionMessage(null)}>
+                        {actionMessage}
+                    </Alert>
+                )}
 
-            {(canBind || (canUnbind && databaseSchema)) && (
+                {(canBind || (canUnbind && databaseSchema)) && (
+                    <Container
+                        header={
+                            <Header
+                                variant="h2"
+                                description={`The compliance schema the ${Synonyms.assets} of this ${Synonyms.database} are evaluated against. Schemas bound to individual ${Synonyms.assets} in the ${Synonyms.asset} editor take precedence. Offered: the GLOBAL schemas and those available to this ${Synonyms.database} only.`}
+                            >
+                                Schema Binding
+                            </Header>
+                        }
+                    >
+                        <SpaceBetween direction="horizontal" size="xs" alignItems="end">
+                            {canBind && (
+                                <FormField label="Bound schema">
+                                    <Select
+                                        selectedOption={selectedSchema}
+                                        onChange={({ detail }) =>
+                                            setSelectedSchema(detail.selectedOption)
+                                        }
+                                        options={schemaOptions}
+                                        placeholder="Select a compliance schema"
+                                        loadingText="Loading schemas"
+                                        statusType={loadingSchemas ? "loading" : "finished"}
+                                        filteringType="auto"
+                                        disabled={bindingInProgress}
+                                        data-testid="database-compliance-bound-schema"
+                                    />
+                                </FormField>
+                            )}
+                            {canBind && (
+                                <Button
+                                    onClick={handleBind}
+                                    loading={bindingInProgress}
+                                    disabled={
+                                        !selectedSchema?.value ||
+                                        selectedSchema.value === databaseSchema
+                                    }
+                                >
+                                    {databaseSchema ? "Change" : "Bind"}
+                                </Button>
+                            )}
+                            {canUnbind && databaseSchema && (
+                                <Button
+                                    onClick={() => setConfirmRemove(true)}
+                                    disabled={bindingInProgress}
+                                >
+                                    Remove
+                                </Button>
+                            )}
+                        </SpaceBetween>
+                    </Container>
+                )}
+
+                <Modal
+                    visible={confirmRemove}
+                    onDismiss={() => setConfirmRemove(false)}
+                    header="Remove the compliance schema binding"
+                    footer={
+                        <Box float="right">
+                            <SpaceBetween direction="horizontal" size="xs">
+                                <Button variant="link" onClick={() => setConfirmRemove(false)}>
+                                    Cancel
+                                </Button>
+                                <Button variant="primary" onClick={handleRemove}>
+                                    Remove binding
+                                </Button>
+                            </SpaceBetween>
+                        </Box>
+                    }
+                >
+                    Remove {databaseSchema} from the {Synonyms.database} {databaseId}? The
+                    compliance state of every {Synonyms.asset} that inherits it is deleted;{" "}
+                    {Synonyms.assets} that bind their own schema keep theirs.
+                </Modal>
+
                 <Container
                     header={
                         <Header
                             variant="h2"
-                            description={`The compliance schema the ${Synonyms.assets} of this ${Synonyms.database} are evaluated against. Schemas bound to individual ${Synonyms.assets} in the ${Synonyms.asset} editor take precedence. Offered: the GLOBAL schemas and those available to this ${Synonyms.database} only.`}
+                            actions={
+                                canEvaluateAll ? (
+                                    <Button
+                                        variant="primary"
+                                        loading={sweeping}
+                                        onClick={handleEvaluateAll}
+                                        disabled={!databaseSchema && totalTracked === 0}
+                                    >
+                                        Evaluate All {Synonyms.Assets}
+                                    </Button>
+                                ) : undefined
+                            }
+                            description={
+                                databaseSchema
+                                    ? `Schema: ${databaseSchema}`
+                                    : "No compliance schema bound"
+                            }
                         >
-                            Schema Binding
+                            {Synonyms.Database} Compliance Overview
                         </Header>
                     }
                 >
-                    <SpaceBetween direction="horizontal" size="xs" alignItems="end">
-                        {canBind && (
-                            <FormField label="Bound schema">
-                                <Select
-                                    selectedOption={selectedSchema}
-                                    onChange={({ detail }) =>
-                                        setSelectedSchema(detail.selectedOption)
-                                    }
-                                    options={schemaOptions}
-                                    placeholder="Select a compliance schema"
-                                    loadingText="Loading schemas"
-                                    statusType={loadingSchemas ? "loading" : "finished"}
-                                    filteringType="auto"
-                                    disabled={bindingInProgress}
-                                    data-testid="database-compliance-bound-schema"
-                                />
-                            </FormField>
-                        )}
-                        {canBind && (
-                            <Button
-                                onClick={handleBind}
-                                loading={bindingInProgress}
-                                disabled={
-                                    !selectedSchema?.value ||
-                                    selectedSchema.value === databaseSchema
-                                }
-                            >
-                                {databaseSchema ? "Change" : "Bind"}
-                            </Button>
-                        )}
-                        {canUnbind && databaseSchema && (
-                            <Button
-                                onClick={() => setConfirmRemove(true)}
-                                disabled={bindingInProgress}
-                            >
-                                Remove
-                            </Button>
-                        )}
-                    </SpaceBetween>
-                </Container>
-            )}
-
-            <Modal
-                visible={confirmRemove}
-                onDismiss={() => setConfirmRemove(false)}
-                header="Remove the compliance schema binding"
-                footer={
-                    <Box float="right">
-                        <SpaceBetween direction="horizontal" size="xs">
-                            <Button variant="link" onClick={() => setConfirmRemove(false)}>
-                                Cancel
-                            </Button>
-                            <Button variant="primary" onClick={handleRemove}>
-                                Remove binding
-                            </Button>
-                        </SpaceBetween>
-                    </Box>
-                }
-            >
-                Remove {databaseSchema} from the {Synonyms.database} {databaseId}? The compliance
-                state of every {Synonyms.asset} that inherits it is deleted; {Synonyms.assets} that
-                bind their own schema keep theirs.
-            </Modal>
-
-            <Container
-                header={
-                    <Header
-                        variant="h2"
-                        actions={
-                            canEvaluateAll ? (
-                                <Button
-                                    variant="primary"
-                                    loading={sweeping}
-                                    onClick={handleEvaluateAll}
-                                    disabled={!databaseSchema && totalTracked === 0}
+                    <ColumnLayout columns={9} minColumnWidth={130} variant="text-grid">
+                        <div>
+                            <Box variant="awsui-key-label">Tracked {Synonyms.Assets}</Box>
+                            <Box variant="awsui-value-large">{totalTracked}</Box>
+                        </div>
+                        <div>
+                            <Box variant="awsui-key-label">Compliant</Box>
+                            <Box variant="awsui-value-large">
+                                <StatusIndicator type={COMPLIANCE_STATE_INDICATORS.compliant.type}>
+                                    {compliantCount}
+                                </StatusIndicator>
+                            </Box>
+                        </div>
+                        <div>
+                            <Box variant="awsui-key-label">Non-Compliant</Box>
+                            <Box variant="awsui-value-large">
+                                <StatusIndicator
+                                    type={COMPLIANCE_STATE_INDICATORS.non_compliant.type}
                                 >
-                                    Evaluate All {Synonyms.Assets}
-                                </Button>
-                            ) : undefined
-                        }
-                        description={
-                            databaseSchema
-                                ? `Schema: ${databaseSchema}`
-                                : "No compliance schema bound"
-                        }
-                    >
-                        {Synonyms.Database} Compliance Overview
-                    </Header>
-                }
-            >
-                <ColumnLayout columns={9} minColumnWidth={130} variant="text-grid">
-                    <div>
-                        <Box variant="awsui-key-label">Tracked {Synonyms.Assets}</Box>
-                        <Box variant="awsui-value-large">{totalTracked}</Box>
-                    </div>
-                    <div>
-                        <Box variant="awsui-key-label">Compliant</Box>
-                        <Box variant="awsui-value-large">
-                            <StatusIndicator type={COMPLIANCE_STATE_INDICATORS.compliant.type}>
-                                {compliantCount}
-                            </StatusIndicator>
-                        </Box>
-                    </div>
-                    <div>
-                        <Box variant="awsui-key-label">Non-Compliant</Box>
-                        <Box variant="awsui-value-large">
-                            <StatusIndicator type={COMPLIANCE_STATE_INDICATORS.non_compliant.type}>
-                                {summary?.non_compliant || 0}
-                            </StatusIndicator>
-                        </Box>
-                    </div>
-                    <div>
-                        <Box variant="awsui-key-label">Quarantined</Box>
-                        <Box variant="awsui-value-large">
-                            <StatusIndicator type={COMPLIANCE_STATE_INDICATORS.quarantined.type}>
-                                {summary?.quarantined || 0}
-                            </StatusIndicator>
-                        </Box>
-                    </div>
-                    <div>
-                        <Box variant="awsui-key-label">Exception</Box>
-                        <Box variant="awsui-value-large">
-                            <StatusIndicator type={COMPLIANCE_STATE_INDICATORS.exception.type}>
-                                {summary?.exception || 0}
-                            </StatusIndicator>
-                        </Box>
-                    </div>
-                    <div>
-                        <Box variant="awsui-key-label">Pending Evaluation</Box>
-                        <Box variant="awsui-value-large">
-                            <StatusIndicator
-                                type={COMPLIANCE_STATE_INDICATORS.pending_evaluation.type}
-                            >
-                                {summary?.pending_evaluation || 0}
-                            </StatusIndicator>
-                        </Box>
-                    </div>
-                    <div>
-                        <Box variant="awsui-key-label">Unknown</Box>
-                        <Box variant="awsui-value-large">
-                            <StatusIndicator type={COMPLIANCE_STATE_INDICATORS.unknown.type}>
-                                {summary?.unknown || 0}
-                            </StatusIndicator>
-                        </Box>
-                    </div>
-                    {/* An overlay on the state buckets: these assets keep the state shown in their
-                        row, and their last evaluation produced no verdict. */}
-                    <div>
-                        <Box variant="awsui-key-label">Evaluation errors</Box>
-                        <Box variant="awsui-value-large">
-                            <StatusIndicator type="error">{summary?.error || 0}</StatusIndicator>
-                        </Box>
-                    </div>
-                    <div>
-                        <Box variant="awsui-key-label">Compliance Rate</Box>
-                        <Box variant="awsui-value-large">{complianceRate}%</Box>
-                    </div>
-                </ColumnLayout>
-            </Container>
+                                    {summary?.non_compliant || 0}
+                                </StatusIndicator>
+                            </Box>
+                        </div>
+                        <div>
+                            <Box variant="awsui-key-label">Quarantined</Box>
+                            <Box variant="awsui-value-large">
+                                <StatusIndicator
+                                    type={COMPLIANCE_STATE_INDICATORS.quarantined.type}
+                                >
+                                    {summary?.quarantined || 0}
+                                </StatusIndicator>
+                            </Box>
+                        </div>
+                        <div>
+                            <Box variant="awsui-key-label">Exception</Box>
+                            <Box variant="awsui-value-large">
+                                <StatusIndicator type={COMPLIANCE_STATE_INDICATORS.exception.type}>
+                                    {summary?.exception || 0}
+                                </StatusIndicator>
+                            </Box>
+                        </div>
+                        <div>
+                            <Box variant="awsui-key-label">Pending Evaluation</Box>
+                            <Box variant="awsui-value-large">
+                                <StatusIndicator
+                                    type={COMPLIANCE_STATE_INDICATORS.pending_evaluation.type}
+                                >
+                                    {summary?.pending_evaluation || 0}
+                                </StatusIndicator>
+                            </Box>
+                        </div>
+                        <div>
+                            <Box variant="awsui-key-label">Unknown</Box>
+                            <Box variant="awsui-value-large">
+                                <StatusIndicator type={COMPLIANCE_STATE_INDICATORS.unknown.type}>
+                                    {summary?.unknown || 0}
+                                </StatusIndicator>
+                            </Box>
+                        </div>
+                        {/* An overlay on the state buckets: these assets keep the state shown in their
+                            row, and their last evaluation produced no verdict. */}
+                        <div>
+                            <Box variant="awsui-key-label">Evaluation errors</Box>
+                            <Box variant="awsui-value-large">
+                                <StatusIndicator type="error">
+                                    {summary?.error || 0}
+                                </StatusIndicator>
+                            </Box>
+                        </div>
+                        <div>
+                            <Box variant="awsui-key-label">Compliance Rate</Box>
+                            <Box variant="awsui-value-large">{complianceRate}%</Box>
+                        </div>
+                    </ColumnLayout>
+                </Container>
 
-            <Container
-                header={
-                    <Header
-                        variant="h3"
-                        counter={`(${pageAssets.length} of ${totalTracked})`}
-                        description={
-                            isPaging
-                                ? `Showing ${pageAssets.length} of ${totalTracked} tracked ${Synonyms.assets}; the summary above covers all of them.`
-                                : undefined
+                <Container
+                    header={
+                        <Header
+                            variant="h3"
+                            counter={`(${pageAssets.length} of ${totalTracked})`}
+                            description={
+                                isPaging
+                                    ? `Showing ${pageAssets.length} of ${totalTracked} tracked ${Synonyms.assets}; the summary above covers all of them.`
+                                    : undefined
+                            }
+                        >
+                            {Synonyms.Asset} Compliance States
+                        </Header>
+                    }
+                >
+                    <Table
+                        wrapLines
+                        stickyColumns={ROW_ACTIONS_STICKY_COLUMNS}
+                        loading={loading}
+                        items={pageAssets}
+                        pagination={
+                            <Pagination
+                                currentPageIndex={currentPageIndex}
+                                pagesCount={hasMore ? loadedPages + 1 : loadedPages}
+                                openEnd={hasMore}
+                                onChange={handlePageChange}
+                                disabled={loading}
+                                ariaLabels={{
+                                    nextPageLabel: `Next page of ${Synonyms.assets}`,
+                                    previousPageLabel: `Previous page of ${Synonyms.assets}`,
+                                    pageLabel: (pageNumber) =>
+                                        `Page ${pageNumber} of ${Synonyms.assets}`,
+                                }}
+                            />
                         }
-                    >
-                        {Synonyms.Asset} Compliance States
-                    </Header>
-                }
-            >
-                <Table
-                    wrapLines
-                    stickyColumns={ROW_ACTIONS_STICKY_COLUMNS}
-                    loading={loading}
-                    items={pageAssets}
-                    pagination={
-                        <Pagination
-                            currentPageIndex={currentPageIndex}
-                            pagesCount={hasMore ? loadedPages + 1 : loadedPages}
-                            openEnd={hasMore}
-                            onChange={handlePageChange}
-                            disabled={loading}
-                            ariaLabels={{
-                                nextPageLabel: `Next page of ${Synonyms.assets}`,
-                                previousPageLabel: `Previous page of ${Synonyms.assets}`,
-                                pageLabel: (pageNumber) =>
-                                    `Page ${pageNumber} of ${Synonyms.assets}`,
-                            }}
-                        />
-                    }
-                    empty={
-                        <Box textAlign="center" padding="l">
-                            {loadFailed
-                                ? `The ${Synonyms.asset} compliance states could not be loaded.`
-                                : `No ${Synonyms.assets} are being tracked for compliance in this ${Synonyms.database}.`}
-                        </Box>
-                    }
-                    columnDefinitions={[
-                        {
-                            id: "assetName",
-                            header: `${Synonyms.Asset} Name`,
-                            cell: (item: any) =>
-                                canOpenAsset ? (
-                                    <Link href={`#/databases/${databaseId}/assets/${item.assetId}`}>
-                                        {item.assetName || item.assetId}
-                                    </Link>
-                                ) : (
-                                    item.assetName || item.assetId
+                        empty={
+                            <Box textAlign="center" padding="l">
+                                {loadFailed
+                                    ? `The ${Synonyms.asset} compliance states could not be loaded.`
+                                    : `No ${Synonyms.assets} are being tracked for compliance in this ${Synonyms.database}.`}
+                            </Box>
+                        }
+                        columnDefinitions={[
+                            {
+                                id: "assetName",
+                                header: `${Synonyms.Asset} Name`,
+                                cell: (item: any) =>
+                                    canOpenAsset ? (
+                                        <Link
+                                            href={`#/databases/${databaseId}/assets/${item.assetId}`}
+                                        >
+                                            {item.assetName || item.assetId}
+                                        </Link>
+                                    ) : (
+                                        item.assetName || item.assetId
+                                    ),
+                                sortingField: "assetName",
+                            },
+                            {
+                                id: "assetId",
+                                header: `${Synonyms.Asset} ID`,
+                                cell: (item: any) => item.assetId,
+                                sortingField: "assetId",
+                            },
+                            {
+                                id: "complianceState",
+                                header: "State",
+                                cell: (item: any) => (
+                                    <SpaceBetween direction="horizontal" size="xs">
+                                        <ComplianceStateBadge state={item.complianceState} />
+                                        <EvaluationErrorIndicator
+                                            lastEvaluationStatus={item.lastEvaluationStatus}
+                                        />
+                                    </SpaceBetween>
                                 ),
-                            sortingField: "assetName",
-                        },
-                        {
-                            id: "assetId",
-                            header: `${Synonyms.Asset} ID`,
-                            cell: (item: any) => item.assetId,
-                            sortingField: "assetId",
-                        },
-                        {
-                            id: "complianceState",
-                            header: "State",
-                            cell: (item: any) => (
-                                <SpaceBetween direction="horizontal" size="xs">
-                                    <ComplianceStateBadge state={item.complianceState} />
-                                    <EvaluationErrorIndicator
-                                        lastEvaluationStatus={item.lastEvaluationStatus}
-                                    />
-                                </SpaceBetween>
-                            ),
-                            sortingField: "complianceState",
-                        },
-                        {
-                            id: "schemaName",
-                            header: "Bound schema",
-                            cell: (item: any) => item.schemaName || "-",
-                            sortingField: "schemaName",
-                        },
-                        {
-                            id: "schemaSource",
-                            header: "Source",
-                            cell: (item: any) => schemaSourceLabel(item.schemaSource),
-                            sortingField: "schemaSource",
-                        },
-                        {
-                            id: "updatedAt",
-                            header: "Last Updated",
-                            cell: (item: any) =>
-                                item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "-",
-                            sortingField: "updatedAt",
-                        },
-                        ...(canViewHistory || canRevokeException
-                            ? [
-                                  {
-                                      id: "actions",
-                                      header: "Actions",
-                                      width: ASSET_ROW_ACTIONS_COLUMN_WIDTH,
-                                      minWidth: ASSET_ROW_ACTIONS_COLUMN_WIDTH,
-                                      cell: (item: any) => (
-                                          <SpaceBetween direction="horizontal" size="s">
-                                              {canViewHistory && (
-                                                  <Button
-                                                      variant="inline-link"
-                                                      ariaLabel={`Evaluation history of ${
-                                                          item.assetName || item.assetId
-                                                      }`}
-                                                      onClick={() => setHistoryTarget(item)}
-                                                  >
-                                                      History
-                                                  </Button>
-                                              )}
-                                              {canRevokeException &&
-                                                  item.complianceState === "exception" && (
+                                sortingField: "complianceState",
+                            },
+                            {
+                                id: "schemaName",
+                                header: "Bound schema",
+                                cell: (item: any) => item.schemaName || "-",
+                                sortingField: "schemaName",
+                            },
+                            {
+                                id: "schemaSource",
+                                header: "Source",
+                                cell: (item: any) => schemaSourceLabel(item.schemaSource),
+                                sortingField: "schemaSource",
+                            },
+                            {
+                                id: "updatedAt",
+                                header: "Last Updated",
+                                cell: (item: any) =>
+                                    item.updatedAt
+                                        ? new Date(item.updatedAt).toLocaleString()
+                                        : "-",
+                                sortingField: "updatedAt",
+                            },
+                            ...(canViewHistory || canRevokeException
+                                ? [
+                                      {
+                                          id: "actions",
+                                          header: "Actions",
+                                          width: ASSET_ROW_ACTIONS_COLUMN_WIDTH,
+                                          minWidth: ASSET_ROW_ACTIONS_COLUMN_WIDTH,
+                                          cell: (item: any) => (
+                                              <SpaceBetween direction="horizontal" size="s">
+                                                  {canViewHistory && (
                                                       <Button
                                                           variant="inline-link"
-                                                          ariaLabel={`Revoke the exception of ${
+                                                          ariaLabel={`Evaluation history of ${
                                                               item.assetName || item.assetId
                                                           }`}
-                                                          onClick={() => setRevokeTarget(item)}
+                                                          onClick={() => setHistoryTarget(item)}
                                                       >
-                                                          Revoke exception
+                                                          History
                                                       </Button>
                                                   )}
-                                          </SpaceBetween>
-                                      ),
-                                  },
-                              ]
-                            : []),
-                    ]}
-                    sortingDisabled={false}
-                />
-            </Container>
-            {historyTarget && databaseId && (
-                <EvaluationHistoryModal
-                    visible={!!historyTarget}
-                    databaseId={databaseId}
-                    assetId={historyTarget.assetId}
-                    assetLabel={historyTarget.assetName || historyTarget.assetId}
-                    onDismiss={() => setHistoryTarget(null)}
-                />
-            )}
+                                                  {canRevokeException &&
+                                                      item.complianceState === "exception" && (
+                                                          <Button
+                                                              variant="inline-link"
+                                                              ariaLabel={`Revoke the exception of ${
+                                                                  item.assetName || item.assetId
+                                                              }`}
+                                                              onClick={() => setRevokeTarget(item)}
+                                                          >
+                                                              Revoke exception
+                                                          </Button>
+                                                      )}
+                                              </SpaceBetween>
+                                          ),
+                                      },
+                                  ]
+                                : []),
+                        ]}
+                        sortingDisabled={false}
+                    />
+                </Container>
+                {historyTarget && databaseId && (
+                    <EvaluationHistoryModal
+                        visible={!!historyTarget}
+                        databaseId={databaseId}
+                        assetId={historyTarget.assetId}
+                        assetLabel={historyTarget.assetName || historyTarget.assetId}
+                        onDismiss={() => setHistoryTarget(null)}
+                    />
+                )}
 
-            {revokeTarget && (
-                <RevokeExceptionModal
-                    visible={!!revokeTarget}
-                    revoking={revoking}
-                    onConfirm={handleRevokeException}
-                    onDismiss={() => setRevokeTarget(null)}
-                />
-            )}
-        </SpaceBetween>
+                {revokeTarget && (
+                    <RevokeExceptionModal
+                        visible={!!revokeTarget}
+                        revoking={revoking}
+                        onConfirm={handleRevokeException}
+                        onDismiss={() => setRevokeTarget(null)}
+                    />
+                )}
+            </SpaceBetween>
+        </Box>
     );
 };
 
