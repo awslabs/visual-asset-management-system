@@ -71,6 +71,12 @@ export const cascadeProgress = (record: CascadeRecord | null): string | null => 
     }
 };
 
+/**
+ * Width (px) of the Actions column: room for the Approve and Reject buttons side by side, so neither
+ * label wraps when the table is narrow.
+ */
+export const CASCADE_ACTIONS_COLUMN_WIDTH = 220;
+
 const ComplianceCascades: React.FC = () => {
     const [items, setItems] = useState<CascadeRecord[]>([]);
     const [loading, setLoading] = useState(true);
@@ -331,6 +337,8 @@ const ComplianceCascades: React.FC = () => {
                     {
                         id: "actions",
                         header: "Actions",
+                        width: CASCADE_ACTIONS_COLUMN_WIDTH,
+                        minWidth: CASCADE_ACTIONS_COLUMN_WIDTH,
                         cell: (item) =>
                             item.state === "pending_approval" ? (
                                 <SpaceBetween direction="horizontal" size="xs">

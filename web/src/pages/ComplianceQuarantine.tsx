@@ -24,6 +24,12 @@ import ReasonModal from "../components/compliance/ReasonModal";
 import { ComplianceStateBadge } from "../components/compliance/complianceStateBadge";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 
+/**
+ * Width (px) of the Actions column: room for the Release and Exception buttons side by side.
+ * Without it the table squeezed the column until each button label wrapped one letter per line.
+ */
+export const QUARANTINE_ACTIONS_COLUMN_WIDTH = 240;
+
 const ComplianceQuarantine: React.FC = () => {
     // Asset names link to the asset page only when the caller may open it.
     const { canOpenAsset } = useAssetPageAccess();
@@ -234,6 +240,8 @@ const ComplianceQuarantine: React.FC = () => {
                     {
                         id: "actions",
                         header: "Actions",
+                        width: QUARANTINE_ACTIONS_COLUMN_WIDTH,
+                        minWidth: QUARANTINE_ACTIONS_COLUMN_WIDTH,
                         cell: (item) => (
                             <SpaceBetween direction="horizontal" size="xs">
                                 <Button variant="normal" onClick={() => handleRelease(item)}>
