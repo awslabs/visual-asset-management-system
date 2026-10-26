@@ -611,8 +611,10 @@ describe("CAD STEP agent with the OpenAI provider configured", () => {
     });
 
     test("the container role may read exactly that secret", () => {
-        const secrets = policyStatements(synth).filter((s) =>
-            actionsOf(s.statement).includes("secretsmanager:GetSecretValue")
+        const secrets = policyStatements(synth).filter(
+            (s) =>
+                /cadstepagent/i.test(s.stack) &&
+                actionsOf(s.statement).includes("secretsmanager:GetSecretValue")
         );
         expect(secrets).toHaveLength(1);
         expect(SynthResult.flatten(secrets[0].statement.Resource)).toBe(secretArn);
