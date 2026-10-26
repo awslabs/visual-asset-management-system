@@ -12,7 +12,6 @@ import ColumnLayout from "@cloudscape-design/components/column-layout";
 import Container from "@cloudscape-design/components/container";
 import Header from "@cloudscape-design/components/header";
 import Link from "@cloudscape-design/components/link";
-import Modal from "@cloudscape-design/components/modal";
 import Pagination from "@cloudscape-design/components/pagination";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
@@ -35,6 +34,7 @@ import {
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../../../services/ComplianceService";
 import ReasonModal from "../../compliance/ReasonModal";
+import RevokeExceptionModal from "../../compliance/RevokeExceptionModal";
 import {
     ComplianceStateBadge,
     EvaluationErrorIndicator,
@@ -486,36 +486,12 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                 onDismiss={() => setExceptionModalVisible(false)}
             />
 
-            <Modal
+            <RevokeExceptionModal
                 visible={revokeModalVisible}
+                revoking={revoking}
+                onConfirm={handleRevokeException}
                 onDismiss={() => setRevokeModalVisible(false)}
-                header="Revoke compliance exception"
-                closeAriaLabel="Close dialog"
-                footer={
-                    <Box float="right">
-                        <SpaceBetween direction="horizontal" size="xs">
-                            <Button
-                                variant="link"
-                                onClick={() => setRevokeModalVisible(false)}
-                                disabled={revoking}
-                            >
-                                Cancel
-                            </Button>
-                            <Button
-                                variant="primary"
-                                onClick={handleRevokeException}
-                                loading={revoking}
-                            >
-                                Revoke
-                            </Button>
-                        </SpaceBetween>
-                    </Box>
-                }
-            >
-                The {Synonyms.asset} returns to the state of its last evaluation. When that
-                evaluation quarantined it, it is quarantined again. The revocation is recorded in
-                the compliance audit log.
-            </Modal>
+            />
         </SpaceBetween>
     );
 };

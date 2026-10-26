@@ -311,6 +311,8 @@ export interface EvaluationRecord {
     databaseId: string;
     assetId: string;
     schemaName: string;
+    /** Version of the schema the evaluation read. */
+    schemaVersion?: number | null;
     result: ComplianceEvaluationVerdict;
     verdict?: ComplianceEvaluationVerdict;
     status?: "pending_pipeline" | "completed" | "error";

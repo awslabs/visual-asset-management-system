@@ -122,7 +122,11 @@ web/
                               #   quarantine); complianceStateBadge.tsx
                               #   (shared compliance-state -> StatusIndicator map + Badge color accessor;
                               #   `exception` renders as info/blue; EvaluationErrorIndicator flags a
-                              #   record whose lastEvaluationStatus is `error`)
+                              #   record whose lastEvaluationStatus is `error`);
+                              #   EvaluationHistoryModal.tsx (one asset's paged evaluation history with schema
+                              #   version and rule results, opened from the database overview);
+                              #   RevokeExceptionModal.tsx (the revoke confirmation shared by the asset tab
+                              #   and the database overview)
       filemanager/            # Asset file manager (Cloudscape)
                                 #   EnhancedFileManager.tsx lazy-loads the orchestration execution
                                 #   quick view for a file's "View execution" provenance link.

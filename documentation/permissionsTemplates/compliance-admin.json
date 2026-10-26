@@ -1,7 +1,7 @@
 {
     "metadata": {
         "name": "Compliance Admin",
-        "description": "Administrative access for compliance operations. Can manage compliance schemas, bind and unbind them on the database and its assets, trigger evaluations, release quarantined assets, grant exceptions, and approve/reject cascades. Read-only on the database and its assets. Scoped to a specific database.",
+        "description": "Administrative access for compliance operations. Can manage compliance schemas, bind and unbind them on the database and its assets, trigger evaluations, release quarantined assets, grant exceptions, and approve/reject cascades. Read-only on the database and its assets. Scoped to a specific database. Grants no asset pages: evaluation history and exception revocation are on the database compliance overview.",
         "version": "1.0"
     },
     "variables": [

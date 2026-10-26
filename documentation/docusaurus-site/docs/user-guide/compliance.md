@@ -33,6 +33,7 @@ Each row lists the rules that failed as violations. A row flagged **Exception ap
     - A summary row with counts for each state: Compliant, Non-Compliant, Quarantined, Exception, Pending Evaluation, and Unknown, plus an **Evaluation errors** tile counting the assets whose last evaluation produced no verdict. That tile is an overlay on the state counts, not a state of its own: each of those assets is also counted under the state it kept.
     - A compliance rate (compliant assets divided by tracked assets).
     - A table of tracked assets with Asset Name, Asset ID, compliance state (with the **Evaluation error** indicator beside it where the last evaluation errored), the **Bound schema** — the schema the asset is currently bound to, which is not necessarily the schema whose evaluation produced the state shown — and last evaluation time.
+    - On each asset row, for users who may read evaluations, **History**: the asset's evaluations newest first, each with its verdict, the schema and version it read, and every rule's result, including rules whose tooling failed (shown as errors, not evaluated). For an asset in the `exception` state, users who may revoke exceptions also get **Revoke exception**, with the same confirmation as the asset's Compliance tab. Both work without access to the asset page, which is how the Compliance Admin and Compliance Readonly roles reach them: neither template grants asset pages.
 
 Only assets with a compliance record are counted; an asset that has never been bound does not appear.
 
@@ -594,14 +595,14 @@ Both templates take `DATABASE_ID` and `ROLE_NAME` variables. Apply them with `va
 1. Apply the `compliance-admin` template with `DATABASE_ID` set to the target database.
 2. Assign the resulting role to the user.
 
-The user manages schemas across the deployment but evaluates assets and acts on quarantine only within the scoped database.
+The user manages schemas across the deployment but evaluates assets and acts on quarantine only within the scoped database. The template grants no asset pages: the user reads evaluation history and revokes exceptions on the database compliance overview.
 
 ### Example: read-only compliance viewer
 
 1. Apply the `compliance-readonly` template with `DATABASE_ID` set to the target database.
 2. Assign the resulting role to the user.
 
-The user views schemas, evaluation history, quarantine status and the audit log but cannot evaluate, release, grant exceptions or approve cascades.
+The user views schemas, evaluation history (from **History** on the database compliance overview), quarantine status and the audit log but cannot evaluate, release, grant exceptions or approve cascades.
 
 :::tip[Troubleshooting 403 errors]
 If a user receives **Not Authorized** on compliance pages or calls, verify they hold both:

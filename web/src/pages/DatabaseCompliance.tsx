@@ -28,6 +28,7 @@ import {
     fetchComplianceSchemas,
     bindSchemaToDatabase,
     unbindSchemaFromDatabase,
+    revokeException,
     DatabaseComplianceOverview,
     EvaluateDatabaseResponse,
     COMPLIANCE_LISTING_PAGE_SIZE,
@@ -38,6 +39,8 @@ import {
     EvaluationErrorIndicator,
 } from "../components/compliance/complianceStateBadge";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
+import EvaluationHistoryModal from "../components/compliance/EvaluationHistoryModal";
+import RevokeExceptionModal from "../components/compliance/RevokeExceptionModal";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 
 // The routes behind the database binding control (backend/backend/common/apiRoutes.py): the
@@ -46,6 +49,11 @@ const COMPLIANCE_SCHEMAS_API_ROUTE = "/compliance/schemas";
 const COMPLIANCE_BIND_DATABASE_API_ROUTE = "/compliance/bind/{databaseId}";
 // Evaluate All (the database's tracked assets); offered only to a caller who may call it.
 export const COMPLIANCE_EVALUATE_DATABASE_API_ROUTE = "/compliance/evaluate/{databaseId}";
+// Per-asset history and the revocation of an asset's exception, offered on the asset rows so a
+// role that cannot open asset pages (both compliance templates) still reaches them.
+export const COMPLIANCE_EVALUATIONS_API_ROUTE = "/compliance/evaluations/{databaseId}/{assetId}";
+export const COMPLIANCE_EXCEPTION_API_ROUTE =
+    "/compliance/quarantine/{databaseId}/{assetId}/exception";
 
 /**
  * The success message of Evaluate All: the API's count, plus how many tracked assets were not
@@ -61,6 +69,9 @@ export const evaluateAllMessage = (result: EvaluateDatabaseResponse): string => 
     }
     return parts.join("; ") + ".";
 };
+
+/** Width (px) of the asset rows' Actions column: History and Revoke exception side by side. */
+export const ASSET_ROW_ACTIONS_COLUMN_WIDTH = 260;
 
 const DatabaseCompliancePage: React.FC = () => {
     const { databaseId } = useParams();
@@ -78,6 +89,11 @@ const DatabaseCompliancePage: React.FC = () => {
     const canBind = canListSchemas && canCallRoute("PUT", COMPLIANCE_BIND_DATABASE_API_ROUTE);
     const canUnbind = canListSchemas && canCallRoute("DELETE", COMPLIANCE_BIND_DATABASE_API_ROUTE);
     const canEvaluateAll = canCallRoute("POST", COMPLIANCE_EVALUATE_DATABASE_API_ROUTE);
+    const canViewHistory = canCallRoute("GET", COMPLIANCE_EVALUATIONS_API_ROUTE);
+    const canRevokeException = canCallRoute("DELETE", COMPLIANCE_EXCEPTION_API_ROUTE);
+    const [historyTarget, setHistoryTarget] = useState<any | null>(null);
+    const [revokeTarget, setRevokeTarget] = useState<any | null>(null);
+    const [revoking, setRevoking] = useState(false);
     // The breadcrumb and asset names link to the assets and asset pages only when the caller may
     // open them.
     const { canOpenDatabaseAssets, canOpenAsset } = useAssetPageAccess();
@@ -238,6 +254,22 @@ const DatabaseCompliancePage: React.FC = () => {
             setError(typeof result === "string" ? result : "Evaluation failed");
         }
         setSweeping(false);
+    };
+
+    const handleRevokeException = async () => {
+        if (!databaseId || !revokeTarget) return;
+        setRevoking(true);
+        setActionMessage(null);
+        setError(null);
+        const [success, result] = await revokeException(databaseId, revokeTarget.assetId);
+        setRevoking(false);
+        setRevokeTarget(null);
+        if (success && typeof result !== "string") {
+            setActionMessage(result.message);
+            await loadData();
+        } else {
+            setError(typeof result === "string" ? result : "Failed to revoke exception");
+        }
     };
 
     const summary = overview?.summary;
@@ -532,10 +564,65 @@ const DatabaseCompliancePage: React.FC = () => {
                                 item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "-",
                             sortingField: "updatedAt",
                         },
+                        ...(canViewHistory || canRevokeException
+                            ? [
+                                  {
+                                      id: "actions",
+                                      header: "Actions",
+                                      width: ASSET_ROW_ACTIONS_COLUMN_WIDTH,
+                                      minWidth: ASSET_ROW_ACTIONS_COLUMN_WIDTH,
+                                      cell: (item: any) => (
+                                          <SpaceBetween direction="horizontal" size="xs">
+                                              {canViewHistory && (
+                                                  <Button
+                                                      variant="normal"
+                                                      ariaLabel={`Evaluation history of ${
+                                                          item.assetName || item.assetId
+                                                      }`}
+                                                      onClick={() => setHistoryTarget(item)}
+                                                  >
+                                                      History
+                                                  </Button>
+                                              )}
+                                              {canRevokeException &&
+                                                  item.complianceState === "exception" && (
+                                                      <Button
+                                                          variant="normal"
+                                                          ariaLabel={`Revoke the exception of ${
+                                                              item.assetName || item.assetId
+                                                          }`}
+                                                          onClick={() => setRevokeTarget(item)}
+                                                      >
+                                                          Revoke exception
+                                                      </Button>
+                                                  )}
+                                          </SpaceBetween>
+                                      ),
+                                  },
+                              ]
+                            : []),
                     ]}
                     sortingDisabled={false}
                 />
             </Container>
+            {historyTarget && databaseId && (
+                <EvaluationHistoryModal
+                    visible={!!historyTarget}
+                    databaseId={databaseId}
+                    assetId={historyTarget.assetId}
+                    assetLabel={historyTarget.assetName || historyTarget.assetId}
+                    onDismiss={() => setHistoryTarget(null)}
+                />
+            )}
+
+            {revokeTarget && (
+                <RevokeExceptionModal
+                    visible={!!revokeTarget}
+                    revoking={revoking}
+                    onConfirm={handleRevokeException}
+                    onDismiss={() => setRevokeTarget(null)}
+                />
+            )}
         </SpaceBetween>
     );
 };

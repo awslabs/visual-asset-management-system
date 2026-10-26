@@ -95,7 +95,8 @@ web/
                             #   assetAttributes checks)
                             #   + complianceSchemaRules.ts;
                             #   ReasonModal.tsx (Cloudscape reason dialog); complianceStateBadge.tsx
-                            #   (shared state -> StatusIndicator map, `exception` = info)
+                            #   (shared state -> StatusIndicator map, `exception` = info);
+                            #   EvaluationHistoryModal.tsx; RevokeExceptionModal.tsx
       createupdate/         # CreateDatabase, UpdateAsset + form definitions
       filemanager/          # File tree and file operations
       form/
