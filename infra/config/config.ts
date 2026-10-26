@@ -52,6 +52,10 @@ export const STACK_XREGION_DESCRIPTION =
     "(SO9299) (uksb-1608h3hqer) (VAMS-XREGION) (version:" +
     VAMS_VERSION +
     ") Cross-Region asset bucket notification components for the Visual Asset Management Systems";
+export const STACK_ORIGIN_VERIFY_DESCRIPTION =
+    "(SO9299) (uksb-1608h3hqer) (VAMS-ORIGINVERIFY) (version:" +
+    VAMS_VERSION +
+    ") API origin verification secret for the Visual Asset Management Systems";
 
 // Custom Authorizer Configuration
 export const CUSTOM_AUTHORIZER_IGNORED_PATHS = ["/api/amplify-config", "/api/version"];
@@ -68,6 +72,27 @@ export const SUPPORTED_API_TYPES = [API_TYPE_APIGATEWAY_REST];
 // distribution (CloudFront originPath / ALB redirect) absorbs this stage so browser/CLI
 // base URLs remain /api/*.
 export const API_GATEWAY_STAGE_NAME = "api";
+
+// The routes registered under the stage's own `/api/` prefix: the anonymous bootstrap routes. The
+// CloudFront distribution forwards each of these exact paths with the stage as its origin path and
+// every other `/api/*` path without one, so no other route may begin with `/api/`.
+export const API_STAGE_PREFIXED_ROUTE_PATHS = ["/api/amplify-config", "/api/version"];
+
+// On a CloudFront deployment, CloudFront adds this header to every request it forwards to the REST
+// API, carrying the deployment's origin verification value (an AWS Secrets Manager secret). The
+// regional web ACL's rate-based rules and the REST authorizer's client-address resolution read it.
+// Lower-case, because AWS WAF matches a single header by its lower-case name. Mirrored in
+// backend/backend/common/auth/originVerify.py and in the SENSITIVE_KEYS of
+// backend/backend/customLogging/logger.py (test/security/apiOriginVerifyMirror.test.ts).
+export const API_ORIGIN_VERIFY_HEADER_NAME = "x-vams-origin-verify";
+// JSON keys of the origin verification secret: the value CloudFront sends, and the value it sent
+// before the last rotation.
+export const API_ORIGIN_VERIFY_CURRENT_KEY = "current";
+export const API_ORIGIN_VERIFY_PREVIOUS_KEY = "previous";
+// Days between automatic rotations of the origin verification secret. A value stays accepted as
+// `previous` until the rotation after the one that replaced it, so each value is accepted for at
+// most two intervals: 45 days keeps that lifetime at about 90 days.
+export const API_ORIGIN_VERIFY_ROTATION_DAYS = 45;
 
 // The REST API integration timeout applied when a deployment names none, in seconds. 29 seconds is
 // the API Gateway default and the floor VAMS allows. Raising it above the default requires an
@@ -153,6 +178,51 @@ export function rapidPipelineEksWorstCaseRunSeconds(jobTimeoutSeconds: number): 
     );
 }
 
+// The RapidPipeline (Amazon ECS) timeout chain. The same three clocks bound a run and must nest the
+// same way, so that the parent workflow is still waiting when the run reports its outcome:
+//
+//   ConstructPipeline + Fargate task + PipelineEnd  <=  state machine timeout  <  bundle taskTimeout
+//
+// The Fargate task is a `.sync` ECS RunTask, which waits for the task to stop however long it runs,
+// so the construct gives that state a task-level timeout. A task-level States.Timeout is a state error
+// that the task's Catch routes to PipelineEnd, which reports the failure to the parent workflow; an
+// execution-level States.Timeout bypasses every Catch, so PipelineEnd would not run. ConstructPipeline
+// and PipelineEnd are bounded by their Lambda functions' timeouts, set in the pipeline's lambda
+// builder, so the CONSTRUCT_PIPELINE and PIPELINE_END values below are the budget counted for them,
+// and infra/test/pipelines/ecsTimeoutHeadroom.test.ts fails if the emitted functions exceed it. The
+// 17040 s task bound leaves 360 s of the 18000 s state machine timeout after both Lambda steps. That
+// covers the stop route below (54 s at worst) and the backoff of the two Lambda steps'
+// service-exception retries (126 s each, 252 s together), with 54 s to spare. The bundle's
+// taskTimeout, declared in backendPipelines/multi/rapidPipeline/vamsSchema/pipeline.json, is 30
+// minutes longer than the state machine timeout, because the parent's task starts before the state
+// machine does: vamsExecute invokes openPipeline and waits for it, openPipeline starts the
+// execution, and vamsExecute's five-minute timeout bounds both.
+//
+// The stop route. A task-level States.Timeout fails the state, and Step Functions stops the Fargate
+// task as it ends the state. Its documentation does not list that case, so the timeout's Catch also
+// runs up to three AWS SDK calls before PipelineEnd to stop a task still running. The Fargate task is
+// started with its group set to the execution name, and ecs:ListTasks cannot filter by group, so
+// ecs:ListTasks lists the cluster's running tasks (one page of STOP_ROUTE_PAGE_SIZE, the most
+// ListTasks returns and DescribeTasks accepts), ecs:DescribeTasks keeps the one whose group is the
+// execution name, and a Map calls ecs:StopTask on it. Each call is bounded by the STOP_CALL timeout
+// and retried STOP_CALL_RETRIES times on throttling and server errors (1 s, then 2 s), so one call
+// takes at most (1 + 2) x 5 + 1 + 2 = 18 s. The Map's iterations run concurrently, and the group is
+// unique to the execution, so the route takes at most three calls in sequence: 54 s. Any call's
+// failure is caught and goes on to PipelineEnd, so the parent workflow is told of the timeout
+// whether or not the stop succeeds.
+//
+// The construct reads the state machine timeout, the Fargate task timeout and the stop-call bounds
+// from here; the bundle taskTimeout is what the tests compare pipeline.json and the state machine
+// timeout with.
+export const RAPID_PIPELINE_ECS_STATE_MACHINE_TIMEOUT_SECONDS = 18000;
+export const RAPID_PIPELINE_ECS_FARGATE_TASK_TIMEOUT_SECONDS = 17040;
+export const RAPID_PIPELINE_ECS_BUNDLE_TASK_TIMEOUT_SECONDS = 19800;
+export const RAPID_PIPELINE_ECS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_ECS_PIPELINE_END_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_ECS_STOP_CALL_TIMEOUT_SECONDS = 5;
+export const RAPID_PIPELINE_ECS_STOP_CALL_RETRIES = 2;
+export const RAPID_PIPELINE_ECS_STOP_ROUTE_PAGE_SIZE = 100;
+
 // ============================================================================================
 // Constants used only to check configuration
 //
@@ -164,6 +234,25 @@ export function rapidPipelineEksWorstCaseRunSeconds(jobTimeoutSeconds: number): 
 // VAMS' own ceiling on the REST API integration timeout, matching the practical upper bound for a
 // synchronous request/response API. Compared against, never assigned.
 export const API_GATEWAY_MAX_TIMEOUT_SECONDS = 300;
+
+// Partitions in which VAMS creates a Regional API Gateway custom domain name for the REST API
+// (`app.api.apiGatewayRest.customDomain`). Amazon API Gateway offers Regional custom domain names in
+// the commercial and AWS GovCloud (US) partitions; any other partition is rejected until its support
+// has been confirmed.
+export const API_CUSTOM_DOMAIN_PARTITIONS = ["aws", "aws-us-gov"];
+
+// A REST API custom domain host: lowercase labels separated by dots, no scheme, port or path. API
+// Gateway does not accept uppercase letters in a custom domain name.
+export const API_CUSTOM_DOMAIN_HOST_PATTERN =
+    /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+// An ACM certificate ARN, with the partition and Region captured.
+export const ACM_CERTIFICATE_ARN_PATTERN =
+    /^arn:(aws[a-z-]*):acm:([a-z0-9-]+):\d{12}:certificate\/[a-f0-9-]+$/;
+
+// An Amazon Route 53 hosted zone ID as the Route 53 API returns it, without the `/hostedzone/`
+// prefix: `Z` followed by uppercase letters and digits, at most 32 characters in total.
+export const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
 
 // Amazon Cognito's username limit. Used to reject an over-long app.adminUserId at synthesis rather
 // than letting CreateUser fail mid-deploy and roll the core stack back.
@@ -1454,6 +1543,12 @@ export function getConfig(app: cdk.App): Config {
                 endpointType: "REGIONAL",
                 optionalExternalPrivateApigVPCEId: "",
                 apiGatewayTimeoutTime: API_GATEWAY_DEFAULT_TIMEOUT_SECONDS,
+                customDomain: {
+                    enabled: false,
+                    domainHost: "",
+                    certificateArn: "",
+                    optionalHostedZoneId: "",
+                },
             },
         };
     }
@@ -1474,6 +1569,12 @@ export function getConfig(app: cdk.App): Config {
             optionalExternalPrivateApigVPCEId: legacyApi.externalRegionalAPIGatewayVPCEId ?? "",
             apiGatewayTimeoutTime:
                 legacyApi.apiGatewayTimeoutTime ?? API_GATEWAY_DEFAULT_TIMEOUT_SECONDS,
+            customDomain: {
+                enabled: false,
+                domainHost: "",
+                certificateArn: "",
+                optionalHostedZoneId: "",
+            },
         };
     }
 
@@ -1493,6 +1594,14 @@ export function getConfig(app: cdk.App): Config {
     }
     if (config.app.api.apiGatewayRest.apiGatewayTimeoutTime == undefined) {
         config.app.api.apiGatewayRest.apiGatewayTimeoutTime = API_GATEWAY_DEFAULT_TIMEOUT_SECONDS;
+    }
+    if (config.app.api.apiGatewayRest.customDomain == undefined) {
+        config.app.api.apiGatewayRest.customDomain = {
+            enabled: false,
+            domainHost: "",
+            certificateArn: "",
+            optionalHostedZoneId: "",
+        };
     }
 
     // Initialize CloudFront custom domain configuration if undefined (backward compatibility)
@@ -3300,6 +3409,96 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    // REST API custom domain. A Regional custom domain name maps base path `api` to the stage, so
+    // https://{domainHost}/api/{route} has the same shape as the execute-api invoke URL.
+    const apiCustomDomain = apiGatewayRest.customDomain;
+    if (apiCustomDomain.enabled) {
+        const isUnsetValue = (v: string | undefined | null) =>
+            v == undefined || v === "" || v === "UNDEFINED";
+        if (
+            isUnsetValue(apiCustomDomain.domainHost) ||
+            isUnsetValue(apiCustomDomain.certificateArn)
+        ) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.enabled requires " +
+                    "app.api.apiGatewayRest.customDomain.domainHost and " +
+                    "app.api.apiGatewayRest.customDomain.certificateArn."
+            );
+        }
+        if (!API_CUSTOM_DOMAIN_HOST_PATTERN.test(apiCustomDomain.domainHost)) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.domainHost must be a " +
+                    "lowercase host name with no scheme, port or path (for example api.example.com). " +
+                    `Got: '${apiCustomDomain.domainHost}'.`
+            );
+        }
+        // The web application's own host (the CloudFront custom domain, or the ALB host) already
+        // points at the web front, so the API custom domain needs a host of its own.
+        const webAppHosts: [string, string | undefined][] = [
+            [
+                "app.useCloudFront.customDomain.domainHost",
+                config.app.useCloudFront.enabled && config.app.useCloudFront.customDomain.enabled
+                    ? config.app.useCloudFront.customDomain.domainHost
+                    : undefined,
+            ],
+            [
+                "app.useAlb.domainHost",
+                config.app.useAlb.enabled ? config.app.useAlb.domainHost : undefined,
+            ],
+        ];
+        for (const [webAppHostField, webAppHost] of webAppHosts) {
+            if (
+                !isUnsetValue(webAppHost) &&
+                String(webAppHost).toLowerCase() === apiCustomDomain.domainHost.toLowerCase()
+            ) {
+                throw new Error(
+                    "Configuration Error: app.api.apiGatewayRest.customDomain.domainHost must differ " +
+                        `from ${webAppHostField}, the web application's host. Got: '${apiCustomDomain.domainHost}' for both.`
+                );
+            }
+        }
+        if (
+            !isUnsetValue(apiCustomDomain.optionalHostedZoneId) &&
+            !ROUTE53_HOSTED_ZONE_ID_PATTERN.test(apiCustomDomain.optionalHostedZoneId)
+        ) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.optionalHostedZoneId must be " +
+                    "an Amazon Route 53 hosted zone ID such as Z0123456789ABCDEFGHIJ (no /hostedzone/ " +
+                    `prefix), or empty. Got: '${apiCustomDomain.optionalHostedZoneId}'.`
+            );
+        }
+        if (apiGatewayRest.endpointType === "PRIVATE") {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.enabled is not supported " +
+                    "with app.api.apiGatewayRest.endpointType 'PRIVATE'. The custom domain is a " +
+                    "Regional (public) domain name; a private API is reached through its VPC endpoint."
+            );
+        }
+        if (API_CUSTOM_DOMAIN_PARTITIONS.indexOf(config.env.partition) === -1) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.enabled is not supported " +
+                    `in the '${config.env.partition}' partition. VAMS creates the REST API custom ` +
+                    `domain in the ${API_CUSTOM_DOMAIN_PARTITIONS.join(
+                        " and "
+                    )} partitions only. ` +
+                    "Set app.api.apiGatewayRest.customDomain.enabled to false."
+            );
+        }
+        const certMatch = ACM_CERTIFICATE_ARN_PATTERN.exec(apiCustomDomain.certificateArn);
+        if (
+            !certMatch ||
+            certMatch[1] !== config.env.partition ||
+            certMatch[2] !== config.env.region
+        ) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.certificateArn must be an " +
+                    `ACM certificate ARN in the deployment Region (${config.env.region}). A Regional ` +
+                    "custom domain name uses a certificate from its own Region. Provided ARN: " +
+                    apiCustomDomain.certificateArn
+            );
+        }
+    }
+
     // Validate IP ranges configuration. Each entry is an inclusive [min, max] pair of literal
     // addresses, of either family: the authorizer compares them numerically with Python's
     // `ipaddress` module, so an IPv6 range is expressible and matches. Both endpoints of one
@@ -4077,6 +4276,18 @@ export function crossRegionS3EndpointRegions(config: ConfigPublic): string[] {
     );
 }
 
+/**
+ * The REST API custom domain host, or undefined when `app.api.apiGatewayRest.customDomain` is off.
+ *
+ * The REST API construct, the amplify-config function and the web CSP all read the host from here,
+ * so the domain the API serves, the base URL the clients are given and the origin the browser may
+ * call cannot disagree.
+ */
+export function apiCustomDomainHost(config: ConfigPublic): string | undefined {
+    const customDomain = config.app.api.apiGatewayRest.customDomain;
+    return customDomain && customDomain.enabled ? customDomain.domainHost : undefined;
+}
+
 // One externally owned pipeline bridge allowed to register sub-executions on the orchestration bus.
 // The bus resource policy grants events:PutEvents to the account root carrying an aws:PrincipalArn
 // condition on roleArnPattern, so only roles matching the pattern can publish. invokeTargets lists
@@ -4490,6 +4701,12 @@ export interface ConfigPublic {
                 endpointType: "REGIONAL" | "PRIVATE";
                 optionalExternalPrivateApigVPCEId: string;
                 apiGatewayTimeoutTime: number;
+                customDomain: {
+                    enabled: boolean;
+                    domainHost: string;
+                    certificateArn: string;
+                    optionalHostedZoneId: string;
+                };
             };
         };
         metadataSchema: {

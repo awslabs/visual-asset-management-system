@@ -373,6 +373,10 @@ def resolve_inputs(data, manifest=None):
         "outputS3AssetFilesPath": data.get("outputS3AssetFilesPath", ""),
         "outputS3AssetPreviewPath": data.get("outputS3AssetPreviewPath", ""),
         "outputS3AssetMetadataPath": data.get("outputS3AssetMetadataPath", ""),
+        # Where a pipeline writes a report meant for the EXECUTION rather than for the asset. The
+        # workflow's output processing lists this prefix, reads each object's content and records it on
+        # the execution row, so a gate report, a benchmark or an error detail written here is visible
+        # against the run without becoming a file in the asset.
         "outputS3AssetResultsPath": data.get("outputS3AssetResultsPath", ""),
         "inputOutputS3AssetAuxiliaryFilesPath": data.get("inputOutputS3AssetAuxiliaryFilesPath", ""),
         "inputMetadataS3Location": data.get("inputMetadataS3Location", ""),

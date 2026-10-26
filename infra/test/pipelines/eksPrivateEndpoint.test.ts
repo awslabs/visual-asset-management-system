@@ -48,8 +48,6 @@ import { SynthResult, synthTemplate } from "../support/templateSynth";
 function enableEksPipeline(c: any) {
     c.app.useGlobalVpc.enabled = true;
     const eks = c.app.pipelines.useRapidPipeline.useEks;
-    c.app.pipelines.useRapidPipeline.enabled = true;
-    c.app.pipelines.useRapidPipeline.autoRegisterWithVAMS = false;
     eks.enabled = true;
     // The real config field. An earlier version of this harness set `containerUri`, which is
     // not a field at all, so the shipped placeholder stayed in place and the harness only

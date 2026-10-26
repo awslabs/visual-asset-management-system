@@ -133,6 +133,8 @@ The AWS Deadline Cloud execution type is available when the deployment sets
 | GenAI CAD STEP agent     | Warm sessions (`warmSessionSlots`)       | 0-20 on the `agentcore` runtime, default 0                   |
 | GenAI CAD STEP agent     | AgentCore Runtime container image size   | 2 GB (Amazon Bedrock AgentCore quota, not adjustable)        |
 | Isaac Lab Training       | GPU instance required                    | `g6e.2xlarge` or `g5.xlarge`                                 |
+| RapidPipeline (ECS)      | Fargate task run time                    | 4 hours 44 minutes (`config.ts` constant)                    |
+| RapidPipeline (ECS)      | Running tasks checked at a task timeout  | 100 (one `ListTasks` page; `config.ts` constant)             |
 | RapidPipeline (EKS)      | Node instance type                       | Configurable                                                 |
 | RapidPipeline (EKS)      | Job timeout                              | Configurable                                                 |
 | RapidPipeline (EKS)      | Job backoff limit                        | Configurable                                                 |

@@ -53,7 +53,7 @@ class TestUserCognitoListCommand:
         """Test successful user listing."""
         with user_command_mocks as mocks:
             mocks['api_client'].list_cognito_users.return_value = {
-                'Items': [
+                'users': [
                     {
                         'userId': 'user1@example.com',
                         'email': 'user1@example.com',
@@ -100,7 +100,7 @@ class TestUserCognitoListCommand:
         """Test list with manual pagination."""
         with user_command_mocks as mocks:
             mocks['api_client'].list_cognito_users.return_value = {
-                'Items': [
+                'users': [
                     {
                         'userId': 'user1@example.com',
                         'email': 'user1@example.com',
@@ -133,13 +133,13 @@ class TestUserCognitoListCommand:
             # Simulate two pages of results
             mocks['api_client'].list_cognito_users.side_effect = [
                 {
-                    'Items': [
+                    'users': [
                         {'userId': 'user1@example.com', 'email': 'user1@example.com', 'userStatus': 'CONFIRMED', 'enabled': True, 'mfaEnabled': False}
                     ],
                     'NextToken': 'token-page-2'
                 },
                 {
-                    'Items': [
+                    'users': [
                         {'userId': 'user2@example.com', 'email': 'user2@example.com', 'userStatus': 'CONFIRMED', 'enabled': True, 'mfaEnabled': False}
                     ]
                 }
@@ -155,14 +155,16 @@ class TestUserCognitoListCommand:
             assert 'user1@example.com' in result.output
             assert 'user2@example.com' in result.output
 
-            # Verify two API calls were made
+            # Verify two API calls were made, the second one following NextToken
             assert mocks['api_client'].list_cognito_users.call_count == 2
+            second_params = mocks['api_client'].list_cognito_users.call_args_list[1][0][0]
+            assert second_params['startingToken'] == 'token-page-2'
 
     def test_list_json_output(self, cli_runner, user_command_mocks):
         """Test list with JSON output."""
         with user_command_mocks as mocks:
             mocks['api_client'].list_cognito_users.return_value = {
-                'Items': [
+                'users': [
                     {
                         'userId': 'user1@example.com',
                         'email': 'user1@example.com',
@@ -182,9 +184,81 @@ class TestUserCognitoListCommand:
 
             # Verify output is valid JSON
             parsed = json.loads(result.output)
-            assert 'Items' in parsed
-            assert len(parsed['Items']) == 1
-            assert parsed['Items'][0]['userId'] == 'user1@example.com'
+            assert 'users' in parsed
+            assert len(parsed['users']) == 1
+            assert parsed['users'][0]['userId'] == 'user1@example.com'
+
+    @staticmethod
+    def _user(n):
+        return {'userId': f'user{n}@example.com', 'email': f'user{n}@example.com',
+                'userStatus': 'CONFIRMED', 'enabled': True, 'mfaEnabled': False}
+
+    def test_list_empty_pool(self, cli_runner, user_command_mocks):
+        """An empty `users` list is reported as no users."""
+        with user_command_mocks as mocks:
+            mocks['api_client'].list_cognito_users.return_value = {'users': []}
+
+            result = cli_runner.invoke(cli, ['user', 'cognito', 'list'])
+
+            assert result.exit_code == 0
+            assert 'No Cognito users found.' in result.output
+
+    def test_list_accepts_items_key(self, cli_runner, user_command_mocks):
+        """A response in the generic `Items` shape is still listed, not read as empty."""
+        with user_command_mocks as mocks:
+            mocks['api_client'].list_cognito_users.return_value = {'Items': [self._user(1)]}
+
+            result = cli_runner.invoke(cli, ['user', 'cognito', 'list'])
+
+            assert result.exit_code == 0
+            assert 'Found 1 Cognito user(s)' in result.output
+            assert 'user1@example.com' in result.output
+            assert 'No Cognito users found.' not in result.output
+
+    def test_list_auto_paginate_page_size_one(self, cli_runner, user_command_mocks):
+        """--page-size 1 walks every page via NextToken and lists each user exactly once."""
+        with user_command_mocks as mocks:
+            mocks['api_client'].list_cognito_users.side_effect = [
+                {'users': [self._user(1)], 'NextToken': 't2'},
+                {'users': [self._user(2)], 'NextToken': 't3'},
+                {'users': [self._user(3)]},
+            ]
+
+            result = cli_runner.invoke(cli, [
+                'user', 'cognito', 'list', '--auto-paginate', '--page-size', '1'
+            ])
+
+            assert result.exit_code == 0
+            assert 'Auto-paginated: Retrieved 3 items in 3 page(s)' in result.output
+            assert 'Found 3 Cognito user(s)' in result.output
+            for n in (1, 2, 3):
+                assert result.output.count(f'User ID: user{n}@example.com') == 1
+            calls = [c[0][0] for c in mocks['api_client'].list_cognito_users.call_args_list]
+            assert calls == [
+                {'pageSize': 1},
+                {'pageSize': 1, 'startingToken': 't2'},
+                {'pageSize': 1, 'startingToken': 't3'},
+            ]
+
+    def test_list_auto_paginate_json_output(self, cli_runner, user_command_mocks):
+        """The aggregated JSON result carries the API's `users` key."""
+        with user_command_mocks as mocks:
+            mocks['api_client'].list_cognito_users.side_effect = [
+                {'users': [self._user(1)], 'NextToken': 't2'},
+                {'users': [self._user(2)]},
+            ]
+
+            result = cli_runner.invoke(cli, [
+                'user', 'cognito', 'list', '--auto-paginate', '--json-output'
+            ])
+
+            assert result.exit_code == 0
+            parsed = json.loads(result.output)
+            assert [u['userId'] for u in parsed['users']] == ['user1@example.com', 'user2@example.com']
+            assert parsed['totalItems'] == 2
+            assert parsed['pageCount'] == 2
+            assert parsed['autoPaginated'] is True
+            assert 'Items' not in parsed
 
     def test_list_cognito_not_enabled(self, cli_runner, user_command_mocks):
         """Test list when Cognito is not enabled."""
@@ -541,7 +615,7 @@ class TestUserCognitoDeleteCommand:
             # Verify API was not called
             mocks['api_client'].delete_cognito_user.assert_not_called()
 
-    def test_delete_cancelled_at_prompt(self, cli_runner, user_command_mocks):
+    def test_delete_cancelled_at_prompt(self, cli_runner, user_command_mocks, interactive_stdin):
         """Test delete cancelled at confirmation prompt."""
         with user_command_mocks as mocks:
             result = cli_runner.invoke(cli, [
@@ -593,10 +667,8 @@ class TestUserCognitoDeleteCommand:
 
             assert result.exit_code == 0
 
-            # Note: Delete command has confirmation prompts that appear even with --json-output
-            # This is by design for safety - the prompts use click.secho/click.echo which bypass json_output
-            # For this test, we verify the command succeeds and API is called correctly
-            # In real usage, users can parse the JSON from the output or use --confirm to skip interactive prompt
+            # --json-output never asks the second confirmation question: --confirm alone proceeds
+            assert 'Are you sure you want to proceed?' not in result.output
             
             # Verify API was called correctly
             mocks['api_client'].delete_cognito_user.assert_called_once_with('user@example.com')

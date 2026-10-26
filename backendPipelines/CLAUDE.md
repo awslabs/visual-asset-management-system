@@ -521,7 +521,11 @@ partition. Author it with the block for your execution type present but empty:
     (even to the millisecond) is not enough, so keep the random suffix. The name also namespaces
     per-execution S3 objects in some pipelines (`rp_config_{jobName}.json`), where a collision has
     concurrent runs overwrite each other's config instead of merely failing to start. Keep it within the
-    80-character Step Functions limit and free of `:` and `/`.
+    80-character Step Functions limit and free of `:` and `/`. In `multi/rapidPipeline` the name is also
+    the Fargate task's ECS task group, which is how the state machine finds a task still running at its
+    task-level timeout to stop it (it matches the group of the cluster's running tasks to the execution
+    name), so keep it unique per execution and within ECS's 255-character task group limit: pinned by
+    `multi/rapidPipeline/lambda/tests/test_rapidpipeline_ecs_timeout_stop_route.py`.
 
 Verify registration after a deploy rather than assuming it:
 
@@ -629,6 +633,19 @@ Producer tests (`lambda/tests/test_manifest_refactor.py`, `test_batch_job_regist
 keys and that the emitted `logGroupArn` passes `CLOUDWATCH_LOG_GROUP_ARN` and `logStreamPrefix` passes
 `LOG_STREAM_NAME`. Run each pipeline's `tests/` in its own pytest process (module-name collision across
 pipelines).
+
+**Work a stopped execution leaves running.** Abort and a failure elsewhere in the workflow stop a
+registered `stepFunctionsExecution`, and a stopped execution runs no further states, so anything its
+states started outside a Step Functions `.sync` integration keeps running unless the pipeline cleans it
+up itself. `multi/rapidPipelineEKS` is the example for its Kubernetes job: CONSTRUCT_PIPELINE records each
+job name under `$$.Execution.Name` in the auxiliary bucket, and an EventBridge rule on the state
+machine's own `ABORTED` / `TIMED_OUT` / `FAILED` status changes invokes the handler's
+`EXECUTION_END_CLEANUP`, which rejects any other state machine and deletes the recorded jobs. The rule's
+`targets.LambdaFunction` permission carries `SourceArn` only, so the construct adds `SourceAccount`
+(`infra/test/pipelines/eksExecutionEndCleanup.test.ts`). The target's `retryAttempts` covers only
+EventBridge's delivery; a handler that returns an error body has succeeded as far as Lambda is concerned,
+so `lambda_handler` raises for a 5xx `EXECUTION_END_CLEANUP` result (never for its 400/403 rejections)
+and the construct pins Lambda's asynchronous retries with `configureAsyncInvoke` (no destination).
 
 ## Every boto3 Client Carries the Adaptive Retry Configuration
 

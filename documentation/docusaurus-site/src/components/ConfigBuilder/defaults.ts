@@ -406,6 +406,12 @@ const COMMERCIAL: ConfigShape = {
                 endpointType: "REGIONAL",
                 optionalExternalPrivateApigVPCEId: "",
                 apiGatewayTimeoutTime: 29,
+                customDomain: {
+                    enabled: false,
+                    domainHost: "",
+                    certificateArn: "",
+                    optionalHostedZoneId: "",
+                },
             },
         },
         metadataSchema: {

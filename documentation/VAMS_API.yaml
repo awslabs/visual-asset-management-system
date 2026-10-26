@@ -5,7 +5,7 @@ info:
     version: "2022-01-27 01:29:36UTC"
 servers:
     - url: "{apiGatewayUrl}"
-      description: "Amazon API Gateway REST API invoke URL, including the fixed `api` stage path: `https://{restApiId}.execute-api.{region}.amazonaws.com/api`, with the domain suffix of the deployment's partition. Every path in this document is relative to it, so `/assets` is requested at `.../api/assets` and `/api/amplify-config` at `.../api/api/amplify-config`. The URL is the same whether the web application is served through Amazon CloudFront, through an Application Load Balancer (ALB), or not deployed. The web application URL reaches only a few of these paths: the CloudFront `/api/*` behavior forwards to the stage, which serves only `/api/amplify-config` and `/api/version` under that prefix, and the ALB answers `/api*` and `/secure-config*` with a 302 redirect to the stage. Call every other path on the invoke URL. A `PRIVATE` endpoint is reachable only through an execute-api VPC interface endpoint, either one VAMS created or one supplied through `optionalExternalPrivateApigVPCEId`. `GET /api/amplify-config` returns this URL, with a trailing slash, in `api`. Stage Path Fronting in the VAMS networking architecture documentation describes how each front maps the web application's paths onto the stage."
+      description: "Amazon API Gateway REST API invoke URL, including the fixed `api` stage path: `https://{restApiId}.execute-api.{region}.amazonaws.com/api`, with the domain suffix of the deployment's partition. Every path in this document is relative to it, so `/assets` is requested at `.../api/assets` and `/api/amplify-config` at `.../api/api/amplify-config`. The URL is the same whether the web application is served through Amazon CloudFront, through an Application Load Balancer (ALB), or not deployed. The CloudFront web application URL reaches every path as well: its `/api/*` behavior forwards `/api/amplify-config` and `/api/version` to the stage under their own path and every other path without the `/api` prefix, so `https://{web-domain}/api/assets` is the same request as `.../api/assets`. The ALB answers `/api*` and `/secure-config*` with a 302 redirect to the stage. When the deployment enables `app.api.apiGatewayRest.customDomain`, `https://{api-domain}/api` serves every path in this document as well. A `PRIVATE` endpoint is reachable only through an execute-api VPC interface endpoint, either one VAMS created or one supplied through `optionalExternalPrivateApigVPCEId`. `GET /api/amplify-config` returns the base URL the clients use, with a trailing slash, in `api`. Stage Path Fronting in the VAMS networking architecture documentation describes how each front maps the web application's paths onto the stage."
       variables:
           apiGatewayUrl:
               default: "https://abc123.execute-api.us-east-1.amazonaws.com/api"
@@ -31,7 +31,7 @@ paths:
                                         example: "us-east-1"
                                     api:
                                         type: string
-                                        description: "Stage-inclusive Amazon API Gateway invoke URL with a trailing slash (`https://{restApiId}.execute-api.{region}.amazonaws.com/api/`), built from the API Gateway domain name and stage of the request, so it is the same whether the request arrived through CloudFront, through an ALB redirect or directly. It is the base URL of every other path in this document; see Stage Path Fronting in the VAMS networking architecture documentation."
+                                        description: "Stage-inclusive Amazon API Gateway invoke URL with a trailing slash (`https://{restApiId}.execute-api.{region}.amazonaws.com/api/`), built from the API Gateway domain name and stage of the request, so it is the same whether the request arrived through CloudFront, through an ALB redirect or directly. When the deployment enables `app.api.apiGatewayRest.customDomain`, it is the custom domain's base URL instead (`https://{api-domain}/api/`), whichever host the request arrived through. It is the base URL of every other path in this document; see Stage Path Fronting in the VAMS networking architecture documentation."
                                     cognitoUserPoolId:
                                         type: string
                                         description: "Amazon Cognito user pool identifier; 'undefined' when Cognito is not the authentication provider"
@@ -1704,19 +1704,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/updateDatabaseResponse"
                 "400":
-                    description: Invalid parameters or bucket ID not found.
+                    description: Validation error, no updatable field supplied, or database or bucket not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update database.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Database not found.
+                    description: Not authorized to update database. Nothing is written.
                     content:
                         application/json:
                             schema:
