@@ -337,7 +337,7 @@ export default function CreateDatabase({
     // (choosing None) deletes the compliance state of every asset that inherits it, so it first
     // asks for the same confirmation as Remove on the database compliance overview, and sends
     // nothing (not even the save) until it is confirmed.
-    const submit = async (unbindConfirmed: boolean = false) => {
+    const submit = async (unbindConfirmed = false) => {
         const selectedValue = (selectedSchema?.value as string | undefined) || null;
         const sendSave = savedState === null || !sameDatabaseFields(formState, savedState);
         const sendBinding = canBindComplianceSchema && selectedValue !== initialSchemaValue;
