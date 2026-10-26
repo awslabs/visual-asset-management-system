@@ -50,6 +50,14 @@
             "groupPermissions": [{ "action": "POST", "type": "allow" }]
         },
         {
+            "name": "{{ROLE_NAME}}-database-list-route",
+            "description": "Allow the database list route only (exact path), so the Databases page lists {{DATABASE_ID}} and links to its compliance page",
+            "objectType": "api",
+            "criteriaAnd": [],
+            "criteriaOr": [{ "field": "route__path", "operator": "equals", "value": "/database" }],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
             "name": "{{ROLE_NAME}}-compliance-schemas-readonly",
             "description": "Allow viewing compliance schemas",
             "objectType": "complianceSchema",

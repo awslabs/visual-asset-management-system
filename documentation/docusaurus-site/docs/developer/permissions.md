@@ -321,18 +321,19 @@ Binding a schema is authorized on the database's `complianceBinding` object (`PU
 
 Read-only compliance access: every schema, and the evaluation history, compliance state, quarantine list, cascades and audit trail of one database.
 
-**Key constraints (8 constraints):**
+**Key constraints (9 constraints):**
 
 -   `web` -- Allow GET on paths starting with `/compliance` or `/databases`
 -   `api` -- Allow GET on paths starting with `/compliance`, `/secure-config`, `/amplify-config`, `/auth/routes`, or `/auth/loginProfile`
 -   `api` -- Allow POST on paths starting with `/auth/routes` or `/auth/loginProfile` (non-mutating)
+-   `api` -- Allow GET on the path that `equals` `/database`: the database list, from which the Databases page links to the database's compliance overview. As for the Compliance Admin, the exact match leaves every route below it and `/buckets` ungranted
 -   `complianceSchema` -- Allow GET where `complianceSchemaName contains .*`
 -   `complianceEvaluation` -- Allow GET where `databaseId equals {DATABASE_ID}`
 -   `complianceCascade` -- Allow GET where `cascadeId contains .*`
 -   `asset` -- Allow GET where `databaseId equals {DATABASE_ID}`
 -   `database` -- Allow GET where `databaseId equals {DATABASE_ID}`
 
-Neither compliance template grants the `/assets` or `/search` API routes or any route below `/database/`; the Compliance Admin template grants only the database list (`GET /database`). To browse the database's assets and files, a user also needs a role that grants those routes, such as Database Read-Only.
+Neither compliance template grants the `/assets` or `/search` API routes or any route below `/database/`; both grant only the database list (`GET /database`). To browse the database's assets and files, a user also needs a role that grants those routes, such as Database Read-Only.
 
 ### Multi-database access
 
@@ -478,7 +479,7 @@ VAMS includes pre-built permission templates that you can import to quickly set 
 | Global Read-Only    | `global-readonly.json`     | `ROLE_NAME`                | Read-only access across all databases (13 constraints)                                                                             |
 | Deny Tagged Assets  | `deny-tagged-assets.json`  | `ROLE_NAME`, `TAG_VALUE`   | Overlay: deny editing of assets with a specific tag (1 constraint)                                                                 |
 | Compliance Admin    | `compliance-admin.json`    | `DATABASE_ID`, `ROLE_NAME` | Compliance schema management, schema binding, evaluation, quarantine actions and cascade approval for one database (9 constraints) |
-| Compliance Readonly | `compliance-readonly.json` | `DATABASE_ID`, `ROLE_NAME` | Read-only compliance access for one database (8 constraints)                                                                       |
+| Compliance Readonly | `compliance-readonly.json` | `DATABASE_ID`, `ROLE_NAME` | Read-only compliance access for one database (9 constraints)                                                                       |
 
 Templates are located in the `documentation/permissionsTemplates/` directory.
 
