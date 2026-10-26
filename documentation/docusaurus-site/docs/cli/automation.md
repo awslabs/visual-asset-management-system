@@ -14,7 +14,7 @@ vamscli database list --json-output
 When `--json-output` is enabled:
 
 -   Status messages and progress indicators are suppressed
--   Interactive confirmation prompts are skipped (use `--confirm` flags instead)
+-   Interactive confirmation prompts are skipped (use `--confirm` flags instead). Without `--json-output`, the additional prompt of a destructive command is also skipped when stdin is not a terminal (a script, pipe or CI job), so `--confirm` alone proceeds
 -   Errors are returned as JSON objects to stderr with a non-zero exit code
 -   Password prompts are disabled (provide `--password` explicitly)
     :::

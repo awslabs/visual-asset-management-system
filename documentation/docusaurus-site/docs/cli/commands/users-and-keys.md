@@ -121,7 +121,7 @@ vamscli user cognito delete -u user@example.com --confirm --json-output
 ```
 
 :::danger[Permanent Deletion]
-This action is permanent and cannot be undone. All user data and sessions are removed. The `--confirm` flag is required, and in interactive (non-JSON) mode an additional confirmation prompt appears before deletion proceeds.
+This action is permanent and cannot be undone. All user data and sessions are removed. The `--confirm` flag is required. When the command runs in an interactive terminal without `--json-output`, an additional confirmation prompt appears before deletion proceeds; in a script, pipe or CI job, or with `--json-output`, `--confirm` alone proceeds.
 :::
 
 ---
