@@ -56,7 +56,9 @@ export function useFilePartsUpload() {
             fileUploadItems: FileUploadTableItem[],
             partsToUpload: FilePart[],
             onProgress?: (completed: number, total: number) => void,
-            onFileProgress?: (fileIndex: number, progress: number) => void,
+            // `failedReason` is set while one of the file's parts has failed every automatic
+            // retry: the file is then Failed, with that part's error, until the part is retried.
+            onFileProgress?: (fileIndex: number, progress: number, failedReason?: string) => void,
             onSequenceComplete?: (sequenceId: number) => void
         ): Promise<{ success: boolean; failedCount: number }> => {
             console.log(`uploadFileParts called: partsToUpload.length=${partsToUpload.length}`);
@@ -277,8 +279,8 @@ export function useFilePartsUpload() {
 
                         this.failedCount++;
 
-                        // Update file status to failed
-                        this.updateFileStatus(part.fileIndex, "Failed");
+                        // The file reads Failed, with this part's error, from the part's status.
+                        this.updateFileProgress(part.fileIndex);
                     } finally {
                         // Remove from active uploads
                         this.activeUploads.delete(partKey);
@@ -336,16 +338,15 @@ export function useFilePartsUpload() {
                     const fileProgress = Math.round(
                         (fileCompletedParts / filePartsForThisFile.length) * 100
                     );
+                    const failedPart = filePartsForThisFile.find((p) => p.status === "failed");
 
                     if (onFileProgress) {
-                        onFileProgress(fileIndex, fileProgress);
+                        onFileProgress(
+                            fileIndex,
+                            fileProgress,
+                            failedPart ? failedPart.lastError || "Upload failed" : undefined
+                        );
                     }
-                }
-
-                private updateFileStatus(fileIndex: number, status: string): void {
-                    // This will be handled by the parent component through file progress updates
-                    // But we can trigger a file progress update to ensure status is reflected
-                    this.updateFileProgress(fileIndex);
                 }
             }
 

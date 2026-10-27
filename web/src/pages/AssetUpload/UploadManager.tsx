@@ -628,25 +628,10 @@ export default function UploadManager({
                                 );
                                 setUploadState((prev) => ({ ...prev, overallProgress: progress }));
                             },
-                            (fileIndex, progress) => {
+                            (fileIndex, progress, failedReason) =>
                                 setFileUploadItems((prev) =>
-                                    prev.map((item) =>
-                                        item.index === fileIndex
-                                            ? {
-                                                  ...item,
-                                                  progress,
-                                                  loaded: Math.round((progress * item.total) / 100),
-                                                  status:
-                                                      progress === 100
-                                                          ? "Completed"
-                                                          : progress > 0
-                                                          ? "In Progress"
-                                                          : "Queued",
-                                              }
-                                            : item
-                                    )
-                                );
-                            },
+                                    withFileProgress(prev, fileIndex, progress, failedReason)
+                                ),
                             // Sequence completion callback - triggers parallel completion
                             (sequenceId) => {
                                 console.log(
@@ -914,7 +899,7 @@ export default function UploadManager({
         setFileUploadItems((prev) =>
             prev.map((item) =>
                 fileIndicesWithFailedParts.has(item.index)
-                    ? { ...item, status: "Queued", progress: 0 }
+                    ? { ...item, status: "In Progress", error: undefined }
                     : item
             )
         );
@@ -927,25 +912,10 @@ export default function UploadManager({
                 const progress = Math.round((completed / total) * 100);
                 setUploadState((prev) => ({ ...prev, overallProgress: progress }));
             },
-            (fileIndex, progress) => {
+            (fileIndex, progress, failedReason) =>
                 setFileUploadItems((prev) =>
-                    prev.map((item) =>
-                        item.index === fileIndex
-                            ? {
-                                  ...item,
-                                  progress,
-                                  loaded: Math.round((progress * item.total) / 100),
-                                  status:
-                                      progress === 100
-                                          ? "Completed"
-                                          : progress > 0
-                                          ? "In Progress"
-                                          : "Queued",
-                              }
-                            : item
-                    )
-                );
-            },
+                    withFileProgress(prev, fileIndex, progress, failedReason)
+                ),
             (sequenceId) => {
                 if (handleSequenceCompletionRef.current) {
                     handleSequenceCompletionRef.current(sequenceId);
@@ -1020,7 +990,9 @@ export default function UploadManager({
             // Update file status
             setFileUploadItems((prev) =>
                 prev.map((item) =>
-                    item.index === fileIndex ? { ...item, status: "Queued", progress: 0 } : item
+                    item.index === fileIndex
+                        ? { ...item, status: "In Progress", error: undefined }
+                        : item
                 )
             );
 
@@ -1032,25 +1004,10 @@ export default function UploadManager({
                     const progress = Math.round((completed / total) * 100);
                     setUploadState((prev) => ({ ...prev, overallProgress: progress }));
                 },
-                (fileIdx, progress) => {
+                (fileIdx, progress, failedReason) =>
                     setFileUploadItems((prev) =>
-                        prev.map((item) =>
-                            item.index === fileIdx
-                                ? {
-                                      ...item,
-                                      progress,
-                                      loaded: Math.round((progress * item.total) / 100),
-                                      status:
-                                          progress === 100
-                                              ? "Completed"
-                                              : progress > 0
-                                              ? "In Progress"
-                                              : "Queued",
-                                  }
-                                : item
-                        )
-                    );
-                },
+                        withFileProgress(prev, fileIdx, progress, failedReason)
+                    ),
                 (sequenceId) => {
                     if (handleSequenceCompletionRef.current) {
                         handleSequenceCompletionRef.current(sequenceId);
@@ -1232,25 +1189,10 @@ export default function UploadManager({
                         const progress = Math.round((completed / total) * 100);
                         setUploadState((prev) => ({ ...prev, overallProgress: progress }));
                     },
-                    (fileIndex, progress) => {
+                    (fileIndex, progress, failedReason) =>
                         setFileUploadItems((prev) =>
-                            prev.map((item) =>
-                                item.index === fileIndex
-                                    ? {
-                                          ...item,
-                                          progress,
-                                          loaded: Math.round((progress * item.total) / 100),
-                                          status:
-                                              progress === 100
-                                                  ? "Completed"
-                                                  : progress > 0
-                                                  ? "In Progress"
-                                                  : "Queued",
-                                      }
-                                    : item
-                            )
-                        );
-                    },
+                            withFileProgress(prev, fileIndex, progress, failedReason)
+                        ),
                     (sequenceId) => {
                         if (handleSequenceCompletionRef.current) {
                             handleSequenceCompletionRef.current(sequenceId);
@@ -1633,6 +1575,10 @@ export default function UploadManager({
 
     // Count failed files
     const failedFilesCount = fileUploadItems.filter((item) => item.status === "Failed").length;
+    // A part re-upload is offered once the part upload has finished. A file is Failed as soon as
+    // one of its parts fails every automatic retry, while other parts may still be uploading; a
+    // re-upload started then would run a second queue over the parts not yet sent.
+    const partUploadSettled = uploadState.uploadStatus !== "in-progress";
 
     return (
         <Container header={<Header variant="h2">Upload Progress</Header>}>
@@ -1843,10 +1789,14 @@ export default function UploadManager({
                     // Offer a re-upload only when there is a failed part to send: a file the
                     // server refused at completion is Failed with every part uploaded.
                     onRetry={
-                        failedFilesCount > 0 && hasFailedParts(fileParts) ? handleRetry : undefined
+                        failedFilesCount > 0 && partUploadSettled && hasFailedParts(fileParts)
+                            ? handleRetry
+                            : undefined
                     }
                     onRetryItem={handleRetryFile}
-                    canRetryItem={(fileIndex) => hasFailedParts(fileParts, fileIndex)}
+                    canRetryItem={(fileIndex) =>
+                        partUploadSettled && hasFailedParts(fileParts, fileIndex)
+                    }
                     onCancelItem={handleCancelFile}
                     cancelConfirmFileIndex={cancelConfirmFileIndex}
                     onConfirmCancel={confirmCancelFile}
@@ -1858,6 +1808,38 @@ export default function UploadManager({
 }
 
 // Helper functions
+
+/**
+ * The file rows after a part of one file finished: the file's progress is the share of its parts
+ * uploaded, and while one of its parts has failed every automatic retry (`failedReason` is that
+ * part's error) the file is Failed, so its row says why and offers the retry. This is the one place
+ * a row's status is taken from its parts.
+ */
+function withFileProgress(
+    items: FileUploadTableItem[],
+    fileIndex: number,
+    progress: number,
+    failedReason?: string
+): FileUploadTableItem[] {
+    return items.map((item) =>
+        item.index === fileIndex
+            ? {
+                  ...item,
+                  progress,
+                  loaded: Math.round((progress * item.total) / 100),
+                  status:
+                      failedReason !== undefined
+                          ? "Failed"
+                          : progress === 100
+                          ? "Completed"
+                          : progress > 0
+                          ? "In Progress"
+                          : "Queued",
+                  error: failedReason,
+              }
+            : item
+    );
+}
 
 /**
  * Whether a part re-upload has anything to send: some part, of the given file or of any file, is
