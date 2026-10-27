@@ -143,23 +143,23 @@ Every rule VAMS generates from a constraint first requires the object to be of t
 
 Each object type supports specific constraint fields that can be used in criteria conditions.
 
-| Object Type            | Constraint Fields                                                       | Description                                                                      |
-| ---------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `api`                  | `route__path`                                                           | Backend API route paths.                                                         |
-| `web`                  | `route__path`                                                           | Frontend UI page routes.                                                         |
-| `database`             | `databaseId`                                                            | Database entity operations.                                                      |
-| `asset`                | `databaseId`, `assetName`, `assetType`, `tags`                          | Asset entity operations (includes file operations).                              |
-| `pipeline`             | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name` | Pipeline management and execution (includes pipeline templates and tag schemas). |
-| `workflow`             | `databaseId`, `workflowId`, `category`, `name`                          | Workflow management, triggers, and execution.                                    |
-| `metadataSchema`       | `databaseId`, `metadataSchemaName`, `metadataSchemaEntityType`          | Metadata schema management.                                                      |
-| `tag`                  | `tagName`, `databaseId`                                                 | Tag CRUD operations.                                                             |
-| `tagType`              | `tagTypeName`, `databaseId`                                             | Tag type CRUD operations.                                                        |
-| `role`                 | `roleName`                                                              | Role management.                                                                 |
-| `userRole`             | `roleName`, `userId`                                                    | User-to-role assignment management.                                              |
+| Object Type            | Constraint Fields                                                       | Description                                                                                                                     |
+| ---------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `api`                  | `route__path`                                                           | Backend API route paths.                                                                                                        |
+| `web`                  | `route__path`                                                           | Frontend UI page routes.                                                                                                        |
+| `database`             | `databaseId`                                                            | Database entity operations.                                                                                                     |
+| `asset`                | `databaseId`, `assetName`, `assetType`, `tags`                          | Asset entity operations (includes file operations).                                                                             |
+| `pipeline`             | `databaseId`, `pipelineId`, `pipelineExecutionType`, `category`, `name` | Pipeline management and execution (includes pipeline templates and tag schemas).                                                |
+| `workflow`             | `databaseId`, `workflowId`, `category`, `name`                          | Workflow management, triggers, and execution.                                                                                   |
+| `metadataSchema`       | `databaseId`, `metadataSchemaName`, `metadataSchemaEntityType`          | Metadata schema management.                                                                                                     |
+| `tag`                  | `tagName`, `databaseId`                                                 | Tag CRUD operations.                                                                                                            |
+| `tagType`              | `tagTypeName`, `databaseId`                                             | Tag type CRUD operations.                                                                                                       |
+| `role`                 | `roleName`                                                              | Role management.                                                                                                                |
+| `userRole`             | `roleName`, `userId`                                                    | User-to-role assignment management.                                                                                             |
 | `complianceSchema`     | `databaseId`, `complianceSchemaName`                                    | Compliance schema management and the schema named in a binding. `databaseId` is the schema's scope: a database ID, or `GLOBAL`. |
-| `complianceBinding`    | `databaseId`                                                            | Binding (`PUT`) and unbinding (`DELETE`) compliance schemas in a database.       |
-| `complianceEvaluation` | `databaseId`, `complianceState`                                         | Compliance evaluation, quarantine, and audit operations.                         |
-| `complianceCascade`    | `databaseId`, `cascadeId`                                               | Cascade approval and execution operations. `databaseId` is the database of the cascade's parent asset. |
+| `complianceBinding`    | `databaseId`                                                            | Binding (`PUT`) and unbinding (`DELETE`) compliance schemas in a database.                                                      |
+| `complianceEvaluation` | `databaseId`, `complianceState`                                         | Compliance evaluation, quarantine, and audit operations.                                                                        |
+| `complianceCascade`    | `databaseId`, `cascadeId`                                               | Cascade approval and execution operations. `databaseId` is the database of the cascade's parent asset.                          |
 
 :::info[Compliance object types]
 The default admin role includes constraints for all four compliance object types with `contains .*` (match all) criteria. A constraint with no `databaseId` criterion matches every scope, so a compliance role stored before `complianceSchema` and `complianceCascade` gained `databaseId` keeps its earlier reach until it is re-imported from the current templates. For non-admin roles, use the `compliance-admin` or `compliance-readonly` permission templates for quick setup; see [Compliance](compliance.md#authorization-model).
