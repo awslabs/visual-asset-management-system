@@ -22,9 +22,10 @@
  *     the statements' evaluation as well as by their exact shape);
  *   * two exclusions relaxing the same rule exempt its label on the prefixes of both, and each
  *     keeps its own re-block rule name;
- *   * synth fails for a label that is not the named rule's, a managed group whose label namespace
- *     is not known, an exclusion relaxing no rule, an empty, whole-API or off-stage prefix, and a
- *     duplicate, policy-colliding or invalid re-block rule name;
+ *   * synth fails for a label that is not exactly the named rule's documented label (letter case
+ *     included), a rule or managed group the documented label table does not list, an exclusion
+ *     relaxing no rule, an empty, whole-API or off-stage prefix, and a duplicate, policy-colliding
+ *     or invalid re-block rule name;
  *   * a CfWafStack passes the exclusions to its web ACL;
  *   * with no exclusion supplied, or an empty list, the ACL is the one the policy alone produces;
  *   * a rule the policy counts or allows keeps the policy's action and is not re-blocked; a rule
@@ -46,6 +47,7 @@ import * as Config from "../../config/config";
 import { buildApiOriginVerifyStack } from "../../lib/apiOriginVerify-stack";
 import { buildWafStacks, CfWafStack } from "../../lib/cf-waf-stack";
 import {
+    AWS_MANAGED_RULE_LABELS,
     Wafv2BasicConstruct,
     WAFScope,
     WafPolicyConfig,
@@ -750,29 +752,98 @@ describe("a scoped exclusion is validated at synth", () => {
         expect(synthWith(fixtureExclusions)).not.toThrow();
     });
 
-    describe("each label must be the named rule's label in the named managed rule group", () => {
+    describe("each label must be the named rule's documented label, exactly", () => {
+        const rejectsLabel = (
+            name: string,
+            label: string,
+            managedRuleGroupName = COMMON_RULE_SET
+        ) =>
+            expect(
+                synthWith(withExclusion({ managedRuleGroupName, rules: [{ name, label }] }))
+            ).toThrow(new RegExp(`label "${label}" of rule "${name}" is not that rule's label`));
+
+        // The review's example: the rule name's letter case in place of the label's. AWS WAF would
+        // accept it, count GenericRFI_BODY on every path and never re-block it.
+        test("rejects the rule name's letter case in the label (GenericRFI_BODY for GenericRFI_Body)", () => {
+            rejectsLabel(RFI_RULE, "awswaf:managed:aws:core-rule-set:GenericRFI_BODY");
+        });
+
         test.each([
-            ["the rule name used as the label", RFI_RULE],
-            ["another group's namespace", "awswaf:managed:aws:known-bad-inputs:GenericRFI_Body"],
-            ["another rule's label", "awswaf:managed:aws:core-rule-set:GenericLFI_Body"],
-            ["a label with an extra segment", "awswaf:managed:aws:core-rule-set:x:GenericRFI_Body"],
-        ])("rejects %s", (_, label) => {
-            expect(synthWith(withExclusion({ rules: [{ name: RFI_RULE, label }] }))).toThrow(
-                new RegExp(`label "${label}" of rule "${RFI_RULE}"`)
+            ["the rule name used as the label", RFI_RULE, RFI_RULE, COMMON_RULE_SET],
+            [
+                "a lowercase label",
+                RFI_RULE,
+                "awswaf:managed:aws:core-rule-set:genericrfi_body",
+                COMMON_RULE_SET,
+            ],
+            [
+                "another rule's letter case (URIPath where the group documents UriPath)",
+                "SQLiExtendedPatterns_URIPATH",
+                "awswaf:managed:aws:sql-database:SQLiExtendedPatterns_URIPath",
+                "AWSManagedRulesSQLiRuleSet",
+            ],
+            [
+                "the rule name in place of a label that drops part of it",
+                "UserAgent_BadBots_HEADER",
+                "awswaf:managed:aws:core-rule-set:UserAgent_BadBots_Header",
+                COMMON_RULE_SET,
+            ],
+            [
+                "another group's namespace",
+                RFI_RULE,
+                "awswaf:managed:aws:known-bad-inputs:GenericRFI_Body",
+                COMMON_RULE_SET,
+            ],
+            [
+                "another rule's label",
+                RFI_RULE,
+                "awswaf:managed:aws:core-rule-set:GenericLFI_Body",
+                COMMON_RULE_SET,
+            ],
+            [
+                "a label with an extra segment",
+                RFI_RULE,
+                "awswaf:managed:aws:core-rule-set:x:GenericRFI_Body",
+                COMMON_RULE_SET,
+            ],
+            ["a label with a trailing space", RFI_RULE, `${RFI_LABEL} `, COMMON_RULE_SET],
+        ])("rejects %s", (_, name, label, group) => {
+            rejectsLabel(name, label, group);
+        });
+
+        test("rejects a rule the table does not list in a group it does", () => {
+            expect(
+                synthWith(
+                    withExclusion({
+                        rules: [
+                            {
+                                name: "GenericRFI_HEADER",
+                                label: "awswaf:managed:aws:core-rule-set:GenericRFI_Header",
+                            },
+                        ],
+                    })
+                )
+            ).toThrow(
+                /rule "GenericRFI_HEADER" of AWSManagedRulesCommonRuleSet is not in AWS_MANAGED_RULE_LABELS.*Add the rule .*infra\/lib\/constructs\/wafv2-basic-construct\.ts/
             );
         });
 
-        test("accepts a documented label whose last segment differs from the rule name", () => {
-            const rules = [
-                {
-                    name: "UserAgent_BadBots_HEADER",
-                    label: "awswaf:managed:aws:core-rule-set:BadBots_Header",
-                },
-            ];
-            expect(synthWith(withExclusion({ rules }))).not.toThrow();
+        test("rejects a rule name inherited from Object.prototype", () => {
+            expect(
+                synthWith(
+                    withExclusion({
+                        rules: [
+                            {
+                                name: "toString",
+                                label: "awswaf:managed:aws:core-rule-set:toString",
+                            },
+                        ],
+                    })
+                )
+            ).toThrow(/rule "toString" of AWSManagedRulesCommonRuleSet is not in/);
         });
 
-        test("rejects a managed rule group whose label namespace is not known", () => {
+        test("rejects a managed rule group the table does not list", () => {
             expect(
                 synthWith(
                     withExclusion({
@@ -786,32 +857,96 @@ describe("a scoped exclusion is validated at synth", () => {
                     })
                 )
             ).toThrow(
-                /AWSManagedRulesBotControlRuleSet.*label namespace is not known.*Add the group/
+                /AWSManagedRulesBotControlRuleSet.*not in AWS_MANAGED_RULE_LABELS.*Add the group .*infra\/lib\/constructs\/wafv2-basic-construct\.ts/
             );
         });
 
-        // One documented label per managed rule group the shipped policy enables.
-        const shippedGroupLabels: Record<string, { name: string; label: string }> = {
-            AWSManagedRulesCommonRuleSet: { name: RFI_RULE, label: RFI_LABEL },
+        // One documented label per group of the table, copied from the group's page in the AWS WAF
+        // Developer Guide independently of the table, preferring a rule whose label's letter case
+        // or wording differs from its name.
+        const documentedLabelPerGroup: Record<string, { name: string; label: string }> = {
+            AWSManagedRulesCommonRuleSet: {
+                name: "UserAgent_BadBots_HEADER",
+                label: "awswaf:managed:aws:core-rule-set:BadBots_Header",
+            },
+            AWSManagedRulesAdminProtectionRuleSet: {
+                name: "AdminProtection_URIPATH",
+                label: "awswaf:managed:aws:admin-protection:AdminProtection_URIPath",
+            },
             AWSManagedRulesKnownBadInputsRuleSet: {
-                name: "Log4JRCE_BODY",
-                label: "awswaf:managed:aws:known-bad-inputs:Log4JRCE_Body",
+                name: "Host_localhost_HEADER",
+                label: "awswaf:managed:aws:known-bad-inputs:Host_Localhost_Header",
             },
             AWSManagedRulesAmazonIpReputationList: {
                 name: "AWSManagedIPReputationList",
                 label: "awswaf:managed:aws:amazon-ip-list:AWSManagedIPReputationList",
             },
+            AWSManagedRulesAnonymousIpList: {
+                name: "HostingProviderIPList",
+                label: "awswaf:managed:aws:anonymous-ip-list:HostingProviderIPList",
+            },
+            AWSManagedRulesSQLiRuleSet: {
+                name: "SQLiExtendedPatterns_URIPATH",
+                label: "awswaf:managed:aws:sql-database:SQLiExtendedPatterns_UriPath",
+            },
+            AWSManagedRulesLinuxRuleSet: {
+                name: "LFI_QUERYSTRING",
+                label: "awswaf:managed:aws:linux-os:LFI_QueryString",
+            },
+            AWSManagedRulesUnixRuleSet: {
+                name: "UNIXShellCommandsVariables_BODY",
+                label: "awswaf:managed:aws:posix-os:UNIXShellCommandsVariables_Body",
+            },
+            AWSManagedRulesWindowsRuleSet: {
+                name: "WindowsShellCommands_URIPATH",
+                label: "awswaf:managed:aws:windows-os:WindowsShellCommands_UriPath",
+            },
+            AWSManagedRulesPHPRuleSet: {
+                name: "PHP2Shell_BODY_Extended",
+                label: "awswaf:managed:aws:php-app:PHP2Shell_Body_Extended",
+            },
+            AWSManagedRulesWordPressRuleSet: {
+                name: "WordPressExploitablePaths_URIPATH",
+                label: "awswaf:managed:aws:wordpress-app:WordPressExploitablePaths_URIPATH",
+            },
         };
-        test.each((shippedPolicy.managedRuleGroups || []).map((g) => g.managedRuleGroupName))(
-            "knows the label namespace of %s, which the shipped policy enables",
-            (managedRuleGroupName) => {
-                const rule = shippedGroupLabels[managedRuleGroupName];
-                expect(rule).toBeDefined();
+        test.each(Object.entries(documentedLabelPerGroup))(
+            "accepts the documented label of a rule of %s (control)",
+            (managedRuleGroupName, rule) => {
                 expect(
                     synthWith(withExclusion({ managedRuleGroupName, rules: [rule] }))
                 ).not.toThrow();
             }
         );
+
+        test("has a control for every group of the table", () => {
+            expect(Object.keys(documentedLabelPerGroup).sort()).toEqual(
+                Object.keys(AWS_MANAGED_RULE_LABELS).sort()
+            );
+        });
+
+        test.each((shippedPolicy.managedRuleGroups || []).map((g) => g.managedRuleGroupName))(
+            "lists the labels of %s, which the shipped policy enables",
+            (managedRuleGroupName) => {
+                expect(Object.keys(AWS_MANAGED_RULE_LABELS)).toContain(managedRuleGroupName);
+            }
+        );
+
+        test("lists each label once, under its group's namespace", () => {
+            const labels = Object.values(AWS_MANAGED_RULE_LABELS).flatMap((group) =>
+                Object.values(group)
+            );
+            expect(new Set(labels).size).toBe(labels.length);
+            for (const [group, rules] of Object.entries(AWS_MANAGED_RULE_LABELS)) {
+                const namespaces = new Set(
+                    Object.values(rules).map((label) => label.slice(0, label.lastIndexOf(":") + 1))
+                );
+                expect({ group, namespaces: [...namespaces].length }).toEqual({
+                    group,
+                    namespaces: 1,
+                });
+            }
+        });
     });
 
     test("rejects an exclusion that relaxes no rule", () => {

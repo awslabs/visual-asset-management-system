@@ -109,9 +109,9 @@ export interface WafScopedRuleExclusion {
     // At least one rule: its name within the group and the label it adds when it matches (the
     // group's AvailableLabels). A rule set to count still adds its label, which the re-block rule
     // matches. AWS WAF accepts a label nothing emits, so a wrong label would leave the rule relaxed
-    // on every path: synth fails unless the label is the group's namespace
-    // (AWS_MANAGED_RULE_GROUP_LABEL_NAMESPACES) followed by the rule name in any letter case, or by
-    // the suffix the group documents for that rule (AWS_MANAGED_RULE_LABEL_SUFFIXES).
+    // on every path: synth fails for a label other than the one AWS_MANAGED_RULE_LABELS lists for
+    // the rule, compared exactly (letter case included), and for a rule or group the table does not
+    // list.
     rules: Array<{ name: string; label: string }>;
     // API route prefixes, each matched against the URI path the REST API stage receives. That path
     // begins with `/${Config.API_GATEWAY_STAGE_NAME}` for a request to the invoke URL, to the API
@@ -136,35 +136,139 @@ export interface WafScopedRuleExclusion {
 }
 
 /**
- * The label namespace of each AWS managed rule group a scoped exclusion may relax, from the
- * group's page in the AWS WAF Developer Guide (baseline, IP reputation and use-case specific rule
- * groups). A rule's label is the namespace followed by the rule name, in the letter case the
- * group's AvailableLabels list (rule `GenericRFI_BODY`, label
- * `awswaf:managed:aws:core-rule-set:GenericRFI_Body`). To relax a rule of another group, add the
- * group here with the namespace its page documents.
+ * The label each rule of an AWS managed rule group adds when it matches, by group and rule name,
+ * copied verbatim from the group's page in the AWS WAF Developer Guide:
+ *   https://docs.aws.amazon.com/waf/latest/developerguide/aws-managed-rule-groups-baseline.html
+ *     (Core rule set, Admin protection, Known bad inputs)
+ *   https://docs.aws.amazon.com/waf/latest/developerguide/aws-managed-rule-groups-ip-rep.html
+ *     (Amazon IP reputation list, Anonymous IP list)
+ *   https://docs.aws.amazon.com/waf/latest/developerguide/aws-managed-rule-groups-use-case.html
+ *     (SQL database, Linux, POSIX, Windows, PHP and WordPress)
+ * A label is not derived from its rule name: the letter case differs (rule GenericRFI_BODY, label
+ * ...:GenericRFI_Body; SQLiExtendedPatterns_URIPATH, ...:SQLiExtendedPatterns_UriPath) and a label
+ * may drop part of the name (UserAgent_BadBots_HEADER, ...:BadBots_Header). A scoped exclusion
+ * may relax only a rule listed here, and its label must equal the entry exactly. To relax another
+ * rule, add it with the label its group's page documents; for another group, add the group and
+ * each rule it relaxes.
  */
-export const AWS_MANAGED_RULE_GROUP_LABEL_NAMESPACES: Readonly<Record<string, string>> = {
-    AWSManagedRulesCommonRuleSet: "awswaf:managed:aws:core-rule-set:",
-    AWSManagedRulesAdminProtectionRuleSet: "awswaf:managed:aws:admin-protection:",
-    AWSManagedRulesKnownBadInputsRuleSet: "awswaf:managed:aws:known-bad-inputs:",
-    AWSManagedRulesSQLiRuleSet: "awswaf:managed:aws:sql-database:",
-    AWSManagedRulesLinuxRuleSet: "awswaf:managed:aws:linux-os:",
-    AWSManagedRulesUnixRuleSet: "awswaf:managed:aws:posix-os:",
-    AWSManagedRulesWindowsRuleSet: "awswaf:managed:aws:windows-os:",
-    AWSManagedRulesPHPRuleSet: "awswaf:managed:aws:php-app:",
-    AWSManagedRulesWordPressRuleSet: "awswaf:managed:aws:wordpress-app:",
-    AWSManagedRulesAmazonIpReputationList: "awswaf:managed:aws:amazon-ip-list:",
-    AWSManagedRulesAnonymousIpList: "awswaf:managed:aws:anonymous-ip-list:",
-};
-
-/**
- * Rules whose documented label does not end in the rule name, by group: the label suffix (after the
- * namespace) the group's page lists for the rule.
- */
-export const AWS_MANAGED_RULE_LABEL_SUFFIXES: Readonly<
-    Record<string, Readonly<Record<string, string>>>
-> = {
-    AWSManagedRulesCommonRuleSet: { UserAgent_BadBots_HEADER: "BadBots_Header" },
+export const AWS_MANAGED_RULE_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+    AWSManagedRulesCommonRuleSet: {
+        NoUserAgent_HEADER: "awswaf:managed:aws:core-rule-set:NoUserAgent_Header",
+        UserAgent_BadBots_HEADER: "awswaf:managed:aws:core-rule-set:BadBots_Header",
+        SizeRestrictions_QUERYSTRING:
+            "awswaf:managed:aws:core-rule-set:SizeRestrictions_QueryString",
+        SizeRestrictions_Cookie_HEADER:
+            "awswaf:managed:aws:core-rule-set:SizeRestrictions_Cookie_Header",
+        SizeRestrictions_BODY: "awswaf:managed:aws:core-rule-set:SizeRestrictions_Body",
+        SizeRestrictions_URIPATH: "awswaf:managed:aws:core-rule-set:SizeRestrictions_URIPath",
+        EC2MetaDataSSRF_BODY: "awswaf:managed:aws:core-rule-set:EC2MetaDataSSRF_Body",
+        EC2MetaDataSSRF_COOKIE: "awswaf:managed:aws:core-rule-set:EC2MetaDataSSRF_Cookie",
+        EC2MetaDataSSRF_URIPATH: "awswaf:managed:aws:core-rule-set:EC2MetaDataSSRF_URIPath",
+        EC2MetaDataSSRF_QUERYARGUMENTS:
+            "awswaf:managed:aws:core-rule-set:EC2MetaDataSSRF_QueryArguments",
+        GenericLFI_QUERYARGUMENTS: "awswaf:managed:aws:core-rule-set:GenericLFI_QueryArguments",
+        GenericLFI_URIPATH: "awswaf:managed:aws:core-rule-set:GenericLFI_URIPath",
+        GenericLFI_BODY: "awswaf:managed:aws:core-rule-set:GenericLFI_Body",
+        RestrictedExtensions_URIPATH:
+            "awswaf:managed:aws:core-rule-set:RestrictedExtensions_URIPath",
+        RestrictedExtensions_QUERYARGUMENTS:
+            "awswaf:managed:aws:core-rule-set:RestrictedExtensions_QueryArguments",
+        GenericRFI_QUERYARGUMENTS: "awswaf:managed:aws:core-rule-set:GenericRFI_QueryArguments",
+        GenericRFI_BODY: "awswaf:managed:aws:core-rule-set:GenericRFI_Body",
+        GenericRFI_URIPATH: "awswaf:managed:aws:core-rule-set:GenericRFI_URIPath",
+        CrossSiteScripting_COOKIE: "awswaf:managed:aws:core-rule-set:CrossSiteScripting_Cookie",
+        CrossSiteScripting_QUERYARGUMENTS:
+            "awswaf:managed:aws:core-rule-set:CrossSiteScripting_QueryArguments",
+        CrossSiteScripting_BODY: "awswaf:managed:aws:core-rule-set:CrossSiteScripting_Body",
+        CrossSiteScripting_URIPATH: "awswaf:managed:aws:core-rule-set:CrossSiteScripting_URIPath",
+    },
+    AWSManagedRulesAdminProtectionRuleSet: {
+        AdminProtection_URIPATH: "awswaf:managed:aws:admin-protection:AdminProtection_URIPath",
+    },
+    AWSManagedRulesKnownBadInputsRuleSet: {
+        JavaDeserializationRCE_HEADER:
+            "awswaf:managed:aws:known-bad-inputs:JavaDeserializationRCE_Header",
+        JavaDeserializationRCE_BODY:
+            "awswaf:managed:aws:known-bad-inputs:JavaDeserializationRCE_Body",
+        JavaDeserializationRCE_URIPATH:
+            "awswaf:managed:aws:known-bad-inputs:JavaDeserializationRCE_URIPath",
+        JavaDeserializationRCE_QUERYSTRING:
+            "awswaf:managed:aws:known-bad-inputs:JavaDeserializationRCE_QueryString",
+        Host_localhost_HEADER: "awswaf:managed:aws:known-bad-inputs:Host_Localhost_Header",
+        PROPFIND_METHOD: "awswaf:managed:aws:known-bad-inputs:Propfind_Method",
+        ExploitablePaths_URIPATH: "awswaf:managed:aws:known-bad-inputs:ExploitablePaths_URIPath",
+        Log4JRCE_HEADER: "awswaf:managed:aws:known-bad-inputs:Log4JRCE_Header",
+        Log4JRCE_QUERYSTRING: "awswaf:managed:aws:known-bad-inputs:Log4JRCE_QueryString",
+        Log4JRCE_BODY: "awswaf:managed:aws:known-bad-inputs:Log4JRCE_Body",
+        Log4JRCE_URIPATH: "awswaf:managed:aws:known-bad-inputs:Log4JRCE_URIPath",
+        ReactJSRCE_BODY: "awswaf:managed:aws:known-bad-inputs:ReactJSRCE_Body",
+    },
+    AWSManagedRulesAmazonIpReputationList: {
+        AWSManagedIPReputationList: "awswaf:managed:aws:amazon-ip-list:AWSManagedIPReputationList",
+        AWSManagedReconnaissanceList:
+            "awswaf:managed:aws:amazon-ip-list:AWSManagedReconnaissanceList",
+        AWSManagedIPDDoSList: "awswaf:managed:aws:amazon-ip-list:AWSManagedIPDDoSList",
+    },
+    AWSManagedRulesAnonymousIpList: {
+        AnonymousIPList: "awswaf:managed:aws:anonymous-ip-list:AnonymousIPList",
+        HostingProviderIPList: "awswaf:managed:aws:anonymous-ip-list:HostingProviderIPList",
+    },
+    AWSManagedRulesSQLiRuleSet: {
+        SQLi_QUERYARGUMENTS: "awswaf:managed:aws:sql-database:SQLi_QueryArguments",
+        SQLiExtendedPatterns_QUERYARGUMENTS:
+            "awswaf:managed:aws:sql-database:SQLiExtendedPatterns_QueryArguments",
+        SQLi_BODY: "awswaf:managed:aws:sql-database:SQLi_Body",
+        SQLiExtendedPatterns_BODY: "awswaf:managed:aws:sql-database:SQLiExtendedPatterns_Body",
+        SQLiExtendedPatterns_HEADER: "awswaf:managed:aws:sql-database:SQLiExtendedPatterns_Header",
+        SQLiExtendedPatterns_URIPATH:
+            "awswaf:managed:aws:sql-database:SQLiExtendedPatterns_UriPath",
+        SQLi_COOKIE: "awswaf:managed:aws:sql-database:SQLi_Cookie",
+        SQLi_URIPATH: "awswaf:managed:aws:sql-database:SQLi_URIPath",
+    },
+    AWSManagedRulesLinuxRuleSet: {
+        LFI_URIPATH: "awswaf:managed:aws:linux-os:LFI_URIPath",
+        LFI_QUERYSTRING: "awswaf:managed:aws:linux-os:LFI_QueryString",
+        LFI_HEADER: "awswaf:managed:aws:linux-os:LFI_Header",
+    },
+    AWSManagedRulesUnixRuleSet: {
+        UNIXShellCommandsVariables_QUERYSTRING:
+            "awswaf:managed:aws:posix-os:UNIXShellCommandsVariables_QueryString",
+        UNIXShellCommandsVariables_BODY:
+            "awswaf:managed:aws:posix-os:UNIXShellCommandsVariables_Body",
+        UNIXShellCommandsVariables_HEADER:
+            "awswaf:managed:aws:posix-os:UNIXShellCommandsVariables_Header",
+    },
+    AWSManagedRulesWindowsRuleSet: {
+        WindowsShellCommands_HEADER: "awswaf:managed:aws:windows-os:WindowsShellCommands_Header",
+        WindowsShellCommands_QUERYARGUMENTS:
+            "awswaf:managed:aws:windows-os:WindowsShellCommands_QueryArguments",
+        WindowsShellCommands_QUERYSTRING:
+            "awswaf:managed:aws:windows-os:WindowsShellCommands_QueryString",
+        WindowsShellCommands_URIPATH: "awswaf:managed:aws:windows-os:WindowsShellCommands_UriPath",
+        WindowsShellCommands_BODY: "awswaf:managed:aws:windows-os:WindowsShellCommands_Body",
+        PowerShellCommands_COOKIE: "awswaf:managed:aws:windows-os:PowerShellCommands_Cookie",
+        PowerShellCommands_QUERYARGUMENTS:
+            "awswaf:managed:aws:windows-os:PowerShellCommands_QueryArguments",
+        PowerShellCommands_BODY: "awswaf:managed:aws:windows-os:PowerShellCommands_Body",
+    },
+    AWSManagedRulesPHPRuleSet: {
+        PHPHighRiskMethodsVariables_HEADER:
+            "awswaf:managed:aws:php-app:PHPHighRiskMethodsVariables_Header",
+        PHPHighRiskMethodsVariables_QUERYSTRING:
+            "awswaf:managed:aws:php-app:PHPHighRiskMethodsVariables_QueryString",
+        PHPHighRiskMethodsVariables_BODY:
+            "awswaf:managed:aws:php-app:PHPHighRiskMethodsVariables_Body",
+        PHPHighRiskMethodsVariables_URIPATH:
+            "awswaf:managed:aws:php-app:PHPHighRiskMethodsVariables_URIPath",
+        PHP2Shell_BODY: "awswaf:managed:aws:php-app:PHP2Shell_Body",
+        PHP2Shell_BODY_Extended: "awswaf:managed:aws:php-app:PHP2Shell_Body_Extended",
+    },
+    AWSManagedRulesWordPressRuleSet: {
+        WordPressExploitableCommands_QUERYSTRING:
+            "awswaf:managed:aws:wordpress-app:WordPressExploitableCommands_QUERYSTRING",
+        WordPressExploitablePaths_URIPATH:
+            "awswaf:managed:aws:wordpress-app:WordPressExploitablePaths_URIPATH",
+    },
 };
 
 // AWS WAF rule names: 1 to 128 of A-Z, a-z, 0-9, - and _. The re-block rule's metric name is the
@@ -320,13 +424,19 @@ function buildScopedExclusionRule(
     };
 }
 
+/** `key` is an own property of `record`, not one it inherits from Object.prototype (`toString`). */
+function hasOwn(record: object, key: string): boolean {
+    return Object.prototype.hasOwnProperty.call(record, key);
+}
+
 /**
  * Fails synth for a scoped exclusion AWS WAF would reject at deploy time or that would not do what
  * it says: a re-block rule name that is not a valid rule and metric name, repeats another
- * exclusion's or names a policy rule; an exclusion relaxing no rule; a label that is not the named
- * rule's label in the named group (AWS WAF accepts a label nothing emits, which would leave the rule
- * relaxed on every path) or a group whose label namespace is not known; and a prefix that is empty,
- * covers the whole API or lies outside the API stage path (which would never match).
+ * exclusion's or names a policy rule; an exclusion relaxing no rule; a label other than the named
+ * rule's documented label in AWS_MANAGED_RULE_LABELS, compared exactly (AWS WAF accepts a label
+ * nothing emits, which would leave the rule relaxed on every path), or a rule or group that table
+ * does not list; and a prefix that is empty, covers the whole API or lies outside the API stage
+ * path (which would never match).
  */
 function validateScopedRuleExclusions(
     policy: WafPolicyConfig,
@@ -370,26 +480,34 @@ function validateScopedRuleExclusions(
             throw new Error(`${subject} relaxes no rule; list at least one { name, label }.`);
         }
         const group = exclusion.managedRuleGroupName;
-        const namespace = AWS_MANAGED_RULE_GROUP_LABEL_NAMESPACES[group];
-        if (!namespace) {
+        const groupLabels = hasOwn(AWS_MANAGED_RULE_LABELS, group)
+            ? AWS_MANAGED_RULE_LABELS[group]
+            : undefined;
+        if (!groupLabels) {
             throw new Error(
-                `${subject} names managed rule group "${group}", whose label namespace is not ` +
-                    `known. Add the group and the label namespace its page in the AWS WAF Developer ` +
-                    `Guide documents to AWS_MANAGED_RULE_GROUP_LABEL_NAMESPACES in ` +
+                `${subject} names managed rule group "${group}", which is not in ` +
+                    `AWS_MANAGED_RULE_LABELS, so its labels cannot be checked. Add the group and ` +
+                    `the label of each rule to relax, as its page in the AWS WAF Developer Guide ` +
+                    `documents it, to AWS_MANAGED_RULE_LABELS in ` +
                     `infra/lib/constructs/wafv2-basic-construct.ts.`
             );
         }
         for (const rule of exclusion.rules) {
-            const expectedSuffix = AWS_MANAGED_RULE_LABEL_SUFFIXES[group]?.[rule.name] ?? rule.name;
-            const suffix = rule.label.startsWith(namespace)
-                ? rule.label.slice(namespace.length)
-                : undefined;
-            if (!rule.name || suffix?.toLowerCase() !== expectedSuffix.toLowerCase()) {
+            const expected = hasOwn(groupLabels, rule.name) ? groupLabels[rule.name] : undefined;
+            if (expected === undefined) {
+                throw new Error(
+                    `${subject}: rule "${rule.name}" of ${group} is not in ` +
+                        `AWS_MANAGED_RULE_LABELS, so its label cannot be checked. Add the rule ` +
+                        `with the label its group's page in the AWS WAF Developer Guide documents ` +
+                        `to AWS_MANAGED_RULE_LABELS in infra/lib/constructs/wafv2-basic-construct.ts.`
+                );
+            }
+            if (rule.label !== expected) {
                 throw new Error(
                     `${subject}: the label "${rule.label}" of rule "${rule.name}" is not that ` +
-                        `rule's label in ${group}. It must be "${namespace}${expectedSuffix}", in ` +
-                        `the letter case the group's AvailableLabels list. AWS WAF accepts a label ` +
-                        `nothing emits, so a wrong one would leave the rule relaxed on every path.`
+                        `rule's label in ${group}. It must be "${expected}", exactly as documented, ` +
+                        `letter case included. AWS WAF accepts a label nothing emits, so a wrong ` +
+                        `one would leave the rule relaxed on every path.`
                 );
             }
         }
