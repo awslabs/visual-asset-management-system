@@ -5,7 +5,6 @@
 
 import { useEffect, useState } from "react";
 import ReactDOM from "react-dom";
-import { signOut as amplifySignOut } from "aws-amplify/auth";
 import { appCache } from "./services/appCache";
 import { HashRouter } from "react-router-dom";
 import { TopNavigation } from "@cloudscape-design/components";
@@ -17,6 +16,12 @@ import { PageFooter } from "./authenticator/Footer";
 import config from "./config";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "./features/orchestration/components/ToastProvider";
+import {
+    clearLocalStore,
+    clearStoredSession,
+    navigation,
+    revokeSession,
+} from "./utils/sessionManager";
 
 const queryClient = new QueryClient({
     defaultOptions: {
@@ -61,17 +66,12 @@ function App() {
 
     const menuText = user?.username;
 
-    const signOut = () => {
-        localStorage.clear();
-        amplifySignOut()
-            .then(() => {
-                console.log("User signed out - signout button clicked");
-            })
-            .catch((error) => {
-                console.log("User sign out error - signout button clicked", error);
-            });
-
-        window.location.href = "/";
+    const signOut = async () => {
+        // Amplify revokes the refresh token from the stored tokens, so it runs before any clear.
+        await revokeSession();
+        clearStoredSession();
+        await clearLocalStore();
+        navigation.redirectToLogin();
     };
 
     return (
@@ -83,7 +83,7 @@ function App() {
                 <HeaderPortal>
                     <TopNavigation
                         identity={{
-                            href: "/",
+                            href: "#/",
                             logo: {
                                 src: logoWhite,
                                 alt: config.APP_NAME,
@@ -116,7 +116,7 @@ function App() {
                                 description: menuText,
                                 iconName: "user-profile",
                                 onItemClick: (e) => {
-                                    if (e?.detail?.id === "signout") signOut();
+                                    if (e?.detail?.id === "signout") void signOut();
                                 },
                                 items: [{ id: "signout", text: "Sign out" }],
                             },

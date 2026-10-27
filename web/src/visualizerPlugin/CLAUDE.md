@@ -141,7 +141,7 @@ export const VIEWER_COMPONENTS = {
 | `supportsMultiFile`          | boolean           | Can handle multiple files at once                    |
 | `canFullscreen`              | boolean           | Supports fullscreen mode                             |
 | `priority`                   | number            | Lower = listed first when multiple viewers match     |
-| `loadStrategy`               | "lazy" \| "eager" | When to load the component                           |
+| `loadStrategy`               | "lazy" \| "eager" | Not read; every viewer loads on first use            |
 | `category`                   | string            | Viewer category (3d, media, document, data, preview) |
 | `featuresEnabledRestriction` | string[]?         | Required feature flags                               |
 | `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
@@ -173,6 +173,11 @@ expires. Putting one in an iframe's **query string** writes it into CloudFront o
 are not treated as containing credentials and stay in the web app access-logs bucket until its
 lifecycle rule removes them (`WebAppAccessLogsBucket` in `staticWebBuilder-nestedStack.ts`): the bucket
 is versioned, so a log object expires after 30 days and its noncurrent version is deleted 30 days later.
+When `app.useWaf` is on, the query string and the `Referer` headers also reach the `aws-waf-logs-vams-*`
+log group of the web ACL in front of the site (`wafv2-basic-construct.ts`; in `us-east-1` for the
+CloudFront ACL), which keeps events for one year and redacts only the `authorization` header. The
+operator-facing account of both channels and their controls is in `troubleshooting/known-limitations.md`
+("SuperSplat Editor File URLs in Web Logs").
 
 `supersplat-viewer` currently does this (`SuperSplatViewerComponent.tsx` builds
 `?load=<presigned>&filename=…`) — one object, expiring, but logged. **Do not copy the pattern into a new

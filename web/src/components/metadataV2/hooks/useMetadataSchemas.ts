@@ -31,9 +31,20 @@ interface UseMetadataSchemasResult {
 }
 
 /**
+ * Whether a metadata schema applies, read the way the backend validation reads `enabled`
+ * (backend/backend/common/metadataSchemaValidation.py): a missing value is enabled, a string is
+ * enabled only when it is "true" in any case, and any other value is tested for truthiness.
+ */
+export const isSchemaEnabled = (enabled: unknown): boolean => {
+    if (enabled === undefined) return true;
+    if (typeof enabled === "string") return enabled.toLowerCase() === "true";
+    return Boolean(enabled);
+};
+
+/**
  * Custom hook for fetching and aggregating metadata schemas
  * Fetches schemas from both the selected database and GLOBAL database
- * Filters by entity type and aggregates all schema fields
+ * Filters by entity type, skips disabled schemas and aggregates all schema fields
  */
 export const useMetadataSchemas = (
     databaseId?: string,
@@ -83,6 +94,9 @@ export const useMetadataSchemas = (
             results.forEach((result) => {
                 if (result.Items && Array.isArray(result.Items)) {
                     result.Items.forEach((schema) => {
+                        if (!isSchemaEnabled(schema.enabled)) {
+                            return;
+                        }
                         allSchemas.push(schema);
                         if (schema.schemaName) {
                             schemaNames.push(schema.schemaName);

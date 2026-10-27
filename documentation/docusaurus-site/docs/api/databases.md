@@ -50,6 +50,8 @@ GET /database
 }
 ```
 
+`assetCount` counts the database's active (non-archived) assets and can exceed the assets the caller can list or open. Search totals likewise count assets the caller cannot open.
+
 ### Error responses
 
 | Status | Description                   |
@@ -76,7 +78,7 @@ GET /database/{databaseId}
 
 ### Response
 
-Returns a single database object in the same format as the items in the list response.
+Returns a single database object in the same format as the items in the list response. `assetCount` counts the database's active (non-archived) assets and can exceed the assets the caller can list or open. Search totals likewise count assets the caller cannot open.
 
 ### Error responses
 

@@ -15,7 +15,6 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { AssetDetail } from "./AssetUpload";
 import { useLocation, useNavigate, useParams } from "react-router";
-import localforage from "localforage";
 import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUploadTable";
 import Synonyms from "../../synonyms";
 import { Link } from "@cloudscape-design/components";
@@ -310,20 +309,6 @@ export default function ModifyAssetsUploadsPage() {
             setPreviewFile(null);
         }
     }, [keyPrefix, previewFile]);
-
-    // Save to localforage when assetDetail changes
-    useEffect(() => {
-        if (assetDetail && assetDetail.assetId) {
-            localforage
-                .setItem(assetDetail.assetId, assetDetail)
-                .then(() => {
-                    console.log("Asset detail saved to local storage");
-                })
-                .catch((error) => {
-                    console.error("Error saving asset detail to local storage:", error);
-                });
-        }
-    }, [assetDetail]);
 
     // Handle file selection
     const handleFileSelection = useCallback(

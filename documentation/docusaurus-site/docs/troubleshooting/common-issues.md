@@ -189,6 +189,22 @@ Verify that the KMS key policy includes the required principals. If using an ext
 -   `kms:GenerateDataKey`
 -   `kms:ReEncrypt*`
 
+### Amazon Cognito User Pool Schema Errors
+
+The user pool fails to create or update on its `custom:groups` attribute. `app.authProvider.useCognito.retainLegacyGroupsAttribute` decides whether the user pool declares that attribute, and the value has to match the user pool the deployment has.
+
+**Symptoms:**
+
+-   A new deployment fails creating the user pool with `Attribute names MUST conform to the following rules` (`InvalidRequest`), and the core stack rolls back.
+-   An update fails on the user pool with `Existing schema attributes cannot be modified or deleted` (`InvalidRequest`), and the core stack rolls back to `UPDATE_ROLLBACK_COMPLETE`.
+
+**Resolution:**
+
+-   For the create error, set `retainLegacyGroupsAttribute` to `false` in `infra/config/config.json`. A core stack whose first creation failed is left in `ROLLBACK_COMPLETE` and cannot be updated, so delete it in the AWS CloudFormation console, then deploy again. Amazon Cognito rejects the attribute name when it creates a user pool.
+-   For the update error, set `retainLegacyGroupsAttribute` to `true` (or remove the key, which resolves to `true`) and deploy again. The existing user pool declares the attribute, and Amazon Cognito keeps a custom attribute for the life of the pool.
+
+See [Update the solution](../deployment/update-the-solution.md#v266-and-later-amazon-cognito-user-pool-attribute).
+
 ### Amazon OpenSearch Provisioned Domain Update Failures
 
 Updating a provisioned Amazon OpenSearch Service domain can fail when the requested domain configuration is incompatible with the existing indexes.

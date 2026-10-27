@@ -41,6 +41,7 @@ const update = async (
 ) => {
     if (!isFormValid) return; // Don't attempt to update if form is not valid
 
+    setError({ isError: false, message: "" });
     try {
         // Update asset metadata using the new API endpoint
         const updateAssetData = {
@@ -53,12 +54,22 @@ const update = async (
             Comment: updatedAsset.currentVersion?.Comment || "",
         };
 
-        // Update asset metadata using the new API endpoint
-        await updateAsset({
+        // Update asset metadata using the new API endpoint. updateAsset resolves with
+        // [false, message] for a rejected request rather than throwing.
+        const result = await updateAsset({
             databaseId: updatedAsset.databaseId,
             assetId: updatedAsset.assetId,
             updateData: updateAssetData,
         });
+        if (!Array.isArray(result) || result[0] !== true) {
+            setError({
+                isError: true,
+                message:
+                    (Array.isArray(result) && result[1]) ||
+                    "An error occurred during the update process",
+            });
+            return;
+        }
 
         // Mark as complete
         setComplete(true);
@@ -86,6 +97,14 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     if (complete) {
         props.onComplete();
     }
+
+    // The modal stays mounted while closed, so closing it clears a refused update's message.
+    const close = () => {
+        setIsFormTouched(false);
+        setError({ isError: false, message: "" });
+        setInProgress(false);
+        props.onClose();
+    };
 
     const [selectedTags, setSelectedTags] = useState<OptionDefinition[]>([]);
 
@@ -190,23 +209,14 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
 
     return (
         <Modal
-            onDismiss={() => {
-                setIsFormTouched(false);
-                props.onClose();
-            }}
+            onDismiss={close}
             visible={props.isOpen}
             closeAriaLabel="Close modal"
             size="medium"
             footer={
                 <Box float="right">
                     <SpaceBetween direction="horizontal" size="xs">
-                        <Button
-                            variant="link"
-                            onClick={() => {
-                                setIsFormTouched(false);
-                                props.onClose();
-                            }}
-                        >
+                        <Button variant="link" onClick={close}>
                             Cancel
                         </Button>
                         <Button

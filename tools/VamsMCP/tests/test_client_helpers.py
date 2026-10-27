@@ -138,6 +138,75 @@ def test_paginate_omits_next_token_on_a_complete_walk():
     assert "note" not in result
 
 
+# --- Resuming after a max_items cut, and naming the page bound ---------------
+#
+# The token returned at a max_items bound came from a page that was then cut to max_items, so it
+# pointed past the rows dropped from that page: with the default page size of 100, `max_items=50`
+# plus one resume on a 123-row route returned 73 rows, and the resumed walk ended with no
+# `truncated` flag. And with no max_items the limit is max_pages * page_size, so a walk the page
+# bound stopped after full pages also reached that limit and its note said "the requested limit".
+
+
+def _offset_endpoint(rows):
+    """A route that honours pageSize and issues a token resuming after the last RETURNED row."""
+    sent = []
+
+    def fetch(params):
+        sent.append(dict(params))
+        start = int(params.get("startingToken") or 0)
+        page = rows[start : start + int(params["pageSize"])]
+        end = start + len(page)
+        return {"Items": page, "NextToken": str(end) if end < len(rows) else None}
+
+    return fetch, sent
+
+
+def test_resume_after_a_max_items_cut_reaches_every_row():
+    rows = list(range(123))
+    fetch, _ = _offset_endpoint(rows)
+    client = _client()
+
+    first = client.paginate(fetch, max_items=50)
+    rest = client.paginate(fetch, starting_token=first["NextToken"])
+
+    assert first["Items"] == rows[:50]
+    assert first["truncated"] is True
+    assert first["Items"] + rest["Items"] == rows  # nothing skipped, nothing repeated
+    assert "truncated" not in rest
+
+
+def test_last_page_requests_only_the_rows_still_wanted():
+    fetch, sent = _offset_endpoint(list(range(500)))
+    _client(page_size=100).paginate(fetch, max_items=250)
+    assert [p["pageSize"] for p in sent] == [100, 100, 50]
+
+
+def test_max_pages_note_without_max_items_names_max_pages():
+    """With no max_items the default limit is max_pages * page_size, so a walk the page bound
+    stopped must not be reported as the caller's 'requested limit'."""
+    client = _client(max_pages=2, page_size=25)
+
+    def fetch(_params):
+        return {"Items": [0] * 25, "NextToken": "more"}
+
+    result = client.paginate(fetch)
+    assert result["truncated"] is True
+    assert "max_pages" in result["note"]
+    assert "requested limit" not in result["note"]
+
+
+def test_an_explicit_max_items_still_names_the_requested_limit():
+    """Control: a caller-supplied max_items reached exactly keeps the 'requested limit' wording."""
+    client = _client(max_pages=20, page_size=25)
+
+    def fetch(_params):
+        return {"Items": [0] * 25, "NextToken": "more"}
+
+    result = client.paginate(fetch, max_items=50)
+    assert "requested limit of 50" in result["note"]
+    assert "max_pages" not in result["note"]
+
+
 # --- Overflow on a final page with no token ---------------------------------
 #
 # S6-TOOLS-021. `items[:limit]` dropped the surplus but `truncated` was set only `if next_token`, so
@@ -241,3 +310,17 @@ def test_trim_search_results_max_hits():
 def test_trim_search_results_empty():
     trimmed = VamsClient.trim_search_results({})
     assert trimmed == {"total": None, "returned": 0, "results": []}
+
+
+def test_search_enabled_follows_the_noopensearch_feature_switch():
+    from unittest.mock import MagicMock
+
+    client = _client()
+    client._profile = MagicMock()
+
+    client._profile.has_feature_switch.return_value = True
+    assert client.search_enabled() is False
+    client._profile.has_feature_switch.assert_called_with("NOOPENSEARCH")
+
+    client._profile.has_feature_switch.return_value = False
+    assert client.search_enabled() is True

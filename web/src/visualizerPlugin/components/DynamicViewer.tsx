@@ -463,8 +463,11 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                         loadedViewer.config.canFullscreen &&
                                         !hideFullscreenControls && (
                                             <div className="visualizer-footer">
-                                                <a
+                                                <button
+                                                    type="button"
                                                     title="View Wide"
+                                                    aria-label="View wide"
+                                                    aria-pressed={viewerMode === "wide"}
                                                     onClick={() => onViewerModeChange("wide")}
                                                     className={
                                                         viewerMode === "wide" ? "selected" : ""
@@ -477,6 +480,8 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                                         viewBox="0 0 24 24"
                                                         width="24px"
                                                         fill="#000000"
+                                                        aria-hidden="true"
+                                                        focusable="false"
                                                     >
                                                         <g>
                                                             <rect
@@ -491,9 +496,12 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                                             </g>
                                                         </g>
                                                     </svg>
-                                                </a>
-                                                <a
+                                                </button>
+                                                <button
+                                                    type="button"
                                                     title="View Fullscreen"
+                                                    aria-label="View fullscreen"
+                                                    aria-pressed={viewerMode === "fullscreen"}
                                                     onClick={() => onViewerModeChange("fullscreen")}
                                                     className={
                                                         viewerMode === "fullscreen"
@@ -507,11 +515,13 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                                                         viewBox="0 0 24 24"
                                                         width="24px"
                                                         fill="#000000"
+                                                        aria-hidden="true"
+                                                        focusable="false"
                                                     >
                                                         <path d="M0 0h24v24H0V0z" fill="none" />
                                                         <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z" />
                                                     </svg>
-                                                </a>
+                                                </button>
                                             </div>
                                         )}
                                 </div>

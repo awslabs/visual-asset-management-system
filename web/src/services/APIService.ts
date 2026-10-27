@@ -2113,10 +2113,7 @@ export const fetchAssetS3Files = async ({
                 const nextResponse = await apiClient.get(
                     `database/${databaseId}/assets/${assetId}/listFiles`,
                     {
-                        queryStringParameters: {
-                            includeArchived: includeArchived.toString(),
-                            startingToken: nextToken,
-                        },
+                        queryStringParameters: { ...queryParams, startingToken: nextToken },
                     }
                 );
 
@@ -2141,10 +2138,7 @@ export const fetchAssetS3Files = async ({
                     const nextResponse = await apiClient.get(
                         `database/${databaseId}/assets/${assetId}/listFiles`,
                         {
-                            queryStringParameters: {
-                                includeArchived: includeArchived.toString(),
-                                startingToken: nextToken,
-                            },
+                            queryStringParameters: { ...queryParams, startingToken: nextToken },
                         }
                     );
 
@@ -3281,17 +3275,10 @@ export const unarchiveAsset = async ({ databaseId, assetId, body }: any) => {
             `database/${databaseId}/assets/${assetId}/unarchiveAsset`,
             { body }
         );
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            }
-            return [true, response.message];
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
-        return [true, response];
+        return [true, response?.message ?? response];
     } catch (error: any) {
         console.log(error);
         return [false, error?.message];
@@ -3304,17 +3291,10 @@ export const archiveAssetDelete = async ({ databaseId, assetId, body }: any) => 
             `database/${databaseId}/assets/${assetId}/archiveAsset`,
             { body }
         );
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            }
-            return [true, response.message];
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
-        return [true, response];
+        return [true, response?.message ?? response];
     } catch (error: any) {
         console.log(error);
         return [false, error?.message];
@@ -3327,17 +3307,10 @@ export const deleteAssetPermanentDelete = async ({ databaseId, assetId, body }: 
             `database/${databaseId}/assets/${assetId}/deleteAsset`,
             { body }
         );
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            }
-            return [true, response.message];
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
-        return [true, response];
+        return [true, response?.message ?? response];
     } catch (error: any) {
         console.log(error);
         return [false, error?.message];

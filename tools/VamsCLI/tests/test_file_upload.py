@@ -1170,6 +1170,53 @@ class TestBackendUploadRestrictions:
         assert zero_byte_files[0].relative_key == "empty.txt"
 
 
+class TestLargeFileLimits:
+    """The client part limits leave room for very large files.
+
+    A file over MAX_FILE_SIZE_SMALL_CHUNKS is cut into DEFAULT_CHUNK_SIZE_LARGE parts and is
+    initialized on its own, so its part count is checked against both MAX_PARTS_PER_FILE and
+    MAX_TOTAL_PARTS_PER_REQUEST.
+    """
+
+    SIZE_300_GB = 300 * 1024 * 1024 * 1024
+
+    def test_a_300_gb_file_passes_the_individual_file_check(self):
+        from vamscli.utils.file_processor import validate_individual_file_constraints
+
+        validate_individual_file_constraints(FileInfo("/tmp/scan.e57", "scan.e57", self.SIZE_300_GB))
+
+    def test_a_300_gb_file_passes_the_sequence_check_in_its_own_sequence(self):
+        from vamscli.utils.file_processor import UploadSequence, validate_sequence_constraints
+
+        sequence = UploadSequence([FileInfo("/tmp/scan.e57", "scan.e57", self.SIZE_300_GB)], 1)
+        sequence.calculate_parts()
+
+        assert sequence.total_parts == 300
+        validate_sequence_constraints(sequence)
+
+    def test_a_300_gb_file_is_sequenced_on_its_own(self):
+        files = [FileInfo("/tmp/scan.e57", "scan.e57", self.SIZE_300_GB),
+                 FileInfo("/tmp/notes.txt", "notes.txt", 1024)]
+
+        sequences = create_upload_sequences(files)
+
+        assert {len(s.files) for s in sequences} == {1}
+        assert sorted(f.relative_key for s in sequences for f in s.files) == ["notes.txt", "scan.e57"]
+
+    def test_the_client_limits_stay_within_the_backend_cap(self):
+        """The client limits stay at or below 1,500 parts, the backend's per-request part cap
+        (MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST); a backend with a higher cap accepts them too."""
+        assert MAX_PARTS_PER_FILE <= MAX_TOTAL_PARTS_PER_REQUEST <= 1500
+
+    def test_a_file_over_the_per_file_limit_is_still_refused(self):
+        """NEGATIVE CONTROL: the per-file limit is still enforced above 1,000 parts."""
+        from vamscli.utils.file_processor import validate_individual_file_constraints
+
+        too_large = (MAX_PARTS_PER_FILE + 1) * DEFAULT_CHUNK_SIZE_LARGE
+        with pytest.raises(UploadSequenceError, match="requires .* parts"):
+            validate_individual_file_constraints(FileInfo("/tmp/huge.e57", "huge.e57", too_large))
+
+
 class TestFileUploadCommandNewRestrictions:
     """Test file upload command with new backend restrictions."""
     
