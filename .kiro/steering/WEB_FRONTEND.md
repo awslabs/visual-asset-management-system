@@ -89,6 +89,7 @@ web/
 
     FedAuth/                # Authentication orchestrator
       Auth.tsx              # Dual-mode auth: Cognito OR External OAuth2
+      oauthSignInState.ts   # External OAuth: opaque state, same-origin return page, one-time values
 
     authenticator/          # Cognito Authenticator UI components
       Header.tsx
@@ -605,6 +606,7 @@ const header = await getDualAuthorizationHeader();
 -   `appCache` replaces Amplify Cache for runtime config storage
 -   Hub event names changed: `signIn` -> `signedIn`, `signOut` -> `signedOut`
 -   Every sign-out path awaits `revokeSession()` (`utils/sessionManager.ts`; Amplify `signOut()`, bounded at 5 s) BEFORE `clearStoredSession()` and `clearLocalStore()`. Amplify reads the stored tokens to revoke the refresh token, so clearing localStorage first skips the revocation.
+-   External OAuth sign-in (`FedAuth/oauthSignInState.ts`) sends an opaque random `state`, never the page URL: an IdP that returns `state` without percent-encoding would cut a URL at `#`. The page to return to is stored under `auth_return_to`, followed only when it is on `window.location.origin` (otherwise the app root), and `auth_state`, `auth_return_to` and `code_verifier` are removed once the callback succeeds or fails. The callback is refused unless its `state` equals the stored one.
 
 ### 5.4 User State
 
