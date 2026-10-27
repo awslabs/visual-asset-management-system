@@ -44,6 +44,7 @@ from unittest.mock import MagicMock, patch
 
 from backend.backend.models import common as response_models
 from backend.backend.customLogging.logger import (
+from models.common import CORS_EXPOSE_HEADERS
     mask_sensitive_data,
     REDACTED,
     SENSITIVE_KEYS,
@@ -66,7 +67,7 @@ _RESPONSE_HEADERS = {
     "Content-Type": "application/json",
     "Cache-Control": "no-cache, no-store",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Expose-Headers": "Retry-After, Location, ETag",
+    "Access-Control-Expose-Headers": CORS_EXPOSE_HEADERS,
 }
 
 # (helper name, status code, default message) for the four error helpers.
@@ -154,7 +155,7 @@ class TestSuccessResponseUnchanged:
             "Content-Type": "application/json",
             "Cache-Control": "no-cache, no-store",
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Expose-Headers": "Retry-After, Location, ETag",
+            "Access-Control-Expose-Headers": CORS_EXPOSE_HEADERS,
         }
         assert response["body"] == (
             '{"assetSize": 1024, "ratio": 1.5, "nested": [{"count": 2}, "text"]}')
@@ -357,4 +358,4 @@ def test_common_headers_expose_retry_after_location_and_etag():
     its wait in Retry-After, the asset export's 303 carries its redirect target in Location, and a
     response may carry its entity tag in ETag."""
     assert (response_models.commonHeaders()["Access-Control-Expose-Headers"]
-            == "Retry-After, Location, ETag")
+            == CORS_EXPOSE_HEADERS)
