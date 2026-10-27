@@ -58,6 +58,7 @@ web/
 
     FedAuth/                # Authentication orchestrator
       Auth.tsx              # Dual-mode auth: Cognito OR External OAuth2
+      oauthSignInState.ts   # External OAuth: opaque state, same-origin return page, one-time values
 
     services/               # API and data services (with features/orchestration/api/, the ONLY
                             #   places apiClient is imported)
