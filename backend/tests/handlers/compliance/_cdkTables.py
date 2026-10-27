@@ -30,6 +30,12 @@ _PARAM = re.compile(
 _DYNAMO_FIELD = re.compile(r'^\s*(\w+):\s*(\w+),?\s*$', re.MULTILINE)
 _TYPES = {"STRING": "S", "NUMBER": "N", "BINARY": "B"}
 
+# The environment as it was when the test modules, and the handler modules they import, were
+# collected. Session fixtures of other test directories (assetLinks, assets) set some table-name
+# variables to other values later and do not restore them, while a handler module keeps the name it
+# read at import, so names are resolved from this snapshot as well as from the current environment.
+_ENVIRONMENT_AT_COLLECTION = dict(os.environ)
+
 
 def _block(text: str, opening: int) -> str:
     """The text of the `{...}` block whose opening brace is at `opening`."""
@@ -141,11 +147,12 @@ def tables_by_test_name() -> Dict[str, Tuple[str, CdkTable]]:
     for attribute, key in vars(ResourceKeys).items():
         if not isinstance(key, ResourceParamKey) or key.param_key not in storage_tables():
             continue
-        for env_name in key.env_var_names:
-            value = os.environ.get(env_name)
-            if value:
-                names.setdefault(value, (attribute, storage_tables()[key.param_key]))
-                break
+        for environment in (os.environ, _ENVIRONMENT_AT_COLLECTION):
+            for env_name in key.env_var_names:
+                value = environment.get(env_name)
+                if value:
+                    names.setdefault(value, (attribute, storage_tables()[key.param_key]))
+                    break
     return names
 
 
