@@ -10,7 +10,9 @@ paths point into those downloads; each download directory is recorded with its a
 the download left there, so the export can name those files relative to the asset it is uploaded to.
 A reference with no prim path brings in a file's default prim, so a file without one is referenced at
 its only root prim, and one with several root prims is not referenced at all. An import leaves the
-stage's defaultPrim as it was, and a failed MJCF import leaves nothing behind at its prim path.
+stage's defaultPrim as it was, and a failed MJCF import leaves nothing behind at its prim path. An
+MJCF file that is not well-formed XML, or that declares a document type, is refused before the
+importer runs.
 """
 
 import logging
@@ -779,6 +781,21 @@ class TestTheImportActions:
 MJ = ('<mujoco model="mj"><worldbody><body name="b"><geom type="box" size="0.1 0.1 0.1"/></body>'
       '</worldbody></mujoco>')
 BROKEN_MJ = '<mujoco model="broken"><worldbody><body name="b"></body></worldbody>'
+# An XML declaration and a comment ahead of the root element are not a document type declaration.
+DECLARED_MJ = f'<?xml version="1.0" encoding="utf-8"?>\n<!-- arm -->\n{MJ}\n'
+# Each kind of document type declaration, with the line it is on. MJCF uses none. The first declares
+# an entity and a second one that expands to it several times, referenced from an attribute.
+DOCTYPE_MJ = {
+    "internal-entities": ('<?xml version="1.0"?>\n<!DOCTYPE mujoco [\n<!ENTITY a "box">\n'
+                          '<!ENTITY b "&a;&a;&a;">\n]>\n<mujoco model="&b;"/>', 2),
+    "external-dtd": (f'<!DOCTYPE mujoco SYSTEM "mujoco.dtd">\n{MJ}', 1),
+    "bare": (f"<!DOCTYPE mujoco>{MJ}", 1),
+}
+
+
+def _doctype_refusal(line):
+    return (f"it declares a document type at line {line}, which MJCF does not use and which can "
+            "declare entities")
 
 
 def _parse_error(text):
@@ -831,6 +848,20 @@ class TestTheImportersLeaveTheStageAsItWas:
         assert importers == []
         assert (world.prims, world.layer.defaultPrim) == ({"/World"}, "World")
 
+    def test_an_mjcf_with_an_xml_declaration_and_a_comment_is_imported(self, extension, world,
+                                                                       importers):
+        assert _import(extension, "_on_import_mjcf", "/mjcf/arm.xml", DECLARED_MJ) == (
+            "Imported MJCF /mjcf/arm.xml as /World/arm")
+        assert [arguments["prim_path"] for _command, arguments in importers] == ["/World/arm"]
+
+    @pytest.mark.parametrize("text, line", DOCTYPE_MJ.values(), ids=DOCTYPE_MJ.keys())
+    def test_an_mjcf_that_declares_a_document_type_is_refused_before_the_importer_runs(
+            self, extension, world, importers, text, line):
+        status = _import(extension, "_on_import_mjcf", "/mjcf/dtd.xml", text)
+        assert status == f"MJCF error: /mjcf/dtd.xml is refused: {_doctype_refusal(line)}"
+        assert importers == []
+        assert (world.prims, world.layer.defaultPrim) == ({"/World"}, "World")
+
     def test_an_mjcf_import_that_brings_in_nothing_is_undone(self, extension, world, importers):
         importers.imports_nothing.add("robot.xml")
         status = _import(extension, "_on_import_mjcf", "/mjcf/robot.xml", '<robot name="r"/>')
@@ -877,6 +908,24 @@ class TestTheImportersLeaveTheStageAsItWas:
                                                       str(tmp_path / "dl")) is None
         assert "broken.xml is not well-formed XML" in caplog.text
         assert importers == []
+
+    @pytest.mark.parametrize("text, line", DOCTYPE_MJ.values(), ids=DOCTYPE_MJ.keys())
+    def test_the_scripting_api_raises_for_an_mjcf_that_declares_a_document_type(
+            self, tmp_path, world, importers, caplog, text, line):
+        local_file = tmp_path / "dtd.xml"
+        local_file.write_text(text)
+        with pytest.raises(MalformedXmlError) as excinfo:
+            _connector(_FakeCli()).import_mjcf_file(str(local_file))
+        assert (str(excinfo.value), excinfo.value.reason) == (
+            f"dtd.xml is refused: {_doctype_refusal(line)}", _doctype_refusal(line))
+        connector = _connector(_FakeCli(files=("/mjcf/dtd.xml",),
+                                        contents={"/mjcf/dtd.xml": text}))
+        with caplog.at_level(logging.ERROR):
+            assert connector.download_and_import_mjcf("db", "a1", "/mjcf/dtd.xml",
+                                                      str(tmp_path / "dl")) is None
+        assert "dtd.xml is refused: it declares a document type" in caplog.text
+        assert importers == []
+        assert world.prims == {"/World"}
 
 
 class TestTheExportAction:
