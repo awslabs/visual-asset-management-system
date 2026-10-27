@@ -375,6 +375,7 @@ def format_cascade(cascade: Dict[str, Any]) -> str:
         ('approvalTimeoutAt', 'Approval Deadline'),
         ('approvedBy', 'Approved By'),
         ('rejectedBy', 'Rejected By'),
+        ('rejectionReason', 'Rejection Reason'),
         ('abortReason', 'Abort Reason'),
         ('completedAt', 'Completed'),
     ):
@@ -1314,7 +1315,8 @@ def get_cascade(ctx: click.Context, cascade_id: str, json_output: bool):
     """Get a cascade's record and state.
 
     An executing cascade runs in the background; poll this command until the state is completed
-    or aborted (an aborted cascade carries its abortReason).
+    or aborted (a rejected cascade carries its rejectionReason, any other aborted cascade its
+    abortReason).
 
     Examples:
         vamscli compliance cascade get -c 3f0c...-...

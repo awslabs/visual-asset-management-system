@@ -1798,7 +1798,8 @@ def get_compliance_cascade(cascade_id: str) -> Dict[str, Any]:
     This is how a started cascade is followed: create_compliance_cascade() with
     `require_approval=False` and approve_compliance_cascade() return while the cascade is
     `executing`, so poll this tool until `state` is `completed` or `aborted`. An aborted cascade
-    carries `abortReason` (a rejection, or the failure that stopped the run)."""
+    carries `rejectionReason` when it was rejected, otherwise `abortReason` (`approval timed
+    out`, or the failure that stopped the run)."""
     return CLIENT.api.get_compliance_cascade(cascade_id)
 
 

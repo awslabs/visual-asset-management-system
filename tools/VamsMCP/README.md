@@ -492,7 +492,8 @@ pending, but `create_compliance_cascade` always opens a new one.
 `approve_compliance_cascade` (and a create without approval) returns at once with
 `state` `executing` and no `result` — the run continues in the background, so poll
 `get_compliance_cascade` until `state` is `completed` or `aborted` (`abortReason`)
-— and `reject_compliance_cascade` aborts it.
+— and `reject_compliance_cascade` aborts it, recording `rejectionReason` (no
+`abortReason`).
 
 ### Destructive (require `VAMS_ENABLE_DESTRUCTIVE=true`)
 

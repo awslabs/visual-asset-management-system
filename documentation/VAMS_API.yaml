@@ -10122,7 +10122,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/cascades/{cascadeId}:
         get:
             summary: "Get a cascade."
-            description: "Returns one cascade with its state and per-node progress. An executing cascade is followed by polling this route until `state` is `completed` or `aborted`; an aborted cascade carries `abortReason`."
+            description: "Returns one cascade with its state and per-node progress. An executing cascade is followed by polling this route until `state` is `completed` or `aborted`; a rejected cascade carries `rejectionReason`, any other aborted cascade `abortReason`."
             parameters:
                 - name: cascadeId
                   in: path
@@ -17350,9 +17350,10 @@ components:
                     format: date-time
                 rejectionReason:
                     type: string
+                    description: "The reason given when the cascade was rejected (`rejected` when none was). A rejected cascade carries no `abortReason`."
                 abortReason:
                     type: string
-                    description: "Why an `aborted` cascade stopped: the rejection, or the failure that ended the run."
+                    description: "Why an `aborted` cascade that was not rejected stopped: `approval timed out`, or the failure that stopped it from starting or ended the run."
                 completedAt:
                     type: string
                     format: date-time

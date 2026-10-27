@@ -1559,6 +1559,18 @@ class TestComplianceCascadeCommands:
             assert 'State: aborted' in result.output
             assert 'Abort Reason: Cascade execution failed' in result.output
 
+    def test_get_shows_why_a_rejected_cascade_was_rejected(self, cli_runner, generic_command_mocks):
+        # A rejection records rejectionReason (and no abortReason); the command prints it.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_cascade.return_value = dict(
+                CASCADE_RECORD, state='aborted', rejectedBy='reviewer',
+                rejectedAt='2026-10-27T05:00:00+00:00', rejectionReason='Not now')
+            result = cli_runner.invoke(cli, ['compliance', 'cascade', 'get', '-c', 'casc-1'])
+            assert result.exit_code == 0
+            assert 'Rejected By: reviewer' in result.output
+            assert 'Rejection Reason: Not now' in result.output
+            assert 'Abort Reason' not in result.output
+
     def test_get_json_output(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].get_compliance_cascade.return_value = CASCADE_RECORD

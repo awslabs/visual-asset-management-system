@@ -456,14 +456,14 @@ A cascade re-evaluates the downstream assets of a parent: every descendant reach
 
 A cascade opens in two ways. After an evaluation of an asset that has children — from the trigger, an on-demand evaluation or a sweep — a cascade is opened in the `pending_approval` state and the parent's subscribers are notified; while a cascade for that parent is still pending approval, further evaluations of the parent open no new one, so the approval queue holds at most one automatic cascade per parent. This holds also when evaluations of the parent finish at the same moment: the cascade is written together with a per-parent marker, in one transaction that only succeeds when the parent has no marker, and the marker is removed when the cascade is approved, rejected or aborted on its approval timeout. A cascade created through the API or CLI always opens a new one; it waits for approval by default, or starts executing at once when created with `requireApproval: false`.
 
-| State              | Meaning                                                     |
-| ------------------ | ----------------------------------------------------------- |
-| `pending_approval` | Waiting for an approval or rejection                        |
-| `executing`        | Evaluating the downstream assets in the background          |
-| `completed`        | Every downstream asset was evaluated, skipped or superseded |
-| `aborted`          | Rejected, or the run failed — `abortReason` says which      |
+| State              | Meaning                                                                   |
+| ------------------ | ------------------------------------------------------------------------- |
+| `pending_approval` | Waiting for an approval or rejection                                      |
+| `executing`        | Evaluating the downstream assets in the background                        |
+| `completed`        | Every downstream asset was evaluated, skipped or superseded               |
+| `aborted`          | Rejected (`rejectionReason`), timed out or the run failed (`abortReason`) |
 
-A pending cascade records an `approvalTimeoutAt` timestamp 24 hours after its creation, shown in the approval queue. A cascade still pending at that time can no longer be approved or rejected: the first read of it (the queue, the cascade itself, an approve or reject, or the parent's next evaluation) aborts it with `abortReason` `approval timed out` and a `cascade_timed_out` audit entry, so the parent's next evaluation can open a new one. Approving a cascade moves it to `executing` and hands the run to a background executor; the approve request returns at once, and the per-asset verdicts are recorded on the cascade as the run progresses, so its state is followed by reading the cascade until it is `completed` or `aborted`. Rejecting a cascade aborts it.
+A pending cascade records an `approvalTimeoutAt` timestamp 24 hours after its creation, shown in the approval queue. A cascade still pending at that time can no longer be approved or rejected: the first read of it (the queue, the cascade itself, an approve or reject, or the parent's next evaluation) aborts it with `abortReason` `approval timed out` and a `cascade_timed_out` audit entry, so the parent's next evaluation can open a new one. Approving a cascade moves it to `executing` and hands the run to a background executor; the approve request returns at once, and the per-asset verdicts are recorded on the cascade as the run progresses, so its state is followed by reading the cascade until it is `completed` or `aborted`. Rejecting a cascade aborts it and records `rejectedBy`, `rejectedAt` and `rejectionReason`; a rejected cascade carries no `abortReason`.
 
 ## Audit trail
 

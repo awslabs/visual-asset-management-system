@@ -7680,7 +7680,8 @@ class APIClient(CustomAPIClientMixin):
             answers 200 and `state` is pending_approval. Without it the handler writes the cascade
             in state executing, starts the executor asynchronously and answers 202; the request
             does not wait for the evaluations. Poll `get_compliance_cascade` until `state` is
-            completed or aborted (an aborted cascade carries `abortReason`).
+            completed or aborted (a rejected cascade carries `rejectionReason`, any other aborted
+            cascade `abortReason`).
 
         Raises:
             InvalidComplianceDataError: When the request is rejected, or the executor could not be
