@@ -196,6 +196,18 @@ describe("isTransitionalWorkstation", () => {
         expect(isTransitionalWorkstation({ state, connectionAvailable })).toBe(expected);
     });
 
+    it("treats a running workstation whose display session ended as settled", () => {
+        // ACTIVE and not connectable, but not starting: nothing changes until the user stops it.
+        expect(
+            isTransitionalWorkstation({
+                state: "ACTIVE",
+                connectionAvailable: false,
+                activity: null,
+                connectionUnavailableReason: "DISPLAY_SESSION_ENDED",
+            })
+        ).toBe(false);
+    });
+
     it("treats a stalled start as settled, and a creating row with any other code as transitional", () => {
         const creating = { state: "CREATING", connectionAvailable: false, activity: null } as const;
         expect(isTransitionalWorkstation({ ...creating, lastError: "START_STALLED" })).toBe(false);
@@ -382,6 +394,24 @@ describe("useWorkstationConnect", () => {
         await expect(result.current.mutateAsync("s-1")).rejects.toThrow(
             "Workstation is not ready to connect"
         );
+    });
+
+    it("re-reads the list after a refused connect, so the row shows why", async () => {
+        (workstationService.getWorkstationConnection as jest.Mock).mockResolvedValue([
+            false,
+            "The workstation is running but its remote display session has ended. Stop it, then start it again, to reconnect.",
+        ]);
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        const invalidate = jest.spyOn(client, "invalidateQueries");
+        const { result } = renderHook(() => useWorkstationConnect(), {
+            wrapper: wrapperFor(client),
+        });
+
+        await expect(result.current.mutateAsync("s-1")).rejects.toThrow(
+            /display session has ended/
+        );
+
+        expect(invalidate).toHaveBeenCalledWith({ queryKey: ["edh", "workstations"] });
     });
 });
 

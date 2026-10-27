@@ -91,11 +91,13 @@ from .common.edhSessionState import (
     EXPIRES_AT_FIELD,
     ACTIVITY_FIELD,
     ACTIVITY_STARTING,
+    CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED, CONNECTION_UNAVAILABLE_REASON_FIELD, DISPLAY_SESSION_ENDED_MESSAGE,
     LAST_ERROR_LEASE_EXPIRED,
     LAST_ERROR_RESERVATION_FULL,
     START_IN_PROGRESS_SECONDS, STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED,
     STOP_REQUESTED_FIELD, WORKER_ACTION_START, WORKER_PAYLOAD_KEYS,
-    capacity_reservation_fallback_reason, capacity_reservation_named, credential_claim_stamp, deleted_row_expiry,
+    capacity_reservation_fallback_reason, capacity_reservation_named, connection_unavailable_reason,
+    credential_claim_stamp, deleted_row_expiry,
     edh_failure_attributes, edh_failure_read_due,
     launch_image_snapshot, observed_row_attributes, orphaned_last_error, session_row_live, start_accepted_cleared,
     start_in_progress, start_stall_cleared, start_stamp, start_stamp_cleared, state_for_edh_session_state,
@@ -438,7 +440,8 @@ def _record(row, labels=None, images=None):
     """The API shape of a session row, with the registry label of the capacity reservation it names joined in
     (``capacity_reservation_named``: the one it was sent with, else the one a fallback asked for): from ``labels``
     (id -> label) when the caller read them, else read for the row's own reservation (a row without one reads
-    nothing); ``activity`` derived from the row as it is now, never the stored mark; and the
+    nothing); ``activity`` derived from the row as it is now, never the stored mark; ``connectionUnavailableReason``
+    only while the row is ACTIVE, running and not connectable (``connection_unavailable_reason``); and the
     image fields (``workstation_image``) from ``images`` -- the recipe builds by EDH stack id and each recipe's
     newest AVAILABLE version -- when the caller read them, else read for this row."""
     capacity_reservation_id = capacity_reservation_named(row)
@@ -454,6 +457,7 @@ def _record(row, labels=None, images=None):
                                      CAPACITY_RESERVATION_FALLBACK_REASON_FIELD:
                                          capacity_reservation_fallback_reason(row),
                                      ACTIVITY_FIELD: workstation_activity(row),
+                                     CONNECTION_UNAVAILABLE_REASON_FIELD: connection_unavailable_reason(row),
                                      **workstation_image(row, row.get('imageId'), builds_by_stack,
                                                          latest_versions)}).dict()
 
@@ -1664,10 +1668,23 @@ def _not_ready_response(event):
                          body={'message': 'Workstation is not ready for connection'}, event=event)
 
 
+def _not_connectable_response(event, row):
+    """The 409 a connect or a Windows sign-in answers for an ACTIVE row EDH's record found not connectable:
+    ``DISPLAY_SESSION_ENDED`` with what to do when the row now records the desktop's display session ended, else
+    the generic not-ready answer."""
+    if connection_unavailable_reason(row) == CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED:
+        logger.warning(f"EDH listed the running desktop of session {row.get('sessionId')} without a DCV session")
+        return general_error(status_code=409, body={'code': CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED,
+                                                    'message': DISPLAY_SESSION_ENDED_MESSAGE}, event=event)
+    return _not_ready_response(event)
+
+
 def connect_workstation(event, path):
     """The DCV connection URL of the caller's ACTIVE session: the ``connection_string`` EDH's per-user
     listing renders for that one desktop while it is running; EDH issues its connection token on this
-    call. A row in any other stored state is not ready and EDH is not asked. The URL is a credential and
+    call. A row in any other stored state is not ready and EDH is not asked; a desktop EDH reports running with a
+    link that signs no user in, the fallback EDH lists when the DCV broker holds no session for it, is refused
+    ``DISPLAY_SESSION_ENDED`` and the row records it. The URL is a credential and
     appears in the response body only. A caller that authenticated with an API key, a desktop's own
     temporary session key included, is refused: the URL is a credential for the desktop."""
     if claims_and_roles.get('authMethod') == AUTH_METHOD_API_KEY:
@@ -1691,10 +1708,10 @@ def connect_workstation(event, path):
         return _not_ready_response(event)
     _observe_desktop(row, desktop)
     # _update_row mirrors its writes onto the row, so the row's connectionAvailable is now
-    # observed_row_attributes' verdict: EDH reports the desktop running.
+    # observed_row_attributes' verdict: EDH reports the desktop running with a link that signs a user in.
     connection_string = desktop.get(EDH_FIELD_CONNECTION_STRING)
     if not row.get('connectionAvailable') or not isinstance(connection_string, str) or not connection_string:
-        return _not_ready_response(event)
+        return _not_connectable_response(event, row)
     return success(body=ConnectResponseModel(
         sessionId=session_id, connectionUrl=connection_string, osFamily=row['osFamily']).dict())
 
@@ -1743,7 +1760,7 @@ def windows_sign_in(event, path):
     _observe_desktop(row, desktop)
     connection_string = desktop.get(EDH_FIELD_CONNECTION_STRING)
     if not row.get('connectionAvailable') or not isinstance(connection_string, str) or not connection_string:
-        return _not_ready_response(event)
+        return _not_connectable_response(event, row)
     username = _windows_username(desktop, edh_uid)
     directory_account = '\\' in username
     password = None

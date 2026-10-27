@@ -9493,7 +9493,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The launch has no session id, the record is not ACTIVE, or EDH does not report the desktop running with a URL."
+                    description: "The launch has no session id, the record is not ACTIVE, or EDH does not report the desktop running with a URL; or EDH reports the desktop running with a link that signs no user in, whose body carries `\"code\": \"DISPLAY_SESSION_ENDED\"` and the message `The workstation is running but its remote display session has ended. Stop it, then start it again, to reconnect.` (the record then carries `connectionUnavailableReason`)."
                     content:
                         application/json:
                             schema:
@@ -9544,7 +9544,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The launch has no session id (`Workstation has no EDH session`), the record is not ACTIVE or EDH does not report the desktop running with a URL (`Workstation is not ready for connection`), or EDH lists no password for the desktop (`Windows password is not available yet`)."
+                    description: "The launch has no session id (`Workstation has no EDH session`), the record is not ACTIVE or EDH does not report the desktop running with a URL (`Workstation is not ready for connection`), EDH reports the desktop running with a link that signs no user in (`code` `DISPLAY_SESSION_ENDED`, as connect answers it), or EDH lists no password for the desktop (`Windows password is not available yet`)."
                     content:
                         application/json:
                             schema:
@@ -11833,6 +11833,13 @@ components:
                 connectionAvailable:
                     type: boolean
                     description: "`true` while EDH reports the desktop `running`; Connect then fetches its connection URL."
+                connectionUnavailableReason:
+                    type: string
+                    nullable: true
+                    description: "Why an ACTIVE workstation EDH reports `running` cannot be connected to: `DISPLAY_SESSION_ENDED` when EDH lists the desktop with a connection link that signs no user in (no `authToken` or `username`), which it does when its Amazon DCV broker holds no session for the desktop. Recorded when connect or Windows sign-in reads that link and kept while EDH still reports the desktop running; a connectable link, or a state other than `running`, clears it. `connectionAvailable` is then false and `activity` null. Stop the workstation, then start it again, to reconnect. Null otherwise."
+                    enum:
+                        - DISPLAY_SESSION_ENDED
+                        - null
                 lastError:
                     type: string
                     nullable: true

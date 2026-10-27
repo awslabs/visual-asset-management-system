@@ -1,5 +1,5 @@
 {
-    "description": "Workstation records covering every state x activity x lastError combination of the start-status contract (feature #536, D10/D11, and D16's stalled start), each with what the web status badge shows (`badge`), what `vamscli edh workstation list` prints in its State column (`state`, the badge's last word upper-cased: `Start stalled` prints `STALLED`), and the start-failure sentence and detail line both the web and `vamscli edh workstation get` show (null when none). Read by web/src/addons/edh/components/WorkstationStatusBadge.cases.test.tsx and tools/VamsCLI/tests/addon/test_edh_start_status.py, so the two clients cannot drift apart.",
+    "description": "Workstation records covering every state x activity x lastError combination of the start-status contract (feature #536, D10/D11, and D16's stalled start), each with what the web status badge shows (`badge`), what `vamscli edh workstation list` prints in its State column (`state`, the badge's last word upper-cased: `Start stalled` prints `STALLED`), and the start-failure sentence and detail line both the web and `vamscli edh workstation get` show (null when none), and, on a running workstation that cannot be connected to (D20), the sentence the web shows under its inert Connect and `get` prints as Connection (`connectionUnavailableMessage`, absent on the other cases). Read by web/src/addons/edh/components/WorkstationStatusBadge.cases.test.tsx and tools/VamsCLI/tests/addon/test_edh_start_status.py, so the two clients cannot drift apart.",
     "cases": [
         {
             "name": "a stopped workstation whose start is in progress",
@@ -158,6 +158,25 @@
             "state": "ACTIVE",
             "startFailureMessage": null,
             "startFailureDetail": null
+        },
+        {
+            "name": "a running desktop whose remote display session has ended",
+            "record": {
+                "state": "ACTIVE",
+                "edhState": "running",
+                "activity": null,
+                "lastError": null,
+                "startFailure": null,
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "connectionUnavailableReason": "DISPLAY_SESSION_ENDED",
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Active",
+            "state": "ACTIVE",
+            "startFailureMessage": null,
+            "startFailureDetail": null,
+            "connectionUnavailableMessage": "The workstation is running but its remote display session has ended. Stop it, then start it again, to reconnect."
         },
         {
             "name": "a stopped desktop",

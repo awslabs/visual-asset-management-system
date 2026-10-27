@@ -17,7 +17,13 @@ import WorkstationStatusBadge, {
     describeStartFailure,
 } from "./WorkstationStatusBadge";
 import fixture from "../workstationStatusCases.json";
-import type { StartFailure, WorkstationActivity, WorkstationState } from "../types";
+import { connectUnavailableReason } from "../workstations/ConnectLink";
+import type {
+    StartFailure,
+    WorkstationActivity,
+    WorkstationRecord,
+    WorkstationState,
+} from "../types";
 
 interface StatusCase {
     name: string;
@@ -29,12 +35,15 @@ interface StatusCase {
         startFailure: StartFailure | null;
         sessionId: string | null;
         connectionAvailable: boolean;
+        connectionUnavailableReason?: string | null;
         instanceType: string;
     };
     badge: string;
     state: string;
     startFailureMessage: string | null;
     startFailureDetail: string | null;
+    /** The sentence under an inert Connect of a running workstation that cannot be connected to. */
+    connectionUnavailableMessage?: string;
 }
 
 const CASES = fixture.cases as StatusCase[];
@@ -67,6 +76,29 @@ describe("workstationStatusCases.json (shared with the CLI tests)", () => {
         );
         expect(creatingCodes).toContain("START_STALLED");
         expect(CASES.filter((c) => c.badge === "Start stalled").length).toBeGreaterThanOrEqual(1);
+        // A running workstation whose remote display session has ended (D20).
+        expect(
+            CASES.filter((c) => c.record.connectionUnavailableReason === "DISPLAY_SESSION_ENDED")
+        ).toHaveLength(1);
+    });
+
+    it.each(table)("%s: the Connect reason is as agreed", (_name, c) => {
+        if (c.connectionUnavailableMessage === undefined) {
+            expect(c.record.connectionUnavailableReason ?? null).toBeNull();
+            return;
+        }
+        const record = {
+            ...c.record,
+            bootstrapId: "b-1",
+            userId: "user@example.com",
+            edhUid: "vabcdefghij23456",
+            name: "Render-box",
+            imageId: "12",
+            osFamily: "linux",
+            createdAt: "2026-10-23T10:00:00Z",
+            updatedAt: "2026-10-23T15:19:13Z",
+        } as unknown as WorkstationRecord;
+        expect(connectUnavailableReason(record)).toBe(c.connectionUnavailableMessage);
     });
 
     it.each(table)("%s: the badge reads as agreed", (_name, c) => {

@@ -72,7 +72,10 @@ def register(
         captured. A capacity code makes `lastError` CAPACITY_UNAVAILABLE and a vCPU or instance limit
         QUOTA_EXCEEDED; EDH's own wording is never returned),
         `launchAttempts`, `imageId`, `osFamily`, `instanceType`, `rootSizeGb`, `createdAt`, `updatedAt`,
-        `connectionAvailable`, and `leaseExpiresAt`, `leaseStoppedAt` and `leaseHoursAtLaunch` (null
+        `connectionAvailable`, `connectionUnavailableReason` (`DISPLAY_SESSION_ENDED` on an ACTIVE row EDH
+        reports running whose remote display session has ended, so it is not connectable and not
+        starting either: stop it with stop_edh_workstation, then start it again, to reconnect; null
+        otherwise), and `leaseExpiresAt`, `leaseStoppedAt` and `leaseHoursAtLaunch` (null
         when no lease applies). `capacityReservationId` is the capacity reservation the launch was
         sent into (null for an on-demand one), `capacityReservationLabel` its registry label (null
         once unregistered), `capacityReservationFallback` true when the workstation asked for a
@@ -114,7 +117,8 @@ def register(
         `recipeDisplayName`, `recipeVersion`, `latestRecipeVersion` and `imageLatest` as a
         list_edh_workstations row does. Reading it makes
         EDH issue no connection token; `connectionAvailable` is true while EDH reports the desktop
-        running."""
+        running, and `connectionUnavailableReason` is `DISPLAY_SESSION_ENDED` (null otherwise) when the
+        desktop is running but its remote display session has ended."""
         client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
         return client.api.get_edh_workstation(session_id)
 
@@ -358,7 +362,11 @@ def register(
         def get_edh_workstation_connect(session_id: str) -> Dict[str, Any]:
             """Get the DCV connection details for one of the authenticated user's ACTIVE EDH workstations:
             `{sessionId, connectionUrl, osFamily}`. A workstation that is not connectable (CREATING,
-            STOPPED, or without an EDH session) is refused with a 409 that is returned as the error.
+            STOPPED, or without an EDH session) is refused with a 409 that is returned as the error. A
+            running workstation whose remote display session has ended is refused with a 409 returned as
+            `error_type` `EdhDisplaySessionEndedError`, `code` `DISPLAY_SESSION_ENDED`, and the sentence
+            to relay: stop it, then start it again, to reconnect (stop_edh_workstation, then
+            start_edh_workstation); the workstation's record then carries `connectionUnavailableReason`.
             Each call makes EDH issue at most one connection token per request EDH answers, for this
             desktop; VAMS repeats a read once after a transport failure or a gateway error, which can make
             a second.

@@ -74,11 +74,10 @@ from .common import edhCapacityReservations as reservations
 from .common import edhSessionBootstrap as bootstrap
 from .common.edhLeasePolicy import LeaseValidationError, read_lease_policy, write_lease_policy
 from .common.edhSessionState import (
-    ACTIVITY_FIELD, CAPACITY_RESERVATION_FALLBACK_REASON_FIELD, EDH_CONNECTION_STRING_FIELD, EDH_SESSION_STATE_FIELD,
-    EDH_SESSION_STATE_RUNNING,
+    ACTIVITY_FIELD, CAPACITY_RESERVATION_FALLBACK_REASON_FIELD, EDH_SESSION_STATE_FIELD,
     EXPIRES_AT_FIELD, IMAGE_NAME_FIELD, START_FAILURE_FIELD, STATE_CREATING, STATE_DELETED, STATE_ORPHANED,
     STATE_STOPPED, STOP_REQUESTED_FIELD, capacity_reservation_fallback_reason, capacity_reservation_named,
-    deleted_row_expiry,
+    connection_verdict, deleted_row_expiry,
     start_accepted_cleared, start_stall_cleared,
     start_stamp_cleared, state_for_edh_session_state, workstation_activity, workstation_image,
 )
@@ -777,9 +776,10 @@ def _instance_item(record, row):
     state = state_for_edh_session_state(edh_state, row.get('state'))
     connectable = row.get('connectionAvailable')
     if edh_state is not None:
-        # EDH's listing carries the desktop's connection string: running with one that is not empty connects.
-        connectable = (edh_state.lower() == EDH_SESSION_STATE_RUNNING
-                       and (EDH_CONNECTION_STRING_FIELD not in record or bool(record.get(EDH_CONNECTION_STRING_FIELD))))
+        # Connectable as the session sweep records it from the same record (``connection_verdict``): running with a
+        # link that signs a user in, or with no link field at all unless the row records the desktop's display
+        # session ended.
+        connectable = connection_verdict(row, record)[0]
     activity = workstation_activity({**row, 'state': state, 'edhState': edh_state if edh_state is not None
                                      else row.get('edhState'), 'connectionAvailable': connectable,
                                      'sessionId': record_str(EDH_FIELD_SESSION_UUID) or row.get('sessionId')})

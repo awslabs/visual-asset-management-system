@@ -36,7 +36,7 @@ INSTANCE_ID = "i-0abc123def4567890"
 SECRET_NAME = "vams/edh-session/" + BOOTSTRAP_OWN
 # A connection string carrying no credential: the connect case asserts on the response key, never on
 # the value EDH reports.
-CONNECTION_STRING = "https://dcv.example.internal/#" + SESSION_OWN
+CONNECTION_STRING = "https://dcv.example.internal/?authToken=abc&username=vabc#" + SESSION_OWN
 
 
 def _desktop(*, instance_id=INSTANCE_ID, state="pending"):
