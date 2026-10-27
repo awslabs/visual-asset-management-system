@@ -16,8 +16,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.tests.handlers.compliance._harness import (
-    ASSET, CASCADE_ID, RULES_SCHEMA_BODY, body_of, claims_for, rest_event, schema_row,
-    update_values,
+    ASSET, CASCADE_ID, RULES_SCHEMA_BODY, body_of, claims_for, real_constants, rest_event,
+    schema_row, update_values,
 )
 from handlers.compliance import (
     complianceCascadeService, complianceEvaluateService, complianceQuarantineService,
@@ -29,6 +29,16 @@ from backend.tests.handlers.auth.test_permission_templates_compliance_binding im
 
 GLOBAL = "GLOBAL"
 STORE = "handlers.compliance.complianceEvaluationStore"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _real_permission_constants():
+    """The real permission field matrix for the enforcer and the template import, whatever was
+    collected before this module: alone, or with the compliance tests only, the root harness's mock
+    `common.constants` is in place and the enforcer would build the roles against it."""
+    with real_constants("backend.backend.handlers.authz",
+                        "backend.backend.handlers.auth.authConstraintsTemplateService"):
+        yield
 
 
 # ---------------------------------------------------------------------------------------------

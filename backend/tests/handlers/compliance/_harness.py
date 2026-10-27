@@ -8,10 +8,12 @@ registration this directory depends on lives in `conftest.py`, which pytest load
 """
 
 import base64
+import contextlib
 import importlib.util
 import json
 import os
-from unittest.mock import MagicMock
+import types
+from unittest.mock import MagicMock, NonCallableMock, patch
 
 from botocore.exceptions import ClientError
 
@@ -30,6 +32,59 @@ _real_dynamodb_spec = importlib.util.spec_from_file_location(
 _real_dynamodb = importlib.util.module_from_spec(_real_dynamodb_spec)
 _real_dynamodb_spec.loader.exec_module(_real_dynamodb)
 REAL_TO_UPDATE_EXPR = _real_dynamodb.to_update_expr
+
+
+@contextlib.contextmanager
+def real_constants(*module_names):
+    """The real `common.constants` (the permission field matrix the policy builder reads), for a
+    test that runs the production enforcer.
+
+    The root harness installs a bare mock of the module; `tests/handlers/auth/conftest.py` installs
+    the real one, but only when the auth tests are collected, so a test that leans on it passes in
+    the full run and fails alone. This installs the real module when the mock is in place (and
+    restores the mock afterwards), and in each of `module_names` points every name it bound from
+    the mock at import (`from common.constants import ...`) at the real value until the context
+    ends; those modules read the names at call time. Yields the module.
+    """
+    import importlib
+    import sys
+
+    def is_real(module):
+        return isinstance(module, types.ModuleType) and isinstance(
+            getattr(module, "PERMISSION_CONSTRAINT_FIELDS", None), dict)
+
+    previous = sys.modules.get("common.constants")
+    installed = not is_real(previous)
+    if installed:
+        spec = importlib.util.spec_from_file_location(
+            "common.constants", os.path.join(_BACKEND_SOURCE, "common", "constants.py"))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["common.constants"] = module
+        spec.loader.exec_module(module)
+    constants = sys.modules["common.constants"]
+    public = [name for name in vars(constants) if not name.startswith("_")]
+    patches = []
+    for name in module_names:
+        loaded = sys.modules.get(name)
+        if loaded is None:
+            continue
+        # A name the module took from the mock `common.constants` at import is a mock: point it at
+        # the real value for the duration (the modules read these names at call time).
+        for attribute in public:
+            if isinstance(vars(loaded).get(attribute), NonCallableMock):
+                patches.append(patch.object(loaded, attribute, vars(constants)[attribute]))
+    for active in patches:
+        active.start()
+    try:
+        yield constants
+    finally:
+        for active in reversed(patches):
+            active.stop()
+        if installed:
+            if previous is None:
+                sys.modules.pop("common.constants", None)
+            else:
+                sys.modules["common.constants"] = previous
 
 USER = "user1"
 DB = "db1"
