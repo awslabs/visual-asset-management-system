@@ -603,8 +603,9 @@ def delete(ctx: click.Context, asset_id: str, database: str, reason: Optional[st
                 output_info("Use --confirm flag to proceed with permanent deletion.", False)
                 raise click.ClickException("Confirmation required for permanent deletion")
         
-        # Additional confirmation prompt for safety (skip in JSON mode)
-        if not json_output:
+        # Additional confirmation prompt for safety (skip in JSON mode
+        # and when stdin is not a TTY — --confirm is already the gate for scripts/CI)
+        if not json_output and sys.stdin.isatty():
             output_warning(f"⚠️  You are about to permanently delete asset '{asset_id}' from database '{database}'", False)
             output_warning("This action cannot be undone!", False)
             

@@ -2,6 +2,7 @@
 
 import json
 import click
+import sys
 from typing import Dict, Any, Optional
 
 from ..constants import API_ROLES, API_ROLE_BY_ID, API_CONSTRAINTS, API_CONSTRAINT_BY_ID, API_CONSTRAINTS_TEMPLATE_IMPORT
@@ -493,8 +494,8 @@ def delete(ctx: click.Context, role_name: str, confirm: bool, json_output: bool)
                 click.echo("Use --confirm flag to proceed with deletion.")
                 raise click.ClickException("Confirmation required for role deletion")
         
-        # Additional confirmation prompt for safety (skip in JSON mode)
-        if not json_output:
+        # Additional confirmation prompt for safety (skip in JSON / non-TTY mode)
+        if not json_output and sys.stdin.isatty():
             click.secho(f"⚠️  You are about to delete role '{role_name}'", fg='red', bold=True)
             click.echo("This action cannot be undone!")
             
@@ -1098,8 +1099,8 @@ def delete_constraint(ctx: click.Context, constraint_id: str, confirm: bool, jso
                 click.echo("Use --confirm flag to proceed with deletion.")
                 raise click.ClickException("Confirmation required for constraint deletion")
         
-        # Additional confirmation prompt for safety (skip in JSON mode)
-        if not json_output:
+        # Additional confirmation prompt for safety (skip in JSON / non-TTY mode)
+        if not json_output and sys.stdin.isatty():
             click.secho(f"⚠️  You are about to delete constraint '{constraint_id}'", fg='red', bold=True)
             click.echo("This action cannot be undone!")
             
@@ -1640,8 +1641,8 @@ def delete_user_roles(ctx: click.Context, user_id: str, confirm: bool, json_outp
                 click.echo("Use --confirm flag to proceed with deletion.")
                 raise click.ClickException("Confirmation required for user role deletion")
         
-        # Additional confirmation prompt for safety (skip in JSON mode)
-        if not json_output:
+        # Additional confirmation prompt for safety (skip in JSON / non-TTY mode)
+        if not json_output and sys.stdin.isatty():
             click.secho(f"⚠️  You are about to delete ALL roles for user '{user_id}'", fg='red', bold=True)
             click.echo("This action cannot be undone!")
             

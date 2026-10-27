@@ -360,8 +360,9 @@ def push(ctx: click.Context, local_directory, database_id, asset_id, asset_locat
                           cli_formatter=lambda r: '\n'.join(_format_plan_lines(r['plan'], 'push')))
             return result
 
-        # Confirm permanent deletions interactively (flag-only gate in JSON mode)
-        if plan.deletes and permanent_delete and not json_output:
+        # Confirm permanent deletions interactively (flag-only gate in JSON /
+        # non-TTY mode — --confirm / permanent_delete already required)
+        if plan.deletes and permanent_delete and not json_output and sys.stdin.isatty():
             output_warning(f"⚠️  {len(plan.deletes)} VAMS file(s) will be PERMANENTLY deleted. "
                            "This cannot be undone!", json_output)
             if not click.confirm("Are you sure you want to proceed?"):
@@ -638,8 +639,9 @@ def pull(ctx: click.Context, local_directory, database_id, asset_id, asset_locat
                           cli_formatter=lambda r: '\n'.join(_format_plan_lines(r['plan'], 'pull')))
             return result
 
-        # Confirm local deletions interactively (flag-only gate in JSON mode)
-        if plan.deletes and not json_output:
+        # Confirm local deletions interactively (flag-only gate in JSON /
+        # non-TTY mode)
+        if plan.deletes and not json_output and sys.stdin.isatty():
             output_warning(f"⚠️  {len(plan.deletes)} local file(s) will be deleted. "
                            "This cannot be undone!", json_output)
             if not click.confirm("Are you sure you want to proceed?"):

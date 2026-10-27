@@ -1,6 +1,7 @@
 """User management commands for VamsCLI."""
 
 import click
+import sys
 from typing import Dict, Any, Optional
 
 from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
@@ -422,8 +423,9 @@ def delete(ctx: click.Context, user_id: str, confirm: bool, json_output: bool):
                 raise click.ClickException("Confirmation required for user deletion")
         
         # If --confirm is provided, skip the additional prompt in JSON mode
-        if not json_output:
-            # Additional confirmation prompt for safety (CLI mode only)
+        # and when stdin is not a TTY (scripts/CI — --confirm is the gate)
+        if not json_output and sys.stdin.isatty():
+            # Additional confirmation prompt for safety (interactive CLI only)
             click.secho(f"⚠️  You are about to delete user '{user_id}'", fg='red', bold=True)
             click.echo("This action cannot be undone!")
             

@@ -2,6 +2,7 @@
 
 import json
 import click
+import sys
 from typing import Dict, Any, Optional, List
 
 from ..constants import API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS
@@ -654,8 +655,9 @@ def delete(ctx: click.Context, database_id: str, confirm: bool, json_output: boo
                 raise click.ClickException("Confirmation required for database deletion")
         
         # If --confirm is provided, skip the additional prompt in JSON mode
-        if not json_output:
-            # Additional confirmation prompt for safety (CLI mode only)
+        # and when stdin is not a TTY (scripts/CI — --confirm is the gate)
+        if not json_output and sys.stdin.isatty():
+            # Additional confirmation prompt for safety (interactive CLI only)
             click.secho(f"⚠️  You are about to delete database '{database_id}'", fg='red', bold=True)
             click.echo("This action cannot be undone!")
             
