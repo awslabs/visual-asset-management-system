@@ -805,6 +805,10 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
             sceneEnvironmentRef.current = null;
 
             runRenderer?.dispose();
+            // dispose() frees the renderer's GPU resources but keeps the WebGL context until the
+            // canvas is garbage collected, and the browser caps live contexts per page. Called after
+            // dispose(), which has already removed the renderer's own context-lost listener.
+            runRenderer?.forceContextLoss?.();
             runRenderer = null;
 
             // Clear global THREE.js reference to prevent contamination

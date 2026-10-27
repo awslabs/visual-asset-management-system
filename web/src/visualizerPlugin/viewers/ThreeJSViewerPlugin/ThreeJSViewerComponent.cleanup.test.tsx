@@ -5,9 +5,10 @@
 
 /**
  * The viewer creates its WebGL renderer before any file loads. Each renderer holds a WebGL context,
- * and browsers drop the oldest context once a page holds too many, so these tests pin that
- * unmounting releases the renderer, its scene environment and its canvas whatever the load outcome:
- * a load that failed, one still in flight, and (as a control) one that succeeded.
+ * and browsers drop the oldest context once a page holds too many. three.js's dispose() frees the
+ * renderer's GPU resources but keeps the context until the canvas is garbage collected, so these
+ * tests pin that unmounting releases the renderer, its scene environment, its canvas and its context
+ * whatever the load outcome: a load that failed, one still in flight, and one that succeeded.
  */
 
 import React from "react";
@@ -59,6 +60,7 @@ interface FakeRenderer {
     domElement: HTMLCanvasElement;
     render: jest.Mock;
     dispose: jest.Mock;
+    forceContextLoss: jest.Mock;
 }
 
 /** Every renderer and scene environment the viewer creates, so a test can check each was released. */
@@ -142,6 +144,7 @@ function installFakeThree(): void {
             setPixelRatio = jest.fn();
             render = jest.fn();
             dispose = jest.fn();
+            forceContextLoss = jest.fn();
             constructor() {
                 renderers.push(this as unknown as FakeRenderer);
             }
@@ -165,6 +168,12 @@ function expectReleased(renderer: FakeRenderer, environment: { dispose: jest.Moc
     expect(renderer.dispose).toHaveBeenCalledTimes(1);
     expect(environment.dispose).toHaveBeenCalledTimes(1);
     expect(renderer.domElement.isConnected).toBe(false);
+    // dispose() keeps the WebGL context until garbage collection; the context itself is released
+    // afterwards, once dispose() has removed the renderer's context-lost listener.
+    expect(renderer.forceContextLoss).toHaveBeenCalledTimes(1);
+    expect(renderer.forceContextLoss.mock.invocationCallOrder[0]).toBeGreaterThan(
+        renderer.dispose.mock.invocationCallOrder[0]
+    );
 }
 
 describe("ThreeJSViewerComponent cleanup", () => {
@@ -221,7 +230,7 @@ describe("ThreeJSViewerComponent cleanup", () => {
         expectReleased(renderers[0], environments[0]);
     });
 
-    it("control: releases the renderer exactly once after a successful load", async () => {
+    it("releases the renderer and its context exactly once after a successful load", async () => {
         const model = new FakeObject3D();
         model.type = "Mesh";
         mockedLoadFile.mockResolvedValue({ object: model });
