@@ -12,7 +12,7 @@ import { MouseControls } from "./MouseControls";
 import ThreeJSPanel from "./ThreeJSPanel";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import { MaterialLibraryItem } from "./ThreeJSMaterialLibrary";
-import { loadFile } from "./utils/fileLoaders";
+import { isCadSupportError, loadFile } from "./utils/fileLoaders";
 import { preloadGLTFDependencies, cleanupBlobUrls } from "./utils/gltfDependencyLoader";
 import { applySceneEnvironment, applySceneLighting, SceneEnvironment } from "./utils/sceneLighting";
 
@@ -541,13 +541,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 // If no files loaded, show the actual error message
                 if (loadedGroups.length === 0) {
                     // Check if any error is CAD/WASM-related (SharedArrayBuffer, OCCT, etc.)
-                    const cadError = errors.find(
-                        (err) =>
-                            err.error.includes("CAD Format Support Not Available") ||
-                            err.error.includes("CAD format support not enabled") ||
-                            err.error.includes("OCCT library") ||
-                            err.error.includes("SharedArrayBuffer")
-                    );
+                    const cadError = errors.find((err) => isCadSupportError(err.error));
 
                     if (cadError) {
                         // Show CAD/WASM error prominently
@@ -1297,9 +1291,20 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
     };
 
     if (error) {
+        // Keyed apart from the viewer root below so React does not reuse the scene container for
+        // this panel: the renderer's canvas is appended to that container outside React, and a
+        // reused node would keep it above the message.
         return (
             <div
-                style={{ position: "relative", height: "100%", backgroundColor: "#f5f5f5" }}
+                key="threejs-viewer-error"
+                style={{
+                    position: "relative",
+                    height: "100%",
+                    backgroundColor: "#f5f5f5",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                }}
                 id="threejs-viewer-root"
             >
                 <div
@@ -1308,20 +1313,25 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         fontSize: "1.4em",
                         lineHeight: "1.5",
                         maxWidth: "800px",
-                        position: "absolute",
-                        top: "50%",
-                        left: "50%",
-                        transform: "translate(-50%, -50%)",
+                        maxHeight: "100%",
+                        overflowY: "auto",
+                        boxSizing: "border-box",
                         textAlign: "center",
+                        whiteSpace: "pre-line",
                         padding: "20px",
                     }}
                 >
                     {error}
-                    <br />
-                    <br />
-                    <span style={{ fontSize: ".9em", color: "#d13212" }}>
-                        Please ensure the file is a supported 3D format
-                    </span>
+                    {/* A CAD setup message is about the deployment or browser, not the file. */}
+                    {!isCadSupportError(error) && (
+                        <>
+                            <br />
+                            <br />
+                            <span style={{ fontSize: ".9em", color: "#d13212" }}>
+                                Please ensure the file is a supported 3D format
+                            </span>
+                        </>
+                    )}
                 </div>
             </div>
         );
@@ -1329,6 +1339,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
     return (
         <div
+            key="threejs-viewer"
             style={{ position: "relative", height: "100%", width: "100%" }}
             id="threejs-viewer-root"
         >
