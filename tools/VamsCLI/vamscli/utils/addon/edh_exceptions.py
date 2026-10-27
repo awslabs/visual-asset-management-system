@@ -58,6 +58,15 @@ class EdhReservationFullError(EdhOperationError):
     json_fields = {"code": "RESERVATION_FULL"}
 
 
+class EdhDisplaySessionEndedError(EdhOperationError):
+    """Raised when a connect or a Windows sign-in is refused (409 `code` DISPLAY_SESSION_ENDED) because
+    the workstation is running but its remote display session has ended: EDH lists it with a link that
+    signs no one in. The workstation records `connectionUnavailableReason` DISPLAY_SESSION_ENDED; stop
+    it, then start it again, to reconnect."""
+    # Carried into --json-output beside the error, as the API's own error body carries it.
+    json_fields = {"code": "DISPLAY_SESSION_ENDED"}
+
+
 class EdhReservationNotPermittedError(PermissionDeniedError, EdhError):
     """Raised when a launch is refused (403) because the caller's role may see the capacity
     reservation but not launch into it (`code` RESERVATION_NOT_PERMITTED). Both a permission denial,

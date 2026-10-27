@@ -38,14 +38,17 @@ export const WORKSTATION_POLL_STABLE_MS = 20000;
  * (`activity`), a launch EDH has not reported back on, or an active desktop EDH does not yet report
  * connectable. A start the sweep found stalled (`isStartStalled`) is CREATING but not moving: nothing
  * changes until the user stops it or EDH finishes, so it does not hold the list at the fast cadence.
+ * Nor does a running workstation whose remote display session has ended (`connectionUnavailableReason`):
+ * it is not starting, and stays as it is until the user stops it.
  */
 export function isTransitionalWorkstation(
-    row: Pick<WorkstationRecord, "state" | "connectionAvailable" | "activity" | "lastError">
+    row: Pick<WorkstationRecord, "state" | "connectionAvailable" | "activity" | "lastError"> &
+        Partial<Pick<WorkstationRecord, "connectionUnavailableReason">>
 ): boolean {
     return (
         !!row.activity ||
         (row.state === "CREATING" && !isStartStalled(row)) ||
-        (row.state === "ACTIVE" && !row.connectionAvailable)
+        (row.state === "ACTIVE" && !row.connectionAvailable && !row.connectionUnavailableReason)
     );
 }
 
@@ -89,11 +92,15 @@ export function useWorkstations() {
  * a settled call leaves the mutation cache as soon as nothing observes it.
  */
 export function useWorkstationConnect() {
+    const queryClient = useQueryClient();
     return useMutation({
         mutationFn: (sessionId: string) =>
             callService<WorkstationConnection>(() =>
                 workstationService.getWorkstationConnection(sessionId)
             ),
+        // A refused connect may have recorded why on the row (a running desktop whose remote display
+        // session has ended), so the list is re-read and the row's Connect shows the reason.
+        onError: () => queryClient.invalidateQueries({ queryKey: qk.workstations() }),
         gcTime: 0,
     });
 }

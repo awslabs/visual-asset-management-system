@@ -376,9 +376,9 @@ ships an add-on with tools; a fork does not.
     rest `FEATURE_EDH_WORKSTATIONS`. The add-on's list routes return every row in one
     `{"Items": [...]}` page and no `message` envelope, so the tools return the body as it comes,
     without `paginate()` or `unwrap_message()`. `EdhOutcomeUnknownError`,
-    `EdhStartInProgressError`, `EdhReservationFullError` and `EdhReservationNotPermittedError`
-    carry `outcomeUnknown` / `startInProgress` / `code` (`RESERVATION_FULL`,
-    `RESERVATION_NOT_PERMITTED`) in their `json_fields`, which `@tool_result` passes through
+    `EdhStartInProgressError`, `EdhReservationFullError`, `EdhReservationNotPermittedError` and
+    `EdhDisplaySessionEndedError` carry `outcomeUnknown` / `startInProgress` / `code`
+    (`RESERVATION_FULL`, `RESERVATION_NOT_PERMITTED`, `DISPLAY_SESSION_ENDED`) in their `json_fields`, which `@tool_result` passes through
     (Mandatory Rule 5).
 -   Capacity reservations: the catalog items carry `launchAllowed` (false: the role may see the
     reservation but not launch into it; create answers 403 `RESERVATION_NOT_PERMITTED`) and both

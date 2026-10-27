@@ -8,7 +8,8 @@ codes an ORPHANED row keeps in ``lastError`` and the lease-expiry code a STOPPED
 expiry a DELETED row leaves the table by, the form a start's stamp and a credential claim are written
 in and the windows they hold for, when a row's desktop may still be running on a key of its bootstrap,
 the launch worker's payload keys and attempt ceiling, and the EDH schedule VAMS gives every desktop. It
-also reads the reason EDH recorded for a failed launch out of the desktop's recent events, says which
+says whether a running desktop's connection link signs a user in, and why one that does not cannot be
+connected to; it also reads the reason EDH recorded for a failed launch out of the desktop's recent events, says which
 ``lastError`` that reason implies, and when a row is due a read for one; it says when a start EDH accepted has
 stalled, and it names the image a workstation runs: what a launch stores on its row, and the record's image fields
 resolved from the recipe builds. A pure module: no AWS client, no environment read.
@@ -19,6 +20,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Dict, Optional, Tuple
+from urllib.parse import parse_qs, urlsplit
 
 # Session row states.
 STATE_CREATING = "CREATING"
@@ -119,6 +121,19 @@ EDH_SESSION_STATE_STOPPING = "stopping"
 # `running` predates EDH's own update.
 STOP_REQUESTED_FIELD = "stopRequestedAt"
 STOP_SETTLE_SECONDS = 300
+# Why a workstation EDH reports running cannot be connected to (``connectionUnavailableReason``), kept on its row
+# while it stays ACTIVE and running: ``DISPLAY_SESSION_ENDED``, EDH listed the desktop with a link that signs no
+# user in, which it does when the DCV broker holds no session for the desktop. The desktop keeps running and the row
+# stays ACTIVE; a stop and a start, which register a DCV session with the broker again, recover it.
+CONNECTION_UNAVAILABLE_REASON_FIELD = "connectionUnavailableReason"
+CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED = "DISPLAY_SESSION_ENDED"
+CONNECTION_UNAVAILABLE_REASONS = (CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED,)
+DISPLAY_SESSION_ENDED_MESSAGE = ("The workstation is running but its remote display session has ended. "
+                                 "Stop it, then start it again, to reconnect.")
+# The query fields of an EDH connection link that sign a user in: the DCV connection token (the high-scale layout
+# and a standard virtual desktop) or the user name (the high-scale layout and a standard console desktop). EDH's
+# fallback link, and its link for a desktop the broker has not registered, carry neither.
+EDH_CONNECTION_QUERY_FIELDS = ("authToken", "username")
 # The AWS error codes, parsed from the reason EDH recorded for a failed launch, that turn a generic
 # LAUNCH_ERROR on an ORPHANED row into CAPACITY_UNAVAILABLE or QUOTA_EXCEEDED; any other code leaves it.
 CAPACITY_ERROR_CODES = frozenset({
@@ -344,10 +359,58 @@ def schedule_never_auto_starts(value) -> bool:
     return True
 
 
+def connection_string_connectable(value) -> bool:
+    """True only for a connection link whose query carries a non-blank ``authToken`` or ``username``
+    (``EDH_CONNECTION_QUERY_FIELDS``): a link that signs a user in. A link without a query, with neither field, with
+    blank values only, or that does not parse, and anything that is not a non-blank string, is False."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        query = parse_qs(urlsplit(value).query)
+    except ValueError:
+        return False
+    return any(item.strip() for field in EDH_CONNECTION_QUERY_FIELDS for item in query.get(field, []))
+
+
+def connection_verdict(row, desktop) -> Tuple[bool, Optional[str]]:
+    """(whether the desktop can be connected to, why not while EDH reports it running), as EDH's record of it reads
+    against the stored row. Running with a link that signs a user in (``connection_string_connectable``) connects;
+    running with any other link that is not blank is a desktop whose DCV session has ended
+    (``DISPLAY_SESSION_ENDED``); running with an empty link is not connectable, without a reason. A record without
+    the connection-string field (EDH's token-free session-state read, the cluster listing) says nothing of the
+    display session: running connects, save on a row stored ACTIVE that records the session ended, which keeps it
+    until a link or a state other than running says otherwise. Not running is not connectable, without a reason."""
+    if str(desktop.get(EDH_SESSION_STATE_FIELD)).lower() != EDH_SESSION_STATE_RUNNING:
+        return False, None
+    if EDH_CONNECTION_STRING_FIELD not in desktop:
+        if (row.get('state') == STATE_ACTIVE
+                and row.get(CONNECTION_UNAVAILABLE_REASON_FIELD) == CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED):
+            return False, CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED
+        return True, None
+    link = desktop.get(EDH_CONNECTION_STRING_FIELD)
+    if connection_string_connectable(link):
+        return True, None
+    if isinstance(link, str) and link.strip():
+        return False, CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED
+    return False, None
+
+
+def connection_unavailable_reason(row) -> Optional[str]:
+    """Why the workstation cannot be connected to, as its record returns it: the reason its row records while the
+    row is stored ACTIVE, EDH reports it running and it is not connectable; None otherwise, a reason a stop or a
+    delete left on a row included."""
+    reason = row.get(CONNECTION_UNAVAILABLE_REASON_FIELD)
+    if (reason in CONNECTION_UNAVAILABLE_REASONS and row.get('state') == STATE_ACTIVE
+            and not row.get('connectionAvailable')
+            and str(row.get('edhState') or '').lower() == EDH_SESSION_STATE_RUNNING):
+        return reason
+    return None
+
+
 def observed_row_attributes(row, desktop):
     """The row attributes EDH's desktop record implies, limited to those that differ from the row:
-    the session id a row lacks, the raw and mapped state, connectability (running, unless the record
-    carries an empty connection string), the EC2 instance the desktop is placed on (left as stored
+    the session id a row lacks, the raw and mapped state, connectability and the reason a running desktop is not
+    connectable (``connection_verdict``), the EC2 instance the desktop is placed on (left as stored
     while EDH reports none), the launch-error code an ``error`` state carries when the row holds none (a
     code the launch recorded is kept, a stalled start's is not; as is, while the state stays stopped, a code of
     ``STOPPED_ROW_LAST_ERRORS`` with the ``startFailure`` beside it, and, while the state stays CREATING, a stalled
@@ -386,10 +449,9 @@ def observed_row_attributes(row, desktop):
             attributes['startRequestedAt'] = None
         if attributes['state'] in (STATE_ACTIVE, STATE_ORPHANED) and row.get(ACTIVITY_FIELD) is not None:
             attributes[ACTIVITY_FIELD] = None
-    connection_string = desktop.get(EDH_CONNECTION_STRING_FIELD)
-    attributes['connectionAvailable'] = (
-        str(edh_state).lower() == EDH_SESSION_STATE_RUNNING
-        and (EDH_CONNECTION_STRING_FIELD not in desktop or bool(connection_string)))
+    available, reason = connection_verdict(row, desktop)
+    attributes['connectionAvailable'] = available
+    attributes[CONNECTION_UNAVAILABLE_REASON_FIELD] = reason
     return {key: value for key, value in attributes.items() if row.get(key) != value}
 
 
@@ -413,8 +475,9 @@ def workstation_activity(row, now=None) -> Optional[str]:
     still reports it running; ``starting`` for a STOPPED row marked with a start the owner asked for whose stamp
     is still inside ``START_IN_PROGRESS_SECONDS``, for a CREATING row with a session id (a stopped desktop EDH
     has taken a start of, or a new one EDH has placed) unless it records the start stalled (``START_STALLED``: the
-    start is stuck, no longer under way), and for an ACTIVE row whose desktop is not connectable yet; None
-    otherwise, and always for a DELETED or ORPHANED row. Pure: it reads only the row and ``now``."""
+    start is stuck, no longer under way), and for an ACTIVE row whose desktop is not connectable yet, unless it
+    records the desktop's display session ended (``connection_unavailable_reason``: the desktop is running, not
+    starting); None otherwise, and always for a DELETED or ORPHANED row. Pure: it reads only the row and ``now``."""
     now = now or datetime.now(timezone.utc)
     state = row.get('state')
     if state in (STATE_DELETED, STATE_ORPHANED):
@@ -432,7 +495,8 @@ def workstation_activity(row, now=None) -> Optional[str]:
         return None
     if state == STATE_CREATING and row.get('sessionId'):
         return None if row.get('lastError') == LAST_ERROR_START_STALLED else ACTIVITY_STARTING
-    if state == STATE_ACTIVE and not row.get('connectionAvailable'):
+    if (state == STATE_ACTIVE and not row.get('connectionAvailable')
+            and connection_unavailable_reason(row) is None):
         return ACTIVITY_STARTING
     return None
 

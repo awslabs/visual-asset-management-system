@@ -191,7 +191,8 @@ class TestWindowsSignIn:
         assert response["statusCode"] == 200
         assert response_body(response)["directoryAccount"] is True
 
-    @pytest.mark.parametrize("query", ["authToken=s3cr3t", "authToken=s3cr3t&username=", "username=%20%20"])
+    @pytest.mark.parametrize("query", ["authToken=s3cr3t", "authToken=s3cr3t&username=",
+                                       "authToken=s3cr3t&username=%20%20"])
     def test_without_a_username_value_the_session_owner_signs_in(self, monkeypatch, query):
         desktop = _desktop(connection_string=_url(query), owner="vowner1234567890")
         fakes = _installed(monkeypatch, desktop=desktop)
@@ -208,14 +209,16 @@ class TestWindowsSignIn:
 
         assert response_body(response)["username"] == edh_uid_for(USER)
 
-    def test_a_connection_string_that_does_not_parse_falls_back_to_the_owner(self, monkeypatch):
+    def test_a_connection_string_that_does_not_parse_signs_no_one_in(self, monkeypatch):
+        # A link that does not parse is no link connect would connect to (D20): no account, no password.
         desktop = _desktop(connection_string="https://[bad/?username=x", owner="vowner1234567890")
         fakes = _installed(monkeypatch, desktop=desktop)
 
         response = _sign_in(fakes)
 
-        assert response["statusCode"] == 200
-        assert response_body(response)["username"] == "vowner1234567890"
+        assert response["statusCode"] == 409
+        assert response_body(response)["code"] == "DISPLAY_SESSION_ENDED"
+        assert PASSWORD not in response["body"] and "vowner1234567890" not in response["body"]
 
     @pytest.mark.parametrize("password", ["missing", None, "", "   ", 123])
     def test_a_desktop_without_a_password_is_not_available_yet(self, monkeypatch, password):

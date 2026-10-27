@@ -214,6 +214,30 @@ describe("ConnectLink", () => {
         expect(screen.getByText("The launch did not complete.")).toBeVisible();
     });
 
+    it("tells the owner of a running workstation whose display session ended to stop and start it", async () => {
+        const user = userEvent.setup();
+        const sentence =
+            "The workstation is running but its remote display session has ended. Stop it, then start it again, to reconnect.";
+        render(
+            <ConnectLink
+                row={row({
+                    connectionAvailable: false,
+                    connectionUnavailableReason: "DISPLAY_SESSION_ENDED",
+                })}
+            />
+        );
+
+        const control = screen.getByRole("button", { name: "Connect" });
+        expect(control).toHaveAttribute("aria-disabled", "true");
+        expect(control).toHaveAccessibleDescription(sentence);
+        expect(screen.getByText(sentence)).toBeVisible();
+        await user.click(control);
+        expect(connect.mutateAsync).not.toHaveBeenCalled();
+        expect(
+            connectUnavailableReason(row({ connectionUnavailableReason: "DISPLAY_SESSION_ENDED" }))
+        ).toBe(sentence);
+    });
+
     it("gives every non-connectable state a reason", () => {
         expect(
             connectUnavailableReason(row({ state: "DELETED", connectionAvailable: false }))

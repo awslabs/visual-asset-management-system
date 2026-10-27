@@ -16,8 +16,15 @@ interface ConnectLinkProps {
     row: WorkstationRecord;
 }
 
+/** What a running workstation whose remote display session has ended shows under its inert Connect. */
+export const DISPLAY_SESSION_ENDED_MESSAGE =
+    "The workstation is running but its remote display session has ended. Stop it, then start it again, to reconnect.";
+
 /** Why Connect is inert for a row that cannot be connected to yet, or any more. */
 export function connectUnavailableReason(row: WorkstationRecord): string {
+    if (row.connectionUnavailableReason === "DISPLAY_SESSION_ENDED") {
+        return DISPLAY_SESSION_ENDED_MESSAGE;
+    }
     switch (row.state) {
         case "ORPHANED":
             return "The launch did not complete.";

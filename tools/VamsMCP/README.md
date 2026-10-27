@@ -603,6 +603,11 @@ enables the add-on:
 session auth token (see the security notes below) — so it is exposed with the writes rather
 than always available, and it is never in `autoApprove`. A workstation that is
 not connectable (CREATING, STOPPED, or without an EDH session) is refused with a 409.
+A running workstation whose remote display session has ended is refused with a
+409 returned as `error_type` `EdhDisplaySessionEndedError`, `code`
+`DISPLAY_SESSION_ENDED`: stop it, then start it again, to reconnect. Its record
+then carries `connectionUnavailableReason` `DISPLAY_SESSION_ENDED` (null
+otherwise), and its `activity` is null: it is running, not starting.
 Each call makes EDH issue at most one connection token per request EDH answers,
 for that desktop; VAMS repeats a read once after a transport failure or a gateway
 error, which can make a second. `list_edh_workstations` and `get_edh_workstation`

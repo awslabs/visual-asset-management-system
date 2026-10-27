@@ -112,6 +112,13 @@ STALLED_LABEL = 'STALLED'
 START_STALLED_MESSAGE = (
     "EDH has not finished starting this workstation after 30 minutes. Stop it, then start it again; if "
     "it stalls again, ask your administrator.")
+# A running workstation whose remote display session has ended (D20): the record carries
+# connectionUnavailableReason DISPLAY_SESSION_ENDED, `get` prints the sentence the web shows under its inert
+# Connect, and `connect` is refused (409) with it.
+DISPLAY_SESSION_ENDED_CODE = 'DISPLAY_SESSION_ENDED'
+DISPLAY_SESSION_ENDED_MESSAGE = (
+    "The workstation is running but its remote display session has ended. Stop it, then start it again, "
+    "to reconnect.")
 
 # The `get` record's label column: a continuation line of a value starts under the value.
 RECORD_VALUE_INDENT = ' ' * 19
@@ -481,6 +488,8 @@ def format_workstation(result: Dict[str, Any]) -> str:
     lines.append(f"  Created At:      {result.get('createdAt', 'N/A')}")
     lines.append(f"  Updated At:      {result.get('updatedAt', 'N/A')}")
     lines.append(f"  Connectable:     {result.get('connectionAvailable', 'N/A')}")
+    if result.get('connectionUnavailableReason') == DISPLAY_SESSION_ENDED_CODE:
+        lines.append(f"  Connection:      {DISPLAY_SESSION_ENDED_MESSAGE}")
     lines.append(f"  Lease Expires:   {result.get('leaseExpiresAt') or 'none'}")
     lines.append(f"  Lease Stopped:   {result.get('leaseStoppedAt') or 'none'}")
     lines.append(f"  Lease Hours:     {result.get('leaseHoursAtLaunch') or 'N/A'}")
@@ -893,7 +902,9 @@ def connect(ctx: click.Context, session_id: str, show_windows_password: bool, js
     """Fetch the DCV connection details for one of your ACTIVE workstations.
 
     The response is sessionId, connectionUrl and osFamily. A workstation that is not connectable yet
-    (still CREATING, STOPPED, or without an EDH session) is refused with HTTP 409.
+    (still CREATING, STOPPED, or without an EDH session) is refused with HTTP 409. So is a running
+    workstation whose remote display session has ended (code DISPLAY_SESSION_ENDED; `get` shows it as
+    Connection): stop it, then start it again, to reconnect.
 
     The connection URL carries a session credential, so in CLI mode only the DCV host is printed.
     Use --json-output to receive the full connectionUrl; it is written to stdout, so it lands in your

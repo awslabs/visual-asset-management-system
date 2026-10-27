@@ -64,6 +64,8 @@ WORKSTATION_ACTIVITIES = ('starting', 'stopping')
 # Why a workstation that asked for a capacity reservation runs on-demand: the reservation was full at launch, or
 # had ended when the stopped workstation was started.
 CAPACITY_RESERVATION_FALLBACK_REASONS = ('full', 'ended')
+# Why a workstation EDH reports running cannot be connected to: its remote display session has ended.
+CONNECTION_UNAVAILABLE_REASONS = ('DISPLAY_SESSION_ENDED',)
 
 AMI_RECIPE_KINDS = ('vdi', 'simulation')
 EDH_ARCHITECTURES = ('x86_64', 'arm64')
@@ -181,6 +183,10 @@ class WorkstationRecordModel(BaseModel, extra='ignore'):
     createdAt: str
     updatedAt: str
     connectionAvailable: bool = False
+    # Why a workstation EDH reports running cannot be connected to: ``DISPLAY_SESSION_ENDED``, its remote display
+    # session has ended (a stop and a start recover it). Returned only while the row is ACTIVE and running and not
+    # connectable, never a stale value a stop or a delete left on the row; None otherwise.
+    connectionUnavailableReason: Optional[str] = None
     # Launch bookkeeping kept by the launch worker: the generic error code of a definite refusal
     # and the number of launch starts made for the row.
     lastError: Optional[str] = None
@@ -228,6 +234,7 @@ class WorkstationRecordModel(BaseModel, extra='ignore'):
         _require_one_of(values, 'osFamily', EDH_OS_FAMILIES)
         _require_one_of(values, 'activity', WORKSTATION_ACTIVITIES)
         _require_one_of(values, 'capacityReservationFallbackReason', CAPACITY_RESERVATION_FALLBACK_REASONS)
+        _require_one_of(values, 'connectionUnavailableReason', CONNECTION_UNAVAILABLE_REASONS)
         return values
 
 
