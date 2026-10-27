@@ -147,7 +147,6 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **RapidPipeline EKS task timeout** — The workflow waits up to 23400 seconds (6.5 hours) for the pipeline, 30 minutes longer than the pipeline's state machine can run, so it is still waiting when the pipeline reports its outcome. Synthesis rejects a `useEks.jobTimeout` above 14400 seconds or one whose longest run, the job plus the steps around it, does not fit in the 6-hour state machine timeout. (issue #745)
 -   **RapidPipeline ECS task timeout** — The AWS Fargate task is bounded at 4 hours 44 minutes and the whole run at 5 hours. A task still running at its bound is stopped, and the run fails and sends the workflow the failure, also when the stop itself fails. The workflow waits up to 19800 seconds (5.5 hours) for the pipeline, 30 minutes longer than the run can take, so it is still waiting when the pipeline reports its outcome. With `useEcs.autoRegisterWithVAMS` on, the next deployment re-registers the built-in pipeline, replacing edits made to it. (issues #756, #805)
 -   **The USD viewer requests only the files a `.usdz` package lacks** — The Needle USD viewer requests from the asset only the dependencies a `.usdz` package does not contain, and only paths within the asset, instead of requesting every file stored in the package and free text from its comments. (issue #799)
--   **Turning on the customer managed key for an existing deployment** — The default role, constraint, user and metadata schema seeds wait for the policy that grants their role the new AWS KMS key, so the update completes instead of failing with `kms:Decrypt` access denied and rolling back the core stack. (issue #841)
 
 **Other changes:**
 
@@ -219,6 +218,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **External OAuth token requirements documented** — The configuration reference and the FAQ state that the authorizer requires the access token's `aud` claim to equal `lambdaAuthorizorJWTAudience`, which claims identify the user, and that an Amazon Cognito user pool cannot be used as the external identity provider. (issue #788)
 -   **CLI lists Cognito users** — `vamscli user cognito list` lists the user pool's users instead of reporting that none were found, with and without `--auto-paginate`; the auto-paginated JSON result lists them under `users`, the key the API returns. (issue #808)
 -   **CLI `--confirm` works in scripts** — Destructive commands that require `--confirm` (asset, database, role, constraint, role user and Cognito user deletion, and sync deletions) ask their additional confirmation question only in an interactive terminal, so in a script, pipe or CI job `--confirm` alone proceeds instead of the command cancelling and deleting nothing. (issue #809)
+-   **Turning on the customer managed key for an existing deployment** — The default role, constraint, user and metadata schema seeds wait for the policy that grants their role the new AWS KMS key, so the update completes instead of failing with `kms:Decrypt` access denied and rolling back the core stack. (issue #841)
 
 **Other changes:**
 
