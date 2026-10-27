@@ -317,12 +317,13 @@ function callsIn(body: string): PyCall[] {
 }
 
 /**
- * Whether a call queries a secondary index: `IndexName` among its arguments, or a `**kwargs` splat
- * of a dict the body builds with an `IndexName` entry.
+ * Whether a call queries a secondary index: `IndexName` among its arguments, or a dict the body
+ * builds with an `IndexName` entry passed to it — as a `**kwargs` splat, or whole to a paging
+ * helper (`listing.query_page(table, query_kwargs, ...)`).
  */
 function queriesIndex(call: PyCall, body: string): boolean {
     if (/\bIndexName\b/.test(call.args)) return true;
-    for (const splat of call.args.matchAll(/\*\*(\w+)/g)) {
+    for (const splat of call.args.matchAll(/(?:\*\*)?(?<![\w.=])(\w+)\s*(?=,|$)/g)) {
         const name = escape(splat[1]);
         for (const literal of body.matchAll(new RegExp(`(?<![\\w.])${name}\\s*=\\s*\\{`, "g"))) {
             const { inner } = balanced(body, literal.index! + literal[0].length - 1);
@@ -698,8 +699,10 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
         expect(quarantine.get("ASSET_STORAGE_TABLE")).toMatchObject({ write: false });
 
         const cascade = deriveNeeds("handlers.compliance.complianceCascadeService");
+        // The asset-state table is read for the asset's name an audit entry records.
         expect([...cascade.keys()].sort()).toEqual([
             "ASSET_STORAGE_TABLE",
+            "COMPLIANCE_ASSET_STATE_STORAGE_TABLE",
             "COMPLIANCE_AUDIT_STORAGE_TABLE",
             "COMPLIANCE_CASCADE_STORAGE_TABLE",
         ]);

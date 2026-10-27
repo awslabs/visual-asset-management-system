@@ -356,6 +356,9 @@ export function buildComplianceCascadeServiceFunction(
     storageResources.dynamo.complianceAuditStorageTable.grantReadWriteData(fun);
     // The trigger asset's existence is checked on the asset row before a cascade is created.
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    // An audit entry records the asset's name at the time of the event, read from its compliance
+    // record when the caller does not pass it.
+    storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
