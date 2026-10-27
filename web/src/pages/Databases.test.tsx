@@ -6,11 +6,11 @@
 /**
  * The Databases page serves a caller who may only list databases. The Compliance Admin template
  * grants `GET /database` and no other database route: the page lists the role's database with the
- * Compliance column link, offers no Create, Edit or Delete Selected action the caller cannot call,
- * and never requests the administrator-only bucket listing (`GET /buckets`), which the
- * create/edit modal reads only once it is opened. The database name links to the database's
- * assets page only when the caller may call the route that page lists from; otherwise it links
- * to the compliance page, or is not a link.
+ * compliance page link beneath its name, offers no Create, Edit or Delete Selected action the
+ * caller cannot call, and never requests the administrator-only bucket listing (`GET /buckets`),
+ * which the create/edit modal reads only once it is opened. The database name links to the
+ * database's assets page only when the caller may call the route that page lists from; otherwise
+ * it links to the compliance page, or is not a link.
  */
 import React from "react";
 import { render, screen, waitFor, fireEvent, within, act } from "@testing-library/react";
