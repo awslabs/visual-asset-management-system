@@ -3,6 +3,7 @@ from flask import Flask, Blueprint, request, redirect, url_for, make_response
 import jwt as pyjwt
 
 from handlers.auth import routes as routes_api
+from common.apiRoutes import get_public_api_routes
 
 from localMockData.mockRoles import mockRoles
 
@@ -50,9 +51,21 @@ def secureConfig():
     'bucket': 'TODO'
   }
 
+def _allow_all_routes():
+  return os.environ.get('ALLOW_ALL_ROUTES', 'true').lower() in ('1', 'true', 'yes')
+
 @vams.route('/auth/routes/api/allowed', methods=['GET'])
 def allowedApiRoutes():
-  # Local-dev: report no specific allowed-API-routes restriction.
+  # Local-dev default: report every public API route as allowed, matching the POST /auth/routes
+  # mock, so capability-gated UI renders. ALLOW_ALL_ROUTES=false reports none.
+  if _allow_all_routes():
+    return {
+      'routes': [
+        {'path': route.path, 'methods': list(route.methods), 'category': route.category}
+        for route in get_public_api_routes()
+      ],
+      'userId': 'vams-test-user',
+    }
   return {'routes': []}
 
 @vams.route('/auth/loginProfile/<userId>', methods=['POST'])
@@ -86,7 +99,7 @@ def routes():
   # Local-dev default: allow every requested web route so all pages render
   # (the mock test user has no Casbin roles, which would otherwise gate every
   # page out). Set ALLOW_ALL_ROUTES=false to delegate to the real handler.
-  if os.environ.get('ALLOW_ALL_ROUTES', 'true').lower() in ('1', 'true', 'yes'):
+  if _allow_all_routes():
     requested = (routes or {}).get('routes', [])
     return {'allowedRoutes': requested}
 

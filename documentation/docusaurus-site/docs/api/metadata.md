@@ -169,12 +169,13 @@ Adds new metadata items to an asset. Supports bulk creation of multiple items in
 
 **Error Responses:**
 
-| Status | Description                                                         |
-| ------ | ------------------------------------------------------------------- |
-| `400`  | Invalid parameters, validation error, or schema validation failure. |
-| `403`  | Not authorized to create metadata for this asset.                   |
-| `404`  | Asset not found.                                                    |
-| `500`  | Internal server error.                                              |
+| Status | Description                                                                                |
+| ------ | ------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters, validation error, or schema validation failure.                        |
+| `403`  | Not authorized to create metadata for this asset.                                          |
+| `404`  | Asset not found.                                                                           |
+| `500`  | Internal server error.                                                                     |
+| `503`  | The existing record count could not be checked, so nothing was written. Retry the request. |
 
 ---
 
@@ -384,12 +385,13 @@ Returns a bulk operation response (same format as asset metadata).
 
 **Error Responses:**
 
-| Status | Description              |
-| ------ | ------------------------ |
-| `400`  | Invalid parameters.      |
-| `403`  | Not authorized.          |
-| `404`  | Asset or file not found. |
-| `500`  | Internal server error.   |
+| Status | Description                                                                                |
+| ------ | ------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters.                                                                        |
+| `403`  | Not authorized.                                                                            |
+| `404`  | Asset or file not found.                                                                   |
+| `500`  | Internal server error.                                                                     |
+| `503`  | The existing record count could not be checked, so nothing was written. Retry the request. |
 
 ---
 
@@ -550,12 +552,13 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description                                      |
-| ------ | ------------------------------------------------ |
-| `400`  | Invalid parameters or schema validation failure. |
-| `403`  | Not authorized.                                  |
-| `404`  | Database not found.                              |
-| `500`  | Internal server error.                           |
+| Status | Description                                                                                |
+| ------ | ------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or schema validation failure.                                           |
+| `403`  | Not authorized.                                                                            |
+| `404`  | Database not found.                                                                        |
+| `500`  | Internal server error.                                                                     |
+| `503`  | The existing record count could not be checked, so nothing was written. Retry the request. |
 
 ---
 
@@ -703,12 +706,13 @@ Returns a bulk operation response.
 
 **Error Responses:**
 
-| Status | Description                             |
-| ------ | --------------------------------------- |
-| `400`  | Invalid parameters or validation error. |
-| `403`  | Not authorized.                         |
-| `404`  | Asset link not found.                   |
-| `500`  | Internal server error.                  |
+| Status | Description                                                                                |
+| ------ | ------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or validation error.                                                    |
+| `403`  | Not authorized.                                                                            |
+| `404`  | Asset link not found.                                                                      |
+| `500`  | Internal server error.                                                                     |
+| `503`  | The existing record count could not be checked, so nothing was written. Retry the request. |
 
 ---
 

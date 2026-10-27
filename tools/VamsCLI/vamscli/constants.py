@@ -195,10 +195,15 @@ MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 DEFAULT_PARALLEL_UPLOADS = 10
 DEFAULT_RETRY_ATTEMPTS = 3
 
-# New Backend Upload Limits (v2.2+)
+# Upload limits. MAX_PART_SIZE and MAX_UPLOADS_PER_USER_PER_MINUTE are Amazon S3 and backend
+# limits. The other three are this client's own batch sizes: each stays within the backend's
+# per-request caps (MAX_FILES_PER_UPLOAD_REQUEST, MAX_PARTS_PER_FILE and
+# MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST in backend/backend/models/assetsV3.py). One file is
+# initialized in one request, so MAX_PARTS_PER_FILE also bounds the largest file (1,000 parts
+# of DEFAULT_CHUNK_SIZE_LARGE).
 MAX_FILES_PER_REQUEST = 50  # Maximum files per upload request
-MAX_TOTAL_PARTS_PER_REQUEST = 200  # Maximum total parts across all files
-MAX_PARTS_PER_FILE = 200  # Maximum parts per individual file
+MAX_TOTAL_PARTS_PER_REQUEST = 1000  # Maximum total parts across all files in one request
+MAX_PARTS_PER_FILE = 1000  # Maximum parts per individual file
 MAX_PART_SIZE = 5 * 1024 * 1024 * 1024  # 5GB maximum part size (S3 limit)
 MAX_UPLOADS_PER_USER_PER_MINUTE = 20  # Rate limit for upload initialization
 

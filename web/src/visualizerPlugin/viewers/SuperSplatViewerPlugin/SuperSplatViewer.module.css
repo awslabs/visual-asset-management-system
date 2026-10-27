@@ -26,7 +26,8 @@
     justify-content: center;
     flex-direction: column;
     gap: 12px;
-    color: var(--vams-text-secondary, #b5b5b5);
+    /* The overlay is dark in both themes, so its text colour is fixed too (about 8.4:1). */
+    color: #b5b5b5;
     background: #1b1b1b;
     font-size: 14px;
     text-align: center;

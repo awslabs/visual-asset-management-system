@@ -138,7 +138,7 @@ The `isDistributable` boolean controls whether the content of an asset's files l
 -   When `true`, users with appropriate permissions can generate download URLs for the asset's files, stream them, and view them in the visualizer.
 -   When `false`, the API refuses every operation that serves file content -- download URL generation, file streaming, and the auxiliary preview stream -- regardless of the user's role permissions.
 
-This flag provides content-level distribution control independent of the permission system.
+This flag provides content-level distribution control independent of the permission system. The API and the web interface both treat an asset record without the flag as not distributable.
 
 The flag governs file **content**, not the asset's existence. An asset marked as not distributable still appears in listings and search results, and its metadata, file listing, version history, and comments remain readable to users whose permissions allow it.
 

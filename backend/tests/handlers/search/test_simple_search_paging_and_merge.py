@@ -57,6 +57,16 @@ def _boto_client(name, *args, **kwargs):
     return MagicMock()
 
 
+def _parent_asset_rows(dynamodb_resource, table_name, keys, **kwargs):
+    """batch_get_items stand-in: one asset row per requested key, none unresolved."""
+    rows = [
+        {"databaseId": key["databaseId"], "assetId": key["assetId"], "assetName": key["assetId"],
+         "assetType": ".glb", "tags": []}
+        for key in keys
+    ]
+    return rows, []
+
+
 @pytest.fixture
 def search_module():
     """The real search module, loaded by file path with boto3 stubbed.
@@ -80,6 +90,8 @@ def search_module():
 
     dynamodb_stub = types.ModuleType("common.dynamodb")
     dynamodb_stub.validate_pagination_info = MagicMock()
+    # File hits are checked against their parent asset's row; every parent resolves.
+    dynamodb_stub.batch_get_items = MagicMock(side_effect=_parent_asset_rows)
     sys.modules["common.dynamodb"] = dynamodb_stub
 
     try:
@@ -106,6 +118,7 @@ def _hit(index_type, ordinal, score):
         "_source": {
             "str_rectype": index_type,
             "str_databaseid": "db1",
+            "str_assetid": f"asset-{ordinal:04d}",
             "str_assetname": f"{index_type}-{ordinal:04d}",
             "list_tags": [],
         },

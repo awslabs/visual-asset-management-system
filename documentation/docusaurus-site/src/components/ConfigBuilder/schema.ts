@@ -93,6 +93,8 @@ export const SECTIONS: Section[] = [
 // --- Visibility predicates (shared) ---
 const albEnabled = (c: ConfigShape) => !!getByPath(c, "app.useAlb.enabled");
 const cfCustomDomain = (c: ConfigShape) => !!getByPath(c, "app.useCloudFront.customDomain.enabled");
+const apiCustomDomain = (c: ConfigShape) =>
+    !!getByPath(c, "app.api.apiGatewayRest.customDomain.enabled");
 const provisioned = (c: ConfigShape) => !!getByPath(c, "app.openSearch.useProvisioned.enabled");
 const serverless = (c: ConfigShape) => !!getByPath(c, "app.openSearch.useServerless.enabled");
 const oauthEnabled = (c: ConfigShape) =>
@@ -1724,6 +1726,42 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: (c) => getByPath(c, "app.api.apiGatewayRest.endpointType") === "PRIVATE",
     },
     {
+        path: "app.api.apiGatewayRest.customDomain.enabled",
+        label: "API custom domain",
+        input: "boolean",
+        section: "api-webui",
+        advanced: true,
+        help: "Serves the REST API at https://{domain host}/api/ through a Regional API Gateway custom domain name. The web app and a new VamsCLI setup use this URL. Commercial and GovCloud partitions only; not available with a PRIVATE endpoint.",
+    },
+    {
+        path: "app.api.apiGatewayRest.customDomain.domainHost",
+        label: "API domain host",
+        input: "text",
+        section: "api-webui",
+        advanced: true,
+        placeholder: "api.vams.example.com",
+        help: "Lowercase host name, no scheme or path.",
+        visibleWhen: apiCustomDomain,
+    },
+    {
+        path: "app.api.apiGatewayRest.customDomain.certificateArn",
+        label: "API certificate ARN (deployment Region)",
+        input: "text",
+        section: "api-webui",
+        advanced: true,
+        help: "ACM certificate ARN for the domain host, in the deployment Region.",
+        visibleWhen: apiCustomDomain,
+    },
+    {
+        path: "app.api.apiGatewayRest.customDomain.optionalHostedZoneId",
+        label: "API hosted zone ID (optional)",
+        input: "text",
+        section: "api-webui",
+        advanced: true,
+        help: "When set, VAMS creates Route 53 A and AAAA alias records for the domain host in this hosted zone.",
+        visibleWhen: apiCustomDomain,
+    },
+    {
         path: "app.webUi.optionalBannerHtmlMessage",
         label: "Web UI banner HTML message",
         input: "text",
@@ -1745,7 +1783,7 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "api-webui",
         advanced: true,
-        help: "Registers http://localhost:3001 as a Cognito callback and logout URL so a locally run web front can complete a federated sign-in. Read only when Cognito SAML or OIDC federation is enabled. Leave off for a deployment that serves real users.",
+        help: "Registers http://localhost:3001 as a Cognito callback and logout URL so a locally run web front can complete a federated sign-in. The callback URLs are read only when Cognito SAML or OIDC federation is enabled. In every authentication mode it also admits http://localhost:3001 as a referer for the Amazon Location Service map key. Leave off for a deployment that serves real users.",
     },
 
     // ===== Metadata schema auto-load =====

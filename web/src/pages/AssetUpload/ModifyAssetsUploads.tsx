@@ -15,7 +15,6 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { AssetDetail } from "./AssetUpload";
 import { useLocation, useNavigate, useParams } from "react-router";
-import localforage from "localforage";
 import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUploadTable";
 import Synonyms from "../../synonyms";
 import { Link } from "@cloudscape-design/components";
@@ -311,20 +310,6 @@ export default function ModifyAssetsUploadsPage() {
         }
     }, [keyPrefix, previewFile]);
 
-    // Save to localforage when assetDetail changes
-    useEffect(() => {
-        if (assetDetail && assetDetail.assetId) {
-            localforage
-                .setItem(assetDetail.assetId, assetDetail)
-                .then(() => {
-                    console.log("Asset detail saved to local storage");
-                })
-                .catch((error) => {
-                    console.error("Error saving asset detail to local storage:", error);
-                });
-        }
-    }, [assetDetail]);
-
     // Handle file selection
     const handleFileSelection = useCallback(
         async (directoryHandle: any, fileHandles: any[]) => {
@@ -534,7 +519,7 @@ export default function ModifyAssetsUploadsPage() {
                                         <Alert header="File Upload Restrictions" type="warning">
                                             <SpaceBetween direction="vertical" size="xs">
                                                 <div>
-                                                    {`This ${Synonyms.database} has file upload restrictions in place.`}
+                                                    {`This ${Synonyms.database} has file upload restrictions in place.`}{" "}
                                                     Only files with the following extensions are
                                                     allowed:
                                                 </div>
@@ -617,7 +602,7 @@ export default function ModifyAssetsUploadsPage() {
                                                     <li>
                                                         You cannot upload a preview file for a file
                                                         that is not part of this upload or is
-                                                        already
+                                                        already{" "}
                                                         {`uploaded as part of the ${Synonyms.asset}.`}
                                                     </li>
                                                     <li>

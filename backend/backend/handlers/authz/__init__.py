@@ -59,6 +59,12 @@ DEFAULT_ROLE_NAME = os.environ.get("DEFAULT_ROLE_NAME", "").strip()
 #
 POLICY_TEXT_DENY_ALL = "g,,\0,*,deny\np,,,*,deny"
 
+# Archived assets and deleted databases are stored under "<databaseId>#deleted". Authorization
+# allows such a record only when it passes both on its stored id and on its database id
+# (CasbinEnforcerService.enforce, _evaluated_database_id).
+#
+ARCHIVED_DATABASE_ID_SUFFIX = "#deleted"
+
 # Tracks users and their policy_text (which could span multiple roles)
 #
 casbin_user_policy_map = {} if CASBIN_NO_DICTIONARY_LOCKING else locked_dict.LockedDict()
@@ -881,6 +887,29 @@ class CasbinEnforcerService:
         allowed = set(valid_fields) | ALWAYS_ALLOWED_OBJECT_KEYS
         return {k: v for k, v in obj.items() if k in allowed}
 
+    @staticmethod
+    def _evaluated_database_id(obj):
+        """The object with an archived record's databaseId replaced by the database it belongs to.
+
+        Archiving an asset and deleting a database both rewrite the record under the partition key
+        ``<databaseId>#deleted``, and the listings and single-record reads that include archived
+        records hand that stored id to ``enforce()``. ``enforce()`` decides such a record in two
+        forms: the copy returned here, and the record as stored. It is allowed only when both are
+        allowed, so a rule on the database id (``equals dbX``) denies its archived records as it
+        denies its live ones, and a rule naming the stored id (``equals dbX#deleted``) still applies
+        to it. Granting archived records therefore takes an allow that covers both forms. Database
+        ids cannot contain ``#`` (``id_pattern``), so the suffix is unambiguous; every trailing
+        occurrence is removed, so a repeated suffix is decided on the same database. A copy is
+        returned and the caller's object is not modified; an object without the suffix is returned
+        unchanged (the same object).
+        """
+        database_id = obj.get("databaseId")
+        if isinstance(database_id, str) and database_id.endswith(ARCHIVED_DATABASE_ID_SUFFIX):
+            while database_id.endswith(ARCHIVED_DATABASE_ID_SUFFIX):
+                database_id = database_id[: -len(ARCHIVED_DATABASE_ID_SUFFIX)]
+            return {**obj, "databaseId": database_id}
+        return obj
+
     def enforce(self, obj, act):
         """
         Enforce authorization (audit logging handled by wrapper).
@@ -905,6 +934,11 @@ class CasbinEnforcerService:
         # Ignore fields out of scope for this object's type so deprecated or foreign
         # fields cannot influence a match. Unknown/absent types are left unchanged.
         obj = self._scrub_object_fields(obj)
+        # An archived record must also pass on the database it belongs to; the stored record is
+        # then decided below as for any other object.
+        evaluated = self._evaluated_database_id(obj)
+        if evaluated is not obj and not self.enforce(evaluated, act):
+            return False
 
         enhanced_object = PERMISSION_CONSTRAINT_FIELDS.copy()
         # Update with obj, but convert any None values to empty strings to prevent regex errors

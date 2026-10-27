@@ -179,6 +179,25 @@ describe("BabylonJSGaussianSplatViewerComponent", () => {
         expect(container.querySelectorAll("canvas")).toHaveLength(1);
     });
 
+    it("removes only the color picker containers from the page, not other sp- classes", async () => {
+        const note = document.createElement("div");
+        note.className = "csp-note";
+        const picker = document.createElement("div");
+        picker.className = "sp-container";
+        document.body.append(note, picker);
+        jest.useFakeTimers();
+        try {
+            const { unmount } = render(<BabylonJSGaussianSplatViewerComponent {...props} />);
+            jest.advanceTimersByTime(1000);
+            expect(document.body.contains(picker)).toBe(false);
+            expect(document.body.contains(note)).toBe(true);
+            unmount();
+        } finally {
+            jest.useRealTimers();
+            note.remove();
+        }
+    });
+
     it("names the rendering surface for assistive technology", async () => {
         const { container } = render(<BabylonJSGaussianSplatViewerComponent {...props} />);
 
