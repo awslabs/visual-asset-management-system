@@ -8,7 +8,7 @@
  *
  * A scoped rule exclusion sets named managed rules to count inside their group and adds one VAMS
  * rule that blocks on their labels everywhere except under the exclusion's URI path prefixes. The
- * enabled add-ons supply the regional ACL's exclusions through `addonWafRuleExclusions()`; the
+ * enabled add-ons supply both web ACLs' exclusions through `addonWafRuleExclusions()`; the
  * fixture exclusion here has the same shape, two Common Rule Set body rules relaxed under one
  * prefix.
  *
@@ -34,8 +34,8 @@
  *   * an exclusion with no path prefix relaxes nothing and reports no unrelaxed rule;
  *   * the explicit-rules and legacy count-only paths ignore exclusions;
  *   * `buildWafStacks()` keeps the stack names, Regions and origin verification wiring, applies the
- *     add-on exclusions to the regional web ACL only, and with no add-on exclusion builds both web
- *     ACLs from the policy alone.
+ *     add-on exclusions to both web ACLs, and with no add-on exclusion builds both web ACLs from the
+ *     policy alone.
  */
 
 import { readFileSync } from "fs";
@@ -1150,7 +1150,7 @@ describe("buildWafStacks", () => {
         expect(aclOf(stacks.regional).Properties.Rules).toEqual(aclOf(reference).Properties.Rules);
     });
 
-    test("applies the add-on exclusions to the regional web ACL only", () => {
+    test("applies the add-on exclusions to both web ACLs", () => {
         jest.spyOn(addonWafExclusions, "addonWafRuleExclusions").mockReturnValue(fixtureExclusions);
         const app = newTestApp();
         const config = withCloudFront();
@@ -1159,24 +1159,36 @@ describe("buildWafStacks", () => {
         const stacks = buildWafStacks(app, config, originVerify)!;
         // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         const cloudfront = stacks.cloudfront!;
-        const edgeReference = policyOnlyStack(
-            app,
-            cloudfront,
-            WAFScope.CLOUDFRONT,
-            config.wafPolicyJSON
-        );
+
+        // A request to `<distribution>/api/*` meets the CloudFront ACL first, on the viewer's path,
+        // which CloudFront forwards to the stage with no origin path; without the exclusions there it
+        // would be blocked before the regional ACL saw it.
+        const edgeReference = new cdk.Stack(app, "EdgeWithExclusions", {
+            env: { account: cloudfront.account, region: cloudfront.region },
+        });
+        new Wafv2BasicConstruct(edgeReference, "Waf", {
+            wafScope: WAFScope.CLOUDFRONT,
+            wafPolicy: config.wafPolicyJSON,
+            scopedRuleExclusions: fixtureExclusions,
+        });
 
         const regional = aclOf(stacks.regional);
-        expect(ruleNamed(regional, REBLOCK_RULE)?.Action).toEqual({ Block: {} });
-        expect(overridesOf(regional)).toEqual(
-            expect.arrayContaining([
-                { Name: SSRF_RULE, ActionToUse: { Count: {} } },
-                { Name: RFI_RULE, ActionToUse: { Count: {} } },
-            ])
-        );
-
         const edge = aclOf(cloudfront);
-        expect(ruleNamed(edge, REBLOCK_RULE)).toBeUndefined();
+        for (const acl of [regional, edge]) {
+            expect(ruleNamed(acl, REBLOCK_RULE)?.Action).toEqual({ Block: {} });
+            expect(overridesOf(acl)).toEqual(
+                expect.arrayContaining([
+                    { Name: SSRF_RULE, ActionToUse: { Count: {} } },
+                    { Name: RFI_RULE, ActionToUse: { Count: {} } },
+                ])
+            );
+        }
         expect(rulesOf(edge)).toEqual(rulesOf(aclOf(edgeReference)));
+        // One prefix form serves both ACLs, so the re-block statements are the same.
+        expect(ruleNamed(edge, REBLOCK_RULE).Statement).toEqual(
+            ruleNamed(regional, REBLOCK_RULE).Statement
+        );
+        // Control: the CloudFront ACL still has no origin verification scope-down.
+        expect(JSON.stringify(rulesOf(edge))).not.toContain("ScopeDownStatement");
     });
 });

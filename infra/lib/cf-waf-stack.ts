@@ -75,7 +75,7 @@ export interface WafStacks {
 /**
  * The web ACL stacks of a deployment with WAF enabled, or undefined with WAF off. The regional ACL
  * protects the API stage and, with the ALB, the load balancer; the CloudFront ACL exists only with
- * CloudFront and protects the distribution.
+ * CloudFront and protects the distribution. Both take the add-on scoped rule exclusions.
  *
  * `apiOriginVerifyStack` is the origin verification stack `buildApiOriginVerifyStack` returns: defined
  * for a CloudFront deployment only. When given, the regional ACL takes its secret ARN (the scope-down
@@ -91,9 +91,12 @@ export function buildWafStacks(
     }
     const wafBaseName = config.app.baseStackName;
 
-    // Managed rules relaxed on add-on API routes only, in the regional ACL on the API stage, which
-    // evaluates every request that reaches the stage. The CloudFront ACL takes no exclusion: it
-    // applies the policy unchanged on every path, so a request it evaluates gets no exemption.
+    // Managed rules relaxed on add-on API routes only, in both web ACLs. The regional ACL on the API
+    // stage evaluates every request that reaches the stage, on the path the stage receives. A
+    // request to `<distribution>/api/*` is evaluated by the CloudFront ACL first, on the viewer's
+    // path, and CloudFront forwards that path to the stage unchanged (no origin path), so the same
+    // stage-prefixed prefixes match it there; without the exclusions in the CloudFront ACL it would
+    // block an exempted request before the regional ACL saw it.
     const wafScopedRuleExclusions = addonWafRuleExclusions(config);
 
     // A regional-scoped web ACL is ALWAYS created in the core region when WAF is enabled.
@@ -142,6 +145,7 @@ export function buildWafStacks(
             },
             wafScope: WAFScope.CLOUDFRONT,
             wafPolicy: config.wafPolicyJSON,
+            scopedRuleExclusions: wafScopedRuleExclusions,
             description: STACK_WAF_DESCRIPTION,
             synthesizer: buildBootstrapSynthesizer(config),
         });

@@ -116,13 +116,14 @@ export interface WafScopedRuleExclusion {
     // API route prefixes, each matched against the URI path the REST API stage receives. That path
     // begins with `/${Config.API_GATEWAY_STAGE_NAME}` for a request to the invoke URL, to the API
     // custom domain (base path `api`) and forwarded by CloudFront, so build each prefix from
-    // `Config.API_GATEWAY_STAGE_NAME`. A prefix covers the path itself and every path below it, at a
-    // segment boundary: `/api/x` covers `/api/x` and `/api/x/y`, not `/api/xy`, and a trailing slash
-    // is ignored. The path must be at or below the prefix both as received and after URL_DECODE then
-    // NORMALIZE_PATH, so neither an encoded slash inside a path parameter nor a dot segment lets a
-    // request to another route fall under a prefix. Synth fails for a prefix that is empty, covers
-    // the whole API or does not start with `/${Config.API_GATEWAY_STAGE_NAME}/`. An exclusion with no
-    // prefix relaxes nothing.
+    // `Config.API_GATEWAY_STAGE_NAME`. The CloudFront web ACL evaluates the viewer's path, which is
+    // the same path: CloudFront forwards `/api/*` to the stage with no origin path. A prefix covers
+    // the path itself and every path below it, at a segment boundary: `/api/x` covers `/api/x` and
+    // `/api/x/y`, not `/api/xy`, and a trailing slash is ignored. The path must be at or below the
+    // prefix both as received and after URL_DECODE then NORMALIZE_PATH, so neither an encoded slash
+    // inside a path parameter nor a dot segment lets a request to another route fall under a prefix.
+    // Synth fails for a prefix that is empty, covers the whole API or does not start with
+    // `/${Config.API_GATEWAY_STAGE_NAME}/`. An exclusion with no prefix relaxes nothing.
     uriPathPrefixes: string[];
     // Name and metric name of the rule that blocks the exclusion's labels elsewhere: 1 to 128 of
     // A-Z, a-z, 0-9, - and _, not a reserved metric name, and unique among the exclusions and the

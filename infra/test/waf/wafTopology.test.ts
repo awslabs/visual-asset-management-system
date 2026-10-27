@@ -4,14 +4,15 @@
  */
 
 /**
- * Where the deployment's web ACLs attach, and the routing premises a scoped rule exclusion on the
- * regional web ACL rests on, in full synths of the fronting modes.
+ * Where the deployment's web ACLs attach, and the routing premises a scoped rule exclusion rests on,
+ * in full synths of the fronting modes.
  *
- * A scoped rule exclusion lives on the regional web ACL alone, under stage-prefixed route paths. The
- * regional ACL is the one on the REST API stage, so it evaluates every API request with the path the
- * stage receives, the same whether the request is made to the invoke URL or forwarded by CloudFront;
- * the CloudFront ACL applies the policy unchanged, so a request through the distribution gets no
- * exemption there. What is pinned here:
+ * A scoped rule exclusion lives on both web ACLs, under stage-prefixed route paths. The regional ACL
+ * is the one on the REST API stage, so it evaluates every API request with the path the stage
+ * receives, the same whether the request is made to the invoke URL or forwarded by CloudFront. The
+ * CloudFront ACL evaluates a request to the distribution first, on the viewer's path, and the same
+ * prefixes match it there because CloudFront forwards `/api/*` with no origin path. What is pinned
+ * here:
  *   * associations: the regional ACL on the stage in every mode and on the ALB when there is one,
  *     the CloudFront ACL on the distribution only;
  *   * each ARN reaches only the resources that need it, outputs, parameters and conditions included:
