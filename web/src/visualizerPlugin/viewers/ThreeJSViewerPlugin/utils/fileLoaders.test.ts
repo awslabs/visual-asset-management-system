@@ -10,7 +10,7 @@
  * the viewer names the deployment setting instead, and that every other failure is still wrapped.
  */
 
-import { loadFile } from "./fileLoaders";
+import { isCadSupportError, loadFile } from "./fileLoaders";
 import { loadOCCTFile } from "./occtLoader";
 
 jest.mock("./occtLoader", () => ({
@@ -99,5 +99,43 @@ describe("loadFile OCCT error messages", () => {
         await failureMessage();
 
         expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:test");
+    });
+});
+
+describe("isCadSupportError", () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+
+    beforeEach(() => {
+        mockedLoadOCCTFile.mockReset();
+        URL.createObjectURL = jest.fn(() => "blob:test");
+        URL.revokeObjectURL = jest.fn();
+    });
+
+    afterEach(() => {
+        URL.createObjectURL = originalCreateObjectURL;
+        URL.revokeObjectURL = originalRevokeObjectURL;
+        delete (window as any).THREEBundle;
+    });
+
+    it("recognizes the Content Security Policy message", async () => {
+        (window as any).THREEBundle = { THREE: {}, occtimportjs: jest.fn() };
+        mockedLoadOCCTFile.mockRejectedValue(new EvalError("blocked"));
+
+        expect(isCadSupportError(await failureMessage())).toBe(true);
+    });
+
+    it("recognizes the message for a bundle built without OCCT", async () => {
+        (window as any).THREEBundle = { THREE: {} };
+
+        expect(isCadSupportError(await failureMessage())).toBe(true);
+    });
+
+    it("does not treat a CAD file that failed to load as a setup problem", async () => {
+        (window as any).THREEBundle = { THREE: {}, occtimportjs: jest.fn() };
+        mockedLoadOCCTFile.mockRejectedValue(new Error("Unsupported OCCT format: xyz"));
+
+        expect(isCadSupportError(await failureMessage())).toBe(false);
+        expect(isCadSupportError("Failed to load: part.glb (404)")).toBe(false);
     });
 });

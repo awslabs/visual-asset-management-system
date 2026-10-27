@@ -21,6 +21,20 @@ export interface LoaderResult {
 export const OCCT_FORMATS = ["stp", "step", "iges", "igs", "brep"];
 
 /**
+ * True for the CAD setup messages loadFile throws when the browser or deployment cannot run the
+ * OCCT loader (SharedArrayBuffer, the OCCT bundle, or the Content Security Policy), as opposed to
+ * a file that failed to load.
+ */
+export function isCadSupportError(message: string): boolean {
+    return (
+        message.includes("CAD Format Support Not Available") ||
+        message.includes("CAD format support not enabled") ||
+        message.includes("OCCT library") ||
+        message.includes("SharedArrayBuffer")
+    );
+}
+
+/**
  * Get file extension from file key
  */
 export function getFileExtension(fileKey: string): string {

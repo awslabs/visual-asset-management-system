@@ -65,7 +65,7 @@ This adds `'unsafe-eval'` to the Content Security Policy `script-src` directive 
 If a user tries to view a CAD file without proper browser support, they will see:
 
 ```
-CAD Format Support Not Available
+CAD Format Support Not Available.
 
 This CAD file format requires WebAssembly with SharedArrayBuffer support,
 which is not currently available. This may be due to:
@@ -80,7 +80,7 @@ Please contact your system administrator to enable WASM support for CAD files.
 If the deployment has not set `app.webUi.allowUnsafeEvalFeatures`, they will see:
 
 ```
-CAD Format Support Not Available
+CAD Format Support Not Available.
 
 CAD format viewing is blocked by the Content Security Policy. The OpenCascade
 loader used for STEP, IGES and BREP files needs app.webUi.allowUnsafeEvalFeatures
