@@ -1433,6 +1433,28 @@ class TestComplianceCascadeCommands:
             assert 'State: pending_approval' in result.output
             mocks['api_client'].get_compliance_cascade.assert_called_once_with('casc-1')
 
+    def test_get_names_the_parent_and_every_node(self, cli_runner, generic_command_mocks):
+        record = dict(
+            CASCADE_RECORD, state='completed', assetName='Turbine',
+            nodes=json.dumps({'db1:b': 'compliant', 'db2:c': 'skipped_not_authorized'}),
+            nodeNames=json.dumps({'db1:b': 'Rotor'}),
+            executionOrder=json.dumps(['db1:b', 'db2:c']))
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_cascade.return_value = record
+            result = cli_runner.invoke(cli, ['compliance', 'cascade', 'get', '-c', 'casc-1'])
+            assert result.exit_code == 0
+            assert '(Turbine)' in result.output
+            assert 'Nodes (2):' in result.output
+            assert 'Rotor (db1:b): compliant' in result.output
+            assert '(db2:c): skipped_not_authorized' in result.output
+
+    def test_get_without_nodes_lists_none(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_cascade.return_value = dict(CASCADE_RECORD, nodes='{}')
+            result = cli_runner.invoke(cli, ['compliance', 'cascade', 'get', '-c', 'casc-1'])
+            assert result.exit_code == 0
+            assert 'Nodes' not in result.output
+
     def test_get_shows_why_an_aborted_cascade_stopped(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].get_compliance_cascade.return_value = dict(

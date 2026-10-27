@@ -21,7 +21,7 @@ re-evaluates the dependents of a changed asset, optionally after a human approva
 
 import json
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import click
 
@@ -359,10 +359,12 @@ def format_cascade(cascade: Dict[str, Any]) -> str:
     # triggeredBy* attributes; a single cascade record carries the triggeredBy* attributes only.
     database_id = cascade.get('databaseId') or cascade.get('triggeredByDatabaseId', 'N/A')
     asset_id = cascade.get('assetId') or cascade.get('triggeredByAssetId', 'N/A')
+    parent_name = cascade.get('assetName') or cascade.get('triggeredByAssetName')
+    named = f" ({parent_name})" if parent_name else ""
     lines = [
         f"Cascade ID: {cascade.get('cascadeId', 'N/A')}",
         f"State: {cascade.get('state', 'N/A')}",
-        f"Triggered By: {database_id}:{asset_id}",
+        f"Triggered By: {database_id}:{asset_id}{named}",
     ]
     for key, label in (
         ('triggerReason', 'Reason'),
@@ -375,7 +377,39 @@ def format_cascade(cascade: Dict[str, Any]) -> str:
     ):
         if cascade.get(key):
             lines.append(f"{label}: {cascade[key]}")
+    lines.extend(_cascade_node_lines(cascade))
     return '\n'.join(lines)
+
+
+def _json_field(value: Any, default: Any) -> Any:
+    """A JSON-encoded cascade attribute (`nodes`, `nodeNames`, `executionOrder`) decoded; the
+    default when it is absent or unreadable."""
+    if isinstance(value, (dict, list)):
+        return value
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _cascade_node_lines(cascade: Dict[str, Any]) -> List[str]:
+    """One line per downstream node, in evaluation order: its name (when the cascade recorded
+    one), its `databaseId:assetId` key and its state."""
+    nodes = _json_field(cascade.get('nodes'), {})
+    if not isinstance(nodes, dict) or not nodes:
+        return []
+    names = _json_field(cascade.get('nodeNames'), {})
+    names = names if isinstance(names, dict) else {}
+    order = _json_field(cascade.get('executionOrder'), [])
+    keys = [key for key in order if key in nodes] if isinstance(order, list) else []
+    keys += [key for key in nodes if key not in keys]
+    lines = [f"Nodes ({len(keys)}):"]
+    for key in keys:
+        name = names.get(key)
+        lines.append(f"  {name + ' ' if name else ''}({key}): {nodes[key]}")
+    return lines
 
 
 def format_cascade_list(result: Dict[str, Any]) -> str:

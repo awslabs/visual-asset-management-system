@@ -1783,12 +1783,16 @@ def list_compliance_cascades(
 @tool_result
 def get_compliance_cascade(cascade_id: str) -> Dict[str, Any]:
     """Read one cascade: its `state` (pending_approval, executing, completed, aborted), the asset
-    that triggered it, per-node progress (`nodes`, `executionOrder`, `totalNodes`), and — once
-    decided — approvedBy / approvalReason or rejectedBy / rejectionReason with completedAt.
+    that triggered it (`assetName` is its name), per-node progress (`nodes`, `executionOrder`,
+    `totalNodes`, and `nodeNames`, a JSON map of node key to the node asset's name), whether the
+    caller may approve or reject it (`permissions.approve`), and — once decided — approvedBy /
+    approvalReason or rejectedBy / rejectionReason with completedAt.
 
     A node's state is `pending`, `evaluating`, the verdict its evaluation produced, `skipped` (no
-    bound schema), `superseded` (a newer evaluation of that asset had already started, so this one
-    did not run; not a failure) or `error`.
+    bound schema), `skipped_not_authorized` (a node in a database the caller who started the
+    cascade may not evaluate; it is neither evaluated nor named), `superseded` (a newer
+    evaluation of that asset had already started, so this one did not run; not a failure) or
+    `error`.
 
     This is how a started cascade is followed: create_compliance_cascade() with
     `require_approval=False` and approve_compliance_cascade() return while the cascade is

@@ -519,7 +519,7 @@ vamscli compliance cascade list --json-output
 
 ## compliance cascade get
 
-Get a cascade's record and state (`pending_approval`, `executing`, `completed` or `aborted`). With `--json-output` the record includes `nodes`, each node's status: a verdict, `skipped` (no bound schema), `superseded` (a newer evaluation of that asset had already started, so this one did not run; not an error) or `error`.
+Get a cascade's record and state (`pending_approval`, `executing`, `completed` or `aborted`), the trigger asset with its name, and one line per downstream node in evaluation order: the node asset's name, its `databaseId:assetId` and its status — a verdict, `skipped` (no bound schema), `skipped_not_authorized` (in a database the caller who started the cascade may not evaluate; not named), `superseded` (a newer evaluation of that asset had already started, so this one did not run; not an error) or `error`. With `--json-output` the record carries `nodes`, `nodeNames` and `executionOrder` as JSON-encoded strings.
 
 ```bash
 vamscli compliance cascade get [OPTIONS]

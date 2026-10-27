@@ -492,6 +492,9 @@ def get_cascade(event, cascade_id):
         return refused
     item = store.expire_timed_out_cascade(cascade_table, item)
     body = {key: value for key, value in item.items() if key not in PRIVATE_CASCADE_ATTRIBUTES}
+    # The trigger (parent) asset's name, as the listing rows carry it; the children's names are
+    # in `nodeNames`, recorded by the executor with the nodes.
+    body["assetName"] = item.get("triggeredByAssetName", "")
     body["permissions"] = _cascade_permissions(CasbinEnforcer(claims_and_roles), item)
     return success(body=body)
 

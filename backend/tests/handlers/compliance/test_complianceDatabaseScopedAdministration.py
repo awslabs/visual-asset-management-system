@@ -341,6 +341,13 @@ class TestTheCascadeScope:
         item = table.put_item.call_args.kwargs["Item"]
         assert json.loads(item["authorizedDatabaseIds"]) == [DB]
 
+    def test_a_cascade_names_its_parent_asset(self):
+        row = dict(_cascade(DB), triggeredByAssetName="Turbine")
+        response, _ = _run_cascade(
+            rest_event("GET", f"/compliance/cascades/{CASCADE_ID}", {"cascadeId": CASCADE_ID}),
+            database_admin_rules(), cascade_item=row)
+        assert body_of(response)["assetName"] == "Turbine"
+
     def test_the_recorded_reach_is_never_returned(self):
         row = dict(_cascade(DB), authorizedDatabaseIds=json.dumps([DB]))
         response, _ = _run_cascade(

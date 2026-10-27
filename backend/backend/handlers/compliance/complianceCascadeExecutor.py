@@ -229,28 +229,39 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
 
     execution_order = topological_sort(source_db, source_asset, descendants)
     nodes = {_node_key(n["databaseId"], n["assetId"]): NODE_STATE_PENDING for n in execution_order}
+    authorized = _authorized_database_ids(cascade)
+
+    # Each node's compliance record is read once, up front, so the names are recorded with the
+    # nodes; the evaluation loop takes the bound schema from the same read. A node outside the
+    # starting caller's reach is not read: it is neither evaluated nor named.
+    records = {}
+    for node in execution_order:
+        node_key = _node_key(node["databaseId"], node["assetId"])
+        if authorized is None or node["databaseId"] in authorized:
+            records[node_key] = store.get_compliance_record(node["databaseId"], node["assetId"]) or {}
+    node_names = {key: record.get("assetName") or "" for key, record in records.items()}
 
     cascade_table.update_item(
         Key={"cascadeId": cascade_id},
-        UpdateExpression="SET executionOrder = :order, nodes = :nodes, totalNodes = :total",
+        UpdateExpression=("SET executionOrder = :order, nodes = :nodes, totalNodes = :total,"
+                          " nodeNames = :names"),
         ExpressionAttributeValues={
             ":order": json.dumps(list(nodes.keys())),
             ":nodes": json.dumps(nodes),
             ":total": len(execution_order),
+            ":names": json.dumps(node_names),
         },
     )
 
-    authorized = _authorized_database_ids(cascade)
     results = []
     for node in execution_order:
         node_key = _node_key(node["databaseId"], node["assetId"])
-        if authorized is not None and node["databaseId"] not in authorized:
+        if node_key not in records:
             nodes[node_key] = NODE_STATE_SKIPPED_NOT_AUTHORIZED
             _write_nodes(cascade_id, nodes)
             results.append({"node": node_key, "status": NODE_STATE_SKIPPED_NOT_AUTHORIZED})
             continue
-        schema_name = (store.get_compliance_record(node["databaseId"], node["assetId"]) or {}).get(
-            "schemaName", "")
+        schema_name = records[node_key].get("schemaName", "")
         if not schema_name:
             nodes[node_key] = NODE_STATE_SKIPPED
             _write_nodes(cascade_id, nodes)

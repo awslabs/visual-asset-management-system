@@ -17336,6 +17336,9 @@ components:
                 executionOrder:
                     type: string
                     description: "JSON-encoded list of the downstream assets' `databaseId:assetId` keys in evaluation order."
+                nodeNames:
+                    type: string
+                    description: "JSON-encoded map of the same `databaseId:assetId` keys to each node asset's name, recorded when the cascade starts; a `skipped_not_authorized` node is not named."
             required:
                 - cascadeId
                 - state

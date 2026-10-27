@@ -402,3 +402,43 @@ class TestExecuteCascade:
         assert result == {"cascadeId": CASCADE_ID, "error": error}
         mocks["run_evaluation"].assert_not_called()
         mocks["table"].update_item.assert_not_called()
+
+
+@pytest.mark.unit
+class TestNodeNames:
+    """The executor records each node's asset name (`nodeNames`, JSON map of node key to name)
+    from the compliance record it already reads for the node's schema: one read per node, none
+    for a node outside the starting caller's reach, which is not named."""
+
+    def _run(self, cascade_item, records):
+        graph = Graph([(ASSET, "B"), (ASSET, "C")])
+        cascade_table, patches = _patched(graph, cascade_item)
+        patches[3] = patch(f"{STORE}.get_compliance_record",
+                           side_effect=lambda db, asset: dict(records.get(asset, {})))
+        started = [p.start() for p in patches]
+        try:
+            executor.execute_cascade(CASCADE_ID)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+        return cascade_table, started[3]
+
+    def test_the_first_node_write_carries_every_name(self):
+        records = {"B": {"schemaName": "schema-1", "assetName": "Rotor"},
+                   "C": {"schemaName": "schema-1", "assetName": "Blade"}}
+        table, read = self._run(EXECUTING, records)
+        first = next(u for u in update_values(table) if "executionOrder" in u)
+        assert json.loads(first["nodeNames"]) == {f"{DB}:B": "Rotor", f"{DB}:C": "Blade"}
+        assert read.call_count == 2
+
+    def test_a_node_without_a_name_is_recorded_with_an_empty_one(self):
+        table, _ = self._run(EXECUTING, {"B": {"schemaName": "schema-1"}, "C": {}})
+        first = next(u for u in update_values(table) if "executionOrder" in u)
+        assert json.loads(first["nodeNames"]) == {f"{DB}:B": "", f"{DB}:C": ""}
+
+    def test_a_node_outside_the_reach_is_neither_read_nor_named(self):
+        cascade = dict(EXECUTING, authorizedDatabaseIds=json.dumps([]))
+        table, read = self._run(cascade, {"B": {"assetName": "Rotor"}})
+        first = next(u for u in update_values(table) if "executionOrder" in u)
+        assert json.loads(first["nodeNames"]) == {}
+        read.assert_not_called()
