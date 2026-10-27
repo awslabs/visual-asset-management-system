@@ -185,3 +185,51 @@ describe("CreateConstraint", () => {
         });
     });
 });
+
+describe("CreateConstraint default-constraint notice", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        const { fetchConstraintPermissionObjects } = require("../../services/APIService");
+        fetchConstraintPermissionObjects.mockResolvedValue([true, _PERMISSION_OBJECTS]);
+    });
+
+    const renderEditor = (initState: any) =>
+        render(
+            <MemoryRouter>
+                <CreateConstraint
+                    open={true}
+                    setOpen={jest.fn()}
+                    setReload={jest.fn()}
+                    initState={initState}
+                />
+            </MemoryRouter>
+        );
+
+    const constraint = (constraintId: string) => ({
+        constraintId,
+        name: "c",
+        description: "d",
+        objectType: "asset",
+        criteriaAnd: [{ field: "assetName", operator: "equals", value: "x" }],
+        criteriaOr: [],
+        groupPermissions: [],
+        userPermissions: [],
+    });
+
+    it.each(["initial_admin_allow_all_assets", "initial_basicro_allow_get_apis"])(
+        "shows the notice when editing %s",
+        async (constraintId) => {
+            renderEditor(constraint(constraintId));
+
+            expect(await screen.findByText("Default constraint")).toBeInTheDocument();
+        }
+    );
+
+    it("shows no notice when editing a custom constraint", async () => {
+        const { fetchConstraintPermissionObjects } = require("../../services/APIService");
+        renderEditor(constraint("my-constraint"));
+
+        await waitFor(() => expect(fetchConstraintPermissionObjects).toHaveBeenCalled());
+        expect(screen.queryByText("Default constraint")).not.toBeInTheDocument();
+    });
+});

@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { unwrapMessage, toTuple, toTupleWithWarnings } from "./client";
+import { unwrapMessage, toTuple, toTupleWithWarnings, pageAll, PAGE_ALL_MAX_PAGES } from "./client";
 
 describe("orchestration api client helpers", () => {
     it("unwrapMessage returns .message when present", () => {
@@ -47,5 +47,30 @@ describe("orchestration api client helpers", () => {
             );
             expect(result).toEqual({ message: "ok", warnings: [] });
         }
+    });
+});
+
+describe("pageAll", () => {
+    it("collects every page until no token is returned", async () => {
+        const fetchPage = jest
+            .fn()
+            .mockResolvedValueOnce({ Items: [1, 2], NextToken: "t1" })
+            .mockResolvedValueOnce({ message: { Items: [3], NextToken: "t2" } })
+            .mockResolvedValueOnce({ Items: [4] });
+        await expect(pageAll(fetchPage)).resolves.toEqual([1, 2, 3, 4]);
+        expect(fetchPage.mock.calls.map(([token]) => token)).toEqual([undefined, "t1", "t2"]);
+    });
+
+    it("rejects when a response repeats a token instead of looping forever", async () => {
+        const fetchPage = jest.fn().mockResolvedValue({ Items: [1], NextToken: "same" });
+        await expect(pageAll(fetchPage)).rejects.toThrow(/already returned/);
+        expect(fetchPage).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects once the page bound is reached", async () => {
+        let n = 0;
+        const fetchPage = jest.fn(async () => ({ Items: [n], NextToken: `t${++n}` }));
+        await expect(pageAll(fetchPage)).rejects.toThrow(`${PAGE_ALL_MAX_PAGES} pages`);
+        expect(fetchPage).toHaveBeenCalledTimes(PAGE_ALL_MAX_PAGES);
     });
 });

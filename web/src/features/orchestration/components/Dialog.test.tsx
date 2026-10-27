@@ -72,3 +72,17 @@ describe("Dialog layout", () => {
         expect(container).toBeEmptyDOMElement();
     });
 });
+
+describe("Dialog close button", () => {
+    it("takes its colour from the theme text tokens", () => {
+        render(
+            <Dialog open onOpenChange={jest.fn()} title="T">
+                <p>body</p>
+            </Dialog>
+        );
+        const close = screen.getByRole("button", { name: "Close dialog" });
+        expect(close.className).toContain("text-text-secondary");
+        expect(close.className).toContain("hover:text-text-primary");
+        expect(close.className).not.toMatch(/text-gray-/);
+    });
+});

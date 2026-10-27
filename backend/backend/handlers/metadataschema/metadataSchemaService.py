@@ -441,6 +441,18 @@ def update_metadata_schema(metadataSchemaId, update_data, claims_and_roles):
         # Get the existing schema
         schema = get_metadata_schema_details(metadataSchemaId)
         if not schema:
+            # A missing schema is checked as a provisional object (the update route carries no
+            # databaseId), so the 404 is answered only to a caller allowed to update schemas
+            provisional_schema = {
+                "databaseId": "",
+                "object__type": "metadataSchema",
+                "metadataSchemaName": "",
+                "metadataSchemaEntityType": ""
+            }
+            if len(claims_and_roles["tokens"]) == 0:
+                return authorization_error()
+            if not CasbinEnforcer(claims_and_roles).enforce(provisional_schema, "POST"):
+                return authorization_error()
             raise VAMSGeneralErrorResponse("Metadata schema not found", status_code=404)
         
         # Check authorization
@@ -530,12 +542,13 @@ def update_metadata_schema(metadataSchemaId, update_data, claims_and_roles):
         logger.exception(f"Error updating metadata schema: {e}")
         raise VAMSGeneralErrorResponse("Error updating metadata schema")
 
-def delete_metadata_schema(metadataSchemaId, claims_and_roles):
+def delete_metadata_schema(metadataSchemaId, claims_and_roles, databaseId=""):
     """Delete a metadata schema
     
     Args:
         metadataSchemaId: The metadata schema ID
         claims_and_roles: User claims and roles for authorization
+        databaseId: The database ID from the request path, checked when the schema is missing
         
     Returns:
         Delete operation response
@@ -544,6 +557,18 @@ def delete_metadata_schema(metadataSchemaId, claims_and_roles):
         # Get the existing schema
         schema = get_metadata_schema_details(metadataSchemaId)
         if not schema:
+            # A missing schema is checked as a provisional object in the path's database, so
+            # the 404 is answered only to a caller allowed to delete schemas there
+            provisional_schema = {
+                "databaseId": databaseId,
+                "object__type": "metadataSchema",
+                "metadataSchemaName": "",
+                "metadataSchemaEntityType": ""
+            }
+            if len(claims_and_roles["tokens"]) == 0:
+                return authorization_error()
+            if not CasbinEnforcer(claims_and_roles).enforce(provisional_schema, "DELETE"):
+                return authorization_error()
             raise VAMSGeneralErrorResponse("Metadata schema not found", status_code=404)
         
         # Check authorization
@@ -657,8 +682,20 @@ def handle_get_request(event):
                     return success(body=response_model.dict())
                 except ValidationError as v:
                     logger.exception(f"Error converting schema to response model: {v}")
-                    return success(body={"message": schema})
+                    return success(body=schema)
             else:
+                # A missing schema is checked as a provisional object in the path's database, so
+                # the 404 is answered only to a caller allowed to read schemas there
+                provisional_schema = {
+                    "databaseId": path_parameters['databaseId'],
+                    "object__type": "metadataSchema",
+                    "metadataSchemaName": "",
+                    "metadataSchemaEntityType": ""
+                }
+                if len(claims_and_roles["tokens"]) == 0:
+                    return authorization_error()
+                if not CasbinEnforcer(claims_and_roles).enforce(provisional_schema, "GET"):
+                    return authorization_error()
                 return general_error(body={"message": "Metadata schema not found"}, status_code=404, event=event)
         
         # Case 2: List metadata schemas with filters
@@ -888,7 +925,8 @@ def handle_delete_request(event):
         # Delete the schema
         result = delete_metadata_schema(
             path_parameters['metadataSchemaId'],
-            claims_and_roles
+            claims_and_roles,
+            path_parameters['databaseId']
         )
 
         # An authorization denial is already a complete response

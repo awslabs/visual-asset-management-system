@@ -219,6 +219,7 @@ export class CoreVAMSStack extends cdk.Stack {
         authBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
 
         //Ignore stacks if we are only loading context (mostly for Imported VPC)
+        let staticWebBuilderNestedStack: StaticWebBuilderNestedStack | undefined;
         if (!props.config.env.loadContextIgnoreVPCStacks) {
             // Cross-stack route registry — populated by all API-contributing stacks,
             // rendered into a single REST API by the RestApi stack (ApiNestedStack, built last).
@@ -372,25 +373,23 @@ export class CoreVAMSStack extends cdk.Stack {
 
             //Deploy Static Website and any API proxies (nested stack; after REST API for apiUrl)
             if (props.config.app.useAlb.enabled || props.config.app.useCloudFront.enabled) {
-                const staticWebBuilderNestedStack = new StaticWebBuilderNestedStack(
-                    this,
-                    "StaticWeb",
-                    {
-                        config: props.config,
-                        vpc: this.vpc,
-                        subnetsIsolated: this.subnetsIsolated,
-                        subnetsPublic: this.subnetsPublic,
-                        webAppBuildPath: this.webAppBuildPath,
-                        apiUrl: apiNestedStack.apiEndpoint,
-                        storageResources: storageResourcesNestedStack.storageResources,
-                        ssmWafArnCloudfront: props.ssmWafArnCloudfront,
-                        ssmWafArnRegional: props.ssmWafArnRegional,
-                        authResources: authBuilderNestedStack.authResources,
-                        lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
-                        apiOriginVerifySecret: props.apiOriginVerifySecret,
-                    }
-                );
+                staticWebBuilderNestedStack = new StaticWebBuilderNestedStack(this, "StaticWeb", {
+                    config: props.config,
+                    vpc: this.vpc,
+                    subnetsIsolated: this.subnetsIsolated,
+                    subnetsPublic: this.subnetsPublic,
+                    webAppBuildPath: this.webAppBuildPath,
+                    apiUrl: apiNestedStack.apiEndpoint,
+                    storageResources: storageResourcesNestedStack.storageResources,
+                    ssmWafArnCloudfront: props.ssmWafArnCloudfront,
+                    ssmWafArnRegional: props.ssmWafArnRegional,
+                    authResources: authBuilderNestedStack.authResources,
+                    lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                    apiOriginVerifySecret: props.apiOriginVerifySecret,
+                });
                 staticWebBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
+                staticWebBuilderNestedStack.addStackDependency(apiNestedStack);
+                staticWebBuilderNestedStack.addStackDependency(authBuilderNestedStack);
 
                 //Set features
                 if (props.config.app.useCloudFront.enabled) {
@@ -529,8 +528,12 @@ export class CoreVAMSStack extends cdk.Stack {
                 "LocationService",
                 {
                     config: props.config,
+                    allowedWebOrigins: staticWebBuilderNestedStack?.webOrigins,
                 }
             );
+            if (staticWebBuilderNestedStack) {
+                locationServiceNestedStack.addStackDependency(staticWebBuilderNestedStack);
+            }
 
             this.enabledFeatures.push(VAMS_APP_FEATURES.LOCATIONSERVICES);
         }

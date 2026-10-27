@@ -66,6 +66,7 @@ _RESPONSE_HEADERS = {
     "Content-Type": "application/json",
     "Cache-Control": "no-cache, no-store",
     "Access-Control-Allow-Origin": "*",
+    "Access-Control-Expose-Headers": "Retry-After",
 }
 
 # (helper name, status code, default message) for the four error helpers.
@@ -153,6 +154,7 @@ class TestSuccessResponseUnchanged:
             "Content-Type": "application/json",
             "Cache-Control": "no-cache, no-store",
             "Access-Control-Allow-Origin": "*",
+            "Access-Control-Expose-Headers": "Retry-After",
         }
         assert response["body"] == (
             '{"assetSize": 1024, "ratio": 1.5, "nested": [{"count": 2}, "text"]}')
@@ -347,3 +349,10 @@ class TestErrorResponsesUnchanged:
                                            event={"headers": {}})
         assert audit.call_count == 1
         assert audit.call_args.args[2]["errorMessage"] == "Invalid request."
+
+
+@pytest.mark.unit
+def test_common_headers_expose_retry_after():
+    """A cross-origin browser caller can read only exposed headers, and the upload limiter's 429
+    carries its wait in Retry-After."""
+    assert response_models.commonHeaders()["Access-Control-Expose-Headers"] == "Retry-After"

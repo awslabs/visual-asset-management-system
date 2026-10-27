@@ -116,9 +116,10 @@ export const RawValueEditor: React.FC<RawValueEditorProps> = ({
                                 right: "8px",
                                 padding: "4px 8px",
                                 fontSize: "11px",
-                                border: "1px solid #ccc",
+                                border: "1px solid var(--vams-border-default)",
                                 borderRadius: "4px",
-                                background: "#f5f5f5",
+                                background: "var(--vams-bg-secondary)",
+                                color: "var(--vams-text-primary)",
                                 cursor: disabled ? "not-allowed" : "pointer",
                                 zIndex: 1,
                             }}

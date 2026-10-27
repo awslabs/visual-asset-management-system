@@ -19,7 +19,7 @@ VAMS deploys as a root stack (`CoreVAMSStack`) with 10+ nested stacks. Understan
 
 ### Dependency Chain
 
-Each solid arrow is an explicit `addStackDependency()` call in `core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the arrows from the root mark the stacks that declare none. The dotted arrow is a cross-stack reference that AWS CloudFormation orders implicitly: StaticWeb reads the REST API endpoint. See [Nested Stack Dependency Chain](../architecture/details.md#nested-stack-dependency-chain) for how the ordering is derived.
+Each solid arrow is an explicit `addStackDependency()` call in `core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the arrows from the root mark the stacks that declare none, except LocationService, which declares its dependency on StaticWeb when the static web stack is built. See [Nested Stack Dependency Chain](../architecture/details.md#nested-stack-dependency-chain) for how the ordering is derived.
 
 ```mermaid
 graph TD
@@ -65,7 +65,9 @@ graph TD
     Search --> Rest
     Addon --> Rest
     Storage --> Web
-    Rest -.->|API endpoint| Web
+    Rest --> Web
+    Auth --> Web
+    Web --> Location
 ```
 
 ### Key Nested Stacks

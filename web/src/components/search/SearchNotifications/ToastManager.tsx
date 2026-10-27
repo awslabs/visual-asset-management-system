@@ -33,7 +33,9 @@ const ToastManager: React.FC<ToastManagerProps> = ({ toasts, onDismiss }) => {
                 position: "fixed",
                 top: "20px",
                 right: "20px",
-                zIndex: 1000,
+                // Above the sticky header (1002) and dialogs: the layer the orchestration
+                // ToastProvider uses, so a toast at the top of the page is not painted under the header.
+                zIndex: 4000,
                 maxWidth: "400px",
             }}
         >

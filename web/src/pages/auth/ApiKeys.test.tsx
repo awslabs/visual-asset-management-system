@@ -19,7 +19,7 @@ import {
     ALLOWED_API_ROUTES_CACHE_TTL_MILLIS,
 } from "../../common/constants/authRoutes";
 import { API_KEY_LISTING_PAGE_SIZE } from "../../common/constants/apiKeys";
-import ApiKeys from "./ApiKeys";
+import ApiKeys, { apiKeyStatus } from "./ApiKeys";
 
 const mockFetchApiKeys = jest.fn();
 const mockFetchUserApiKeys = jest.fn();
@@ -217,5 +217,51 @@ describe("ApiKeys server-side paging", () => {
             pageSize: API_KEY_LISTING_PAGE_SIZE,
             startingToken: undefined,
         });
+    });
+});
+
+/**
+ * The Active column follows the authorizer: an active key whose expiration has passed is refused,
+ * so it reads Expired rather than Active.
+ */
+describe("ApiKeys status column", () => {
+    const NOW = Date.parse("2026-06-15T12:00:00Z");
+
+    it.each([
+        [{ isActive: "false", expiresAt: "2020-01-01" }, "Inactive"],
+        [{ isActive: "true" }, "Active"],
+        [{ isActive: "true", expiresAt: "2026-06-15T11:59:59Z" }, "Expired"],
+        [{ isActive: "true", expiresAt: "2026-06-15T12:00:01Z" }, "Active"],
+        // Date-only and offset-less values are read as UTC, as the authorizer reads them.
+        [{ isActive: "true", expiresAt: "2026-06-15" }, "Expired"],
+        [{ isActive: "true", expiresAt: "2026-06-16" }, "Active"],
+        [{ isActive: "true", expiresAt: "2026-06-15T11:00:00" }, "Expired"],
+        [{ isActive: "true", expiresAt: "2026-06-15T13:00:00" }, "Active"],
+        [{ isActive: "true", expiresAt: "2026-06-15T14:00:00+01:00" }, "Active"],
+        [{ isActive: "true", expiresAt: "not-a-date" }, "Expired"],
+    ])("reads %j as %s", (item, expected) => {
+        expect(apiKeyStatus(item as any, NOW)).toBe(expected);
+    });
+
+    it("shows an active key past its expiry as Expired in the table", async () => {
+        localStorage.clear();
+        cacheRoutes("/auth/api-keys");
+        mockFetchUserApiKeys.mockResolvedValue({ Items: [] });
+        mockFetchApiKeys.mockResolvedValue({
+            Items: [
+                {
+                    apiKeyId: "k1",
+                    apiKeyName: "old-key",
+                    userId: "u1",
+                    isActive: "true",
+                    expiresAt: "2020-01-01T00:00:00Z",
+                },
+            ],
+        });
+
+        render(<ApiKeys />);
+
+        expect(await screen.findByText("old-key")).toBeInTheDocument();
+        expect(screen.getByText("Expired")).toBeInTheDocument();
     });
 });
