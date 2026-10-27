@@ -661,14 +661,44 @@ A deployment writes each enabled default schema once, and on later deployments r
 
 Compliance deploys with every VAMS deployment: five Amazon DynamoDB tables, nine AWS Lambda functions, and the `/compliance/*` API routes for schema management, automated evaluation, quarantine management, cascade execution, and audit logging. There is no enable switch; access to the routes is governed by permissions like every other page. These two fields tune its behavior.
 
-| Field                                     | Type    | Default | Description                                                                                                                                                                                                                                                                                     |
-| ----------------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.compliance.autoLoadDefaultSchema`    | boolean | `true`  | Deploys a default global compliance schema (`default-compliance-schema`) that validates a bound asset's metadata against the default asset metadata schema at the `warn` level. Set to `false` to skip.                                                                                         |
-| `app.compliance.quarantineBlocksDownload` | boolean | `false` | When `true`, the asset download, stream, export (presigned file URLs) and auxiliary-preview stream endpoints refuse a quarantined asset unless it has an active exception. When `false` (default), quarantine is informational only — the UI displays a warning but downloads proceed normally. |
+| Field                                     | Type    | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ----------------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.compliance.autoLoadDefaultSchema`    | boolean | `true`  | Deploys a default global compliance schema (`default-compliance-schema`) that validates a bound asset's metadata against the default asset metadata schema at the `warn` level. Set to `false` to skip on a fresh deployment. On an existing deployment, `false` leaves an already-written schema in place (see [The default schema on fresh and existing deployments](#the-default-schema-on-fresh-and-existing-deployments)). |
+| `app.compliance.quarantineBlocksDownload` | boolean | `false` | When `true`, the asset download, stream, export (presigned file URLs) and auxiliary-preview stream endpoints refuse a quarantined asset unless it has an active exception. When `false` (default), quarantine is informational only — the UI displays a warning but downloads proceed normally.                                                                                                                                 |
 
 The default compliance schema's single rule validates assets against the GLOBAL `defaultAsset` metadata schema, which is created by `app.metadataSchema.autoLoadDefaultAssetSchema`. Deployment validation rejects a configuration that sets `app.compliance.autoLoadDefaultSchema` to `true` while `app.metadataSchema.autoLoadDefaultAssetSchema` is `false`: without the metadata schema the rule has no fields to check, so the seeded schema would report every asset compliant. Disable both flags to run without the default schemas, or keep both enabled.
 
-The default schema is written once: a redeploy leaves an existing `default-compliance-schema` row in place.
+#### The default schema on fresh and existing deployments
+
+The default schema is written once, by the deployment that first finds it missing. Later deployments do not change it, refresh it or remove it, whatever `app.compliance.autoLoadDefaultSchema` is set to. Its description says so: "Written once at deployment by app.compliance.autoLoadDefaultSchema; later deployments do not change or remove it."
+
+| Deployment                                                        | `autoLoadDefaultSchema: true`           | `autoLoadDefaultSchema: false`                                                                                                                                            |
+| ----------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fresh deployment                                                  | Writes `default-compliance-schema`.     | No default schema is written.                                                                                                                                             |
+| Existing deployment that already has `default-compliance-schema`  | Leaves the schema as it is.             | Removes only the seeding step. The schema stays: it is still listed, still bound wherever it was bound, and still evaluated. Turning the flag back on leaves it as it is. |
+| Existing deployment without the schema (deleted, or never seeded) | Writes it again on the next deployment. | Nothing is written.                                                                                                                                                       |
+
+The default schema is a system schema (`isSystem: true`). The web interface, the CLI and the API refuse to update or delete it for every user, administrators included (`400`, "System schemas cannot be deleted"). So an administrator who turns the flag off chooses one of two things:
+
+-   **Keep the schema.** Nothing to do. It does nothing to a database or asset until it is bound, and a binding made earlier keeps working. To stop it applying to a database, remove that database's binding (**Remove binding** on the database's Compliance page, or `vamscli compliance unbind -d <databaseId>`); the schema itself stays listed.
+-   **Remove the schema.** First remove every binding of it: each database binding as above, and each asset-level override (`vamscli compliance bindings -d <databaseId>` lists a database's overrides; `vamscli compliance unbind -d <databaseId> -a <assetId>` removes one). An asset still bound to a deleted schema records "Schema not found" on its next evaluation. Then delete the schema's items from the compliance schema table in Amazon DynamoDB, one per version, with credentials that can write to that table. Deleting it this way writes no compliance audit entry. While `autoLoadDefaultSchema` is `true`, the next deployment writes the schema again, so set the flag to `false` first.
+
+```bash
+# The compliance schema table of this deployment
+TABLE=$(aws ssm get-parameter \
+    --name "/<CONFIG_NAME>-<BASE_STACK_NAME>/resourceNames/dynamoTables/complianceSchemaStorage" \
+    --query Parameter.Value --output text)
+
+# The schema's versions
+aws dynamodb query --table-name "$TABLE" \
+    --key-condition-expression "schemaName = :name" \
+    --expression-attribute-values '{":name": {"S": "default-compliance-schema"}}' \
+    --projection-expression internalVersion
+
+# Delete each version the query lists (the seed writes version 1)
+aws dynamodb delete-item --table-name "$TABLE" \
+    --key '{"schemaName": {"S": "default-compliance-schema"}, "internalVersion": {"N": "1"}}'
+```
 
 **Authorization:** The default admin role is granted full access to all compliance operations. For non-admin users, use the `compliance-admin` or `compliance-readonly` permission templates (in `documentation/permissionsTemplates/`) to grant scoped access. Compliance uses four dedicated Casbin object types: `complianceSchema`, `complianceEvaluation`, `complianceCascade`, and `complianceBinding`. See [Permissions Model: Compliance Routes](../concepts/permissions-model.md#compliance-routes) for details.
 

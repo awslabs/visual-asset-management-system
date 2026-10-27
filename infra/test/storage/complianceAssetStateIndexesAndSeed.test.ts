@@ -172,6 +172,17 @@ describe("default compliance schema seed is idempotent", () => {
         expect(del).toBeUndefined();
     });
 
+    test("the seeded description stays true once autoLoadDefaultSchema is turned off", () => {
+        // The row outlives the seed: turning the flag off removes the custom resource but not the
+        // row, so its description names the flag that wrote it and says deployments leave it alone,
+        // rather than claiming the deployment provides it.
+        const { create } = complianceSeed(synth());
+        const description: string = create.parameters.Item.description.S;
+        expect(description).toContain("app.compliance.autoLoadDefaultSchema");
+        expect(description).toContain("do not change or remove it");
+        expect(description).not.toContain("Deployed automatically");
+    });
+
     test("the physical id is a stable literal, not a response field", () => {
         // `ignoreErrorCodesMatching` is incompatible with `PhysicalResourceId.fromResponse` — an ignored
         // error returns no response to read — and a physical id that changed between Create and Update

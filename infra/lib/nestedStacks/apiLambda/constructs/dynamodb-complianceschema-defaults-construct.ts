@@ -86,8 +86,11 @@ export class DynamoDbComplianceSchemaDefaultsConstruct extends Construct {
                     schemaName: { S: "default-compliance-schema" },
                     internalVersion: { N: "1" },
                     databaseId: { S: "GLOBAL" },
+                    // Written once and never refreshed, so the text must stay true after
+                    // autoLoadDefaultSchema is turned off: say where the schema came from, not
+                    // that the deployment maintains it.
                     description: {
-                        S: "Default compliance schema: validates bound assets against the default asset metadata schema. Deployed automatically with VAMS.",
+                        S: "Default compliance schema: validates bound assets against the default asset metadata schema. Written once at deployment by app.compliance.autoLoadDefaultSchema; later deployments do not change or remove it.",
                     },
                     schemaBody: { S: JSON.stringify(DEFAULT_COMPLIANCE_SCHEMA) },
                     registeredAt: { S: now },

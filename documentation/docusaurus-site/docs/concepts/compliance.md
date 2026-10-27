@@ -15,10 +15,10 @@ Compliance is part of every VAMS deployment: five Amazon DynamoDB tables, nine A
 }
 ```
 
-| Setting                                   | Default | Effect                                                                                                                                                                                                                               |
-| ----------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `app.compliance.autoLoadDefaultSchema`    | `true`  | Seeds the `GLOBAL` schema `default-compliance-schema` at deployment: one `warn`-level metadata rule that validates a bound asset against the `GLOBAL` `defaultAsset` metadata schema.                                                |
-| `app.compliance.quarantineBlocksDownload` | `false` | When `true`, the asset download, stream, export (presigned file URLs) and auxiliary-preview stream endpoints refuse a quarantined asset. When `false`, quarantine is visible in the interface and the API but does not block access. |
+| Setting                                   | Default | Effect                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.compliance.autoLoadDefaultSchema`    | `true`  | Seeds the `GLOBAL` schema `default-compliance-schema` at deployment: one `warn`-level metadata rule that validates a bound asset against the `GLOBAL` `defaultAsset` metadata schema. The schema is written once; setting `false` on an existing deployment stops the seeding but leaves an already-written schema in place. |
+| `app.compliance.quarantineBlocksDownload` | `false` | When `true`, the asset download, stream, export (presigned file URLs) and auxiliary-preview stream endpoints refuse a quarantined asset. When `false`, quarantine is visible in the interface and the API but does not block access.                                                                                         |
 
 See the [Configuration Reference](../deployment/configuration-reference.md) for the settings and [Compliance (User Guide)](../user-guide/compliance.md) for the interface walkthrough.
 
@@ -26,7 +26,7 @@ See the [Configuration Reference](../deployment/configuration-reference.md) for 
 
 A compliance schema is a named, versioned set of rules. Every registration or update writes the next version of the schema and evaluation always reads the highest version, so the version history is retained. A schema is scoped to a database or to `GLOBAL`; a database-scoped schema can only be bound within its own database, while a `GLOBAL` schema can be bound anywhere.
 
-A schema whose `isSystem` flag is set is a system schema. Only the system user can register one, write a new version of it, or delete it. The default schema seeded at deployment is a system schema.
+A schema whose `isSystem` flag is set is a system schema. Only the system user can register one, write a new version of it, or delete it. The default schema seeded at deployment is a system schema, so no user can edit or delete it through the web interface, the CLI or the API, including after `app.compliance.autoLoadDefaultSchema` is turned off. To keep it, do nothing; to remove it, see [The default schema on fresh and existing deployments](../deployment/configuration-reference.md#the-default-schema-on-fresh-and-existing-deployments).
 
 ### Schema format
 
