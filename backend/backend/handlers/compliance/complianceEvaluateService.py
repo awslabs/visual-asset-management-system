@@ -40,7 +40,9 @@ from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from handlers.compliance import complianceEvaluationStore as store
-from handlers.compliance.complianceTrigger import check_and_trigger_cascade
+from handlers.compliance.complianceTrigger import (
+    check_and_trigger_cascade, remove_record_if_asset_gone,
+)
 from models.common import (
     APIGatewayProxyResponseV2,
     VAMSGeneralErrorResponse,
@@ -296,7 +298,9 @@ def sweep_schema(event, schema_name, starting_token=None):
     the response carries `NextToken`, and a call that passes it back as `startingToken` evaluates
     only the assets not evaluated since the sweep started (`_sweep_candidates`), so the calls
     advance and the sweep ends; `assetsRemaining` counts the assets still to evaluate after this
-    call. `pending_evaluation` rows go first, then the least recently evaluated. An asset whose
+    call. `pending_evaluation` rows go first, then the least recently evaluated. A record whose
+    asset no longer exists is not evaluated: it is removed as the asset's permanent deletion
+    removes it and counted under `removedOrphans`. An asset whose
     evaluation found a newer one of it already started (a trigger evaluation running at the same
     time) is listed with verdict `superseded` and `superseded: true` and counted under
     `superseded`: its state is that evaluation's, and the listed `evaluationId` names no evaluation
@@ -338,6 +342,7 @@ def sweep_schema(event, schema_name, starting_token=None):
     triggered = []
     skipped = 0
     superseded = 0
+    removed_orphans = 0
     beyond_cap = 0
     beyond_budget = 0
     budget_spent = False
@@ -358,6 +363,9 @@ def sweep_schema(event, schema_name, starting_token=None):
         if budget_spent:
             beyond_budget += 1
             continue
+        if _asset_gone_and_record_removed(database_id, asset["assetId"]):
+            removed_orphans += 1
+            continue
         result = run_evaluation_for_asset(database_id, asset["assetId"], schema_name, actor)
         entry = {
             "databaseId": database_id,
@@ -375,7 +383,8 @@ def sweep_schema(event, schema_name, starting_token=None):
     logger.info(f"Sweep of schema {schema_name}: {len(triggered)} triggered ({superseded} "
                 f"superseded by a newer evaluation), {skipped} skipped, {remaining} remaining "
                 f"({beyond_cap} beyond the cap, {beyond_budget} beyond the time budget), "
-                f"{evaluated_earlier} evaluated earlier in this sweep")
+                f"{evaluated_earlier} evaluated earlier in this sweep, {removed_orphans} records of deleted "
+                f"assets removed")
     body = {
         "message": f"Sweep triggered for {len(triggered)} assets",
         "schemaName": schema_name,
@@ -384,6 +393,7 @@ def sweep_schema(event, schema_name, starting_token=None):
         "skipped": skipped,
         "skippedNotAuthorized": skipped,
         "superseded": superseded,
+        "removedOrphans": removed_orphans,
     }
     if remaining:
         body["NextToken"] = _sweep_token(sweep_started_at)
@@ -397,7 +407,8 @@ def evaluate_database(event, database_id, starting_token=None):
     SWEEP_TIME_BUDGET_SECONDS per call, `pending_evaluation` rows first and then the least recently
     evaluated, a `NextToken` while assets remain that the next call passes back as `startingToken`
     to evaluate only the assets not evaluated since the evaluation started, and `assetsRemaining`
-    the tracked assets still to evaluate after this call (`_sweep_candidates`).
+    the tracked assets still to evaluate after this call (`_sweep_candidates`). A record whose
+    asset no longer exists is removed rather than evaluated, as in a sweep (`removedOrphans`).
 
     A database binding governs every asset of the database, so an asset of a bound database that
     has no compliance record yet is registered under the binding first (`registered`). A tracked
@@ -434,6 +445,7 @@ def evaluate_database(event, database_id, starting_token=None):
     actor = claims_and_roles["tokens"][0]
     triggered = []
     superseded = 0
+    removed_orphans = 0
     without_schema = 0
     beyond_cap = 0
     beyond_budget = 0
@@ -453,6 +465,9 @@ def evaluate_database(event, database_id, starting_token=None):
         if budget_spent:
             beyond_budget += 1
             continue
+        if _asset_gone_and_record_removed(database_id, row["assetId"]):
+            removed_orphans += 1
+            continue
         result = run_evaluation_for_asset(database_id, row["assetId"], schema_name, actor)
         entry = {
             "databaseId": database_id,
@@ -470,7 +485,8 @@ def evaluate_database(event, database_id, starting_token=None):
     logger.info(f"Evaluation of database {database_id}: {registered} registered, {len(triggered)} "
                 f"triggered ({superseded} superseded), {without_schema} without a schema, "
                 f"{remaining} remaining ({beyond_cap} beyond the cap, {beyond_budget} beyond the "
-                f"time budget), {evaluated_earlier} evaluated earlier in this evaluation")
+                f"time budget), {evaluated_earlier} evaluated earlier in this evaluation, "
+                f"{removed_orphans} records of deleted assets removed")
     body = {
         "message": f"Evaluation triggered for {len(triggered)} assets",
         "databaseId": database_id,
@@ -479,10 +495,22 @@ def evaluate_database(event, database_id, starting_token=None):
         "superseded": superseded,
         "registered": registered,
         "withoutSchema": without_schema,
+        "removedOrphans": removed_orphans,
     }
     if remaining:
         body["NextToken"] = _sweep_token(sweep_started_at)
     return success(body=body)
+
+
+def _asset_gone_and_record_removed(database_id, asset_id):
+    """Whether a sweep reached the compliance record of an asset that no longer exists, and so
+    removed it rather than evaluate it (the evaluation would record a verdict for an asset that is
+    gone and keep the record counted in the overview). One read of the asset row decides the usual
+    case; a missing row is confirmed against the archive and the record is removed as the asset's
+    permanent deletion removes it (`remove_record_if_asset_gone`)."""
+    if store.get_asset_item(database_id, asset_id):
+        return False
+    return remove_record_if_asset_gone(database_id, asset_id)
 
 
 def _database_rows(database_id):

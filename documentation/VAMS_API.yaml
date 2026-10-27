@@ -16945,6 +16945,9 @@ components:
                 withoutSchema:
                     type: integer
                     description: "Tracked assets whose compliance record names no schema; not evaluated."
+                removedOrphans:
+                    type: integer
+                    description: "Compliance records of assets that no longer exist, removed (with an `asset_deleted` audit entry) instead of evaluated."
             required:
                 - message
                 - databaseId
@@ -17000,6 +17003,9 @@ components:
                 superseded:
                     type: integer
                     description: "Listed assets whose evaluation did not run because a newer evaluation of the asset had already started."
+                removedOrphans:
+                    type: integer
+                    description: "Compliance records of assets that no longer exist, removed (with an `asset_deleted` audit entry) instead of evaluated."
             required:
                 - message
                 - schemaName

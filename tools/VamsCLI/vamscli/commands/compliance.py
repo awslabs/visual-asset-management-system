@@ -943,6 +943,9 @@ def sweep(ctx: click.Context, schema_name: Optional[str], database_id: Optional[
                 lines.append(f"  Registered under the database binding: {r['registered']}")
             if r.get('withoutSchema'):
                 lines.append(f"  Without a bound schema (not evaluated): {r['withoutSchema']}")
+            if r.get('removedOrphans'):
+                lines.append(f"  Records of deleted assets removed (not evaluated): "
+                             f"{r['removedOrphans']}")
             if r.get('assetsRemaining'):
                 lines.append(f"  Remaining (not evaluated yet): {r['assetsRemaining']}")
             if r.get('NextToken'):
@@ -960,14 +963,15 @@ def sweep(ctx: click.Context, schema_name: Optional[str], database_id: Optional[
 def _follow_sweep(call, starting_token: Optional[str], follow: bool,
                   json_output: bool) -> Dict[str, Any]:
     """Call a sweep route, following its NextToken until the sweep is done (no token), and merge
-    the calls into one result: every call's `assetsTriggered`, the summed `superseded` and
-    `registered`, the last call's `skipped`, `withoutSchema` and `assetsRemaining` (each call counts
+    the calls into one result: every call's `assetsTriggered`, the summed `superseded`,
+    `registered` and `removedOrphans`, the last call's `skipped`, `withoutSchema` and `assetsRemaining` (each call counts
     those across the whole sweep), and `calls`. Stops early, keeping the last `NextToken`, when
     `follow` is off or a call evaluated nothing (no progress: continue later with the token)."""
     result = call(starting_token)
     triggered = list(result.get('assetsTriggered') or [])
     superseded = result.get('superseded') or 0
     registered = result.get('registered') or 0
+    removed = result.get('removedOrphans') or 0
     calls = 1
     while follow and result.get('NextToken') and result.get('assetsTriggered'):
         output_status(f"  {len(triggered)} evaluated, {result.get('assetsRemaining', 0)} "
@@ -977,6 +981,7 @@ def _follow_sweep(call, starting_token: Optional[str], follow: bool,
         triggered.extend(result.get('assetsTriggered') or [])
         superseded += result.get('superseded') or 0
         registered += result.get('registered') or 0
+        removed += result.get('removedOrphans') or 0
     if calls == 1:
         return result
     merged = dict(result, assetsTriggered=triggered, calls=calls)
@@ -984,6 +989,8 @@ def _follow_sweep(call, starting_token: Optional[str], follow: bool,
         merged['superseded'] = superseded
     if 'registered' in result or registered:
         merged['registered'] = registered
+    if 'removedOrphans' in result or removed:
+        merged['removedOrphans'] = removed
     merged['message'] = f"Sweep triggered for {len(triggered)} assets in {calls} calls"
     return merged
 

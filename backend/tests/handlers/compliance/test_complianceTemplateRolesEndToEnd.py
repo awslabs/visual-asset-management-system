@@ -135,6 +135,7 @@ class TestTheServicesWithTheRealEnforcer:
                 patch(f"{STORE}.load_schema_item",
                       return_value=schema_row("global-1", database_id=GLOBAL)), \
                 patch(f"{STORE}.databases_bound_to_schema", return_value=[]), \
+                patch(f"{STORE}.get_asset_item", return_value={"databaseId": "db", "assetId": "present"}), \
                 patch(f"{svc.__name__}.run_evaluation_for_asset",
                       return_value={"evaluationId": "e", "verdict": "compliant"}) as run:
             response = svc.lambda_handler(

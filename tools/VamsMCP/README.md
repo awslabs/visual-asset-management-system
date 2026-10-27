@@ -474,7 +474,9 @@ state is left unchanged with `lastEvaluationStatus` `error`. `sweep_compliance_s
 `NextToken`, and calling again with it as `starting_token` continues the sweep until no
 token is returned. `evaluate_database_compliance` evaluates
 the tracked assets of one database, each against its own bound schema, with the same
-bounds and continuation, and adds `registered` and `withoutSchema`. `release_quarantine` returns an asset to
+bounds and continuation, and adds `registered` and `withoutSchema`. Both remove,
+rather than evaluate, the compliance record of an asset that no longer exists
+(`removedOrphans`). `release_quarantine` returns an asset to
 compliant until its next evaluation; `grant_quarantine_exception` records a
 deliberate waiver with its required `reason` and moves the asset to state
 `exception`, scoped to its bound schema at its current version — a re-evaluation

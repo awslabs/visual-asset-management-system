@@ -520,6 +520,7 @@ class TestSweep:
                 patch(f"{MOD}.asset_state_table", state_table), \
                 patch(f"{STORE}.load_schema_item", return_value=schema_row()), \
                 patch(f"{STORE}.run_evaluation", return_value=EVALUATION_RESULT) as run, \
+                patch(f"{STORE}.get_asset_item", return_value={"databaseId": "db", "assetId": "present"}), \
                 patch(f"{MOD}.check_and_trigger_cascade"):
             response = svc.lambda_handler(
                 rest_event("POST", SWEEP_PATH, SCHEMA_PARAMS, body={}), MagicMock())

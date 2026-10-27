@@ -426,6 +426,7 @@ class TestTheSweepReachesOnlyTheCallersDatabases:
                 patch(f"{mod}.asset_state_table", state_table), \
                 patch(f"{STORE}.load_schema_item", return_value=schema_row()), \
                 patch(f"{STORE}.databases_bound_to_schema", return_value=[]), \
+                patch(f"{STORE}.get_asset_item", return_value={"databaseId": "db", "assetId": "present"}), \
                 patch(f"{mod}.run_evaluation_for_asset",
                       return_value={"evaluationId": "e", "verdict": "compliant"}) as run:
             response = evaluate_svc.lambda_handler(

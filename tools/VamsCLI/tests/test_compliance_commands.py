@@ -1035,6 +1035,19 @@ class TestComplianceEvaluationCommands:
                     mocks['api_client'].evaluate_database_compliance.call_args_list] == [
                 None, 'tok-2']
 
+    def test_sweep_reports_the_records_of_deleted_assets_it_removed(self, cli_runner,
+                                                                   generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].evaluate_database_compliance.side_effect = [
+                {'assetsTriggered': [{'databaseId': 'd', 'assetId': 'a'}], 'assetsRemaining': 1,
+                 'removedOrphans': 2, 'NextToken': 'tok-2'},
+                {'assetsTriggered': [{'databaseId': 'd', 'assetId': 'b'}], 'assetsRemaining': 0,
+                 'removedOrphans': 1},
+            ]
+            result = cli_runner.invoke(cli, ['compliance', 'sweep', '-d', 'd'])
+            assert result.exit_code == 0, result.output
+            assert 'Records of deleted assets removed (not evaluated): 3' in result.output
+
     def test_sweep_stops_with_the_token_when_a_call_makes_no_progress(self, cli_runner,
                                                                     generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:

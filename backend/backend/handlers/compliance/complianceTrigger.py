@@ -613,20 +613,42 @@ def _process_asset_removal(database_id, asset_id, batch=None):
     if not asset_is_gone(database_id, asset_id):
         return
     batch.evaluated.add((live, asset_id))
+    _delete_record_of_deleted_asset(live, asset_id)
+
+
+def remove_record_if_asset_gone(database_id, asset_id, detected_by="sweep"):
+    """For a sweep that reached a compliance record: when the record's asset was permanently
+    deleted (no asset row in the database or its archive), remove the record as the asset-table
+    REMOVE does (`_process_asset_removal`: the record with its state, binding and quarantine, and
+    one `asset_deleted` audit entry) instead of evaluating an asset that is gone. Returns whether
+    the asset is gone (its record is then absent, removed here or already); an archived asset
+    keeps its record."""
+    if not asset_is_gone(database_id, asset_id):
+        return False
+    _delete_record_of_deleted_asset(live_database_id(database_id), asset_id, detected_by)
+    return True
+
+
+def _delete_record_of_deleted_asset(live, asset_id, detected_by=None):
+    """Delete the compliance record of a permanently deleted asset and audit it once; returns
+    whether there was a record to delete."""
     removed = asset_state_table.delete_item(
         Key={"databaseId": live, "assetId": asset_id}, ReturnValues="ALL_OLD").get("Attributes")
     if not removed:
-        return
+        return False
     logger.info(f"Asset {live}:{asset_id} was permanently deleted; removed its compliance record")
+    details = {"reason": "asset_permanently_deleted", "schemaSource": removed.get("schemaSource")}
+    if detected_by:
+        details["detectedBy"] = detected_by
     store.write_audit(
         live, asset_id,
         event_type=AUDIT_EVENT_ASSET_DELETED,
         actor=store.SYSTEM_ACTOR,
-        details={"reason": "asset_permanently_deleted",
-                 "schemaSource": removed.get("schemaSource")},
+        details=details,
         previous_state=removed.get("complianceState"),
         schema_name=removed.get("schemaName"),
     )
+    return True
 
 
 def stream_record_kind(dynamodb_data):

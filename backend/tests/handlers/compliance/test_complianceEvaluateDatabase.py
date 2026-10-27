@@ -42,6 +42,8 @@ def _run(rows, database_item=None, casbin=None, registered=0, result=RESULT, clo
               if database_item is None else database_item),
         patch(f"{STORE}.register_unrecorded_assets", return_value=registered),
         patch(f"{STORE}.run_evaluation", return_value=result),
+        # Every asset exists: a sweep evaluates it rather than removing its record.
+        patch(f"{STORE}.get_asset_item", return_value={"databaseId": "db", "assetId": "present"}),
         patch(f"{MOD}.check_and_trigger_cascade"),
     ]
     if clock is not None:
