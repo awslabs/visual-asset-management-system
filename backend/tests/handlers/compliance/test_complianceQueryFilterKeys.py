@@ -26,7 +26,6 @@ from unittest.mock import MagicMock, patch
 import boto3
 from boto3.dynamodb.conditions import ConditionExpressionBuilder
 import pytest
-from boto3.resources.base import ServiceResource
 from moto import mock_aws
 
 from backend.tests.handlers.compliance import _cdkTables
@@ -84,9 +83,6 @@ def key_attribute_violations(calls, tables_by_name):
                                tuple(sorted(named))))
     return violations
 
-
-def _is_table(value):
-    return isinstance(value, ServiceResource) and value.meta.resource_model.name == "Table"
 
 
 def _now(offset_hours=0):
@@ -204,23 +200,7 @@ def recorded():
 
         resource.meta.client.meta.events.register("before-call.dynamodb.Query", record)
         resource.meta.client.meta.events.register("before-call.dynamodb.Scan", record)
-        doubles, patches, unknown = {}, [], set()
-        for module in HANDLER_MODULES:
-            for attribute, value in vars(module).items():
-                if not _is_table(value):
-                    continue
-                if value.name not in tables_by_test_name:
-                    unknown.add(f"{module.__name__}.{attribute} ({value.name})")
-                    continue
-                if value.name not in doubles:
-                    _, cdk_table = tables_by_test_name[value.name]
-                    resource.create_table(**cdk_table.create_table_kwargs(value.name))
-                    doubles[value.name] = resource.Table(value.name)
-                patches.append(patch.object(module, attribute, doubles[value.name]))
-        assert not unknown, f"tables not published by the storage stack: {sorted(unknown)}"
-        by_key = {key.split("/", 1)[1]: doubles[name]
-                  for name, (_, table) in tables_by_test_name.items() if name in doubles
-                  for key, candidate in _cdkTables.storage_tables().items() if candidate is table}
+        patches, by_key = _cdkTables.table_doubles(resource, HANDLER_MODULES)
         for active in patches:
             active.start()
         try:

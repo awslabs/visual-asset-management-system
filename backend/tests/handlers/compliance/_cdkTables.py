@@ -151,3 +151,37 @@ def tables_by_test_name() -> Dict[str, Tuple[str, CdkTable]]:
 
 def all_tables() -> List[CdkTable]:
     return list(storage_tables().values())
+
+
+def _is_table_resource(value) -> bool:
+    from boto3.resources.base import ServiceResource
+    return isinstance(value, ServiceResource) and value.meta.resource_model.name == "Table"
+
+
+def table_doubles(resource, modules):
+    """`(patches, doubles_by_key)` for every DynamoDB table resource a handler module holds as a
+    module attribute: a double of the CDK table (created on `resource`, a moto-backed DynamoDB
+    resource, under the name the test environment resolves) and an unstarted `patch.object` per
+    attribute, so aliases (`asset_state_table = store.asset_state_table`) share one double.
+    `doubles_by_key` maps the `dynamoTables/<key>` suffix (`complianceAssetStateStorage`) to the
+    double. Raises when a module holds a table the storage stack does not publish."""
+    from unittest.mock import patch
+    by_name = tables_by_test_name()
+    doubles: Dict[str, object] = {}
+    patches, unknown = [], []
+    for module in modules:
+        for attribute, value in vars(module).items():
+            if not _is_table_resource(value):
+                continue
+            if value.name not in by_name:
+                unknown.append(f"{module.__name__}.{attribute} ({value.name})")
+                continue
+            if value.name not in doubles:
+                resource.create_table(**by_name[value.name][1].create_table_kwargs(value.name))
+                doubles[value.name] = resource.Table(value.name)
+            patches.append(patch.object(module, attribute, doubles[value.name]))
+    if unknown:
+        raise AssertionError(f"tables not published by the storage stack: {sorted(unknown)}")
+    keys = {id(table): key.split("/", 1)[1] for key, table in storage_tables().items()}
+    doubles_by_key = {keys[id(by_name[name][1])]: double for name, double in doubles.items()}
+    return patches, doubles_by_key

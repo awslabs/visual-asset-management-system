@@ -20,11 +20,17 @@ from backend.tests.handlers.compliance._harness import (
     ASSET, DB, REAL_TO_UPDATE_EXPR, RULES_SCHEMA_BODY, SCHEMA, SYNC_RULES_SCHEMA_BODY, USER,
     FakeAssetStateTable, put_items, schema_row, update_values,
 )
+from common.compliance import listing
 from handlers.compliance import complianceEvaluationStore as store
 from models.compliance import PipelineRule
 from models.executions import ExecuteWorkflowRequestV2Model
 
 STORE = "handlers.compliance.complianceEvaluationStore"
+# The attributes the evaluation writes when it records the asset's name on its compliance record.
+NAME_ATTRIBUTES = {"assetName", "assetNameSort", "assetSearchText"}
+# A compliance record that already carries the (unnamed) asset's name attributes, for the tests
+# that pin what an evaluation reads and writes: the evaluation then writes no name.
+NAMED_RECORD = listing.asset_name_attributes(ASSET, None)
 NOTIFICATIONS = "handlers.compliance.complianceNotifications"
 
 PIPELINE_RULE = PipelineRule(**RULES_SCHEMA_BODY["rules"]["residual-bound"])
@@ -267,8 +273,9 @@ class Tables:
     def claim_and_outcome(self):
         """`(claim, outcome)`: the two asset-state writes of a `run_evaluation` that ran — the claim
         it made as it started (the pointers, `pending_pipeline`) and the write that applied its
-        outcome for the same evaluation."""
-        writes = update_values(self.state)
+        outcome for the same evaluation. The write of the asset's name onto a record without one
+        (`_keep_record_name`) is not one of them."""
+        writes = [write for write in update_values(self.state) if set(write) != NAME_ATTRIBUTES]
         assert len(writes) == 2, writes
         claim, outcome = writes
         assert claim["lastEvaluationStatus"] == store.engine.EVALUATION_STATUS_PENDING_PIPELINE
@@ -718,7 +725,7 @@ class TestPipelineRuleLaunch:
     def test_the_asset_files_are_listed_once_for_several_pipeline_rules(self):
         body = dict(RULES_SCHEMA_BODY, rules={
             "residual-bound": PIPELINE_RULE.dict(), "other": OTHER_RULE.dict()})
-        tables = Tables(schema_body=body)
+        tables = Tables(schema_body=body, previous_row=NAMED_RECORD)
         tables.pipeline.get_item.side_effect = lambda **kw: {"Item": {"pipelineId": kw["Key"]["pipelineId"]}}
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA)
         assert result["pipelineRulesPending"] == 2
@@ -1218,7 +1225,7 @@ class TestFileAndAttributeRules:
         return tables
 
     def test_an_evaluation_without_these_rule_types_lists_no_files_and_reads_no_versions(self):
-        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY)
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, previous_row=NAMED_RECORD)
         tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
         tables.s3_client.list_object_versions.assert_not_called()
         tables.s3_client.get_paginator.assert_not_called()
@@ -2006,7 +2013,7 @@ class TestStartClaim:
 
     PREVIOUS = {"complianceState": "compliant", "schemaName": SCHEMA, "schemaSource": "database",
                 "lastEvaluationId": "eval-older", "lastEvaluatedAt": "2026-01-01T00:00:00+00:00",
-                "lastEvaluationStatus": "completed"}
+                "lastEvaluationStatus": "completed", **NAMED_RECORD}
 
     def test_the_claim_precedes_every_rule_read_and_the_launch(self):
         tables = Tables(previous_row=self.PREVIOUS)
@@ -2113,7 +2120,7 @@ class TestOwnedStateWrite:
     def test_a_write_that_loses_the_condition_leaves_the_row_and_the_audit_alone(self):
         """The claim lands; a newer evaluation claims the row while this one runs, so the outcome
         write loses its condition."""
-        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0)
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0, previous_row=NAMED_RECORD)
         tables.state.update_item.side_effect = [{}, conditional_check_failure()]
         result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
         assert result["verdict"] == "quarantined"
@@ -2122,7 +2129,7 @@ class TestOwnedStateWrite:
         assert tables.evaluation_records()[0][0]["status"] == "completed"
 
     def test_a_real_write_failure_is_raised(self):
-        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0)
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, parents=0, previous_row=NAMED_RECORD)
         tables.state.update_item.side_effect = [{}, RuntimeError("table unavailable")]
         with pytest.raises(RuntimeError):
             tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
@@ -2401,7 +2408,7 @@ class TestScopedMetadataRules:
 
     def _tables(self, body, schema_rows, files=("/models/part.glb", "/models/plain.glb"),
                 file_rows=(), attribute_rows=(), parents=(), children=(), link_rows=None):
-        tables = Tables(schema_body=body, asset_files=files)
+        tables = Tables(schema_body=body, asset_files=files, previous_row=NAMED_RECORD)
         tables.metadata_schema.query.side_effect = _schema_lookup(*schema_rows)
         asset_rows = [{"metadataKey": "owner", "metadataValue": "v", "metadataValueType": "STRING",
                        "databaseId:assetId:filePath": f"{DB}:{ASSET}:/"}]

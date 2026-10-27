@@ -847,7 +847,7 @@ A `state` filter reads the state index, `sort=name` reads the database's name in
 
 Right after an update that adds the name index to an existing table, Amazon DynamoDB builds the index in the background, and until it is active it cannot be read. A `sort=name` request (without `state`) is then answered in `assetId` order with `"nameSortUnavailable": true`, and its `NextToken` continues in that order; once the index is active the flag is absent.
 
-A record written before asset names were kept on compliance records has no `assetName` until the asset is next modified or re-registered; until then it is absent from `sort=name` and matches `text` by its ID only.
+A record written before asset names were kept on compliance records has no `assetName` until its next evaluation, which writes the asset's current name onto the record (`POST /compliance/evaluate/{databaseId}` evaluates every tracked asset of a database), or until the asset is next modified; until then it is absent from `sort=name` and matches `text` by its ID only.
 
 ### Error responses
 

@@ -920,6 +920,24 @@ def refresh_asset_state_name(database_id: str, asset_id: str, asset_name: Option
     return True
 
 
+def _keep_record_name(database_id: str, asset_id: str, record: Dict[str, Any],
+                      asset_row: Optional[Dict[str, Any]]) -> None:
+    """Write the asset's current name onto its compliance record when the record has none or
+    names another (`refresh_asset_state_name`). Called by an evaluation with the asset row it read,
+    so it costs no extra read; best-effort — a failed name write never fails the evaluation."""
+    if not isinstance(asset_row, dict):
+        return
+    name = asset_row.get("assetName")
+    name = name.strip() if isinstance(name, str) else ""
+    if record.get("assetNameSort") and (record.get("assetName") or "") == name:
+        return
+    try:
+        refresh_asset_state_name(database_id, asset_id, name)
+    except Exception as e:
+        logger.warning(f"Could not record the name of asset {database_id}:{asset_id} on its "
+                       f"compliance record: {e}")
+
+
 def update_asset_state(database_id: str, asset_id: str, updates: Dict[str, Any],
                        condition=None) -> None:
     """SET attributes on an asset's compliance state row (created when absent), optionally under a
@@ -1301,8 +1319,9 @@ def run_evaluation(
     synchronously; pipeline rules launch workflow executions and leave the evaluation
     `pending_pipeline` until the workflow callback finalizes it. The asset row, the asset's current
     file listing and its asset-version file records are read only when a rule of a type that uses
-    them is present, and the file metadata, file attribute and link metadata rows only when a
-    metadata rule of that scope is. Writes the evaluation record, the asset-state row and the audit entries, and returns
+    them is present (the asset row also when the compliance record has no asset name yet, which
+    the evaluation then writes: `_keep_record_name`), and the file metadata, file attribute and
+    link metadata rows only when a metadata rule of that scope is. Writes the evaluation record, the asset-state row and the audit entries, and returns
     `{evaluationId, verdict, complianceState, ruleResults, pipelineRulesPending, schemaVersion,
     exceptionApplied, hasRuleErrors, errorRules}`.
 
@@ -1344,6 +1363,13 @@ def run_evaluation(
                     "row claimed by a newer evaluation; nothing is evaluated")
         return _superseded_result(evaluation_id, claimed_from)
 
+    # A record written before compliance records kept the asset's name has none: the evaluation
+    # reads the asset and writes it, so a sweep fills the names of such records.
+    asset_row = None
+    if not claimed_from.get("assetNameSort"):
+        asset_row = get_asset_item(database_id, asset_id)
+        _keep_record_name(database_id, asset_id, claimed_from, asset_row)
+
     schema_item = load_schema_item(schema_name)
     if schema_item is None:
         return _record_error(evaluation_id, database_id, asset_id, schema_name,
@@ -1370,7 +1396,13 @@ def run_evaluation(
     # Read only for the rule types that use them: an evaluation without a file-structure,
     # version-coverage, asset-attribute or file-scope metadata rule lists no S3 objects and reads no
     # file versions, and each metadata scope's rows are read only when a rule of that scope exists.
-    asset_row = get_asset_item(database_id, asset_id) if engine.needs_asset_row(groups) else None
+    # The asset row is read once: a row read above for the record's name serves the rules too.
+    if engine.needs_asset_row(groups):
+        if asset_row is None:
+            asset_row = get_asset_item(database_id, asset_id)
+            _keep_record_name(database_id, asset_id, claimed_from, asset_row)
+    else:
+        asset_row = None
     current_files = (get_current_files(database_id, asset_id, asset=asset_row)
                      if engine.needs_current_files(groups) and asset_row is not None else None)
     versioned_file_keys = (get_versioned_file_keys(database_id, asset_id)
