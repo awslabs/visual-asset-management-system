@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from "react";
+import React, { useState, useCallback, useEffect, useId, useRef } from "react";
 import "./ResizableSplitter.css";
 
 interface ResizableSplitterProps {
@@ -10,6 +10,9 @@ interface ResizableSplitterProps {
     className?: string;
     onWidthChange?: (width: number) => void; // Callback when width changes
 }
+
+// Width change per ArrowLeft / ArrowRight key press, in pixels
+const KEYBOARD_STEP = 20;
 
 export const ResizableSplitter: React.FC<ResizableSplitterProps> = ({
     leftPanel,
@@ -24,67 +27,109 @@ export const ResizableSplitter: React.FC<ResizableSplitterProps> = ({
     const [isDragging, setIsDragging] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
     const splitterRef = useRef<HTMLDivElement>(null);
+    // Ties the separator to the pane it sizes (aria-controls).
+    const leftPanelId = useId();
 
-    const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    const clampWidth = useCallback(
+        (width: number) => Math.max(minLeftWidth, Math.min(maxLeftWidth, width)),
+        [minLeftWidth, maxLeftWidth]
+    );
+
+    // Pointer events cover mouse, pen and touch; capturing the pointer keeps the drag on the
+    // splitter when the pointer moves faster than the splitter follows.
+    const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
         e.preventDefault();
+        e.currentTarget.setPointerCapture?.(e.pointerId);
         setIsDragging(true);
     }, []);
 
-    const handleMouseMove = useCallback(
-        (e: MouseEvent) => {
+    const handlePointerMove = useCallback(
+        (e: React.PointerEvent<HTMLDivElement>) => {
             if (!isDragging || !containerRef.current) return;
 
             const containerRect = containerRef.current.getBoundingClientRect();
-            const newLeftWidth = e.clientX - containerRect.left;
-
-            // Apply constraints
-            const constrainedWidth = Math.max(minLeftWidth, Math.min(maxLeftWidth, newLeftWidth));
-
-            setLeftWidth(constrainedWidth);
+            setLeftWidth(clampWidth(e.clientX - containerRect.left));
         },
-        [isDragging, minLeftWidth, maxLeftWidth]
+        [isDragging, clampWidth]
     );
 
-    const handleMouseUp = useCallback(() => {
+    const handlePointerEnd = useCallback(() => {
+        if (!isDragging) return;
         setIsDragging(false);
         // Notify parent of width change when dragging ends
         if (onWidthChange) {
             onWidthChange(leftWidth);
         }
-    }, [leftWidth, onWidthChange]);
+    }, [isDragging, leftWidth, onWidthChange]);
 
-    // Add global mouse event listeners when dragging
+    const handleKeyDown = useCallback(
+        (e: React.KeyboardEvent<HTMLDivElement>) => {
+            let next: number;
+            switch (e.key) {
+                case "ArrowLeft":
+                    next = leftWidth - KEYBOARD_STEP;
+                    break;
+                case "ArrowRight":
+                    next = leftWidth + KEYBOARD_STEP;
+                    break;
+                case "Home":
+                    next = minLeftWidth;
+                    break;
+                case "End":
+                    next = maxLeftWidth;
+                    break;
+                default:
+                    return;
+            }
+            e.preventDefault();
+            const width = clampWidth(next);
+            setLeftWidth(width);
+            if (onWidthChange) {
+                onWidthChange(width);
+            }
+        },
+        [leftWidth, minLeftWidth, maxLeftWidth, clampWidth, onWidthChange]
+    );
+
+    // Keep the resize cursor and suppress text selection page-wide while dragging
     useEffect(() => {
         if (isDragging) {
-            document.addEventListener("mousemove", handleMouseMove);
-            document.addEventListener("mouseup", handleMouseUp);
             document.body.style.cursor = "col-resize";
             document.body.style.userSelect = "none";
         } else {
-            document.removeEventListener("mousemove", handleMouseMove);
-            document.removeEventListener("mouseup", handleMouseUp);
             document.body.style.cursor = "";
             document.body.style.userSelect = "";
         }
 
         return () => {
-            document.removeEventListener("mousemove", handleMouseMove);
-            document.removeEventListener("mouseup", handleMouseUp);
             document.body.style.cursor = "";
             document.body.style.userSelect = "";
         };
-    }, [isDragging, handleMouseMove, handleMouseUp]);
+    }, [isDragging]);
 
     return (
         <div ref={containerRef} className={`resizable-splitter-container ${className}`}>
-            <div className="resizable-left-panel" style={{ width: leftWidth }}>
+            <div id={leftPanelId} className="resizable-left-panel" style={{ width: leftWidth }}>
                 {leftPanel}
             </div>
 
             <div
                 ref={splitterRef}
                 className={`resizable-splitter ${isDragging ? "dragging" : ""}`}
-                onMouseDown={handleMouseDown}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize panels"
+                aria-controls={leftPanelId}
+                aria-valuenow={leftWidth}
+                aria-valuetext={`${leftWidth} pixels`}
+                aria-valuemin={minLeftWidth}
+                aria-valuemax={maxLeftWidth}
+                tabIndex={0}
+                onKeyDown={handleKeyDown}
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerEnd}
+                onPointerCancel={handlePointerEnd}
             >
                 <div className="splitter-handle" />
             </div>

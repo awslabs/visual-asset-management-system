@@ -51,13 +51,6 @@ const mount = () => {
             userId="user1"
             setReload={setReload}
             defaultExpanded={true}
-            version={{
-                Comment: "",
-                dateModified: "",
-                S3Version: "",
-                Version: "1",
-                description: "",
-            }}
             comments={[comment]}
             showMessage={showMessage}
         />

@@ -47,6 +47,7 @@ describe.each([
     ["eusovereign", eusovereign, "eusc-de-east-1"],
 ] as const)("%s bootstrap responses", (_name, raw, region) => {
     let amplifyHandler: BootstrapHandler;
+    let amplifyCustomDomainHandler: BootstrapHandler;
     let versionHandler: BootstrapHandler;
 
     beforeAll(() => {
@@ -57,21 +58,30 @@ describe.each([
         const stack = new cdk.Stack(newTestApp(), "Bootstrap", {
             env: { account: config.env.account, region },
         });
-        const amplify = new AmplifyConfigLambdaConstruct(stack, "Amplify", {
-            config,
-            authResources: {
-                cognito: {
-                    userPoolId: "test-pool",
-                    webClientId: "test-client",
-                    identityPoolId: "test-identity",
-                },
-            } as unknown as authResources,
-            region,
-            stackName: "Bootstrap",
-            apiUrl: "https://fallback.example.com/api/",
-        });
+        // `apiUrl` is empty unless the REST API custom domain is on (rest-api-gateway-construct):
+        // empty, the handler derives the URL from the request; set, it returns it as is.
+        const amplifyFor = (id: string, apiUrl: string) =>
+            new AmplifyConfigLambdaConstruct(stack, id, {
+                config,
+                authResources: {
+                    cognito: {
+                        userPoolId: "test-pool",
+                        webClientId: "test-client",
+                        identityPoolId: "test-identity",
+                    },
+                } as unknown as authResources,
+                region,
+                stackName: "Bootstrap",
+                apiUrl,
+            });
+        const amplify = amplifyFor("Amplify", "");
+        const amplifyCustomDomain = amplifyFor(
+            "AmplifyCustomDomain",
+            "https://api.custom.example.com/api/"
+        );
         const version = new VamsVersionLambdaConstruct(stack, "Version", { config });
         amplifyHandler = synthesizedHandler(stack, amplify.lambdaFn);
+        amplifyCustomDomainHandler = synthesizedHandler(stack, amplifyCustomDomain.lambdaFn);
         versionHandler = synthesizedHandler(stack, version.lambdaFn);
     });
 
@@ -102,8 +112,12 @@ describe.each([
                     : "undefined",
             })
         );
-        expect(JSON.parse((await amplifyHandler({})).body).api).toBe(
-            "https://fallback.example.com/api/"
+        const customDomainResponse = await amplifyCustomDomainHandler({
+            requestContext: { domainName: "api.example.com", stage: "api" },
+        });
+        expect(customDomainResponse.headers["Cache-Control"]).toBe("no-cache, no-store");
+        expect(JSON.parse(customDomainResponse.body).api).toBe(
+            "https://api.custom.example.com/api/"
         );
     });
 
@@ -125,7 +139,13 @@ test("the API cache policy honors origin headers while forwarding authorization"
     const distribution = new cloudfront.Distribution(stack, "Distribution", {
         defaultBehavior: { origin: new origins.HttpOrigin("web.example.com") },
     });
-    addBehaviorToCloudFrontDistribution(stack, distribution, "api.example.com", "api");
+    addBehaviorToCloudFrontDistribution(
+        stack,
+        distribution,
+        "api.example.com",
+        "api",
+        commercial.app.api.apiGatewayRest.apiGatewayTimeoutTime
+    );
     const template = Template.fromStack(stack);
     template.hasResourceProperties("AWS::CloudFront::CachePolicy", {
         CachePolicyConfig: {

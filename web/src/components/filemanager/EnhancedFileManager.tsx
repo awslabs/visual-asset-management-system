@@ -24,7 +24,11 @@ import {
     FileManagerContextType,
     EnhancedFileManagerProps,
 } from "./types/FileManagerTypes";
-import { addFiles, getRootByPath } from "./utils/FileManagerUtils";
+import {
+    addFiles,
+    normalizeFileManagerPath,
+    resolveFileManagerPath,
+} from "./utils/FileManagerUtils";
 import { fileManagerReducer } from "./utils/FileManagerReducer";
 import "./EnhancedFileManager.css";
 
@@ -108,11 +112,18 @@ export function EnhancedFileManager({
     // Handle filePathToNavigate after basic data loading is complete
     useEffect(() => {
         if (!filePathToNavigate) return;
+        // Compared in tree form, so a link without the leading slash and the slash form the
+        // selection callback writes back name the same target.
+        const targetPath = normalizeFileManagerPath(filePathToNavigate);
         // The parent writes `?filePath=` back from our own selection callback, so a path that is
         // already selected — or any path while a multi-selection is active — counts as navigated
         // without re-dispatching SELECT_ITEM, which would collapse the user's selection.
-        if (state.multiSelectMode || state.selectedItem?.relativePath === filePathToNavigate) {
-            navigatedPathRef.current = filePathToNavigate;
+        if (
+            state.multiSelectMode ||
+            (state.selectedItem &&
+                normalizeFileManagerPath(state.selectedItem.relativePath) === targetPath)
+        ) {
+            navigatedPathRef.current = targetPath;
             return;
         }
         // Only proceed if:
@@ -122,7 +133,7 @@ export function EnhancedFileManager({
         //    waiting for `complete` would leave a deep link pointing at the previous selection)
         // 3. We're not in legacy mode (assetFiles is empty)
         if (
-            navigatedPathRef.current !== filePathToNavigate &&
+            navigatedPathRef.current !== targetPath &&
             (state.loadingPhase === "basic-complete" ||
                 state.loadingPhase === "detailed-loading" ||
                 state.loadingPhase === "complete") &&
@@ -130,17 +141,20 @@ export function EnhancedFileManager({
         ) {
             console.log("🎯 Attempting to navigate to:", filePathToNavigate);
 
-            // Find the file in the tree by path
-            const targetFile = getRootByPath(state.fileTree, filePathToNavigate);
+            // Find the file or folder in the tree by path
+            const targetFile = resolveFileManagerPath(state.fileTree, filePathToNavigate);
 
             if (targetFile) {
                 console.log("✅ Found target file, selecting:", targetFile.relativePath);
                 // First, expand all parent folders leading to this file
-                dispatch({ type: "EXPAND_PATH_TO_ITEM", payload: { path: filePathToNavigate } });
+                dispatch({
+                    type: "EXPAND_PATH_TO_ITEM",
+                    payload: { path: targetFile.relativePath },
+                });
                 // Then select the file
                 dispatch({ type: "SELECT_ITEM", payload: { item: targetFile } });
                 // Mark as navigated
-                navigatedPathRef.current = filePathToNavigate;
+                navigatedPathRef.current = targetPath;
             } else {
                 console.log("❌ Target file not found:", filePathToNavigate);
                 // File not found - show non-blocking error
@@ -157,7 +171,7 @@ export function EnhancedFileManager({
                 // Still select root so user can browse
                 dispatch({ type: "SELECT_ITEM", payload: { item: state.fileTree } });
                 // Mark as navigated to prevent retrying
-                navigatedPathRef.current = filePathToNavigate;
+                navigatedPathRef.current = targetPath;
             }
         }
     }, [
@@ -387,14 +401,14 @@ export function EnhancedFileManager({
 
             // Handle file path navigation if provided
             if (filePathToNavigate) {
-                // Find the file in the tree by path
-                const targetFile = getRootByPath(fileTree, filePathToNavigate);
+                // Find the file or folder in the tree by path
+                const targetFile = resolveFileManagerPath(fileTree, filePathToNavigate);
 
                 if (targetFile) {
                     // First, expand all parent folders leading to this file
                     dispatch({
                         type: "EXPAND_PATH_TO_ITEM",
-                        payload: { path: filePathToNavigate },
+                        payload: { path: targetFile.relativePath },
                     });
                     // Then select the file
                     dispatch({ type: "SELECT_ITEM", payload: { item: targetFile } });

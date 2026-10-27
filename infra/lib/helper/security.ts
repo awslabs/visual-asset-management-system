@@ -252,6 +252,19 @@ export function globalLambdaEnvironmentsAndPermissions(
             ? "true"
             : "false"
     );
+
+    // The optional REST API custom domain (app.api.apiGatewayRest.customDomain). Through it, a
+    // proxy event's `path` keeps the base path its mapping routes to the stage (`/api/database`,
+    // where execute-api delivers `/database`). common/auth/apiEvent.py removes that base path for
+    // an event whose requestContext.domainName is this host, so handlers and the authorizer see
+    // the stage-relative path on every host. The base path is the stage name
+    // (rest-api-gateway-construct BasePathMapping). Set only when the domain is enabled, so a
+    // deployment without it synthesizes unchanged.
+    const customDomainHost = Config.apiCustomDomainHost(config);
+    if (customDomainHost) {
+        lambdaFunction.addEnvironment("API_CUSTOM_DOMAIN_NAME", customDomainHost);
+        lambdaFunction.addEnvironment("API_CUSTOM_DOMAIN_BASE_PATH", Config.API_GATEWAY_STAGE_NAME);
+    }
 }
 
 /**
@@ -533,6 +546,13 @@ export function generateContentSecurityPolicy(
         `https://${Service("S3", false).Endpoint}/`,
     ];
 
+    // The REST API custom domain, which amplify-config hands the clients when it is enabled. The
+    // execute-api host above stays allowed for a browser still holding the earlier base URL.
+    const customDomainHost = Config.apiCustomDomainHost(config);
+    if (customDomainHost) {
+        connectSrc.push(`https://${customDomainHost}`);
+    }
+
     // Inline scripts in index.html are allowed by SHA-256 hash rather than by
     // `'unsafe-inline'`, so an injected inline script is still blocked. The
     // hashes cover the exact bytes of each block's text content, including
@@ -547,10 +567,12 @@ export function generateContentSecurityPolicy(
     //
     // The list covers web/index.html only. This policy is a response header on
     // the whole distribution, so it governs every HTML document served from
-    // web/public as well; an inline block in one of those (the SuperSplat
-    // viewer's upstream service-worker registration) has no hash here and does
-    // not run. A served document that needs its own inline script needs its own
-    // hashes, taken from that document.
+    // web/public as well. The inline block in the SuperSplat viewer's
+    // index.html unregisters every service worker on the origin, including the
+    // root /coi-serviceworker.js that web/index.html registers for cross-origin
+    // isolation, so it must stay blocked: never add its hash here. A served
+    // document that needs its own inline script needs its own hashes, taken
+    // from that document.
     //
     // `'wasm-unsafe-eval'` permits WebAssembly compilation for the WASM-based
     // viewer plugins. It is not an inline-script keyword, so it neither relies

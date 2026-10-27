@@ -12,17 +12,17 @@ All API endpoints are served by an Amazon API Gateway REST API under the fixed s
 https://{api-id}.execute-api.{region}.amazonaws.com/api
 ```
 
-The domain suffix follows the deployment's partition, for example `amazonaws.eu` in the AWS European Sovereign Cloud. The base URL is the same for an Amazon CloudFront, an Application Load Balancer (ALB) or an API-only deployment. The web application URL reaches only a few routes: the CloudFront `/api/*` behavior forwards `/api/amplify-config` and `/api/version` to the stage, and the ALB answers `/api*` and `/secure-config*` with a redirect to it. The web application, the VamsCLI and the VAMS MCP server send every other request to the invoke URL. A `PRIVATE` endpoint is reachable only through an execute-api VPC interface endpoint, either one VAMS created or one supplied through `optionalExternalPrivateApigVPCEId`. See [Stage Path Fronting](../architecture/networking.md#stage-path-fronting).
+The domain suffix follows the deployment's partition, for example `amazonaws.eu` in the AWS European Sovereign Cloud. The base URL is the same for an Amazon CloudFront, an Application Load Balancer (ALB) or an API-only deployment. The CloudFront web application URL also reaches every route: the `/api/*` behavior forwards `/api/amplify-config` and `/api/version` to the stage under their own path and every other path without the `/api` prefix, so `https://{web-domain}/api/assets` is the same request as `.../api/assets` on the invoke URL. The ALB answers `/api*` and `/secure-config*` with a redirect to the stage. When the deployment enables `app.api.apiGatewayRest.customDomain`, `https://{api-domain}/api` serves the same paths as the invoke URL. The web application, the VamsCLI and the VAMS MCP server send their requests to the base URL that `/api/amplify-config` returns. A `PRIVATE` endpoint is reachable only through an execute-api VPC interface endpoint, either one VAMS created or one supplied through `optionalExternalPrivateApigVPCEId`. See [Stage Path Fronting](../architecture/networking.md#stage-path-fronting).
 
-The two unauthenticated routes carry `/api` in their own path, so on the execute-api host the stage segment appears twice:
+The two unauthenticated routes carry `/api` in their own path, so on the execute-api host and the API custom domain the stage segment appears twice:
 
-| Route                     | On the execute-api host                                                      | On the web domain                         |
-| ------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------- |
-| `GET /api/version`        | `https://{api-id}.execute-api.{region}.amazonaws.com/api/api/version`        | `https://{web-domain}/api/version`        |
-| `GET /api/amplify-config` | `https://{api-id}.execute-api.{region}.amazonaws.com/api/api/amplify-config` | `https://{web-domain}/api/amplify-config` |
+| Route                     | On the execute-api host                                                      | On the API custom domain                      | On the web domain                         |
+| ------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------- | ----------------------------------------- |
+| `GET /api/version`        | `https://{api-id}.execute-api.{region}.amazonaws.com/api/api/version`        | `https://{api-domain}/api/api/version`        | `https://{web-domain}/api/version`        |
+| `GET /api/amplify-config` | `https://{api-id}.execute-api.{region}.amazonaws.com/api/api/amplify-config` | `https://{api-domain}/api/api/amplify-config` | `https://{web-domain}/api/amplify-config` |
 
 :::info[Discovering the Base URL]
-After deployment, read the base URL from the core stack's `APIGatewayEndpointOutput` output, or from the `api` field of `GET /api/amplify-config`, which returns it with a trailing slash. Request `/api/amplify-config` on the web application URL, or on the invoke URL as `.../api/api/amplify-config`.
+After deployment, read the base URL from the core stack's `APIGatewayEndpointOutput` output (or `ApiCustomDomainUrl` when the API custom domain is enabled), or from the `api` field of `GET /api/amplify-config`, which returns it with a trailing slash. Request `/api/amplify-config` on the web application URL, or on the invoke URL as `.../api/api/amplify-config`.
 :::
 
 ---

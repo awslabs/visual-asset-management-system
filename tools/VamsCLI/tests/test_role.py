@@ -620,7 +620,7 @@ class TestRoleDeleteCommand:
             assert 'Use --confirm flag' in result.output
     
     @patch('click.confirm')
-    def test_delete_cancelled_at_prompt(self, mock_confirm, cli_runner, role_command_mocks):
+    def test_delete_cancelled_at_prompt(self, mock_confirm, cli_runner, role_command_mocks, interactive_stdin):
         """Test deletion cancelled at confirmation prompt."""
         mock_confirm.return_value = False
         

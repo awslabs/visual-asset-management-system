@@ -7,7 +7,6 @@ SPDX-License-Identifier: Apache-2.0
 from typing import Dict, List, Optional, Any, Union, Literal
 from pydantic import Field
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator
-from common.dynamoDbMetadataKeys import is_internal_metadata_field
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="DualIndexingModels")
@@ -67,73 +66,6 @@ def _sanitize_field_name(field_name: str) -> str:
         sanitized = sanitized[:255]
     
     return sanitized
-
-######################## Field Type Detection ##########################
-
-def _determine_field_name_and_type(field_name: str, field_value: Any) -> tuple[str, Any]:
-    """
-    Determine the OpenSearch field name and processed value based on the field type.
-    Excludes VAMS_* and _* prefixed fields from indexing.
-    
-    Args:
-        field_name: The original field name
-        field_value: The field value
-        
-    Returns:
-        Tuple of (opensearch_field_name, processed_value) or (None, None) if excluded
-    """
-    # Exclude VAMS_* and _* prefixed fields (internal VAMS fields)
-    if is_internal_metadata_field(field_name):
-        return None, None
-    
-    # Sanitize the field name for OpenSearch compatibility
-    sanitized_name = _sanitize_field_name(field_name)
-    
-    # Handle None values
-    if field_value is None:
-        return f"str_{sanitized_name}", ""
-    
-    # Handle different data types
-    if isinstance(field_value, bool):
-        return f"bool_{sanitized_name}", field_value
-    elif isinstance(field_value, (int, float)):
-        return f"num_{sanitized_name}", field_value
-    elif isinstance(field_value, list):
-        # Convert all list items to strings for consistent indexing
-        string_list = [str(item) for item in field_value if item is not None]
-        return f"list_{sanitized_name}", string_list
-    elif isinstance(field_value, dict):
-        # Handle GPS coordinates and other structured data
-        if 'lat' in field_value and 'lon' in field_value:
-            return f"gp_{sanitized_name}", field_value
-        else:
-            # Convert dict to JSON string for indexing
-            import json
-            return f"gs_{sanitized_name}", json.dumps(field_value, default=str)
-    elif isinstance(field_value, str):
-        # Check if it's a date string
-        if _is_date_string(field_value):
-            return f"date_{sanitized_name}", field_value
-        else:
-            return f"str_{sanitized_name}", field_value
-    else:
-        # Convert everything else to string
-        return f"str_{sanitized_name}", str(field_value)
-
-def _is_date_string(value: str) -> bool:
-    """Check if a string value appears to be a date/datetime"""
-    import re
-    # ISO 8601 date patterns
-    iso_patterns = [
-        r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}',  # 2024-01-01T12:00:00
-        r'^\d{4}-\d{2}-\d{2}$',                     # 2024-01-01
-        r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}',   # 2024-01-01 12:00:00
-    ]
-    
-    for pattern in iso_patterns:
-        if re.match(pattern, value):
-            return True
-    return False
 
 ######################## File Index Models ##########################
 

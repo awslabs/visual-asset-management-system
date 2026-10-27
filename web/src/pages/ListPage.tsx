@@ -26,7 +26,6 @@ export default function ListPage(props: any) {
     const { databaseId } = useParams();
     const {
         singularNameTitleCase,
-        pluralName,
         pluralNameTitleCase,
         listDefinition,
         CreateNewElement,
@@ -103,7 +102,7 @@ export default function ListPage(props: any) {
                             { text: Synonyms.Databases, href: "#/databases/" },
                             {
                                 text: databaseId,
-                                href: `#/databases/${databaseId}/${pluralName}/`,
+                                href: `#/databases/${databaseId}/assets/`,
                             },
                             { text: pluralNameTitleCase } as any,
                         ]}

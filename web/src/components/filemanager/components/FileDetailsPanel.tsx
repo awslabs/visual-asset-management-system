@@ -71,9 +71,9 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     const isMultiSelect = state.multiSelectMode && selectedItems.length > 1;
     // A non-distributable asset is refused by the download, stream, and preview APIs, so the
     // affordances that call them (Export, View File, the viewer popup) are hidden rather than left to
-    // fail. Compared against false so the pre-fetch null asset and a record predating the field both
-    // keep the distributable behavior.
-    const isNotDistributable = asset?.isDistributable === false;
+    // fail. A fetched record without the flag is not distributable, as the API treats it; the null
+    // held before the fetch resolves is not.
+    const isNotDistributable = !!asset?.assetId && asset.isDistributable !== true;
     // The viewer registry is initialized lazily. Without this the eye icons below would never
     // appear on this page: nothing else initializes the registry before they render, so every
     // viewability check reported "no viewer" (only the search page's container initializes it).
@@ -261,6 +261,12 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     // State for modals
     const [createFolderModalVisible, setCreateFolderModalVisible] = useState(false);
     const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+    const [createFolderError, setCreateFolderError] = useState("");
+    const [downloadError, setDownloadError] = useState<string | null>(null);
+    // A download error belongs to the file it was raised for
+    useEffect(() => {
+        setDownloadError(null);
+    }, [selectedItem?.keyPrefix]);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [showMoveFilesModal, setShowMoveFilesModal] = useState(false);
     const [showFileVersionsModal, setShowFileVersionsModal] = useState(false);
@@ -777,15 +783,22 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     }
 
     // Single selection display (existing functionality)
-    const handleDownload = () => {
-        dispatch({
-            type: "DOWNLOAD_FILE",
-            payload: {
-                key: selectedItem.keyPrefix,
-                versionId: selectedItem.versionId || "",
-                assetVersionId: state.assetVersionId,
-            },
-        });
+    const handleDownload = async () => {
+        setDownloadError(null);
+        const result = await downloadFile(
+            state.assetId,
+            state.databaseId,
+            selectedItem.keyPrefix,
+            selectedItem.versionId || "",
+            state.assetVersionId
+        );
+        if (!result.ok) {
+            setDownloadError(
+                result.status
+                    ? `Download failed (${result.status}): ${result.message}`
+                    : `Download failed: ${result.message}`
+            );
+        }
     };
 
     const handleUpload = () => {
@@ -836,6 +849,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
     // Handle create folder
     const handleCreateFolder = async (newFolderName: string) => {
         setIsCreatingFolder(true);
+        setCreateFolderError("");
 
         try {
             // Construct the relative path for the new folder
@@ -854,14 +868,15 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 relativeKey = `${basePath}${newFolderName}/`;
             }
 
-            // Call the API to create the folder
-            const [success, response] = (await createFolder({
+            // Call the API to create the folder. It resolves [true, message] on success,
+            // [false, message] for a rejected request and false for an empty reply.
+            const result = await createFolder({
                 databaseId,
                 assetId,
                 relativeKey,
-            })) as [boolean, any];
+            });
 
-            if (success) {
+            if (Array.isArray(result) && result[0] === true) {
                 // Refresh the file list
                 dispatch({
                     type: "REFRESH_FILES",
@@ -871,12 +886,13 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                 // Close the modal
                 setCreateFolderModalVisible(false);
             } else {
-                console.error("Failed to create folder:", response);
-                // Handle error (could show an error message)
+                const reason = (Array.isArray(result) && result[1]) || "Unknown error";
+                console.error("Failed to create folder:", reason);
+                setCreateFolderError(`Failed to create folder: ${reason}`);
             }
-        } catch (error) {
+        } catch (error: any) {
             console.error("Error creating folder:", error);
-            // Handle error
+            setCreateFolderError(`Failed to create folder: ${error?.message || "Unknown error"}`);
         } finally {
             setIsCreatingFolder(false);
         }
@@ -905,6 +921,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     onSubmit={handleCreateFolder}
                     parentFolder={folderName}
                     isLoading={isCreatingFolder}
+                    submitError={createFolderError}
                 />
 
                 <AssetDeleteModal
@@ -1168,6 +1185,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     setShowDeleteModal(true);
                                                     break;
                                                 case "create-subfolder":
+                                                    setCreateFolderError("");
                                                     setCreateFolderModalVisible(true);
                                                     break;
                                             }
@@ -1359,6 +1377,18 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     }`}
                 >
                     <div className="file-info-content">
+                        {downloadError && (
+                            <Alert
+                                type="error"
+                                dismissible
+                                dismissAriaLabel="Dismiss download error"
+                                onDismiss={() => setDownloadError(null)}
+                                statusIconAriaLabel="Error"
+                            >
+                                {downloadError}
+                            </Alert>
+                        )}
+
                         {selectedItem.isPermanentlyDeleted && (
                             <Alert type="error" statusIconAriaLabel="Error">
                                 This file has been permanently deleted. All S3 versions have been

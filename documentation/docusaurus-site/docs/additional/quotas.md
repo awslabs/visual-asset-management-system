@@ -129,6 +129,8 @@ The AWS Deadline Cloud execution type is available when the deployment sets
 | All ECS pipelines        | Metadata JSON input                      | 8,000 characters                                             |
 | Gaussian Splat Toolbox   | GPU instance required                    | `g6e.2xlarge` or `g5.xlarge`                                 |
 | Isaac Lab Training       | GPU instance required                    | `g6e.2xlarge` or `g5.xlarge`                                 |
+| RapidPipeline (ECS)      | Fargate task run time                    | 4 hours 44 minutes (`config.ts` constant)                    |
+| RapidPipeline (ECS)      | Running tasks checked at a task timeout  | 100 (one `ListTasks` page; `config.ts` constant)             |
 | RapidPipeline (EKS)      | Node instance type                       | Configurable                                                 |
 | RapidPipeline (EKS)      | Job timeout                              | Configurable                                                 |
 | RapidPipeline (EKS)      | Job backoff limit                        | Configurable                                                 |
@@ -263,8 +265,8 @@ endpoint rather than the detail response.
 | Parameter                 | Value                                                                                                                    |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | Blocked file extensions   | `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat` |
-| Upload stage 1 rate limit | 10 initializations per user per minute                                                                                   |
-| File validation           | Extension and MIME type checks on API upload only                                                                        |
+| Upload stage 1 rate limit | 20 initializations per user per minute                                                                                   |
+| File validation           | Extension and MIME type checks on API upload; extension check on the destination of a move, rename or copy               |
 
 ### Blocked MIME Types
 

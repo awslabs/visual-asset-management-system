@@ -82,6 +82,9 @@ DELIBERATE_DEPARTURES = {
     # three attempts rather than five.
     ("common/auth/authorizerCore.py",
      "BotoConfig(retries={'max_attempts': 3, 'mode': 'adaptive'})"),
+    # The authorizer's origin verification secret read: short timeouts and two retries, so a VPC
+    # with no route to Secrets Manager falls back to the TCP peer inside the authorizer timeout.
+    ("common/auth/originVerify.py", "retry_config"),
     # Best-effort EventBridge publishes on a hot ingestion path and on the job callback: bounded
     # connect/read timeouts so an unreachable endpoint fails fast instead of blocking the caller.
     ("handlers/indexing/sqsBucketSync.py",

@@ -21,19 +21,19 @@ taken from it; otherwise ``sourceIp`` is used. This means a deployment that has 
 or an ALB configured still authorizes direct execute-api callers correctly (their request
 simply carries no front header), so existing direct integrations are never broken.
 
-Spoofing safety: forwarding headers are trusted **only when the deployment is actually
-behind CloudFront** (``fronted == "cloudfront"``), because only then is a reverse proxy in
-the request path that overwrites/appends them. On ``"alb"`` and ``"none"`` deployments the
-execute-api endpoint is directly reachable and every header is client-controlled, so the
-headers are ignored entirely and ``sourceIp`` (the TCP peer, which a client cannot forge)
-is authoritative. This prevents a direct caller from forging ``CloudFront-Viewer-Address``
-or ``X-Forwarded-For`` to impersonate an allow-listed IP. Even behind CloudFront, only the
-right-most *untrusted* forwarded address (the hop adjacent to the gateway, after stripping
-the proxy peer) is used, so a client-supplied left-most entry can never grant access.
+Header trust: the forwarding headers are read only on a CloudFront deployment
+(``fronted == "cloudfront"``), and there only from a request that carries the deployment's
+origin verification value — the header CloudFront adds to every request it forwards
+(``common.auth.originVerify``). Every other request resolves to ``sourceIp``, the TCP peer:
+every request on ``"alb"`` and ``"none"`` deployments, where the execute-api endpoint is
+reached directly, and on a CloudFront deployment every request that reaches the execute-api
+endpoint or the API custom domain without that value. Behind CloudFront, only the right-most
+forwarded address that is not the proxy peer (the hop adjacent to the gateway) is used.
 """
 import ipaddress
 from typing import Optional, List
 
+from common.auth import originVerify
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="ClientIp")
@@ -73,18 +73,16 @@ def resolve_client_ip(event: dict, *, fronted: str = "none") -> Optional[str]:
     """Resolve the real client IP for an API request, adaptively per request.
 
     ``fronted`` is a deploy-time hint of the configured front ("cloudfront", "alb", or
-    "none"). Forwarding headers are trusted **only** when ``fronted == "cloudfront"``,
-    because only then is a reverse proxy in the request path that sets them. Resolution
-    order:
+    "none"). Forwarding headers are read **only** when ``fronted == "cloudfront"`` and the
+    request carries a valid origin verification value (``originVerify``). Resolution order:
 
-    1. (CloudFront only) ``CloudFront-Viewer-Address`` header, if present (set by
-       CloudFront; not forwardable by a client) — use the viewer IP.
-    2. (CloudFront only) ``X-Forwarded-For`` whose trailing hop is the TCP peer — use the
+    1. (CloudFront, verified) ``CloudFront-Viewer-Address`` header, if present (set by
+       CloudFront) — use the viewer IP.
+    2. (CloudFront, verified) ``X-Forwarded-For`` whose trailing hop is the TCP peer — use the
        right-most untrusted hop.
-    3. Otherwise ``identity.sourceIp`` — the TCP peer. Authoritative for direct execute-api
-       callers and ALB redirects, and a client cannot forge it. On non-CloudFront
-       deployments this is the only trusted source, so forged forwarding headers cannot
-       impersonate an allow-listed IP.
+    3. Otherwise ``identity.sourceIp`` — the TCP peer. Used for direct execute-api and
+       custom-domain callers, ALB redirects, every non-CloudFront deployment, and any request
+       without a valid origin verification value.
     """
     identity = (event.get("requestContext", {}) or {}).get("identity", {}) or {}
     source_ip = identity.get("sourceIp")
@@ -95,6 +93,13 @@ def resolve_client_ip(event: dict, *, fronted: str = "none") -> Optional[str]:
     if fronted == "cloudfront":
         headers = event.get("headers", {}) or {}
         lower = {k.lower(): v for k, v in headers.items() if isinstance(k, str)}
+
+        # The forwarding headers count only on a request CloudFront forwarded, which carries the
+        # deployment's origin verification value; any other request resolves to the TCP peer.
+        if not originVerify.is_valid_origin_verify_value(
+            lower.get(originVerify.ORIGIN_VERIFY_HEADER_NAME)
+        ):
+            return source_ip
 
         # 1) CloudFront reverse-proxy path: the viewer-address header is the authoritative
         #    client IP and cannot be spoofed by a client (CloudFront overwrites it).

@@ -24,7 +24,8 @@ export function searchRowToFileInfo(row: Record<string, any>): FileInfo {
         size: row.num_filesize || row.num_size,
         dateCreatedCurrentVersion: row.date_lastmodified,
         isArchived: row.bool_archived === true,
-        primaryType: row.str_primarytype ?? null,
+        // The file indexer stores the vams-primarytype object metadata in MD_.
+        primaryType: row.MD_?.["s3_vams-primarytype"] ?? null,
         // versionId omitted -> viewer resolves the current version
     };
 }

@@ -1098,14 +1098,16 @@ backendPipelines/{useCase}/{name}/vamsSchema/{variant}/
 Registration is idempotent. Re-deploying overwrites the existing definition and clears the archived
 flag, so a redeploy neither duplicates a pipeline nor leaves a previously archived one hidden.
 
-Re-registration runs only when the bundle's contents change. The registration resource carries a
-content hash of `pipeline.json`, `workflow.json`, and the top-level `templates/*.json` files, so a
-deployment that changes nothing under `vamsSchema/` leaves the registered definition untouched.
+Re-registration runs only when the registration's inputs change. The registration resource carries a
+content hash of the `vamsSchema/` bundle files, the override values injected at deploy time (resource
+and id overrides), and the auto-trigger setting, so a deployment that changes none of these leaves the
+registered definition untouched.
 
-:::warning[An edit to a built-in is reverted the next time its bundle changes]
+:::warning[An edit to a built-in is reverted the next time it re-registers]
 The bundle is the source of truth for a registered built-in pipeline. Changing one through the web
 interface, the API, or the CLI — renaming it, retuning its `systemConfig`, or archiving it — is
-overwritten the next time that bundle's contents change and the pipeline re-registers. To customize a
+overwritten the next time the pipeline re-registers: after a change to its bundle, to an override
+value, or to its auto-trigger setting. To customize a
 built-in durably, either edit its `vamsSchema/` files so the bundle carries the change, or create a
 separate pipeline of your own rather than editing the built-in in place.
 :::

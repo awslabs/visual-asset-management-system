@@ -303,13 +303,13 @@ export const SchemaFieldEditor: React.FC<SchemaFieldEditorProps> = ({
                                                         style={{
                                                             marginLeft: "8px",
                                                             fontSize: "0.9em",
-                                                            color: "#666",
+                                                            color: "var(--vams-text-secondary)",
                                                         }}
                                                     >
                                                         {field.required && (
                                                             <span
                                                                 style={{
-                                                                    color: "#d13212",
+                                                                    color: "var(--vams-color-error)",
                                                                     fontWeight: "bold",
                                                                 }}
                                                             >
