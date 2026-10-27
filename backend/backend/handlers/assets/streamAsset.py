@@ -18,7 +18,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_download_streamed
 from common.s3 import validateUnallowedFileExtensionAndContentType, region_routing_s3_client, bucket_region_fields
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message, streamCorsHeaders
 from handlers.assets.assetVersions import (
     resolve_file_version_from_asset_version,
     resolve_asset_version_id_from_alias
@@ -285,14 +285,12 @@ def handle_head_request(event, claims_and_roles):
             return validation_error(body={'message': message}, event=event)
         
         # Build response headers following HTTP best practices
-        response_headers = {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Range',
-            'Cache-Control': 'no-cache, no-store',
+        response_headers = streamCorsHeaders()
+        response_headers.update({
             'Content-Type': content_type,
             'Content-Length': str(head_response.get('ContentLength', 0)),
             'Accept-Ranges': 'bytes',
-        }
+        })
         
         # Add optional headers if available
         if 'LastModified' in head_response:
@@ -369,11 +367,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if len(version_params) > 1:
             message = "Only one of versionId, assetVersionId, or assetVersionIdAlias can be specified"
             logger.error(message)
-            streaming_headers = {
-                'Access-Control-Allow-Headers': 'Range',
-                'Access-Control-Allow-Origin': '*',
-                'Cache-Control': 'no-cache, no-store',
-            }
+            streaming_headers = streamCorsHeaders()
             error_response = validation_error(body={'message': message}, event=event)
             error_response['headers'].update(streaming_headers)
             return error_response
@@ -383,11 +377,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             message = "No Asset File Object Key Provided in Path"
             logger.error(message)
             # Create custom headers for streaming response
-            streaming_headers = {
-                'Access-Control-Allow-Headers': 'Range',
-                'Access-Control-Allow-Origin': '*',
-                'Cache-Control': 'no-cache, no-store',
-            }
+            streaming_headers = streamCorsHeaders()
             error_response = validation_error(body={'message': message}, event=event)
             error_response['headers'].update(streaming_headers)
             return error_response
@@ -434,10 +424,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             message = f"Asset not found in database"
             logger.error(message)
             # Create custom headers for streaming response
-            streaming_headers = {
-                'Access-Control-Allow-Headers': 'Range',
-                'Access-Control-Allow-Origin': '*',
-            }
+            streaming_headers = streamCorsHeaders()
             error_response = general_error(body={"message": message}, status_code=404, event=event)
             error_response['headers'].update(streaming_headers)
             return error_response
@@ -447,10 +434,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             message = "Asset not distributable"
             logger.error(message)
             # Create custom headers for streaming response
-            streaming_headers = {
-                'Access-Control-Allow-Headers': 'Range',
-                'Access-Control-Allow-Origin': '*',
-            }
+            streaming_headers = streamCorsHeaders()
             error_response = authorization_error(body={"message": message})
             error_response['headers'].update(streaming_headers)
             return error_response
@@ -474,10 +458,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 message = "Asset location not found"
                 logger.error(message)
                 # Create custom headers for streaming response
-                streaming_headers = {
-                    'Access-Control-Allow-Headers': 'Range',
-                    'Access-Control-Allow-Origin': '*',
-                }
+                streaming_headers = streamCorsHeaders()
                 error_response = general_error(body={"message": message}, status_code=404, event=event)
                 error_response['headers'].update(streaming_headers)
                 return error_response
@@ -495,11 +476,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             if exceeds_s3_object_key_limit(object_key):
                 message = "File key exceeds the maximum S3 object key length"
                 logger.error(message)
-                streaming_headers = {
-                    'Access-Control-Allow-Headers': 'Range',
-                    'Access-Control-Allow-Origin': '*',
-                    'Cache-Control': 'no-cache, no-store',
-                }
+                streaming_headers = streamCorsHeaders()
                 error_response = validation_error(body={'message': message}, event=event)
                 error_response['headers'].update(streaming_headers)
                 return error_response
@@ -544,10 +521,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     message = "Unallowed file extension or content type in asset file"
                     logger.error(message)
                     # Create custom headers for streaming response
-                    streaming_headers = {
-                        'Access-Control-Allow-Headers': 'Range',
-                        'Access-Control-Allow-Origin': '*',
-                    }
+                    streaming_headers = streamCorsHeaders()
                     error_response = validation_error(body={"message": message}, event=event)
                     error_response['headers'].update(streaming_headers)
                     return error_response
@@ -593,10 +567,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     return {
                         'statusCode': 307,
                         'headers': {
+                            **streamCorsHeaders(),
                             'Location': presigned_url,
-                            'Access-Control-Allow-Headers': 'Range',
-                            'Access-Control-Allow-Origin': '*',
-                            'Cache-Control': 'no-cache, no-store',
                         },
                         'body': ''
                     }
@@ -624,9 +596,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     'statusCode': 200,
                     'body': '',
                     'headers': {
-                            'Access-Control-Allow-Headers': 'Range',
-                            'Access-Control-Allow-Origin': '*',
-                            'Cache-Control': 'no-cache, no-store',
+                            **streamCorsHeaders(),
                             'Accept-Ranges': s3_response['ResponseMetadata']['HTTPHeaders']['accept-ranges'],
                             'Content-Type': s3_response['ResponseMetadata']['HTTPHeaders']['content-type'],
                             'Content-Length': s3_response['ResponseMetadata']['HTTPHeaders']['content-length'],
@@ -672,11 +642,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     message = "Error Fetching Asset File from Path Provided"
                     status_code = 400
                 # Create custom headers for streaming response
-                streaming_headers = {
-                    'Access-Control-Allow-Headers': 'Range',
-                    'Access-Control-Allow-Origin': '*',
-                    'Cache-Control': 'no-cache, no-store',
-                }
+                streaming_headers = streamCorsHeaders()
                 error_response = general_error(body={"message": message}, status_code=status_code, event=event)
                 error_response['headers'].update(streaming_headers)
                 return error_response
