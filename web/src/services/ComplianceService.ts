@@ -784,6 +784,11 @@ export interface DatabaseComplianceOverview {
     };
     assets: DatabaseComplianceAsset[];
     nextToken?: string;
+    /**
+     * Set when `sort=name` was asked while the name index is still being built (after an
+     * upgrade); the page is then in asset ID order.
+     */
+    nameSortUnavailable?: boolean;
 }
 
 /** Server-side filters of the database overview; the summary ignores them. */

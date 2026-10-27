@@ -22,6 +22,7 @@ import time
 from aws_lambda_powertools.utilities.parser import ValidationError, parse
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from boto3.dynamodb.conditions import Attr, Key
+from botocore.exceptions import ClientError
 from common.apiRoutes import (
     API_COMPLIANCE_EVALUATE_ASSET,
     API_COMPLIANCE_EVALUATE_DATABASE,
@@ -693,15 +694,41 @@ def get_database_compliance_overview(event, database_id, query_params):
     filters, error = _overview_filters(event, query_params)
     if error:
         return error
+    # `sort=name` without a state reads DatabaseAssetNameIndex. While DynamoDB backfills that index
+    # (the update that adds it to an existing table returns before the backfill ends) a read of it
+    # is refused, so the page is answered in the default order and flagged.
+    name_index = filters["sort"] == "name" and not filters["state"]
+    name_sort_unavailable = False
     kwargs, keys, filtered, accept = _overview_query(database_id, filters)
     start_key = None
     if query_params.get("startingToken"):
         start_key = listing.decode_token(query_params["startingToken"], keys)
+        if start_key is None and name_index:
+            # A listing that began in the default order, during the backfill, continues in it.
+            start_key = listing.decode_token(query_params["startingToken"], listing.BASE_STATE_KEYS)
+            name_sort_unavailable = start_key is not None
         if start_key is None:
             return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
 
-    rows, next_key, _ = listing.query_page(asset_state_table, kwargs, page_size, keys,
-                                           start_key=start_key, filtered=filtered, accept=accept)
+    rows = next_key = None
+    if not name_sort_unavailable:
+        try:
+            rows, next_key, _ = listing.query_page(asset_state_table, kwargs, page_size, keys,
+                                                   start_key=start_key, filtered=filtered,
+                                                   accept=accept)
+        except ClientError as error:
+            if not (name_index and _index_backfilling(error)):
+                raise
+            logger.warning(f"{listing.DATABASE_ASSET_NAME_INDEX} is backfilling; answering the "
+                           f"overview of {database_id} in assetId order")
+            name_sort_unavailable = True
+            if start_key is not None:
+                start_key = {name: start_key[name] for name in listing.BASE_STATE_KEYS}
+    if name_sort_unavailable:
+        kwargs, keys, filtered, accept = _overview_query(database_id, dict(filters, sort="assetId"))
+        rows, next_key, _ = listing.query_page(asset_state_table, kwargs, page_size, keys,
+                                               start_key=start_key, filtered=filtered,
+                                               accept=accept)
     if filters["state"] and filters["sort"] == "name":
         rows.sort(key=lambda row: row.get("assetNameSort") or row.get("assetId", ""))
     for row in rows:
@@ -716,9 +743,20 @@ def get_database_compliance_overview(event, database_id, query_params):
         "summary": summary,
         "assets": rows,
     }
+    if name_sort_unavailable:
+        # The rows are in assetId order: the name index is still being built.
+        body["nameSortUnavailable"] = True
     if next_key:
         body["NextToken"] = listing.encode_token(next_key)
     return success(body=body)
+
+
+def _index_backfilling(error):
+    """Whether a ClientError is DynamoDB refusing a read of a global secondary index it is still
+    backfilling ("Cannot read from backfilling global secondary index")."""
+    details = error.response.get("Error", {}) if hasattr(error, "response") else {}
+    return (details.get("Code") == "ValidationException"
+            and "backfilling" in str(details.get("Message", "")).lower())
 
 
 def _decode_key_token(token, key_attributes):

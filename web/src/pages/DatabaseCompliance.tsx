@@ -84,6 +84,12 @@ export const OVERVIEW_SORT_OPTIONS: SelectProps.Option[] = [
     { value: "name", label: `Sort by ${Synonyms.asset} name` },
 ];
 
+/**
+ * Shown when the name sort was asked while the service is still building its name index (for a
+ * few minutes after an upgrade, longer on a large table); the rows are then in ID order.
+ */
+export const NAME_SORT_UNAVAILABLE_NOTICE = `Sort by name is available once indexing finishes. The ${Synonyms.assets} are shown in ${Synonyms.asset} ID order until then.`;
+
 const optionFor = (options: SelectProps.Option[], value: string): SelectProps.Option =>
     options.find((option) => option.value === value) || options[0];
 
@@ -605,6 +611,13 @@ const DatabaseCompliancePage: React.FC = () => {
                         </Header>
                     }
                 >
+                    {filters.sort === "name" && overview?.nameSortUnavailable && (
+                        <Box margin={{ bottom: "s" }}>
+                            <Alert type="info" data-testid="name-sort-unavailable">
+                                {NAME_SORT_UNAVAILABLE_NOTICE}
+                            </Alert>
+                        </Box>
+                    )}
                     <Table
                         wrapLines
                         stickyColumns={ROW_ACTIONS_STICKY_COLUMNS}

@@ -17173,6 +17173,9 @@ components:
                 NextToken:
                     type: string
                     description: "Continuation token for the next page of `assets`; absent on the last page."
+                nameSortUnavailable:
+                    type: boolean
+                    description: "Present (`true`) when `sort=name` was requested while the database name index is still being built after an upgrade; `assets` is then in `assetId` order, and `NextToken` continues in that order."
             required:
                 - databaseId
                 - totalAssets

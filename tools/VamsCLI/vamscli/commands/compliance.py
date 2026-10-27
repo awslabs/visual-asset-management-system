@@ -266,6 +266,9 @@ def format_database_state(result: Dict[str, Any]) -> str:
     if 'error' in summary:
         lines.append("  (error counts assets whose last evaluation produced no verdict; it overlays "
                      "the state buckets rather than adding to them)")
+    if result.get('nameSortUnavailable'):
+        lines.append("Note: sort by name is available once indexing finishes; this page is in "
+                     "asset ID order.")
     if assets:
         lines.append("-" * 80)
         for record in assets:

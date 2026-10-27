@@ -1079,6 +1079,25 @@ class TestComplianceEvaluationCommands:
                 'my-database', max_items=1, starting_token='page-1',
                 filters={'state': None, 'schemaName': None, 'schemaSource': None, 'evaluationError': None, 'text': None, 'sort': None})
 
+    def test_state_overview_says_when_the_name_sort_is_not_available_yet(
+            self, cli_runner, generic_command_mocks):
+        # While the name index backfills after an upgrade, the API answers in asset ID order.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_database_compliance_state.return_value = {
+                'databaseId': 'my-database', 'totalAssets': 1, 'summary': {'compliant': 1},
+                'assets': [{'assetId': 'a1', 'complianceState': 'compliant'}],
+                'nameSortUnavailable': True}
+            result = cli_runner.invoke(cli, ['compliance', 'state', '-d', 'my-database',
+                                             '--sort', 'name'])
+            assert result.exit_code == 0
+            assert ('Note: sort by name is available once indexing finishes; this page is in '
+                    'asset ID order.') in result.output
+            mocks['api_client'].get_database_compliance_state.return_value.pop(
+                'nameSortUnavailable')
+            result = cli_runner.invoke(cli, ['compliance', 'state', '-d', 'my-database',
+                                             '--sort', 'name'])
+            assert 'indexing finishes' not in result.output
+
     def test_state_for_an_asset_refuses_the_paging_options(self, cli_runner, generic_command_mocks):
         # The single-asset route is not paged; a knob it ignores would look honoured.
         with generic_command_mocks('compliance') as mocks:
