@@ -1620,14 +1620,14 @@ class TestComplianceAuditCommand:
             mocks['api_client'].query_compliance_audit.assert_not_called()
 
     @pytest.mark.parametrize('option', ['--max-items', '--limit'])
-    @pytest.mark.parametrize('value', ['0', '501'])
+    @pytest.mark.parametrize('value', ['0', '201'])
     def test_a_page_size_outside_the_route_cap_is_rejected(self, cli_runner, generic_command_mocks,
                                                            option, value):
         # The handler clamps silently; the CLI refuses instead so the caller learns the cap.
         with generic_command_mocks('compliance') as mocks:
             result = cli_runner.invoke(cli, ['compliance', 'audit', option, value])
             assert result.exit_code != 0
-            assert '500' in result.output
+            assert '200' in result.output
             mocks['api_client'].query_compliance_audit.assert_not_called()
 
     def test_asset_history(self, cli_runner, generic_command_mocks):
