@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import re
 import boto3
 import json
 import uuid
@@ -175,9 +176,16 @@ def save_asset_details(asset_data):
         raise VAMSGeneralErrorResponse("Error saving asset.")
 
 def create_sns_topic_for_asset(database_id, asset_id):
-    """Create an SNS topic for an asset"""
+    """Create an SNS topic for an asset.
+
+    SNS topic names allow only [A-Za-z0-9_-]. Asset IDs may contain dots and
+    spaces (filename_pattern / ASSET_ID); replace disallowed characters with
+    hyphens so a validated ID does not fail at topic create.
+    """
     try:
-        topic_response = sns_client.create_topic(Name=f'AssetTopic{database_id}-{asset_id}')
+        safe_asset_id = re.sub(r'[^a-zA-Z0-9_-]', '-', asset_id)
+        topic_response = sns_client.create_topic(
+            Name=f'AssetTopic{database_id}-{safe_asset_id}')
         return topic_response['TopicArn']
     except Exception as e:
         logger.exception(f"Error creating SNS topic: {e}")
