@@ -227,12 +227,19 @@ describe("ConnectLink", () => {
             />
         );
 
-        const control = screen.getByRole("button", { name: "Connect" });
-        expect(control).toHaveAttribute("aria-disabled", "true");
+        const control = screen.getByRole("button", { name: "Connect to Dev box" });
+        expect(control).not.toHaveAttribute("aria-disabled");
         expect(control).toHaveAccessibleDescription(sentence);
         expect(screen.getByText(sentence)).toBeVisible();
+        const tab = fakeTab();
+        openSpy.mockReturnValue(tab as unknown as Window);
+        connect.mutateAsync.mockRejectedValue(new Error(sentence));
         await user.click(control);
-        expect(connect.mutateAsync).not.toHaveBeenCalled();
+        // The click asks EDH again: a brief broker gap clears itself, a real one is refused and the
+        // blank tab closes with the reason.
+        expect(connect.mutateAsync).toHaveBeenCalledWith("s-1");
+        await waitFor(() => expect(tab.close).toHaveBeenCalled());
+        expect(tab.location.replace).not.toHaveBeenCalled();
         expect(
             connectUnavailableReason(row({ connectionUnavailableReason: "DISPLAY_SESSION_ENDED" }))
         ).toBe(sentence);

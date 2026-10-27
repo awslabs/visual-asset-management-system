@@ -50,7 +50,11 @@ const ConnectLink: React.FC<ConnectLinkProps> = ({ row }) => {
     const connect = useWorkstationConnect();
     const { claim, release } = useInFlight();
     const descriptionId = useId();
-    const ready = row.state === "ACTIVE" && row.connectionAvailable && !!row.sessionId;
+    // A running row whose display session looked ended stays clickable: the click asks EDH again, so a
+    // brief broker gap clears itself, and a session that really ended answers with the same reason.
+    const displayEnded = row.connectionUnavailableReason === "DISPLAY_SESSION_ENDED";
+    const ready =
+        row.state === "ACTIVE" && !!row.sessionId && (row.connectionAvailable || displayEnded);
 
     if (!ready) {
         return (
@@ -110,9 +114,15 @@ const ConnectLink: React.FC<ConnectLinkProps> = ({ row }) => {
             >
                 {connect.isPending ? "Opening…" : "Connect"}
             </button>
-            <span id={descriptionId} className="sr-only">
-                Opens in a new tab.
-            </span>
+            {displayEnded ? (
+                <span id={descriptionId} className="block text-xs text-text-secondary">
+                    {DISPLAY_SESSION_ENDED_MESSAGE}
+                </span>
+            ) : (
+                <span id={descriptionId} className="sr-only">
+                    Opens in a new tab.
+                </span>
+            )}
         </>
     );
 };
