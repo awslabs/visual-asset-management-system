@@ -14,7 +14,6 @@ import Header from "@cloudscape-design/components/header";
 import Link from "@cloudscape-design/components/link";
 import Pagination from "@cloudscape-design/components/pagination";
 import SpaceBetween from "@cloudscape-design/components/space-between";
-import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import Table from "@cloudscape-design/components/table";
 import { useAllowedRoutes } from "../../../features/orchestration/permissions/useAllowedRoutes";
 import {
@@ -364,6 +363,9 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                 }
             >
                 <Table
+                    // Columns wrap, so the history fits the tab at 1280 px with the navigation open
+                    // instead of scrolling sideways and cutting off the Execution column.
+                    wrapLines
                     loading={loading}
                     items={evaluations}
                     pagination={
@@ -426,19 +428,25 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                             cell: (item) => {
                                 // An errored rule was not evaluated, so it is listed apart from the
                                 // rules that failed: its enforcement did not apply to the verdict.
+                                // Each violation is a line of its own that wraps between words;
+                                // the rule names that were not evaluated follow in error text,
+                                // which (unlike a status indicator) does not break mid-word.
                                 const errored = erroredRuleNames(item);
-                                const violations = item.violations?.length
-                                    ? item.violations.join(", ")
-                                    : "-";
-                                if (errored.length === 0) {
-                                    return violations;
+                                const violations = item.violations || [];
+                                if (violations.length === 0 && errored.length === 0) {
+                                    return "-";
                                 }
                                 return (
                                     <SpaceBetween size="xxs">
-                                        <span>{violations}</span>
-                                        <StatusIndicator type="error">
-                                            Not evaluated: {errored.join(", ")}
-                                        </StatusIndicator>
+                                        {violations.map((violation, index) => (
+                                            <span key={index}>{violation}</span>
+                                        ))}
+                                        {violations.length === 0 && <span>-</span>}
+                                        {errored.length > 0 && (
+                                            <Box color="text-status-error">
+                                                Not evaluated: {errored.join(", ")}
+                                            </Box>
+                                        )}
                                     </SpaceBetween>
                                 );
                             },
