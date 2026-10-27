@@ -21,6 +21,20 @@ export interface LoaderResult {
 export const OCCT_FORMATS = ["stp", "step", "iges", "igs", "brep"];
 
 /**
+ * True for the CAD setup messages loadFile throws when the browser or deployment cannot run the
+ * OCCT loader (SharedArrayBuffer, the OCCT bundle, or the Content Security Policy), as opposed to
+ * a file that failed to load.
+ */
+export function isCadSupportError(message: string): boolean {
+    return (
+        message.includes("CAD Format Support Not Available") ||
+        message.includes("CAD format support not enabled") ||
+        message.includes("OCCT library") ||
+        message.includes("SharedArrayBuffer")
+    );
+}
+
+/**
  * Get file extension from file key
  */
 export function getFileExtension(fileKey: string): string {
@@ -41,6 +55,19 @@ export function isSupportedThreeFormat(fileKey: string): boolean {
  */
 export function isOCCTFormat(fileKey: string): boolean {
     return OCCT_FORMATS.includes(getFileExtension(fileKey));
+}
+
+/**
+ * True when an error is the browser refusing `eval`/`new Function` under the Content Security
+ * Policy: an EvalError (matched by name too, in case it comes from another realm), or an error
+ * whose message is the browser's CSP violation text.
+ */
+function isEvalBlockedError(error: any): boolean {
+    if (error instanceof EvalError || error?.name === "EvalError") {
+        return true;
+    }
+    const message = String(error?.message ?? error ?? "");
+    return /unsafe-eval|Content Security Policy/i.test(message);
 }
 
 /**
@@ -275,6 +302,16 @@ export async function loadFile(
                 throw error;
             }
         } catch (error: any) {
+            // The OCCT Embind glue compiles functions with `new Function`, which a script-src
+            // without 'unsafe-eval' refuses. Name the deployment setting rather than showing the
+            // browser's CSP violation text, which quotes the whole directive.
+            if (isEvalBlockedError(error)) {
+                throw new Error(
+                    `CAD Format Support Not Available.\n\n` +
+                        `CAD format viewing is blocked by the Content Security Policy. The OpenCascade loader used for STEP, IGES and BREP files needs app.webUi.allowUnsafeEvalFeatures set to true in the deployment configuration.\n\n` +
+                        `Please contact your administrator to enable CAD format support for this viewer.`
+                );
+            }
             throw new Error(`Failed to load CAD file: ${error.message || error}`);
         }
     }
