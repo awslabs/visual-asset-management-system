@@ -44,6 +44,47 @@ import { schemaSourceLabel } from "../components/compliance/complianceStateBadge
 import RevokeExceptionModal from "../components/compliance/RevokeExceptionModal";
 import { ROW_ACTIONS_STICKY_COLUMNS, VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
+import { TextFilterInput, useUrlFilters } from "../components/compliance/listingFilters";
+
+/** The overview's server-side filters and sort, kept in the URL. */
+export const OVERVIEW_FILTER_KEYS = [
+    "state",
+    "schemaName",
+    "schemaSource",
+    "evaluationError",
+    "text",
+    "sort",
+] as const;
+
+export const OVERVIEW_STATE_OPTIONS: SelectProps.Option[] = [
+    { value: "", label: "All states" },
+    { value: "compliant", label: "Compliant" },
+    { value: "non_compliant", label: "Non-Compliant" },
+    { value: "quarantined", label: "Quarantined" },
+    { value: "exception", label: "Exception" },
+    { value: "pending_evaluation", label: "Pending Evaluation" },
+    { value: "unknown", label: "Unknown" },
+];
+
+export const OVERVIEW_SOURCE_OPTIONS: SelectProps.Option[] = [
+    { value: "", label: "Any binding" },
+    { value: "database", label: `${Synonyms.Database} binding` },
+    { value: "asset", label: `${Synonyms.Asset} override` },
+];
+
+export const OVERVIEW_ERROR_OPTIONS: SelectProps.Option[] = [
+    { value: "", label: "Any last evaluation" },
+    { value: "true", label: "Last evaluation errored" },
+    { value: "false", label: "Last evaluation without error" },
+];
+
+export const OVERVIEW_SORT_OPTIONS: SelectProps.Option[] = [
+    { value: "", label: `Sort by ${Synonyms.asset} ID` },
+    { value: "name", label: `Sort by ${Synonyms.asset} name` },
+];
+
+const optionFor = (options: SelectProps.Option[], value: string): SelectProps.Option =>
+    options.find((option) => option.value === value) || options[0];
 
 // The routes behind the database binding control (backend/backend/common/apiRoutes.py): the
 // schema list fills the selector, PUT binds or changes the schema, DELETE removes it.
@@ -78,6 +119,19 @@ export const evaluateAllMessage = (result: EvaluateDatabaseResponse): string => 
  */
 export const ASSET_ROW_ACTIONS_COLUMN_WIDTH = 240;
 
+/** The state tiles of the summary, in display order; each one filters the table to its state. */
+const SUMMARY_TILES: {
+    state: keyof typeof COMPLIANCE_STATE_INDICATORS;
+    label: string;
+}[] = [
+    { state: "compliant", label: "Compliant" },
+    { state: "non_compliant", label: "Non-Compliant" },
+    { state: "quarantined", label: "Quarantined" },
+    { state: "exception", label: "Exception" },
+    { state: "pending_evaluation", label: "Pending Evaluation" },
+    { state: "unknown", label: "Unknown" },
+];
+
 const DatabaseCompliancePage: React.FC = () => {
     const { databaseId } = useParams();
     const [overview, setOverview] = useState<DatabaseComplianceOverview | null>(null);
@@ -110,6 +164,8 @@ const DatabaseCompliancePage: React.FC = () => {
     const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
     const [bindingInProgress, setBindingInProgress] = useState(false);
     const [confirmRemove, setConfirmRemove] = useState(false);
+    const [filters, setFilters] = useUrlFilters(OVERVIEW_FILTER_KEYS);
+    const filtersActive = OVERVIEW_FILTER_KEYS.some((key) => key !== "sort" && !!filters[key]);
 
     // Server-side token paging of the asset-state table: tokens[i] is the startingToken that
     // fetches page i (tokens[0] is undefined). The summary counts cover the whole database on
@@ -128,7 +184,15 @@ const DatabaseCompliancePage: React.FC = () => {
             try {
                 const [overviewSuccess, overviewResult] = await fetchDatabaseComplianceOverview(
                     databaseId,
-                    { maxItems: COMPLIANCE_LISTING_PAGE_SIZE, startingToken }
+                    { maxItems: COMPLIANCE_LISTING_PAGE_SIZE, startingToken },
+                    {
+                        state: filters.state,
+                        schemaName: filters.schemaName,
+                        schemaSource: filters.schemaSource,
+                        evaluationError: filters.evaluationError,
+                        text: filters.text,
+                        sort: filters.sort,
+                    }
                 );
                 if (overviewSuccess && typeof overviewResult !== "string") {
                     setOverview(overviewResult);
@@ -158,31 +222,54 @@ const DatabaseCompliancePage: React.FC = () => {
                 setLoading(false);
             }
         },
-        [databaseId]
+        [
+            databaseId,
+            filters.state,
+            filters.schemaName,
+            filters.schemaSource,
+            filters.evaluationError,
+            filters.text,
+            filters.sort,
+        ]
     );
 
-    // A reload restarts the walk from the first page and re-reads the binding.
-    const loadData = useCallback(async () => {
+    // A filter change restarts the walk from the first page: a token is issued for its filters.
+    const restartWalk = useCallback(async () => {
         if (!databaseId) return;
         setTokens({});
         setCurrentPageIndex(1);
         setLoadedPages(1);
         setHasMore(false);
         await loadPage(0, undefined);
+    }, [databaseId, loadPage]);
 
+    const loadBinding = useCallback(async () => {
+        if (!databaseId) return;
         const [bindingSuccess, bindingResult] = await getDatabaseBindings(databaseId);
         if (bindingSuccess && typeof bindingResult !== "string") {
             const bound = bindingResult.databaseSchema || null;
             setDatabaseSchema(bound);
             setSelectedSchema(bound ? { label: bound, value: bound } : null);
         }
-    }, [databaseId, loadPage]);
+    }, [databaseId]);
+
+    // A reload restarts the walk from the first page and re-reads the binding.
+    const loadData = useCallback(async () => {
+        await restartWalk();
+        await loadBinding();
+    }, [restartWalk, loadBinding]);
 
     useEffect(() => {
         if (databaseId) {
-            loadData();
+            restartWalk();
         }
-    }, [databaseId, loadData]);
+    }, [databaseId, restartWalk]);
+
+    useEffect(() => {
+        if (databaseId) {
+            loadBinding();
+        }
+    }, [databaseId, loadBinding]);
 
     useEffect(() => {
         if (!canBind) return;
@@ -427,72 +514,66 @@ const DatabaseCompliancePage: React.FC = () => {
                     }
                 >
                     <ColumnLayout columns={9} minColumnWidth={130} variant="text-grid">
+                        {/* Each tile lists its assets: a state tile sets the state filter, the
+                            errors tile the evaluation-error filter, Tracked clears both. */}
                         <div>
                             <Box variant="awsui-key-label">Tracked {Synonyms.Assets}</Box>
-                            <Box variant="awsui-value-large">{totalTracked}</Box>
-                        </div>
-                        <div>
-                            <Box variant="awsui-key-label">Compliant</Box>
                             <Box variant="awsui-value-large">
-                                <StatusIndicator type={COMPLIANCE_STATE_INDICATORS.compliant.type}>
-                                    {compliantCount}
-                                </StatusIndicator>
-                            </Box>
-                        </div>
-                        <div>
-                            <Box variant="awsui-key-label">Non-Compliant</Box>
-                            <Box variant="awsui-value-large">
-                                <StatusIndicator
-                                    type={COMPLIANCE_STATE_INDICATORS.non_compliant.type}
+                                <Button
+                                    variant="inline-link"
+                                    ariaLabel={`Show every tracked ${Synonyms.asset}`}
+                                    onClick={() => setFilters({ state: "", evaluationError: "" })}
                                 >
-                                    {summary?.non_compliant || 0}
-                                </StatusIndicator>
+                                    {totalTracked}
+                                </Button>
                             </Box>
                         </div>
-                        <div>
-                            <Box variant="awsui-key-label">Quarantined</Box>
-                            <Box variant="awsui-value-large">
-                                <StatusIndicator
-                                    type={COMPLIANCE_STATE_INDICATORS.quarantined.type}
-                                >
-                                    {summary?.quarantined || 0}
-                                </StatusIndicator>
-                            </Box>
-                        </div>
-                        <div>
-                            <Box variant="awsui-key-label">Exception</Box>
-                            <Box variant="awsui-value-large">
-                                <StatusIndicator type={COMPLIANCE_STATE_INDICATORS.exception.type}>
-                                    {summary?.exception || 0}
-                                </StatusIndicator>
-                            </Box>
-                        </div>
-                        <div>
-                            <Box variant="awsui-key-label">Pending Evaluation</Box>
-                            <Box variant="awsui-value-large">
-                                <StatusIndicator
-                                    type={COMPLIANCE_STATE_INDICATORS.pending_evaluation.type}
-                                >
-                                    {summary?.pending_evaluation || 0}
-                                </StatusIndicator>
-                            </Box>
-                        </div>
-                        <div>
-                            <Box variant="awsui-key-label">Unknown</Box>
-                            <Box variant="awsui-value-large">
-                                <StatusIndicator type={COMPLIANCE_STATE_INDICATORS.unknown.type}>
-                                    {summary?.unknown || 0}
-                                </StatusIndicator>
-                            </Box>
-                        </div>
+                        {SUMMARY_TILES.map((tile) => (
+                            <div key={tile.state}>
+                                <Box variant="awsui-key-label">{tile.label}</Box>
+                                <Box variant="awsui-value-large">
+                                    <Button
+                                        variant="inline-link"
+                                        ariaLabel={`Show only ${tile.label.toLowerCase()} ${
+                                            Synonyms.assets
+                                        }`}
+                                        onClick={() =>
+                                            setFilters({
+                                                state:
+                                                    filters.state === tile.state ? "" : tile.state,
+                                            })
+                                        }
+                                    >
+                                        <StatusIndicator
+                                            type={COMPLIANCE_STATE_INDICATORS[tile.state].type}
+                                        >
+                                            {(summary as any)?.[tile.state] || 0}
+                                            {filters.state === tile.state ? " (shown)" : ""}
+                                        </StatusIndicator>
+                                    </Button>
+                                </Box>
+                            </div>
+                        ))}
                         {/* An overlay on the state buckets: these assets keep the state shown in their
                             row, and their last evaluation produced no verdict. */}
                         <div>
                             <Box variant="awsui-key-label">Evaluation errors</Box>
                             <Box variant="awsui-value-large">
-                                <StatusIndicator type="error">
-                                    {summary?.error || 0}
-                                </StatusIndicator>
+                                <Button
+                                    variant="inline-link"
+                                    ariaLabel={`Show only ${Synonyms.assets} whose last evaluation errored`}
+                                    onClick={() =>
+                                        setFilters({
+                                            evaluationError:
+                                                filters.evaluationError === "true" ? "" : "true",
+                                        })
+                                    }
+                                >
+                                    <StatusIndicator type="error">
+                                        {summary?.error || 0}
+                                        {filters.evaluationError === "true" ? " (shown)" : ""}
+                                    </StatusIndicator>
+                                </Button>
                             </Box>
                         </div>
                         <div>
@@ -506,9 +587,15 @@ const DatabaseCompliancePage: React.FC = () => {
                     header={
                         <Header
                             variant="h3"
-                            counter={`(${pageAssets.length} of ${totalTracked})`}
+                            counter={
+                                filtersActive
+                                    ? `(${pageAssets.length}${hasMore ? "+" : ""})`
+                                    : `(${pageAssets.length} of ${totalTracked})`
+                            }
                             description={
-                                isPaging
+                                filtersActive
+                                    ? `${Synonyms.Assets} matching the filters; the summary above covers all ${totalTracked} tracked ${Synonyms.assets}.`
+                                    : isPaging
                                     ? `Showing ${pageAssets.length} of ${totalTracked} tracked ${Synonyms.assets}; the summary above covers all of them.`
                                     : undefined
                             }
@@ -520,6 +607,87 @@ const DatabaseCompliancePage: React.FC = () => {
                     <Table
                         wrapLines
                         stickyColumns={ROW_ACTIONS_STICKY_COLUMNS}
+                        filter={
+                            <SpaceBetween direction="horizontal" size="xs">
+                                <TextFilterInput
+                                    value={filters.text}
+                                    onCommit={(text) => setFilters({ text })}
+                                    placeholder={`Search ${Synonyms.asset} name or ID`}
+                                    ariaLabel={`Search ${Synonyms.assets}`}
+                                />
+                                <Select
+                                    selectedOption={optionFor(
+                                        OVERVIEW_STATE_OPTIONS,
+                                        filters.state
+                                    )}
+                                    options={OVERVIEW_STATE_OPTIONS}
+                                    ariaLabel="Filter by compliance state"
+                                    onChange={({ detail }) =>
+                                        setFilters({ state: detail.selectedOption.value || "" })
+                                    }
+                                />
+                                <Select
+                                    selectedOption={{
+                                        value: filters.schemaName,
+                                        label: filters.schemaName || "Any schema",
+                                    }}
+                                    options={[
+                                        { value: "", label: "Any schema" },
+                                        ...Array.from(
+                                            new Set(
+                                                [
+                                                    ...schemaOptions.map((o) => o.value || ""),
+                                                    databaseSchema || "",
+                                                    filters.schemaName,
+                                                ].filter(Boolean)
+                                            )
+                                        )
+                                            .sort()
+                                            .map((name) => ({ value: name, label: name })),
+                                    ]}
+                                    ariaLabel="Filter by bound schema"
+                                    onChange={({ detail }) =>
+                                        setFilters({
+                                            schemaName: detail.selectedOption.value || "",
+                                        })
+                                    }
+                                />
+                                <Select
+                                    selectedOption={optionFor(
+                                        OVERVIEW_SOURCE_OPTIONS,
+                                        filters.schemaSource
+                                    )}
+                                    options={OVERVIEW_SOURCE_OPTIONS}
+                                    ariaLabel="Filter by binding source"
+                                    onChange={({ detail }) =>
+                                        setFilters({
+                                            schemaSource: detail.selectedOption.value || "",
+                                        })
+                                    }
+                                />
+                                <Select
+                                    selectedOption={optionFor(
+                                        OVERVIEW_ERROR_OPTIONS,
+                                        filters.evaluationError
+                                    )}
+                                    options={OVERVIEW_ERROR_OPTIONS}
+                                    ariaLabel="Filter by last evaluation"
+                                    onChange={({ detail }) =>
+                                        setFilters({
+                                            evaluationError: detail.selectedOption.value || "",
+                                        })
+                                    }
+                                />
+                                <Select
+                                    selectedOption={optionFor(OVERVIEW_SORT_OPTIONS, filters.sort)}
+                                    options={OVERVIEW_SORT_OPTIONS}
+                                    ariaLabel={`Sort ${Synonyms.assets}`}
+                                    onChange={({ detail }) =>
+                                        setFilters({ sort: detail.selectedOption.value || "" })
+                                    }
+                                />
+                            </SpaceBetween>
+                        }
                         loading={loading}
                         items={pageAssets}
                         pagination={
@@ -541,6 +709,8 @@ const DatabaseCompliancePage: React.FC = () => {
                             <Box textAlign="center" padding="l">
                                 {loadFailed
                                     ? `The ${Synonyms.asset} compliance states could not be loaded.`
+                                    : filtersActive
+                                    ? `No ${Synonyms.assets} match the filters.`
                                     : `No ${Synonyms.assets} are being tracked for compliance in this ${Synonyms.database}.`}
                             </Box>
                         }

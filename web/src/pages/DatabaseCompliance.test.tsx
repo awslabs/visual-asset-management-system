@@ -87,6 +87,15 @@ describe("DatabaseCompliance asset-state paging", () => {
         expect(service().fetchDatabaseComplianceOverview.mock.calls[0]).toEqual([
             "db1",
             { maxItems: COMPLIANCE_LISTING_PAGE_SIZE, startingToken: undefined },
+            // No filter set: the service sends none of them.
+            {
+                state: "",
+                schemaName: "",
+                schemaSource: "",
+                evaluationError: "",
+                text: "",
+                sort: "",
+            },
         ]);
 
         await userEvent.click(screen.getByRole("button", { name: /Next page of/ }));
