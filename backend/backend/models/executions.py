@@ -294,6 +294,10 @@ class WorkflowExecutionConfigurationRecord(
     metadataSourceAssetsTruncated: Optional[bool] = False
     metadataSourceDatabases: Optional[List[str]] = []
     metadataSourceDatabasesTruncated: Optional[bool] = False
+    # The output kinds the run produced (subset of ["File","Metadata","Result"], File->Metadata->
+    # Result order). Written [] at launch and UPDATEd at completion/failure. A row written before the
+    # attribute existed resolves to [] on read (no migration), which is the default here.
+    outputTypes: Optional[List[str]] = []
 
 
 #######################
@@ -672,6 +676,80 @@ class DetailMetadataPageResponseModel(BaseModel, extra='ignore'):
     Items: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     collection: str
     NextToken: Optional[str] = None
+
+
+# File collections of the execution-detail view that can be read a page at a time. Distinct from the
+# metadata collection set — files have NO inputDatabase analogue (that split is metadata-only). 'input'
+# is the workflow-level input files; 'output' the per-pipeline output files.
+DETAIL_FILE_COLLECTION_INPUT = "input"
+DETAIL_FILE_COLLECTION_OUTPUT = "output"
+DETAIL_FILE_COLLECTIONS = (
+    DETAIL_FILE_COLLECTION_INPUT,
+    DETAIL_FILE_COLLECTION_OUTPUT,
+)
+
+
+class DetailFilesPageRequestModel(BaseModel, extra='ignore'):
+    """Query parameters of the paged execution-detail FILES read. Mirrors
+    DetailMetadataPageRequestModel exactly except that collection is validated against
+    DETAIL_FILE_COLLECTIONS (input|output, no inputDatabase). pageSize is clamped to the handler's
+    page-size cap; startingToken/NextToken are the opaque base64 continuation (either name accepted,
+    matching the metadata read and the global execution list). pipelineId narrows output files to one
+    step."""
+    collection: Optional[str] = DETAIL_FILE_COLLECTION_INPUT
+    pageSize: Optional[int] = Field(None, ge=1)
+    startingToken: Optional[str] = Field(None, max_length=4096)
+    NextToken: Optional[str] = Field(None, max_length=4096)
+    pipelineId: Optional[str] = None
+
+    @validator("collection", pre=True)
+    def _default_collection(cls, v):
+        if v is None or str(v).strip() == "":
+            return DETAIL_FILE_COLLECTION_INPUT
+        return str(v).strip()
+
+    @validator("pageSize", pre=True)
+    def _blank_page_size(cls, v):
+        # Query parameters arrive as strings, and an omitted one is often sent as "" rather than
+        # dropped; that is "unspecified", not a parse failure, so it falls back to the default.
+        if v is None or str(v).strip() == "":
+            return None
+        return v
+
+    @root_validator
+    def validate_fields(cls, values):
+        if values.get("collection") not in DETAIL_FILE_COLLECTIONS:
+            raise ValueError(f"collection must be one of {DETAIL_FILE_COLLECTIONS}")
+        # pipelineId narrows the read to one step's output rows, compared against the stored
+        # pipelineId, so it is validated with the same ID rule every other pipeline id uses.
+        if values.get("pipelineId"):
+            _validate_id(values.get("pipelineId"))
+        return values
+
+    def resolved_starting_token(self):
+        """The supplied continuation token under either accepted name ("" when none)."""
+        return (self.startingToken or self.NextToken or "").strip()
+
+
+class DetailFilesPageResponseModel(BaseModel, extra='ignore'):
+    """One page of a detail file collection, mirroring DetailMetadataPageResponseModel. Rows carry
+    the same scrubbed file shape the details view returns. NextToken is absent on the last page."""
+    Items: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+    collection: str
+    NextToken: Optional[str] = None
+
+
+class ExecutionResultsResponseModel(BaseModel, extra='ignore'):
+    """The /details/results response: the FULL concatenated result text of a run plus accounting.
+
+    resultContent is the whole result unless resultContentTruncated is True, in which case it was cut
+    server-side at EXECUTION_RESULT_RESPONSE_MAX_BYTES (payload safety) and the remainder is read via
+    the details output-results section or the CLI's --output FILE. A legacy/empty run returns the
+    empty shape (resultContent "", flags/counts zero), never an error."""
+    resultContent: Optional[str] = ""
+    resultContentTruncated: Optional[bool] = False
+    resultRowCount: Optional[int] = 0
+    resultContentBytes: Optional[int] = 0
 
 
 class PermanentDeleteRequestModel(BaseModel, extra='ignore'):
