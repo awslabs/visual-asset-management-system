@@ -62,6 +62,10 @@ const SSRF_RULE = "EC2MetaDataSSRF_BODY";
 const RFI_RULE = "GenericRFI_BODY";
 const SSRF_LABEL = "awswaf:managed:aws:core-rule-set:EC2MetaDataSSRF_Body";
 const RFI_LABEL = "awswaf:managed:aws:core-rule-set:GenericRFI_Body";
+// Blocked by the shipped policy, unlike GenericRFI_BODY, which it counts: the fixture relaxes two
+// rules the policy blocks, so both are re-blocked off the prefix.
+const XSS_RULE = "CrossSiteScripting_BODY";
+const XSS_LABEL = "awswaf:managed:aws:core-rule-set:CrossSiteScripting_Body";
 const FIXTURE_PREFIX = "/api/fixture/bodies";
 const REBLOCK_RULE = "VAMS-FixtureBodyRules";
 const LINUX_RULE_SET = "AWSManagedRulesLinuxRuleSet";
@@ -96,7 +100,7 @@ const fixtureExclusions: WafScopedRuleExclusion[] = [
         managedRuleGroupName: COMMON_RULE_SET,
         rules: [
             { name: SSRF_RULE, label: SSRF_LABEL },
-            { name: RFI_RULE, label: RFI_LABEL },
+            { name: XSS_RULE, label: XSS_LABEL },
         ],
         uriPathPrefixes: [FIXTURE_PREFIX],
         reapplyRuleName: REBLOCK_RULE,
@@ -283,7 +287,7 @@ describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])(
                 expect.arrayContaining([
                     ...shippedCommonOverrides,
                     { Name: SSRF_RULE, ActionToUse: { Count: {} } },
-                    { Name: RFI_RULE, ActionToUse: { Count: {} } },
+                    { Name: XSS_RULE, ActionToUse: { Count: {} } },
                 ])
             );
             // The rest of the group stays in block mode.
@@ -305,7 +309,7 @@ describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])(
                     Statements: [
                         {
                             OrStatement: {
-                                Statements: [labelMatch(SSRF_LABEL), labelMatch(RFI_LABEL)],
+                                Statements: [labelMatch(SSRF_LABEL), labelMatch(XSS_LABEL)],
                             },
                         },
                         { NotStatement: { Statement: prefixMatch(FIXTURE_PREFIX) } },
@@ -352,7 +356,7 @@ describe("a CfWafStack passes its scoped rule exclusions to its web ACL", () => 
         expect(overridesOf(acls[0])).toEqual(
             expect.arrayContaining([
                 { Name: SSRF_RULE, ActionToUse: { Count: {} } },
-                { Name: RFI_RULE, ActionToUse: { Count: {} } },
+                { Name: XSS_RULE, ActionToUse: { Count: {} } },
             ])
         );
     });
@@ -401,11 +405,11 @@ describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])(
             (action, actionToUse) => {
                 const acl = synthAcl(
                     wafScope,
-                    policyOverriding([{ name: RFI_RULE, action }]),
+                    policyOverriding([{ name: XSS_RULE, action }]),
                     fixtureExclusions
                 );
-                const rfiOverrides = overridesOf(acl).filter((o) => o.Name === RFI_RULE);
-                expect(rfiOverrides).toEqual([{ Name: RFI_RULE, ActionToUse: actionToUse }]);
+                const xssOverrides = overridesOf(acl).filter((o) => o.Name === XSS_RULE);
+                expect(xssOverrides).toEqual([{ Name: XSS_RULE, ActionToUse: actionToUse }]);
                 expect(overridesOf(acl)).toContainEqual({
                     Name: SSRF_RULE,
                     ActionToUse: { Count: {} },
@@ -425,18 +429,18 @@ describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])(
         test("relaxes a rule the policy overrides to block and re-blocks both labels", () => {
             const acl = synthAcl(
                 wafScope,
-                policyOverriding([{ name: RFI_RULE, action: "block" }]),
+                policyOverriding([{ name: XSS_RULE, action: "block" }]),
                 fixtureExclusions
             );
-            expect(overridesOf(acl).filter((o) => o.Name === RFI_RULE)).toEqual([
-                { Name: RFI_RULE, ActionToUse: { Count: {} } },
+            expect(overridesOf(acl).filter((o) => o.Name === XSS_RULE)).toEqual([
+                { Name: XSS_RULE, ActionToUse: { Count: {} } },
             ]);
             expect(ruleNamed(acl, REBLOCK_RULE).Statement).toEqual({
                 AndStatement: {
                     Statements: [
                         {
                             OrStatement: {
-                                Statements: [labelMatch(SSRF_LABEL), labelMatch(RFI_LABEL)],
+                                Statements: [labelMatch(SSRF_LABEL), labelMatch(XSS_LABEL)],
                             },
                         },
                         { NotStatement: { Statement: prefixMatch(FIXTURE_PREFIX) } },
@@ -448,7 +452,7 @@ describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])(
         test("adds no re-block rule when the policy overrides both relaxed rules", () => {
             const policy = policyOverriding([
                 { name: SSRF_RULE, action: "count" },
-                { name: RFI_RULE, action: "count" },
+                { name: XSS_RULE, action: "count" },
             ]);
             const acl = synthAcl(wafScope, policy, fixtureExclusions);
             expect(ruleNamed(acl, REBLOCK_RULE)).toBeUndefined();
@@ -522,7 +526,7 @@ describe("scoped rule exclusions outside the shipped policy", () => {
         });
         const acl = synthAcl(wafScope, policy, fixtureExclusions);
         expect(ruleNamed(acl, REBLOCK_RULE).Statement.AndStatement.Statements[0]).toEqual({
-            OrStatement: { Statements: [labelMatch(SSRF_LABEL), labelMatch(RFI_LABEL)] },
+            OrStatement: { Statements: [labelMatch(SSRF_LABEL), labelMatch(XSS_LABEL)] },
         });
         const commonRuleSetGroups = rulesOf(acl).filter(
             (r) => r.Statement.ManagedRuleGroupStatement?.Name === COMMON_RULE_SET
@@ -535,7 +539,7 @@ describe("scoped rule exclusions outside the shipped policy", () => {
             expect(group.Statement.ManagedRuleGroupStatement.RuleActionOverrides).toEqual(
                 expect.arrayContaining([
                     { Name: SSRF_RULE, ActionToUse: { Count: {} } },
-                    { Name: RFI_RULE, ActionToUse: { Count: {} } },
+                    { Name: XSS_RULE, ActionToUse: { Count: {} } },
                 ])
             );
         });
@@ -575,8 +579,8 @@ describe("scoped rule exclusions outside the shipped policy", () => {
             managedRuleGroupName: COMMON_RULE_SET,
             rules: [
                 {
-                    name: "CrossSiteScripting_BODY",
-                    label: "awswaf:managed:aws:core-rule-set:CrossSiteScripting_Body",
+                    name: "NoUserAgent_HEADER",
+                    label: "awswaf:managed:aws:core-rule-set:NoUserAgent_Header",
                 },
             ],
             uriPathPrefixes: ["/api/one", "/api/two"],
@@ -592,7 +596,7 @@ describe("scoped rule exclusions outside the shipped policy", () => {
         expect(ruleNamed(acl, "VAMS-Second").Statement).toEqual({
             AndStatement: {
                 Statements: [
-                    labelMatch("awswaf:managed:aws:core-rule-set:CrossSiteScripting_Body"),
+                    labelMatch("awswaf:managed:aws:core-rule-set:NoUserAgent_Header"),
                     {
                         NotStatement: {
                             Statement: {
@@ -626,7 +630,7 @@ describe("a scoped exclusion's prefix covers the path and the paths below it onl
         [`${FIXTURE_PREFIX}/item`],
         [`${FIXTURE_PREFIX}/item/part`],
     ])("exempts %s", (path) => {
-        expect(reblockedBy(acl, { path, labels: [RFI_LABEL] })).toBeUndefined();
+        expect(reblockedBy(acl, { path, labels: [XSS_LABEL] })).toBeUndefined();
     });
 
     test.each([
@@ -646,7 +650,7 @@ describe("a scoped exclusion's prefix covers the path and the paths below it onl
         [`/${FIXTURE_PREFIX}/item`],
         [FIXTURE_PREFIX.toUpperCase() + "/item"],
     ])("re-blocks %s", (path) => {
-        expect(reblockedBy(acl, { path, labels: [RFI_LABEL] })).toBe(REBLOCK_RULE);
+        expect(reblockedBy(acl, { path, labels: [XSS_LABEL] })).toBe(REBLOCK_RULE);
     });
 
     test("blocks nothing without a relaxed label", () => {
@@ -662,7 +666,7 @@ describe("two scoped exclusions relaxing the same rule", () => {
         {
             managedRuleGroupName: COMMON_RULE_SET,
             rules: [
-                { name: RFI_RULE, label: RFI_LABEL },
+                { name: XSS_RULE, label: XSS_LABEL },
                 { name: SSRF_RULE, label: SSRF_LABEL },
             ],
             uriPathPrefixes: [ADDON_A],
@@ -670,7 +674,7 @@ describe("two scoped exclusions relaxing the same rule", () => {
         },
         {
             managedRuleGroupName: COMMON_RULE_SET,
-            rules: [{ name: RFI_RULE, label: RFI_LABEL }],
+            rules: [{ name: XSS_RULE, label: XSS_LABEL }],
             uriPathPrefixes: [ADDON_B],
             reapplyRuleName: "VAMS-B",
         },
@@ -678,13 +682,13 @@ describe("two scoped exclusions relaxing the same rule", () => {
     const acl = synthAcl(wafScope, shippedPolicy, exclusionsSharingRfi);
 
     test.each([
-        [`${ADDON_A}/item`, [RFI_LABEL], undefined],
-        [`${ADDON_B}/item`, [RFI_LABEL], undefined],
-        ["/api/assets/item", [RFI_LABEL], "VAMS-A"],
+        [`${ADDON_A}/item`, [XSS_LABEL], undefined],
+        [`${ADDON_B}/item`, [XSS_LABEL], undefined],
+        ["/api/assets/item", [XSS_LABEL], "VAMS-A"],
         [`${ADDON_A}/item`, [SSRF_LABEL], undefined],
         // A label only the first exclusion relaxes stays scoped to its own prefix.
         [`${ADDON_B}/item`, [SSRF_LABEL], "VAMS-A"],
-        [`${ADDON_B}/item`, [RFI_LABEL, SSRF_LABEL], "VAMS-A"],
+        [`${ADDON_B}/item`, [XSS_LABEL, SSRF_LABEL], "VAMS-A"],
     ] as const)("a request to %s carrying %j is re-blocked by %s", (path, labels, rule) => {
         expect(reblockedBy(acl, { path, labels: [...labels] })).toBe(rule);
     });
@@ -693,7 +697,7 @@ describe("two scoped exclusions relaxing the same rule", () => {
         const sharedRfi = {
             AndStatement: {
                 Statements: [
-                    labelMatch(RFI_LABEL),
+                    labelMatch(XSS_LABEL),
                     {
                         NotStatement: {
                             Statement: {
@@ -1179,7 +1183,7 @@ describe("buildWafStacks", () => {
             expect(overridesOf(acl)).toEqual(
                 expect.arrayContaining([
                     { Name: SSRF_RULE, ActionToUse: { Count: {} } },
-                    { Name: RFI_RULE, ActionToUse: { Count: {} } },
+                    { Name: XSS_RULE, ActionToUse: { Count: {} } },
                 ])
             );
         }
