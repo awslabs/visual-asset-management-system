@@ -45,6 +45,14 @@ jest.mock("../services/ComplianceService", () => ({
     fetchCascades: jest.fn().mockResolvedValue([true, []]),
     fetchAuditLog: jest.fn().mockResolvedValue([true, { entries: [] }]),
     fetchComplianceSchemas: jest.fn().mockResolvedValue([true, []]),
+    // The Schemas page reads the unfiltered listing through fetchComplianceSchemaListing; it
+    // answers with what the test's fetchComplianceSchemas mock returns.
+    fetchComplianceSchemaListing: jest.fn(async () => {
+        const [ok, result] = await jest
+            .requireMock("../services/ComplianceService")
+            .fetchComplianceSchemas();
+        return [ok, ok ? { schemas: result } : result];
+    }),
     fetchDatabaseComplianceOverview: jest
         .fn()
         .mockResolvedValue([true, { databaseId: "db1", totalAssets: 0, summary: {}, assets: [] }]),

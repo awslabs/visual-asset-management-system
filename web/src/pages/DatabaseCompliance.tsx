@@ -26,6 +26,7 @@ import {
     evaluateDatabaseCompliance,
     getDatabaseBindings,
     fetchComplianceSchemas,
+    bindableSchemas,
     bindSchemaToDatabase,
     unbindSchemaFromDatabase,
     revokeException,
@@ -278,7 +279,7 @@ const DatabaseCompliancePage: React.FC = () => {
             const [success, result] = await fetchComplianceSchemas(databaseId);
             if (success && Array.isArray(result)) {
                 setSchemaOptions(
-                    result.map((s) => ({
+                    bindableSchemas(result).map((s) => ({
                         label: s.schemaName,
                         value: s.schemaName,
                         description: s.description,

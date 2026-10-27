@@ -43,6 +43,14 @@ jest.mock("../services/ComplianceService", () => ({
     fetchQuarantinedAssets: jest.fn(),
     fetchCascades: jest.fn(),
     fetchComplianceSchemas: jest.fn(),
+    // The Schemas page reads the unfiltered listing through fetchComplianceSchemaListing; it
+    // answers with what the test's fetchComplianceSchemas mock returns.
+    fetchComplianceSchemaListing: jest.fn(async () => {
+        const [ok, result] = await jest
+            .requireMock("../services/ComplianceService")
+            .fetchComplianceSchemas();
+        return [ok, ok ? { schemas: result } : result];
+    }),
     fetchDatabaseComplianceOverview: jest.fn(),
     getDatabaseBindings: jest.fn(),
 }));

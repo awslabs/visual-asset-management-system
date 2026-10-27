@@ -19,6 +19,7 @@ import {
     fetchCascade,
     approveCascade,
     rejectCascade,
+    itemAllows,
     CascadeNodeState,
     CascadeRecord,
     COMPLIANCE_LISTING_PAGE_SIZE,
@@ -488,8 +489,11 @@ const ComplianceCascades: React.FC = () => {
                                       header: "Actions",
                                       width: CASCADE_ACTIONS_COLUMN_WIDTH,
                                       minWidth: CASCADE_ACTIONS_COLUMN_WIDTH,
+                                      // Only on the cascades the caller may approve: the service
+                                      // computes that per cascade (its parent's database).
                                       cell: (item: CascadeRecord) =>
-                                          item.state === "pending_approval" ? (
+                                          item.state === "pending_approval" &&
+                                          itemAllows(item, "approve") ? (
                                               <SpaceBetween direction="horizontal" size="s">
                                                   {canApprove && (
                                                       <Button

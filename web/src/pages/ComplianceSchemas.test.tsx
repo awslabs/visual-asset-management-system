@@ -24,6 +24,14 @@ jest.mock("../features/orchestration/permissions/useAllowedRoutes", () => ({
 jest.mock("../services/ComplianceService", () => ({
     ...jest.requireActual("../services/ComplianceService"),
     fetchComplianceSchemas: jest.fn(),
+    // The Schemas page reads the unfiltered listing through fetchComplianceSchemaListing; it
+    // answers with what the test's fetchComplianceSchemas mock returns.
+    fetchComplianceSchemaListing: jest.fn(async () => {
+        const [ok, result] = await jest
+            .requireMock("../services/ComplianceService")
+            .fetchComplianceSchemas();
+        return [ok, ok ? { schemas: result } : result];
+    }),
     createComplianceSchema: jest.fn(),
     updateComplianceSchema: jest.fn(),
     sweepSchema: jest.fn(),

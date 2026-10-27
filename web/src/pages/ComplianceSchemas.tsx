@@ -25,7 +25,8 @@ import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { usePageTitle } from "../hooks/usePageTitle";
 import Synonyms from "../synonyms";
 import {
-    fetchComplianceSchemas,
+    fetchComplianceSchemaListing,
+    itemAllows,
     createComplianceSchema,
     updateComplianceSchema,
     sweepSchema,
@@ -439,13 +440,17 @@ export const sweepMessage = (schemaName: string, result: any): string => {
 
 export default function ComplianceSchemas() {
     const { can: canCallRoute } = useAllowedRoutes();
-    const canCreate = canCallRoute("POST", COMPLIANCE_SCHEMAS_API_ROUTE);
+    const canCreateRoute = canCallRoute("POST", COMPLIANCE_SCHEMAS_API_ROUTE);
     const canUpdate = canCallRoute("PUT", COMPLIANCE_SCHEMA_API_ROUTE);
     const canSweep = canCallRoute("POST", COMPLIANCE_SWEEP_API_ROUTE);
     const canListDatabases = canCallRoute("GET", DATABASE_LIST_API_ROUTE);
     usePageTitle("Compliance Schemas");
 
     const [schemas, setSchemas] = useState<ComplianceSchema[]>([]);
+    // The scopes the caller may create a schema in, as the service computes them; undefined when
+    // the response predates them (the route check alone then gates creation).
+    const [createScopes, setCreateScopes] = useState<string[] | undefined>(undefined);
+    const canCreate = canCreateRoute && (createScopes === undefined || createScopes.length > 0);
     const [loading, setLoading] = useState(false);
     const [filterText, setFilterText] = useState("");
     const [flashMessages, setFlashMessages] = useState<FlashbarProps.MessageDefinition[]>([]);
@@ -455,8 +460,9 @@ export default function ComplianceSchemas() {
     // Modal state
     const [modalVisible, setModalVisible] = useState(false);
     const [editingSchema, setEditingSchema] = useState<ComplianceSchema | null>(null);
-    // A caller who may read a schema but not update it opens it read-only from its name.
-    const viewOnly = !!editingSchema && !canUpdate;
+    // A caller who may read a schema but not update it (the route, or this schema in its scope)
+    // opens it read-only from its name.
+    const viewOnly = !!editingSchema && !(canUpdate && itemAllows(editingSchema, "edit"));
     const [formName, setFormName] = useState("");
     const [formDescription, setFormDescription] = useState("");
     // Where the schema can be bound: GLOBAL (every database) or one database (only there).
@@ -486,9 +492,10 @@ export default function ComplianceSchemas() {
 
     const loadSchemas = async () => {
         setLoading(true);
-        const [success, result] = await fetchComplianceSchemas();
-        if (success && Array.isArray(result)) {
-            setSchemas(result);
+        const [success, result] = await fetchComplianceSchemaListing();
+        if (success && typeof result !== "string") {
+            setSchemas(result.schemas);
+            setCreateScopes(result.createScopes);
         } else if (typeof result === "string") {
             addFlashMessage("error", result);
         }
@@ -515,7 +522,12 @@ export default function ComplianceSchemas() {
         setEditingSchema(null);
         setFormName("");
         setFormDescription("");
-        setFormDatabaseId(GLOBAL_SCOPE);
+        // GLOBAL when the caller may create there, otherwise the first database it may create in.
+        setFormDatabaseId(
+            createScopes === undefined || createScopes.includes(GLOBAL_SCOPE)
+                ? GLOBAL_SCOPE
+                : createScopes.find((scope) => scope !== GLOBAL_SCOPE) || GLOBAL_SCOPE
+        );
         setSelectedTemplate(DEFAULT_TEMPLATE_OPTION);
         setFormBody(DEFAULT_TEMPLATE_BODY);
         setFormError(null);
@@ -523,7 +535,8 @@ export default function ComplianceSchemas() {
     };
 
     useEffect(() => {
-        if (!canListDatabases) return;
+        // The service names the databases the caller may create in; no listing is needed.
+        if (!canListDatabases || createScopes !== undefined) return;
         fetchAllDatabases().then((databases) => {
             if (Array.isArray(databases)) {
                 setDatabaseOptions(
@@ -535,7 +548,27 @@ export default function ComplianceSchemas() {
                 );
             }
         });
-    }, [canListDatabases]);
+    }, [canListDatabases, createScopes]);
+
+    // The scopes the form offers: those the caller may create (and move a schema) in, plus the
+    // edited schema's own scope; without `createScopes`, GLOBAL and every listed database.
+    const scopeAllowed = (scope: string) =>
+        createScopes === undefined ||
+        createScopes.includes(scope) ||
+        (!!editingSchema && schemaScope(editingSchema) === scope);
+    const formDatabaseOptions: SelectProps.Option[] =
+        createScopes === undefined
+            ? databaseOptions
+            : Array.from(
+                  new Set([
+                      ...createScopes.filter((scope) => scope !== GLOBAL_SCOPE),
+                      ...(editingSchema && schemaScope(editingSchema) !== GLOBAL_SCOPE
+                          ? [schemaScope(editingSchema)]
+                          : []),
+                  ])
+              )
+                  .sort()
+                  .map((id) => ({ value: id, label: id }));
 
     const handleTemplateChange = (option: any) => {
         setSelectedTemplate(option);
@@ -742,7 +775,7 @@ export default function ComplianceSchemas() {
                                                   complianceSchemaFormat(item) === "legacy";
                                               return (
                                                   <SpaceBetween direction="horizontal" size="s">
-                                                      {canUpdate && (
+                                                      {canUpdate && itemAllows(item, "edit") && (
                                                           <Button
                                                               variant="inline-link"
                                                               disabled={legacy}
@@ -840,12 +873,12 @@ export default function ComplianceSchemas() {
                                         {
                                             value: GLOBAL_SCOPE,
                                             label: "All databases (GLOBAL)",
-                                            disabled: viewOnly,
+                                            disabled: viewOnly || !scopeAllowed(GLOBAL_SCOPE),
                                         },
                                         {
                                             value: "one",
                                             label: `One ${Synonyms.database}`,
-                                            disabled: viewOnly,
+                                            disabled: viewOnly || formDatabaseOptions.length === 0,
                                         },
                                     ]}
                                 />
@@ -857,7 +890,7 @@ export default function ComplianceSchemas() {
                                                 ? { value: formDatabaseId, label: formDatabaseId }
                                                 : null
                                         }
-                                        options={databaseOptions}
+                                        options={formDatabaseOptions}
                                         filteringType="auto"
                                         placeholder={`Choose a ${Synonyms.database}`}
                                         disabled={viewOnly}

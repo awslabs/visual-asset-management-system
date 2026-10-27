@@ -17,6 +17,7 @@ import {
     fetchQuarantinedAssets,
     releaseFromQuarantine,
     grantException,
+    itemAllows,
     QuarantinedAsset,
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../services/ComplianceService";
@@ -303,7 +304,9 @@ const ComplianceQuarantine: React.FC = () => {
                                       minWidth: QUARANTINE_ACTIONS_COLUMN_WIDTH,
                                       cell: (item: QuarantinedAsset) => (
                                           <SpaceBetween direction="horizontal" size="s">
-                                              {canRelease && (
+                                              {/* Per row: the service computes whether the
+                                                  caller may act in the row's database. */}
+                                              {canRelease && itemAllows(item, "release") && (
                                                   <Button
                                                       variant="inline-link"
                                                       onClick={() => setReleaseTarget(item)}
@@ -311,14 +314,15 @@ const ComplianceQuarantine: React.FC = () => {
                                                       Release
                                                   </Button>
                                               )}
-                                              {canGrantException && (
-                                                  <Button
-                                                      variant="inline-link"
-                                                      onClick={() => setExceptionTarget(item)}
-                                                  >
-                                                      Exception
-                                                  </Button>
-                                              )}
+                                              {canGrantException &&
+                                                  itemAllows(item, "exception") && (
+                                                      <Button
+                                                          variant="inline-link"
+                                                          onClick={() => setExceptionTarget(item)}
+                                                      >
+                                                          Exception
+                                                      </Button>
+                                                  )}
                                           </SpaceBetween>
                                       ),
                                   },

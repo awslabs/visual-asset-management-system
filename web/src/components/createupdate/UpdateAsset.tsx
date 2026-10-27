@@ -18,6 +18,7 @@ import ProgressBar from "@cloudscape-design/components/progress-bar";
 import { fetchTagsForAsset, fetchTagTypesForAsset, updateAsset } from "../../services/APIService";
 import {
     fetchComplianceSchemas,
+    bindableSchemas,
     fetchComplianceState,
     bindSchemaToAsset,
     unbindSchemaFromAsset,
@@ -296,7 +297,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
             const [success, result] = await fetchComplianceSchemas(tagScopeDatabaseId);
             if (success && Array.isArray(result)) {
                 setSchemaOptions(
-                    result.map((s) => ({
+                    bindableSchemas(result).map((s) => ({
                         label: s.schemaName,
                         value: s.schemaName,
                         description: s.description,

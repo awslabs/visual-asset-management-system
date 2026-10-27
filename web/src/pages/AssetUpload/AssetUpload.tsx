@@ -61,7 +61,11 @@ import { FileUploadTable, FileUploadTableItem, shortenBytes } from "./FileUpload
 import localforage from "localforage";
 import { fetchDatabase, fetchTagsForAsset, fetchTagTypesForAsset } from "../../services/APIService";
 import { buildTagOptionGroups } from "../../common/utils/tagOptions";
-import { fetchComplianceSchemas, bindSchemaToAsset } from "../../services/ComplianceService";
+import {
+    bindableSchemas,
+    fetchComplianceSchemas,
+    bindSchemaToAsset,
+} from "../../services/ComplianceService";
 import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
 import type { SelectProps } from "@cloudscape-design/components";
 import { TagType } from "../Tag/TagType.interface";
@@ -493,7 +497,7 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
             );
             if (success && Array.isArray(result)) {
                 setSchemaOptions(
-                    result.map((s) => ({
+                    bindableSchemas(result).map((s) => ({
                         label: s.schemaName,
                         value: s.schemaName,
                         description: s.description,

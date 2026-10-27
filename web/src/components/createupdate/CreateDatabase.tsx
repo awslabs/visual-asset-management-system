@@ -21,6 +21,7 @@ import { useState, useEffect } from "react";
 import { createDatabase, updateDatabase, fetchBuckets } from "../../services/APIService";
 import {
     fetchComplianceSchemas,
+    bindableSchemas,
     bindSchemaToDatabase,
     unbindSchemaFromDatabase,
     getDatabaseBindings,
@@ -223,7 +224,7 @@ export default function CreateDatabase({
             );
             if (success && Array.isArray(result)) {
                 setSchemaOptions(
-                    result.map((s) => ({
+                    bindableSchemas(result).map((s) => ({
                         label: s.schemaName,
                         value: s.schemaName,
                         description: s.description,

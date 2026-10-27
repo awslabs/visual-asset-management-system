@@ -222,6 +222,26 @@ export type ComplianceSchemaBody = VamsRulesV1SchemaBody | Record<string, any>;
  */
 export type ComplianceSchemaFormat = typeof VAMS_RULES_V1_FORMAT | "legacy";
 
+/**
+ * The caller's allowed actions on one listed item, computed by the service. A response that
+ * predates the field carries none; `itemAllows` then defers to the route-level check alone.
+ */
+export interface ItemPermissions {
+    [action: string]: boolean | undefined;
+}
+
+/**
+ * Whether the item's `permissions` allow `action`. An item without `permissions` (a response that
+ * predates them) allows it, so the page falls back to its route-level gating.
+ */
+export const itemAllows = (
+    item: { permissions?: ItemPermissions } | null | undefined,
+    action: string
+): boolean => {
+    if (!item?.permissions) return true;
+    return item.permissions[action] === true;
+};
+
 export interface ComplianceSchema {
     schemaName: string;
     description?: string;
@@ -233,6 +253,23 @@ export interface ComplianceSchema {
     version?: number;
     createdAt?: string;
     updatedAt?: string;
+    isSystem?: boolean;
+    /** Listing only: `edit`, `delete` and `bind` (see `itemAllows`). */
+    permissions?: ItemPermissions;
+}
+
+/**
+ * The listed schemas a binding picker offers: those the service marks bindable for the caller
+ * (readable, a vams-rules-v1 body, and the binding permission in the listing's database).
+ */
+export const bindableSchemas = (schemas: ComplianceSchema[]): ComplianceSchema[] =>
+    schemas.filter((schema) => itemAllows(schema, "bind"));
+
+/** The schema listing with the scopes the caller may create a schema in (unfiltered listing). */
+export interface ComplianceSchemaListing {
+    schemas: ComplianceSchema[];
+    /** `GLOBAL` and database ids; absent on a response that predates the field. */
+    createScopes?: string[];
 }
 
 /** The format of a schema record, derived from its body when the record does not carry it. */
@@ -378,6 +415,7 @@ export type CascadeNodeState =
     | "pending"
     | "evaluating"
     | "skipped"
+    | "skipped_not_authorized"
     | "superseded"
     | ComplianceEvaluationVerdict;
 
@@ -402,6 +440,8 @@ export interface CascadeRecord {
     totalNodes?: number;
     completedAt?: string;
     abortReason?: string;
+    /** `approve`: whether the caller may approve or reject the cascade (see `itemAllows`). */
+    permissions?: ItemPermissions;
 }
 
 /** Response of the cascade create/approve/reject routes; `state` is set when the cascade moves. */
@@ -497,6 +537,36 @@ export const fetchComplianceSchemas = async (
         return [true, response.schemas || response.Items || []];
     } catch (error: any) {
         console.log("fetchComplianceSchemas error:", error);
+        return [false, error?.message || "Failed to fetch compliance schemas"];
+    }
+};
+
+/**
+ * The unfiltered schema listing: every schema the caller may read, and `createScopes`, the scopes
+ * the caller may create a schema in.
+ */
+export const fetchComplianceSchemaListing = async (): Promise<
+    [boolean, ComplianceSchemaListing | string]
+> => {
+    try {
+        const response = await apiClient.get("compliance/schemas", {});
+        if (
+            response?.message &&
+            (response.message.includes("error") || response.message.includes("Error"))
+        ) {
+            return [false, response.message];
+        }
+        return [
+            true,
+            {
+                schemas: response?.schemas || response?.Items || [],
+                createScopes: Array.isArray(response?.createScopes)
+                    ? response.createScopes
+                    : undefined,
+            },
+        ];
+    } catch (error: any) {
+        console.log("fetchComplianceSchemaListing error:", error);
         return [false, error?.message || "Failed to fetch compliance schemas"];
     }
 };
@@ -754,6 +824,8 @@ export const fetchDatabaseComplianceOverview = async (
 
 export interface QuarantinedAsset extends ComplianceState {
     assetName?: string;
+    /** `release` and `exception` (see `itemAllows`). */
+    permissions?: ItemPermissions;
 }
 
 export interface PagedQuarantinedAssets {
