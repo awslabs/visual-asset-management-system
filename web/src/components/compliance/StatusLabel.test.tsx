@@ -37,12 +37,13 @@ const service = () =>
 /** The one-line wrapper of the label, asserted to hold the icon and the whole label. */
 const expectOneLine = (label: string) => {
     const text = screen.getByText(label);
-    const wrapper = text.closest("[data-status-label]") as HTMLElement | null;
-    expect(wrapper).not.toBeNull();
-    expect(wrapper!.style.whiteSpace).toBe("nowrap");
-    expect(wrapper!.textContent?.trim()).toBe(label);
+    const wrapper = text.closest("[data-status-label]");
+    expect(wrapper).toBeInstanceOf(HTMLElement);
+    const span = wrapper as HTMLElement;
+    expect(span.style.whiteSpace).toBe("nowrap");
+    expect(span.textContent?.trim()).toBe(label);
     // The status icon is inside the same no-wrap span, so it never parts from the label.
-    expect(wrapper!.querySelector("svg")).not.toBeNull();
+    expect(span.querySelector("svg")).not.toBeNull();
 };
 
 describe("compliance status labels stay on one line", () => {
