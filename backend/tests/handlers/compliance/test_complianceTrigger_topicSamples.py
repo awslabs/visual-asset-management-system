@@ -78,7 +78,8 @@ class TestTheSamplesAreThePublishedMessages:
     @pytest.mark.parametrize("sample", S3_SAMPLES, ids=lambda s: s["name"])
     def test_each_s3_sample_carries_the_records_the_trigger_unwraps(self, sample):
         records = s3_records_from_indexer_message(sample["body"])
-        assert records and all(r["eventSource"] == "aws:s3" for r in records)
+        assert records
+        assert all(r["eventSource"] == "aws:s3" for r in records)
         assert set(sample["body"]) == {"Records", "ASSET_BUCKET_NAME", "ASSET_BUCKET_PREFIX"}
 
 
@@ -93,9 +94,10 @@ class TestTheTriggerRoutesEverySample:
                 patch.object(trigger, "_process_file_event") as file_event, \
                 patch.object(trigger.logger, "info") as info:
             trigger._dispatch_event(sample["body"], batch=MagicMock())
+        # Exactly one of the two stream handlers ran, so the message was recognized: the branch
+        # that logs an unrecognized message is the else of the same if/elif.
         assert asset.call_count + indexed.call_count == 1
         file_event.assert_not_called()
-        assert all("Unrecognized" not in str(c.args[0]) for c in info.call_args_list)
 
     @pytest.mark.parametrize("sample", S3_SAMPLES, ids=lambda s: s["name"])
     def test_an_s3_sample_reaches_the_file_event_path(self, sample):

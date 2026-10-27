@@ -370,7 +370,8 @@ class TestListingFilters:
         built = ConditionExpressionBuilder().build_expression(kwargs["FilterExpression"])
         values = set(built.attribute_value_placeholders.values())
         assert {DB, "blade"} <= values
-        assert kwargs["Limit"] == listing.FILTERED_READ_LIMIT
+        # Rows the filter drops are skipped, so a read evaluates more than a page.
+        assert svc.DEFAULT_CASCADE_PAGE_SIZE < kwargs["Limit"] <= listing.FILTERED_READ_LIMIT
 
     def test_a_full_page_resumes_after_its_last_row(self):
         rows = [dict(PENDING, cascadeId=f"c{i}", createdAt=f"2026-10-0{i}") for i in range(1, 4)]

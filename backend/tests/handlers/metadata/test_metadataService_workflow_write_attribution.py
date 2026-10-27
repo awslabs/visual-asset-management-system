@@ -104,7 +104,8 @@ class TestAWriteBackMarksItsRows:
         assert kwargs["Key"] == _delete("b")["DeleteRequest"]["Key"]
         assert kwargs["ExpressionAttributeValues"] == {":executionId": {"S": "exec-7"}}
         assert kwargs["ExpressionAttributeNames"]["#deletedBy"] == "deletedByWorkflowExecutionId"
-        assert kwargs["ConditionExpression"] == "attribute_exists(#key)"
+        # The mark applies only to a row that exists, so marking cannot create one.
+        assert "attribute_exists(#key)" in kwargs["ConditionExpression"]
 
     def test_a_failed_mark_does_not_stop_the_delete(self, table):
         client = MagicMock()

@@ -69,7 +69,7 @@ class TestEvaluateDatabase:
         assert body["databaseId"] == DB
         evaluated = [(c.args[1], c.args[2]) for c in mocks["run"].call_args_list]
         assert evaluated == [("a", SCHEMA), ("b", "override-s"), ("c", SCHEMA)]
-        assert all(c.args[0] == DB for c in mocks["run"].call_args_list)
+        assert {c.args[0] for c in mocks["run"].call_args_list} == {DB}
         assert [t["assetId"] for t in body["assetsTriggered"]] == ["a", "b", "c"]
         assert body["assetsRemaining"] == 0
 

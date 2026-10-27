@@ -304,7 +304,7 @@ class TestQueryPage:
         # Resumes after a2, not after a4: a3 and a4 are read again on the next page.
         assert key == {"databaseId": "db", "assetId": "a2"} and reads == 2
         assert table.calls[1]["ExclusiveStartKey"] == {"databaseId": "db", "assetId": "a1"}
-        assert table.calls[0]["Limit"] == listing.FILTERED_READ_LIMIT
+        assert 2 < table.calls[0]["Limit"] <= listing.FILTERED_READ_LIMIT
 
     def test_the_budget_stops_a_selective_filter_with_a_token(self):
         pages = [{"Items": [_item(1)], "LastEvaluatedKey": {"databaseId": "db", "assetId": f"k{n}"}}

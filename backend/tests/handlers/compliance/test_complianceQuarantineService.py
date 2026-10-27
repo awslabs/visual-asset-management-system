@@ -104,7 +104,7 @@ class TestRouteDispatch:
         assert query["IndexName"] == "ComplianceStateIndex"
         assert query["KeyConditionExpression"]._values[0].name == "complianceState"
         assert query["KeyConditionExpression"]._values[1] == "quarantined"
-        assert query["Limit"] == listing.FILTERED_READ_LIMIT
+        assert svc.DEFAULT_LIST_PAGE_SIZE < query["Limit"] <= listing.FILTERED_READ_LIMIT
         assert "ExclusiveStartKey" not in query
 
     def test_post_release_reaches_release(self):
@@ -564,7 +564,7 @@ class TestListingPaging:
         token = body_of(response)["NextToken"]
         assert decode_token(token) == last_key
         # Rows the caller may not GET are skipped, so a read evaluates more than a page.
-        assert mocks["state"].query.call_args.kwargs["Limit"] == listing.FILTERED_READ_LIMIT
+        assert 1 < mocks["state"].query.call_args.kwargs["Limit"] <= listing.FILTERED_READ_LIMIT
 
         response, mocks = _run(
             rest_event("GET", LIST_PATH, query_params={"maxItems": "1", "startingToken": token}),

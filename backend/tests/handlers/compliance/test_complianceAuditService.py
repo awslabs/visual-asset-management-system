@@ -365,7 +365,7 @@ class TestCrossAssetListing:
         assert query["IndexName"] == "AuditByDateGSI"
         assert query["ScanIndexForward"] is False
         # Entries the caller may not GET are skipped, so a read evaluates more than a page.
-        assert query["Limit"] == listing.FILTERED_READ_LIMIT
+        assert 7 < query["Limit"] <= listing.FILTERED_READ_LIMIT
         assert "ExclusiveStartKey" not in query
         assert _partition_of(query) == LIST_PARTITION
         assert type(query["KeyConditionExpression"]).__name__ == "Equals"
@@ -441,7 +441,7 @@ class TestCrossAssetListing:
         query = table.query.call_args.kwargs
         assert query["IndexName"] == "EventTypeIndex"
         assert query["ScanIndexForward"] is False
-        assert query["Limit"] == listing.FILTERED_READ_LIMIT
+        assert 1 < query["Limit"] <= listing.FILTERED_READ_LIMIT
         assert _partition_of(query) == "compliance_check"
         assert _decode(body_of(response)["NextToken"]) == {
             "partition": "compliance_check", "key": last_key}

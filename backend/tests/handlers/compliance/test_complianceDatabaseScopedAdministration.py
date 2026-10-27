@@ -168,6 +168,7 @@ class TestTheSchemaListing:
             scopes = schema_svc.creatable_scopes(allow_all)
         assert scopes == ["GLOBAL", DB, OTHER_DB]
         checked = [call.args[0]["databaseId"] for call in allow_all.enforce.call_args_list]
+        assert DB in checked and OTHER_DB in checked
         assert not any("#deleted" in database_id for database_id in checked)
 
 

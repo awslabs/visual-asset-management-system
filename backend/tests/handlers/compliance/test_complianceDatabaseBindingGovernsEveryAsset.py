@@ -46,6 +46,7 @@ class TestTheTriggerRegistersANewAsset:
         mocks = self._run(_stream_message("INSERT"), OFF_DB)
         mocks["register"].assert_called_once_with(DB, ASSET, SCHEMA, asset_name=mocks["register"].call_args.kwargs["asset_name"])
         mocks["run_evaluation"].assert_not_called()
+        assert mocks["get_compliance_record"].call_args_list
         assert all(c.kwargs == {"consistent_read": True}
                    for c in mocks["get_compliance_record"].call_args_list)
 
