@@ -48,8 +48,54 @@ function createField(
     };
 }
 
+/** `modifiedBy` of a default that no user has edited since a deployment wrote it. */
+const SEED_WRITERS = {
+    ":systemUser": { S: "SYSTEM_USER" },
+    // Read-only match for rows that the 2.4.0 to 2.5.3 seeds wrote; never written by this construct.
+    ":legacySystem": { S: "SYSTEM" },
+};
+
 /**
- * Deploys default metadata schemas to DynamoDB table
+ * The create and update calls that seed one default schema item.
+ *
+ * Create writes the item unless a row already exists that a user has edited; update refreshes the
+ * row only while it still exists and no user has edited it. Every API edit, disabling included,
+ * records its editor in `modifiedBy`, so edited, disabled and deleted defaults are left alone.
+ */
+function seedCalls(
+    tableName: string,
+    item: Record<string, unknown>,
+    physicalResourceId: string
+): { onCreate: AwsSdkCall; onUpdate: AwsSdkCall } {
+    const call = (conditionExpression: string): AwsSdkCall => ({
+        service: "DynamoDB",
+        action: "putItem",
+        parameters: {
+            TableName: tableName,
+            Item: item,
+            ConditionExpression: conditionExpression,
+            ExpressionAttributeValues: SEED_WRITERS,
+        },
+        ignoreErrorCodesMatching: "ConditionalCheckFailedException",
+        physicalResourceId: PhysicalResourceId.of(physicalResourceId),
+    });
+    return {
+        onCreate: call(
+            "attribute_not_exists(metadataSchemaId) OR modifiedBy IN (:systemUser, :legacySystem)"
+        ),
+        onUpdate: call(
+            "attribute_exists(metadataSchemaId) AND modifiedBy IN (:systemUser, :legacySystem)"
+        ),
+    };
+}
+
+/**
+ * Deploys default metadata schemas to DynamoDB table.
+ *
+ * A default is written on the deployment that creates its seed resource and refreshed on later
+ * deployments only while no user has edited it. A release changes a shipped default only by adding
+ * optional fields, never by renaming, retyping or removing one, and names the schema ID and the
+ * field in its CHANGELOG entry, so administrators with an edited copy can add the field themselves.
  */
 export class DynamoDbMetadataSchemaDefaultsConstruct extends Construct {
     constructor(
@@ -59,7 +105,7 @@ export class DynamoDbMetadataSchemaDefaultsConstruct extends Construct {
     ) {
         super(parent, name);
 
-        const now = new Date().toISOString();
+        const tableName = props.storageResources.dynamo.metadataSchemaStorageTableV2.tableName;
         let schemaIndex = 0;
 
         // Asset Links Schema - defaultAssetLinks
@@ -74,59 +120,45 @@ export class DynamoDbMetadataSchemaDefaultsConstruct extends Construct {
             const assetLinksSchemaId = "default-assetlinks-schema";
             const assetLinksCompositeKey = "GLOBAL:assetLinkMetadata";
 
-            const awsSdkCallAssetLinks: AwsSdkCall = {
-                service: "DynamoDB",
-                action: "putItem",
-                parameters: {
-                    TableName: props.storageResources.dynamo.metadataSchemaStorageTableV2.tableName,
-                    Item: {
-                        metadataSchemaId: {
-                            S: assetLinksSchemaId,
-                        },
-                        "databaseId:metadataEntityType": {
-                            S: assetLinksCompositeKey,
-                        },
-                        databaseId: {
-                            S: "GLOBAL",
-                        },
-                        metadataSchemaEntityType: {
-                            S: "assetLinkMetadata",
-                        },
-                        schemaName: {
-                            S: "defaultAssetLinks",
-                        },
-                        fields: {
-                            S: JSON.stringify({ fields: assetLinksFields }),
-                        },
-                        enabled: {
-                            BOOL: true,
-                        },
-                        dateCreated: {
-                            S: now,
-                        },
-                        dateModified: {
-                            S: now,
-                        },
-                        createdBy: {
-                            S: "SYSTEM_USER",
-                        },
-                        modifiedBy: {
-                            S: "SYSTEM_USER",
-                        },
+            const assetLinksSeed = seedCalls(
+                tableName,
+                {
+                    metadataSchemaId: {
+                        S: assetLinksSchemaId,
+                    },
+                    "databaseId:metadataEntityType": {
+                        S: assetLinksCompositeKey,
+                    },
+                    databaseId: {
+                        S: "GLOBAL",
+                    },
+                    metadataSchemaEntityType: {
+                        S: "assetLinkMetadata",
+                    },
+                    schemaName: {
+                        S: "defaultAssetLinks",
+                    },
+                    fields: {
+                        S: JSON.stringify({ fields: assetLinksFields }),
+                    },
+                    enabled: {
+                        BOOL: true,
+                    },
+                    createdBy: {
+                        S: "SYSTEM_USER",
+                    },
+                    modifiedBy: {
+                        S: "SYSTEM_USER",
                     },
                 },
-                physicalResourceId: PhysicalResourceId.of(
-                    props.storageResources.dynamo.metadataSchemaStorageTableV2.tableName +
-                        `_assetlinks_initialization`
-                ),
-            };
+                tableName + `_assetlinks_initialization`
+            );
 
             new AwsCustomResource(
                 this,
                 `metadataSchemaStorageTable_AssetLinksCustomResource_${schemaIndex}`,
                 {
-                    onCreate: awsSdkCallAssetLinks,
-                    onUpdate: awsSdkCallAssetLinks,
+                    ...assetLinksSeed,
                     role: props.customResourceRole,
                 }
             );
@@ -140,59 +172,45 @@ export class DynamoDbMetadataSchemaDefaultsConstruct extends Construct {
             const databaseSchemaId = "default-database-schema";
             const databaseCompositeKey = "GLOBAL:databaseMetadata";
 
-            const awsSdkCallDatabase: AwsSdkCall = {
-                service: "DynamoDB",
-                action: "putItem",
-                parameters: {
-                    TableName: props.storageResources.dynamo.metadataSchemaStorageTableV2.tableName,
-                    Item: {
-                        metadataSchemaId: {
-                            S: databaseSchemaId,
-                        },
-                        "databaseId:metadataEntityType": {
-                            S: databaseCompositeKey,
-                        },
-                        databaseId: {
-                            S: "GLOBAL",
-                        },
-                        metadataSchemaEntityType: {
-                            S: "databaseMetadata",
-                        },
-                        schemaName: {
-                            S: "defaultDatabase",
-                        },
-                        fields: {
-                            S: JSON.stringify({ fields: databaseFields }),
-                        },
-                        enabled: {
-                            BOOL: true,
-                        },
-                        dateCreated: {
-                            S: now,
-                        },
-                        dateModified: {
-                            S: now,
-                        },
-                        createdBy: {
-                            S: "SYSTEM_USER",
-                        },
-                        modifiedBy: {
-                            S: "SYSTEM_USER",
-                        },
+            const databaseSeed = seedCalls(
+                tableName,
+                {
+                    metadataSchemaId: {
+                        S: databaseSchemaId,
+                    },
+                    "databaseId:metadataEntityType": {
+                        S: databaseCompositeKey,
+                    },
+                    databaseId: {
+                        S: "GLOBAL",
+                    },
+                    metadataSchemaEntityType: {
+                        S: "databaseMetadata",
+                    },
+                    schemaName: {
+                        S: "defaultDatabase",
+                    },
+                    fields: {
+                        S: JSON.stringify({ fields: databaseFields }),
+                    },
+                    enabled: {
+                        BOOL: true,
+                    },
+                    createdBy: {
+                        S: "SYSTEM_USER",
+                    },
+                    modifiedBy: {
+                        S: "SYSTEM_USER",
                     },
                 },
-                physicalResourceId: PhysicalResourceId.of(
-                    props.storageResources.dynamo.metadataSchemaStorageTableV2.tableName +
-                        `_database_initialization`
-                ),
-            };
+                tableName + `_database_initialization`
+            );
 
             new AwsCustomResource(
                 this,
                 `metadataSchemaStorageTable_DatabaseCustomResource_${schemaIndex}`,
                 {
-                    onCreate: awsSdkCallDatabase,
-                    onUpdate: awsSdkCallDatabase,
+                    ...databaseSeed,
                     role: props.customResourceRole,
                 }
             );
@@ -206,59 +224,45 @@ export class DynamoDbMetadataSchemaDefaultsConstruct extends Construct {
             const assetSchemaId = "default-asset-schema";
             const assetCompositeKey = "GLOBAL:assetMetadata";
 
-            const awsSdkCallAsset: AwsSdkCall = {
-                service: "DynamoDB",
-                action: "putItem",
-                parameters: {
-                    TableName: props.storageResources.dynamo.metadataSchemaStorageTableV2.tableName,
-                    Item: {
-                        metadataSchemaId: {
-                            S: assetSchemaId,
-                        },
-                        "databaseId:metadataEntityType": {
-                            S: assetCompositeKey,
-                        },
-                        databaseId: {
-                            S: "GLOBAL",
-                        },
-                        metadataSchemaEntityType: {
-                            S: "assetMetadata",
-                        },
-                        schemaName: {
-                            S: "defaultAsset",
-                        },
-                        fields: {
-                            S: JSON.stringify({ fields: assetFields }),
-                        },
-                        enabled: {
-                            BOOL: true,
-                        },
-                        dateCreated: {
-                            S: now,
-                        },
-                        dateModified: {
-                            S: now,
-                        },
-                        createdBy: {
-                            S: "SYSTEM_USER",
-                        },
-                        modifiedBy: {
-                            S: "SYSTEM_USER",
-                        },
+            const assetSeed = seedCalls(
+                tableName,
+                {
+                    metadataSchemaId: {
+                        S: assetSchemaId,
+                    },
+                    "databaseId:metadataEntityType": {
+                        S: assetCompositeKey,
+                    },
+                    databaseId: {
+                        S: "GLOBAL",
+                    },
+                    metadataSchemaEntityType: {
+                        S: "assetMetadata",
+                    },
+                    schemaName: {
+                        S: "defaultAsset",
+                    },
+                    fields: {
+                        S: JSON.stringify({ fields: assetFields }),
+                    },
+                    enabled: {
+                        BOOL: true,
+                    },
+                    createdBy: {
+                        S: "SYSTEM_USER",
+                    },
+                    modifiedBy: {
+                        S: "SYSTEM_USER",
                     },
                 },
-                physicalResourceId: PhysicalResourceId.of(
-                    props.storageResources.dynamo.metadataSchemaStorageTableV2.tableName +
-                        `_asset_initialization`
-                ),
-            };
+                tableName + `_asset_initialization`
+            );
 
             new AwsCustomResource(
                 this,
                 `metadataSchemaStorageTable_AssetCustomResource_${schemaIndex}`,
                 {
-                    onCreate: awsSdkCallAsset,
-                    onUpdate: awsSdkCallAsset,
+                    ...assetSeed,
                     role: props.customResourceRole,
                 }
             );
@@ -272,62 +276,48 @@ export class DynamoDbMetadataSchemaDefaultsConstruct extends Construct {
             const fileSchemaId = "default-file-schema-3dmodel";
             const fileCompositeKey = "GLOBAL:fileAttribute";
 
-            const awsSdkCallFile: AwsSdkCall = {
-                service: "DynamoDB",
-                action: "putItem",
-                parameters: {
-                    TableName: props.storageResources.dynamo.metadataSchemaStorageTableV2.tableName,
-                    Item: {
-                        metadataSchemaId: {
-                            S: fileSchemaId,
-                        },
-                        "databaseId:metadataEntityType": {
-                            S: fileCompositeKey,
-                        },
-                        databaseId: {
-                            S: "GLOBAL",
-                        },
-                        metadataSchemaEntityType: {
-                            S: "fileAttribute",
-                        },
-                        schemaName: {
-                            S: "defaultAssetFile3dModel",
-                        },
-                        fileKeyTypeRestriction: {
-                            S: ".glb,.usd,.obj,.fbx,.gltf,.stl,.usdz",
-                        },
-                        fields: {
-                            S: JSON.stringify({ fields: fileFields }),
-                        },
-                        enabled: {
-                            BOOL: true,
-                        },
-                        dateCreated: {
-                            S: now,
-                        },
-                        dateModified: {
-                            S: now,
-                        },
-                        createdBy: {
-                            S: "SYSTEM_USER",
-                        },
-                        modifiedBy: {
-                            S: "SYSTEM_USER",
-                        },
+            const fileSeed = seedCalls(
+                tableName,
+                {
+                    metadataSchemaId: {
+                        S: fileSchemaId,
+                    },
+                    "databaseId:metadataEntityType": {
+                        S: fileCompositeKey,
+                    },
+                    databaseId: {
+                        S: "GLOBAL",
+                    },
+                    metadataSchemaEntityType: {
+                        S: "fileAttribute",
+                    },
+                    schemaName: {
+                        S: "defaultAssetFile3dModel",
+                    },
+                    fileKeyTypeRestriction: {
+                        S: ".glb,.usd,.obj,.fbx,.gltf,.stl,.usdz",
+                    },
+                    fields: {
+                        S: JSON.stringify({ fields: fileFields }),
+                    },
+                    enabled: {
+                        BOOL: true,
+                    },
+                    createdBy: {
+                        S: "SYSTEM_USER",
+                    },
+                    modifiedBy: {
+                        S: "SYSTEM_USER",
                     },
                 },
-                physicalResourceId: PhysicalResourceId.of(
-                    props.storageResources.dynamo.metadataSchemaStorageTableV2.tableName +
-                        `_file_initialization`
-                ),
-            };
+                tableName + `_file_initialization`
+            );
 
             new AwsCustomResource(
                 this,
                 `metadataSchemaStorageTable_FileCustomResource_${schemaIndex}`,
                 {
-                    onCreate: awsSdkCallFile,
-                    onUpdate: awsSdkCallFile,
+                    ...fileSeed,
                     role: props.customResourceRole,
                 }
             );

@@ -26,22 +26,22 @@
     --vams-bg-overlay-hover: #e9ebed;
 
     /* Input surfaces + the orchestration page surface alias Amazon Cloudscape's OWN runtime custom
-     * properties, so a form control on a Tailwind page paints the exact colour a Cloudscape control
-     * paints beside it and follows Cloudscape's light/dark switch automatically. `applyMode()`
-     * (src/hooks/useThemeSettings.ts) publishes these variables, so they are defined at runtime; the
-     * literal after each comma is the matching Cloudscape value as a build-time fallback.
+     * properties, with the matching Cloudscape value as the literal after each comma. Cloudscape
+     * declares those properties on <body>, not on <html>. The aliases in this :root block resolve on
+     * <html>, where the properties are not defined, so in light mode the literal always applies. The
+     * dark-mode block below resolves on the element that carries .awsui-dark-mode (<body>), where the
+     * properties are defined, so dark mode follows Cloudscape's runtime value.
      *
      * The `-ifz5bb`-style suffix is derived from the token NAME, not from the package version: the
      * same suffixes appear identically in @cloudscape-design/design-tokens and
      * @cloudscape-design/components even though those two are versioned separately. So a version bump
      * does not by itself regenerate them, and aliasing the hashed name is stable rather than fragile.
      *
-     * What WOULD break silently is Cloudscape renaming or removing a token, or changing the value the
+     * What WOULD break silently is Cloudscape renaming or removing a token, or changing the value a
      * literal mirrors: a reference that no longer resolves falls back to the literal with no build
-     * error and no runtime error, leaving the previous release's colour beside the new one.
-     * `src/__tests__/shellAndThemeInvariants.test.ts` reads every hashed name — and the light-mode
-     * fallback beside it — back out of the installed @cloudscape-design/design-tokens output, so
-     * either change fails the suite instead of degrading quietly. */
+     * error and no runtime error. `src/__tests__/shellAndThemeInvariants.test.ts` checks every
+     * hashed name, and each light and dark literal, against the installed
+     * @cloudscape-design/design-tokens, so either change fails the suite. */
     --vams-bg-input: var(--color-background-input-default-ifz5bb, #ffffff);
     --vams-orch-page-bg: var(--color-background-layout-main-5ilwcb, #ffffff);
     --vams-orch-container-bg: var(--color-background-container-content-6u8rvp, #ffffff);
@@ -69,6 +69,10 @@
     /* Scrollbar */
     --vams-scrollbar-track: #f9fafa;
     --vams-scrollbar-thumb: #d1d5db;
+
+    /* Deployment banner (same in both themes) */
+    --vams-banner-bg: #cc3a1a;
+    --vams-banner-text: #ffffff;
 }
 
 /*

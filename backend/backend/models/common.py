@@ -100,6 +100,8 @@ def commonHeaders() -> Dict[str, str]:
         # handled separately by the API's MOCK method). Mirrors the preflight's
         # allow-origin so cross-origin browser callers can read the response.
         'Access-Control-Allow-Origin': '*',
+        # Lets a cross-origin browser caller read the Retry-After of a 429
+        'Access-Control-Expose-Headers': 'Retry-After',
     }
 
 

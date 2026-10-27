@@ -7,6 +7,8 @@ import * as cdk from "aws-cdk-lib";
 import * as wafv2 from "aws-cdk-lib/aws-wafv2";
 import * as logs from "aws-cdk-lib/aws-logs";
 import { generateUniqueNameHash } from "../helper/security";
+import { apiOriginVerifyCurrentValueReference } from "../helper/apiOriginVerify";
+import * as Config from "../../config/config";
 import { Construct } from "constructs";
 export enum WAFScope {
     CLOUDFRONT = "CLOUDFRONT",
@@ -99,6 +101,12 @@ export interface Wafv2BasicConstructProps extends cdk.StackProps {
     readonly wafPolicy?: WafPolicyConfig;
     readonly stackName?: string;
     readonly env?: cdk.Environment;
+    /**
+     * ARN of the deployment's origin verification secret (CloudFront deployments only). Accepted for
+     * the REGIONAL scope only: its rate-based rules then leave requests that carry the value
+     * CloudFront adds to the CloudFront-scoped web ACL, and the header is redacted from the log.
+     */
+    readonly originVerifySecretArn?: string;
 }
 
 /**
@@ -126,14 +134,44 @@ const legacyDefaultRules: Array<wafv2.CfnWebACL.RuleProperty> = [
 ];
 
 /**
+ * Scope-down statement for a REGIONAL rate-based rule on a CloudFront deployment: the rule counts
+ * only requests that do NOT carry the deployment's origin verification value, so requests CloudFront
+ * forwards are rate-limited by the CloudFront-scoped web ACL (which observes the viewer address)
+ * rather than per CloudFront edge address, and direct execute-api and custom-domain requests keep the
+ * regional limit.
+ *
+ * Both match branches resolve to the secret's `current` value. During a rotation the rotation function
+ * sets the first branch to the new value and the second to the previous one, so requests from
+ * CloudFront edges that still send the previous value are recognised while the distribution update
+ * propagates; a later stack update resolves both branches to `current` again.
+ */
+function originVerifyScopeDownStatement(secretArn: string): wafv2.CfnWebACL.StatementProperty {
+    const valueMatch = (): wafv2.CfnWebACL.StatementProperty => ({
+        byteMatchStatement: {
+            fieldToMatch: { singleHeader: { Name: Config.API_ORIGIN_VERIFY_HEADER_NAME } },
+            positionalConstraint: "EXACTLY",
+            searchString: apiOriginVerifyCurrentValueReference(secretArn),
+            textTransformations: [{ priority: 0, type: "NONE" }],
+        },
+    });
+    return {
+        notStatement: {
+            statement: { orStatement: { statements: [valueMatch(), valueMatch()] } },
+        },
+    };
+}
+
+/**
  * Build WAF rules from a policy config: managed rule groups (block or count-only per
  * `block`) plus rate-based rules for L7 DDoS / brute-force throttling. `wafScopeString` is
  * the ACL scope the rules are being built for, reported alongside any policy warning.
+ * `originVerifySecretArn` adds the origin verification scope-down to every rate-based rule.
  */
 function buildRulesFromPolicy(
     policy: WafPolicyConfig,
     scope: Construct,
-    wafScopeString: string
+    wafScopeString: string,
+    originVerifySecretArn?: string
 ): Array<wafv2.CfnWebACL.RuleProperty> {
     const rules: Array<wafv2.CfnWebACL.RuleProperty> = [];
 
@@ -211,6 +249,12 @@ function buildRulesFromPolicy(
                 rateBasedStatement: {
                     limit: rateRule.limit,
                     aggregateKeyType: WAF_RATE_LIMIT_AGGREGATE_KEY_TYPE,
+                    ...(originVerifySecretArn
+                        ? {
+                              scopeDownStatement:
+                                  originVerifyScopeDownStatement(originVerifySecretArn),
+                          }
+                        : {}),
                 },
             },
             visibilityConfig: {
@@ -255,6 +299,14 @@ export class Wafv2BasicConstruct extends Construct {
         // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         const wafScopeString = props.wafScope!.toString();
 
+        if (props.originVerifySecretArn && props.wafScope !== WAFScope.REGIONAL) {
+            throw new Error(
+                "Wafv2BasicConstruct: originVerifySecretArn applies to the REGIONAL web ACL only; " +
+                    "CloudFront adds the origin verification header after the CLOUDFRONT-scoped " +
+                    "web ACL has evaluated the request."
+            );
+        }
+
         // Rule precedence: explicit props.rules > policy config > legacy default.
         // A populated config/policy/wafPolicyConfig.json applies best-practice managed
         // rule groups in block mode plus rate-based DDoS protection; an empty/absent
@@ -262,7 +314,12 @@ export class Wafv2BasicConstruct extends Construct {
         const resolvedRules =
             props.rules ||
             (props.wafPolicy
-                ? buildRulesFromPolicy(props.wafPolicy, this, wafScopeString)
+                ? buildRulesFromPolicy(
+                      props.wafPolicy,
+                      this,
+                      wafScopeString,
+                      props.originVerifySecretArn
+                  )
                 : legacyDefaultRules);
 
         /*
@@ -328,8 +385,15 @@ export class Wafv2BasicConstruct extends Construct {
             resourceArn: webacl.attrArn,
             logDestinationConfigs: [wafLogGroup.logGroupArn],
             // The bearer token would otherwise be written in cleartext for every recorded
-            // request. WAF redacts the value and keeps the field name.
-            redactedFields: [{ singleHeader: { Name: "authorization" } }],
+            // request, and on a CloudFront deployment so would the origin verification value
+            // CloudFront adds to every request it forwards. WAF redacts the value and keeps the
+            // field name.
+            redactedFields: [
+                { singleHeader: { Name: "authorization" } },
+                ...(props.originVerifySecretArn
+                    ? [{ singleHeader: { Name: Config.API_ORIGIN_VERIFY_HEADER_NAME } }]
+                    : []),
+            ],
         });
     }
 }

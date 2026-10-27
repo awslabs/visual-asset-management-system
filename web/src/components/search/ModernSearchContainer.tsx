@@ -8,8 +8,15 @@ import { useParams } from "react-router-dom";
 import { appCache } from "../../services/appCache";
 import { useNavigate } from "react-router-dom";
 import { Grid, SegmentedControl, Box } from "@cloudscape-design/components";
+import Alert from "@cloudscape-design/components/alert";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
-import { SearchContainerProps, MetadataFilter, getTotalResultCount } from "./types";
+import {
+    SearchContainerProps,
+    MetadataFilter,
+    getTotalResultCount,
+    getPageCount,
+    SEARCH_RESULT_WINDOW,
+} from "./types";
 import { useSearchState } from "./hooks/useSearchState";
 import { useSearchAPI } from "./hooks/useSearchAPI";
 import { usePreferences } from "./hooks/usePreferences";
@@ -424,7 +431,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
     // Calculate pagination values
     const totalResults = getTotalResultCount(searchState.result);
     const currentPage = 1 + Math.floor(searchState.pagination.from / preferences.pageSize);
-    const pageCount = Math.ceil(totalResults / preferences.pageSize);
+    const pageCount = getPageCount(totalResults, preferences.pageSize);
 
     console.log("[Pagination] Current page calculation:", {
         from: searchState.pagination.from,
@@ -635,6 +642,10 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                                 case "query-criteria-cleared":
                                     handleClearSearch();
                                     break;
+                                case "refresh":
+                                    setAutoRefreshing(true);
+                                    handleSearch();
+                                    break;
                                 default:
                                     console.log("Unhandled dispatch action:", action.type);
                             }
@@ -764,6 +775,10 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                                 case "query-criteria-cleared":
                                     handleClearSearch();
                                     break;
+                                case "refresh":
+                                    setAutoRefreshing(true);
+                                    handleSearch();
+                                    break;
                                 default:
                                     console.log("Unhandled dispatch action:", action.type);
                             }
@@ -843,6 +858,15 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                     <Box padding={{ horizontal: "l", bottom: "l" }}>
                         {/* View Selector */}
                         <Box padding={{ bottom: "m" }}>{renderViewSelector()}</Box>
+
+                        {totalResults > SEARCH_RESULT_WINDOW && (
+                            <Box padding={{ bottom: "m" }}>
+                                <Alert type="info" statusIconAriaLabel="Info">
+                                    Showing the first {SEARCH_RESULT_WINDOW.toLocaleString()}{" "}
+                                    results; refine your search
+                                </Alert>
+                            </Box>
+                        )}
 
                         {/* Results */}
                         {renderContent()}

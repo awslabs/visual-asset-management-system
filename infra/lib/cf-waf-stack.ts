@@ -22,6 +22,8 @@ interface EnvProps {
     stackName: string;
     wafScope?: WAFScope;
     wafPolicy?: WafPolicyConfig;
+    // Origin verification secret ARN, for the REGIONAL web ACL of a CloudFront deployment.
+    originVerifySecretArn?: string;
     description: string;
     synthesizer?: cdk.IStackSynthesizer;
 }
@@ -40,6 +42,7 @@ export class CfWafStack extends cdk.Stack {
             ...props,
             wafScope: props.wafScope,
             wafPolicy: props.wafPolicy,
+            originVerifySecretArn: props.originVerifySecretArn,
         });
 
         new cdk.aws_ssm.StringParameter(this, "waf_acl_arn", {

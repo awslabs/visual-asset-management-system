@@ -36,6 +36,8 @@ export const VIEWER_COMPONENTS = {
         "ThatOpenWebIfcViewerPlugin/ThatOpenWebIfcViewerComponent",
     "./viewers/SuperSplatViewerPlugin/SuperSplatViewerComponent":
         "SuperSplatViewerPlugin/SuperSplatViewerComponent",
+    "./viewers/RoboticsDataViewerPlugin/RoboticsDataViewerComponent":
+        "RoboticsDataViewerPlugin/RoboticsDataViewerComponent",
 } as const;
 
 // Dependency manager paths - add new dependency managers here

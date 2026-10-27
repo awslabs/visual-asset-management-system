@@ -95,6 +95,10 @@ claims_and_roles = {}
 
 # Constants
 MAX_METADATA_RECORDS_PER_ENTITY = 500
+# A create whose record-count check cannot run writes nothing and answers 503.
+RECORD_LIMIT_CHECK_FAILED_MESSAGE = (
+    "The metadata record count could not be checked, so nothing was written; retry the request"
+)
 
 # The pagination defaults are imported from models.metadata, where the request models declare them
 # as their field defaults: maxItems is the per-response ceiling that keeps the payload under the
@@ -934,8 +938,8 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
         except VAMSGeneralErrorResponse:
             raise
         except Exception as e:
-            logger.warning(f"Error checking record limit: {e}")
-            # Continue without limit check if it fails
+            logger.exception(f"Error checking record limit: {e}")
+            raise VAMSGeneralErrorResponse(RECORD_LIMIT_CHECK_FAILED_MESSAGE, status_code=503)
         
         # Check if user is SYSTEM_USER - bypass schema validation
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
@@ -1698,7 +1702,7 @@ def handle_asset_link_metadata_post(event):
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)}, event=event)
+        return general_error(status_code=e.status_code, body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
         return internal_error(event=event)
@@ -2056,8 +2060,8 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
         except VAMSGeneralErrorResponse:
             raise
         except Exception as e:
-            logger.warning(f"Error checking record limit: {e}")
-            # Continue without limit check if it fails
+            logger.exception(f"Error checking record limit: {e}")
+            raise VAMSGeneralErrorResponse(RECORD_LIMIT_CHECK_FAILED_MESSAGE, status_code=503)
         
         # Check if user is SYSTEM_USER - bypass schema validation
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
@@ -2832,7 +2836,7 @@ def handle_asset_metadata_post(event):
         logger.warning(f"Permission error: {p}")
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)}, event=event)
+        return general_error(status_code=e.status_code, body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
         return internal_error(event=event)
@@ -3193,8 +3197,8 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
         except VAMSGeneralErrorResponse:
             raise
         except Exception as e:
-            logger.warning(f"Error checking record limit: {e}")
-            # Continue without limit check if it fails
+            logger.exception(f"Error checking record limit: {e}")
+            raise VAMSGeneralErrorResponse(RECORD_LIMIT_CHECK_FAILED_MESSAGE, status_code=503)
         
         # Check if user is SYSTEM_USER - bypass schema validation
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
@@ -4005,7 +4009,7 @@ def handle_file_metadata_post(event):
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)}, event=event)
+        return general_error(status_code=e.status_code, body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
         return internal_error(event=event)
@@ -4222,8 +4226,8 @@ def create_database_metadata(database_id: str, request_model: CreateDatabaseMeta
         except VAMSGeneralErrorResponse:
             raise
         except Exception as e:
-            logger.warning(f"Error checking record limit: {e}")
-            # Continue without limit check if it fails
+            logger.exception(f"Error checking record limit: {e}")
+            raise VAMSGeneralErrorResponse(RECORD_LIMIT_CHECK_FAILED_MESSAGE, status_code=503)
         
         # Check if user is SYSTEM_USER - bypass schema validation
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
@@ -4890,7 +4894,7 @@ def handle_database_metadata_post(event):
     except PermissionError as p:
         return authorization_error(body={'message': str(p)})
     except VAMSGeneralErrorResponse as e:
-        return general_error(body={"message": str(e)}, event=event)
+        return general_error(status_code=e.status_code, body={"message": str(e)}, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
         return internal_error(event=event)

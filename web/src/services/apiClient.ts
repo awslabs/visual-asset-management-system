@@ -102,11 +102,12 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Parse a Retry-After header (delta-seconds or HTTP-date) into milliseconds, clamped to a
- * sane range. Defaults to 2s when absent/unparseable so a single 429 retries promptly.
+ * sane range. Defaults to 2s when absent/unparseable so a single 429 retries promptly. The
+ * 60s ceiling covers the upload limiter's 60s window.
  */
 function parseRetryAfterMs(headerValue: string | null): number {
     const DEFAULT_MS = 2000;
-    const MAX_MS = 30000;
+    const MAX_MS = 60000;
     if (!headerValue) return DEFAULT_MS;
     const seconds = Number(headerValue);
     if (Number.isFinite(seconds)) {
@@ -167,7 +168,7 @@ class ApiClient {
         } catch (tokenError) {
             const alive = await ensureValidSession();
             if (!alive) {
-                logoutExpired();
+                void logoutExpired();
                 throw tokenError;
             }
             if (!retried) {
@@ -204,7 +205,7 @@ class ApiClient {
                 const forceRefresh = response.status === 401 && !retried;
                 const alive = await ensureValidSession(forceRefresh);
                 if (!alive) {
-                    logoutExpired();
+                    void logoutExpired();
                 } else if (forceRefresh) {
                     // Re-issue once through request() so the Authorization header is rebuilt
                     // from the refreshed token rather than replaying the rejected one. Safe to
