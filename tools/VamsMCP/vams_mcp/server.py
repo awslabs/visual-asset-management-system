@@ -1629,7 +1629,8 @@ def get_database_compliance_overview(
     """Read a database's compliance overview: `totalAssets` and a per-state `summary` (compliant,
     non_compliant, pending_evaluation, quarantined, exception, unknown) covering EVERY tracked
     asset, plus `assets` — ONE PAGE of their records, each with its `assetName`, in assetId order
-    (or by name with `sort="name"`).
+    (or by name with `sort="name"`). `nameSortUnavailable: true` in the response means the name
+    index is still being built after an upgrade: that page is in assetId order.
 
     The page is filtered ON THE SERVER: `state` (one complianceState), `schema_name`,
     `schema_source` (`database` or `asset`), `evaluation_error` (True: the last evaluation
