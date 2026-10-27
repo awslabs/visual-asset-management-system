@@ -775,7 +775,7 @@ Then deploy. The web ACL carries no data, so nothing is lost.
 
 ### v2.6 to v2.7
 
-v2.7 moves add-on code out of the core list files into add-on files beside them, and adds fork extension points ([Extending VAMS in a Fork](../developer/customizing-vams.md)). No data migration is needed. A default deployment needs no action. The changes below affect a deployment that enabled a licensed viewer or a pipeline with `useCodeBuild: true`, and a fork that references the moved names.
+v2.7 moves add-on code out of the core list files into add-on files beside them, and adds fork extension points ([Extending VAMS in a Fork](../developer/customizing-vams.md)). No data migration is needed. A default deployment needs no action. The changes below affect a deployment that enabled a licensed viewer, a GPU pipeline, or a pipeline with `useCodeBuild: true`, and a fork that references the moved names.
 
 -   **Licensed viewers are configured in the add-on viewer file.** The `vntana-viewer` and `veerum-viewer` entries move, unchanged and still disabled, from `web/src/visualizerPlugin/config/viewerConfig.json` to `web/src/visualizerPlugin/config/addonViewerConfig.json`. A deployment that enabled one by setting `"enabled": true` in `viewerConfig.json` sets it on the same entry in `addonViewerConfig.json` instead. If a merge leaves a copy of the entry in `viewerConfig.json`, delete that copy and keep only the add-on entry. The install scripts in `web/customInstalls/vntana/` and `web/customInstalls/veerum/` and their `postinstall` entries are unchanged, and they now read the add-on file to decide whether to fetch the vendor package.
 -   **`PHYSNA_ADDON` is an add-on feature switch.** It moves from `VAMS_APP_FEATURES` (`infra/common/vamsAppFeatures.ts`) to `ADDON_APP_FEATURES` (`infra/common/addonAppFeatures.ts`). The published value is unchanged, so `/api/secure-config` and the web interface see the same `featuresEnabled` list. CDK code that referenced `VAMS_APP_FEATURES.PHYSNA_ADDON` imports `ADDON_APP_FEATURES` instead. In the CLI, `FEATURE_PHYSNA_ADDON` moves to `vamscli/addon_constants.py` and is re-exported from `vamscli.constants`, so existing imports keep working.
@@ -793,6 +793,53 @@ v2.7 moves add-on code out of the core list files into add-on files beside them,
     The AWS CloudFormation execution role needs `kms:CreateGrant`, `kms:DescribeKey` and `kms:RetireGrant` on the key, which the default CDK bootstrap role has; see [Amazon Elastic Container Registry](../architecture/aws-resources.md#amazon-elastic-container-registry). With the setting `false`, the repositories are unchanged, and each image is rebuilt once into its existing repository because the build trigger now carries the repository URI.
 
 -   **A later key change needs one extra deployment for the explicitly named repositories.** Changing to a different key while the CMK stays on (for example, setting `optionalExternalCmkArn` on a deployment that uses the VAMS-generated key) replaces the repositories again, but the coordinate transform and Video SOP/BOM Extraction repositories keep their names, so that update fails. Deploy once with `useCodeBuild` set to `false` on `app.pipelines.useConversionCoordinateTransform` and `app.pipelines.useGenAiVideoSopBom` (whichever is enabled), which builds the image with local Docker for that deployment and removes the repository, then set it back to `true` and deploy again.
+
+#### GPU compute environments are replaced
+
+Every AWS Batch compute environment behind a GPU pipeline — the four NVIDIA Cosmos pipelines, GR00T
+Finetune, and Gaussian Splat — is **replaced** by this update rather than modified in
+place. CloudFormation creates the new environment, re-points the pipeline's job queue at it, and deletes
+the old one. No configuration change is required and the queues keep their names, so nothing downstream
+needs re-pointing.
+
+The replacement exists because these environments previously named their own Batch service role, and
+Batch does not permit an environment that names a service role to have its launch template, instance
+types, subnets or security groups updated in place. That blocked a fix to the instance start-up script
+from ever reaching a running fleet: the shared model-weight cache was never mounted, so every GPU run
+restored its weights from Amazon S3 and uploaded them again — up to eight minutes of billed GPU time per
+run, with nothing in the logs to say so. The new environments use the Batch service-linked role
+(`AWSServiceRoleForBatch`), which is what makes future changes to the start-up script deliverable, and
+which AWS keeps current as Batch gains features. It is also what the Fargate, Coordinate Transform and
+Isaac Lab environments have always used.
+
+This is a single `cdk deploy`. There is no flag to set before or after it, and no second pass: the
+compute environments are replaced once, on this update, and every deploy after it updates them **in
+place** — Batch re-merges the launch template and rolls the instances, with no new environment and no
+queue re-point. That is why the replacement happens now rather than being deferred; an environment that
+names a service role can be neither updated in place nor migrated, so the one replacement buys every
+later update a gentler path.
+
+**Let running GPU jobs finish first.** Replacing a compute environment deletes it and terminates its
+instances, so a job still executing on a GPU pipeline is lost and must be re-run. Check for in-flight
+executions and wait for them, or plan the update for a quiet window. This is worth knowing beyond this
+release: an in-place instance roll also terminates running jobs by default, so any later update that
+changes a GPU pipeline's instance types or start-up script has the same consideration. Set
+`updatePolicy.terminateJobsOnUpdate` on the compute environment if you would rather a deploy waited for
+jobs to drain.
+
+No new permissions are required. The service-linked role is created by Batch itself when the first
+environment that does not name a service role is created, and VAMS has always deployed such environments
+for its Fargate pipelines — the Blender, PDAL, Potree, 3D preview thumbnail, Coordinate Transform and
+Isaac Lab compute environments all run on `AWSServiceRoleForBatch` today. Any account that has deployed
+VAMS therefore already has the role, and the CDK CloudFormation execution role created by
+`cdk bootstrap` already holds the permission that created it.
+
+After the update, each Cosmos pipeline's weight cache starts empty at a new path, because the four Cosmos
+pipelines previously shared one cache directory while each backed it up to a different Amazon S3 prefix —
+which meant the first pipeline to run made every other one skip its own restore and download its weights
+during inference instead. Each pipeline now has its own directory, so the first run of each pays one
+restore from its S3 backup and every run after that finds the cache warm. Nothing is lost; the S3 backups
+are unchanged.
 
 ## Breaking changes checklist
 
@@ -817,6 +864,7 @@ Use this checklist to determine if additional actions are needed after updating.
 | Licensed viewer enable location                               | v2.6 to v2.7 (VNTANA or VEERUM enabled)           | Set `"enabled": true` on the viewer's entry in `addonViewerConfig.json`; delete any copy of the entry a merge leaves in `viewerConfig.json`.                                                                                                                                                                                             |
 | Add-on names moved                                            | v2.6 to v2.7 (forks that reference them)          | Import `ADDON_APP_FEATURES.PHYSNA_ADDON` from `infra/common/addonAppFeatures.ts` and `models.addon.physnaViewer`; the CLI's `FEATURE_PHYSNA_ADDON` is still importable from `vamscli.constants`.                                                                                                                                         |
 | CodeBuild image repositories replaced                         | v2.6 to v2.7 (CMK and `useCodeBuild` on)          | Wait for each pipeline's AWS CodeBuild build to finish before running it. A custom AWS CloudFormation execution role needs `kms:CreateGrant`, `kms:DescribeKey` and `kms:RetireGrant` on the key.                                                                                                                                        |
+| GPU Batch compute environments replaced                       | v2.6 to v2.7 (GPU pipelines only)                 | Let in-flight GPU jobs finish first — the old environments are deleted and their instances terminated. No configuration change and no flags: one `cdk deploy` replaces them, queues are re-pointed automatically, and later deploys update them in place.                                                                                |
 | Permission constraint migration                               | v2.3 to v2.4, v2.4 to v2.5                        | Run constraint migration script if custom constraints exist.                                                                                                                                                                                                                                                                             |
 | API Gateway authorizer change                                 | v2.2 to v2.3                                      | Reset authorizer cache after deployment.                                                                                                                                                                                                                                                                                                 |
 | Pipeline CDK construct rename                                 | v2.2 to v2.3                                      | Deploy without pipelines, then redeploy with pipelines enabled.                                                                                                                                                                                                                                                                          |
