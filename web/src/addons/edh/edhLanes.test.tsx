@@ -152,8 +152,10 @@ describe("EDH routes", () => {
             </MemoryRouter>
         );
 
-        // "*" is always added back, so the unmatched path lands on the landing page.
-        await waitFor(() => expect(screen.getByTestId("landing-page")).toBeInTheDocument());
+        // A route the role does not allow shows the no-access panel, like any core page.
+        await waitFor(() =>
+            expect(screen.getByText("You do not have access to this page")).toBeInTheDocument()
+        );
         expect(screen.queryByTestId("edh-workstations-page")).not.toBeInTheDocument();
     });
 });
@@ -161,12 +163,12 @@ describe("EDH routes", () => {
 describe("EDH navigation sections", () => {
     it("places Virtual Workstations after Orchestrate & Automate and Admin - Workstations before User", async () => {
         allowRoutes(
-            "/executions/",
-            "/metadataschema/",
-            "/auth/userroles/",
-            "/auth/api-keys/",
-            "/edh/workstations/",
-            "/edh/admin/"
+            "/executions",
+            "/metadataschema",
+            "/auth/userroles",
+            "/auth/api-keys",
+            "/edh/workstations",
+            "/edh/admin"
         );
         const container = renderNavigation([addonFeaturesEnabled.EDH_WORKSTATIONS]);
 
@@ -186,7 +188,7 @@ describe("EDH navigation sections", () => {
     });
 
     it("offers My Workstations when the switch is on and the route is allowed", async () => {
-        allowRoutes("/databases/", "/edh/workstations/", "/edh/workstations/simulations/");
+        allowRoutes("/databases", "/edh/workstations", "/edh/workstations/simulations");
         const container = renderNavigation([addonFeaturesEnabled.EDH_WORKSTATIONS]);
 
         await waitFor(() => expect(findNavLink(container, WORKSTATIONS_HREF)).toBeTruthy());
@@ -198,7 +200,7 @@ describe("EDH navigation sections", () => {
     });
 
     it("omits both sections when the switch is absent, even though the routes are allowed", async () => {
-        allowRoutes("/databases/", "/edh/workstations/", "/edh/admin/");
+        allowRoutes("/databases", "/edh/workstations", "/edh/admin");
         const container = renderNavigation([]);
 
         await waitFor(() => expect(findNavLink(container, "#/databases/")).toBeTruthy());
@@ -206,11 +208,11 @@ describe("EDH navigation sections", () => {
         expect(findNavLink(container, ADMIN_HREF)).toBeFalsy();
         expect(screen.queryByText("Virtual Workstations")).not.toBeInTheDocument();
         expect(screen.queryByText("Admin - Workstations")).not.toBeInTheDocument();
-        expect(checkedRoutePaths()).not.toContain("/edh/workstations/");
+        expect(checkedRoutePaths()).not.toContain("/edh/workstations");
     });
 
     it("omits the section when the switch is on but the web route is not allowed", async () => {
-        allowRoutes("/databases/");
+        allowRoutes("/databases");
         const container = renderNavigation([addonFeaturesEnabled.EDH_WORKSTATIONS]);
 
         await waitFor(() => expect(findNavLink(container, "#/databases/")).toBeTruthy());
@@ -219,7 +221,7 @@ describe("EDH navigation sections", () => {
     });
 
     it("adds a Simulations link when containers are on, checked against its own route", async () => {
-        allowRoutes("/databases/", "/edh/workstations/", "/edh/workstations/simulations/");
+        allowRoutes("/databases", "/edh/workstations", "/edh/workstations/simulations");
         const container = renderNavigation([
             addonFeaturesEnabled.EDH_WORKSTATIONS,
             addonFeaturesEnabled.EDH_CONTAINERS,
@@ -228,12 +230,12 @@ describe("EDH navigation sections", () => {
         await waitFor(() => expect(findNavLink(container, SIMULATIONS_HREF)).toBeTruthy());
         expect(screen.getByText("Simulations")).toBeInTheDocument();
         expect(findNavLink(container, WORKSTATIONS_HREF)).toBeTruthy();
-        expect(checkedRoutePaths()).toContain("/edh/workstations/simulations/");
+        expect(checkedRoutePaths()).toContain("/edh/workstations/simulations");
         expect(SIMULATIONS_HREF).toBe(`#${EDH_SIMULATIONS_PATH}/`);
     });
 
     it("omits the Simulations link when its route is not allowed", async () => {
-        allowRoutes("/databases/", "/edh/workstations/");
+        allowRoutes("/databases", "/edh/workstations");
         const container = renderNavigation([
             addonFeaturesEnabled.EDH_WORKSTATIONS,
             addonFeaturesEnabled.EDH_CONTAINERS,
@@ -244,7 +246,7 @@ describe("EDH navigation sections", () => {
     });
 
     it("shows nothing for the containers switch alone", async () => {
-        allowRoutes("/databases/", "/edh/workstations/", "/edh/workstations/simulations/");
+        allowRoutes("/databases", "/edh/workstations", "/edh/workstations/simulations");
         const container = renderNavigation([addonFeaturesEnabled.EDH_CONTAINERS]);
 
         await waitFor(() => expect(findNavLink(container, "#/databases/")).toBeTruthy());
@@ -253,7 +255,7 @@ describe("EDH navigation sections", () => {
     });
 
     it("adds the sections when the feature list arrives after mount, without a reload", async () => {
-        allowRoutes("/databases/", "/edh/workstations/", "/edh/admin/");
+        allowRoutes("/databases", "/edh/workstations", "/edh/admin");
         // The amplify config the shell holds before the secure config lands carries no features.
         const { container, rerender } = render(
             <RuntimeConfigContext.Provider value={{ api: "https://api.example.test" }}>
@@ -282,7 +284,7 @@ describe("EDH navigation sections", () => {
     });
 
     it("offers Workstation Admin under Admin - Workstations when the switch is on and the route is allowed", async () => {
-        allowRoutes("/databases/", "/edh/workstations/", "/edh/admin/");
+        allowRoutes("/databases", "/edh/workstations", "/edh/admin");
         const container = renderNavigation([addonFeaturesEnabled.EDH_WORKSTATIONS]);
 
         await waitFor(() => expect(findNavLink(container, ADMIN_HREF)).toBeTruthy());
@@ -291,7 +293,7 @@ describe("EDH navigation sections", () => {
     });
 
     it("omits Admin - Workstations when the switch is on but its web route is not allowed", async () => {
-        allowRoutes("/databases/", "/edh/workstations/");
+        allowRoutes("/databases", "/edh/workstations");
         const container = renderNavigation([addonFeaturesEnabled.EDH_WORKSTATIONS]);
 
         await waitFor(() => expect(findNavLink(container, WORKSTATIONS_HREF)).toBeTruthy());
