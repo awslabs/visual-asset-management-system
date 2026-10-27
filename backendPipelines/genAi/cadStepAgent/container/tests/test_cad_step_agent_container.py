@@ -349,6 +349,13 @@ def _outcome(**overrides):
 # backend/backend/common/workflows/executionRecords.py MAX_TEXT_FIELD_BYTES: the most one results row stores.
 ROW_TEXT_BYTES = 400 * 1024 - 20 * 1024
 
+# The keys a run manages, written on every run (an unmeasured figure as ""): the measured file attributes, and
+# the eight cadAgent* file metadata keys.
+MEASURED_KEYS = ("cadVolumeMm3", "cadBboxXMm", "cadBboxYMm", "cadBboxZMm", "cadSolidCount", "cadHoleCount",
+                 "cadFilletCount", "cadUnits")
+AGENT_METADATA_KEYS = ("cadAgentStatus", "cadAgentSummary", "cadAgentUnresolved", "cadAgentSources", "cadAgentModel",
+                       "cadAgentAttempts", "cadAgentRunId", "cadAgentGeometry")
+
 
 def _dense_geometry(groups):
     """A geometry summary of a dense B-rep: ``groups`` distinct sizes in each grouped feature list."""
@@ -418,17 +425,40 @@ class TestReport:
         numeric = ("cadVolumeMm3", "cadBboxXMm", "cadBboxYMm", "cadBboxZMm", "cadSolidCount", "cadHoleCount", "cadFilletCount")
         assert all(isinstance(values[k], str) and float(values[k]) >= 0 and "e" not in values[k].lower() for k in numeric)
 
-    def test_attribute_document_omits_every_figure_the_outcome_lacks(self):
-        bare = report.attribute_document(_outcome(geometry=None))
-        assert [e["metadataKey"] for e in bare["metadata"]] == ["cadAgentStatus", "cadAgentMode"]
-        no_features = {e["metadataKey"] for e in report.attribute_document(
+    def test_attribute_document_writes_every_figure_the_outcome_lacks_as_empty(self):
+        # D44: the document is applied as an upsert, so a figure left out would keep an earlier run's value on
+        # the same file path. Every run writes the whole measured key set; an unmeasured figure is "".
+        bare = {e["metadataKey"]: e["metadataValue"] for e in report.attribute_document(_outcome(geometry=None))["metadata"]}
+        assert bare == {"cadAgentStatus": "partial", "cadAgentMode": "modify", **dict.fromkeys(MEASURED_KEYS, "")}
+        no_features = {e["metadataKey"]: e["metadataValue"] for e in report.attribute_document(
             _outcome(geometry={"solid_count": 2, "volume_mm3": 10.0, "bounding_box_mm": [0, 0, 0, 1, 2, 3]}))["metadata"]}
-        assert {"cadHoleCount", "cadFilletCount"}.isdisjoint(no_features) and "cadUnits" in no_features
+        assert no_features["cadHoleCount"] == no_features["cadFilletCount"] == ""
+        assert no_features["cadSolidCount"] == "2" and no_features["cadUnits"] == "mm"
         none_found = {e["metadataKey"]: e["metadataValue"] for e in report.attribute_document(
             _outcome(geometry={"solid_count": 1, "features": {"holes": [], "fillet_like_faces": []}}))["metadata"]}
         assert none_found["cadHoleCount"] == "0" and none_found["cadFilletCount"] == "0"
-        assert "cadVolumeMm3" not in none_found and "cadBboxXMm" not in none_found
-        assert all(e["metadataValue"] != "" for e in report.attribute_document(_outcome())["metadata"])
+        assert none_found["cadVolumeMm3"] == none_found["cadBboxXMm"] == "" and none_found["cadUnits"] == "mm"
+        assert [e["metadataKey"] for e in report.attribute_document(_outcome())["metadata"]] == \
+            ["cadAgentStatus", "cadAgentMode", *MEASURED_KEYS]
+
+    def test_metadata_document_writes_an_empty_geometry_when_the_outcome_has_none(self):
+        values = {e["metadataKey"]: e["metadataValue"] for e in report.metadata_document(_outcome(geometry=None))["metadata"]}
+        assert set(values) == set(AGENT_METADATA_KEYS) and values["cadAgentGeometry"] == ""
+
+    def test_a_later_run_replaces_every_figure_an_earlier_run_wrote_on_the_same_file(self):
+        # D44 repro: run 1 measured holes, run 2 (a new version of the same file) had no feature summary and no
+        # geometry. Applied in order as upserts -- the process-output step's "update" -- nothing of run 1 survives.
+        run1 = _outcome(status="succeeded", geometry={"solid_count": 1, "volume_mm3": 5.0, "bounding_box_mm": [0, 0, 0, 1, 1, 1],
+                                                      "features": {"holes": [{"count": 4}], "fillet_like_faces": []}})
+        run2 = _outcome(status="partial", geometry=None)
+        for build in (report.attribute_document, report.metadata_document):
+            stored = {}
+            for outcome in (run1, run2):
+                doc = build(outcome)
+                assert doc["updateType"] == "update"
+                stored.update({e["metadataKey"]: e["metadataValue"] for e in doc["metadata"]})
+            assert stored == {e["metadataKey"]: e["metadataValue"] for e in build(run2)["metadata"]}
+        assert stored["cadAgentGeometry"] == ""
 
     def test_decimal_rounds_to_three_places_without_a_negative_zero(self):
         assert report._decimal(136445.10549) == "136445.105"
@@ -1861,7 +1891,7 @@ class TestInputGeometryLeftOut:
         assert result["assumptions"] == []
         assert attributes == {"cadAgentStatus": "succeeded", "cadAgentMode": "modify", "cadVolumeMm3": "136445.105",
                               "cadBboxXMm": "190.5", "cadBboxYMm": "3.038", "cadBboxZMm": "279.4",
-                              "cadSolidCount": "1", "cadHoleCount": "26", "cadUnits": "mm"}
+                              "cadSolidCount": "1", "cadHoleCount": "26", "cadFilletCount": "", "cadUnits": "mm"}
 
     def test_a_drop_from_the_output_file_is_reported_once(self, monkeypatch):
         # A script that wrote the whole imported shape: the sanitiser drops the annotation geometry and records it,

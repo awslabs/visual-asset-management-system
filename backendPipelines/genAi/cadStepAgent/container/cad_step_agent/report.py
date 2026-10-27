@@ -35,7 +35,10 @@ METADATA_KEY_GEOMETRY = "cadAgentGeometry"
 METADATA_KEY_RUN_ID = "cadAgentRunId"
 
 # File attributes: the measured figures as separate, filterable values. VAMS file attributes are
-# string-typed, so every figure is a decimal string; one the outcome lacks is omitted, never blank.
+# string-typed, so every figure is a decimal string. The process-output step applies the documents as an
+# upsert ("update"), and a modify run's default output is a new version of the input file, whose metadata
+# and attributes are keyed by its path: a key a run leaves out keeps an earlier run's value. So every run
+# writes every key it manages, and a figure it did not measure is written empty.
 ATTRIBUTE_KEY_STATUS = "cadAgentStatus"
 ATTRIBUTE_KEY_MODE = "cadAgentMode"
 ATTRIBUTE_KEY_VOLUME = "cadVolumeMm3"
@@ -46,6 +49,9 @@ ATTRIBUTE_KEY_SOLIDS = "cadSolidCount"
 ATTRIBUTE_KEY_HOLES = "cadHoleCount"
 ATTRIBUTE_KEY_FILLETS = "cadFilletCount"
 ATTRIBUTE_KEY_UNITS = "cadUnits"
+MEASURED_ATTRIBUTE_KEYS = (ATTRIBUTE_KEY_VOLUME, ATTRIBUTE_KEY_BBOX_X, ATTRIBUTE_KEY_BBOX_Y, ATTRIBUTE_KEY_BBOX_Z,
+                           ATTRIBUTE_KEY_SOLIDS, ATTRIBUTE_KEY_HOLES, ATTRIBUTE_KEY_FILLETS, ATTRIBUTE_KEY_UNITS)
+UNMEASURED = ""
 # cad_io measures every figure in millimetres: Open CASCADE converts a file's declared unit on import and
 # the agent writes its scripts in millimetres.
 GEOMETRY_UNITS = "mm"
@@ -116,7 +122,10 @@ def _bounded_list(items, max_items=MAX_LIST_ITEMS, max_chars=LIST_MAX_CHARS):
 
 
 def metadata_document(outcome, update_type="update"):
-    """The ``<file>.metadata.json`` body the process-output step applies to the output file."""
+    """The ``<file>.metadata.json`` body the process-output step applies to the output file: all eight keys
+    on every run, ``cadAgentGeometry`` empty when the outcome carries no geometry."""
+    geometry = _clip(json.dumps(outcome.geometry, sort_keys=True), LIST_MAX_CHARS) if outcome.geometry \
+        else UNMEASURED
     entries = [
         {"metadataKey": METADATA_KEY_STATUS, "metadataValue": outcome.status},
         {"metadataKey": METADATA_KEY_SUMMARY, "metadataValue": summary_text(outcome)},
@@ -125,10 +134,8 @@ def metadata_document(outcome, update_type="update"):
         {"metadataKey": METADATA_KEY_MODEL, "metadataValue": _clip(outcome.model, 256)},
         {"metadataKey": METADATA_KEY_ATTEMPTS, "metadataValue": str(len(outcome.attempts))},
         {"metadataKey": METADATA_KEY_RUN_ID, "metadataValue": _clip(outcome.run_id, 128)},
+        {"metadataKey": METADATA_KEY_GEOMETRY, "metadataValue": geometry},
     ]
-    if outcome.geometry:
-        entries.append({"metadataKey": METADATA_KEY_GEOMETRY,
-                        "metadataValue": _clip(json.dumps(outcome.geometry, sort_keys=True), LIST_MAX_CHARS)})
     return {"type": "metadata", "updateType": update_type, "metadata": entries}
 
 
@@ -149,28 +156,29 @@ def _feature_total(features, key):
 
 def attribute_document(outcome, update_type="update"):
     """The ``<file>.attribute.json`` body: the run's status and mode and its measured figures as file
-    attributes. A figure the outcome does not carry is left out rather than written empty."""
+    attributes. Every measured key is written; a figure the outcome does not carry is written empty, and
+    ``cadUnits`` is empty when no figure was measured."""
     entries = [
         {"metadataKey": ATTRIBUTE_KEY_STATUS, "metadataValue": outcome.status},
         {"metadataKey": ATTRIBUTE_KEY_MODE, "metadataValue": outcome.mode},
     ]
     geometry = outcome.geometry if isinstance(outcome.geometry, dict) else {}
-    figures = []
+    figures = dict.fromkeys(MEASURED_ATTRIBUTE_KEYS, UNMEASURED)
     if geometry.get("volume_mm3") is not None:
-        figures.append((ATTRIBUTE_KEY_VOLUME, _decimal(geometry["volume_mm3"])))
+        figures[ATTRIBUTE_KEY_VOLUME] = _decimal(geometry["volume_mm3"])
     bbox = geometry.get("bounding_box_mm")
     if isinstance(bbox, (list, tuple)) and len(bbox) == 6:
         for key, axis in ((ATTRIBUTE_KEY_BBOX_X, 0), (ATTRIBUTE_KEY_BBOX_Y, 1), (ATTRIBUTE_KEY_BBOX_Z, 2)):
-            figures.append((key, _decimal(bbox[axis + 3] - bbox[axis])))
+            figures[key] = _decimal(bbox[axis + 3] - bbox[axis])
     if geometry.get("solid_count") is not None:
-        figures.append((ATTRIBUTE_KEY_SOLIDS, str(int(geometry["solid_count"]))))
+        figures[ATTRIBUTE_KEY_SOLIDS] = str(int(geometry["solid_count"]))
     for key, feature in ((ATTRIBUTE_KEY_HOLES, "holes"), (ATTRIBUTE_KEY_FILLETS, "fillet_like_faces")):
         total = _feature_total(geometry.get("features"), feature)
         if total is not None:
-            figures.append((key, str(total)))
-    if figures:
-        figures.append((ATTRIBUTE_KEY_UNITS, GEOMETRY_UNITS))
-    entries += [{"metadataKey": key, "metadataValue": value} for key, value in figures]
+            figures[key] = str(total)
+    if any(value != UNMEASURED for value in figures.values()):
+        figures[ATTRIBUTE_KEY_UNITS] = GEOMETRY_UNITS
+    entries += [{"metadataKey": key, "metadataValue": value} for key, value in figures.items()]
     return {"type": "attribute", "updateType": update_type, "metadata": entries}
 
 
