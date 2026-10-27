@@ -88,6 +88,9 @@ paths:
                                     externalOAuthIdpDisplayName:
                                         type: string
                                         description: "Label rendered on the external OAuth login button; 'undefined' when not configured, in which case the web application falls back to 'SSO'"
+                                    externalOAuthIdpUserIdClaim:
+                                        type: string
+                                        description: "Access-token claim whose value is the VAMS user id (app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim); 'undefined' when not configured, in which case the web application and the API authorizer use cognito:username, then username, then sub"
                                     stackName:
                                         type: string
                                         nullable: true

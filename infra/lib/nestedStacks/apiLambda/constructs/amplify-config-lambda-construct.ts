@@ -114,6 +114,14 @@ interface InlineLambdaProps {
     externalOAuthIdpDisplayName?: string;
 
     /**
+     * External OAUTH IDP access-token claim whose value is the VAMS user id
+     * (`useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim`). `"undefined"` when not set, in which
+     * case the web application uses `cognito:username`, then `username`, then `sub`, as the API
+     * authorizer does; set, both use only this claim.
+     */
+    externalOAuthIdpUserIdClaim?: string;
+
+    /**
      * Name of deployed stack
      */
     stackName: string;
@@ -220,6 +228,9 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                     externalOAuthIdpDisplayName:
                         props.config.app.authProvider.useExternalOAuthIdp.idpDisplayName ||
                         "undefined",
+                    externalOAuthIdpUserIdClaim:
+                        props.config.app.authProvider.useExternalOAuthIdp
+                            .lambdaAuthorizorJWTUserIdClaim || "undefined",
                     stackName: props.stackName!,
                     contentSecurityPolicy: "",
                     bannerHtmlMessage: props.config.app.webUi.optionalBannerHtmlMessage || "",

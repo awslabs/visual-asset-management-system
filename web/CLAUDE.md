@@ -159,7 +159,7 @@ web/
     utils/
       apiEndpoint.ts        # Resolves the API base URL
       chunkLoadRecovery.ts  # lazyWithRetry, chunk-failure detection, guarded one-time reload
-      authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader
+      authTokenUtils.ts     # getDualValidAccessToken, getDualAuthorizationHeader, resolveExternalUserId
       sessionManager.ts     # Idle/expiry session handling
       fileExtensionValidation.ts
       fileHandleCompat.ts
@@ -592,6 +592,12 @@ There is no separate `email` key. Nothing writes one and nothing reads one — t
 identity comes from the `user` entry above. Storing it a second time under its own key put a user
 identifier in `localStorage` for no consumer, and wrote the literal string `"undefined"` when there
 was no signed-in user.
+
+In external OAuth mode `user.username` is the user id the API authorizer resolves from the access
+token (`resolveExternalUserId` in `src/utils/authTokenUtils.ts`). With amplify-config
+`externalOAuthIdpUserIdClaim` set, a token without that claim opens no session: storing it throws
+`MissingUserIdClaimError` (sign-in, refresh, page load, amplify-config refresh), the app signs out,
+and the sign-in page names the claim from `MISSING_USER_ID_CLAIM_KEY`.
 
 ---
 

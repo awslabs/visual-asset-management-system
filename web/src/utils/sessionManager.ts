@@ -5,7 +5,11 @@
 
 import { signOut } from "aws-amplify/auth";
 import localforage from "localforage";
-import { ensureSessionValid, getCurrentTokenExpiryMs } from "./authTokenUtils";
+import {
+    ensureSessionValid,
+    getCurrentTokenExpiryMs,
+    MISSING_USER_ID_CLAIM_KEY,
+} from "./authTokenUtils";
 
 /** localStorage keys read by Auth.tsx to drive the login-screen message and route restore. */
 export const SESSION_EXPIRED_KEY = "session_expired";
@@ -181,6 +185,10 @@ export function clearStoredSession(): void {
  * revokes the refresh token when it still can), clear localStorage (keeping display preferences),
  * record the expired flag + the route to return to, empty the localforage store, then redirect to
  * the login screen. Idempotent — first caller wins.
+ *
+ * A session ended because a refreshed external OAuth token lacked the configured user id
+ * claim (MISSING_USER_ID_CLAIM_KEY, written by authTokenUtils) keeps that claim instead of
+ * the expired flag, so the login screen names it.
  */
 export async function logoutExpired(returnTo: string = window.location.hash): Promise<void> {
     if (loggingOut) {
@@ -189,9 +197,15 @@ export async function logoutExpired(returnTo: string = window.location.hash): Pr
     loggingOut = true;
     clearExpiryTimer();
 
+    // Read before anything is cleared: the clear below removes it with the rest of the session.
+    const missingUserIdClaim = localStorage.getItem(MISSING_USER_ID_CLAIM_KEY);
     await revokeSession();
     clearStoredSession();
-    localStorage.setItem(SESSION_EXPIRED_KEY, "true");
+    if (missingUserIdClaim) {
+        localStorage.setItem(MISSING_USER_ID_CLAIM_KEY, missingUserIdClaim);
+    } else {
+        localStorage.setItem(SESSION_EXPIRED_KEY, "true");
+    }
     if (returnTo) {
         localStorage.setItem(SESSION_RETURN_TO_KEY, returnTo);
     }

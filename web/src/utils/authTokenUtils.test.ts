@@ -14,9 +14,15 @@ import {
     getCurrentTokenExpiryMs,
     ensureSessionValid,
     getDualValidAccessToken,
+    getExternalOAuth2Token,
+    MISSING_USER_ID_CLAIM_KEY,
+    MissingUserIdClaimError,
+    resolveExternalUserId,
     setOAuth2ClientInstance,
     setExternalOauth2Token,
+    syncExternalOAuthUser,
 } from "./authTokenUtils";
+import { appCache } from "../services/appCache";
 
 // Mock Amplify auth — only the symbols authTokenUtils imports.
 const mockFetchAuthSession = jest.fn();
@@ -199,6 +205,237 @@ describe("authTokenUtils session helpers", () => {
             await ensureSessionValid(false);
 
             expect(refreshToken).toHaveBeenCalledTimes(2);
+        });
+    });
+});
+
+/**
+ * Issue #816: the web application's user id in external OAuth mode is the one the API authorizer
+ * resolves (backend/backend/common/auth/authorizerCore.py resolve_user_id). With
+ * `externalOAuthIdpUserIdClaim` not set (absent, "" or "undefined" in amplify-config) that is the
+ * first of cognito:username, username and sub; set, only that claim. It used to be `sub` alone, so
+ * an IdP whose username differs from sub had its login profile request refused.
+ *
+ * Durable (root CLAUDE.md Rule 13).
+ */
+describe("external OAuth user id", () => {
+    const jwtWith = (claims: Record<string, unknown>) => "h." + btoa(JSON.stringify(claims)) + ".s";
+    const ALL_NAMES = {
+        "cognito:username": "cognito-name",
+        username: "plain-name",
+        sub: "sub-1",
+        email: "first.last@example.com",
+    };
+    const storedUser = () => JSON.parse(localStorage.getItem("user")!).username;
+    const withClaimSetting = (value: string | undefined) =>
+        appCache.setItem(
+            "config",
+            value === undefined ? { api: "x" } : { api: "x", externalOAuthIdpUserIdClaim: value }
+        );
+    const signIn = (claims: Record<string, unknown>) =>
+        setExternalOauth2Token({
+            accessToken: jwtWith(claims),
+            refreshToken: "r1",
+            expiresAt: Date.now() + 60_000,
+        } as any);
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        localStorage.clear();
+        (window as any).DISABLE_COGNITO = true;
+    });
+
+    describe.each([
+        ["absent", undefined],
+        ["empty", ""],
+        ['"undefined"', "undefined"],
+    ])("not set (%s): the authorizer's chain on the access token", (_label, setting) => {
+        beforeEach(() => withClaimSetting(setting));
+
+        it("username when it differs from sub", () => {
+            signIn({ username: "plain-name", sub: "sub-1" });
+            expect(storedUser()).toBe("plain-name");
+        });
+
+        it("cognito:username before username", () => {
+            signIn(ALL_NAMES);
+            expect(storedUser()).toBe("cognito-name");
+        });
+
+        it("sub when the token carries no username claim", () => {
+            signIn({ sub: "sub-1", email: "first.last@example.com" });
+            expect(storedUser()).toBe("sub-1");
+        });
+    });
+
+    describe("set", () => {
+        it("uses only the configured claim, even when username claims are present", () => {
+            withClaimSetting("email");
+            signIn(ALL_NAMES);
+            expect(storedUser()).toBe("first.last@example.com");
+        });
+
+        it("does not fall back when the token lacks the configured claim", () => {
+            withClaimSetting("email");
+            expect(() => signIn({ username: "plain-name", sub: "sub-1" })).toThrow(
+                MissingUserIdClaimError
+            );
+        });
+
+        it.each([
+            ["absent", {}],
+            ["empty", { email: "" }],
+            ["a number", { email: 7 }],
+            ["a list", { email: ["first.last@example.com"] }],
+        ])(
+            "stores no session when the configured claim is %s",
+            (_label, emailClaim: Record<string, unknown>) => {
+                withClaimSetting("email");
+                let thrown: unknown;
+                try {
+                    signIn({ username: "plain-name", sub: "sub-1", ...emailClaim });
+                } catch (error) {
+                    thrown = error;
+                }
+                expect(thrown).toBeInstanceOf(MissingUserIdClaimError);
+                expect((thrown as MissingUserIdClaimError).claim).toBe("email");
+                // The claim name only: no token or claim value in the message.
+                expect((thrown as Error).message).toContain('"email"');
+                expect((thrown as Error).message).not.toContain("plain-name");
+                expect(localStorage.getItem("oauth2_token")).toBeNull();
+                expect(localStorage.getItem("user")).toBeNull();
+            }
+        );
+
+        it("the refresh path applies the same claim", async () => {
+            withClaimSetting("email");
+            signIn({ sub: "sub-1", email: "old@example.com" });
+            // Expire the access token so the next validation refreshes.
+            localStorage.setItem(
+                "oauth2_token",
+                JSON.stringify({ ...getExternalOAuth2Token(), expiresAt: 1 })
+            );
+            const refreshToken = jest.fn().mockResolvedValue({
+                accessToken: jwtWith({ ...ALL_NAMES, email: "new@example.com" }),
+                refreshToken: "r2",
+                expiresAt: Date.now() + 60_000,
+            });
+            setOAuth2ClientInstance({ refreshToken } as any);
+
+            expect(await ensureSessionValid()).toBe(true);
+            expect(refreshToken).toHaveBeenCalled();
+            expect(storedUser()).toBe("new@example.com");
+        });
+
+        describe("a refreshed token without the configured claim ends the session", () => {
+            const LACKS_EMAIL = { "cognito:username": "cognito-name", sub: "sub-1" };
+
+            const signedInThenRefreshesTo = (
+                refreshed: Record<string, unknown>,
+                expiresAt: number
+            ) => {
+                withClaimSetting("email");
+                signIn({ sub: "sub-1", email: "old@example.com" });
+                localStorage.setItem(
+                    "oauth2_token",
+                    JSON.stringify({ ...getExternalOAuth2Token(), expiresAt })
+                );
+                const refreshToken = jest.fn().mockResolvedValue({
+                    accessToken: jwtWith(refreshed),
+                    refreshToken: "r2",
+                    expiresAt: Date.now() + 60_000,
+                });
+                setOAuth2ClientInstance({ refreshToken } as any);
+                return refreshToken;
+            };
+
+            const expectSessionEndedForClaim = () => {
+                expect(localStorage.getItem("oauth2_token")).toBeNull();
+                expect(localStorage.getItem("user")).toBeNull();
+                // sessionManager.logoutExpired reads this to show the claim instead of "expired".
+                expect(localStorage.getItem(MISSING_USER_ID_CLAIM_KEY)).toBe("email");
+            };
+
+            beforeEach(() => {
+                jest.spyOn(console, "error").mockImplementation(() => undefined);
+            });
+
+            afterEach(() => {
+                (console.error as jest.Mock).mockRestore();
+            });
+
+            it("on validation after expiry", async () => {
+                const refreshToken = signedInThenRefreshesTo(LACKS_EMAIL, 1);
+
+                expect(await ensureSessionValid()).toBe(false);
+                expect(refreshToken).toHaveBeenCalled();
+                expectSessionEndedForClaim();
+            });
+
+            it("on a proactive refresh while the access token is still valid", async () => {
+                // Unlike a transient IdP failure, keeping the old token would only delay the end.
+                const refreshToken = signedInThenRefreshesTo(LACKS_EMAIL, Date.now() + 120_000);
+
+                expect(await ensureSessionValid(true)).toBe(false);
+                expect(refreshToken).toHaveBeenCalled();
+                expectSessionEndedForClaim();
+            });
+
+            it("on an API call's token fetch", async () => {
+                signedInThenRefreshesTo(LACKS_EMAIL, 1);
+
+                await expect(getDualValidAccessToken()).rejects.toThrow();
+                expectSessionEndedForClaim();
+            });
+
+            it("positive control: a refreshed token with the claim keeps the session", async () => {
+                signedInThenRefreshesTo({ ...LACKS_EMAIL, email: "new@example.com" }, 1);
+
+                expect(await ensureSessionValid()).toBe(true);
+                expect(storedUser()).toBe("new@example.com");
+                expect(localStorage.getItem(MISSING_USER_ID_CLAIM_KEY)).toBeNull();
+            });
+        });
+    });
+
+    describe("syncExternalOAuthUser", () => {
+        it("re-derives the user when the configured claim changes after sign-in", () => {
+            withClaimSetting(undefined); // a cached amplify-config from before the setting
+            signIn(ALL_NAMES);
+            expect(storedUser()).toBe("cognito-name");
+
+            withClaimSetting("email"); // the refreshed amplify-config
+            expect(syncExternalOAuthUser()).toBe(true);
+            expect(storedUser()).toBe("first.last@example.com");
+            expect(syncExternalOAuthUser()).toBe(false); // nothing left to change
+        });
+
+        it("does nothing without a stored token", () => {
+            withClaimSetting("email");
+            expect(syncExternalOAuthUser()).toBe(false);
+            expect(localStorage.getItem("user")).toBeNull();
+        });
+
+        it("refuses the stored token when the newly named claim is missing from it", () => {
+            withClaimSetting(undefined);
+            signIn({ username: "plain-name", sub: "sub-1" });
+            expect(storedUser()).toBe("plain-name");
+
+            withClaimSetting("email"); // the refreshed amplify-config names a claim the token lacks
+            expect(() => syncExternalOAuthUser()).toThrow(MissingUserIdClaimError);
+        });
+    });
+
+    describe("resolveExternalUserId", () => {
+        it.each([
+            [{ "cognito:username": "", username: "plain-name", sub: "sub-1" }, null, "plain-name"],
+            [{ username: 7, sub: "sub-1" }, null, "sub-1"],
+            [{ sub: "sub-1" }, null, "sub-1"],
+            [{}, null, ""],
+            [{ email: ["a@example.com"] }, "email", ""],
+            [{ "custom:id": "e-1", sub: "sub-1" }, "custom:id", "e-1"],
+        ])("%p with claim %p is %p", (claims, claim, expected) => {
+            expect(resolveExternalUserId(claims as Record<string, unknown>, claim)).toBe(expected);
         });
     });
 });

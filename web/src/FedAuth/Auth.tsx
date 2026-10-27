@@ -23,6 +23,9 @@ import {
     externalTokenValidation,
     setExternalOauth2Token,
     externalOAuthTokenProvider,
+    syncExternalOAuthUser,
+    MISSING_USER_ID_CLAIM_KEY,
+    MissingUserIdClaimError,
 } from "../utils/authTokenUtils";
 import {
     ensureValidSession,
@@ -171,6 +174,13 @@ interface Config {
      * External OAUTH IDP Discovery Endpoint Configuration
      */
     externalOAuthIdpDiscoveryEndpoint?: string;
+
+    /**
+     * External OAUTH IDP access-token claim whose value is the VAMS user id
+     * (`"undefined"` or absent when not set: cognito:username, then username, then sub, as the
+     * API authorizer does). Read by authTokenUtils getExternalUserIdClaim.
+     */
+    externalOAuthIdpUserIdClaim?: string;
 
     /**
      * VAMS Features that are enabled (normalized to an array when secure-config is applied)
@@ -477,6 +487,13 @@ const Auth: React.FC<AuthProps> = (props) => {
     const [sessionExpired, setSessionExpired] = useState<boolean>(
         () => localStorage.getItem(SESSION_EXPIRED_KEY) === "true"
     );
+    // External OAuth: the user id claim an access token lacked, shown on the sign-in page.
+    const [missingUserIdClaim, setMissingUserIdClaim] = useState<string | null>(() =>
+        localStorage.getItem(MISSING_USER_ID_CLAIM_KEY)
+    );
+    // Set once a session ended for a missing user id claim, so a validation still in flight
+    // does not mark the user signed in while the sign-out's redirect is pending.
+    const externalSessionEndedRef = useRef(false);
 
     // Always the latest config, for async callbacks that must merge over current
     // state rather than the value captured when they started.
@@ -525,6 +542,17 @@ const Auth: React.FC<AuthProps> = (props) => {
     // TODO: Refactor how/when handleExternalOauthSignIn() & External OAuth Effects are called without needing to do this
     // This line in combination with the useEffect dependency allows for the useEffects to execute in the right order
     const [triggerExternalOAuth, setTriggerExternalOAuth] = useState(false);
+
+    //External OAUTH Function
+    //An access token without the configured user id claim opens no session (the API refuses it
+    //on every request): sign out, clearing what was stored, and name the claim on the sign-in page.
+    const endSessionForMissingUserIdClaim = (claim: string) => {
+        externalSessionEndedRef.current = true;
+        void signOutWithError(MISSING_USER_ID_CLAIM_KEY, claim);
+        setMissingUserIdClaim(claim);
+        setisLoggedIn(false);
+        setIsLoading(false);
+    };
 
     //Both Affect
     //Fetch && Setup Initial global configurations
@@ -594,6 +622,16 @@ const Auth: React.FC<AuthProps> = (props) => {
                         const merged = { ...latest, ...fetchedConfig };
                         if (JSON.stringify(merged) !== JSON.stringify(latest)) {
                             appCache.setItem("config", merged);
+                            // External OAuth: a session signed in on the cached config keeps the
+                            // user id claim the backend now names, so the web app and the API
+                            // agree on the user, or ends when its token lacks that claim.
+                            if (window.DISABLE_COGNITO) {
+                                const missingClaim = syncStoredExternalOAuthUser();
+                                if (missingClaim) {
+                                    endSessionForMissingUserIdClaim(missingClaim);
+                                    return;
+                                }
+                            }
                             setConfig(merged);
                         }
                     } else {
@@ -672,11 +710,22 @@ const Auth: React.FC<AuthProps> = (props) => {
             }
             setIsLoading(true);
             ensureValidSession().then((valid) => {
+                if (externalSessionEndedRef.current) {
+                    return;
+                }
                 if (valid) {
+                    // The stored token must carry the configured user id claim as well.
+                    const missingClaim = syncStoredExternalOAuthUser();
+                    if (missingClaim) {
+                        endSessionForMissingUserIdClaim(missingClaim);
+                        return;
+                    }
                     setisLoggedIn(true);
                 } else {
                     setisLoggedIn(false);
                     resetSession();
+                    // A refresh refused for a missing user id claim records it (authTokenUtils).
+                    setMissingUserIdClaim(localStorage.getItem(MISSING_USER_ID_CLAIM_KEY));
                 }
                 setIsLoading(false);
             });
@@ -778,6 +827,10 @@ const Auth: React.FC<AuthProps> = (props) => {
                 .catch((error) => {
                     console.error(error);
                     clearOAuthSignInState();
+                    if (error instanceof MissingUserIdClaimError) {
+                        endSessionForMissingUserIdClaim(error.claim);
+                        return;
+                    }
                     void signOutWithError("auth_error", "Failed to get access token"); // Catching error when redirect code is missing and start new sign in process.
                 });
         }
@@ -966,6 +1019,10 @@ const Auth: React.FC<AuthProps> = (props) => {
                 setTriggerExternalOAuth(true); // Access token is now valid, continue login process
                 return;
             } catch (error) {
+                if (error instanceof MissingUserIdClaimError) {
+                    endSessionForMissingUserIdClaim(error.claim);
+                    return;
+                }
                 // Failed to refresh the token (possibly invalid tokens or refresh token expired), continue on
                 console.error("refreshtoken error: ", error);
             }
@@ -1166,7 +1223,17 @@ const Auth: React.FC<AuthProps> = (props) => {
                                 </SpaceBetween>
                             </Box>
                         </div>
-                        {sessionExpired ? (
+                        {missingUserIdClaim ? (
+                            <div className={styles.alertError}>
+                                <Alert
+                                    type="error"
+                                    statusIconAriaLabel="Error"
+                                    header="Sign-in failed"
+                                >
+                                    {`The identity provider's access token has no "${missingUserIdClaim}" claim, which this deployment uses as the user id. Contact your administrator.`}
+                                </Alert>
+                            </div>
+                        ) : sessionExpired ? (
                             <div className={styles.alertError}>
                                 <Alert
                                     type="warning"
@@ -1364,6 +1431,26 @@ const resetSession = () => {
     appCache.removeItem(ALLOWED_API_ROUTES_CACHE_KEY);
 };
 
+// Re-derives the stored user from the stored access token with the cached config's user id
+// claim. A changed user drops the cached login profile, which the profile effect then fetches
+// again for the new id. Returns the claim when the token lacks it, else null.
+const syncStoredExternalOAuthUser = (): string | null => {
+    try {
+        if (syncExternalOAuthUser()) {
+            appCache.removeItem("loginProfile");
+        }
+        return null;
+    } catch (error) {
+        if (error instanceof MissingUserIdClaimError) {
+            return error.claim;
+        }
+        // A stored token that cannot be decoded is left to the session validation and the API.
+        // A fixed message: a decoding error can quote the token's payload.
+        console.error("The stored access token could not be decoded.");
+        return null;
+    }
+};
+
 // Wrapper for setExternalOauth2Token that also handles timer restart and error clearing
 // This function should be used within Auth.tsx for login flows
 const setExternalOauthLoginAndRefreshTimer = (oauth2Token: OAuth2Token) => {
@@ -1374,6 +1461,7 @@ const setExternalOauthLoginAndRefreshTimer = (oauth2Token: OAuth2Token) => {
 
 function clearPreviousLoginErrors() {
     localStorage.removeItem("auth_error");
+    localStorage.removeItem(MISSING_USER_ID_CLAIM_KEY);
 }
 
 export default Auth;

@@ -2331,6 +2331,12 @@ export function buildApiGatewayAuthorizerRestFunction(
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl;
         environment.JWT_AUDIENCE =
             config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience;
+        // Claims compared with JWT_AUDIENCE, in order, and the user id claim ("" = chain)
+        environment.JWT_AUDIENCE_CLAIMS = JSON.stringify(
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims
+        );
+        environment.JWT_USER_ID_CLAIM =
+            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim;
     }
 
     const authorizerFunc = new lambda.Function(scope, name, {

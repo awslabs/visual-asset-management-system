@@ -258,6 +258,17 @@ export const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
 // than letting CreateUser fail mid-deploy and roll the core stack back.
 export const COGNITO_USERNAME_MAX_LENGTH = 128;
 
+// External OAuth: the token claims the authorizer may compare with lambdaAuthorizorJWTAudience
+// (lambdaAuthorizorJWTAudienceClaims), and its default. An Amazon Cognito user pool access token,
+// for one, carries client_id and no aud. Mirrored by SUPPORTED_JWT_AUDIENCE_CLAIMS in
+// backend/backend/common/auth/authorizerCore.py.
+export const EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS = ["aud", "client_id"];
+export const EXTERNAL_OAUTH_DEFAULT_JWT_AUDIENCE_CLAIMS = ["aud"];
+
+// External OAuth: a token claim name for lambdaAuthorizorJWTUserIdClaim. Mirrored by
+// JWT_USER_ID_CLAIM_PATTERN in backend/backend/common/auth/authorizerCore.py.
+export const EXTERNAL_OAUTH_USER_ID_CLAIM_PATTERN = /^[A-Za-z0-9_:.-]+$/;
+
 // The longest lifetime AWS Signature Version 4 allows a presigned URL: 7 days, in seconds. Amazon S3
 // answers AuthorizationQueryParametersError for a URL signed for longer, so a larger
 // app.authProvider.presignedUrlTimeoutSeconds would deploy and then fail every download, and
@@ -1484,6 +1495,20 @@ export function getConfig(app: cdk.App): Config {
     // Initialize IdP display name for external OAuth (backward compatibility)
     if (config.app.authProvider.useExternalOAuthIdp.idpDisplayName == undefined) {
         config.app.authProvider.useExternalOAuthIdp.idpDisplayName = "SSO";
+    }
+
+    // External OAuth claim settings when config.json omits them. The user id claim "" means not
+    // set: the authorizer and the web application use the first of cognito:username, username and
+    // sub. The audience claims default to ["aud"].
+    if (config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim == undefined) {
+        config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim = "";
+    }
+    if (
+        config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims == undefined
+    ) {
+        config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims = [
+            ...EXTERNAL_OAUTH_DEFAULT_JWT_AUDIENCE_CLAIMS,
+        ];
     }
 
     if (config.app.api == undefined) {
@@ -3131,6 +3156,43 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    // External OAuth claim settings, read only in external OAuth mode (both are optional; the
+    // defaults are filled above). lambdaAuthorizorJWTUserIdClaim names the token claim whose value
+    // is the VAMS user id ("" = not set). lambdaAuthorizorJWTAudienceClaims lists the claims the
+    // authorizer compares with lambdaAuthorizorJWTAudience, in order.
+    if (config.app.authProvider.useExternalOAuthIdp.enabled) {
+        const userIdClaim = config.app.authProvider.useExternalOAuthIdp
+            .lambdaAuthorizorJWTUserIdClaim as unknown;
+        if (
+            typeof userIdClaim !== "string" ||
+            (userIdClaim !== "" && !EXTERNAL_OAUTH_USER_ID_CLAIM_PATTERN.test(userIdClaim))
+        ) {
+            throw new Error(
+                `Configuration Error: app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTUserIdClaim must be "" (not set) or a token claim name of letters, digits, '_', ':', '.' and '-'. Got: ${JSON.stringify(
+                    userIdClaim
+                )}`
+            );
+        }
+
+        const audienceClaims = config.app.authProvider.useExternalOAuthIdp
+            .lambdaAuthorizorJWTAudienceClaims as unknown;
+        if (
+            !Array.isArray(audienceClaims) ||
+            audienceClaims.length === 0 ||
+            audienceClaims.some(
+                (claim) =>
+                    typeof claim !== "string" || !EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS.includes(claim)
+            ) ||
+            new Set(audienceClaims).size !== audienceClaims.length
+        ) {
+            throw new Error(
+                `Configuration Error: app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudienceClaims must be a non-empty list of distinct claim names from [${EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS.map(
+                    (claim) => `"${claim}"`
+                ).join(", ")}]. Got: ${JSON.stringify(audienceClaims)}`
+            );
+        }
+    }
+
     //API Configuration Error Checks
 
     // API type: only API Gateway REST is supported today.
@@ -4483,6 +4545,12 @@ export interface ConfigPublic {
                 idpAuthProviderDiscoveryEndpoint: string;
                 lambdaAuthorizorJWTIssuerUrl: string;
                 lambdaAuthorizorJWTAudience: string;
+                // Token claims compared with lambdaAuthorizorJWTAudience, in order; the first one
+                // present must equal it. "aud" and/or "client_id". Default ["aud"].
+                lambdaAuthorizorJWTAudienceClaims: string[];
+                // Token claim whose value is the VAMS user id, for the authorizer and the web
+                // application. "" (default) = not set: cognito:username, then username, then sub.
+                lambdaAuthorizorJWTUserIdClaim: string;
             };
         };
         webUi: {

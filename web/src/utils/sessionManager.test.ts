@@ -136,6 +136,19 @@ describe("sessionManager", () => {
             expect(localStorage.getItem(SESSION_EXPIRED_KEY)).toBe("true");
         });
 
+        it("ends a session refused for a missing user id claim with that claim, not as expired", async () => {
+            // authTokenUtils records the claim when a refreshed token lacks it.
+            localStorage.setItem(tokenUtils.MISSING_USER_ID_CLAIM_KEY, "email");
+            localStorage.setItem("user", JSON.stringify({ username: "u" }));
+
+            await logoutExpired("#/assets");
+
+            expect(localStorage.getItem(tokenUtils.MISSING_USER_ID_CLAIM_KEY)).toBe("email");
+            expect(localStorage.getItem(SESSION_EXPIRED_KEY)).toBeNull();
+            expect(localStorage.getItem("user")).toBeNull();
+            expect(redirectSpy).toHaveBeenCalledTimes(1);
+        });
+
         it("preserves the viewer settings across the localStorage wipe", async () => {
             localStorage.setItem("ov_viewer_settings", '{"a":1}');
             localStorage.setItem("ov_camera_settings", '{"b":2}');

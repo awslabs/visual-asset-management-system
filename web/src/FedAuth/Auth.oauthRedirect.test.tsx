@@ -16,6 +16,7 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { appCache } from "../services/appCache";
+import { MISSING_USER_ID_CLAIM_KEY } from "../utils/authTokenUtils";
 import Auth from "./Auth";
 import { oauthNavigation } from "./oauthSignInState";
 
@@ -388,6 +389,82 @@ describe("Auth external OAuth state", () => {
         );
         expect(goTo).not.toHaveBeenCalled();
         expect(storedSignInValues()).toEqual([null, null, null]);
+    });
+});
+
+/**
+ * With `externalOAuthIdpUserIdClaim` set, the deep link and the one-time sign-in values work as
+ * without it: a token carrying the claim lands on the deep link, and a token lacking it signs out
+ * with the sign-in attempt's values removed and the deep link not followed.
+ */
+describe("Auth external OAuth deep link with a configured user id claim", () => {
+    const OAUTH2_CONFIG_EMAIL = { ...OAUTH2_CONFIG, externalOAuthIdpUserIdClaim: "email" };
+    const tokenWith = (claims: Record<string, unknown>) => ({
+        ...TOKEN,
+        accessToken: `header.${btoa(JSON.stringify(claims))}.signature`,
+    });
+    let consoleError: jest.SpyInstance;
+    let goTo: jest.SpyInstance;
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        localStorage.clear();
+        appCache.setItem("config", OAUTH2_CONFIG_EMAIL);
+        mockGetAmplifyConfig.mockResolvedValue({ ...OAUTH2_CONFIG_EMAIL });
+        mockEnsureValidSession.mockResolvedValue(false);
+        mockClearLocalStore.mockResolvedValue(undefined);
+        mockRevokeSession.mockReset().mockResolvedValue(undefined);
+        mockClearStoredSession.mockReset();
+        goTo = jest.spyOn(oauthNavigation, "goTo").mockImplementation(() => undefined);
+        // jsdom reports document.location assignments as unimplemented navigation.
+        consoleError = jest.spyOn(console, "error").mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+        goTo.mockRestore();
+        consoleError.mockRestore();
+        window.history.replaceState(null, "", "/");
+    });
+
+    it("lands on the deep link after a sign-in whose token carries the claim", async () => {
+        window.history.replaceState(null, "", DEEP_LINK);
+        mockGetAuthorizeUri.mockResolvedValue("https://idp.test/authorize?x=1");
+        const signIn = renderAuth();
+        fireEvent.click(await screen.findByText("Log in with SSO"));
+        await waitFor(() => expect(mockGetAuthorizeUri).toHaveBeenCalledTimes(1));
+        const sentState = mockGetAuthorizeUri.mock.calls[0][0].state;
+        signIn.unmount();
+
+        window.history.replaceState(null, "", `/?code=abc&state=${sentState}`);
+        mockGetTokenFromCodeRedirect.mockResolvedValue(
+            tokenWith({ sub: "user-1", email: "first.last@example.com" })
+        );
+
+        renderAuth();
+
+        await waitFor(() => expect(goTo).toHaveBeenCalledWith(`http://localhost${DEEP_LINK}`));
+        expect(JSON.parse(localStorage.getItem("user") ?? "{}").username).toBe(
+            "first.last@example.com"
+        );
+        expect(localStorage.getItem(MISSING_USER_ID_CLAIM_KEY)).toBeNull();
+        expect(storedSignInValues()).toEqual([null, null, null]);
+    });
+
+    it("removes the sign-in attempt's values when the token lacks the claim", async () => {
+        storeSignInAttempt();
+        window.history.replaceState(null, "", `/?code=abc&state=${STATE}`);
+        mockGetTokenFromCodeRedirect.mockResolvedValue(tokenWith({ sub: "user-1" }));
+
+        renderAuth();
+
+        await waitFor(() => expect(localStorage.getItem(MISSING_USER_ID_CLAIM_KEY)).toBe("email"));
+        // The full sign-out wipe is stubbed here, so these were removed by the attempt's own
+        // clean-up, not as a side effect of clearing localStorage.
+        expect(storedSignInValues()).toEqual([null, null, null]);
+        expect(localStorage.getItem("oauth2_token")).toBeNull();
+        expect(goTo).not.toHaveBeenCalled();
+        expect(mockRevokeSession).toHaveBeenCalledTimes(1);
+        expect(await screen.findByText("Sign-in failed")).toBeInTheDocument();
     });
 });
 
