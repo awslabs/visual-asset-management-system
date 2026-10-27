@@ -75,7 +75,7 @@ const Dialog: React.FC<DialogProps> = ({
                     </div>
                     <RadixDialog.Close
                         aria-label="Close dialog"
-                        className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                        className="absolute top-4 right-4 text-text-secondary hover:text-text-primary"
                     >
                         <span aria-hidden="true" className="text-xl">
                             ×

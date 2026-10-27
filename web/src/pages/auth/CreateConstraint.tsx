@@ -17,6 +17,7 @@ import {
     Textarea,
 } from "@cloudscape-design/components";
 import ExpandableSection from "@cloudscape-design/components/expandable-section";
+import Alert from "@cloudscape-design/components/alert";
 import { Optional } from "@cloudscape-design/components/internal/types";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -29,6 +30,16 @@ import { routeTable } from "../../routes";
 import RoleGroupPermissionsTable, { RoleGroupPermission } from "./RoleGroupPermissionsTable";
 import UserPermissionsTable, { UserPermission } from "./UserPermissionsTable";
 // import { fetchMetadataSchema } from "../../services/APIService";
+
+/** Constraints the deployment seeds for the default admin and basicReadOnly roles. */
+const SEEDED_CONSTRAINT_ID_PREFIXES = ["initial_admin_", "initial_basicro_"];
+
+function isSeededConstraint(constraintId?: string): boolean {
+    return (
+        typeof constraintId === "string" &&
+        SEEDED_CONSTRAINT_ID_PREFIXES.some((prefix) => constraintId.startsWith(prefix))
+    );
+}
 
 interface ConstraintCriteria {
     id: string;
@@ -588,6 +599,13 @@ export default function CreateConstraint({
         >
             <Form errorText={metadataError || formError}>
                 <SpaceBetween direction="vertical" size="l">
+                    {isSeededConstraint(initState?.constraintId) && (
+                        <Alert type="info" header="Default constraint">
+                            This constraint is created by the VAMS deployment. The next deployment
+                            rewrites it, undoing edits made here, and re-creates it if it was
+                            deleted. Put customizations on a separate role and constraints.
+                        </Alert>
+                    )}
                     {metadataError && (
                         <Button onClick={loadObjectTypes} iconName="refresh">
                             Retry loading object types

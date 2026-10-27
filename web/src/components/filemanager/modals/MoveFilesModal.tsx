@@ -248,6 +248,7 @@ export function MoveFilesModal({
 
         const successCount = operationResults.filter((r) => r.success).length;
         const failureCount = operationResults.filter((r) => !r.success).length;
+        const pastTense = operationMode === "copy" ? "copied" : "moved";
 
         return (
             <Container header={<Header variant="h3">Operation Results</Header>}>
@@ -273,9 +274,9 @@ export function MoveFilesModal({
                     {successCount > 0 && (
                         <Alert
                             type="success"
-                            header={`Successfully ${operationMode}d ${successCount} file(s)`}
+                            header={`Successfully ${pastTense} ${successCount} file(s)`}
                         >
-                            Files have been {operationMode}d to: {selectedFolder}
+                            Files have been {pastTense} to: {selectedFolder}
                             {operationMode === "copy" &&
                                 copyTarget === "different" &&
                                 selectedAsset && (

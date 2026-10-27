@@ -1,7 +1,7 @@
 {
     "metadata": {
         "name": "Database User",
-        "description": "Standard user access for a specific database. Can view all data, create/update assets, archive (soft delete) assets, and execute workflows (execute, list, details, paged detail metadata, abort, re-run). Can create and execute workflows in the scoped database \u2014 the workflow POST action covers both. Cannot permanently delete assets, view detailed execution logs, permanently delete executions, create/update/delete pipelines, delete workflows or schemas, delete the database, list the registered asset buckets, or use asset ingestion. Can view and execute global pipelines and workflows.",
+        "description": "Standard user access for a specific database. Can view all data, create/update assets, archive (soft delete) assets, add, edit and remove the database's metadata, and execute workflows (execute, list, details, paged detail metadata, abort, re-run). Can create and execute workflows in the scoped database \u2014 the workflow POST action covers both. Cannot view, unarchive or permanently delete archived assets, permanently delete assets, view detailed execution logs, permanently delete executions, create/update/delete pipelines, delete workflows or schemas, create the database, edit its details, delete (archive) it, list the registered asset buckets, or use asset ingestion. Can view and execute global pipelines and workflows.",
         "version": "1.0"
     },
     "variables": [
@@ -213,7 +213,7 @@
         },
         {
             "name": "{{ROLE_NAME}}-api-routes-post",
-            "description": "Allow POST API access for asset operations and workflow execution (execute + re-run) for {{ROLE_NAME}}",
+            "description": "Allow POST API access for asset operations, database metadata, and workflow execution (execute + re-run) for {{ROLE_NAME}}. The trailing slash on /database/ leaves out POST /database (create).",
             "objectType": "api",
             "criteriaAnd": [],
             "criteriaOr": [
@@ -250,7 +250,7 @@
                 {
                     "field": "route__path",
                     "operator": "starts_with",
-                    "value": "/database"
+                    "value": "/database/"
                 },
                 {
                     "field": "route__path",
@@ -282,7 +282,7 @@
         },
         {
             "name": "{{ROLE_NAME}}-api-routes-put",
-            "description": "Allow PUT API access for asset updates for {{ROLE_NAME}}",
+            "description": "Allow PUT API access for asset and database metadata updates for {{ROLE_NAME}}. The prefix's trailing slash leaves out editing the database's details.",
             "objectType": "api",
             "criteriaAnd": [],
             "criteriaOr": [
@@ -294,7 +294,7 @@
                 {
                     "field": "route__path",
                     "operator": "starts_with",
-                    "value": "/database"
+                    "value": "/database/{{DATABASE_ID}}/"
                 },
                 {
                     "field": "route__path",
@@ -321,7 +321,7 @@
         },
         {
             "name": "{{ROLE_NAME}}-api-routes-delete",
-            "description": "Allow DELETE API access for archive operations and workflow-execution abort for {{ROLE_NAME}}",
+            "description": "Allow DELETE API access for archive operations, database metadata removal, and workflow-execution abort for {{ROLE_NAME}}",
             "objectType": "api",
             "criteriaAnd": [],
             "criteriaOr": [
@@ -334,6 +334,11 @@
                     "field": "route__path",
                     "operator": "contains",
                     "value": "archiveFile"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "equals",
+                    "value": "/database/{{DATABASE_ID}}/metadata"
                 },
                 {
                     "field": "route__path",
@@ -403,8 +408,32 @@
             ]
         },
         {
+            "name": "{{ROLE_NAME}}-api-routes-archive-admin-deny",
+            "description": "Withhold unarchiveAsset in {{DATABASE_ID}} (database admin only). Scoped to the database: a deny applies across all of a user's roles, including an admin role on another database.",
+            "objectType": "api",
+            "criteriaAnd": [
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/database/{{DATABASE_ID}}/"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "ends_with",
+                    "value": "/unarchiveAsset"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "PUT",
+                    "type": "deny"
+                }
+            ]
+        },
+        {
             "name": "{{ROLE_NAME}}-database",
-            "description": "Allow read-only access to the {{DATABASE_ID}} database entity",
+            "description": "Allow reading {{DATABASE_ID}} and changing its database metadata (POST, PUT, DELETE). The api route constraints leave out creating the database, editing its details and deleting it.",
             "objectType": "database",
             "criteriaAnd": [
                 {
@@ -418,12 +447,24 @@
                 {
                     "action": "GET",
                     "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                },
+                {
+                    "action": "PUT",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
                 }
             ]
         },
         {
             "name": "{{ROLE_NAME}}-assets",
-            "description": "Allow create, update, and archive access to assets in {{DATABASE_ID}}",
+            "description": "Allow create, update, and archive access to assets in {{DATABASE_ID}}. Its archived assets are not matched.",
             "objectType": "asset",
             "criteriaAnd": [
                 {

@@ -89,7 +89,6 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                 ".sp-container",
                 ".sp-palette-container",
                 ".sp-picker-container",
-                '[class*="sp-"]',
             ];
 
             unwantedSelectors.forEach((selector) => {
