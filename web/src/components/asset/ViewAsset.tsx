@@ -14,7 +14,6 @@ import {
     AlertProps,
 } from "@cloudscape-design/components";
 import { useNavigate, useParams, useLocation } from "react-router";
-import { appCache } from "../../services/appCache";
 import { AssetDetailContext, assetDetailReducer } from "../../context/AssetDetailContext";
 import { AssetDetail } from "../../pages/AssetUpload/AssetUpload";
 import { fetchAsset, fetchAssetLinks, fetchtagTypes } from "../../services/APIService";
@@ -26,9 +25,7 @@ import TabbedContainer from "./TabbedContainer";
 import AssetDeleteModal from "../modals/AssetDeleteModal";
 import { UpdateAsset } from "../createupdate/UpdateAsset";
 import { MetadataContainer } from "../metadataV2";
-import localforage from "localforage";
 import Synonyms from "../../synonyms";
-import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import { usePageTitle } from "../../hooks/usePageTitle";
 
 // Fetch tag types and store in localStorage
@@ -85,12 +82,6 @@ export default function ViewAsset() {
 
     usePageTitle(databaseId, asset?.assetName);
 
-    // Config
-    const config = appCache.getItem("config");
-    const [useNoOpenSearch] = useState(
-        config?.featuresEnabled?.includes(featuresEnabled.NOOPENSEARCH)
-    );
-
     // Fetch asset data
     useEffect(() => {
         const fetchAssetData = async (): Promise<void> => {
@@ -127,55 +118,25 @@ export default function ViewAsset() {
                 setApiErrorType("error");
             }
 
-            // Only attempt to load from localforage or set asset details if we don't have an API error
-            if (!showApiError) {
-                // Load from localforage if available
-                try {
-                    const value: any = await localforage.getItem(assetId);
-                    if (value && value.Asset) {
-                        dispatch({
-                            type: "SET_ASSET_DETAIL",
-                            payload: {
-                                isMultiFile: value.isMultiFile,
-                                assetId: assetId,
-                                assetName: value.assetName,
-                                databaseId: databaseId,
-                                description: value.description,
-                                key: value.key || value.assetLocation["Key"],
-                                assetLocation: {
-                                    Key: value.key || value.assetLocation["Key"],
-                                },
-                                assetType: value.assetType,
-                                isDistributable: value.isDistributable,
-                                Asset: value.Asset,
-                            },
-                        });
-                    } else if (asset && asset.assetId) {
-                        dispatch({
-                            type: "SET_ASSET_DETAIL",
-                            payload: {
-                                isMultiFile: asset.isMultiFile,
-                                assetId: assetId,
-                                assetName: asset.assetName,
-                                databaseId: databaseId,
-                                description: asset.description,
-                                key:
-                                    asset.key ||
-                                    (asset.assetLocation && asset.assetLocation["Key"]),
-                                assetLocation: {
-                                    Key:
-                                        asset.key ||
-                                        (asset.assetLocation && asset.assetLocation["Key"]),
-                                },
-                                assetType: asset.assetType,
-                                isDistributable: asset.isDistributable,
-                                Asset: [],
-                            },
-                        });
-                    }
-                } catch (error) {
-                    console.error("Error loading from localforage:", error);
-                }
+            // Only set asset details if we don't have an API error
+            if (!showApiError && asset && asset.assetId) {
+                dispatch({
+                    type: "SET_ASSET_DETAIL",
+                    payload: {
+                        isMultiFile: asset.isMultiFile,
+                        assetId: assetId,
+                        assetName: asset.assetName,
+                        databaseId: databaseId,
+                        description: asset.description,
+                        key: asset.key || (asset.assetLocation && asset.assetLocation["Key"]),
+                        assetLocation: {
+                            Key: asset.key || (asset.assetLocation && asset.assetLocation["Key"]),
+                        },
+                        assetType: asset.assetType,
+                        isDistributable: asset.isDistributable,
+                        Asset: [],
+                    },
+                });
             }
         };
 

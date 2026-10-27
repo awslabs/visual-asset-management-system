@@ -57,7 +57,6 @@ tools/VamsCLI/
       execution.py           # Execution ops: list (global), details, details-metadata (paged), logs, abort, rerun, permanent-delete
       user.py                # Cognito user management
       roleUserConstraints.py # Roles, constraints, user-role assignment
-      compliance.py          # Compliance: schema sub-group, bind/unbind/bindings, evaluate/sweep/state/evaluations, quarantine + cascade sub-groups, audit
       custom/__init__.py     # FORK EXTENSION POINT: CUSTOM_COMMANDS, registered on the root group by main.py
       industry/
         industry.py          # Industry command group
@@ -75,6 +74,7 @@ tools/VamsCLI/
       global_exceptions.py   # @handle_global_exceptions() decorator
       decorators.py          # @requires_setup_and_auth, @requires_feature
       json_output.py         # output_result(), output_error(), output_status()
+      confirmation.py        # confirm_destructive_action(): extra prompt only on an interactive terminal
       logging.py             # Rotating file logger, verbose mode
       retry_config.py        # Retry settings with env var overrides
       features.py            # Feature switch utilities
@@ -90,15 +90,14 @@ tools/VamsCLI/
     industry/                # Engineering BOM and PLM command tests (engineering/bom/, engineering/plm/)
 ```
 
-### Command Groups (25 top-level)
+### Command Groups (24 top-level)
 
 All registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
 tag, tag-type, metadata, metadata-schema, comment, subscription, features,
-search, sync, workflow, pipeline, execution, industry, user, role, api-key,
-compliance
+search, sync, workflow, pipeline, execution, industry, user, role, api-key
 ```
 
 Sync has a nested sub-command group:
@@ -115,18 +114,6 @@ Comment and subscription cover the comments and subscriptions APIs:
 
 -   `comment list|get|add|update|delete` -- `list` takes `-v/--asset-version-id` to switch from the asset-wide route to the version-scoped one; `get`, `add`, `update` and `delete` address a comment by asset, asset version and comment ID
 -   `subscription list|create|update|delete|unsubscribe|check` -- `delete` removes the whole subscription (and, for an asset, its notification topic); `unsubscribe` removes one subscriber and is a different route
-
-Compliance covers the schema registry, bindings, evaluation, quarantine, cascades and the audit trail:
-
--   `compliance schema list|get|create|update|delete` -- `create`/`update` take `--schema-file` (a JSON file path or the body inline); `delete` requires `--confirm` and the API refuses a schema that is still bound
--   `compliance bind|unbind|bindings` -- `-d` binds a database, `-d -a` binds one asset as an override; `--no-auto-eval` is rejected with `-a` because the asset route does not read it
--   `compliance evaluate|sweep|state|evaluations` -- `state -d` is the database overview (paged on `--max-items`/`--starting-token`; `summary`/`totalAssets` cover the full set, `assets` is one page; the options are rejected with `-a`), `state -d -a` one asset's record; `evaluations` pages on `--max-items`/`--starting-token` (the route reads its page size from `maxItems`); `sweep` reports `skipped` (bound assets the caller may not evaluate), `superseded` (assets whose evaluation a newer one had already started; marked in the list, not an error) and `assetsRemaining`
--   `compliance schema list|get` print `Format:` from the record's top-level `schemaFormat` (`legacy` rows cannot be bound, updated or evaluated); `compliance evaluate` prints `schemaVersion`, `exceptionApplied`, `hasRuleErrors` and marks `status: error` rule results with `!`; `compliance state` prints `lastEvaluationStatus` and the overview's `error` overlay bucket
--   `compliance quarantine list|release|exception|revoke-exception` -- `list` pages on `--max-items`/`--starting-token` (an authorization-filtered page may be empty while a token remains); `exception` moves the asset to the `exception` state (scoped to the bound schema's name + version); `revoke-exception` (DELETE on the exception route, no reason) returns it to its last verdict's state
--   `compliance cascade list|get|create|approve|reject` -- `create --no-approval` and `approve` return 202 with `state` `executing` and no result; the CLI prints a hint to poll `cascade get` until `completed` or `aborted` (`abortReason`)
--   `compliance audit [-d -a] [--event-type] [--start-date] [--end-date] [--max-items|--limit] [--starting-token]` -- pages on `--max-items` (`--limit` is an alias; `click.IntRange(1, 500)`) and `--starting-token`, printing the `NextToken` hint; `--event-type` is rejected with `-d -a` because the per-asset route has no such filter
-
-The compliance `schemas` and pending `cascades` listings return their whole list in one response and take no paging parameters, so `schema list` and `cascade list` have none — a `--starting-token` there would be a knob the route ignores (`tools/VamsMCP/CLAUDE.md` Rule 9). `bindings` (`assetOverrides`), `state -d` (`assets`), `quarantine list` (`quarantinedAssets`), `evaluations` and `audit` (`entries`) all page on `maxItems` + `startingToken` with a `NextToken`; the CLI exposes them as `--max-items` (IntRange to the route cap) and `--starting-token`.
 
 Industry has nested sub-command groups:
 
@@ -176,7 +163,6 @@ VamsCLIError (base)
     RoleError (+ 4 subclasses)
     ConstraintError (+ 5 subclasses)
     UserRoleError (+ 4 subclasses)
-    ComplianceError (+ 3 subclasses: ComplianceSchemaNotFoundError, ComplianceCascadeNotFoundError, InvalidComplianceDataError)
     ProfileAlreadyExistsError
 ```
 
@@ -220,6 +206,7 @@ def list(ctx: click.Context, json_output: bool):
 5. Never print directly with `print()` or bare `click.echo()` in commands that support `--json-output`
 6. Comment `# Setup/auth already validated by decorator` at top of command body
 7. Catch only `BusinessLogicError` subclasses in commands; never catch `GlobalInfrastructureError`
+8. A destructive command refuses to run without `--confirm`. Its extra "Are you sure you want to proceed?" question (text mode only; `--json-output` never asks) goes through `confirm_destructive_action()` in `utils/confirmation.py`, which asks only when stdin is an interactive terminal and otherwise treats the required `--confirm` as the confirmation. Never call `click.confirm` after a `--confirm` gate: with no terminal on stdin (a script, a pipe, CI, a connector) it reads end of input and aborts with `Operation cancelled by user.`, so `--confirm` alone could never complete the command. `CliRunner`'s stdin is not a terminal, so a test of the prompt itself takes the `interactive_stdin` fixture; `tests/test_destructive_confirmation.py` covers every site.
 
 ### 3. API Client Patterns
 
@@ -624,6 +611,7 @@ Treat a command whose output includes another command's output as this bug until
 | `no_setup_profile_manager` | function | ProfileManager mock with `has_config()=False`  |
 | `generic_command_mocks`    | function | Factory for comprehensive command mocks        |
 | `no_setup_command_mocks`   | function | Factory for no-setup scenario mocks            |
+| `interactive_stdin`        | function | Treats stdin as a terminal (prompt tests)      |
 
 ### The generic_command_mocks Pattern
 
@@ -821,7 +809,7 @@ Follow this checklist:
 
     - Check whether `tools/VamsMCP/vams_mcp/server.py` calls the `APIClient` method you changed, and update the call site
     - Add an `@mcp.tool()` + `@tool_result` function for a new method agents should be able to use, in the correct gate section (read at top, writes under `if CONFIG.enable_writes:`, destructive under `if CONFIG.enable_destructive:`)
-    - Confirm the pagination `items_key` still matches the endpoint's list field. Read the handler's response model rather than checking against a list of names: the names in use today are `Items`, `items`, `versions`, `metadata`, and the compliance fields `evaluations`, `entries`, `quarantinedAssets`. `VamsClient.paginate()` also unwraps the legacy `message` envelope
+    - Confirm the pagination `items_key` still matches the endpoint's list field. Read the handler's response model rather than checking against a list of names: the names in use today are `Items`, `items`, `versions` and `metadata`. `VamsClient.paginate()` also unwraps the legacy `message` envelope
     - Verify the new `def` is unique and correctly positioned. The tools are module-level functions, so a duplicate name silently shadows the earlier one and a `def` placed after the `if __name__` entrypoint or outside its gate block never executes — the tool goes missing with no import error. `tests/test_server_tools.py` asserts the source layout for this
     - Add the tool to the `tools/VamsMCP/README.md` tool list (and the `autoApprove` sample if it is a safe read)
     - Run `cd tools/VamsMCP && pytest` in that server's own virtual environment — tests mock the client, so no live deployment is needed, but the `mcp` SDK needs Pydantic v2 and installing it into a shared environment breaks the Pydantic-v1 backend suite
@@ -1075,7 +1063,8 @@ Each item duplicates a Critical Rule; the rule is authoritative. Do NOT:
 | `MAX_SEQUENCE_SIZE`           | 3 GB   | Max sequence size          |
 | `MAX_PREVIEW_FILE_SIZE`       | 5 MB   | Preview image limit        |
 | `MAX_FILES_PER_REQUEST`       | 50     | Files per upload request   |
-| `MAX_TOTAL_PARTS_PER_REQUEST` | 200    | Total parts per request    |
+| `MAX_TOTAL_PARTS_PER_REQUEST` | 1000   | Client parts per request   |
+| `MAX_PARTS_PER_FILE`          | 1000   | Client parts per file      |
 | `MAX_PART_SIZE`               | 5 GB   | S3 part size limit         |
 
 ### Retry Configuration
@@ -1132,6 +1121,7 @@ constant is a gate no command can name, and an extra one names a gate no deploym
 | `vamscli/utils/global_exceptions.py` | `@handle_global_exceptions()` decorator                |
 | `vamscli/utils/decorators.py`        | `@requires_setup_and_auth`, `@requires_feature`        |
 | `vamscli/utils/json_output.py`       | `output_result()`, `output_error()`, `output_status()` |
+| `vamscli/utils/confirmation.py`      | `confirm_destructive_action()` (Command rule 8)        |
 | `vamscli/utils/logging.py`           | Rotating file logger, verbose mode support             |
 | `vamscli/utils/retry_config.py`      | Retry config with env var overrides                    |
 | `vamscli/utils/features.py`          | Feature switch utilities                               |

@@ -83,12 +83,6 @@ class ResourceKeys:
     WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE = ResourceParamKey("dynamoTables/workflowExecutionLocksStorage", ("WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME",))
     # Vector search tables
     VECTOR_EMBEDDINGS_STORAGE_TABLE = ResourceParamKey("dynamoTables/vectorEmbeddingsStorage", ("VECTOR_EMBEDDINGS_STORAGE_TABLE_NAME",))
-    # Compliance tables
-    COMPLIANCE_SCHEMA_STORAGE_TABLE = ResourceParamKey("dynamoTables/complianceSchemaStorage", ("COMPLIANCE_SCHEMA_STORAGE_TABLE_NAME",))
-    COMPLIANCE_ASSET_STATE_STORAGE_TABLE = ResourceParamKey("dynamoTables/complianceAssetStateStorage", ("COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME",))
-    COMPLIANCE_EVALUATION_STORAGE_TABLE = ResourceParamKey("dynamoTables/complianceEvaluationStorage", ("COMPLIANCE_EVALUATION_STORAGE_TABLE_NAME",))
-    COMPLIANCE_CASCADE_STORAGE_TABLE = ResourceParamKey("dynamoTables/complianceCascadeStorage", ("COMPLIANCE_CASCADE_STORAGE_TABLE_NAME",))
-    COMPLIANCE_AUDIT_STORAGE_TABLE = ResourceParamKey("dynamoTables/complianceAuditStorage", ("COMPLIANCE_AUDIT_STORAGE_TABLE_NAME",))
     # Non-asset S3 buckets
     ASSET_AUXILIARY_BUCKET = ResourceParamKey("s3Buckets/assetAuxiliary", ("S3_ASSET_AUXILIARY_BUCKET", "ASSET_AUXILIARY_BUCKET_NAME", "S3_ASSETAUXILIARY_STORAGE_BUCKET"))
     ARTEFACTS_BUCKET = ResourceParamKey("s3Buckets/artefacts", ("LAMBDA_PIPELINE_SAMPLE_FUNCTION_BUCKET",))

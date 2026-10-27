@@ -155,7 +155,7 @@ The `search assets` and `search files` commands set the entity type automaticall
 
 **Cause:**
 
-Metadata queries use `field:value` syntax with uppercase `AND`/`OR` operators, and `--metadata-mode` accepts only `key`, `value`, or `both` (default `both`).
+Metadata queries use `field:value` syntax with uppercase `AND`/`OR` operators, and `--metadata-mode` accepts only `key`, `value`, or `both` (default `both`). `field:value` terms are read only in `both` mode; in `key` mode every term is a field name and in `value` mode every term is a value.
 
 **Resolution:**
 
@@ -389,10 +389,10 @@ Overly broad queries (for example, `-q "*"`), broad metadata-mode searches, wide
     vamscli search assets -q "model" --filters 'str_databaseid.keyword:"my-db" AND str_assettype:"3d-model"'
     ```
 
-2. Prefer specific metadata modes and exact matches over `both` with broad wildcards:
+2. Prefer exact `field:value` matches over broad wildcards:
 
     ```bash
-    vamscli search assets --metadata-query "MD_str_product:Training" --metadata-mode value
+    vamscli search assets --metadata-query "MD_str_product:Training"
     ```
 
 3. Page through large result sets and export with CSV, which is more memory-efficient than table formatting:

@@ -14,7 +14,7 @@ Surrounding whitespace is removed from a submitted `description` before the leng
 
 -   **Asset**: A logical container for one or more files within a database. Assets have metadata, tags, version history, and storage locations.
 -   **Database**: A logical grouping of assets. Each database has an associated S3 bucket for storage.
--   **Asset Version**: A point-in-time snapshot of an asset's files. Versions are created manually or when files are uploaded.
+-   **Asset Version**: A point-in-time snapshot of an asset's files. A version is recorded when the asset is created (version 0), by Create Version (web interface, API or CLI), and by a revert to an earlier version; uploading or changing files never creates one. See [Files and Versions](../concepts/files-and-versions.md).
 -   **Archive**: Soft-deletion of an asset. Archived assets can be unarchived. Permanent deletion removes all data.
 
 ---
@@ -68,9 +68,12 @@ Returns a paginated list of all assets in the specified database. By default, ar
             }
         }
     ],
-    "NextToken": "eyJ..."
+    "NextToken": "eyJ...",
+    "truncated": true
 }
 ```
+
+`NextToken` and `truncated: true` are returned together when more assets remain; `maxItems` caps the assets one response returns.
 
 **Error Responses:**
 
@@ -89,11 +92,12 @@ Returns a paginated list of all assets across all databases that the user has pe
 
 **Request Parameters:**
 
-| Parameter       | Location | Type    | Required | Description                                           |
-| --------------- | -------- | ------- | -------- | ----------------------------------------------------- |
-| `maxItems`      | query    | integer | No       | Maximum number of assets to return. Default: `30000`. |
-| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `3000`.            |
-| `startingToken` | query    | string  | No       | Continuation token from a previous response.          |
+| Parameter       | Location | Type    | Required | Description                                                                                     |
+| --------------- | -------- | ------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `maxItems`      | query    | integer | No       | Maximum number of assets to return. Default: `30000`.                                           |
+| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `3000`.                                                      |
+| `startingToken` | query    | string  | No       | Continuation token from a previous response.                                                    |
+| `showArchived`  | query    | boolean | No       | When `true`, returns archived (soft-deleted) assets as well as active assets. Default: `false`. |
 
 **Response:**
 
@@ -110,9 +114,12 @@ Returns a paginated list of all assets across all databases that the user has pe
             "tags": ["architecture"]
         }
     ],
-    "NextToken": "eyJ..."
+    "NextToken": "eyJ...",
+    "truncated": true
 }
 ```
+
+`NextToken` and `truncated: true` are returned together when more assets remain; `maxItems` caps the assets one response returns.
 
 **Error Responses:**
 
@@ -297,7 +304,9 @@ Repeat the asset fields from the initialize request, and add:
 | Status | Description                                                                                                                                                               |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid parameters, a `relativeKey` that does not begin with `{assetId}/`, duplicate keys, a database that does not exist, or a failure creating the asset or the upload. |
-| `403`  | Not authorized to write this asset.                                                                                                                                       |
+| `403`  | Not authorized to write this asset, or the upload step refused the request.                                                                                               |
+| `404`  | The upload step reported its target as not found.                                                                                                                         |
+| `429`  | Rate limit exceeded: more than 20 upload initializations by the user in one minute. The response carries a `Retry-After` header (seconds).                                |
 | `500`  | Internal server error.                                                                                                                                                    |
 
 ---
@@ -657,13 +666,13 @@ Bulk requests return one entry per requested key. File paths that do not exist o
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                                                                                                                                                             |
-| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, multiple version parameters specified, `key`/`keys` combined, over 1,500 keys, no URLs generatable, version parameters used with preview downloads, asset is not distributable, or the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload`. |
-| `403`  | Not authorized to download this asset.                                                                                                                                                                                                                                                                                  |
-| `404`  | Database, asset, version, or file not found.                                                                                                                                                                                                                                                                            |
-| `410`  | The requested file version has been archived and cannot be downloaded.                                                                                                                                                                                                                                                  |
-| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                  |
+| Status | Description                                                                                                                                                                                            |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters, multiple version parameters specified, `key`/`keys` combined, over 1,500 keys, no URLs generatable, version parameters used with preview downloads, or asset is not distributable. |
+| `403`  | Not authorized to download this asset.                                                                                                                                                                 |
+| `404`  | Database, asset, version, or file not found.                                                                                                                                                           |
+| `410`  | The requested file version has been archived and cannot be downloaded.                                                                                                                                 |
+| `500`  | Internal server error.                                                                                                                                                                                 |
 
 ---
 
@@ -780,12 +789,12 @@ Two constraints apply to the redirect target:
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                                       |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, or `generatePresignedUrls` was requested for an asset on the page that is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload`. |
-| `403`  | Not authorized to export this asset.                                                                                                                                                              |
-| `404`  | Asset not found.                                                                                                                                                                                  |
-| `500`  | Internal server error.                                                                                                                                                                            |
+| Status | Description                          |
+| ------ | ------------------------------------ |
+| `400`  | Invalid parameters.                  |
+| `403`  | Not authorized to export this asset. |
+| `404`  | Asset not found.                     |
+| `500`  | Internal server error.               |
 
 ---
 

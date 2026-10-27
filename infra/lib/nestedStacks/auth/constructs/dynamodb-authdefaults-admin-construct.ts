@@ -6,6 +6,8 @@
 
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as cdk from "aws-cdk-lib";
+import * as fs from "fs";
+import * as path from "path";
 import { storageResources } from "../../storage/storageBuilder-nestedStack";
 import {
     AwsCustomResource,
@@ -25,6 +27,52 @@ export interface DynamoDbAuthDefaultsAdminConstructStackProps extends cdk.StackP
     lambdaCommonBaseLayer: LayerVersion;
     storageResources: storageResources;
     config: Config;
+}
+
+/** Warning ID for an external OAuth MFA scope configured while the external MFA hook is unchanged. */
+export const EXTERNAL_OAUTH_MFA_HOOK_WARNING_ID = "VAMS:AuthDefaults:externalOAuthMfaHookDefault";
+
+/** The MFA hook the authorizer Lambda bundles (`authFunctions.ts` packages `backend/backend`). */
+export const MFA_HOOK_SOURCE_PATH = path.join(
+    __dirname,
+    "../../../../../backend/backend/customConfigCommon/customAuthClaimsCheck.py"
+);
+
+/**
+ * True when the external OAuth slot of `customMFATokenScopeCheckOverride` holds only the shipped
+ * `mfaLoginEnabled = False`. The slot is the block after the three-line banner naming
+ * "ADD CUSTOM EXTERNAL OAUTH IDP LOGIC", up to the next all-`#` line; comments and blank lines are
+ * ignored. A missing banner or an unterminated slot counts as customized.
+ */
+export function isExternalMfaHookDefault(source: string): boolean {
+    const lines = source.replace(/\r/g, "").split("\n");
+    const isHashRow = (line: string) => /^#+$/.test(line.trim());
+    const banner = lines.findIndex((line) => line.includes("ADD CUSTOM EXTERNAL OAUTH IDP LOGIC"));
+    if (banner < 0) {
+        return false;
+    }
+    const slotStart = lines.findIndex((line, i) => i > banner && isHashRow(line));
+    if (slotStart < 0) {
+        return false;
+    }
+    const slotEnd = lines.findIndex((line, i) => i > slotStart && isHashRow(line));
+    if (slotEnd < 0) {
+        return false;
+    }
+    const code = lines
+        .slice(slotStart + 1, slotEnd)
+        .map((line) => line.trim())
+        .filter((line) => line !== "" && !line.startsWith("#"));
+    return code.length === 1 && code[0] === "mfaLoginEnabled = False";
+}
+
+/** Reads the bundled MFA hook; an unreadable file counts as customized. */
+function bundledExternalMfaHookIsDefault(): boolean {
+    try {
+        return isExternalMfaHookDefault(fs.readFileSync(MFA_HOOK_SOURCE_PATH, "utf8"));
+    } catch {
+        return false;
+    }
 }
 
 /**
@@ -209,6 +257,30 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                     `protected. This role is re-seeded on every deployment, so change it by ` +
                     `registering an MFA factor for that user and setting mfaRequired on a separate ` +
                     `role that carries the administrative permissions.`
+            );
+        }
+
+        // An MFA scope makes the external OAuth login page offer "Log in with MFA", but the
+        // authorizer resolves the MFA claim through the hook's external OAuth slot, which ships
+        // reporting false, so roles marked mfaRequired stay inactive for those users.
+        const externalOAuth = props.config.app.authProvider.useExternalOAuthIdp;
+        const mfaScope = externalOAuth?.idpAuthProviderScopeMfa;
+        if (
+            externalOAuth?.enabled &&
+            mfaScope &&
+            mfaScope !== "undefined" &&
+            mfaScope.trim() !== "" &&
+            bundledExternalMfaHookIsDefault()
+        ) {
+            cdk.Annotations.of(this).addWarningV2(
+                EXTERNAL_OAUTH_MFA_HOOK_WARNING_ID,
+                `app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa is set, so the login ` +
+                    `page offers "Log in with MFA", but the external OAuth slot of ` +
+                    `customMFATokenScopeCheckOverride in ` +
+                    `backend/backend/customConfigCommon/customAuthClaimsCheck.py still returns ` +
+                    `false, so roles marked mfaRequired never apply to external OAuth users. ` +
+                    `Implement that slot; see developer/security.md#authentication-override-hooks ` +
+                    `in the VAMS documentation.`
             );
         }
 
@@ -1465,330 +1537,6 @@ export class DynamoDbAuthDefaultsAdminConstructStack extends Construct {
                 },
                 objectType: {
                     S: "userRole",
-                },
-            },
-            {
-                entityType: {
-                    S: "constraint",
-                },
-                sk: {
-                    S: "initial_admin_allow_all_complianceschemas",
-                },
-                constraintId: {
-                    S: "initial_admin_allow_all_complianceschemas",
-                },
-                criteriaAnd: {
-                    L: [
-                        {
-                            M: {
-                                field: {
-                                    S: "complianceSchemaName",
-                                },
-                                id: {
-                                    S: "admin_all_complianceschemas",
-                                },
-                                operator: {
-                                    S: "contains",
-                                },
-                                value: {
-                                    S: ".*",
-                                },
-                            },
-                        },
-                    ],
-                },
-                description: {
-                    S: "Allow GET/PUT/POST/DELETE on all compliance schemas for admin",
-                },
-                groupPermissions: {
-                    L: [
-                        {
-                            M: {
-                                groupId: {
-                                    S: roleNameAdmin,
-                                },
-                                id: {
-                                    S: "admin-allow-get-all-complianceschemas",
-                                },
-                                permission: {
-                                    S: "GET",
-                                },
-                                permissionType: {
-                                    S: "allow",
-                                },
-                            },
-                        },
-                        {
-                            M: {
-                                groupId: {
-                                    S: roleNameAdmin,
-                                },
-                                id: {
-                                    S: "admin-allow-put-all-complianceschemas",
-                                },
-                                permission: {
-                                    S: "PUT",
-                                },
-                                permissionType: {
-                                    S: "allow",
-                                },
-                            },
-                        },
-                        {
-                            M: {
-                                groupId: {
-                                    S: roleNameAdmin,
-                                },
-                                id: {
-                                    S: "admin-allow-post-all-complianceschemas",
-                                },
-                                permission: {
-                                    S: "POST",
-                                },
-                                permissionType: {
-                                    S: "allow",
-                                },
-                            },
-                        },
-                        {
-                            M: {
-                                groupId: {
-                                    S: roleNameAdmin,
-                                },
-                                id: {
-                                    S: "admin-allow-delete-all-complianceschemas",
-                                },
-                                permission: {
-                                    S: "DELETE",
-                                },
-                                permissionType: {
-                                    S: "allow",
-                                },
-                            },
-                        },
-                    ],
-                },
-                name: {
-                    S: "admin-allow-all-complianceschemas",
-                },
-                objectType: {
-                    S: "complianceSchema",
-                },
-            },
-            {
-                entityType: {
-                    S: "constraint",
-                },
-                sk: {
-                    S: "initial_admin_allow_all_complianceevaluations",
-                },
-                constraintId: {
-                    S: "initial_admin_allow_all_complianceevaluations",
-                },
-                criteriaAnd: {
-                    L: [
-                        {
-                            M: {
-                                field: {
-                                    S: "databaseId",
-                                },
-                                id: {
-                                    S: "admin_all_complianceevaluations",
-                                },
-                                operator: {
-                                    S: "contains",
-                                },
-                                value: {
-                                    S: ".*",
-                                },
-                            },
-                        },
-                    ],
-                },
-                description: {
-                    S: "Allow GET/PUT/POST/DELETE on all compliance evaluations for admin",
-                },
-                groupPermissions: {
-                    L: [
-                        {
-                            M: {
-                                groupId: {
-                                    S: roleNameAdmin,
-                                },
-                                id: {
-                                    S: "admin-allow-get-all-complianceevaluations",
-                                },
-                                permission: {
-                                    S: "GET",
-                                },
-                                permissionType: {
-                                    S: "allow",
-                                },
-                            },
-                        },
-                        {
-                            M: {
-                                groupId: {
-                                    S: roleNameAdmin,
-                                },
-                                id: {
-                                    S: "admin-allow-put-all-complianceevaluations",
-                                },
-                                permission: {
-                                    S: "PUT",
-                                },
-                                permissionType: {
-                                    S: "allow",
-                                },
-                            },
-                        },
-                        {
-                            M: {
-                                groupId: {
-                                    S: roleNameAdmin,
-                                },
-                                id: {
-                                    S: "admin-allow-post-all-complianceevaluations",
-                                },
-                                permission: {
-                                    S: "POST",
-                                },
-                                permissionType: {
-                                    S: "allow",
-                                },
-                            },
-                        },
-                        {
-                            M: {
-                                groupId: {
-                                    S: roleNameAdmin,
-                                },
-                                id: {
-                                    S: "admin-allow-delete-all-complianceevaluations",
-                                },
-                                permission: {
-                                    S: "DELETE",
-                                },
-                                permissionType: {
-                                    S: "allow",
-                                },
-                            },
-                        },
-                    ],
-                },
-                name: {
-                    S: "admin-allow-all-complianceevaluations",
-                },
-                objectType: {
-                    S: "complianceEvaluation",
-                },
-            },
-            {
-                entityType: {
-                    S: "constraint",
-                },
-                sk: {
-                    S: "initial_admin_allow_all_compliancecascades",
-                },
-                constraintId: {
-                    S: "initial_admin_allow_all_compliancecascades",
-                },
-                criteriaAnd: {
-                    L: [
-                        {
-                            M: {
-                                field: {
-                                    S: "cascadeId",
-                                },
-                                id: {
-                                    S: "admin_all_compliancecascades",
-                                },
-                                operator: {
-                                    S: "contains",
-                                },
-                                value: {
-                                    S: ".*",
-                                },
-                            },
-                        },
-                    ],
-                },
-                description: {
-                    S: "Allow GET/PUT/POST/DELETE on all compliance cascades for admin",
-                },
-                groupPermissions: {
-                    L: [
-                        {
-                            M: {
-                                groupId: {
-                                    S: roleNameAdmin,
-                                },
-                                id: {
-                                    S: "admin-allow-get-all-compliancecascades",
-                                },
-                                permission: {
-                                    S: "GET",
-                                },
-                                permissionType: {
-                                    S: "allow",
-                                },
-                            },
-                        },
-                        {
-                            M: {
-                                groupId: {
-                                    S: roleNameAdmin,
-                                },
-                                id: {
-                                    S: "admin-allow-put-all-compliancecascades",
-                                },
-                                permission: {
-                                    S: "PUT",
-                                },
-                                permissionType: {
-                                    S: "allow",
-                                },
-                            },
-                        },
-                        {
-                            M: {
-                                groupId: {
-                                    S: roleNameAdmin,
-                                },
-                                id: {
-                                    S: "admin-allow-post-all-compliancecascades",
-                                },
-                                permission: {
-                                    S: "POST",
-                                },
-                                permissionType: {
-                                    S: "allow",
-                                },
-                            },
-                        },
-                        {
-                            M: {
-                                groupId: {
-                                    S: roleNameAdmin,
-                                },
-                                id: {
-                                    S: "admin-allow-delete-all-compliancecascades",
-                                },
-                                permission: {
-                                    S: "DELETE",
-                                },
-                                permissionType: {
-                                    S: "allow",
-                                },
-                            },
-                        },
-                    ],
-                },
-                name: {
-                    S: "admin-allow-all-compliancecascades",
-                },
-                objectType: {
-                    S: "complianceCascade",
                 },
             },
         ];

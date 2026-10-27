@@ -8,6 +8,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import Box from "@cloudscape-design/components/box";
 import SegmentedControl from "@cloudscape-design/components/segmented-control";
 import { appCache } from "../../services/appCache";
+import Alert from "@cloudscape-design/components/alert";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import {
     SearchContainerProps,
@@ -16,6 +17,8 @@ import {
     SearchMode,
     SearchQuery,
     getTotalResultCount,
+    getPageCount,
+    SEARCH_RESULT_WINDOW,
 } from "./types";
 import { useSearchState } from "./hooks/useSearchState";
 import { useSearchAPI } from "./hooks/useSearchAPI";
@@ -514,7 +517,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
     // Calculate pagination values
     const totalResults = getTotalResultCount(displayedResult);
     const currentPage = 1 + Math.floor(searchState.pagination.from / preferences.pageSize);
-    const pageCount = Math.ceil(totalResults / preferences.pageSize);
+    const pageCount = getPageCount(totalResults, preferences.pageSize);
 
     // The columns the list renders: the fallback set without OpenSearch (only the fields a
     // natural-language hit carries), the user's set otherwise, with relevance first in NLP mode.
@@ -603,6 +606,11 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                 break;
             case "query-criteria-cleared":
                 handleClearSearch();
+                break;
+            case "refresh":
+                // An archive, delete or unarchive in the table re-runs the current search.
+                setAutoRefreshing(true);
+                void handleSearch();
                 break;
             default:
                 console.log("Unhandled dispatch action:", action.type);
@@ -757,6 +765,15 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                     <Box padding={{ horizontal: "l", bottom: "l" }}>
                         {/* View Selector */}
                         <Box padding={{ bottom: "m" }}>{renderViewSelector()}</Box>
+
+                        {totalResults > SEARCH_RESULT_WINDOW && (
+                            <Box padding={{ bottom: "m" }}>
+                                <Alert type="info" statusIconAriaLabel="Info">
+                                    Showing the first {SEARCH_RESULT_WINDOW.toLocaleString()}{" "}
+                                    results; refine your search
+                                </Alert>
+                            </Box>
+                        )}
 
                         {/* Results */}
                         {renderContent()}

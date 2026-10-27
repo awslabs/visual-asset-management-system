@@ -45,10 +45,11 @@ module.exports = {
         "\\?worker&url$": "<rootDir>/src/__mocks__/emptyModule.js",
         "^maplibre-gl$": "<rootDir>/src/__mocks__/emptyModule.js",
     },
-    // Thresholds reflect the current sparse test coverage (~2% of a large
-    // codebase). Raise them as coverage grows.
+    // Thresholds are the suite's measured global coverage rounded down to a whole percent. CI runs
+    // `npx jest --ci --coverage`, so a change that drops coverage below them fails the build.
+    // Raise them as coverage grows.
     coverageThreshold: {
-        global: { branches: 0.5, functions: 1, lines: 1, statements: 1 },
+        global: { branches: 28, functions: 30, lines: 28, statements: 28 },
     },
     coverageReporters: ["text"],
 };

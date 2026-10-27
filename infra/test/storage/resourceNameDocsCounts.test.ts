@@ -45,6 +45,14 @@ const AWS_RESOURCES = "documentation/docusaurus-site/docs/architecture/aws-resou
 const DETAILS = "documentation/docusaurus-site/docs/architecture/details.md";
 const QUOTAS = "documentation/docusaurus-site/docs/additional/quotas.md";
 const INFRA_CLAUDE = "infra/CLAUDE.md";
+
+/** Members of the `dynamo` block of the `storageResources` interface, which `infra/CLAUDE.md` cites. */
+function storageInterfaceDynamoCount(): number {
+    const src = read("infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts");
+    const start = src.indexOf("dynamo: {", src.indexOf("export interface storageResources"));
+    const block = src.slice(start, src.indexOf("};", start));
+    return (block.match(/^\s+\w+\??:\s*dynamodb\.(?:Table|ITable)\b/gm) ?? []).length;
+}
 const KIRO_CDK = ".kiro/steering/CDK_DEVELOPMENT_WORKFLOW.md";
 
 describe("the registry the doc counts are compared against is populated", () => {
@@ -146,8 +154,9 @@ describe("infra/CLAUDE.md and its Kiro mirror state the registry's counts", () =
                 INFRA_CLAUDE
             )
         ).toBe(PUBLISHED_BY_REGISTRY);
+        // The interface also holds the legacy tables a migration still reads, so it is not DYNAMO.
         expect(documentedFigure(claude, /`dynamo\.\*` — (\d+) DynamoDB tables/, INFRA_CLAUDE)).toBe(
-            DYNAMO
+            storageInterfaceDynamoCount()
         );
         expect(
             documentedFigure(

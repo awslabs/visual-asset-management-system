@@ -175,11 +175,13 @@ graph TD
     Search --> API
     Addons --> API
     Storage --> StaticWeb
-    API -.->|API endpoint| StaticWeb
+    API --> StaticWeb
+    Auth --> StaticWeb
+    StaticWeb --> Location
 ```
 
 :::tip[Stack Dependencies]
-Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the arrows from the root mark the stacks that declare none. `SearchBuilder` depends on `ApiBuilder2`, whose `executeWorkflow` function name the vector indexing construct's system-workflow launcher invokes, and, when `vectorSearch.enabled` is `true`, on `PipelineBuilder` as well, so the vector reindex custom resource runs after the system pipelines it launches exist. The dotted arrow into StaticWeb is a cross-stack reference that AWS CloudFormation orders implicitly: StaticWeb reads the REST API endpoint. CustomFeatureEnabledConfig declares no stack dependency; it reads the feature table and AWS KMS key from `storageResources`, so AWS CloudFormation orders it after StorageResourcesBuilder through those references. See [Nested Stack Dependency Chain](details.md#nested-stack-dependency-chain) for the stacks that are built only under certain configurations.
+Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the arrows from the root mark the stacks that declare none, except LocationService, which declares its dependency on StaticWeb when the static web stack is built. `SearchBuilder` depends on `ApiBuilder2`, whose `executeWorkflow` function name the vector indexing construct's system-workflow launcher invokes, and, when `vectorSearch.enabled` is `true`, on `PipelineBuilder` as well, so the vector reindex custom resource runs after the system pipelines it launches exist. CustomFeatureEnabledConfig declares no stack dependency; it reads the feature table and AWS KMS key from `storageResources`, so AWS CloudFormation orders it after StorageResourcesBuilder through those references. See [Nested Stack Dependency Chain](details.md#nested-stack-dependency-chain) for the stacks that are built only under certain configurations.
 :::
 
 ## Next Steps

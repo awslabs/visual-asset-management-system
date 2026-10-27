@@ -33,15 +33,30 @@ class TestAuthenticateRequest:
             res = core.authenticate_request(evt, fronted="none")
         assert res["authorized"] is False
 
-    def test_ip_check_uses_client_ip_when_fronted(self):
-        # sourceIp is the CloudFront hop (disallowed); real client (allowed) is in XFF.
+    def test_ip_check_uses_client_ip_when_fronted(self, origin_verify_value):
+        # sourceIp is the CloudFront hop (disallowed); real client (allowed) is in XFF. The
+        # request carries the origin verification value CloudFront adds.
         evt = _evt(source_ip="130.176.0.1",
-                   headers={"X-Forwarded-For": "203.0.113.7, 130.176.0.1"},
+                   headers={"X-Forwarded-For": "203.0.113.7, 130.176.0.1",
+                            "X-Vams-Origin-Verify": origin_verify_value},
                    auth=None)
         with patch.object(core, "ALLOWED_IP_RANGES", [["203.0.113.0", "203.0.113.255"]]), \
              patch.object(core, "IGNORED_PATHS", ["/database"]):
             res = core.authenticate_request(evt, fronted="cloudfront")
         assert res["authorized"] is True  # client IP allowed, not the proxy IP
+
+    def test_ip_check_uses_source_ip_without_origin_verification(self, origin_verify_value):
+        # The same forwarding headers without the origin verification value: the check runs
+        # on sourceIp, which is outside the allowed range.
+        evt = _evt(source_ip="130.176.0.1",
+                   headers={"X-Forwarded-For": "203.0.113.7, 130.176.0.1",
+                            "CloudFront-Viewer-Address": "203.0.113.7:443"},
+                   auth=None)
+        with patch.object(core, "ALLOWED_IP_RANGES", [["203.0.113.0", "203.0.113.255"]]), \
+             patch.object(core, "IGNORED_PATHS", ["/database"]):
+            res = core.authenticate_request(evt, fronted="cloudfront")
+        assert res["authorized"] is False
+        assert res["reason"] == "IP address not authorized"
 
     def test_ignored_path_resolved_from_method_arn_only(self):
         # REST REQUEST-authorizer event: no requestContext.http, no top-level path,

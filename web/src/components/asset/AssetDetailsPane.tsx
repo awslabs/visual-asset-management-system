@@ -16,7 +16,6 @@ import {
     Popover,
     Icon,
     Spinner,
-    Badge,
 } from "@cloudscape-design/components";
 import { useNavigate } from "react-router";
 import {
@@ -25,21 +24,12 @@ import {
     unsubscribeFromAsset,
     downloadAsset,
 } from "../../services/APIService";
-import { fetchComplianceState, ComplianceState } from "../../services/ComplianceService";
-import {
-    complianceStateBadgeColor,
-    complianceStateIndicator,
-} from "../compliance/complianceStateBadge";
 import PreviewModal from "../filemanager/components/PreviewModal";
 import BellIcon from "../../resources/img/bellIcon.svg";
 import { useStatusMessage } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
 import Synonyms from "../../synonyms";
 import { readCachedTagTypes } from "../../common/utils/tagOptions";
-import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
-
-// The API route the badge reads; the badge is fetched only when the caller may call it.
-const COMPLIANCE_STATE_API_ROUTE = "/compliance/state/{databaseId}/{assetId}";
 
 interface AssetDetailsPaneProps {
     asset: any;
@@ -69,28 +59,13 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
     const [isSubscribing, setIsSubscribing] = useState<boolean>(false);
     const [userName, setUserName] = useState<string>("");
 
-    // Compliance badge state
-    const { can: canCallRoute } = useAllowedRoutes();
-    const canReadCompliance = canCallRoute("GET", COMPLIANCE_STATE_API_ROUTE);
-    const [complianceBadge, setComplianceBadge] = useState<ComplianceState | null>(null);
-
-    useEffect(() => {
-        if (canReadCompliance && asset?.assetId && databaseId) {
-            fetchComplianceState(databaseId, asset.assetId).then(([success, result]) => {
-                if (success && typeof result !== "string") {
-                    setComplianceBadge(result);
-                }
-            });
-        }
-    }, [canReadCompliance, asset?.assetId, databaseId]);
-
     // Asset preview thumbnail state
     const previewKey = asset?.previewLocation?.Key || asset?.previewLocation?.key || "";
     // The preview is served by the asset download API, which refuses a non-distributable asset, so
     // treat that asset as having no preview: the thumbnail, its enlarging modal, and the download
-    // call that would fail are all skipped. Compared against false so an asset record that predates
-    // the field keeps its preview.
-    const isNotDistributable = asset?.isDistributable === false;
+    // call that would fail are all skipped. A fetched record without the flag is not distributable,
+    // as the API treats it; the empty placeholder passed before the fetch (no assetId) is not.
+    const isNotDistributable = !!asset?.assetId && asset.isDistributable !== true;
     const hasPreview = !!previewKey && !isNotDistributable;
     const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
     const [thumbnailLoading, setThumbnailLoading] = useState<boolean>(false);
@@ -260,23 +235,9 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                             </SpaceBetween>
                         }
                     >
-                        <SpaceBetween direction="horizontal" size="xs">
-                            <span style={{ fontSize: "1.2em" }}>
-                                {asset?.assetName || `${Synonyms.Asset} Details`}
-                            </span>
-                            {complianceBadge && (
-                                <Badge
-                                    color={complianceStateBadgeColor(
-                                        complianceBadge.complianceState
-                                    )}
-                                >
-                                    {
-                                        complianceStateIndicator(complianceBadge.complianceState)
-                                            .label
-                                    }
-                                </Badge>
-                            )}
-                        </SpaceBetween>
+                        <span style={{ fontSize: "1.2em" }}>
+                            {asset?.assetName || `${Synonyms.Asset} Details`}
+                        </span>
                     </Header>
                 }
             >
@@ -363,7 +324,7 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                                             marginBottom: "4px",
                                         }}
                                     >
-                                        Asset Id
+                                        {Synonyms.Asset} Id
                                     </div>
                                     <div style={{ marginBottom: "16px" }}>{asset?.assetId}</div>
                                     <div

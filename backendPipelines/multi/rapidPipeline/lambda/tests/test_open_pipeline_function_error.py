@@ -7,7 +7,7 @@ A RequestResponse invoke of a function that raised still returns StatusCode 200 
 reported as FunctionError. openPipeline raises outside its own try block (its abort path calls
 send_task_failure unguarded), so reading only StatusCode reports a launch failure as success: the
 handler returns 200, nothing reports against the workflow's callback token, and the pipeline task
-stays RUNNING for its full 14400-second taskTimeout.
+stays RUNNING for its full 19800-second taskTimeout.
 
 The second class pins the other half of that contract: openPipeline's own abort must keep
 propagating a send_task_failure error, because that propagation is what sets FunctionError and so

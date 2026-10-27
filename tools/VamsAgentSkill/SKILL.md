@@ -67,6 +67,11 @@ allowed API routes** and use them to scope which commands you offer and run.
    the first of two authorization tiers, so a route being allowed does not mean
    every entity behind it is — see
    [Authorization: two tiers, and reading a 403](#authorization-two-tiers-and-reading-a-403).
+   One exception: the listing checks each `{param}` path segment as the
+   placeholder `vams:any`. When the user's `api` constraints name a concrete
+   value in a parameter position (for example `starts_with` `/database/projA/`),
+   a route can be missing although calls on those concrete paths are allowed, or
+   listed although they are refused. Constraints on literal segments are exact.
 
 ### Step 2: Discover the available commands (do not assume them)
 
@@ -191,6 +196,10 @@ touch every database, asset, pipeline, or workflow behind it. So:
     conclude the entity is missing.
 -   A `403` on a route **not** in the allowed set is a Tier-1 refusal: the user
     cannot use that capability at all. Say so and stop.
+-   Where the user's `api` constraints name a concrete value in a parameter
+    position (Step 1b, item 4), a `403` on a listed route can also be a Tier-1
+    refusal of that concrete path. Report the `403` as a refusal either way;
+    never retry it.
 -   A `404` and a Tier-2 `403` can look alike from the outside. Report what the
     API said rather than inferring "does not exist" from a permission error.
 
@@ -560,9 +569,10 @@ session, default to read-only. Do not hardcode environment-specific commands.
 -   Default to read-only; require explicit authorization to mutate.
 -   Scope every action to the user's **allowed API routes** (Step 1b); never
     attempt or work around actions outside the permission boundary. Route access
-    is only Tier 1 — a `403` on an allowed route is a Tier-2 entity refusal, or with
-    `error_type` `RequestBlockedError` a firewall block, to be reported rather than
-    retried.
+    is only Tier 1 — a `403` on an allowed route is a Tier-2 entity refusal (or,
+    when constraints name concrete path values, a Tier-1 refusal of that path), or
+    with `error_type` `RequestBlockedError` a firewall block, to be reported rather
+    than retried.
 -   Confirm destructive and bulk operations before executing. Executing a
     workflow, re-running an execution, and enabling a trigger all start real AWS
     compute.

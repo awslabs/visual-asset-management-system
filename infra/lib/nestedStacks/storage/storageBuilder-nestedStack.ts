@@ -170,12 +170,6 @@ export interface storageResources {
         workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; one row per concurrency lock a running execution holds
         // Vector search tables
         vectorEmbeddingsStorageTable: dynamodb.Table;
-        // Compliance tables
-        complianceSchemaStorageTable: dynamodb.Table;
-        complianceAssetStateStorageTable: dynamodb.Table;
-        complianceEvaluationStorageTable: dynamodb.Table;
-        complianceCascadeStorageTable: dynamodb.Table;
-        complianceAuditStorageTable: dynamodb.Table;
     };
 }
 
@@ -961,6 +955,42 @@ export function storageResourcesBuilder(
                       {
                           enabled: true,
                           prefix: "pipelines/genai-video-sop-bom/",
+                          expiredObjectDeleteMarker: true,
+                      },
+                  ]
+                : []),
+            // The RapidPipeline EKS run-ended markers, one empty object per Kubernetes job, written by
+            // the pipeline's handler when a run ends. A marker only has to outlive a job-create
+            // invocation still running when it is written (the handler's 15-minute timeout), and the
+            // handler never deletes one, so a day is ample. Noncurrent versions and expired delete
+            // markers go with it, as above.
+            ...(config.app.pipelines.useRapidPipeline.useEks.enabled
+                ? [
+                      {
+                          enabled: true,
+                          prefix: "pipelines/rapid-pipeline-eks/run-ended/",
+                          expiration: Duration.days(1),
+                          noncurrentVersionExpiration: Duration.days(1),
+                      },
+                      {
+                          enabled: true,
+                          prefix: "pipelines/rapid-pipeline-eks/run-ended/",
+                          expiredObjectDeleteMarker: true,
+                      },
+                      // The run-jobs records, one empty object per job name the handler builds, kept
+                      // under the execution's name. The cleanup after a stopped execution reads them
+                      // at most the state machine timeout (6 hours), an hour of EventBridge delivery
+                      // and an hour of Lambda's asynchronous retries (both pinned in the RapidPipeline
+                      // EKS construct) after they are written, so a day is ample here too.
+                      {
+                          enabled: true,
+                          prefix: "pipelines/rapid-pipeline-eks/run-jobs/",
+                          expiration: Duration.days(1),
+                          noncurrentVersionExpiration: Duration.days(1),
+                      },
+                      {
+                          enabled: true,
+                          prefix: "pipelines/rapid-pipeline-eks/run-jobs/",
                           expiredObjectDeleteMarker: true,
                       },
                   ]
@@ -2190,6 +2220,8 @@ export function storageResourcesBuilder(
             name: "assetId",
             type: dynamodb.AttributeType.STRING,
         },
+        // Upload records carry expiresAt in epoch seconds; DynamoDB removes them once it passes
+        timeToLiveAttribute: "expiresAt",
     });
 
     assetUploadsStorageTable.addGlobalSecondaryIndex({
@@ -2348,187 +2380,6 @@ export function storageResourcesBuilder(
         },
     });
 
-    /////////////////////////////////////////////////////////////////////////////
-    // Compliance Tables
-    /////////////////////////////////////////////////////////////////////////////
-
-    const complianceSchemaStorageTable = new dynamodb.Table(scope, "ComplianceSchemaStorageTable", {
-        ...dynamodbDefaultProps,
-        partitionKey: {
-            name: "schemaName",
-            type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-            name: "internalVersion",
-            type: dynamodb.AttributeType.NUMBER,
-        },
-    });
-
-    complianceSchemaStorageTable.addGlobalSecondaryIndex({
-        indexName: "DatabaseIdIndex",
-        partitionKey: {
-            name: "databaseId",
-            type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-            name: "schemaName",
-            type: dynamodb.AttributeType.STRING,
-        },
-        projectionType: dynamodb.ProjectionType.ALL,
-    });
-
-    const complianceAssetStateStorageTable = new dynamodb.Table(
-        scope,
-        "ComplianceAssetStateStorageTable",
-        {
-            ...dynamodbDefaultProps,
-            partitionKey: {
-                name: "databaseId",
-                type: dynamodb.AttributeType.STRING,
-            },
-            sortKey: {
-                name: "assetId",
-                type: dynamodb.AttributeType.STRING,
-            },
-        }
-    );
-
-    complianceAssetStateStorageTable.addGlobalSecondaryIndex({
-        indexName: "SchemaNameIndex",
-        partitionKey: {
-            name: "schemaName",
-            type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-            name: "complianceState",
-            type: dynamodb.AttributeType.STRING,
-        },
-        projectionType: dynamodb.ProjectionType.ALL,
-    });
-
-    // Cross-database listing of assets in one compliance state (the quarantine list) as a paged query.
-    complianceAssetStateStorageTable.addGlobalSecondaryIndex({
-        indexName: "ComplianceStateIndex",
-        partitionKey: {
-            name: "complianceState",
-            type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-            name: "databaseId",
-            type: dynamodb.AttributeType.STRING,
-        },
-        projectionType: dynamodb.ProjectionType.ALL,
-    });
-
-    const complianceEvaluationStorageTable = new dynamodb.Table(
-        scope,
-        "ComplianceEvaluationStorageTable",
-        {
-            ...dynamodbDefaultProps,
-            partitionKey: {
-                name: "evaluationId",
-                type: dynamodb.AttributeType.STRING,
-            },
-        }
-    );
-
-    complianceEvaluationStorageTable.addGlobalSecondaryIndex({
-        indexName: "AssetIndex",
-        partitionKey: {
-            name: "databaseId:assetId",
-            type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-            name: "evaluatedAt",
-            type: dynamodb.AttributeType.STRING,
-        },
-        projectionType: dynamodb.ProjectionType.ALL,
-    });
-
-    complianceEvaluationStorageTable.addGlobalSecondaryIndex({
-        indexName: "ExecutionIdIndex",
-        partitionKey: {
-            name: "executionId",
-            type: dynamodb.AttributeType.STRING,
-        },
-        projectionType: dynamodb.ProjectionType.ALL,
-    });
-
-    const complianceCascadeStorageTable = new dynamodb.Table(
-        scope,
-        "ComplianceCascadeStorageTable",
-        {
-            ...dynamodbDefaultProps,
-            partitionKey: {
-                name: "cascadeId",
-                type: dynamodb.AttributeType.STRING,
-            },
-        }
-    );
-
-    complianceCascadeStorageTable.addGlobalSecondaryIndex({
-        indexName: "StateIndex",
-        partitionKey: {
-            name: "state",
-            type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-            name: "createdAt",
-            type: dynamodb.AttributeType.STRING,
-        },
-        projectionType: dynamodb.ProjectionType.ALL,
-    });
-
-    const complianceAuditStorageTable = new dynamodb.Table(scope, "ComplianceAuditStorageTable", {
-        ...dynamodbDefaultProps,
-        partitionKey: {
-            name: "entryId",
-            type: dynamodb.AttributeType.STRING,
-        },
-    });
-
-    complianceAuditStorageTable.addGlobalSecondaryIndex({
-        indexName: "AssetIndex",
-        partitionKey: {
-            name: "databaseId:assetId",
-            type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-            name: "timestamp",
-            type: dynamodb.AttributeType.STRING,
-        },
-        projectionType: dynamodb.ProjectionType.ALL,
-    });
-
-    complianceAuditStorageTable.addGlobalSecondaryIndex({
-        indexName: "EventTypeIndex",
-        partitionKey: {
-            name: "eventType",
-            type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-            name: "timestamp",
-            type: dynamodb.AttributeType.STRING,
-        },
-        projectionType: dynamodb.ProjectionType.ALL,
-    });
-
-    // Global newest-first listing GSI. Every audit row carries a constant partition attribute
-    // (allListPartition = "audit") with timestamp as the sort key, so the unfiltered audit listing
-    // is a single QUERY (ScanIndexForward=false) bounded by an optional timestamp key-condition.
-    complianceAuditStorageTable.addGlobalSecondaryIndex({
-        indexName: "AuditByDateGSI",
-        partitionKey: {
-            name: "allListPartition",
-            type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-            name: "timestamp",
-            type: dynamodb.AttributeType.STRING,
-        },
-        projectionType: dynamodb.ProjectionType.ALL,
-    });
-
     ///DEPRECATED TABLES
 
     //Build storage resources object
@@ -2608,12 +2459,6 @@ export function storageResourcesBuilder(
             workflowExecutionLocksStorageTable: workflowExecutionLocksStorageTable,
             // Vector search tables
             vectorEmbeddingsStorageTable: vectorEmbeddingsStorageTable,
-            // Compliance tables
-            complianceSchemaStorageTable: complianceSchemaStorageTable,
-            complianceAssetStateStorageTable: complianceAssetStateStorageTable,
-            complianceEvaluationStorageTable: complianceEvaluationStorageTable,
-            complianceCascadeStorageTable: complianceCascadeStorageTable,
-            complianceAuditStorageTable: complianceAuditStorageTable,
         },
     };
 
@@ -3216,17 +3061,6 @@ export function storageResourcesBuilder(
         // Vector search tables
         [RESOURCE_PARAM_KEYS.dynamoTables.vectorEmbeddingsStorage]:
             storageResources.dynamo.vectorEmbeddingsStorageTable.tableName,
-        // Compliance tables
-        [RESOURCE_PARAM_KEYS.dynamoTables.complianceSchemaStorage]:
-            storageResources.dynamo.complianceSchemaStorageTable.tableName,
-        [RESOURCE_PARAM_KEYS.dynamoTables.complianceAssetStateStorage]:
-            storageResources.dynamo.complianceAssetStateStorageTable.tableName,
-        [RESOURCE_PARAM_KEYS.dynamoTables.complianceEvaluationStorage]:
-            storageResources.dynamo.complianceEvaluationStorageTable.tableName,
-        [RESOURCE_PARAM_KEYS.dynamoTables.complianceCascadeStorage]:
-            storageResources.dynamo.complianceCascadeStorageTable.tableName,
-        [RESOURCE_PARAM_KEYS.dynamoTables.complianceAuditStorage]:
-            storageResources.dynamo.complianceAuditStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.s3Buckets.assetAuxiliary]:
             storageResources.s3.assetAuxiliaryBucket.bucketName,
         [RESOURCE_PARAM_KEYS.s3Buckets.artefacts]: storageResources.s3.artefactsBucket.bucketName,

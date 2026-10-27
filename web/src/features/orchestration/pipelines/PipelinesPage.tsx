@@ -195,6 +195,7 @@ const PipelinesPage: React.FC<PipelinesPageProps> = ({ databaseId }) => {
             {
                 label: "Templates",
                 onSelect: () => navigate(`${builderRoute}/templates`),
+                hidden: !can("GET", "/database/{databaseId}/pipelines/{pipelineId}/templates"),
             },
             {
                 label: "Archive",

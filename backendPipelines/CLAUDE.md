@@ -28,8 +28,6 @@ Each pipeline step reads several S3 paths from its manifest (`manifestHelper.res
 
 **Key distinction:** `outputS3AssetFilesPath` is for file-level outputs including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is only for asset-level preview images that represent the asset as a whole. Most pipelines producing file previews should write to `outputS3AssetFilesPath`.
 
-**Compliance output:** a pipeline that backs a compliance pipeline rule reports its measurements as one `compliance-output.json` under the execution's `outputs.results` prefix (from the workflow manifest). `backendPipelines/common/compliance_output.py` (`write_compliance_output`, `build_compliance_output`) writes the document — `{"complianceOutput": true, "status": "success"|"error", "measurements": {...}, "errors": [], "pipelineMetadata": {}}` — whose `measurements` keys match the `outputField` of the rule's checks. The pipeline needs no evaluation id or compliance table access; the compliance workflow callback reads the file from the execution's `PipelineExecutionOutputResults` rows.
-
 **Rules for output path usage:**
 
 -   **Always pass through** all output paths resolved from the manifest in `vamsExecute` lambdas. Never hardcode empty strings for output paths — the workflow's process-output step relies on finding files at these locations.
@@ -349,6 +347,17 @@ reports a finished JOB's outcome carries the child's own output instead, so it b
 fit the 32768-character `cause` limit; `multi/rapidPipelineEKS`'s CHECK_JOB path is the example, and its
 `POD_LOG_TAIL_MAX_CHARS` is deliberately far larger than 256.
 
+A value over either `SendTaskFailure` limit (`error` 256 characters, `cause` 32768) is rejected by the
+service — botocore checks only the minimum length — and the rejection lands in the callback's own
+`except`, so the token goes unreported exactly as if no callback had been written. A route that forwards
+an error it did not compose (a `PipelineEnd` handler passing on the state's `$.error`) cannot know its
+size. `multi/rapidPipelineEKS/lambda/taskFailureBounds.py` is the pattern: every `send_task_failure` in
+that pipeline's `consolidated_handler.py` and `openPipeline.py` takes its `error` and `cause` from
+`bounded_task_failure`, which returns a value within its limit unchanged, keeps the head of a longer one
+(a Lambda error body puts the message first) with a `... [truncated from N characters]` marker inside the
+limit, and converts a non-string with `str()`. `tests/test_rapidpipeline_eks_task_failure_bounds.py`
+holds every call to that form with a syntax-tree guard; it is durable, not temporary.
+
 **On the SUCCESS path, report the outcome and not the job's output.** A `SendTaskSuccess` output and the
 lambda's own return value both land in the execution record, which is durable and readable by anyone who
 can read the execution — and on a run that worked, a third-party tool's stdout has no diagnostic value
@@ -606,7 +615,11 @@ partition. Author it with the block for your execution type present but empty:
     (even to the millisecond) is not enough, so keep the random suffix. The name also namespaces
     per-execution S3 objects in some pipelines (`rp_config_{jobName}.json`), where a collision has
     concurrent runs overwrite each other's config instead of merely failing to start. Keep it within the
-    80-character Step Functions limit and free of `:` and `/`.
+    80-character Step Functions limit and free of `:` and `/`. In `multi/rapidPipeline` the name is also
+    the Fargate task's ECS task group, which is how the state machine finds a task still running at its
+    task-level timeout to stop it (it matches the group of the cluster's running tasks to the execution
+    name), so keep it unique per execution and within ECS's 255-character task group limit: pinned by
+    `multi/rapidPipeline/lambda/tests/test_rapidpipeline_ecs_timeout_stop_route.py`.
 12. **`isSystem: true` in `pipeline.json` / `workflow.json` makes the record deployment-owned — the
     importer is the ONLY writer of the flag.** The pipeline and workflow request models ignore the key,
     so an API caller who supplies it creates an ordinary record. The handlers
@@ -745,6 +758,19 @@ Producer tests (`lambda/tests/test_manifest_refactor.py`, `test_batch_job_regist
 keys and that the emitted `logGroupArn` passes `CLOUDWATCH_LOG_GROUP_ARN` and `logStreamPrefix` passes
 `LOG_STREAM_NAME`. Run each pipeline's `tests/` in its own pytest process (module-name collision across
 pipelines).
+
+**Work a stopped execution leaves running.** Abort and a failure elsewhere in the workflow stop a
+registered `stepFunctionsExecution`, and a stopped execution runs no further states, so anything its
+states started outside a Step Functions `.sync` integration keeps running unless the pipeline cleans it
+up itself. `multi/rapidPipelineEKS` is the example for its Kubernetes job: CONSTRUCT_PIPELINE records each
+job name under `$$.Execution.Name` in the auxiliary bucket, and an EventBridge rule on the state
+machine's own `ABORTED` / `TIMED_OUT` / `FAILED` status changes invokes the handler's
+`EXECUTION_END_CLEANUP`, which rejects any other state machine and deletes the recorded jobs. The rule's
+`targets.LambdaFunction` permission carries `SourceArn` only, so the construct adds `SourceAccount`
+(`infra/test/pipelines/eksExecutionEndCleanup.test.ts`). The target's `retryAttempts` covers only
+EventBridge's delivery; a handler that returns an error body has succeeded as far as Lambda is concerned,
+so `lambda_handler` raises for a 5xx `EXECUTION_END_CLEANUP` result (never for its 400/403 rejections)
+and the construct pins Lambda's asynchronous retries with `configureAsyncInvoke` (no destination).
 
 ## Every boto3 Client Carries the Adaptive Retry Configuration
 

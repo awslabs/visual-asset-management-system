@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, Page } from "@playwright/test";
+import { test, expect, Page, Request, Response } from "@playwright/test";
 import { type AssetFileRef, findAssetFiles } from "./support/fixtures";
 
 /**
@@ -83,6 +83,11 @@ const cases = [
     { ext: ".usda", viewer: "NeedleUSD", wasm: true },
     { ext: ".spz", viewer: "Gaussian splat" },
     { ext: ".ifc", viewer: "IFC BIM" },
+    // `signedUrlChecks: true` = the viewer frames a page that receives presigned URLs (the Robotics
+    // Data Viewer, offered only with ALLOWUNSAFEEVAL): the case also asserts the file is read with
+    // HTTP Range requests and that no request to the app origin carries a signed URL in its URL or
+    // Referer, which would put the credential into the web access logs.
+    { ext: ".mcap", viewer: "Robotics", requiresFeature: "ALLOWUNSAFEEVAL", signedUrlChecks: true },
 ];
 
 // `maxBytes` keeps the scan off very large files, whose download alone can outlast a case's waits.
@@ -92,8 +97,96 @@ const LOOKUP_SCOPE = process.env.E2E_VIEWER_ASSET
     : `the distributable assets among the first ${SCAN.maxAssetsPerDatabase} of each of the ` +
       `first ${SCAN.maxDatabases} databases (files up to ${SCAN.maxBytes / 1024 / 1024} MB)`;
 
-// One lookup per worker, shared by every case: the scan covers all five extensions at once.
+// One lookup per worker, shared by every case: the scan covers every case's extension at once.
 let subjects: Map<string, AssetFileRef> | null = null;
+
+/** The deployment's feature list, read from the app's cached config (as security.spec.ts does). */
+async function featuresEnabled(page: Page): Promise<string[]> {
+    if (!page.url().startsWith("http")) {
+        await page.goto("/", { waitUntil: "domcontentloaded" });
+    }
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+        const features = await page.evaluate(() => {
+            try {
+                const raw = localStorage.getItem("vams_cache_config");
+                const parsed = raw ? JSON.parse(raw) : null;
+                return ((parsed?.value ?? parsed ?? {}).featuresEnabled ?? null) as string[] | null;
+            } catch {
+                return null;
+            }
+        });
+        if (features && features.length) return features;
+        if (Date.now() > deadline) return features ?? [];
+        await page.waitForTimeout(1000);
+    }
+}
+
+/** A query parameter only a presigned (SigV4 query-authenticated) URL carries. */
+const SIGNED_URL = /X-Amz-(?:Signature|Credential|Security-Token)=/i;
+
+/** How long to wait for a request's full header list before using its provisional headers. */
+const ALL_HEADERS_TIMEOUT_MS = 2_000;
+
+/**
+ * A request's headers: the provisional ones Playwright records when the request starts (they
+ * carry `Referer`), plus the full list when it arrives within ALL_HEADERS_TIMEOUT_MS. The full
+ * list does not settle for some of the requests the page makes while a framed viewer is open, so
+ * it is not awaited unbounded.
+ */
+async function requestHeaders(request: Request): Promise<Record<string, string>> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), ALL_HEADERS_TIMEOUT_MS);
+    });
+    const all = await Promise.race([request.allHeaders().catch(() => null), timeout]);
+    clearTimeout(timer);
+    return { ...request.headers(), ...(all ?? {}) };
+}
+
+/**
+ * Records, across the page and its frames (and the COI service worker, which re-issues the framed
+ * viewer's fetches), the 206 responses to presigned URLs and every request to the app origin. The
+ * app origin's access logs record each request's URL and Referer, so neither may carry a signed URL.
+ */
+function trackSignedUrls(page: Page) {
+    const context = page.context();
+    const requests: Request[] = [];
+    let partialResponses = 0;
+    const onRequest = (request: Request) => requests.push(request);
+    const onResponse = (response: Response) => {
+        if (response.status() === 206 && SIGNED_URL.test(response.url())) partialResponses += 1;
+    };
+    context.on("request", onRequest);
+    context.on("response", onResponse);
+    return {
+        async summary(): Promise<{ partialResponses: number; appOriginLeaks: string[] }> {
+            context.off("request", onRequest);
+            context.off("response", onResponse);
+            const appOrigin = new URL(page.url()).origin;
+            const appOriginRequests = requests.flatMap((request) => {
+                try {
+                    const url = new URL(request.url());
+                    return url.origin === appOrigin ? [{ request, url }] : [];
+                } catch {
+                    return [];
+                }
+            });
+            const checked = await Promise.all(
+                appOriginRequests.map(async ({ request, url }) => {
+                    const leaks: string[] = [];
+                    const headers = await requestHeaders(request);
+                    if (SIGNED_URL.test(request.url())) leaks.push(`${url.pathname} (URL)`);
+                    if (SIGNED_URL.test(headers["referer"] ?? "")) {
+                        leaks.push(`${url.pathname} (Referer)`);
+                    }
+                    return leaks;
+                })
+            );
+            return { partialResponses, appOriginLeaks: checked.flat() };
+        },
+    };
+}
 
 async function viewerSubject(page: Page, ext: string): Promise<AssetFileRef | null> {
     if (!subjects) {
@@ -116,10 +209,18 @@ for (const c of cases) {
     test(`viewer loads a ${c.ext} file (${c.viewer}) without init errors`, async ({ page }) => {
         const subject = await viewerSubject(page, c.ext);
         test.skip(!subject, `No ${c.ext} file was found via the API in ${LOOKUP_SCOPE}`);
+        if (c.requiresFeature) {
+            const features = await featuresEnabled(page);
+            test.skip(
+                !features.includes(c.requiresFeature),
+                `The ${c.viewer} viewer needs ${c.requiresFeature}, which this deployment does not enable`
+            );
+        }
         const fileName = subject!.key.split("/").filter(Boolean).pop() ?? subject!.key;
         console.log(`[viewers] ${c.ext} subject=${JSON.stringify(subject)}`);
 
         const errors = watchErrors(page);
+        const signedUrls = c.signedUrlChecks ? trackSignedUrls(page) : null;
         await openFile(page, subject!);
 
         // Wait for the ViewFile shell (the file heading) to render. A plain substring match, not a
@@ -157,5 +258,17 @@ for (const c of cases) {
 
         // No uncaught page errors or viewer-init console errors.
         expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+
+        if (signedUrls) {
+            const { partialResponses, appOriginLeaks } = await signedUrls.summary();
+            expect(
+                partialResponses,
+                `${fileName} was not read with HTTP Range requests (no 206 from Amazon S3)`
+            ).toBeGreaterThan(0);
+            expect(
+                appOriginLeaks,
+                `requests to the app origin carried a signed URL:\n${appOriginLeaks.join("\n")}`
+            ).toEqual([]);
+        }
     });
 }

@@ -16,16 +16,9 @@ import Synonyms from "../../../synonyms";
  * @param {boolean} options.showMapThumbnails - Whether to show the map thumbnail column
  * @param {React.ComponentType} options.MapThumbnailComponent - Component to render map thumbnails
  * @param {string} options.mapStyleUrl - Map style URL for thumbnails
- * @param {boolean} options.showCompliance - Whether to show the compliance page link column
  */
 export const createDatabaseListDefinition = (options: any = {}) => {
-    const {
-        onMetadataClick,
-        showMapThumbnails,
-        MapThumbnailComponent,
-        mapStyleUrl,
-        showCompliance,
-    } = options;
+    const { onMetadataClick, showMapThumbnails, MapThumbnailComponent, mapStyleUrl } = options;
 
     const columnDefinitions = [
         new ColumnDefinition({
@@ -51,7 +44,7 @@ export const createDatabaseListDefinition = (options: any = {}) => {
         }),
         new ColumnDefinition({
             id: "assetCount",
-            header: `${Synonyms.Asset} Count`,
+            header: `Total ${Synonyms.Asset} Count`,
             cellWrapper: (props: any) => <>{props.children}</>,
             sortingField: "assetCount",
         }),
@@ -101,22 +94,6 @@ export const createDatabaseListDefinition = (options: any = {}) => {
         );
     }
 
-    if (showCompliance) {
-        columnDefinitions.push(
-            new ColumnDefinition({
-                id: "compliance",
-                header: "Compliance",
-                cellWrapper: (props: any) => {
-                    const { item } = props;
-                    return (
-                        <Link href={`#/databases/${item.databaseId}/compliance`}>Compliance</Link>
-                    );
-                },
-                sortingField: undefined,
-            })
-        );
-    }
-
     columnDefinitions.push(
         new ColumnDefinition({
             id: "restrictMetadataOutsideSchemas",
@@ -156,7 +133,6 @@ export const createDatabaseListDefinition = (options: any = {}) => {
         "description",
         "assetCount",
         "metadata",
-        ...(showCompliance ? ["compliance"] : []),
         "restrictMetadataOutsideSchemas",
         "restrictFileUploadsToExtensions",
         "bucketName",

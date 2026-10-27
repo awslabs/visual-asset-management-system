@@ -199,6 +199,14 @@ def _enforce_workflow(claims_and_roles, item, action):
     return False
 
 
+def _enforce_missing_workflow(claims_and_roles, database_id, workflow_id, action):
+    """Tier-2 check for a workflow row that does not exist, run against a provisional record carrying
+    only the path-scoped ids. Callers run this before returning 404, so the 404 is answered only to a
+    caller the check allows."""
+    return _enforce_workflow(
+        claims_and_roles, {"databaseId": database_id, "workflowId": workflow_id}, action)
+
+
 #######################
 # Pipeline resolution (for authorization, save-validation, and ASL generation)
 #######################
@@ -878,6 +886,8 @@ def update_workflow(database_id, workflow_id, request, username, claims_and_role
                     is_system=None, import_call=False):
     item = get_workflow_item(database_id, workflow_id)
     if not item:
+        if not _enforce_missing_workflow(claims_and_roles, database_id, workflow_id, "PUT"):
+            return authorization_error()
         return validation_error(status_code=404, body={"message": "Workflow not found"})
     if not _enforce_workflow(claims_and_roles, item, "PUT"):
         return authorization_error()
@@ -1107,6 +1117,8 @@ def archive_workflow(database_id, workflow_id, username, claims_and_roles, event
                      import_call=False):
     item = get_workflow_item(database_id, workflow_id)
     if not item:
+        if not _enforce_missing_workflow(claims_and_roles, database_id, workflow_id, "DELETE"):
+            return authorization_error()
         return validation_error(status_code=404, body={"message": "Workflow not found"})
     if not _enforce_workflow(claims_and_roles, item, "DELETE"):
         return authorization_error()
@@ -1266,10 +1278,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if method == "GET":
             if workflow_id:
                 item = get_workflow_item(database_id, workflow_id)
-                if not item or (item.get("archived") and not include_archived):
+                if not item:
+                    if not _enforce_missing_workflow(claims_and_roles, database_id, workflow_id, "GET"):
+                        return authorization_error()
                     return validation_error(status_code=404, body={"message": "Workflow not found"}, event=event)
                 if not _enforce_workflow(claims_and_roles, item, "GET"):
                     return authorization_error()
+                if item.get("archived") and not include_archived:
+                    return validation_error(status_code=404, body={"message": "Workflow not found"}, event=event)
                 triggers = get_workflow_triggers(database_id, workflow_id)
                 return success(body={"message": _item_to_response(
                     item, triggers=triggers,

@@ -52,6 +52,10 @@ export const STACK_XREGION_DESCRIPTION =
     "(SO9299) (uksb-1608h3hqer) (VAMS-XREGION) (version:" +
     VAMS_VERSION +
     ") Cross-Region asset bucket notification components for the Visual Asset Management Systems";
+export const STACK_ORIGIN_VERIFY_DESCRIPTION =
+    "(SO9299) (uksb-1608h3hqer) (VAMS-ORIGINVERIFY) (version:" +
+    VAMS_VERSION +
+    ") API origin verification secret for the Visual Asset Management Systems";
 
 // Custom Authorizer Configuration
 export const CUSTOM_AUTHORIZER_IGNORED_PATHS = ["/api/amplify-config", "/api/version"];
@@ -68,6 +72,27 @@ export const SUPPORTED_API_TYPES = [API_TYPE_APIGATEWAY_REST];
 // distribution (CloudFront originPath / ALB redirect) absorbs this stage so browser/CLI
 // base URLs remain /api/*.
 export const API_GATEWAY_STAGE_NAME = "api";
+
+// The routes registered under the stage's own `/api/` prefix: the anonymous bootstrap routes. The
+// CloudFront distribution forwards each of these exact paths with the stage as its origin path and
+// every other `/api/*` path without one, so no other route may begin with `/api/`.
+export const API_STAGE_PREFIXED_ROUTE_PATHS = ["/api/amplify-config", "/api/version"];
+
+// On a CloudFront deployment, CloudFront adds this header to every request it forwards to the REST
+// API, carrying the deployment's origin verification value (an AWS Secrets Manager secret). The
+// regional web ACL's rate-based rules and the REST authorizer's client-address resolution read it.
+// Lower-case, because AWS WAF matches a single header by its lower-case name. Mirrored in
+// backend/backend/common/auth/originVerify.py and in the SENSITIVE_KEYS of
+// backend/backend/customLogging/logger.py (test/security/apiOriginVerifyMirror.test.ts).
+export const API_ORIGIN_VERIFY_HEADER_NAME = "x-vams-origin-verify";
+// JSON keys of the origin verification secret: the value CloudFront sends, and the value it sent
+// before the last rotation.
+export const API_ORIGIN_VERIFY_CURRENT_KEY = "current";
+export const API_ORIGIN_VERIFY_PREVIOUS_KEY = "previous";
+// Days between automatic rotations of the origin verification secret. A value stays accepted as
+// `previous` until the rotation after the one that replaced it, so each value is accepted for at
+// most two intervals: 45 days keeps that lifetime at about 90 days.
+export const API_ORIGIN_VERIFY_ROTATION_DAYS = 45;
 
 // The REST API integration timeout applied when a deployment names none, in seconds. 29 seconds is
 // the API Gateway default and the floor VAMS allows. Raising it above the default requires an
@@ -120,6 +145,113 @@ export function deriveVectorIndexName(
     return `vec-${slugModelId(embeddingModelId)}-${embeddingDimensions}`;
 }
 
+// The RapidPipeline EKS timeout chain. Three clocks bound a run, each enforced by a different service,
+// and they must nest so that the parent workflow is still waiting when the run reports its outcome:
+//
+//   longest run useEks.jobTimeout allows  <=  state machine timeout  <  bundle taskTimeout
+//
+// `useEks.jobTimeout` is the Kubernetes job's activeDeadlineSeconds and sets the poll ceiling; the run
+// around the job adds ConstructPipeline, RunJob, the poll's margin and CheckJob calls, and PipelineEnd
+// (rapidPipelineEksWorstCaseRunSeconds). The bundle's taskTimeout, declared in
+// backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json, is how long the parent workflow's
+// pipeline task waits for the callback. That task starts before the state machine does (vamsExecute
+// and openPipeline run first, five minutes each at most), so the taskTimeout is 30 minutes longer than
+// the state machine timeout. An execution-level States.Timeout bypasses every Catch, so PipelineEnd
+// does not run and the parent is released by its own taskTimeout.
+//
+// The construct reads the state machine timeout, the ConstructPipeline timeout, the poll interval and
+// the poll ceiling from here. RunJob's timeout (the consolidated handler's 15 minutes plus one minute)
+// and PipelineEnd's are set in the construct, so the values below are the budget getConfig() counts
+// for them, and infra/test/pipelines/eksTimeoutHeadroom.test.ts fails if the emitted states exceed it.
+// The maximum and the CheckJob allowance are read only by getConfig(); the bundle taskTimeout is what
+// the tests compare pipeline.json and the state machine timeout with.
+export const RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS = 14400;
+export const RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS = 21600;
+export const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 23400;
+export const RAPID_PIPELINE_EKS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_EKS_RUN_JOB_TIMEOUT_SECONDS = 960;
+export const RAPID_PIPELINE_EKS_PIPELINE_END_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS = 10;
+// The poll outlives the pod deadline by this much, so it observes the terminated pod and reports the
+// pod's own failure rather than a poll timeout.
+export const RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS = 60;
+// CheckJob's own run time per poll attempt, as an average over the run. A CHECK_JOB invocation builds
+// a Kubernetes client and reads the job's status, plus a pod listing once the job has run two hours: a
+// handful of in-Region API requests. Three seconds is the largest whole second at which the maximum
+// job timeout fits the state machine timeout, and budgets 4341 s for the 1447 calls a run at the
+// maximum makes. The CheckJob task timeout is not used as the bound: a call that reaches it ends the
+// run through PipelineEnd, and 180 s for each of 1447 calls would budget more than 72 hours.
+export const RAPID_PIPELINE_EKS_CHECK_JOB_ALLOWANCE_SECONDS = 3;
+
+/** Status checks the RapidPipeline EKS poll makes before giving up on a job: its ceiling. */
+export function rapidPipelineEksJobCheckAttempts(jobTimeoutSeconds: number): number {
+    return Math.ceil(
+        (jobTimeoutSeconds + RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS) /
+            RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS
+    );
+}
+
+/**
+ * The longest a RapidPipeline EKS state machine run can take for `jobTimeoutSeconds`, without Lambda
+ * retries: ConstructPipeline, RunJob, a poll that reaches its ceiling (one wait per attempt and one
+ * more CheckJob call than waits, since the first check runs before the first wait), and PipelineEnd.
+ */
+export function rapidPipelineEksWorstCaseRunSeconds(jobTimeoutSeconds: number): number {
+    const attempts = rapidPipelineEksJobCheckAttempts(jobTimeoutSeconds);
+    return (
+        RAPID_PIPELINE_EKS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS +
+        RAPID_PIPELINE_EKS_RUN_JOB_TIMEOUT_SECONDS +
+        attempts * RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS +
+        (attempts + 1) * RAPID_PIPELINE_EKS_CHECK_JOB_ALLOWANCE_SECONDS +
+        RAPID_PIPELINE_EKS_PIPELINE_END_TIMEOUT_SECONDS
+    );
+}
+
+// The RapidPipeline (Amazon ECS) timeout chain. The same three clocks bound a run and must nest the
+// same way, so that the parent workflow is still waiting when the run reports its outcome:
+//
+//   ConstructPipeline + Fargate task + PipelineEnd  <=  state machine timeout  <  bundle taskTimeout
+//
+// The Fargate task is a `.sync` ECS RunTask, which waits for the task to stop however long it runs,
+// so the construct gives that state a task-level timeout. A task-level States.Timeout is a state error
+// that the task's Catch routes to PipelineEnd, which reports the failure to the parent workflow; an
+// execution-level States.Timeout bypasses every Catch, so PipelineEnd would not run. ConstructPipeline
+// and PipelineEnd are bounded by their Lambda functions' timeouts, set in the pipeline's lambda
+// builder, so the CONSTRUCT_PIPELINE and PIPELINE_END values below are the budget counted for them,
+// and infra/test/pipelines/ecsTimeoutHeadroom.test.ts fails if the emitted functions exceed it. The
+// 17040 s task bound leaves 360 s of the 18000 s state machine timeout after both Lambda steps. That
+// covers the stop route below (54 s at worst) and the backoff of the two Lambda steps'
+// service-exception retries (126 s each, 252 s together), with 54 s to spare. The bundle's
+// taskTimeout, declared in backendPipelines/multi/rapidPipeline/vamsSchema/pipeline.json, is 30
+// minutes longer than the state machine timeout, because the parent's task starts before the state
+// machine does: vamsExecute invokes openPipeline and waits for it, openPipeline starts the
+// execution, and vamsExecute's five-minute timeout bounds both.
+//
+// The stop route. A task-level States.Timeout fails the state, and Step Functions stops the Fargate
+// task as it ends the state. Its documentation does not list that case, so the timeout's Catch also
+// runs up to three AWS SDK calls before PipelineEnd to stop a task still running. The Fargate task is
+// started with its group set to the execution name, and ecs:ListTasks cannot filter by group, so
+// ecs:ListTasks lists the cluster's running tasks (one page of STOP_ROUTE_PAGE_SIZE, the most
+// ListTasks returns and DescribeTasks accepts), ecs:DescribeTasks keeps the one whose group is the
+// execution name, and a Map calls ecs:StopTask on it. Each call is bounded by the STOP_CALL timeout
+// and retried STOP_CALL_RETRIES times on throttling and server errors (1 s, then 2 s), so one call
+// takes at most (1 + 2) x 5 + 1 + 2 = 18 s. The Map's iterations run concurrently, and the group is
+// unique to the execution, so the route takes at most three calls in sequence: 54 s. Any call's
+// failure is caught and goes on to PipelineEnd, so the parent workflow is told of the timeout
+// whether or not the stop succeeds.
+//
+// The construct reads the state machine timeout, the Fargate task timeout and the stop-call bounds
+// from here; the bundle taskTimeout is what the tests compare pipeline.json and the state machine
+// timeout with.
+export const RAPID_PIPELINE_ECS_STATE_MACHINE_TIMEOUT_SECONDS = 18000;
+export const RAPID_PIPELINE_ECS_FARGATE_TASK_TIMEOUT_SECONDS = 17040;
+export const RAPID_PIPELINE_ECS_BUNDLE_TASK_TIMEOUT_SECONDS = 19800;
+export const RAPID_PIPELINE_ECS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_ECS_PIPELINE_END_TIMEOUT_SECONDS = 300;
+export const RAPID_PIPELINE_ECS_STOP_CALL_TIMEOUT_SECONDS = 5;
+export const RAPID_PIPELINE_ECS_STOP_CALL_RETRIES = 2;
+export const RAPID_PIPELINE_ECS_STOP_ROUTE_PAGE_SIZE = 100;
+
 // ============================================================================================
 // Constants used only to check configuration
 //
@@ -147,6 +279,25 @@ export type SystemGenAiGuardrailPromptAttackStrength =
 export const SYSTEM_GENAI_GUARDRAIL_PII_FILTERS = ["off", "anonymize", "block"] as const;
 export type SystemGenAiGuardrailPiiFilter = (typeof SYSTEM_GENAI_GUARDRAIL_PII_FILTERS)[number];
 
+// Partitions in which VAMS creates a Regional API Gateway custom domain name for the REST API
+// (`app.api.apiGatewayRest.customDomain`). Amazon API Gateway offers Regional custom domain names in
+// the commercial and AWS GovCloud (US) partitions; any other partition is rejected until its support
+// has been confirmed.
+export const API_CUSTOM_DOMAIN_PARTITIONS = ["aws", "aws-us-gov"];
+
+// A REST API custom domain host: lowercase labels separated by dots, no scheme, port or path. API
+// Gateway does not accept uppercase letters in a custom domain name.
+export const API_CUSTOM_DOMAIN_HOST_PATTERN =
+    /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+// An ACM certificate ARN, with the partition and Region captured.
+export const ACM_CERTIFICATE_ARN_PATTERN =
+    /^arn:(aws[a-z-]*):acm:([a-z0-9-]+):\d{12}:certificate\/[a-f0-9-]+$/;
+
+// An Amazon Route 53 hosted zone ID as the Route 53 API returns it, without the `/hostedzone/`
+// prefix: `Z` followed by uppercase letters and digits, at most 32 characters in total.
+export const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
+
 // Amazon Cognito's username limit. Used to reject an over-long app.adminUserId at synthesis rather
 // than letting CreateUser fail mid-deploy and roll the core stack back.
 export const COGNITO_USERNAME_MAX_LENGTH = 128;
@@ -161,11 +312,6 @@ export const VECTOR_SEARCH_MAX_INDEXING_CONCURRENCY = 1000;
 // app.authProvider.presignedUrlTimeoutSeconds would deploy and then fail every download, and
 // getConfig() warns about it at synthesis. Compared against, never assigned.
 export const PRESIGNED_URL_MAX_TIMEOUT_SECONDS = 604800;
-
-// The taskTimeout the RapidPipeline EKS bundle declares
-// (backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json). The parent workflow waits this
-// long for the pipeline's task-token callback, so the Kubernetes job must not be allowed to run longer.
-export const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 14400;
 
 // Input caps of the Video SOP/BOM Extraction pipeline that are tied to its compute sizing rather than
 // being operator cost levers. The Fargate job's ephemeral volume has to hold every input video plus
@@ -1612,8 +1758,9 @@ export function getConfig(app: cdk.App): Config {
     // developer running the web front locally can complete a federated sign-in against a deployed
     // user pool. Defaults off: the URLs are registered on the same user pool that serves real users,
     // and a redirect target on the user's own machine is a code-delivery destination the deployment
-    // does not control. Only read when Cognito SAML or OIDC federation is enabled — without
-    // federation VAMS uses no OAuth redirect at all.
+    // does not control. The callback URLs are only read when Cognito SAML or OIDC federation is
+    // enabled — without federation VAMS uses no OAuth redirect at all. In every auth mode the flag
+    // also admits http://localhost:3001 as a referer for the Location Service map API key.
     if (config.app.webUi.allowLocalhostAuthCallbacks == undefined) {
         config.app.webUi.allowLocalhostAuthCallbacks = false;
     }
@@ -1653,6 +1800,12 @@ export function getConfig(app: cdk.App): Config {
                 endpointType: "REGIONAL",
                 optionalExternalPrivateApigVPCEId: "",
                 apiGatewayTimeoutTime: API_GATEWAY_DEFAULT_TIMEOUT_SECONDS,
+                customDomain: {
+                    enabled: false,
+                    domainHost: "",
+                    certificateArn: "",
+                    optionalHostedZoneId: "",
+                },
             },
         };
     }
@@ -1673,6 +1826,12 @@ export function getConfig(app: cdk.App): Config {
             optionalExternalPrivateApigVPCEId: legacyApi.externalRegionalAPIGatewayVPCEId ?? "",
             apiGatewayTimeoutTime:
                 legacyApi.apiGatewayTimeoutTime ?? API_GATEWAY_DEFAULT_TIMEOUT_SECONDS,
+            customDomain: {
+                enabled: false,
+                domainHost: "",
+                certificateArn: "",
+                optionalHostedZoneId: "",
+            },
         };
     }
 
@@ -1692,6 +1851,14 @@ export function getConfig(app: cdk.App): Config {
     }
     if (config.app.api.apiGatewayRest.apiGatewayTimeoutTime == undefined) {
         config.app.api.apiGatewayRest.apiGatewayTimeoutTime = API_GATEWAY_DEFAULT_TIMEOUT_SECONDS;
+    }
+    if (config.app.api.apiGatewayRest.customDomain == undefined) {
+        config.app.api.apiGatewayRest.customDomain = {
+            enabled: false,
+            domainHost: "",
+            certificateArn: "",
+            optionalHostedZoneId: "",
+        };
     }
 
     // Initialize CloudFront custom domain configuration if undefined (backward compatibility)
@@ -1738,38 +1905,6 @@ export function getConfig(app: cdk.App): Config {
             autoLoadDefaultAssetSchema: true,
             autoLoadDefaultAssetFileSchema: true,
         };
-    }
-
-    // Initialize compliance configuration if undefined (backward compatibility)
-    if (config.app.compliance == undefined) {
-        config.app.compliance = {
-            autoLoadDefaultSchema: true,
-            quarantineBlocksDownload: false,
-        };
-    }
-    if (config.app.compliance.autoLoadDefaultSchema == undefined) {
-        config.app.compliance.autoLoadDefaultSchema = true;
-    }
-    if (config.app.compliance.quarantineBlocksDownload == undefined) {
-        config.app.compliance.quarantineBlocksDownload = false;
-    }
-
-    //The default compliance schema holds one metadata rule against the GLOBAL `defaultAsset` metadata
-    //schema, which only autoLoadDefaultAssetSchema seeds. With that schema absent the evaluation
-    //engine skips the rule's required-field and type checks, so the seeded schema reports every
-    //asset compliant while checking nothing, and no deploy step names the missing reference.
-    if (
-        config.app.compliance.autoLoadDefaultSchema &&
-        !config.app.metadataSchema.autoLoadDefaultAssetSchema
-    ) {
-        throw new Error(
-            "Configuration Error: app.compliance.autoLoadDefaultSchema is true but " +
-                "app.metadataSchema.autoLoadDefaultAssetSchema is false. The default compliance " +
-                "schema validates assets against the GLOBAL defaultAsset metadata schema, which only " +
-                "that flag seeds; without it the seeded rule checks nothing. Set " +
-                "app.metadataSchema.autoLoadDefaultAssetSchema to true, or set " +
-                "app.compliance.autoLoadDefaultSchema to false."
-        );
     }
 
     //Load S3 Policy statements JSON
@@ -2358,10 +2493,12 @@ export function getConfig(app: cdk.App): Config {
         // The job timeout sits in the middle of a three-link chain and every link is enforced somewhere
         // else, so an inconsistent value produces a wrong OUTCOME rather than an error: the state machine
         // derives its poll ceiling from this value, the Kubernetes pod's activeDeadlineSeconds is set
-        // from it, and the registered pipeline bundle declares a taskTimeout the parent workflow waits
-        // for. A pod allowed to outlive the poll makes the execution report FAILED while the pod keeps
-        // writing output; a pod allowed to outlive the parent's taskTimeout makes the parent give up on
-        // a job that is still running.
+        // from it, and the run it allows must fit in the state machine's own timeout, which the
+        // registered pipeline's taskTimeout (the parent workflow's wait) outlasts. A pod allowed to
+        // outlive the poll makes the execution report FAILED while the pod keeps writing output; a run
+        // allowed to outlive the state machine is stopped before PipelineEnd reports it, and the parent
+        // workflow then waits out its taskTimeout. The maximum sits below the largest value that fits,
+        // which leaves the run room for Lambda retries.
         const jobTimeout = config.app.pipelines.useRapidPipeline.useEks.jobTimeout;
         if (typeof jobTimeout !== "number" || !Number.isInteger(jobTimeout) || jobTimeout <= 0) {
             throw new Error(
@@ -2369,13 +2506,22 @@ export function getConfig(app: cdk.App): Config {
                     `integer number of seconds. Received: ${JSON.stringify(jobTimeout)}`
             );
         }
-        if (jobTimeout > RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS) {
+        const worstCaseRunSeconds = rapidPipelineEksWorstCaseRunSeconds(jobTimeout);
+        if (worstCaseRunSeconds > RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS) {
             throw new Error(
                 `Configuration Error: pipelines.useRapidPipeline.useEks.jobTimeout (${jobTimeout}s) ` +
-                    `exceeds the ${RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS}s taskTimeout the ` +
-                    `registered pipeline declares, so the parent workflow would stop waiting while the ` +
-                    `Kubernetes job is still allowed to run. Lower jobTimeout, or raise taskTimeout in ` +
-                    `backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json to match.`
+                    `lets a pipeline run take up to ${worstCaseRunSeconds}s, longer than the ` +
+                    `${RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS}s timeout of the pipeline's ` +
+                    `state machine, which would stop the run before it reports its outcome to the ` +
+                    `parent workflow. Lower jobTimeout to at most ` +
+                    `${RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS}.`
+            );
+        }
+        if (jobTimeout > RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS) {
+            throw new Error(
+                `Configuration Error: pipelines.useRapidPipeline.useEks.jobTimeout (${jobTimeout}s) ` +
+                    `exceeds the ${RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS}s maximum job runtime. ` +
+                    `Lower jobTimeout to at most ${RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS}.`
             );
         }
     }
@@ -2753,17 +2899,17 @@ export function getConfig(app: cdk.App): Config {
             }
         }
     }
-    //Cloudfront + ALB check (not more than 1)
+    //Cloudfront + ALB neither warning check
     if (!config.app.useCloudFront.enabled && !config.app.useAlb.enabled) {
         console.warn(
             "Configuration Warning: YOU HAVE DISABLED DEPLOYING ANY VAMS FRONT-END WITH CLOUDFRONT OR ALB. THIS WILL BE A API-DRIVEN SOLUTION-ONLY DEPLOYMENT."
         );
     }
 
-    //Cloudfront + ALB neither warning check
+    //Cloudfront + ALB check (not more than 1)
     if (config.app.useCloudFront.enabled && config.app.useAlb.enabled) {
         throw new Error(
-            "Configuration Error: Must choose either only Cloufront or ALB for static website deployment use (or neither), cannot have both enabled."
+            "Configuration Error: Must choose either only CloudFront or ALB for static website deployment use (or neither), cannot have both enabled."
         );
     }
 
@@ -2786,7 +2932,7 @@ export function getConfig(app: cdk.App): Config {
         const certArnPattern = /^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[a-f0-9-]+$/;
         if (!certArnPattern.test(config.app.useCloudFront.customDomain.certificateArn)) {
             throw new Error(
-                "Configuration Warning: CloudFront custom domain certificate ARN should be in us-east-1 region. CloudFront requires certificates to be in us-east-1 regardless of deployment region. Provided ARN: " +
+                "Configuration Error: CloudFront custom domain certificate ARN should be in us-east-1 region. CloudFront requires certificates to be in us-east-1 regardless of deployment region. Provided ARN: " +
                     config.app.useCloudFront.customDomain.certificateArn
             );
         }
@@ -2824,6 +2970,19 @@ export function getConfig(app: cdk.App): Config {
     ) {
         throw new Error(
             "Configuration Error: Cannot use ALB deployment without specifying a valid domain hostname and a ACM Certificate ARN to use for SSL/TLS security!"
+        );
+    }
+
+    // The ALB web app bucket is named domainHost and its access-logs bucket domainHost +
+    // "-webappaccesslogs", so domainHost must be a bucket name 17 characters short of the
+    // 63-character limit.
+    if (
+        config.app.useAlb.enabled &&
+        !/^[a-z0-9][a-z0-9.-]{1,44}[a-z0-9]$/.test(config.app.useAlb.domainHost)
+    ) {
+        throw new Error(
+            "Configuration Error: app.useAlb.domainHost names the ALB web app bucket and its '-webappaccesslogs' access-logs bucket, so it must be 3 to 46 characters of lowercase letters, digits, dots and hyphens, beginning and ending with a letter or digit. Provided: " +
+                config.app.useAlb.domainHost
         );
     }
 
@@ -3384,39 +3543,34 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
-    if (
-        config.app.authProvider.useExternalOAuthIdp.enabled &&
-        (!config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl == "" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl ==
-                "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl == "" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience ==
-                "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint ==
-                "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint ==
-                "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint ==
-                "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint ==
-                "UNDEFINED")
-    ) {
-        throw new Error(
-            "Configuration Error: Must specify a external IDP auth URL, external IDP principal domain, external IDP client ID, external IDP client secret, Lambda Authorizer JWT Issuer URL, Lambda Authorizer JWT Identity Source, and Lambda Authorizer JWT Audience when using an external OAUTH provider!"
-        );
+    // Fields VAMS passes to the authorizer and the web client must be set: null, "" and "UNDEFINED"
+    // all count as unset. The MFA scope, principal domain and discovery endpoint are optional, so
+    // only "" and the "UNDEFINED" placeholder are rejected for them and their template null passes.
+    if (config.app.authProvider.useExternalOAuthIdp.enabled) {
+        const externalIdp = config.app.authProvider.useExternalOAuthIdp;
+        const isUnsetValue = (value: unknown) =>
+            value == null || value === "" || value === "UNDEFINED";
+        const isPlaceholder = (value: unknown) => value === "" || value === "UNDEFINED";
+        if (
+            [
+                externalIdp.idpAuthProviderUrl,
+                externalIdp.idpAuthClientId,
+                externalIdp.idpAuthProviderScope,
+                externalIdp.idpAuthProviderTokenEndpoint,
+                externalIdp.idpAuthProviderAuthorizationEndpoint,
+                externalIdp.lambdaAuthorizorJWTIssuerUrl,
+                externalIdp.lambdaAuthorizorJWTAudience,
+            ].some(isUnsetValue) ||
+            [
+                externalIdp.idpAuthProviderScopeMfa,
+                externalIdp.idpAuthPrincipalDomain,
+                externalIdp.idpAuthProviderDiscoveryEndpoint,
+            ].some(isPlaceholder)
+        ) {
+            throw new Error(
+                "Configuration Error: External OAuth IdP requires its provider URL, client ID, scope, token and authorization endpoints, JWT issuer URL and audience. The MFA scope, principal domain and discovery endpoint may be left null, but not empty or UNDEFINED."
+            );
+        }
     }
 
     //API Configuration Error Checks
@@ -3524,6 +3678,96 @@ export function getConfig(app: cdk.App): Config {
             console.warn(
                 "Configuration Warning: app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId is set but will not be used. " +
                     "It applies only to a PRIVATE endpoint. A REGIONAL endpoint is public and does not route through a VPC endpoint."
+            );
+        }
+    }
+
+    // REST API custom domain. A Regional custom domain name maps base path `api` to the stage, so
+    // https://{domainHost}/api/{route} has the same shape as the execute-api invoke URL.
+    const apiCustomDomain = apiGatewayRest.customDomain;
+    if (apiCustomDomain.enabled) {
+        const isUnsetValue = (v: string | undefined | null) =>
+            v == undefined || v === "" || v === "UNDEFINED";
+        if (
+            isUnsetValue(apiCustomDomain.domainHost) ||
+            isUnsetValue(apiCustomDomain.certificateArn)
+        ) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.enabled requires " +
+                    "app.api.apiGatewayRest.customDomain.domainHost and " +
+                    "app.api.apiGatewayRest.customDomain.certificateArn."
+            );
+        }
+        if (!API_CUSTOM_DOMAIN_HOST_PATTERN.test(apiCustomDomain.domainHost)) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.domainHost must be a " +
+                    "lowercase host name with no scheme, port or path (for example api.example.com). " +
+                    `Got: '${apiCustomDomain.domainHost}'.`
+            );
+        }
+        // The web application's own host (the CloudFront custom domain, or the ALB host) already
+        // points at the web front, so the API custom domain needs a host of its own.
+        const webAppHosts: [string, string | undefined][] = [
+            [
+                "app.useCloudFront.customDomain.domainHost",
+                config.app.useCloudFront.enabled && config.app.useCloudFront.customDomain.enabled
+                    ? config.app.useCloudFront.customDomain.domainHost
+                    : undefined,
+            ],
+            [
+                "app.useAlb.domainHost",
+                config.app.useAlb.enabled ? config.app.useAlb.domainHost : undefined,
+            ],
+        ];
+        for (const [webAppHostField, webAppHost] of webAppHosts) {
+            if (
+                !isUnsetValue(webAppHost) &&
+                String(webAppHost).toLowerCase() === apiCustomDomain.domainHost.toLowerCase()
+            ) {
+                throw new Error(
+                    "Configuration Error: app.api.apiGatewayRest.customDomain.domainHost must differ " +
+                        `from ${webAppHostField}, the web application's host. Got: '${apiCustomDomain.domainHost}' for both.`
+                );
+            }
+        }
+        if (
+            !isUnsetValue(apiCustomDomain.optionalHostedZoneId) &&
+            !ROUTE53_HOSTED_ZONE_ID_PATTERN.test(apiCustomDomain.optionalHostedZoneId)
+        ) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.optionalHostedZoneId must be " +
+                    "an Amazon Route 53 hosted zone ID such as Z0123456789ABCDEFGHIJ (no /hostedzone/ " +
+                    `prefix), or empty. Got: '${apiCustomDomain.optionalHostedZoneId}'.`
+            );
+        }
+        if (apiGatewayRest.endpointType === "PRIVATE") {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.enabled is not supported " +
+                    "with app.api.apiGatewayRest.endpointType 'PRIVATE'. The custom domain is a " +
+                    "Regional (public) domain name; a private API is reached through its VPC endpoint."
+            );
+        }
+        if (API_CUSTOM_DOMAIN_PARTITIONS.indexOf(config.env.partition) === -1) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.enabled is not supported " +
+                    `in the '${config.env.partition}' partition. VAMS creates the REST API custom ` +
+                    `domain in the ${API_CUSTOM_DOMAIN_PARTITIONS.join(
+                        " and "
+                    )} partitions only. ` +
+                    "Set app.api.apiGatewayRest.customDomain.enabled to false."
+            );
+        }
+        const certMatch = ACM_CERTIFICATE_ARN_PATTERN.exec(apiCustomDomain.certificateArn);
+        if (
+            !certMatch ||
+            certMatch[1] !== config.env.partition ||
+            certMatch[2] !== config.env.region
+        ) {
+            throw new Error(
+                "Configuration Error: app.api.apiGatewayRest.customDomain.certificateArn must be an " +
+                    `ACM certificate ARN in the deployment Region (${config.env.region}). A Regional ` +
+                    "custom domain name uses a certificate from its own Region. Provided ARN: " +
+                    apiCustomDomain.certificateArn
             );
         }
     }
@@ -4305,6 +4549,18 @@ export function crossRegionS3EndpointRegions(config: ConfigPublic): string[] {
     );
 }
 
+/**
+ * The REST API custom domain host, or undefined when `app.api.apiGatewayRest.customDomain` is off.
+ *
+ * The REST API construct, the amplify-config function and the web CSP all read the host from here,
+ * so the domain the API serves, the base URL the clients are given and the origin the browser may
+ * call cannot disagree.
+ */
+export function apiCustomDomainHost(config: ConfigPublic): string | undefined {
+    const customDomain = config.app.api.apiGatewayRest.customDomain;
+    return customDomain && customDomain.enabled ? customDomain.domainHost : undefined;
+}
+
 // One externally owned pipeline bridge allowed to register sub-executions on the orchestration bus.
 // The bus resource policy grants events:PutEvents to the account root carrying an aws:PrincipalArn
 // condition on roleArnPattern, so only roles matching the pattern can publish. invokeTargets lists
@@ -4703,6 +4959,12 @@ export interface ConfigPublic {
                 endpointType: "REGIONAL" | "PRIVATE";
                 optionalExternalPrivateApigVPCEId: string;
                 apiGatewayTimeoutTime: number;
+                customDomain: {
+                    enabled: boolean;
+                    domainHost: string;
+                    certificateArn: string;
+                    optionalHostedZoneId: string;
+                };
             };
         };
         metadataSchema: {
@@ -4710,10 +4972,6 @@ export interface ConfigPublic {
             autoLoadDefaultDatabaseSchema: boolean;
             autoLoadDefaultAssetSchema: boolean;
             autoLoadDefaultAssetFileSchema: boolean;
-        };
-        compliance: {
-            autoLoadDefaultSchema: boolean;
-            quarantineBlocksDownload: boolean;
         };
     };
 }

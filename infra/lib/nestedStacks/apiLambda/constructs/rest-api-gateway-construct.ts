@@ -9,6 +9,9 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as wafv2 from "aws-cdk-lib/aws-wafv2";
+import * as acm from "aws-cdk-lib/aws-certificatemanager";
+import * as route53 from "aws-cdk-lib/aws-route53";
+import * as route53targets from "aws-cdk-lib/aws-route53-targets";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../config/config";
@@ -19,6 +22,7 @@ import { RouteRegistry } from "../apiRouteRegistry";
 import { buildOpenApiSpec } from "./buildOpenApiSpec";
 import { buildApiGatewayAuthorizerRestFunction } from "../../../lambdaBuilder/authFunctions";
 import { generateUniqueNameHash } from "../../../helper/security";
+import { ApiOriginVerifySecretRef } from "../../../helper/apiOriginVerify";
 import { AmplifyConfigLambdaConstruct } from "./amplify-config-lambda-construct";
 import { VamsVersionLambdaConstruct } from "./vams-version-lambda-construct";
 import { samlSettings } from "../../../../config/saml-config";
@@ -38,6 +42,11 @@ export interface IApiImplementation {
     readonly invokeUrlWithStage: string;
     /** The deployment stage name fronting absorbs (CloudFront originPath / ALB redirect). */
     readonly stageName: string;
+    /**
+     * Regional domain name of the API's custom domain (the DNS target for its host), or undefined
+     * when `app.api.apiGatewayRest.customDomain` is off.
+     */
+    readonly customDomainTarget?: string;
 }
 
 export interface RestApiGatewayConstructProps {
@@ -52,6 +61,11 @@ export interface RestApiGatewayConstructProps {
     vamsCreatedApiGatewayVpcEndpointId?: string;
     /** Resolved WAF web ACL ARN ("" when WAF is disabled). */
     wafArn?: string;
+    /**
+     * The API origin verification secret (CloudFront deployments only). The REST authorizer reads it
+     * to recognise requests CloudFront forwarded.
+     */
+    apiOriginVerifySecret?: ApiOriginVerifySecretRef;
 }
 
 /**
@@ -74,11 +88,13 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
     public readonly apiEndpoint: string;
     public readonly stageName: string;
     public readonly invokeUrlWithStage: string;
+    public readonly customDomainTarget?: string;
 
     constructor(parent: Construct, name: string, props: RestApiGatewayConstructProps) {
         super(parent, name);
         const { config, storageResources, registry } = props;
         const apiGatewayRest = config.app.api.apiGatewayRest;
+        const customDomainHost = Config.apiCustomDomainHost(config);
         // The deployment stage name is a fixed constant (shared with the VamsCLI endpoint
         // constants and the web /api/* fronting), not a per-deployment config option.
         this.stageName = Config.API_GATEWAY_STAGE_NAME;
@@ -109,7 +125,8 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             storageResources,
             config,
             props.vpc,
-            props.subnets
+            props.subnets,
+            props.apiOriginVerifySecret
         );
         if (config.app.authProvider.useCognito.enabled) {
             authorizerFn.addEnvironment("USER_POOL_ID", props.authResources.cognito.userPoolId);
@@ -173,7 +190,9 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             config,
             authResources: props.authResources,
             region: config.env.region,
-            apiUrl: "", // derived at runtime from the request context (see construct)
+            // With a custom domain the clients are given its stage-inclusive URL; otherwise the URL is
+            // derived at runtime from the request context (see construct)
+            apiUrl: customDomainHost ? `https://${customDomainHost}/${this.stageName}/` : "",
             ...(federatedIdentitySettings
                 ? {
                       cognitoFederatedConfig: {
@@ -197,6 +216,14 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             lambdaFn: versionFn.lambdaFn,
             allowAnonymous: true,
         });
+
+        // The CloudFront distribution forwards only these stage-prefixed paths with the stage as
+        // origin path; any other `/api/*` request reaches route `/{rest}`. A route registered under
+        // `/api/` would therefore be unreachable through CloudFront at the path its name suggests.
+        assertNoStagePrefixedRoutes(
+            registry.list().map((r) => r.path),
+            this.stageName
+        );
 
         // 3) Build the OpenAPI document from the full registry
         const spec = buildOpenApiSpec(registry.list(), {
@@ -351,6 +378,66 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             wafAssociation.node.addDependency(stage);
         }
 
+        // 6.6) Optional Regional custom domain. Base path `api` maps to the stage, so
+        // https://{domainHost}/api/{route} has the shape of the execute-api invoke URL and of the
+        // CloudFront `/api/*` paths. The regional web ACL stays associated with the stage, which
+        // covers requests arriving through the domain. The execute-api endpoint stays enabled.
+        if (customDomainHost) {
+            const customDomain = apiGatewayRest.customDomain;
+            const domainName = new apigw.DomainName(this, "ApiCustomDomain", {
+                domainName: customDomainHost,
+                certificate: acm.Certificate.fromCertificateArn(
+                    this,
+                    "ApiCustomDomainCertificate",
+                    customDomain.certificateArn
+                ),
+                endpointType: apigw.EndpointType.REGIONAL,
+                securityPolicy: apigw.SecurityPolicy.TLS_1_2,
+            });
+            // The same policy and access mode as the REST API itself (see above), applied outside the
+            // GovCloud mode only; there the TLS_1_2 policy is the floor.
+            if (!config.app.govCloud.enabled) {
+                const cfnDomainName = domainName.node.defaultChild as apigw.CfnDomainName;
+                cfnDomainName.addPropertyOverride(
+                    "SecurityPolicy",
+                    "SecurityPolicy_TLS13_1_2_2021_06"
+                );
+                cfnDomainName.addPropertyOverride("EndpointAccessMode", "BASIC");
+            }
+            new apigw.BasePathMapping(this, "ApiCustomDomainBasePathMapping", {
+                domainName,
+                restApi: this.restApi,
+                stage,
+                basePath: this.stageName,
+            });
+
+            const hostedZoneId = customDomain.optionalHostedZoneId;
+            if (hostedZoneId && hostedZoneId !== "" && hostedZoneId !== "UNDEFINED") {
+                const zone = route53.HostedZone.fromHostedZoneAttributes(
+                    this,
+                    "ApiCustomDomainHostedZone",
+                    {
+                        zoneName: customDomainHost.substring(customDomainHost.indexOf(".") + 1),
+                        hostedZoneId,
+                    }
+                );
+                const aliasTarget = route53.RecordTarget.fromAlias(
+                    new route53targets.ApiGatewayDomain(domainName)
+                );
+                new route53.ARecord(this, "ApiCustomDomainAliasRecord", {
+                    zone,
+                    recordName: `${customDomainHost}.`,
+                    target: aliasTarget,
+                });
+                new route53.AaaaRecord(this, "ApiCustomDomainAliasRecordIpv6", {
+                    zone,
+                    recordName: `${customDomainHost}.`,
+                    target: aliasTarget,
+                });
+            }
+            this.customDomainTarget = domainName.domainNameAliasDomainName;
+        }
+
         // 7) Endpoint outputs (non-FIPS URL in non-GovCloud, as today)
         this.apiEndpoint = `${this.restApi.restApiId}.${Service("EXECUTE_API", false).Endpoint}`;
         this.invokeUrlWithStage = `https://${this.apiEndpoint}/${this.stageName}`;
@@ -418,6 +505,30 @@ export function resolveApiGatewayVpcEndpointId(
     }
     const external = apiGatewayRest.optionalExternalPrivateApigVPCEId;
     return external && external !== "" ? external : undefined;
+}
+
+/**
+ * Throws when a route other than `API_STAGE_PREFIXED_ROUTE_PATHS` begins with the stage segment.
+ *
+ * CloudFront forwards those exact paths with the stage as origin path and every other `/api/*` path
+ * without one, so `<cf>/api/{route}` reaches route `/{route}`. A route registered as `/api/{name}`
+ * would be reached only at `<cf>/api/api/{name}`.
+ */
+export function assertNoStagePrefixedRoutes(routePaths: string[], stageName: string): void {
+    const prefixed = routePaths.filter(
+        (p) =>
+            (p === `/${stageName}` || p.startsWith(`/${stageName}/`)) &&
+            Config.API_STAGE_PREFIXED_ROUTE_PATHS.indexOf(p) === -1
+    );
+    if (prefixed.length > 0) {
+        throw new Error(
+            `Route(s) ${Array.from(new Set(prefixed)).join(", ")} begin with the stage segment ` +
+                `/${stageName}/. Only ${Config.API_STAGE_PREFIXED_ROUTE_PATHS.join(" and ")} ` +
+                `(API_STAGE_PREFIXED_ROUTE_PATHS in config.ts) are registered under it, because ` +
+                `CloudFront forwards every other /${stageName}/* path without the stage prefix. ` +
+                `Register the route without the /${stageName} prefix.`
+        );
+    }
 }
 
 /** The body API Gateway answers a request the AWS WAF web ACL blocked with. */

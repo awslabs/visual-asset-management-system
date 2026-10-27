@@ -240,9 +240,11 @@ export class AmplifyConfigLambdaConstruct extends Construct {
     private getJavascriptInlineFunction(props: InlineLambdaProps) {
         const resp = JSON.stringify(props);
 
-        return `
-            exports.handler = async function(event, context) {
-                const config = ${resp};
+        // A non-empty build-time API URL (the REST API custom domain) is returned as is, whichever
+        // host the request arrived through.
+        const deriveApiUrl = props.api
+            ? ""
+            : `
                 // Derive the API base URL from the invoking request rather than from a
                 // CDK reference to the REST API. Referencing the API id at deploy time
                 // would create an Api <-> Lambda circular dependency (this Lambda is
@@ -259,10 +261,15 @@ export class AmplifyConfigLambdaConstruct extends Construct {
                     }
                 } catch (e) {
                     // Fall back to the build-time value if request context is unavailable.
-                }
+                }`;
+
+        return `
+            exports.handler = async function(event, context) {
+                const config = ${resp};${deriveApiUrl}
                 return {
                     headers: {
                         'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache, no-store',
                         // REST API returns the Lambda response verbatim (no auto-CORS). Under
                         // ALB fronting this endpoint is fetched cross-origin (the ALB
                         // 302-redirects /api/* to the execute-api host), so the response must

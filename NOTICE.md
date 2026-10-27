@@ -36,9 +36,6 @@ This software includes third party software subject to the following copyrights:
 | Package                             | Version       | License                 |
 | :---------------------------------- | :------------ | :---------------------- |
 | @aws-amplify/ui-react               | ^6.15.2       | Apache-2.0              |
-| @aws-sdk/client-s3                  | ^3.700.0      | Apache-2.0              |
-| @aws-sdk/lib-storage                | ^3.700.0      | Apache-2.0              |
-| @aws-sdk/s3-request-presigner       | ^3.700.0      | Apache-2.0              |
 | @badgateway/oauth2-client           | 2.4.2         | MIT                     |
 | @cloudscape-design/collection-hooks | ^1.0.19       | Apache-2.0              |
 | @cloudscape-design/components       | ^3.0.196      | Apache-2.0              |
@@ -47,7 +44,6 @@ This software includes third party software subject to the following copyrights:
 | @dnd-kit/core                       | ^6.3.1        | MIT                     |
 | @dnd-kit/sortable                   | ^10.0.0       | MIT                     |
 | @dnd-kit/utilities                  | ^3.2.2        | MIT                     |
-| @hookform/resolvers                 | ^3.9.0        | MIT                     |
 | @mapbox/mapbox-gl-draw              | ^1.4.1        | ISC                     |
 | @maplibre/maplibre-gl-geocoder      | ^1.5.0        | ISC                     |
 | @monaco-editor/react                | ^4.6.0        | MIT                     |
@@ -62,10 +58,7 @@ This software includes third party software subject to the following copyrights:
 | @rjsf/validator-ajv8                | ^5.21.2       | Apache-2.0              |
 | @tanstack/react-query               | ^5.59.0       | MIT                     |
 | @tanstack/react-table               | ^8.20.5       | MIT                     |
-| @turf/bbox                          | ^6.5.0        | MIT                     |
-| @turf/turf                          | ^6.5.0        | MIT                     |
 | @types/mapbox\_\_mapbox-gl-draw     | ^1.4.0        | MIT                     |
-| @types/styled-components            | ^5.1.21       | MIT                     |
 | @types/three                        | ^0.180.0      | MIT                     |
 | @types/wicg-file-system-access      | 2020.9.6      | MIT                     |
 | arraybuffer-to-buffer               | ^0.0.7        | MIT                     |
@@ -73,16 +66,13 @@ This software includes third party software subject to the following copyrights:
 | aws-amplify                         | ^6.0.0        | Apache-2.0              |
 | axios                               | ^1.6.0        | MIT                     |
 | buffer                              | ^6.0.3        | MIT                     |
-| dompurify                           | ^3.4.11       | (MPL-2.0 OR Apache-2.0) |
+| dompurify                           | ^3.4.17       | (MPL-2.0 OR Apache-2.0) |
 | fast-xml-parser                     | ^5.9.0        | MIT                     |
 | fcs                                 | ^0.1.2        | MIT                     |
-| file-system-access                  | 1.0.4         | MIT                     |
-| geojson                             | ^0.5.0        | MIT                     |
 | jodit                               | 4.13.10       | MIT                     |
 | jodit-react                         | ^5.3.21       | MIT                     |
 | localforage                         | ^1.10.0       | Apache-2.0              |
 | maplibre-gl                         | ^6.9.0        | BSD-3-Clause            |
-| moment                              | ^2.29.4       | MIT                     |
 | papaparse                           | ^5.4.1        | MIT                     |
 | postcss                             | ^8.4.47       | MIT                     |
 | prop-types                          | ^15.8.1       | MIT                     |
@@ -90,7 +80,6 @@ This software includes third party software subject to the following copyrights:
 | react-data-grid                     | 7.0.0-beta.16 | MIT                     |
 | react-diff-viewer-continued         | 4.4.0         | MIT                     |
 | react-dom                           | ^18.3.1       | MIT                     |
-| react-error-boundary                | ^4.0.9        | MIT                     |
 | react-hook-form                     | ^7.53.0       | MIT                     |
 | react-loading-icons                 | ^1.1.0        | MIT                     |
 | react-map-gl                        | ^8.1.3        | MIT                     |
@@ -102,12 +91,10 @@ This software includes third party software subject to the following copyrights:
 | reactflow                           | ^11.11.4      | MIT                     |
 | sanitize-html                       | ^2.11.0       | MIT                     |
 | semver                              | ^7.5.2        | ISC                     |
-| styled-components                   | ^5.3.3        | MIT                     |
 | tailwindcss                         | ^3.4.14       | MIT                     |
 | tough-cookie                        | ^4.1.3        | BSD-3-Clause            |
 | typescript                          | ^5.0.0        | Apache-2.0              |
-| vite                                | ^8.0.16       | MIT                     |
-| web-vitals                          | ^1.1.2        | Apache-2.0              |
+| vite                                | ^8.1.6        | MIT                     |
 | zod                                 | ^3.23.8       | MIT                     |
 
 `jodit` is not declared directly — it arrives with `jodit-react` and the version shown is the one resolved in the lockfile. `fast-xml-parser` is carried transitively and pinned by the `overrides` block in `web/package.json`.
@@ -133,6 +120,7 @@ This software includes third party software subject to the following copyrights:
 | camera-controls            | [3.1.2](https://github.com/yomotsu/camera-controls)          | MIT                   |
 | @cesium/engine             | [26.1.0](https://github.com/CesiumGS/cesium)                 | Apache-2.0            |
 | fflate                     | [0.8.2](https://github.com/101arrowz/fflate)                 | MIT                   |
+| lichtblick                 | [v1.29.1](https://github.com/lichtblick-suite/lichtblick)    | MPL-2.0\*\*\*         |
 | online-3d-viewer           | [0.16.0](https://github.com/kovacsv/Online3DViewer)          | MIT                   |
 | playcanvas                 | [2.19.6](https://github.com/playcanvas/engine)               | MIT                   |
 | potree                     | [f6ac2d3b](https://github.com/potree/potree)                 | BSD-2-Clause          |
@@ -144,11 +132,13 @@ This software includes third party software subject to the following copyrights:
 | rhino3dm                   | [8.17.0](https://github.com/mcneel/rhino3dm)                 | MIT                   |
 | @simonwep/pickr            | [1.9.0](https://github.com/Simonwep/pickr)                   | MIT                   |
 
-The That Open Engine packages, `camera-controls`, `fflate`, and `web-ifc` are built into the self-contained IFC/BIM viewer bundle declared in `web/customInstalls/thatopenwebifc/package.json`. `supersplat` is the PlayCanvas SuperSplat editor, cloned at the pinned tag by `web/customInstalls/supersplat/superSplatInstall.js`, built, and served from `web/public/viewers/supersplat`; that script also copies the upstream license text to `THIRD_PARTY_LICENSE_SUPERSPLAT.txt` beside the built viewer. `web-ifc`, `rhino3dm`, `occt-import-js` and `draco3d` are also declared by the Online3DViewer install (`web/customInstalls/online3dviewer/package.json`), whose script copies each beside the viewer bundle in place of the CDN URLs the upstream bundle requests; that viewer carries its own `web-ifc` 0.0.68 alongside the 0.0.77 in the IFC/BIM bundle. `@simonwep/pickr` arrives with `online-3d-viewer` and the version shown is the one resolved in that install's lockfile. `@needle-tools/engine` ships inside the prebuilt USD viewer that `web/customInstalls/needletools-usd-viewer/usdViewerInstall.js` clones from `needle-tools/usd-viewer` at the commit shown, and `potree` is cloned at the commit shown and patched by `web/customInstalls/potree/potreeInstall.js`.
+The That Open Engine packages, `camera-controls`, `fflate`, and `web-ifc` are built into the self-contained IFC/BIM viewer bundle declared in `web/customInstalls/thatopenwebifc/package.json`. `supersplat` is the PlayCanvas SuperSplat editor, cloned at the pinned tag by `web/customInstalls/supersplat/superSplatInstall.js`, built, and served from `web/public/viewers/supersplat`; that script also copies the upstream license text to `THIRD_PARTY_LICENSE_SUPERSPLAT.txt` beside the built viewer. `web-ifc`, `rhino3dm`, `occt-import-js` and `draco3d` are also declared by the Online3DViewer install (`web/customInstalls/online3dviewer/package.json`), whose script copies each beside the viewer bundle in place of the CDN URLs the upstream bundle requests; that viewer carries its own `web-ifc` 0.0.68 alongside the 0.0.77 in the IFC/BIM bundle. `@simonwep/pickr` arrives with `online-3d-viewer` and the version shown is the one resolved in that install's lockfile. `@needle-tools/engine` ships inside the prebuilt USD viewer that `web/customInstalls/needletools-usd-viewer/usdViewerInstall.js` clones from `needle-tools/usd-viewer` at the commit shown, and `potree` is cloned at the commit shown and patched by `web/customInstalls/potree/potreeInstall.js`. `lichtblick` is the Lichtblick robotics visualization web app, cloned at the tag shown (commit `95713edb309d77589b130286642ab149995a5f7b`, verified before the build) by `web/customInstalls/robotics/roboticsViewerInstall.js`, installed from its own upstream lockfile, built with a VAMS-authored overlay, and served from `web/public/viewers/robotics`; that script copies the upstream license text to `THIRD_PARTY_LICENSE_LICHTBLICK.txt` and writes `SOURCE.txt` (repository, tag and commit) beside the built viewer. The built viewer also contains the npm packages that lockfile resolves, each under its own license.
 
 \* **OpenCascade Technology (OCCT) License Note**: `occt-import-js` is the OpenCascade-based importer for STEP (.stp, .step), IGES (.iges), and BREP (.brep) files used by the Online3DViewer viewer. The install script copies its worker script, JavaScript, and WebAssembly binary beside the viewer bundle in place of the CDN URL the upstream bundle requests, and the viewer loads them only when a file in one of those formats is opened. It is distributed under LGPL-2.1 and is consumed unmodified as a separately loaded module, so the LGPL-2.1 terms apply to that library's own files. The Three.js viewer bundle does not include it; `web/customInstalls/threejs/package.json` describes how to add it.
 
 \*\* **web-ifc License Note**: web-ifc is distributed under the MPL-2.0, which carries a file-level copyleft obligation on modified MPL-2.0 source files. VAMS consumes it as an unmodified dependency inside the IFC/BIM viewer bundle, so the obligation extends to that library's own files and not to VAMS source.
+
+\*\*\* **Lichtblick License Note**: Lichtblick is distributed under the MPL-2.0, which carries a file-level copyleft obligation on modified MPL-2.0 source files. VAMS compiles the upstream files unmodified; the overlay files compiled with them (`web/customInstalls/robotics/overlay/`) are separate VAMS files under Apache-2.0, so the obligation extends to Lichtblick's own files and not to VAMS source. The Source Code Form of those files is the upstream repository at the commit `SOURCE.txt` names.
 
 ---
 

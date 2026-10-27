@@ -124,8 +124,8 @@ def get_comments(assetId: str, queryParams: dict, showDeleted=False) -> dict:
         return response["Items"]
     except Exception as e:
         logger.exception(f"Error in get_comments: {str(e)}")
-        # Return empty result on error
-        return []
+        # A failed read reaches the handler's 500 path rather than reading as no comments
+        raise
 
 
 def get_comments_version(assetId: str, assetVersionId: str, queryParams: dict, showDeleted=False) -> dict:
@@ -160,8 +160,8 @@ def get_comments_version(assetId: str, assetVersionId: str, queryParams: dict, s
         return response["Items"]
     except Exception as e:
         logger.exception(f"Error in get_comments_version: {str(e)}")
-        # Return empty result on error
-        return []
+        # A failed read reaches the handler's 500 path rather than reading as no comments
+        raise
 
 
 def get_single_comment(assetId: str, assetVersionIdAndCommentId: str, showDeleted=False) -> dict:
@@ -485,12 +485,16 @@ def lambda_handler(event: dict, context: dict) -> dict:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event):
                 method_allowed_on_api = True
-        
 
-        if httpMethod == "GET" and method_allowed_on_api:
+        if not method_allowed_on_api:
+            response["statusCode"] = 403
+            response["body"] = json.dumps({"message": "Action not allowed"})
+            return response
+
+        if httpMethod == "GET":
             result = get_handler(response, pathParameters, queryParameters)
             return result
-        if httpMethod == "DELETE" and method_allowed_on_api:
+        if httpMethod == "DELETE":
             result = delete_handler(response, pathParameters, event)
             return result
         

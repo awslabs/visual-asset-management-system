@@ -635,10 +635,18 @@ def main():
         logger.info("Step 1: Ensuring base model is cached")
         logger.info("=" * 80)
 
+        # The repository this run needs, so the cache check can tell a warm cache for THIS variant
+        # from a warm cache for another one. Serving several variants from a single cache directory,
+        # a check that only asks whether any weights are present reports a hit on the wrong variant,
+        # skips the restore from S3, and downloads the right weights during inference instead.
         ensure_models_cached(
             hf_home=hf_home,
             s3_bucket=s3_model_bucket,
-            invalidate=invalidate_models
+            invalidate=invalidate_models,
+            # The default base model, not the run's resolved config, which is read further down
+            # than this. An overridden baseModelPath therefore reports a miss and restores from
+            # S3 -- slower than it need be, never a hit on the wrong weights.
+            repos=(DEFAULTS["baseModelPath"],)
         )
 
         # Step 2: Download asset files from S3
@@ -737,7 +745,8 @@ def main():
         logger.info("Step 6: Backing up HF cache to S3")
         logger.info("=" * 80)
         try:
-            backup_cache_to_s3(hf_home=hf_home, s3_bucket=s3_model_bucket)
+            backup_cache_to_s3(hf_home=hf_home, s3_bucket=s3_model_bucket,
+                               repos=(DEFAULTS["baseModelPath"],))
         except Exception as backup_err:
             logger.warning(f"Failed to backup HF cache to S3 (non-fatal): {backup_err}")
 

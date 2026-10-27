@@ -78,8 +78,10 @@ BRANCH_FARGATE = "FARGATE"
 BRANCH_NONE = "NONE"
 RENDER_BRANCHES = (BRANCH_BLENDER, BRANCH_RENDER3D, BRANCH_MEDIA, BRANCH_FARGATE, BRANCH_NONE)
 
-# Viewer extensions deliberately withheld from the pipeline. Empty at release.
-EXCLUDED_EXTENSIONS: Set[str] = set()
+# Viewer extensions withheld from dedicated handling: they classify `other` and take the generic probe.
+# The robotics logs the Robotics Data Viewer plays (MCAP, ROS 1 bag, ROS 2 SQLite bag, PX4 ULog) have no
+# extractor in the MEDIA image.
+EXCLUDED_EXTENSIONS: Set[str] = {".mcap", ".bag", ".db3", ".ulg", ".ulog"}
 
 # Formats no viewer renders, admitted for their extracted content: the office formats for their text
 # (document, data and document on the MEDIA branch, never rasterised), the video containers ffmpeg

@@ -7,6 +7,8 @@ import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as eks from "aws-cdk-lib/aws-eks";
+import * as events from "aws-cdk-lib/aws-events";
+import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
@@ -513,6 +515,14 @@ export class RapidPipelineEKSConstruct extends Construct {
             eksSecurityGroups
         );
 
+        // The state machine EXECUTION_END_CLEANUP accepts events for (see the rule below). Built from
+        // the name with the service helper rather than read from the state machine, which depends on
+        // this function.
+        consolidatedHandler.addEnvironment(
+            "STATE_MACHINE_ARN",
+            ServiceHelper.IAMArn(stateMachineName).statemachine
+        );
+
         // Kubernetes access for the pipeline Lambda, scoped to the jobs it runs.
         //
         // The handler was mapped into system:masters, which is cluster-admin — a single Lambda
@@ -605,7 +615,8 @@ export class RapidPipelineEKSConstruct extends Construct {
         // Transforms data input for Kubernetes job creation
         const constructPipelineTask = new tasks.LambdaInvoke(this, "ConstructPipeline", {
             lambdaFunction: consolidatedHandler,
-            timeout: Duration.minutes(5), // Add timeout for construct operation
+            // Counted in the run's worst case, which getConfig() checks against the state machine timeout.
+            timeout: Duration.seconds(Config.RAPID_PIPELINE_EKS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS),
             payload: sfn.TaskInput.fromObject({
                 operation: "CONSTRUCT_PIPELINE",
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
@@ -627,17 +638,28 @@ export class RapidPipelineEKSConstruct extends Construct {
                 // subdirectory within the asset with it, so the converted file is written beside its
                 // source rather than at the asset root.
                 assetId: sfn.JsonPath.stringAt("$.assetId"),
+                // The execution's name, under which CONSTRUCT_PIPELINE records the job name it builds,
+                // so a cleanup started after a stopped execution can find the job. A context-object
+                // path is always present.
+                executionName: sfn.JsonPath.stringAt("$$.Execution.Name"),
             }),
             resultPath: "$.ConstructPipelineResult",
             outputPath: "$",
             retryOnServiceExceptions: true, // Retry on transient AWS service errors
         });
 
-        // Submits Kubernetes job to EKS cluster
+        // Submits Kubernetes job to EKS cluster.
+        //
+        // The task timeout is the handler's own timeout (Lambda's 3 s default if unset) plus a margin,
+        // so a RunJob timeout, or an error the function itself returns, routes the run to
+        // PipelineEnd (which deletes the job by name) only after the RUN_JOB invocation has ended.
+        const runJobTimeout = (consolidatedHandler.timeout ?? Duration.seconds(3)).plus(
+            Duration.minutes(1)
+        );
         const runJobTask = new tasks.LambdaInvoke(this, "RunJob", {
             lambdaFunction: consolidatedHandler,
             integrationPattern: sfn.IntegrationPattern.REQUEST_RESPONSE,
-            timeout: Duration.minutes(10), // Add timeout for job creation
+            timeout: runJobTimeout,
             payload: sfn.TaskInput.fromObject({
                 operation: "RUN_JOB",
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
@@ -702,10 +724,13 @@ export class RapidPipelineEKSConstruct extends Construct {
         // End state: success
         const successState = new sfn.Succeed(this, "Success");
 
-        // End state: failure
+        // End state: failure. EndChoice routes here only when $.error is present, and every state
+        // that sets it either builds Error and Cause as strings or copies the error output of a Catch
+        // that wrote it to $.error. ErrorPath and CausePath must select string fields, and these two
+        // read the run's own error name and description from that object.
         const failState = new sfn.Fail(this, "Failure", {
-            cause: sfn.JsonPath.stringAt("$.error.Cause || 'Unknown error'"),
-            error: sfn.JsonPath.stringAt("$.error.Error || 'PipelineExecutionFailed'"),
+            errorPath: "$.error.Error",
+            causePath: "$.error.Cause",
         });
 
         // Error handlers for the three Lambda tasks. Each task gets its own pair, named
@@ -721,7 +746,10 @@ export class RapidPipelineEKSConstruct extends Construct {
         //   * ConstructPipeline: no job has been created, and the literal says so.
         //   * RunJob: the job may have been created before the failure. Its name is metadata.name in
         //     the jobManifest RunJob's payload reads. PipelineEnd reports a job that was never
-        //     created as already deleted.
+        //     created as already deleted. A RUN_JOB invocation still running when the Catch fires (an
+        //     earlier attempt the retrier resent after a client-side error) deletes a job it creates
+        //     after PipelineEnd, because PipelineEnd writes the run-ended marker that RUN_JOB checks
+        //     after its create.
         //   * CheckJob: the job exists, and its payload reads $.k8sJobName.
         //
         // States.ALL is evaluated after States.Timeout, so the InvokeError handler receives every
@@ -791,7 +819,7 @@ export class RapidPipelineEKSConstruct extends Construct {
         pipelineEndSuccessTask.next(endChoice);
 
         // Define variables for job monitoring with enhanced configuration
-        const jobCheckInterval = 10; // seconds between status checks
+        const jobCheckInterval = Config.RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS;
 
         // The poll ceiling is DERIVED from the configured job timeout, and deliberately outlives it.
         //
@@ -807,10 +835,10 @@ export class RapidPipelineEKSConstruct extends Construct {
         // terminated the pod and the outcome would again be reported as a timeout rather than as the
         // pod's own failure. One extra minute lets the poll observe the terminated pod and report what
         // actually happened.
-        const jobTimeoutSeconds = props.config.app.pipelines.useRapidPipeline.useEks.jobTimeout;
-        const pollMarginSeconds = 60;
-        const maxJobCheckAttempts = Math.ceil(
-            (jobTimeoutSeconds + pollMarginSeconds) / jobCheckInterval
+        //
+        // Computed in config.ts, where getConfig() counts the same attempts in the run's worst case.
+        const maxJobCheckAttempts = Config.rapidPipelineEksJobCheckAttempts(
+            props.config.app.pipelines.useRapidPipeline.useEks.jobTimeout
         );
 
         // Enhanced counter initialization with additional context
@@ -858,7 +886,7 @@ export class RapidPipelineEKSConstruct extends Construct {
                 // observing it end -- and PipelineEnd's cleanup is keyed off this field, so the real
                 // name is what lets the pod be deleted instead of a name that never existed. Every
                 // state on the path to here (InitializeCounter, IncrementCounter, RecordJobStatus)
-                // re-emits it. Contrast HandleRunJobError below, where no job was created.
+                // re-emits it. Contrast HandleConstructPipelineError below, where no job was created.
                 "k8sJobName.$": "$.k8sJobName",
                 "externalSfnTaskToken.$": "$.externalSfnTaskToken",
                 status: "FAILED",
@@ -889,10 +917,16 @@ export class RapidPipelineEKSConstruct extends Construct {
         // missing field rather than the actual failure, and States.Runtime in a Pass state is raised
         // before the state is entered, so it is routed by no Catch and never reaches PipelineEnd —
         // leaving the parent workflow's task token unreleased until its taskTimeout hours later.
+        //
+        // A job can exist when RUN_JOB returns an error body: create_job raises when a create the API
+        // server applied is answered 409 and the job cannot then be read back, and an earlier RunJob
+        // attempt may still create it. So PipelineEnd gets the manifest's job name, which RunJob's
+        // payload read and which this state's input therefore carries, deletes that job, and writes
+        // the run-ended marker that makes a late create delete itself.
         const handleRunJobError = new sfn.Pass(this, "HandleRunJobError", {
             parameters: {
                 "jobName.$": "$.jobName",
-                k8sJobName: "failure-before-creation", // No Kubernetes job exists to clean up
+                "k8sJobName.$": "$.ConstructPipelineResult.Payload.jobManifest.metadata.name",
                 "externalSfnTaskToken.$": "$.externalSfnTaskToken",
                 status: "FAILED",
                 error: {
@@ -1076,7 +1110,9 @@ export class RapidPipelineEKSConstruct extends Construct {
         // 8. Create Step Function State Machine with enhanced configuration
         const stateMachine = new sfn.StateMachine(this, "StateMachine", {
             definition,
-            timeout: Duration.hours(6), // Increased timeout for large file processing
+            // The middle link of the timeout chain in config.ts: the longest run getConfig() accepts
+            // fits inside it, and the registered pipeline's taskTimeout outlasts it.
+            timeout: Duration.seconds(Config.RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS),
             logs: {
                 destination: stateMachineLogGroup,
                 includeExecutionData: true,
@@ -1085,6 +1121,71 @@ export class RapidPipelineEKSConstruct extends Construct {
             tracingEnabled: true,
             stateMachineName: stateMachineName,
             comment: "Enhanced EKS Pipeline with comprehensive error handling and monitoring",
+        });
+
+        // 8b. Delete the Kubernetes job of an execution that ends without PipelineEnd.
+        //
+        // Stopping the execution (the VAMS execution abort, or a failure elsewhere in the workflow,
+        // which stops every registered sub-process), the state machine timeout, or an error no Catch
+        // routes, ends the run without PipelineEnd, the only state that deletes the job. Step Functions
+        // sends every status change of a standard execution to the default event bus. This rule passes
+        // this state machine's ABORTED, TIMED_OUT and FAILED ones to EXECUTION_END_CLEANUP, which finds
+        // the execution's jobs from the records CONSTRUCT_PIPELINE writes, writes their run-ended
+        // markers and deletes them. A SUCCEEDED run always went through PipelineEndSuccess, and a
+        // FAILED one that went through PipelineEnd finds its job already deleted.
+        //
+        // The target adds the handler's one resource-based permission: lambda:InvokeFunction for the
+        // EventBridge service principal, conditioned on SourceArn = this rule; SourceAccount is set
+        // below as well. EventBridge retries the delivery (the Invoke call) twice within an hour, and
+        // Lambda retries the asynchronous invocation itself twice within an hour (configured below):
+        // the handler fails an EXECUTION_END_CLEANUP that did not complete, so a listing or delete
+        // that fails runs again, and the cleanup is idempotent. A job left that long is near
+        // activeDeadlineSeconds. There is no dead-letter queue or destination, so an event whose
+        // delivery or retries are used up leaves the job running until its deadline.
+        const executionEndCleanupRule = new events.Rule(this, "ExecutionEndCleanupRule", {
+            description:
+                "Deletes the Kubernetes job of a RapidPipeline EKS execution that ended without PipelineEnd",
+            eventPattern: {
+                source: ["aws.states"],
+                detailType: ["Step Functions Execution Status Change"],
+                detail: {
+                    stateMachineArn: [stateMachine.stateMachineArn],
+                    status: ["ABORTED", "TIMED_OUT", "FAILED"],
+                },
+            },
+        });
+        executionEndCleanupRule.addTarget(
+            new eventsTargets.LambdaFunction(consolidatedHandler, {
+                event: events.RuleTargetInput.fromObject({
+                    operation: "EXECUTION_END_CLEANUP",
+                    executionArn: events.EventField.fromPath("$.detail.executionArn"),
+                    executionName: events.EventField.fromPath("$.detail.name"),
+                    stateMachineArn: events.EventField.fromPath("$.detail.stateMachineArn"),
+                    status: events.EventField.fromPath("$.detail.status"),
+                }),
+                retryAttempts: 2,
+                maxEventAge: Duration.hours(1),
+            })
+        );
+        // The target writes the permission as a child of the rule, with SourceArn and no
+        // SourceAccount.
+        const cleanupInvokePermissions = executionEndCleanupRule.node.children.filter(
+            (child): child is lambda.CfnPermission => child instanceof lambda.CfnPermission
+        );
+        if (cleanupInvokePermissions.length !== 1) {
+            throw new Error(
+                `ExecutionEndCleanupRule: expected the Lambda target to add one invoke permission, found ${cleanupInvokePermissions.length}`
+            );
+        }
+        cleanupInvokePermissions[0].sourceAccount = cdk.Aws.ACCOUNT_ID;
+        // The handler's asynchronous invocations: Lambda's retries of a failed EXECUTION_END_CLEANUP,
+        // pinned rather than left at the defaults (2 retries, 6 hours), so a cleanup ends within the
+        // hour and the run-jobs records' lifetime covers it (storageBuilder). The rule is the only
+        // asynchronous caller: every Step Functions task above invokes the handler RequestResponse.
+        // No destination is set, so this adds no permission.
+        consolidatedHandler.configureAsyncInvoke({
+            retryAttempts: 2,
+            maxEventAge: Duration.hours(1),
         });
 
         // 9. Create separate openPipeline Lambda function using builder

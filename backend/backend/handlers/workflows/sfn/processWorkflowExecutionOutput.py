@@ -107,10 +107,6 @@ try:
     # the ASL event, so it applies to executions of workflows that were not redeployed
     # with a newer ASL. Optional: empty string disables CloudWatch log retrieval.
     workflow_execution_log_group_arn = os.environ.get("WORKFLOW_EXECUTION_LOG_GROUP_ARN", "")
-    # Orchestration bus + event source prefix for the workflow.execution.completed event (optional:
-    # the event is skipped when the bus ARN is unset).
-    orchestration_bus_arn = os.environ.get("ORCHESTRATION_BUS_ARN", "")
-    orchestration_event_source_prefix = os.environ.get("ORCHESTRATION_EVENT_SOURCE_PREFIX", "")
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
@@ -120,31 +116,14 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 # on a too-small pool (botocore defaults to 10).
 s3_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'},
                    max_pool_connections=MAX_PARALLEL_S3_WORKERS)
-# The events client publishes a best-effort completion event; bound its connect/read timeouts so an
-# unreachable events endpoint fails fast rather than holding the end-state lambda.
-events_retry_config = Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2})
 
 s3c = region_routing_s3_client()
 s3r = region_routing_s3_resource()
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 client = boto3.client('lambda', config=retry_config)
 logs_client = boto3.client('logs', config=retry_config)
-events_client = boto3.client('events', config=events_retry_config)
 asset_upload_table = dynamodb.Table(asset_upload_table_name)
 buckets_table = dynamodb.Table(s3_asset_buckets_table)
-
-
-def emit_workflow_execution_completed(workflow_execution_id, workflow_database_id, workflow_id,
-                                      execution_status, started_at, completed_at,
-                                      execution_group_id=""):
-    """This lambda's `workflow.execution.completed` announcement: the shared emitter bound to the
-    events client and bus configuration resolved at import. Best-effort — skipped (logged) when no
-    bus is configured, and a publish failure is logged rather than failing the terminal-status write
-    that precedes it."""
-    return eo.emit_workflow_execution_completed(
-        events_client, orchestration_bus_arn, orchestration_event_source_prefix,
-        workflow_execution_id, workflow_database_id, workflow_id, execution_status,
-        started_at, completed_at, execution_group_id=execution_group_id)
 
 
 def _lambda_metadata_service(payload):
@@ -604,18 +583,13 @@ def _metadata_write_back_failure(result):
     return METADATA_WRITE_BACK_FAILURE
 
 
-def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, asset_id, file_path, metadata_type, request_context, workflow_execution_id=None):
+def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, asset_id, file_path, metadata_type, request_context):
     """Process metadata or attribute file from pipeline output.
 
     Returns the {metadataKey, metadataValue} entries the file applied (empty when the file carried
     no keys) so the caller can record them as output provenance; a MetadataWriteBackRejection carrying
     the service's message when the metadata service refused the write; or None when the file could not
-    be read/parsed or the cross-call itself failed.
-
-    `workflow_execution_id` travels on the cross-call as `lambdaCrossCall.workflowExecutionId`, so
-    the metadata service records the write on the asset row as the execution's
-    (`lastChangeSource: workflowExecution`) and the compliance trigger does not re-evaluate the asset
-    on a pipeline rule's own metadata output."""
+    be read/parsed or the cross-call itself failed."""
     try:
         logger.info(f"Processing {metadata_type} file: {s3_key}")
         
@@ -675,9 +649,7 @@ def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, a
                 },
                 'body': json.dumps(request_body),
                 'lambdaCrossCall': {
-                    'userName': 'SYSTEM_USER',
-                    **({'workflowExecutionId': workflow_execution_id}
-                       if workflow_execution_id else {}),
+                    'userName': 'SYSTEM_USER'
                 }
             }
             
@@ -1025,27 +997,17 @@ def record_execution_outputs(dynamo, workflow_execution_id, end_state_pipeline_e
         values[":er"] = execution_error
     condition = eo.not_terminal_condition(values)
     try:
-        response = main_table.update_item(
+        main_table.update_item(
             Key={"workflowExecutionId": workflow_execution_id,
                  "workflowDatabaseId:workflowId": er.workflow_composite_key(workflow_database_id, workflow_id)},
             UpdateExpression=expression,
             ConditionExpression=condition,
             ExpressionAttributeValues=values,
-            ReturnValues="ALL_NEW",
         )
     except Exception as e:
         if not eo.is_conditional_check_failure(e):
             raise
         logger.info("Main execution row already holds a terminal status; completion write skipped")
-        return
-
-    # The terminal status is now stored, so announce it. Only the writer that won the terminal guard
-    # emits, so a run finished by the error handler is announced once, by that handler.
-    attributes = (response or {}).get("Attributes") or {}
-    emit_workflow_execution_completed(
-        workflow_execution_id, workflow_database_id, workflow_id, execution_status,
-        started_at=attributes.get("executionStartDate", ""), completed_at=stop_date,
-        execution_group_id=attributes.get("executionGroupId", ""))
 
     # The run is terminal on the main row, so a launch under a locking restriction may now take the same
     # assets, files or file versions. A no-op under `none`; best-effort by contract (an unreleased row
@@ -1534,8 +1496,7 @@ def lambda_handler(event, context):
                                 event['assetId'],
                                 None,  # No file path for asset-level metadata
                                 'metadata',
-                                requestContext,
-                                workflow_execution_id=event.get('workflowExecutionId')
+                                requestContext
                             )
                             if applied is None or isinstance(applied, MetadataWriteBackRejection):
                                 output_failures.append(_metadata_write_back_failure(applied))
@@ -1570,8 +1531,7 @@ def lambda_handler(event, context):
                                     event['assetId'],
                                     file_path,
                                     'metadata',
-                                    requestContext,
-                                    workflow_execution_id=event.get('workflowExecutionId')
+                                    requestContext
                                 )
                                 if applied is None or isinstance(applied, MetadataWriteBackRejection):
                                     output_failures.append(_metadata_write_back_failure(applied))
@@ -1606,8 +1566,7 @@ def lambda_handler(event, context):
                                     event['assetId'],
                                     file_path,
                                     'attribute',
-                                    requestContext,
-                                    workflow_execution_id=event.get('workflowExecutionId')
+                                    requestContext
                                 )
                                 if applied is None or isinstance(applied, MetadataWriteBackRejection):
                                     output_failures.append(_metadata_write_back_failure(applied))

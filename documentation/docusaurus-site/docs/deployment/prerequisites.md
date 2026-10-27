@@ -164,16 +164,17 @@ An account-wide service control policy that denies `bedrock:InvokeModel` makes e
 
 The build machine requires outbound internet access to download dependencies from the following sources:
 
-| Source                              | Protocol | Purpose                                                                                                             |
-| ----------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------- |
-| npm registry (`registry.npmjs.org`) | HTTPS    | Node.js packages for frontend and CDK                                                                               |
-| GitHub (`github.com`)               | HTTPS    | The frontend install clones the `needle-tools/usd-viewer`, `potree/potree` and `playcanvas/supersplat` repositories |
-| PyPI (`pypi.org`)                   | HTTPS    | Python packages for Lambda layers                                                                                   |
-| Docker Hub / Amazon ECR Public      | HTTPS    | Base container images for pipeline container builds                                                                 |
-| AWS service endpoints               | HTTPS    | CDK deployment, AWS CloudFormation operations                                                                       |
+| Source                                            | Protocol | Purpose                                                                                                                                            |
+| ------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| npm registry (`registry.npmjs.org`)               | HTTPS    | Node.js packages for frontend and CDK                                                                                                              |
+| GitHub (`github.com`)                             | HTTPS    | The frontend install clones the `needle-tools/usd-viewer`, `potree/potree`, `playcanvas/supersplat` and `lichtblick-suite/lichtblick` repositories |
+| Yarn (`repo.yarnpkg.com`, `registry.yarnpkg.com`) | HTTPS    | The robotics viewer install fetches Yarn through corepack and installs the Lichtblick packages with it                                             |
+| PyPI (`pypi.org`)                                 | HTTPS    | Python packages for Lambda layers                                                                                                                  |
+| Docker Hub / Amazon ECR Public                    | HTTPS    | Base container images for pipeline container builds                                                                                                |
+| AWS service endpoints                             | HTTPS    | CDK deployment, AWS CloudFormation operations                                                                                                      |
 
 :::note[Network-restricted environments]
-For deployments in VPC-isolated or network-restricted environments, you must pre-stage all npm packages, Python packages, and container images in internal registries, and mirror the Git repositories the frontend install clones: `https://github.com/needle-tools/usd-viewer.git` (see `web/customInstalls/needletools-usd-viewer/usdViewerInstall.js`), `https://github.com/potree/potree.git` (see `web/customInstalls/potree/potreeInstall.js`) and `https://github.com/playcanvas/supersplat.git` (see `web/customInstalls/supersplat/superSplatInstall.js`). Each install script exits non-zero when its clone fails, which fails `npm install`. Consult the [Plan your deployment](plan-your-deployment.md) page for VPC-isolated deployment architecture.
+For deployments in VPC-isolated or network-restricted environments, you must pre-stage all npm packages, Python packages, and container images in internal registries, and mirror the Git repositories the frontend install clones: `https://github.com/needle-tools/usd-viewer.git` (see `web/customInstalls/needletools-usd-viewer/usdViewerInstall.js`), `https://github.com/potree/potree.git` (see `web/customInstalls/potree/potreeInstall.js`), `https://github.com/playcanvas/supersplat.git` (see `web/customInstalls/supersplat/superSplatInstall.js`) and `https://github.com/lichtblick-suite/lichtblick.git` (see `web/customInstalls/robotics/roboticsViewerInstall.js`). Each install script exits non-zero when its clone fails, which fails `npm install`. The robotics viewer install also runs Yarn through corepack: corepack downloads Yarn from `repo.yarnpkg.com` unless `COREPACK_NPM_REGISTRY` names a registry mirror, and Yarn installs from `registry.yarnpkg.com` unless `YARN_NPM_REGISTRY_SERVER` names one. Setting `"enabled": false` on `robotics-data-viewer` in `web/src/visualizerPlugin/config/viewerConfig.json` skips that install. Consult the [Plan your deployment](plan-your-deployment.md) page for VPC-isolated deployment architecture.
 :::
 
 ### SSL proxy considerations

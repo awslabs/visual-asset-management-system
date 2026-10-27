@@ -17,6 +17,7 @@ from ..utils.decorators import (
 )
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning
+from ..utils.confirmation import confirm_destructive_action
 from ..utils.logging import log_debug
 from ..utils.exceptions import (
     SyncError, SyncPlanError, SyncPushError, SyncPullError,
@@ -364,7 +365,7 @@ def push(ctx: click.Context, local_directory, database_id, asset_id, asset_locat
         if plan.deletes and permanent_delete and not json_output:
             output_warning(f"⚠️  {len(plan.deletes)} VAMS file(s) will be PERMANENTLY deleted. "
                            "This cannot be undone!", json_output)
-            if not click.confirm("Are you sure you want to proceed?"):
+            if not confirm_destructive_action():
                 raise click.ClickException("Sync push aborted")
 
         if not json_output and not hide_progress:
@@ -642,7 +643,7 @@ def pull(ctx: click.Context, local_directory, database_id, asset_id, asset_locat
         if plan.deletes and not json_output:
             output_warning(f"⚠️  {len(plan.deletes)} local file(s) will be deleted. "
                            "This cannot be undone!", json_output)
-            if not click.confirm("Are you sure you want to proceed?"):
+            if not confirm_destructive_action():
                 raise click.ClickException("Sync pull aborted")
 
         if not json_output and not hide_progress:

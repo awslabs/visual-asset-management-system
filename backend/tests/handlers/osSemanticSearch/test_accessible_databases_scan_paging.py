@@ -76,6 +76,7 @@ def access_module():
 
     dynamodb_stub = types.ModuleType("common.dynamodb")
     dynamodb_stub.validate_pagination_info = MagicMock()
+    dynamodb_stub.batch_get_items = MagicMock(return_value=([], []))
     sys.modules["common.dynamodb"] = dynamodb_stub
 
     try:

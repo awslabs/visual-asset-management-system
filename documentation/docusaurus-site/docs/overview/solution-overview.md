@@ -41,7 +41,7 @@ For the runtime versions and build tooling VAMS deploys with, and the versions y
 VAMS delivers the following core capabilities:
 
 -   **Asset Management** -- Organize visual assets across databases with metadata, tagging, versioning, and relationship linking
--   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, and media files directly in the browser through 20 built-in viewer plugins
+-   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, robotics logs, and media files directly in the browser through 21 built-in viewer plugins
 -   **Automated Processing** -- Execute pipelines for 3D conversion, metadata extraction, point cloud processing, preview thumbnail generation, and AI-powered metadata generation
 -   **Intelligent Search** -- Full-text and attribute-based search powered by Amazon OpenSearch Service, and natural-language (vector) search powered by Amazon Bedrock embeddings in a DynamoDB vector index, across assets and files
 -   **Fine-Grained Access Control** -- Two-tier Attribute-Based and Role-Based Access Control (ABAC/RBAC) using Casbin policy enforcement

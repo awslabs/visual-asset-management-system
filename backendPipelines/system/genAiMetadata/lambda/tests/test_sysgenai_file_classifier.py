@@ -93,8 +93,13 @@ class TestAllowList:
                                       | set(fc.ADDITIONAL_POINTCLOUD_EXTENSIONS))
         assert {".avi", ".flv", ".wmv"} <= set(fc.ADDITIONAL_EXTENSIONS)
 
-    def test_exclusions_are_empty_at_release(self):
-        assert fc.EXCLUDED_EXTENSIONS == set()
+    def test_exclusions_are_the_robotics_logs(self):
+        # The Robotics Data Viewer's formats have no extractor; each one classifies `other`.
+        assert fc.EXCLUDED_EXTENSIONS == {".mcap", ".bag", ".db3", ".ulg", ".ulog"}
+        assert fc.EXCLUDED_EXTENSIONS <= catalog_extensions()
+        for extension in fc.EXCLUDED_EXTENSIONS:
+            assert extension not in fc.ALLOW_LIST and extension not in fc.EXTENSION_CLASSES
+            assert fc.classify(extension, lambda n: b"") == (fc.CLASS_OTHER, fc.OTHER_BRANCH)
 
     def test_additional_extensions_are_the_formats_no_viewer_serves(self):
         """The office formats join the allow list for their text, the ffmpeg-decodable video containers for

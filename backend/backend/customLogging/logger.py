@@ -15,7 +15,10 @@ REDACTED = "<redacted>"
 # key name, so the api-key identifier fields (apiKeyId, apiKeyName, apiKeyHash) stay in the clear and
 # the audit trail keeps naming which key an action used.
 SENSITIVE_KEYS = ("authorization", "idJwtToken", "Credentials", "AccessKeyId", "SecretAccessKey",
-                  "SessionToken", "apiKey", "apiKeySecret", "rawKey")
+                  "SessionToken", "apiKey", "apiKeySecret", "rawKey",
+                  # The origin verification value CloudFront adds to forwarded API requests
+                  # (common/auth/originVerify.py ORIGIN_VERIFY_HEADER_NAME).
+                  "x-vams-origin-verify")
 
 # Caller-authored payload keys - a pipeline template body or a tag value carries free-form content
 # (prompts, model configuration, file paths). The key is kept so the record still shows that the field

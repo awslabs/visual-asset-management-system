@@ -164,7 +164,6 @@ describe("container image placeholder rejection (S1-INFRA-099)", () => {
             "useRapidPipeline.useEcs",
             (c) => {
                 c.app.useGlobalVpc.enabled = true;
-                c.app.pipelines.useRapidPipeline.enabled = true;
                 c.app.pipelines.useRapidPipeline.useEcs.enabled = true;
             },
             /useRapidPipeline\.useEcs is enabled but ecrContainerImageURI/,
@@ -173,7 +172,6 @@ describe("container image placeholder rejection (S1-INFRA-099)", () => {
             "useRapidPipeline.useEks",
             (c) => {
                 c.app.useGlobalVpc.enabled = true;
-                c.app.pipelines.useRapidPipeline.enabled = true;
                 c.app.pipelines.useRapidPipeline.useEks.enabled = true;
             },
             /useRapidPipeline\.useEks is enabled but ecrContainerImageURI/,
@@ -204,7 +202,7 @@ describe("container image placeholder rejection (S1-INFRA-099)", () => {
                     c.app.pipelines.useRapidPipeline.useEks.ecrContainerImageURI = REAL_IMAGE_URI;
                     c.app.pipelines.useModelOps.ecrContainerImageURI = REAL_IMAGE_URI;
                 })
-            ).not.toThrow(/ecrContainerImageURI/);
+            ).not.toThrow();
         });
 
         test("an empty value is rejected too, and says so", () => {

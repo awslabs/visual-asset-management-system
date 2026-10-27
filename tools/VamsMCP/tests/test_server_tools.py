@@ -197,6 +197,30 @@ def test_search_nlp_normalises_file_classes_and_extensions_as_the_route_does(moc
     assert request["fileExtensions"] == ["glb", "fbx"]
 
 
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: server.search_assets(query="bridge"),
+        lambda: server.search_files(query="texture"),
+        lambda: server.get_search_fields(),
+        lambda: server.find_and_summarize("bridge"),
+    ],
+    ids=["search_assets", "search_files", "get_search_fields", "find_and_summarize"],
+)
+def test_search_tools_refuse_without_opensearch(mock_client, call):
+    """Under NOOPENSEARCH every search tool returns the not-enabled error and sends no request."""
+    mock_client.search_enabled.return_value = False
+
+    result = call()
+
+    assert result == {
+        "error": server.SEARCH_DISABLED_MESSAGE,
+        "error_type": "SearchDisabledError",
+    }
+    mock_client.api.search_query.assert_not_called()
+    mock_client.api.get_search_mapping.assert_not_called()
+
+
 # --- Database-scoped search must not over-match sibling databases ------------
 #
 # S6-TOOLS-003. The filter was `str_databaseid:"{database_id}"` on the ANALYZED field, so the standard
@@ -278,12 +302,28 @@ def test_search_defaults_to_relevance_ordering(searching_client):
     assert searching_client.api.search_query.call_args.args[0]["sort"] == ["_score"]
 
 
+@pytest.mark.parametrize("tool", ["search_assets", "search_files"])
 @pytest.mark.parametrize("descending,expected", [(True, "desc"), (False, "asc")])
-def test_search_orders_by_a_named_field(searching_client, descending, expected):
-    server.search_assets(query="x", sort_field="dateCreated", sort_desc=descending)
+def test_search_orders_by_a_named_field(searching_client, tool, descending, expected):
+    """The search API's request model takes a sort entry as a bare field name or as
+    `{field, order}` (SearchSortModel). The OpenSearch-native `{<field>: {order}}` this test used
+    to pin is rejected with 400 (`sort.0.field: field required`) before it reaches OpenSearch."""
+    getattr(server, tool)(query="x", sort_field="str_assetname", sort_desc=descending)
     assert searching_client.api.search_query.call_args.args[0]["sort"] == [
-        {"dateCreated": {"order": expected}}
+        {"field": "str_assetname", "order": expected}
     ]
+
+
+@pytest.mark.parametrize("descending", [True, False])
+def test_search_sort_matches_the_cli_request_shape(searching_client, descending):
+    """`vamscli search ... --sort-field` sends the shape the deployed API accepts. Pinning the server
+    to the CLI's own builder keeps a mocked API from hiding a shape the real one refuses."""
+    from vamscli.commands.search import _build_sort_config
+
+    server.search_assets(query="x", sort_field="str_assetname", sort_desc=descending)
+    assert searching_client.api.search_query.call_args.args[0]["sort"] == _build_sort_config(
+        "str_assetname", descending
+    )
 
 
 def test_search_negative_offset_is_clamped(searching_client):
@@ -375,10 +415,6 @@ def test_find_and_summarize_within_the_clamp_adds_no_note(mock_client):
         lambda: server.list_executions(starting_token="tok"),
         lambda: server.page_execution_detail_metadata("e1", starting_token="tok"),
         lambda: server.list_subscriptions(starting_token="tok"),
-        lambda: server.list_compliance_evaluations("db1", "a1", starting_token="tok"),
-        lambda: server.list_quarantined_assets(starting_token="tok"),
-        lambda: server.query_compliance_audit(starting_token="tok"),
-        lambda: server.get_asset_compliance_audit("db1", "a1", starting_token="tok"),
     ],
 )
 def test_every_paginated_read_tool_forwards_starting_token(mock_client, call):
@@ -631,10 +667,6 @@ def test_no_read_tool_calls_a_mutating_apiclient_method():
         "create_", "update_", "delete_", "set_", "archive_", "unarchive_", "execute_", "rerun_",
         "abort_", "permanent_", "revert_", "move_", "copy_", "import_", "reset_", "initialize_",
         "complete_",
-        # The compliance write verbs: none deletes stored data, but every one of them changes state
-        # or starts compute, and a read-section placement would reach them with both gates off.
-        "bind_", "unbind_", "evaluate_", "sweep_", "release_", "grant_", "revoke_", "approve_",
-        "reject_",
     )
 
     offenders = []
@@ -1203,7 +1235,6 @@ _PAGINATED_READ_TOOLS = (
     "list_subscriptions",
     "list_api_keys",
     "list_user_api_keys",
-    "list_compliance_evaluations",
 )
 
 
@@ -1438,13 +1469,7 @@ def test_non_pipeline_saves_stay_on_plain_unwrap(tool):
 # kill of running AWS compute. The classification is now stated in all three places, so the risk of
 # drift moves to keeping them in step — which is what this asserts.
 
-_COMPUTE_CAUTION_TOOLS = (
-    "execute_workflow", "rerun_execution", "abort_execution",
-    # A pipeline rule runs a workflow execution per evaluated asset, so these four start compute too:
-    # one asset, every bound asset, and the two ways a cascade's re-evaluation is set running.
-    "evaluate_asset_compliance", "sweep_compliance_schema", "create_compliance_cascade",
-    "approve_compliance_cascade",
-)
+_COMPUTE_CAUTION_TOOLS = ("execute_workflow", "rerun_execution", "abort_execution")
 
 
 def _sibling_doc(name):

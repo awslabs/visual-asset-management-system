@@ -395,10 +395,10 @@ describe("SSM integration surface", () => {
         for (const key of required) {
             expect(names.filter((n) => n.endsWith(`/resourceNames/${key}`))).toHaveLength(1);
         }
-        // 73 registry parameters (ResourceNamesBuilder) + the two late-bound ones here, plus one
+        // 68 registry parameters (ResourceNamesBuilder) + the two late-bound ones here, plus one
         // reindexer name per enabled search engine.
-        expect(names.length).toBeGreaterThanOrEqual(75);
-        expect(names.length).toBeLessThanOrEqual(77);
+        expect(names.length).toBeGreaterThanOrEqual(70);
+        expect(names.length).toBeLessThanOrEqual(72);
     });
 
     test.each(ALL_TEMPLATES)("%s binds the workflow role ARN parameter to the role", (name) => {

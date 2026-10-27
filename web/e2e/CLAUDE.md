@@ -146,6 +146,8 @@ locators — the app's markup is not always guessable, and these were establishe
 | `searchTabs(page)`                                            | The search page's provider tab strip (`role=tablist`)                                      |
 | `readFeaturesEnabled(page)`                                   | Cached secure-config switches; `null` if none cached                                       |
 | `expectSearchRendered(page)`                                  | Rows, "No matches", or "No … to display" — any sandbox                                     |
+| `findNestedAssetFile(page, options)`                          | First file inside a folder via the API, plus its stored key when known, or `null`          |
+| `selectedTreeNode(page)`                                      | The File Manager tree's single-selected row label, in the visible tree                     |
 
 **Selector facts worth not rediscovering:**
 

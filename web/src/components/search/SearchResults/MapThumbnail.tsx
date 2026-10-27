@@ -12,6 +12,31 @@ import { extractLocationData } from "../utils/locationUtils";
 import { offsetForKey, splitGeoJsonForColoring } from "../utils/polygonColor";
 import MapPreviewModal from "./MapPreviewModal";
 
+/**
+ * Each mounted map holds its own WebGL context, and browsers drop the oldest context past about
+ * 16. A thumbnail therefore mounts its map only while it is near the viewport and one of these
+ * slots is free; the others render a same-size placeholder until a slot frees.
+ */
+export const MAX_LIVE_MAP_THUMBNAILS = 8;
+const NEAR_VIEWPORT_MARGIN = "200px";
+
+let liveMapThumbnails = 0;
+const mapSlotWaiters = new Set<() => boolean>();
+
+const acquireMapSlot = (): boolean => {
+    if (liveMapThumbnails >= MAX_LIVE_MAP_THUMBNAILS) return false;
+    liveMapThumbnails += 1;
+    return true;
+};
+
+const releaseMapSlot = () => {
+    liveMapThumbnails = Math.max(0, liveMapThumbnails - 1);
+    for (const waiter of Array.from(mapSlotWaiters)) {
+        if (liveMapThumbnails >= MAX_LIVE_MAP_THUMBNAILS) break;
+        waiter();
+    }
+};
+
 interface MapThumbnailProps {
     assetData: any;
     mapStyleUrl: string;
@@ -44,11 +69,56 @@ const MapThumbnail: React.FC<MapThumbnailProps> = ({
     // thumbnails in a list still look distinct from each other.
     const baseColorOffset = offsetForKey(colorKey);
     const mapRef = useRef<MapRef>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
     const [isLoaded, setIsLoaded] = useState(false);
     const [isModalVisible, setIsModalVisible] = useState(false);
+    // Without IntersectionObserver every thumbnail counts as near the viewport (still capped).
+    const [isNearViewport, setIsNearViewport] = useState(
+        typeof IntersectionObserver === "undefined"
+    );
+    const [hasMapSlot, setHasMapSlot] = useState(false);
 
     // Extract location data from asset
     const locationData = extractLocationData(assetData);
+    const hasLocation = !!locationData;
+
+    useEffect(() => {
+        const element = containerRef.current;
+        if (!hasLocation || !element || typeof IntersectionObserver === "undefined") {
+            return;
+        }
+        const observer = new IntersectionObserver(
+            (entries) => {
+                const entry = entries[entries.length - 1];
+                if (entry) setIsNearViewport(entry.isIntersecting);
+            },
+            { rootMargin: NEAR_VIEWPORT_MARGIN }
+        );
+        observer.observe(element);
+        return () => observer.disconnect();
+    }, [hasLocation]);
+
+    useEffect(() => {
+        if (!hasLocation || !isNearViewport) return;
+        let holding = false;
+        const attempt = () => {
+            if (!acquireMapSlot()) return false;
+            holding = true;
+            mapSlotWaiters.delete(attempt);
+            setHasMapSlot(true);
+            return true;
+        };
+        if (!attempt()) mapSlotWaiters.add(attempt);
+        return () => {
+            mapSlotWaiters.delete(attempt);
+            if (holding) {
+                holding = false;
+                setHasMapSlot(false);
+                setIsLoaded(false);
+                releaseMapSlot();
+            }
+        };
+    }, [hasLocation, isNearViewport]);
 
     // Determine initial view state based on location type
     const getInitialViewState = () => {
@@ -170,89 +240,102 @@ const MapThumbnail: React.FC<MapThumbnailProps> = ({
                     }
                 }}
                 style={containerStyle}
+                ref={containerRef}
             >
-                <Map
-                    ref={mapRef}
-                    initialViewState={getInitialViewState()}
-                    style={{ width: "100%", height: "100%" }}
-                    mapStyle={mapStyleUrl}
-                    validateStyle={false}
-                    onLoad={() => setIsLoaded(true)}
-                    interactive={!enableExpand}
-                    attributionControl={false}
-                >
-                    {!enableExpand && (
-                        <NavigationControl position="top-right" showZoom showCompass={false} />
-                    )}
+                {!hasMapSlot ? (
+                    <div
+                        data-testid="map-thumbnail-placeholder"
+                        aria-hidden="true"
+                        style={{
+                            width: "100%",
+                            height: "100%",
+                            background: "var(--vams-bg-secondary)",
+                        }}
+                    />
+                ) : (
+                    <Map
+                        ref={mapRef}
+                        initialViewState={getInitialViewState()}
+                        style={{ width: "100%", height: "100%" }}
+                        mapStyle={mapStyleUrl}
+                        validateStyle={false}
+                        onLoad={() => setIsLoaded(true)}
+                        interactive={!enableExpand}
+                        attributionControl={false}
+                    >
+                        {!enableExpand && (
+                            <NavigationControl position="top-right" showZoom showCompass={false} />
+                        )}
 
-                    {/* Split a multi-polygon (or geometry collection) value into individual
+                        {/* Split a multi-polygon (or geometry collection) value into individual
                         sub-shapes so each polygon gets its own color. Each sub-geometry is
                         wrapped in a GeoJSON Feature so MapLibre's geojson source accepts it
                         across all engine versions (some are strict about bare geometries). */}
-                    {locationData &&
-                        locationData.type === "geojson" &&
-                        locationData.geoJson &&
-                        splitGeoJsonForColoring(locationData.geoJson, baseColorOffset).map(
-                            (sub) => (
-                                <Source
-                                    key={`thumb-${sub.id}`}
-                                    id={`geojson-thumb-${sub.id}`}
-                                    type="geojson"
-                                    data={
-                                        {
-                                            type: "Feature",
-                                            geometry: sub.geometry,
-                                            properties: {},
-                                        } as any
-                                    }
-                                >
-                                    <Layer
-                                        id={`geojson-thumb-fill-${sub.id}`}
-                                        type="fill"
-                                        paint={{
-                                            "fill-color": sub.color,
-                                            "fill-opacity": 0.35,
-                                        }}
-                                    />
-                                    <Layer
-                                        id={`geojson-thumb-outline-${sub.id}`}
-                                        type="line"
-                                        paint={{
-                                            "line-color": sub.color,
-                                            "line-width": 2,
-                                        }}
-                                    />
-                                </Source>
-                            )
-                        )}
-
-                    {/* Render point marker */}
-                    {locationData &&
-                        locationData.type === "point" &&
-                        locationData.latitude &&
-                        locationData.longitude && (
-                            <Marker
-                                latitude={locationData.latitude}
-                                longitude={locationData.longitude}
-                                anchor="bottom"
-                            >
-                                <div
-                                    style={{
-                                        width: "20px",
-                                        height: "20px",
-                                    }}
-                                >
-                                    <svg
-                                        viewBox="0 0 24 24"
-                                        fill="#d91515"
-                                        xmlns="http://www.w3.org/2000/svg"
+                        {locationData &&
+                            locationData.type === "geojson" &&
+                            locationData.geoJson &&
+                            splitGeoJsonForColoring(locationData.geoJson, baseColorOffset).map(
+                                (sub) => (
+                                    <Source
+                                        key={`thumb-${sub.id}`}
+                                        id={`geojson-thumb-${sub.id}`}
+                                        type="geojson"
+                                        data={
+                                            {
+                                                type: "Feature",
+                                                geometry: sub.geometry,
+                                                properties: {},
+                                            } as any
+                                        }
                                     >
-                                        <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />
-                                    </svg>
-                                </div>
-                            </Marker>
-                        )}
-                </Map>
+                                        <Layer
+                                            id={`geojson-thumb-fill-${sub.id}`}
+                                            type="fill"
+                                            paint={{
+                                                "fill-color": sub.color,
+                                                "fill-opacity": 0.35,
+                                            }}
+                                        />
+                                        <Layer
+                                            id={`geojson-thumb-outline-${sub.id}`}
+                                            type="line"
+                                            paint={{
+                                                "line-color": sub.color,
+                                                "line-width": 2,
+                                            }}
+                                        />
+                                    </Source>
+                                )
+                            )}
+
+                        {/* Render point marker */}
+                        {locationData &&
+                            locationData.type === "point" &&
+                            locationData.latitude &&
+                            locationData.longitude && (
+                                <Marker
+                                    latitude={locationData.latitude}
+                                    longitude={locationData.longitude}
+                                    anchor="bottom"
+                                >
+                                    <div
+                                        style={{
+                                            width: "20px",
+                                            height: "20px",
+                                        }}
+                                    >
+                                        <svg
+                                            viewBox="0 0 24 24"
+                                            fill="#d91515"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                        >
+                                            <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />
+                                        </svg>
+                                    </div>
+                                </Marker>
+                            )}
+                    </Map>
+                )}
             </div>
             {enableExpand && isModalVisible && (
                 <MapPreviewModal

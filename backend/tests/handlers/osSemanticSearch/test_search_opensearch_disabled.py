@@ -56,6 +56,7 @@ def _load_search(monkeypatch, env, unset=()):
     authz_stub.CasbinEnforcer = MagicMock(return_value=enforcer)
     dynamodb_stub = types.ModuleType("common.dynamodb")
     dynamodb_stub.validate_pagination_info = MagicMock()
+    dynamodb_stub.batch_get_items = MagicMock(return_value=([], []))
     sys.modules["handlers.auth"], sys.modules["handlers.authz"], sys.modules["common.dynamodb"] = auth_stub, authz_stub, dynamodb_stub
     try:
         with patch("boto3.client", side_effect=recorder), patch("boto3.resource", return_value=MagicMock()):
@@ -94,7 +95,7 @@ class TestOpenSearchDisabled:
         module, recorder = loaded
         response = module.lambda_handler(_event(method, path), None)
         assert response["statusCode"] == 404
-        assert json.loads(response["body"])["message"] == "Search is not available when OpenSearch is not enabled"
+        assert json.loads(response["body"])["message"] == "Search is not available when OpenSearch feature is not enabled"
         assert "ssm" not in recorder.services
 
     def test_manager_is_unavailable_without_a_client(self, loaded):

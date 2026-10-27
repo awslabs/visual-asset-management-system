@@ -75,6 +75,7 @@ def search_module():
     # stub module carrying the symbols search.py imports at module load.
     dynamodb_stub = types.ModuleType("common.dynamodb")
     dynamodb_stub.validate_pagination_info = MagicMock()
+    dynamodb_stub.batch_get_items = MagicMock(return_value=([], []))
     sys.modules["common.dynamodb"] = dynamodb_stub
 
     try:
@@ -121,3 +122,89 @@ class TestSearchableIdentifierFields:
         should = clause["bool"]["should"]
         text_fields = set(should[0]["query_string"]["fields"])
         assert _EXPECTED_IDENTIFIER_FIELDS.issubset(text_fields)
+
+
+def _query_builder(search_module):
+    return search_module.DualIndexQueryBuilder(search_module.DatabaseAccessManager())
+
+
+def _search_request(search_module, **fields):
+    return search_module.SearchRequestModel(**fields)
+
+
+@pytest.mark.unit
+class TestMetadataSearchModes:
+    """Multi-term metadata queries in key and value mode, and field:value parsing in both mode."""
+
+    def test_key_mode_and_query_requires_every_key(self, search_module):
+        clause = _query_builder(search_module)._build_metadata_search_query(
+            "MD_str_a AND MD_str_b", "key", "asset"
+        )
+        assert clause == {
+            "bool": {"must": [{"exists": {"field": "MD_.a"}}, {"exists": {"field": "MD_.b"}}]}
+        }
+
+    def test_value_mode_or_query_matches_any_value(self, search_module):
+        clause = _query_builder(search_module)._build_metadata_search_query("x OR y", "value", "asset")
+        should = clause["bool"]["should"]
+        assert clause["bool"]["minimum_should_match"] == 1
+        assert [entry["query_string"]["query"] for entry in should] == ["*x*", "*y*"]
+        assert all(entry["query_string"]["fields"] == ["MD_._value"] for entry in should)
+
+    def test_value_mode_term_with_colon_is_a_value(self, search_module):
+        clause = _query_builder(search_module)._build_metadata_search_query("12:30", "value", "asset")
+        assert clause["query_string"]["fields"] == ["MD_._value"]
+        assert clause["query_string"]["query"] == "*12\\:30*"
+
+    def test_both_mode_still_parses_field_value_pairs(self, search_module):
+        clause = _query_builder(search_module)._build_metadata_search_query(
+            "MD_str_a:1 AND MD_str_b:2", "both", "asset"
+        )
+        queries = [entry["query_string"]["query"] for entry in clause["bool"]["must"]]
+        assert queries == ['MD_.a:"1"', 'MD_.b:"2"']
+
+    def test_query_with_no_term_is_rejected_with_its_message(self, search_module):
+        builder = _query_builder(search_module)
+        request = _search_request(search_module, metadataQuery="MD_str_ AND MD_str_", metadataSearchMode="key")
+        with pytest.raises(search_module.VAMSGeneralErrorResponse) as raised:
+            builder._build_index_query(request, ["db1"], "asset")
+        assert "metadataQuery" in str(raised.value)
+
+    def test_field_name_with_a_space_is_escaped_in_the_field_only(self, search_module):
+        clause = _query_builder(search_module)._build_metadata_search_query(
+            "Project Code:A1 B2", "both", "asset"
+        )
+        assert clause["query_string"]["query"] == 'MD_.Project\\ Code:"A1 B2"'
+
+    def test_field_name_tab_is_escaped(self, search_module):
+        clause = _query_builder(search_module)._build_metadata_search_query(
+            "Project\tCode:A1", "both", "asset"
+        )
+        assert clause["query_string"]["query"] == 'MD_.Project\\\tCode:"A1"'
+
+
+def _aggregation_filters(query):
+    return [aggregation["filter"] for aggregation in query["aggs"].values()]
+
+
+@pytest.mark.unit
+class TestAggregationArchivedScope:
+    """Facet aggregations cover the same archived scope as the hits."""
+
+    @pytest.mark.parametrize("index_type", ["asset", "file"])
+    def test_include_archived_aggregations_do_not_exclude_archived(self, search_module, index_type):
+        request = _search_request(search_module, includeArchived=True, aggregations=True)
+        query = _query_builder(search_module)._build_index_query(request, ["db1"], index_type)
+        filters = _aggregation_filters(query)
+        assert filters
+        assert all("bool_archived" not in str(entry) for entry in filters)
+
+    @pytest.mark.parametrize("index_type", ["asset", "file"])
+    def test_default_aggregations_exclude_archived(self, search_module, index_type):
+        request = _search_request(search_module, includeArchived=False, aggregations=True)
+        query = _query_builder(search_module)._build_index_query(request, ["db1"], index_type)
+        filters = _aggregation_filters(query)
+        assert filters
+        assert all(
+            entry == {"bool": {"must_not": [{"term": {"bool_archived": True}}]}} for entry in filters
+        )

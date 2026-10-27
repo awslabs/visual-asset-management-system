@@ -13,6 +13,7 @@
 
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { DynamicViewer } from "./DynamicViewer";
 
 // Built inside the factory (which is hoisted) and read back through require().
@@ -176,5 +177,49 @@ describe("DynamicViewer", () => {
         rerender(view([file("model.glb")]));
 
         await waitFor(() => expect(screen.queryByText(/No compatible viewers found/)).toBeNull());
+    });
+});
+
+describe("DynamicViewer mode controls", () => {
+    const FULLSCREEN_THREEJS = {
+        ...THREEJS,
+        config: { ...THREEJS.config, canFullscreen: true },
+    };
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        registry().isInitialized.mockReturnValue(true);
+        registry().getCurrentlyLoadedPlugin.mockReturnValue(null);
+        registry().loadPluginDependencies.mockResolvedValue(undefined);
+        registry().getCompatibleViewers.mockReturnValue([FULLSCREEN_THREEJS]);
+        registry().switchToPlugin.mockImplementation(async () => ({
+            config: FULLSCREEN_THREEJS.config,
+            component: () => <div>viewer:threejs-viewer</div>,
+            isLoaded: true,
+        }));
+    });
+
+    it("are keyboard-operable buttons that report the current mode", async () => {
+        const onViewerModeChange = jest.fn();
+        render(
+            <DynamicViewer
+                files={[file("model.glb")] as any}
+                assetId="a1"
+                databaseId="d1"
+                viewerMode="fullscreen"
+                onViewerModeChange={onViewerModeChange}
+            />
+        );
+
+        const wide = await screen.findByRole("button", { name: /view wide/i });
+        const fullscreen = screen.getByRole("button", { name: /view fullscreen/i });
+        expect(wide).toHaveAttribute("aria-pressed", "false");
+        expect(fullscreen).toHaveAttribute("aria-pressed", "true");
+        expect(wide.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+
+        wide.focus();
+        expect(wide).toHaveFocus();
+        await userEvent.keyboard("{Enter}");
+        expect(onViewerModeChange).toHaveBeenCalledWith("wide");
     });
 });

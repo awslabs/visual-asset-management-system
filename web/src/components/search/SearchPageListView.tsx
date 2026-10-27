@@ -15,20 +15,14 @@ import Modal from "@cloudscape-design/components/modal";
 import Icon from "@cloudscape-design/components/icon";
 import Checkbox from "@cloudscape-design/components/checkbox";
 import Popover from "@cloudscape-design/components/popover";
-import { SearchExplanation, getTotalResultCount, FIELD_MAPPINGS } from "./types";
+import { SearchExplanation, getTotalResultCount, getPageCount, FIELD_MAPPINGS } from "./types";
 import AssetDeleteModal from "../modals/AssetDeleteModal";
 import AssetUnarchiveModal from "../modals/AssetUnarchiveModal";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
 import FilePreviewThumbnailCell from "./SearchPreviewThumbnail/FilePreviewThumbnailCell";
 import AssetPreviewModal from "../filemanager/modals/AssetPreviewModal";
-import {
-    changeFilter,
-    changeRectype,
-    paginateSearch,
-    search,
-    sortSearch,
-} from "./SearchPropertyFilter";
-import { INITIAL_STATE, SearchPageViewProps } from "./SearchPageTypes";
+import { changeFilter, changeRectype, paginateSearch, sortSearch } from "./SearchPropertyFilter";
+import { SearchPageViewProps } from "./SearchPageTypes";
 import Synonyms from "../../synonyms";
 import { EmptyState } from "../../common/common-components";
 import { useNavigate } from "react-router-dom";
@@ -1092,7 +1086,7 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
 
     const totalResults = getTotalResultCount(state?.result);
     const currentPage = 1 + Math.floor(state?.pagination?.from / state?.tablePreferences?.pageSize);
-    const pageCount = Math.ceil(totalResults / state?.tablePreferences?.pageSize);
+    const pageCount = getPageCount(totalResults, state?.tablePreferences?.pageSize);
 
     console.log("[SearchPageListView] Pagination calculation:", {
         from: state?.pagination?.from,
@@ -1140,9 +1134,6 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                                     <Button
                                         onClick={() => {
                                             dispatch({ type: "query-criteria-cleared" });
-                                            setTimeout(() => {
-                                                search(INITIAL_STATE, { state, dispatch });
-                                            }, 10);
                                         }}
                                     >
                                         Clear filter
@@ -1290,7 +1281,7 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                                 totalResults ? (
                                     <Popover
                                         header="About this count"
-                                        content="This total is based on records accessible with your current permissions. The actual number of records in the system may be higher."
+                                        content={`This count includes every matching record in the ${Synonyms.databases} you can access, counted before each record's own permissions are checked. The table lists only the records you can open, so it can show fewer than this count.`}
                                         triggerType="custom"
                                     >
                                         <Box
@@ -1464,7 +1455,7 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                     }
 
                     // Refresh the search results
-                    search({}, { state, dispatch });
+                    dispatch({ type: "refresh" });
                 }}
             />
 
@@ -1490,7 +1481,7 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                     }
 
                     // Refresh the search results
-                    search({}, { state, dispatch });
+                    dispatch({ type: "refresh" });
                 }}
             />
 

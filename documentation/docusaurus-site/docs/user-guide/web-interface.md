@@ -10,6 +10,8 @@ The VAMS interface uses a persistent side navigation panel on the left and a top
 
 :::info
 If the navigation panel shows **No Access**, your account does not have any web route permissions assigned. Contact your administrator to request the necessary role assignments.
+
+If it shows **Navigation could not be loaded**, the check for which pages you can open did not complete. Choose **Retry**. While the check has failed, Home still opens, and other pages show **Page access could not be checked** with a **Retry** button.
 :::
 
 The side navigation panel can be collapsed or expanded using the toggle control. VAMS remembers your panel state across page navigations within a session.
@@ -38,11 +40,11 @@ The **Databases** page displays all databases you have access to in a searchable
 
 Each database record displays the following information:
 
-| Column            | Description                                             |
-| ----------------- | ------------------------------------------------------- |
-| **Database Name** | The unique identifier for the database.                 |
-| **Description**   | A human-readable description of the database's purpose. |
-| **Asset Count**   | The number of assets contained within the database.     |
+| Column                | Description                                                                    |
+| --------------------- | ------------------------------------------------------------------------------ |
+| **Database Name**     | The unique identifier for the database.                                        |
+| **Description**       | A human-readable description of the database's purpose.                        |
+| **Total Asset Count** | The number of active assets in the database, including assets you cannot open. |
 
 ---
 
@@ -135,7 +137,7 @@ When you select a file in the file manager and choose to view it, VAMS opens a d
 
 ### Supported Viewer Types
 
-VAMS includes 20 built-in viewer plugins covering 3D models, point clouds, Gaussian splats, images, video, audio, documents, and tabular data. The viewer is selected automatically only when exactly one viewer supports the file extension. If multiple viewers support the same extension, you choose one from a dropdown and can switch between them.
+VAMS includes 21 built-in viewer plugins covering 3D models, point clouds, Gaussian splats, images, video, audio, documents, and tabular data. The viewer is selected automatically only when exactly one viewer supports the file extension. If multiple viewers support the same extension, you choose one from a dropdown and can switch between them.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 

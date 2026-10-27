@@ -380,7 +380,13 @@
                 "globalBurstLimit": 100,
                 "endpointType": "REGIONAL",
                 "optionalExternalPrivateApigVPCEId": "",
-                "apiGatewayTimeoutTime": 29
+                "apiGatewayTimeoutTime": 29,
+                "customDomain": {
+                    "enabled": false,
+                    "domainHost": "",
+                    "certificateArn": "",
+                    "optionalHostedZoneId": ""
+                }
             }
         },
         "metadataSchema": {
@@ -388,10 +394,6 @@
             "autoLoadDefaultDatabaseSchema": true,
             "autoLoadDefaultAssetSchema": true,
             "autoLoadDefaultAssetFileSchema": true
-        },
-        "compliance": {
-            "autoLoadDefaultSchema": true,
-            "quarantineBlocksDownload": false
         }
     }
 }

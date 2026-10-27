@@ -410,6 +410,12 @@ const COMMERCIAL: ConfigShape = {
                 endpointType: "REGIONAL",
                 optionalExternalPrivateApigVPCEId: "",
                 apiGatewayTimeoutTime: 29,
+                customDomain: {
+                    enabled: false,
+                    domainHost: "",
+                    certificateArn: "",
+                    optionalHostedZoneId: "",
+                },
             },
         },
         metadataSchema: {
@@ -417,10 +423,6 @@ const COMMERCIAL: ConfigShape = {
             autoLoadDefaultDatabaseSchema: true,
             autoLoadDefaultAssetSchema: true,
             autoLoadDefaultAssetFileSchema: true,
-        },
-        compliance: {
-            autoLoadDefaultSchema: true,
-            quarantineBlocksDownload: false,
         },
     },
 };

@@ -713,3 +713,49 @@ class TestHasTriggersQueryParam:
     def test_an_unrecognized_value_is_rejected_not_ignored(self, bad):
         resp, _ = self._call(bad)
         assert resp["statusCode"] == 400
+
+
+@pytest.mark.unit
+class TestMissingWorkflowIsCheckedBeforeNotFound:
+    """A missing workflow answers 404 only to a caller the provisional {databaseId, workflowId}
+    check allows; a caller denied on that database gets 403."""
+
+    PATH_PARAMS = {"databaseId": "db1", "workflowId": "nosuchwf"}
+    PATH = "/database/db1/workflows/nosuchwf"
+
+    def _call(self, method, object_allowed, body=None, stored=None):
+        enforcer = _enforcer(obj=object_allowed)
+        table = MagicMock()
+        table.get_item.return_value = {"Item": stored} if stored else {}
+        with patch(f"{MOD}.request_to_claims", return_value={"tokens": ["user1"]}), \
+             patch(f"{MOD}.CasbinEnforcer", return_value=enforcer), \
+             patch(f"{MOD}._workflow_table", return_value=table):
+            resp = lambda_handler(_event(method, self.PATH, self.PATH_PARAMS, body), MagicMock())
+        return resp, enforcer
+
+    @pytest.mark.parametrize("method,action,body", [
+        ("GET", "GET", None),
+        ("PUT", "PUT", {"enabled": False}),
+        ("DELETE", "DELETE", None),
+    ])
+    def test_denied_caller_gets_403(self, method, action, body):
+        resp, enforcer = self._call(method, object_allowed=False, body=body)
+        assert resp["statusCode"] == 403
+        checked, checked_action = enforcer.enforce.call_args.args
+        assert checked_action == action
+        assert {k: checked[k] for k in ("databaseId", "workflowId")} == self.PATH_PARAMS
+
+    @pytest.mark.parametrize("method,body", [
+        ("GET", None), ("PUT", {"enabled": False}), ("DELETE", None),
+    ])
+    def test_allowed_caller_gets_404(self, method, body):
+        resp, _ = self._call(method, object_allowed=True, body=body)
+        assert resp["statusCode"] == 404
+
+    def test_hidden_archived_workflow_is_checked_on_the_stored_row(self):
+        stored = {"databaseId": "db1", "workflowId": "nosuchwf", "archived": True,
+                  "workflowName": "W"}
+        resp, enforcer = self._call("GET", object_allowed=False, stored=stored)
+        assert resp["statusCode"] == 403
+        checked, _ = enforcer.enforce.call_args.args
+        assert checked["workflowName"] == "W"

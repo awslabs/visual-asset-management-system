@@ -62,7 +62,6 @@ One folder per domain. The current domains:
 -   `authz/` — Casbin ABAC/RBAC enforcer (`CasbinEnforcer` proxy)
 -   `assetLinks/` — Asset relationship management
 -   `comments/` — Comment CRUD
--   `compliance/` — Compliance (schemas, bindings, evaluation, quarantine, cascades, audit). API handlers `complianceSchemaService`, `complianceSchemaBindingService`, `complianceEvaluateService`, `complianceQuarantineService`, `complianceCascadeService`, `complianceAuditService`; event-driven `complianceTrigger` (asset indexer SNS), `complianceWorkflowCallback` (EventBridge `workflow.execution.completed`) and `complianceCascadeExecutor` (async Lambda invoke from `complianceCascadeService`, event `{"cascadeId"}`); shared `complianceEvaluationStore` (all AWS access + `run_evaluation`; it reads the asset row, the asset's current-file listing (one `list_object_versions` walk through the Region-routing S3 client) and the asset file-versions table only when a rule of a type that uses them is present, and the file-metadata, file-attribute and asset-links-metadata tables only for a metadata rule of the `files`, `fileAttributes` or `links` scope), `complianceNotifications`. Pure rule logic for the six `vams-rules-v1` rule types (`pipeline`, `metadata`, `relationship`, `fileStructure`, `versionCoverage`, `assetAttributes`) lives in `common/compliance/evaluationEngine.py`; creating or reverting to an asset version stamps `lastChangeSource: assetVersion` on the asset row (`common/assetProvenance.py`), an asset edit that changes its name, description or tags stamps `assetEdit`, a metadata write (`metadataService`) stamps `metadataEdit` and an asset-link create or delete (`createAssetLink`, `assetLinksService`, a permanent asset deletion's link cleanup) stamps `linkChange` through `stamp_asset_change`, so the trigger re-evaluates it (a workflow execution's metadata write-back carries `workflowExecutionId` on its cross-call and is stamped `workflowExecution`, which the trigger skips), the quarantine-blocks-download guard shared by `downloadAsset`, `streamAsset`, `assetExportService` and `streamAuxiliaryPreviewAsset` in `common/compliance/quarantineGuard.py` (called after Tier-1 + Tier-2 authorization), the one audit-row builder `build_audit_item` (sets the constant `allListPartition` that `AuditByDateGSI` is partitioned on; every audit `put_item` goes through it, guard-tested) in `common/compliance/auditRecord.py`, models in `models/compliance.py`. Casbin object types `complianceSchema` (`complianceSchemaName`), `complianceEvaluation` (`databaseId`, `complianceState`), `complianceCascade` (`cascadeId`). Tests in `tests/handlers/compliance/`
 -   `config/` — System configuration
 -   `osVectorSearch/` — Vector search family: `vectorIndexer.py` (single writer of the vector embeddings table, driven by `vector.embedding.ready` events and file/asset lifecycle records), `vectorReindexer.py` (`clear`/`enqueue`/`both`; direct invoke or CDK custom resource), `systemWorkflowLauncher.py` (paced SQS consumer that invokes `executeWorkflow` as `SYSTEM_USER`), `vectorSearchService.py` (`POST /search/nlp`). Shared code: `common/vectorsearch/{embeddings,vectorStore,fileClassIntent}.py`, `common/indexing/{documentIds,fileEnumeration}.py`, `common/databaseAccess.py`, `common/workflows/{executionLocks,systemRecords}.py`
 -   `databases/` — Database CRUD
@@ -338,8 +337,13 @@ accumulate every record for a user-facing GET. When ordering or enrichment requi
 the full set first (e.g. metadata schema injection/ordering), enrich the full set,
 then offset-slice to the page. Limits that bound response size or protect Lambda
 runtime (e.g. `MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST`, worker-pool caps) stay as named
-constants with a rationale comment — keep them. CLI and web clients that consume a
-paginated GET must follow `NextToken` to retrieve the complete set.
+constants with a rationale comment — keep them. A count cap does not bound a response
+whose items vary in size: upload initialization (`uploadFile.py` `initialize_upload`)
+also estimates its presigned-URL response from each file's part count and key
+(`MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES` and the overhead constants in `models/assetsV3.py`)
+and refuses an over-budget request with a generic `400` before it creates any multipart
+upload. CLI and web clients that consume a paginated GET must follow `NextToken` to
+retrieve the complete set.
 
 **The token must round-trip, and nothing checks that for you.** The value the handler emits
 has to be something the request model accepts back, on the parameter the handler actually
@@ -639,13 +643,7 @@ group that itself repeats or alternates (`(a+)+`, `(a|a)*`), a backreference, an
 ambiguity than one evaluation can afford — the estimated worst-case backtracking search space against a
 256-character subject must stay under `MAX_REGEX_SEARCH_SPACE`, which admits at most three unbounded
 quantifiers (`.*`, `+`, `{n,}`). The budget is calibrated by measurement: three unbounded quantifiers
-separated by literals match in ~16 ms, four in ~1 s, and five do not finish in 25 s. A value that runs
-against longer subjects is checked at its own length: `validate_regex(subject_length=...)`, or
-`subjectLength` in the `REGEX` spec (`models/compliance.py` checks path patterns at
-`MAX_S3_OBJECT_KEY_BYTES`, 1024, which admits two). A value evaluated with `re.search` passes
-`searched` (`searched: True` in the spec): unless it begins with `^` (`_anchored_at_start`), the
-start positions the search tries count as one more unbounded quantifier; every compliance rule
-pattern is searched. This matters because
+separated by literals match in ~16 ms, four in ~1 s, and five do not finish in 25 s. This matters because
 a constraint criterion value becomes a Casbin `regexMatch(...)` pattern re-evaluated for every policy line
 on every authorization decision. General regex stays accepted (literals, character classes, anchors, `.*`, `|`,
 un-quantified groups). The check runs on the **save** paths — `ConstraintCriteriaModel`, plus
@@ -783,7 +781,13 @@ HTTP API v2 layout handlers are written against in **two** ways that `normalize_
 1.  **`requestContext.http` block.** Handlers read
     `event['requestContext']['http']['path']` / `['method']` / `['sourceIp']`; the REST event
     exposes these as top-level `path` / `httpMethod` and `requestContext.identity.sourceIp`.
-    `normalize_event` injects the v2-style `requestContext.http` block.
+    `normalize_event` injects the v2-style `requestContext.http` block. The injected path is
+    stage-relative on every host: through the optional REST API custom domain the event's
+    `path` keeps the base path (`/api/database` where execute-api delivers `/database`), and
+    `normalize_event` removes that one segment when `requestContext.domainName` is the
+    configured domain (`API_CUSTOM_DOMAIN_NAME` / `API_CUSTOM_DOMAIN_BASE_PATH`, set by the CDK
+    only when the domain is enabled). The top-level `path` is left as delivered, so dispatch
+    on `requestContext.http.path`, never on `event['path']`.
 2.  **Null `pathParameters` / `queryStringParameters`.** The REST event sends these as an
     explicit JSON `null` when empty (HTTP API v2 omitted them), so `event.get('pathParameters', {})`
     / `event.get('queryStringParameters', {})` returns `None` — the default applies only when
@@ -1017,6 +1021,14 @@ def handle_get_request(event):
         return internal_error(event=event)
 ```
 
+**An archived record must pass on its stored id and on its database id.** Archiving an asset and deleting a
+database rewrite the record under the partition key `<databaseId>#deleted`; `CasbinEnforcerService.enforce`
+allows such a record only when both the stored `databaseId` and the id with the suffix removed pass. A deny on
+the database therefore covers its archived records, and an allow written only as `databaseId equals <id>` does
+not reach them; to grant archived records, a rule must also name `<databaseId>#deleted` (for example
+`criteriaOr`: `equals <id>` OR `equals <id>#deleted`). Pass the stored record to `enforce()` unchanged; do not
+strip or add the suffix in a handler for authorization.
+
 **Compiled matcher expressions are cached per user enforcer, never decisions.**
 `ExpressionCachingEnforcer` (`handlers/authz/__init__.py`, the `FastEnforcer` subclass that
 `_create_casbin_enforcer_helper` builds) keeps an **instance-level** dict of compiled `SimpleEval`
@@ -1092,9 +1104,9 @@ return {
 
 Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiBuilder` only when it must share a directly-referenced function instance defined there. `attachFunctionToApi` records a descriptor in the cross-stack `RouteRegistry` (passed as `registry`) and creates no API resource itself; the API implementation, built last, renders the whole registry into one OpenAPI document. Registering the same method + path twice throws at synth. This rule governs core endpoints. `apiBuilder-nestedStack.ts` and `apiBuilder2-nestedStack.ts` hold most routes, but a feature stack registers the routes of the Lambdas it builds into the same registry: `searchBuilder-nestedStack.ts` registers `/search` and `/search/simple`, and add-on stacks such as `physnaSyncBuilder-nestedStack.ts` register theirs only when the add-on is enabled. A fork registers its routes from `infra/lib/nestedStacks/custom/customResources.ts`, built inside the `CustomBuilder` nested stack, which the REST API stack depends on. `rest-api-gateway-construct.ts` registers the anonymous `/api/amplify-config` and `/api/version` with `registry.register(` directly. `infra/test/api/apiRouteBackendCdkParity.test.ts` checks the synthesized routes against `apiRoutes.py` and the route lists it splices in (`addonApiRoutes.py`, `custom/customApiRoutes.py`).
 
-**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.48 MB template and `apiBuilder2` emits 114 in ~0.51 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
+**Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 108 resources in a ~0.48 MB template and `apiBuilder2` emits 73 in ~0.31 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
 
-A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 152 nodes from 119 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
+A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 123 nodes from 101 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
 
 ```typescript
 // ✅ CORRECT - Register API routes
@@ -1154,23 +1166,10 @@ export const [operationName] = async (
             },
         });
 
-        if (response.message) {
-            if (
-                response.message.indexOf &&
-                (response.message.indexOf("error") !== -1 ||
-                    response.message.indexOf("Error") !== -1)
-            ) {
-                console.log("[Operation] error:", response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else if (response.success !== undefined) {
-            // New API response format
-            return [response.success, response.message || "Operation completed"];
-        } else {
-            return [false, "No response received"];
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log("Error in [operationName]:", error);
         return [false, error?.message || "Failed to [operation]"];
@@ -2486,6 +2485,12 @@ optional_table = dynamodb.Table(optional_table_name) if optional_table_name else
 **`PRESIGNED_URL_TIMEOUT_SECONDS` is not global.** Only `infra/lib/lambdaBuilder/assetFunctions.ts` sets it, for the five asset handlers that mint presigned URLs (`downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, `uploadFile`, `assetExportService`), and all five index it (`os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]`) at module level. A handler built by any other lambda builder that copies that idiom raises `KeyError` during module import and returns `500` on every request from cold start — CDK synth, lint, and env-patching unit tests all pass. Add the variable to the handler's own builder before reading it.
 
 **Every path that hands out asset file content applies three controls on top of Casbin.** A presigned GET URL or a streamed body — in `downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, and `assetExportService` — is refused (or, for the export's per-asset entries, withheld) when the asset's `isDistributable` is false; is refused (export: withheld, the file stays in the listing) when `validateUnallowedFileExtensionAndContentType` rejects the file's key or the `ContentType` a `head_object` of the version about to be served reports, or when that head fails; and every URL or body actually issued is written to the file-download audit log (`log_file_download` / `log_file_download_bulk` / `log_file_download_streamed` in `customLogging/auditLogging.py`). A new download surface gets all three; `downloadAsset.py`'s `lambda_handler` is the reference call shape, and `assetExportService.py` `file_type_allowed_for_download` is the withhold-not-refuse form. A surface that checks many files in one request runs the heads through a bounded pool (`downloadAsset.py`'s bulk branch, `assetExportService.py` `mark_files_allowed_for_download`): serial per-file heads over an asset of thousands of files exceed the API Gateway integration timeout.
+
+**Every path that writes an object under a new name checks that name first.** Upload initialize and completion (`uploadFile.py`) and the move, rename and copy destination (`assetFiles.py` `move_file` / `copy_file`) call `validateUnallowedFileExtensionAndContentType` on the key before any S3 write. A new write path gets the same check.
+
+**A multipart file completed with no parts is cancelled.** `complete_upload` (`uploadFile.py`) aborts that file's multipart upload, stores nothing and reports the file with `success=False`; `sqsUploadFileLarge.py` `complete_multipart_upload_for_large_file` does the same and returns `False`. Only a file initialized as `zero-byte` completes with an empty `parts` list.
+
+**Upload records expire on `expiresAt`.** `AssetUploadsStorageTable` has a DynamoDB TTL on `expiresAt` (epoch seconds, set by every writer: 7 days from upload initialize, 1 day for workflow-output records). TTL removes an expired record only some time after it expires, so `complete_upload` still refuses a record whose `expiresAt` has passed. A new writer to the table sets `expiresAt` as a Number.
 
 ### **AWS Client Configuration Pattern**
 

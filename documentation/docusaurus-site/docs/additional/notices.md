@@ -64,6 +64,8 @@ LGPL license terms apply only when these optional features are enabled. The SYST
 
 The 3D Preview Thumbnail pipeline image also contains MPL-2.0 code: the certifi package (required by requests), the tqdm package (required by open3d), and the Eigen library compiled into open3d. `NOTICE.md` lists all three.
 
+The Robotics Data Viewer is the Lichtblick web app (MPL-2.0), which the web application install builds from the upstream source at a pinned tag and commit and serves beside the web application, with the upstream license and a `SOURCE.txt` naming the source repository, tag and commit. VAMS compiles the upstream files unmodified. `NOTICE.md` lists it.
+
 When the 3D Preview Thumbnail pipeline reads a STEP file, it also loads the native libraries that the cadquery-ocp wheel bundles with Open CASCADE. They include JBIG-KIT (GPL-2.0-or-later), FreeImage (GPL-2.0, GPL-3.0 or the FreeImage Public License), LibRaw (LGPL-2.1 or CDDL-1.0) and FreeType (FreeType License or GPL-2.0-or-later). `NOTICE.md` lists every bundled library with its version and license.
 
 ### 3D Preview Thumbnail Gaussian Splat Conversion Notice

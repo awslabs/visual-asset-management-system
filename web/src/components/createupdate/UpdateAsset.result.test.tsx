@@ -20,10 +20,6 @@ jest.mock("../../services/APIService", () => ({
     fetchTagTypesForAsset: jest.fn(() => Promise.resolve([])),
     updateAsset: jest.fn(),
 }));
-// The compliance schema field gates on this hook; a deny keeps these outcome tests focused.
-jest.mock("../../features/orchestration/permissions/useAllowedRoutes", () => ({
-    useAllowedRoutes: () => ({ loading: false, can: () => false }),
-}));
 
 const { updateAsset } = jest.requireMock("../../services/APIService");
 

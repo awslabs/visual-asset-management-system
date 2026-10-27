@@ -152,6 +152,32 @@ describe("apiClient backstop", () => {
         expect(mockLogout).not.toHaveBeenCalled();
     });
 
+    it("on 429: waits out a 60s Retry-After before the single retry", async () => {
+        const waits: number[] = [];
+        const timeoutSpy = jest.spyOn(global, "setTimeout").mockImplementation(((
+            fn: () => void,
+            ms?: number
+        ) => {
+            waits.push(ms ?? 0);
+            fn();
+            return 0;
+        }) as any);
+        const fetchMock = jest
+            .fn()
+            .mockResolvedValueOnce(
+                jsonResponse(429, { message: "Rate limit exceeded" }, { "Retry-After": "60" })
+            )
+            .mockResolvedValueOnce(jsonResponse(200, { ok: 4 }));
+        (global.fetch as any) = fetchMock;
+        try {
+            await expect(apiClient.get("thing")).resolves.toEqual({ ok: 4 });
+        } finally {
+            timeoutSpy.mockRestore();
+        }
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(waits).toContain(60000);
+    });
+
     it("on repeated 429: surfaces a 429 ApiError after the single retry, no logout", async () => {
         const fetchMock = jest
             .fn()

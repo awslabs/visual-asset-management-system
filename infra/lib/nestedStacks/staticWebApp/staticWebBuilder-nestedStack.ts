@@ -25,6 +25,13 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import * as iam from "aws-cdk-lib/aws-iam";
 import { Service } from "../../helper/service-helper";
 import { authResources } from "../auth/authBuilder-nestedStack";
+import { LayerVersion } from "aws-cdk-lib/aws-lambda";
+import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
+import {
+    ApiOriginVerifySecretRef,
+    apiOriginVerifyCurrentValueReference,
+} from "../../helper/apiOriginVerify";
+import { buildApiOriginVerifyRotationFunction } from "../../lambdaBuilder/authFunctions";
 
 export interface StaticWebBuilderNestedStackProps extends cdk.StackProps {
     config: Config.Config;
@@ -39,6 +46,10 @@ export interface StaticWebBuilderNestedStackProps extends cdk.StackProps {
     vpc: ec2.IVpc;
     subnetsIsolated: ec2.ISubnet[];
     subnetsPublic: ec2.ISubnet[];
+    // Layer of the origin verification rotation function (CloudFront deployments).
+    lambdaCommonBaseLayer: LayerVersion;
+    // The API origin verification secret; set on CloudFront deployments only.
+    apiOriginVerifySecret?: ApiOriginVerifySecretRef;
 }
 
 /**
@@ -60,7 +71,7 @@ const LOCAL_DEV_WEB_ORIGIN = "http://localhost:3001";
  * is a destination on an end user's own machine that the deployment does not control — which is why
  * `app.webUi.allowLocalhostAuthCallbacks` defaults to false and this returns nothing.
  *
- * Both spellings are needed when enabled: `VAMSAuth.tsx` derives the redirect from
+ * Both spellings are needed when enabled: `web/src/FedAuth/Auth.tsx` derives the redirect from
  * `window.location.origin`, and Cognito matches a registered URL exactly, trailing slash included.
  */
 function localhostAuthCallbackUrls(config: Config.Config): string[] {
@@ -73,6 +84,11 @@ export class StaticWebBuilderNestedStack extends NestedStack {
     public endpointURL: string;
     public albEndpoint: string;
     public webAppBucket: s3.IBucket;
+    /**
+     * Origins the web app is served from (scheme and host, no trailing slash), plus the local
+     * development origin when `app.webUi.allowLocalhostAuthCallbacks` is on.
+     */
+    public webOrigins: string[] = [];
 
     constructor(parent: Construct, name: string, props: StaticWebBuilderNestedStackProps) {
         super(parent, name);
@@ -213,13 +229,70 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 cognitoDomain: cognitoHostedUiUrl,
             });
 
-            // Bind API Gateway to /api route of cloudfront
+            // Bind API Gateway to the /api/* routes of cloudfront. Both API origins add the origin
+            // verification header, read by the regional web ACL and the REST authorizer.
+            const originVerifySecret = props.apiOriginVerifySecret;
             addBehaviorToCloudFrontDistribution(
                 this,
                 website.cloudFrontDistribution,
                 props.apiUrl,
-                Config.API_GATEWAY_STAGE_NAME
+                Config.API_GATEWAY_STAGE_NAME,
+                props.config.app.api.apiGatewayRest.apiGatewayTimeoutTime,
+                originVerifySecret
+                    ? {
+                          [Config.API_ORIGIN_VERIFY_HEADER_NAME]:
+                              apiOriginVerifyCurrentValueReference(originVerifySecret.secretArn),
+                      }
+                    : undefined
             );
+
+            // Automatic rotation of the origin verification secret. The schedule lives here, next to
+            // the distribution and the regional web ACL the rotation function updates. The L1 schedule
+            // lets the invoke permission name this account as its source; a deployment does not
+            // rotate on its own (RotateImmediatelyOnUpdate false), the first rotation follows the
+            // schedule or an operator's `rotate-secret`.
+            if (originVerifySecret) {
+                const rotationFunction = buildApiOriginVerifyRotationFunction(
+                    this,
+                    props.lambdaCommonBaseLayer,
+                    props.storageResources,
+                    props.config,
+                    {
+                        secret: originVerifySecret,
+                        distribution: website.cloudFrontDistribution,
+                        regionalWebAclArn:
+                            props.config.app.useWaf && props.ssmWafArnRegional
+                                ? props.ssmWafArnRegional
+                                : undefined,
+                        cloudFrontWebAclArn:
+                            props.config.app.useWaf && props.ssmWafArnCloudfront
+                                ? props.ssmWafArnCloudfront
+                                : undefined,
+                    }
+                );
+                rotationFunction.addPermission("SecretsManagerRotationInvoke", {
+                    principal: Service("SECRETSMANAGER").Principal,
+                    sourceAccount: cdk.Stack.of(this).account,
+                });
+                const rotationSchedule = new secretsmanager.CfnRotationSchedule(
+                    this,
+                    "ApiOriginVerifySecretRotationSchedule",
+                    {
+                        secretId: originVerifySecret.secretArn,
+                        rotationLambdaArn: rotationFunction.functionArn,
+                        rotationRules: {
+                            scheduleExpression: `rate(${Config.API_ORIGIN_VERIFY_ROTATION_DAYS} days)`,
+                        },
+                        rotateImmediatelyOnUpdate: false,
+                    }
+                );
+                // Secrets Manager invokes the function when the schedule is created, so its role
+                // policy and invoke permission must exist first.
+                rotationSchedule.node.addDependency(rotationFunction);
+                rotationSchedule.node.addDependency(
+                    rotationFunction.node.findChild("SecretsManagerRotationInvoke")
+                );
+            }
 
             // CloudFront's read access to the web bucket is granted by the origin itself. The
             // distribution is built with `S3BucketOrigin.withOriginAccessControl`, which adds the
@@ -228,7 +301,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
             /**
              * When using federated identities, this list of callback urls must include
-             * the set of names that VAMSAuth.tsx will resolve when it calls
+             * the set of names that web/src/FedAuth/Auth.tsx will resolve when it calls
              * window.location.origin for the redirectSignIn and redirectSignout callback urls.
              * With a custom domain enabled, users browse at the custom domain host, so it
              * must be registered alongside the raw distribution name.
@@ -241,6 +314,13 @@ export class StaticWebBuilderNestedStack extends NestedStack {
             if (props.config.app.useCloudFront.customDomain.enabled) {
                 const customDomainHost = props.config.app.useCloudFront.customDomain.domainHost;
                 callbackUrls.push(`https://${customDomainHost}`, `https://${customDomainHost}/`);
+            }
+
+            this.webOrigins.push(`https://${website.cloudFrontDistribution.domainName}`);
+            if (props.config.app.useCloudFront.customDomain.enabled) {
+                this.webOrigins.push(
+                    `https://${props.config.app.useCloudFront.customDomain.domainHost}`
+                );
             }
 
             /**
@@ -339,7 +419,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
             /**
              * When using federated identities, this list of callback urls must include
-             * the set of names that VAMSAuth.tsx will resolve when it calls
+             * the set of names that web/src/FedAuth/Auth.tsx will resolve when it calls
              * window.location.origin for the redirectSignIn and redirectSignout callback urls.
              */
             const callbackUrls = [
@@ -347,6 +427,8 @@ export class StaticWebBuilderNestedStack extends NestedStack {
                 `${website.endPointURL}`,
                 `${website.endPointURL}/`,
             ];
+
+            this.webOrigins.push(website.endPointURL);
 
             /**
              * Propagate Base CloudFront URL to Cognito User Pool Callback and Logout URLs
@@ -381,7 +463,7 @@ export class StaticWebBuilderNestedStack extends NestedStack {
             const webUrlSSMParameter = new ssm.StringParameter(this, "WebUrlDeploymentParamSSM", {
                 parameterName: props.config.webUrlDeploymentSSMParam,
                 stringValue: website.endPointURL,
-                description: "Web URL for Cloudfront Deployment of VAMS",
+                description: "Web URL for ALB Deployment of VAMS",
                 tier: ssm.ParameterTier.STANDARD,
             });
 
@@ -390,6 +472,10 @@ export class StaticWebBuilderNestedStack extends NestedStack {
 
             this.endpointURL = website.endPointURL;
             this.albEndpoint = website.albEndpoint;
+        }
+
+        if (props.config.app.webUi.allowLocalhostAuthCallbacks) {
+            this.webOrigins.push(LOCAL_DEV_WEB_ORIGIN);
         }
 
         //Nag supressions

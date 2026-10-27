@@ -152,7 +152,6 @@ describe("the per-asset SNS topic grant is pinned to this deployment", () => {
     const SITES = [
         "../lib/lambdaBuilder/assetFunctions.ts",
         "../lib/lambdaBuilder/indexingFunctions.ts",
-        "../lib/lambdaBuilder/complianceFunctions.ts",
         "../lib/lambdaBuilder/sendEmailFunctions.ts",
         "../lib/lambdaBuilder/subscriptionFunctions.ts",
     ];

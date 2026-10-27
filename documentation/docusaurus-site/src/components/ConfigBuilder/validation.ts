@@ -58,6 +58,13 @@ function g(cfg: ConfigShape, path: string): any {
 
 // Regexes copied verbatim from config.ts.
 const CERT_ARN_PATTERN = /^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[a-f0-9-]+$/;
+const ACM_CERTIFICATE_ARN_PATTERN =
+    /^arn:(aws[a-z-]*):acm:([a-z0-9-]+):\d{12}:certificate\/[a-f0-9-]+$/;
+const API_CUSTOM_DOMAIN_HOST_PATTERN =
+    /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
+// config.ts API_CUSTOM_DOMAIN_PARTITIONS.
+const API_CUSTOM_DOMAIN_PARTITIONS = ["aws", "aws-us-gov"];
 /**
  * Region-name prefix to partition name and DNS suffix, matching what
  * `region_info.RegionInfo.get(region)` resolves at synth time (config.ts: "garnetIngestionQueueSqsUrl
@@ -157,10 +164,42 @@ const SECRETSMANAGER_ARN_PATTERN = /^arn:aws[a-z-]*:secretsmanager:/;
 // Amazon Cognito's username limit, mirroring COGNITO_USERNAME_MAX_LENGTH in infra/config/config.ts.
 const COGNITO_USERNAME_MAX_LENGTH = 128;
 
-// The taskTimeout the RapidPipeline EKS bundle declares, mirroring
-// RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS in infra/config/config.ts. The parent workflow waits
-// this long for the pipeline's task-token callback, so the Kubernetes job must not outlive it.
-const RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS = 14400;
+// The RapidPipeline EKS timeout chain, mirroring the RAPID_PIPELINE_EKS_* constants,
+// rapidPipelineEksJobCheckAttempts() and rapidPipelineEksWorstCaseRunSeconds() in
+// infra/config/config.ts. The longest run a jobTimeout allows (ConstructPipeline, RunJob, a poll that
+// reaches its ceiling with a CheckJob allowance per call, and PipelineEnd) must fit in the state
+// machine timeout, and jobTimeout must not exceed the maximum.
+const RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS = 14400;
+const RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS = 21600;
+const RAPID_PIPELINE_EKS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS = 300;
+const RAPID_PIPELINE_EKS_RUN_JOB_TIMEOUT_SECONDS = 960;
+const RAPID_PIPELINE_EKS_PIPELINE_END_TIMEOUT_SECONDS = 300;
+const RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS = 10;
+const RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS = 60;
+const RAPID_PIPELINE_EKS_CHECK_JOB_ALLOWANCE_SECONDS = 3;
+
+function rapidPipelineEksWorstCaseRunSeconds(jobTimeoutSeconds: number): number {
+    const attempts = Math.ceil(
+        (jobTimeoutSeconds + RAPID_PIPELINE_EKS_POLL_MARGIN_SECONDS) /
+            RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS
+    );
+    return (
+        RAPID_PIPELINE_EKS_CONSTRUCT_PIPELINE_TIMEOUT_SECONDS +
+        RAPID_PIPELINE_EKS_RUN_JOB_TIMEOUT_SECONDS +
+        attempts * RAPID_PIPELINE_EKS_JOB_CHECK_INTERVAL_SECONDS +
+        (attempts + 1) * RAPID_PIPELINE_EKS_CHECK_JOB_ALLOWANCE_SECONDS +
+        RAPID_PIPELINE_EKS_PIPELINE_END_TIMEOUT_SECONDS
+    );
+}
+
+/** The configured jobTimeout when it is a positive integer, which the other two rules then check. */
+function rapidPipelineEksJobTimeout(c: ConfigShape): number | undefined {
+    if (!g(c, "app.pipelines.useRapidPipeline.useEks.enabled")) return undefined;
+    const timeout = g(c, "app.pipelines.useRapidPipeline.useEks.jobTimeout");
+    return typeof timeout === "number" && Number.isInteger(timeout) && timeout > 0
+        ? timeout
+        : undefined;
+}
 
 // The 3D preview thumbnail compute tiers getConfig() fills in when a tier names none, mirroring
 // PREVIEW_3D_THUMBNAIL_DEFAULT_COMPUTE_TIERS in infra/config/config.ts.
@@ -230,6 +269,8 @@ function physnaHasInlineCreds(cfg: ConfigShape): boolean {
 /**
  * True if any external-OAuth IdP required field is unset (config.ts: the
  * `useExternalOAuthIdp` required-field checks under "Check when implementing auth providers").
+ * The MFA scope, principal domain and discovery endpoint are optional there: only "" and the
+ * "UNDEFINED" placeholder are rejected for them, so their template null passes.
  */
 function oauthFieldsMissing(cfg: ConfigShape): boolean {
     const base = "app.authProvider.useExternalOAuthIdp";
@@ -238,14 +279,20 @@ function oauthFieldsMissing(cfg: ConfigShape): boolean {
         "lambdaAuthorizorJWTIssuerUrl",
         "lambdaAuthorizorJWTAudience",
         "idpAuthClientId",
-        "idpAuthPrincipalDomain",
         "idpAuthProviderScope",
-        "idpAuthProviderScopeMfa",
         "idpAuthProviderTokenEndpoint",
         "idpAuthProviderAuthorizationEndpoint",
+    ];
+    const optionalPaths = [
+        "idpAuthPrincipalDomain",
+        "idpAuthProviderScopeMfa",
         "idpAuthProviderDiscoveryEndpoint",
     ];
-    return requiredPaths.some((p) => isUnset(g(cfg, `${base}.${p}`)));
+    const isPlaceholder = (value: unknown) => value === "" || value === "UNDEFINED";
+    return (
+        requiredPaths.some((p) => isUnset(g(cfg, `${base}.${p}`))) ||
+        optionalPaths.some((p) => isPlaceholder(g(cfg, `${base}.${p}`)))
+    );
 }
 
 /** True if any Cosmos model is enabled (config.ts: "Cosmos Predict/Transfer validation"). */
@@ -1027,9 +1074,11 @@ export const RULES: Rule[] = [
     // (config.ts: "The job timeout sits in the middle of a three-link chain") -----
     //
     // The state machine derives its poll ceiling from this value, the Kubernetes pod's
-    // activeDeadlineSeconds is set from it, and the registered pipeline bundle declares a taskTimeout
-    // the parent workflow waits for. An inconsistent value produces a wrong outcome rather than an
-    // error: a pod outliving the poll makes the execution report FAILED while it keeps writing output.
+    // activeDeadlineSeconds is set from it, and the run it allows must fit in the state machine's own
+    // timeout, which the registered pipeline's taskTimeout outlasts. An inconsistent value produces a
+    // wrong outcome rather than an error: a pod outliving the poll makes the execution report FAILED
+    // while it keeps writing output, and a run outliving the state machine is stopped before it
+    // reports. The maximum sits below the largest value that fits.
     {
         id: "rapidpipeline-eks-job-timeout",
         severity: "error",
@@ -1042,19 +1091,35 @@ export const RULES: Rule[] = [
         message: "useRapidPipeline.useEks.jobTimeout must be a positive integer number of seconds.",
     },
     {
-        id: "rapidpipeline-eks-job-timeout-exceeds-task-timeout",
+        id: "rapidpipeline-eks-job-timeout-exceeds-state-machine-timeout",
         severity: "error",
         fieldPaths: ["app.pipelines.useRapidPipeline.useEks.jobTimeout"],
-        appliesWhen: (c) =>
-            !!g(c, "app.pipelines.useRapidPipeline.useEks.enabled") &&
-            Number(g(c, "app.pipelines.useRapidPipeline.useEks.jobTimeout")) >
-                RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS,
+        appliesWhen: (c) => {
+            const timeout = rapidPipelineEksJobTimeout(c);
+            return (
+                timeout !== undefined &&
+                rapidPipelineEksWorstCaseRunSeconds(timeout) >
+                    RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS
+            );
+        },
+        message:
+            `useRapidPipeline.useEks.jobTimeout lets a pipeline run take longer than the ` +
+            `${RAPID_PIPELINE_EKS_STATE_MACHINE_TIMEOUT_SECONDS}s timeout of the pipeline's state ` +
+            `machine, which would stop the run before it reports its outcome to the parent workflow. ` +
+            `Lower jobTimeout to at most ${RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS}.`,
+    },
+    {
+        id: "rapidpipeline-eks-job-timeout-exceeds-maximum",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useRapidPipeline.useEks.jobTimeout"],
+        appliesWhen: (c) => {
+            const timeout = rapidPipelineEksJobTimeout(c);
+            return timeout !== undefined && timeout > RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS;
+        },
         message:
             `useRapidPipeline.useEks.jobTimeout exceeds the ` +
-            `${RAPID_PIPELINE_EKS_BUNDLE_TASK_TIMEOUT_SECONDS}s taskTimeout the registered pipeline ` +
-            `declares, so the parent workflow would stop waiting while the Kubernetes job is still ` +
-            `allowed to run. Lower jobTimeout, or raise taskTimeout in ` +
-            `backendPipelines/multi/rapidPipelineEKS/vamsSchema/pipeline.json to match.`,
+            `${RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS}s maximum job runtime. Lower jobTimeout ` +
+            `to at most ${RAPID_PIPELINE_EKS_MAX_JOB_TIMEOUT_SECONDS}.`,
     },
 
     // ----- 3D preview thumbnail compute tiers
@@ -1754,10 +1819,9 @@ export const RULES: Rule[] = [
     // (config.ts: "Cloudfront + ALB check (not more than 1)", "Cloudfront + ALB neither warning
     // check", "CloudFront Custom Domain Configuration Validation") -----
     //
-    // Take the severities from the two branches, not from those two leading comments: in config.ts
-    // the comment naming a check sits above the OTHER one's branch. Enabling BOTH distributions is
-    // the `throw new Error("...cannot have both enabled.")`; enabling NEITHER is the
-    // `console.warn("...API-DRIVEN SOLUTION-ONLY DEPLOYMENT.")`, which is a supported topology.
+    // Enabling BOTH distributions is the `throw new Error("...cannot have both enabled.")` under
+    // "not more than 1"; enabling NEITHER is the `console.warn("...API-DRIVEN SOLUTION-ONLY
+    // DEPLOYMENT.")` under "neither warning check", which is a supported topology.
     {
         id: "frontend-both",
         severity: "error",
@@ -1811,6 +1875,21 @@ export const RULES: Rule[] = [
             g(c, "app.useAlb.enabled") &&
             (isUnset(g(c, "app.useAlb.certificateArn")) || isUnset(g(c, "app.useAlb.domainHost"))),
         message: "ALB deployment requires both a domain hostname and an ACM certificate ARN.",
+    },
+    {
+        id: "alb-domain-bucket-name",
+        severity: "error",
+        fieldPaths: ["app.useAlb.domainHost"],
+        appliesWhen: (c) => {
+            const host = g(c, "app.useAlb.domainHost");
+            return (
+                g(c, "app.useAlb.enabled") &&
+                !isUnset(host) &&
+                !/^[a-z0-9][a-z0-9.-]{1,44}[a-z0-9]$/.test(String(host))
+            );
+        },
+        message:
+            "app.useAlb.domainHost names the ALB web app bucket and its '-webappaccesslogs' access-logs bucket, so it must be 3 to 46 characters of lowercase letters, digits, dots and hyphens, beginning and ending with a letter or digit.",
     },
 
     // ----- Stack name (config.ts: "app.baseStackName is required") -----
@@ -1961,7 +2040,7 @@ export const RULES: Rule[] = [
         appliesWhen: (c) =>
             g(c, "app.authProvider.useExternalOAuthIdp.enabled") && oauthFieldsMissing(c),
         message:
-            "External OAuth IdP requires all of its fields (provider URL, client ID, scopes, principal domain, endpoints, JWT issuer URL and audience).",
+            "External OAuth IdP requires its provider URL, client ID, scope, token and authorization endpoints, JWT issuer URL and audience. The MFA scope, principal domain and discovery endpoint may be left null, but not empty or UNDEFINED.",
     },
 
     // ----- Cognito federation: SAML or OIDC, or neither
@@ -2214,6 +2293,126 @@ export const RULES: Rule[] = [
         appliesWhen: (c) => Number(g(c, "app.api.apiGatewayRest.apiGatewayTimeoutTime")) > 29,
         message:
             "An integration timeout above 29 seconds requires an approved account-level increase to the Amazon API Gateway 'Integration timeout' quota (L-E5AE38E3) in the deployment Region. Request the increase before deploying, otherwise the deployment fails.",
+    },
+
+    // ----- REST API custom domain (config.ts: "REST API custom domain. A Regional custom domain name") -----
+    {
+        id: "api-custom-domain-fields",
+        severity: "error",
+        fieldPaths: [
+            "app.api.apiGatewayRest.customDomain.domainHost",
+            "app.api.apiGatewayRest.customDomain.certificateArn",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.api.apiGatewayRest.customDomain.enabled") &&
+            (isUnset(g(c, "app.api.apiGatewayRest.customDomain.domainHost")) ||
+                isUnset(g(c, "app.api.apiGatewayRest.customDomain.certificateArn"))),
+        message:
+            "app.api.apiGatewayRest.customDomain.enabled requires app.api.apiGatewayRest.customDomain.domainHost and app.api.apiGatewayRest.customDomain.certificateArn.",
+    },
+    {
+        id: "api-custom-domain-host-format",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.customDomain.domainHost"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.api.apiGatewayRest.customDomain.enabled")) return false;
+            const host = g(c, "app.api.apiGatewayRest.customDomain.domainHost");
+            const cert = g(c, "app.api.apiGatewayRest.customDomain.certificateArn");
+            // Checked once both required fields are present (config.ts checks them first).
+            if (isUnset(host) || isUnset(cert)) return false;
+            return typeof host !== "string" || !API_CUSTOM_DOMAIN_HOST_PATTERN.test(host);
+        },
+        message:
+            "app.api.apiGatewayRest.customDomain.domainHost must be a lowercase host name with no scheme, port or path (for example api.example.com).",
+    },
+    // (config.ts: "the API custom domain needs a host of its own")
+    {
+        id: "api-custom-domain-host-conflict",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.customDomain.domainHost"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.api.apiGatewayRest.customDomain.enabled")) return false;
+            const host = g(c, "app.api.apiGatewayRest.customDomain.domainHost");
+            const cert = g(c, "app.api.apiGatewayRest.customDomain.certificateArn");
+            // Checked once the host has passed the checks before it (config.ts order).
+            if (isUnset(host) || isUnset(cert)) return false;
+            if (typeof host !== "string" || !API_CUSTOM_DOMAIN_HOST_PATTERN.test(host))
+                return false;
+            const webAppHosts = [
+                g(c, "app.useCloudFront.enabled") && g(c, "app.useCloudFront.customDomain.enabled")
+                    ? g(c, "app.useCloudFront.customDomain.domainHost")
+                    : undefined,
+                g(c, "app.useAlb.enabled") ? g(c, "app.useAlb.domainHost") : undefined,
+            ];
+            return webAppHosts.some(
+                (webAppHost) =>
+                    !isUnset(webAppHost) && String(webAppHost).toLowerCase() === host.toLowerCase()
+            );
+        },
+        message:
+            "app.api.apiGatewayRest.customDomain.domainHost must differ from the web application's host (app.useCloudFront.customDomain.domainHost or app.useAlb.domainHost).",
+    },
+    // (config.ts: "customDomain.optionalHostedZoneId must be")
+    {
+        id: "api-custom-domain-hosted-zone-id-format",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.customDomain.optionalHostedZoneId"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.api.apiGatewayRest.customDomain.enabled")) return false;
+            const host = g(c, "app.api.apiGatewayRest.customDomain.domainHost");
+            const cert = g(c, "app.api.apiGatewayRest.customDomain.certificateArn");
+            if (isUnset(host) || isUnset(cert)) return false;
+            const zone = g(c, "app.api.apiGatewayRest.customDomain.optionalHostedZoneId");
+            if (isUnset(zone)) return false;
+            return typeof zone !== "string" || !ROUTE53_HOSTED_ZONE_ID_PATTERN.test(zone);
+        },
+        message:
+            "app.api.apiGatewayRest.customDomain.optionalHostedZoneId must be an Amazon Route 53 hosted zone ID such as Z0123456789ABCDEFGHIJ (no /hostedzone/ prefix), or empty.",
+    },
+    {
+        id: "api-custom-domain-private-endpoint",
+        severity: "error",
+        fieldPaths: [
+            "app.api.apiGatewayRest.customDomain.enabled",
+            "app.api.apiGatewayRest.endpointType",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.api.apiGatewayRest.customDomain.enabled") &&
+            g(c, "app.api.apiGatewayRest.endpointType") === "PRIVATE",
+        message:
+            "app.api.apiGatewayRest.customDomain.enabled is not supported with app.api.apiGatewayRest.endpointType 'PRIVATE'. The custom domain is a Regional (public) domain name; a private API is reached through its VPC endpoint.",
+    },
+    {
+        id: "api-custom-domain-partition",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.customDomain.enabled", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.api.apiGatewayRest.customDomain.enabled")) return false;
+            const partition = partitionForRegionName(g(c, "env.region"));
+            return partition !== undefined && !API_CUSTOM_DOMAIN_PARTITIONS.includes(partition);
+        },
+        message:
+            "app.api.apiGatewayRest.customDomain.enabled is supported in the aws and aws-us-gov partitions only. Set app.api.apiGatewayRest.customDomain.enabled to false for this Region.",
+    },
+    {
+        id: "api-custom-domain-cert-region",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.customDomain.certificateArn", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.api.apiGatewayRest.customDomain.enabled")) return false;
+            const host = g(c, "app.api.apiGatewayRest.customDomain.domainHost");
+            const cert = g(c, "app.api.apiGatewayRest.customDomain.certificateArn");
+            if (isUnset(host) || isUnset(cert)) return false;
+            const match = typeof cert === "string" ? ACM_CERTIFICATE_ARN_PATTERN.exec(cert) : null;
+            if (!match) return true;
+            // The Region comparison needs env.region, which can also come from CDK context or the
+            // environment at deploy time; with it unset only the ARN format is checked here.
+            const region = g(c, "env.region");
+            if (isUnset(region) || typeof region !== "string") return false;
+            return match[1] !== partitionForRegionName(region) || match[2] !== region;
+        },
+        message:
+            "app.api.apiGatewayRest.customDomain.certificateArn must be an ACM certificate ARN in the deployment Region. A Regional custom domain name uses a certificate from its own Region.",
     },
 
     // ----- Presigned URL timeout
@@ -3163,37 +3362,6 @@ export const RULES: Rule[] = [
         },
         message: `usePhysnaSync.${label} points at a loopback, link-local, or private address. It is called by a Lambda that can read the VAMS asset buckets, so it must name an external service.`,
     })),
-
-    // ----- Compliance default schema
-    // (config.ts: "The default compliance schema holds one metadata rule against the GLOBAL
-    // `defaultAsset` metadata schema") -----
-    //
-    // The seeded compliance schema's only rule references the GLOBAL `defaultAsset` metadata schema,
-    // which is seeded by `autoLoadDefaultAssetSchema` alone. Without it the evaluation engine skips
-    // the rule's required-field and type checks, so the schema reports every asset compliant while
-    // checking nothing. Absence follows `getConfig()`'s backfills: a missing
-    // `autoLoadDefaultSchema` is true, a missing `metadataSchema` BLOCK is every flag true, and a
-    // missing flag inside a present block is false (the seeding construct tests it for truthiness).
-    {
-        id: "compliance-default-schema-requires-default-asset-metadata-schema",
-        severity: "error",
-        fieldPaths: [
-            "app.compliance.autoLoadDefaultSchema",
-            "app.metadataSchema.autoLoadDefaultAssetSchema",
-        ],
-        appliesWhen: (c) => {
-            const autoLoadDefaultSchema = g(c, "app.compliance.autoLoadDefaultSchema");
-            const seedsComplianceSchema = isAbsent(autoLoadDefaultSchema)
-                ? true
-                : !!autoLoadDefaultSchema;
-            const seedsDefaultAssetSchema = isAbsent(g(c, "app.metadataSchema"))
-                ? true
-                : !!g(c, "app.metadataSchema.autoLoadDefaultAssetSchema");
-            return seedsComplianceSchema && !seedsDefaultAssetSchema;
-        },
-        message:
-            "app.compliance.autoLoadDefaultSchema is true but app.metadataSchema.autoLoadDefaultAssetSchema is false. The default compliance schema validates assets against the GLOBAL defaultAsset metadata schema, which only that flag seeds; without it the seeded rule checks nothing. Set autoLoadDefaultAssetSchema to true, or set autoLoadDefaultSchema to false.",
-    },
 ];
 
 /** Evaluate every rule against the config and return those that apply. */
