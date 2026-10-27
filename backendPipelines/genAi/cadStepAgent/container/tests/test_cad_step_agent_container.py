@@ -415,7 +415,8 @@ class TestReport:
                     "features": {"holes": [{"diameter_mm": 4.5, "through": True, "count": 4},
                                            {"diameter_mm": 8.0, "through": False, "count": 2}],
                                  "fillet_like_faces": [{"radius_mm": 3.0, "count": 4}]}}
-        doc = report.attribute_document(_outcome(status="succeeded", mode="generate", geometry=geometry))
+        doc = report.attribute_document(_outcome(status="succeeded", mode="generate", geometry=geometry),
+                                        agent_metadata=True)
         assert doc["type"] == "attribute" and doc["updateType"] == "update"
         values = {e["metadataKey"]: e["metadataValue"] for e in doc["metadata"]}
         assert values == {"cadAgentStatus": "succeeded", "cadAgentMode": "generate", "cadVolumeMm3": "59363.843",
@@ -428,37 +429,53 @@ class TestReport:
     def test_attribute_document_writes_every_figure_the_outcome_lacks_as_empty(self):
         # D44: the document is applied as an upsert, so a figure left out would keep an earlier run's value on
         # the same file path. Every run writes the whole measured key set; an unmeasured figure is "".
-        bare = {e["metadataKey"]: e["metadataValue"] for e in report.attribute_document(_outcome(geometry=None))["metadata"]}
+        def values(outcome):
+            return {e["metadataKey"]: e["metadataValue"]
+                    for e in report.attribute_document(outcome, agent_metadata=True)["metadata"]}
+        bare = values(_outcome(geometry=None))
         assert bare == {"cadAgentStatus": "partial", "cadAgentMode": "modify", **dict.fromkeys(MEASURED_KEYS, "")}
-        no_features = {e["metadataKey"]: e["metadataValue"] for e in report.attribute_document(
-            _outcome(geometry={"solid_count": 2, "volume_mm3": 10.0, "bounding_box_mm": [0, 0, 0, 1, 2, 3]}))["metadata"]}
+        no_features = values(_outcome(geometry={"solid_count": 2, "volume_mm3": 10.0, "bounding_box_mm": [0, 0, 0, 1, 2, 3]}))
         assert no_features["cadHoleCount"] == no_features["cadFilletCount"] == ""
         assert no_features["cadSolidCount"] == "2" and no_features["cadUnits"] == "mm"
-        none_found = {e["metadataKey"]: e["metadataValue"] for e in report.attribute_document(
-            _outcome(geometry={"solid_count": 1, "features": {"holes": [], "fillet_like_faces": []}}))["metadata"]}
+        none_found = values(_outcome(geometry={"solid_count": 1, "features": {"holes": [], "fillet_like_faces": []}}))
         assert none_found["cadHoleCount"] == "0" and none_found["cadFilletCount"] == "0"
         assert none_found["cadVolumeMm3"] == none_found["cadBboxXMm"] == "" and none_found["cadUnits"] == "mm"
-        assert [e["metadataKey"] for e in report.attribute_document(_outcome())["metadata"]] == \
-            ["cadAgentStatus", "cadAgentMode", *MEASURED_KEYS]
+        assert list(values(_outcome())) == ["cadAgentStatus", "cadAgentMode", *MEASURED_KEYS]
+        # With the agent metadata off the measured set is the same, without the run's status and mode.
+        off = report.attribute_document(_outcome(geometry=None), agent_metadata=False)["metadata"]
+        assert {e["metadataKey"]: e["metadataValue"] for e in off} == dict.fromkeys(MEASURED_KEYS, "")
 
     def test_metadata_document_writes_an_empty_geometry_when_the_outcome_has_none(self):
         values = {e["metadataKey"]: e["metadataValue"] for e in report.metadata_document(_outcome(geometry=None))["metadata"]}
         assert set(values) == set(AGENT_METADATA_KEYS) and values["cadAgentGeometry"] == ""
 
-    def test_a_later_run_replaces_every_figure_an_earlier_run_wrote_on_the_same_file(self):
+    @pytest.mark.parametrize("agent_metadata", [True, False])
+    def test_a_later_run_replaces_every_figure_an_earlier_run_wrote_on_the_same_file(self, agent_metadata):
         # D44 repro: run 1 measured holes, run 2 (a new version of the same file) had no feature summary and no
         # geometry. Applied in order as upserts -- the process-output step's "update" -- nothing of run 1 survives.
         run1 = _outcome(status="succeeded", geometry={"solid_count": 1, "volume_mm3": 5.0, "bounding_box_mm": [0, 0, 0, 1, 1, 1],
                                                       "features": {"holes": [{"count": 4}], "fillet_like_faces": []}})
         run2 = _outcome(status="partial", geometry=None)
-        for build in (report.attribute_document, report.metadata_document):
+        builders = [lambda o: report.attribute_document(o, agent_metadata=agent_metadata)]
+        if agent_metadata:
+            builders.append(report.metadata_document)
+        for build in builders:
             stored = {}
             for outcome in (run1, run2):
                 doc = build(outcome)
                 assert doc["updateType"] == "update"
                 stored.update({e["metadataKey"]: e["metadataValue"] for e in doc["metadata"]})
             assert stored == {e["metadataKey"]: e["metadataValue"] for e in build(run2)["metadata"]}
-        assert stored["cadAgentGeometry"] == ""
+            assert stored["cadHoleCount" if build is builders[0] else "cadAgentGeometry"] == ""
+
+    def test_the_agent_metadata_setting_decides_whether_status_and_mode_are_attributes(self):
+        outcome = _outcome(status="succeeded", geometry={"solid_count": 1})
+        on = report.attribute_document(outcome, agent_metadata=True)["metadata"]
+        off = report.attribute_document(outcome, agent_metadata=False)["metadata"]
+        assert [e["metadataKey"] for e in on] == ["cadAgentStatus", "cadAgentMode", *MEASURED_KEYS]
+        assert on[2:] == off and [e["metadataKey"] for e in off] == list(MEASURED_KEYS)
+        with pytest.raises(TypeError):
+            report.attribute_document(outcome)  # the caller decides; there is no silent default
 
     def test_decimal_rounds_to_three_places_without_a_negative_zero(self):
         assert report._decimal(136445.10549) == "136445.105"
@@ -1209,8 +1226,11 @@ class TestFetchUrlSsrfGuard:
 # run_job
 # ---------------------------------------------------------------------------------------------------
 def _definition(mode="modify", **agent_overrides):
+    # writeAgentMetadata is on here, so these tests see the full output set; the template default (off) and a
+    # definition without the key are tested explicitly in TestRunJob.
     agent_cfg = {"prompt": "Add four M3 holes", "allowInternetResearch": False, "modelProvider": "bedrock",
-                 "modelId": "", "maxAttempts": 3, "maxRunSeconds": 600, "scriptTimeoutSeconds": 30}
+                 "modelId": "", "maxAttempts": 3, "maxRunSeconds": 600, "scriptTimeoutSeconds": 30,
+                 "writeAgentMetadata": True}
     agent_cfg.update(agent_overrides)
     return {
         "jobName": "CadStepAgent_x",
@@ -1421,11 +1441,64 @@ class TestRunJob:
         outcome = _outcome(status="succeeded", output_file_name="part.stp", geometry=geometry)
         assert run.upload_outputs(s3, _definition(), outcome, str(step)) == "xasset1/sub/part.stp"
         attributes = json.loads(s3.objects[("abkt", "xasset1/metadata/sub/part.stp.attribute.json")])
-        assert attributes == report.attribute_document(outcome)
+        assert attributes == report.attribute_document(outcome, agent_metadata=True)
         assert {e["metadataKey"] for e in attributes["metadata"]} >= {"cadAgentStatus", "cadAgentMode", "cadVolumeMm3"}
         # The eight metadata keys are written as before, to their own document.
         meta = json.loads(s3.objects[("abkt", "xasset1/metadata/sub/part.stp.metadata.json")])
         assert len(meta["metadata"]) == 8 and meta["type"] == "metadata"
+
+    @pytest.mark.parametrize("setting", ["off", "absent", "not-a-boolean"])
+    def test_without_the_agent_metadata_tag_only_the_measured_attributes_are_written(self, tmp_path, setting):
+        # WRITE_AGENT_METADATA defaults off. Off, a definition without the key (one from an older Lambda) and a
+        # non-boolean value all write no metadata document and no cadAgentStatus / cadAgentMode attribute.
+        s3 = _FakeS3()
+        step = tmp_path / "output.step"
+        step.write_text("ISO-10303-21;")
+        definition = _definition(writeAgentMetadata=False)
+        if setting == "absent":
+            definition["agent"].pop("writeAgentMetadata")
+        elif setting == "not-a-boolean":
+            definition["agent"]["writeAgentMetadata"] = "true"
+        assert run.write_agent_metadata(definition) is False
+        run.upload_outputs(s3, definition, _outcome(status="succeeded"), str(step))
+        assert not [key for (_, key) in s3.objects if key.endswith(".metadata.json")]
+        attributes = json.loads(s3.objects[("abkt", "xasset1/metadata/sub/part.stp.attribute.json")])
+        assert [e["metadataKey"] for e in attributes["metadata"]] == list(MEASURED_KEYS)
+        assert attributes["metadata"][MEASURED_KEYS.index("cadSolidCount")]["metadataValue"] == "1"
+        # The STEP file, its report and the execution's results-folder files are written either way.
+        prefix = "pipelines/cad/job/output/E1/results/"
+        for key in ("xasset1/sub/part.stp", "xasset1/sub/part.stp.cad-agent-report.md",
+                    prefix + report.RESULT_FILE_NAME, prefix + report.RESULT_REPORT_FILE_NAME):
+            assert ("abkt", key) in s3.objects, key
+
+    def test_with_the_agent_metadata_tag_on_both_documents_carry_the_agent_keys(self, tmp_path):
+        s3 = _FakeS3()
+        step = tmp_path / "output.step"
+        step.write_text("ISO-10303-21;")
+        definition = _definition(writeAgentMetadata=True)
+        assert run.write_agent_metadata(definition) is True
+        run.upload_outputs(s3, definition, _outcome(status="succeeded"), str(step))
+        meta = json.loads(s3.objects[("abkt", "xasset1/metadata/sub/part.stp.metadata.json")])
+        assert [e["metadataKey"] for e in meta["metadata"]] == list(AGENT_METADATA_KEYS)
+        attributes = json.loads(s3.objects[("abkt", "xasset1/metadata/sub/part.stp.attribute.json")])
+        assert [e["metadataKey"] for e in attributes["metadata"]] == ["cadAgentStatus", "cadAgentMode", *MEASURED_KEYS]
+
+    def test_a_run_with_the_agent_metadata_tag_off_writes_no_metadata_document(self, monkeypatch):
+        # End to end through run_job, with the definition in its JSON transport shape.
+        monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
+        s3, sfn = _FakeS3(), MagicMock()
+        with patch.object(cad_io, "inspect_step", return_value=VALID):
+            payload = run.run_job(json.dumps(_definition(writeAgentMetadata=False)), "inner-token", s3=s3, sfn=sfn,
+                                  agent_factory=_agent_that(finish_args=("Added holes", [], "succeeded",
+                                                                         ["holes: expected 4 - measured 4 - ok"])),
+                                  guardrail=_FakeGuardrail())
+        assert payload["status"] == "succeeded"
+        assert ("abkt", "xasset1/metadata/sub/part.stp.metadata.json") not in s3.objects
+        attributes = {e["metadataKey"]: e["metadataValue"] for e in json.loads(
+            s3.objects[("abkt", "xasset1/metadata/sub/part.stp.attribute.json")])["metadata"]}
+        assert "cadAgentStatus" not in attributes and "cadAgentMode" not in attributes
+        assert attributes["cadVolumeMm3"] == "1000"
+        sfn.send_task_success.assert_called_once()
 
     def test_upload_mirrors_the_outcome_into_the_results_folder(self, tmp_path):
         s3 = _FakeS3()

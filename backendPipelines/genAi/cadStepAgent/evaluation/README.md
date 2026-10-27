@@ -66,7 +66,7 @@ To compare two versions of the agent, run the baseline with `--snapshot <dir>` p
 
 ## Live runs (a deployed stack)
 
-`run_live.py` uploads each modify case's input to an asset, executes the generate or modify workflow through `vamscli` with the case's template tags, polls the execution, downloads the STEP and its report, reads the `cadAgent*` file metadata and scores the run. It writes the same `run.json` / `quality.json` shape as the offline runner.
+`run_live.py` uploads each modify case's input to an asset, executes the generate or modify workflow through `vamscli` with the case's template tags, polls the execution, downloads the STEP and its report, reads the `cadAgent*` file metadata and scores the run. It writes the same `run.json` / `quality.json` shape as the offline runner. Both runners turn the agent metadata on (the `WRITE_AGENT_METADATA` template tag, off by default; `writeAgentMetadata` in the offline definition), because the run record and the honesty scorer read it.
 
 ```bash
 python run_live.py --out /tmp/cad-eval/live --profile <vamscli profile> --db <database id> --asset <asset id> \

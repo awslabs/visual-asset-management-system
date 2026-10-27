@@ -4,7 +4,7 @@
     "description": "Apply a described change to one input STEP file (.stp, .step). The result is written to the input file's own name by default (a new file version) or to a prefixed/overridden name.",
     "isDefault": true,
     "configFormat": "json",
-    "configBody": "{\"mode\":\"modify\",\"prompt\":\"{{PROMPT}}\",\"outputFilename\":\"{{OUTPUT_FILENAME}}\",\"outputFilenamePrefix\":\"{{OUTPUT_FILENAME_PREFIX}}\",\"allowInternetResearch\":{{ALLOW_INTERNET_RESEARCH}},\"modelProvider\":\"{{MODEL_PROVIDER}}\",\"modelId\":\"{{MODEL_ID}}\",\"maxAttempts\":{{MAX_ATTEMPTS}}}",
+    "configBody": "{\"mode\":\"modify\",\"prompt\":\"{{PROMPT}}\",\"outputFilename\":\"{{OUTPUT_FILENAME}}\",\"outputFilenamePrefix\":\"{{OUTPUT_FILENAME_PREFIX}}\",\"allowInternetResearch\":{{ALLOW_INTERNET_RESEARCH}},\"modelProvider\":\"{{MODEL_PROVIDER}}\",\"modelId\":\"{{MODEL_ID}}\",\"maxAttempts\":{{MAX_ATTEMPTS}},\"writeAgentMetadata\":{{WRITE_AGENT_METADATA}}}",
     "tagSchema": [
         {
             "tagKey": "PROMPT",
@@ -62,6 +62,14 @@
             "default": 4,
             "label": "Maximum script attempts",
             "description": "How many generated-script attempts the agent may make before the run is failed (1-10). Each attempt validates the produced STEP file and feeds the result back to the agent."
+        },
+        {
+            "tagKey": "WRITE_AGENT_METADATA",
+            "type": "boolean",
+            "required": false,
+            "default": false,
+            "label": "Write agent metadata",
+            "description": "Also write the run's cadAgent* file metadata on the STEP file (status, summary, unresolved items, sources, model, attempt count, geometry, run id) and its cadAgentStatus and cadAgentMode file attributes. The measured file attributes (volume, bounding box, solid, hole and fillet counts, units) and the report beside the file are written either way."
         }
     ],
     "overrides": {
@@ -72,5 +80,5 @@
         }
     },
     "allowCustomEdit": true,
-    "inputInstructions": "Select exactly one STEP file (.stp or .step) and describe the change in the design instruction. The agent reads the file's geometry, writes CadQuery scripts to apply the change, validates the result and writes it back. Leave the output file name empty to update the selected file in place (VAMS keeps the previous version); set a prefix or a file name to write a separate file. The run's report (a Markdown file beside the result, and the file's cadAgent* metadata) lists what was done and anything that could not be completed."
+    "inputInstructions": "Select exactly one STEP file (.stp or .step) and describe the change in the design instruction. The agent reads the file's geometry, writes CadQuery scripts to apply the change, validates the result and writes it back. Leave the output file name empty to update the selected file in place (VAMS keeps the previous version); set a prefix or a file name to write a separate file. The run's report (a Markdown file beside the result) lists what was done and anything that could not be completed; turn on Write agent metadata to also record it in the file's cadAgent* metadata."
 }

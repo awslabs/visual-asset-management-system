@@ -3,7 +3,7 @@
     "templateName": "Generate a new STEP file",
     "description": "Create a brand-new STEP file on the chosen output asset from a design description, optionally researching reference designs online.",
     "configFormat": "json",
-    "configBody": "{\"mode\":\"generate\",\"prompt\":\"{{PROMPT}}\",\"outputFilename\":\"{{OUTPUT_FILENAME}}\",\"outputFilenamePrefix\":\"{{OUTPUT_FILENAME_PREFIX}}\",\"allowInternetResearch\":{{ALLOW_INTERNET_RESEARCH}},\"modelProvider\":\"{{MODEL_PROVIDER}}\",\"modelId\":\"{{MODEL_ID}}\",\"maxAttempts\":{{MAX_ATTEMPTS}},\"designName\":\"{{DESIGN_NAME}}\"}",
+    "configBody": "{\"mode\":\"generate\",\"prompt\":\"{{PROMPT}}\",\"outputFilename\":\"{{OUTPUT_FILENAME}}\",\"outputFilenamePrefix\":\"{{OUTPUT_FILENAME_PREFIX}}\",\"allowInternetResearch\":{{ALLOW_INTERNET_RESEARCH}},\"modelProvider\":\"{{MODEL_PROVIDER}}\",\"modelId\":\"{{MODEL_ID}}\",\"maxAttempts\":{{MAX_ATTEMPTS}},\"designName\":\"{{DESIGN_NAME}}\",\"writeAgentMetadata\":{{WRITE_AGENT_METADATA}}}",
     "tagSchema": [
         {
             "tagKey": "PROMPT",
@@ -69,6 +69,14 @@
             "default": "",
             "label": "Design name",
             "description": "Optional short name for the design, used for the generated file name (for example \"Jetson Nano carrier board\" becomes jetson-nano-carrier-board-<timestamp>.step) when no output file name is set."
+        },
+        {
+            "tagKey": "WRITE_AGENT_METADATA",
+            "type": "boolean",
+            "required": false,
+            "default": false,
+            "label": "Write agent metadata",
+            "description": "Also write the run's cadAgent* file metadata on the STEP file (status, summary, unresolved items, sources, model, attempt count, geometry, run id) and its cadAgentStatus and cadAgentMode file attributes. The measured file attributes (volume, bounding box, solid, hole and fillet counts, units) and the report beside the file are written either way."
         }
     ],
     "allowCustomEdit": true,

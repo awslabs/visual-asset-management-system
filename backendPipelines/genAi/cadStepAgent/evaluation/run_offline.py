@@ -233,6 +233,8 @@ def build_definition(case, globals_, input_name, naming_module, model_id):
             "maxAttempts": int(globals_.get("maxAttempts", 4)),
             "maxRunSeconds": int(globals_.get("maxRunSeconds", 1200)),
             "scriptTimeoutSeconds": int(globals_.get("scriptTimeoutSeconds", 300)),
+            # The honesty scorer reads the cadAgent* file metadata, which the templates leave off by default.
+            "writeAgentMetadata": True,
         },
     }
 

@@ -163,6 +163,13 @@ def attribute_key(definition):
     return metadata_key(definition, ".attribute.json")
 
 
+def write_agent_metadata(definition):
+    """True when the run's WRITE_AGENT_METADATA tag was set, which constructPipeline carries as the boolean
+    ``agent.writeAgentMetadata``. A definition without the key (one built by an older Lambda) or with any
+    other value is off: the run then writes no ``cadAgent*`` file metadata and no status or mode attribute."""
+    return (definition.get("agent") or {}).get("writeAgentMetadata") is True
+
+
 def results_prefix(definition):
     """(bucket, prefix) of the execution's results folder, or None when the definition names none (a
     definition built from a manifest that predates the results output)."""
@@ -220,9 +227,9 @@ def derive_outcome(state, definition, model_label, run_id, wall_seconds):
 
 
 def upload_outputs(s3, definition, outcome, step_path):
-    """Write the STEP file, its report, the metadata and attribute documents and the results-folder
-    mirror. Each write uses the client for its bucket's Region (``bucket_client``); in a manifest-driven
-    run all of them are in the one output bucket."""
+    """Write the STEP file, its report, the attribute document (and, with the agent metadata on, the
+    metadata document) and the results-folder mirror. Each write uses the client for its bucket's Region
+    (``bucket_client``); in a manifest-driven run all of them are in the one output bucket."""
     bucket = definition["outputFiles"]["bucketName"]
     key = output_key(definition)
     out_s3 = bucket_client(s3, definition, bucket)
@@ -233,13 +240,18 @@ def upload_outputs(s3, definition, outcome, step_path):
     out_s3.put_object(Bucket=bucket, Key=report_key, Body=report_body, ContentType="text/markdown")
     meta_key = metadata_key(definition)
     if meta_key:
+        agent_metadata = write_agent_metadata(definition)
         meta_bucket = definition["outputMetadata"]["bucketName"]
         meta_s3 = bucket_client(s3, definition, meta_bucket)
-        meta_s3.put_object(Bucket=meta_bucket, Key=meta_key,
-                           Body=json.dumps(report.metadata_document(outcome)).encode("utf-8"),
-                           ContentType="application/json")
+        if agent_metadata:
+            meta_s3.put_object(Bucket=meta_bucket, Key=meta_key,
+                               Body=json.dumps(report.metadata_document(outcome)).encode("utf-8"),
+                               ContentType="application/json")
+        else:
+            logger.info("agent metadata is off for this run: no cadAgent* file metadata is written")
         meta_s3.put_object(Bucket=meta_bucket, Key=attribute_key(definition),
-                           Body=json.dumps(report.attribute_document(outcome)).encode("utf-8"),
+                           Body=json.dumps(report.attribute_document(
+                               outcome, agent_metadata=agent_metadata)).encode("utf-8"),
                            ContentType="application/json")
     results = results_prefix(definition)
     if results:
@@ -382,9 +394,9 @@ def run_job(definition_raw, task_token, s3=None, sfn=None, agent_factory=None, s
         model = agent_module.build_model(provider, model_id, api_key, guardrail=guard) \
             if agent_factory is None else None
         agent = factory(model, bound_tools)
-        logger.info("agent run start id=%s mode=%s provider=%s attempts=%s research=%s guardrail=%s",
-                    run_id, definition["mode"], provider, state.max_attempts, state.research_allowed,
-                    guard.guardrail_id)
+        logger.info("agent run start id=%s mode=%s provider=%s attempts=%s research=%s guardrail=%s "
+                    "agent_metadata=%s", run_id, definition["mode"], provider, state.max_attempts,
+                    state.research_allowed, guard.guardrail_id, write_agent_metadata(definition))
         try:
             agent(agent_module.run_instruction(definition, tag_prompt=provider == agent_module.PROVIDER_BEDROCK))
         except Exception as exc:

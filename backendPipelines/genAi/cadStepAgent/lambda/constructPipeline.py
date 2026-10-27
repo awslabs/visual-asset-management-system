@@ -141,6 +141,9 @@ def agent_settings(input_configuration):
         "maxAttempts": max_attempts,
         "maxRunSeconds": MAX_RUN_SECONDS,
         "scriptTimeoutSeconds": DEFAULT_SCRIPT_TIMEOUT_SECONDS,
+        # The WRITE_AGENT_METADATA tag: the cadAgent* file metadata and the cadAgentStatus / cadAgentMode
+        # file attributes. Off unless the body says true, so a body authored before the tag writes neither.
+        "writeAgentMetadata": _as_bool(cfg.get("writeAgentMetadata"), False),
     }
 
 
@@ -249,12 +252,14 @@ def _build_execution_params(event):
             "maxAttempts": settings["maxAttempts"],
             "maxRunSeconds": settings["maxRunSeconds"],
             "scriptTimeoutSeconds": settings["scriptTimeoutSeconds"],
+            "writeAgentMetadata": settings["writeAgentMetadata"],
         },
     }
     # The prompt is caller-authored content; the log line names the run and its shape, not the text.
     logger.info(
         f"Definition built: job={definition['jobName']} mode={settings['mode']} "
-        f"provider={settings['modelProvider']} output={file_name} attempts={settings['maxAttempts']}")
+        f"provider={settings['modelProvider']} output={file_name} attempts={settings['maxAttempts']} "
+        f"agentMetadata={settings['writeAgentMetadata']}")
 
     return {
         "jobName": event.get("jobName"),

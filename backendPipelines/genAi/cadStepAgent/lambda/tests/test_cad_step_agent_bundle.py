@@ -172,6 +172,52 @@ class TestTemplates:
                     assert field.get("enumValues"), field["tagKey"]
                     assert field.get("default") in field["enumValues"], field["tagKey"]
 
+    def test_both_templates_carry_the_agent_metadata_tag_defaulting_off(self):
+        for template in _templates():
+            field = next((f for f in template["tagSchema"] if f["tagKey"] == "WRITE_AGENT_METADATA"), None)
+            assert field is not None, template["templateId"]
+            assert (field["type"], field["required"], field["default"]) == ("boolean", False, False)
+            assert field["label"] == "Write agent metadata" and field["description"].strip()
+            assert '"writeAgentMetadata":{{WRITE_AGENT_METADATA}}' in template["configBody"]
+
+
+@pytest.mark.unit
+class TestTemplatesRenderThroughTheBackend:
+    """Each template's tag schema and body pass the backend's own tag validation and substitution."""
+
+    @pytest.fixture(autouse=True)
+    def _backend(self):
+        backend_dir = os.path.join(_REPO_ROOT, "backend", "backend")
+        sys.path.insert(0, backend_dir)
+        try:
+            import importlib
+            self.tag_schema = importlib.import_module("common.workflows.templateTagSchema")
+            self.resolution = importlib.import_module("common.workflows.templateResolution")
+            yield
+        finally:
+            sys.path.remove(backend_dir)
+
+    def _render(self, template, provided):
+        errors, filled = self.tag_schema.validate_tags(template["tagSchema"], provided)
+        assert errors == [], (template["templateId"], errors)
+        body, errors = self.resolution._substitute_user_tags(template["configBody"], filled, template["configFormat"])
+        assert errors == [], (template["templateId"], errors)
+        return json.loads(body)
+
+    def test_every_tag_schema_is_valid(self):
+        for template in _templates():
+            assert self.tag_schema.validate_tag_schema(template["tagSchema"]) == [], template["templateId"]
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_the_body_renders_to_json_with_the_agent_metadata_tag_set(self, value):
+        for template in _templates():
+            config = self._render(template, [{"key": "WRITE_AGENT_METADATA", "value": value}])
+            assert config["writeAgentMetadata"] is value, template["templateId"]
+
+    def test_a_run_that_leaves_the_tag_alone_renders_it_off(self):
+        for template in _templates():
+            assert self._render(template, [])["writeAgentMetadata"] is False, template["templateId"]
+
 
 @pytest.mark.unit
 class TestExtensionRule:

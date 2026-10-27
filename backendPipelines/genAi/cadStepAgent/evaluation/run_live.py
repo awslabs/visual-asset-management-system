@@ -127,9 +127,11 @@ def file_metadata(ctx, key, log):
 
 
 def template_tags(case, globals_):
+    # WRITE_AGENT_METADATA defaults off; the run record and the honesty scorer read the cadAgent* metadata.
     tags = [{"key": "PROMPT", "value": str(case["prompt"]).strip()},
             {"key": "ALLOW_INTERNET_RESEARCH", "value": bool(case.get("research", False))},
-            {"key": "MAX_ATTEMPTS", "value": int(globals_.get("maxAttempts", 4))}]
+            {"key": "MAX_ATTEMPTS", "value": int(globals_.get("maxAttempts", 4))},
+            {"key": "WRITE_AGENT_METADATA", "value": True}]
     if case["mode"] == "generate":
         tags.append({"key": "DESIGN_NAME", "value": case.get("designName", case["id"])})
     return tags

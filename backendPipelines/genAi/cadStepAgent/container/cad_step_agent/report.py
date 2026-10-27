@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The outcome documents of a run: the Markdown report written beside the STEP file, the file metadata
-and file attribute documents the process-output step applies, the structured result written to the
+and file attribute documents the process-output step applies (the cadAgent* metadata and the status and
+mode attributes only when the run's WRITE_AGENT_METADATA tag is set), the structured result written to the
 execution's results folder, and the bounded task-token payload.
 
 All builders are pure; every free-text field is bounded so a verbose model cannot grow the execution
@@ -122,8 +123,9 @@ def _bounded_list(items, max_items=MAX_LIST_ITEMS, max_chars=LIST_MAX_CHARS):
 
 
 def metadata_document(outcome, update_type="update"):
-    """The ``<file>.metadata.json`` body the process-output step applies to the output file: all eight keys
-    on every run, ``cadAgentGeometry`` empty when the outcome carries no geometry."""
+    """The ``<file>.metadata.json`` body the process-output step applies to the output file when the run's
+    WRITE_AGENT_METADATA tag is set: all eight keys on every such run, ``cadAgentGeometry`` empty when the
+    outcome carries no geometry."""
     geometry = _clip(json.dumps(outcome.geometry, sort_keys=True), LIST_MAX_CHARS) if outcome.geometry \
         else UNMEASURED
     entries = [
@@ -154,14 +156,15 @@ def _feature_total(features, key):
     return sum(int(entry.get("count", 0)) for entry in features[key] if isinstance(entry, dict))
 
 
-def attribute_document(outcome, update_type="update"):
-    """The ``<file>.attribute.json`` body: the run's status and mode and its measured figures as file
-    attributes. Every measured key is written; a figure the outcome does not carry is written empty, and
-    ``cadUnits`` is empty when no figure was measured."""
+def attribute_document(outcome, *, agent_metadata, update_type="update"):
+    """The ``<file>.attribute.json`` body: the run's measured figures as file attributes, preceded by its
+    status and mode when ``agent_metadata`` (the run's WRITE_AGENT_METADATA tag) is set. Every measured key
+    is written; a figure the outcome does not carry is written empty, and ``cadUnits`` is empty when no
+    figure was measured."""
     entries = [
         {"metadataKey": ATTRIBUTE_KEY_STATUS, "metadataValue": outcome.status},
         {"metadataKey": ATTRIBUTE_KEY_MODE, "metadataValue": outcome.mode},
-    ]
+    ] if agent_metadata else []
     geometry = outcome.geometry if isinstance(outcome.geometry, dict) else {}
     figures = dict.fromkeys(MEASURED_ATTRIBUTE_KEYS, UNMEASURED)
     if geometry.get("volume_mm3") is not None:

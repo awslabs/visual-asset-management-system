@@ -371,7 +371,23 @@ class TestConstructPipeline:
         assert exc2 is None
         assert json.loads(resp["definition"][0])["agent"] == {
             "prompt": "Add four M3 holes", "allowInternetResearch": True, "modelProvider": "openai",
-            "modelId": "gpt-x", "maxAttempts": 4, "maxRunSeconds": 3600, "scriptTimeoutSeconds": 300}
+            "modelId": "gpt-x", "maxAttempts": 4, "maxRunSeconds": 3600, "scriptTimeoutSeconds": 300,
+            "writeAgentMetadata": False}
+
+    @pytest.mark.parametrize("value, expected", [
+        (True, True), ("true", True), (False, False), ("false", False), ("", False), ("sometimes", False)])
+    def test_the_agent_metadata_tag_is_carried_to_the_container(self, value, expected):
+        mod = _load("constructPipeline.py")
+        resp, _, exc = self._run(mod, _construct_event(), _config(writeAgentMetadata=value))
+        assert exc is None
+        assert json.loads(resp["definition"][0])["agent"]["writeAgentMetadata"] is expected
+
+    def test_a_body_without_the_agent_metadata_key_is_off(self):
+        # A template body authored before the tag existed (a copy, a custom override) carries no key.
+        mod = _load("constructPipeline.py")
+        resp, _, exc = self._run(mod, _construct_event(), _config())
+        assert exc is None and "writeAgentMetadata" not in _config()
+        assert json.loads(resp["definition"][0])["agent"]["writeAgentMetadata"] is False
 
     def test_unknown_provider_and_mode_are_refused(self):
         mod = _load("constructPipeline.py")
