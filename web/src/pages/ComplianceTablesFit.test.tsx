@@ -150,13 +150,37 @@ describe("the compliance tables fit the page at 1280 px", () => {
         expect(renderCell("createdAt", cascade).textContent).toContain("by reviewer");
     });
 
-    it("Audit Log: the columns wrap and an event type wraps anywhere", async () => {
+    it("Audit Log: the columns wrap, identifiers break only at _ and camelCase", async () => {
         render(<ComplianceAuditLog />);
         await waitFor(() => expect(mockTableProps.length).toBeGreaterThan(0));
         expect(lastTable().wrapLines).toBe(true);
-        const eventType = renderCell("eventType", { eventType: "schema_bound_to_database" });
-        expect((eventType.firstChild as HTMLElement).style.overflowWrap).toBe(
-            WRAP_ANYWHERE_STYLE.overflowWrap
-        );
+        // The schema is shown beneath the event type, not in a column of its own.
+        expect(columnIds()).toEqual([
+            "timestamp",
+            "eventType",
+            "databaseId",
+            "assetId",
+            "actor",
+            "details",
+        ]);
+        // The two identifier columns are never squeezed below a readable width.
+        expect(column("eventType").minWidth).toBeGreaterThanOrEqual(150);
+        expect(column("details").minWidth).toBeGreaterThanOrEqual(190);
+        const eventType = renderCell("eventType", {
+            eventType: "schema_bound_to_database",
+            schemaName: "std",
+        });
+        expect(eventType.textContent).toContain("schema_bound_to_database");
+        expect(eventType.textContent).toContain("std");
+        // A break opportunity after each underscore, and nothing that wraps anywhere.
+        expect(eventType.querySelectorAll("wbr")).toHaveLength(3);
+        expect(eventType.querySelector("[style*='overflow-wrap']")).toBeNull();
+        const details = renderCell("details", {
+            details: JSON.stringify({ exceptionSchemaVersion: 3, reason: "non_compliant" }),
+        });
+        expect(details.textContent).toContain("exceptionSchemaVersion: 3");
+        // exception|Schema|Version and non_|compliant.
+        expect(details.querySelectorAll("wbr")).toHaveLength(3);
+        expect(details.querySelector("[style*='overflow-wrap']")).toBeNull();
     });
 });

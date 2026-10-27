@@ -4,7 +4,8 @@
  */
 
 import React, { useEffect, useState, useCallback } from "react";
-import { VAMS_PAGE_PADDING, WRAP_ANYWHERE_STYLE } from "../components/compliance/rowActions";
+import { VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
+import BreakableIdentifier from "../components/compliance/BreakableIdentifier";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import Header from "@cloudscape-design/components/header";
@@ -108,6 +109,16 @@ export const AUDIT_FILTER_KEYS = [
 /** A day filter as the inclusive timestamp bound the route takes. */
 export const dayBound = (day: string, end: boolean): string | undefined =>
     day ? `${day}T${end ? "23:59:59" : "00:00:00"}Z` : undefined;
+
+/**
+ * Minimum widths (px) of the two columns that hold identifiers. Without them the wrapping table
+ * gives Event Type and Details the least width of all and the Actor or Database column the
+ * spare width, so an event type took three lines and a detail key two; with them the common event
+ * types ("compliance_check") and detail keys ("pipelineRulesPending") fit on one line at 1280 px
+ * and the table still fits the page.
+ */
+export const AUDIT_EVENT_TYPE_MIN_WIDTH = 170;
+export const AUDIT_DETAILS_MIN_WIDTH = 210;
 
 const ComplianceAuditLog: React.FC = () => {
     // Asset ids link to the asset page only when the caller may open it.
@@ -312,9 +323,23 @@ const ComplianceAuditLog: React.FC = () => {
                         {
                             id: "eventType",
                             header: "Event Type",
-                            // An event type is one long identifier (schema_bound_to_database).
+                            minWidth: AUDIT_EVENT_TYPE_MIN_WIDTH,
+                            // An event type is one long identifier (schema_bound_to_database): it
+                            // wraps at its underscores only. The schema the event concerns is shown
+                            // beneath it, in one column, so the table fits the page at 1280 px.
                             cell: (item) => (
-                                <span style={WRAP_ANYWHERE_STYLE}>{item.eventType || "-"}</span>
+                                <SpaceBetween size="xxxs">
+                                    {item.eventType ? (
+                                        <BreakableIdentifier text={item.eventType} />
+                                    ) : (
+                                        "-"
+                                    )}
+                                    {item.schemaName && item.schemaName !== "-" && (
+                                        <Box variant="small" color="text-body-secondary">
+                                            {item.schemaName}
+                                        </Box>
+                                    )}
+                                </SpaceBetween>
                             ),
                             sortingField: "eventType",
                         },
@@ -353,11 +378,6 @@ const ComplianceAuditLog: React.FC = () => {
                             sortingField: "assetId",
                         },
                         {
-                            id: "schemaName",
-                            header: "Schema",
-                            cell: (item) => item.schemaName || "-",
-                        },
-                        {
                             id: "actor",
                             header: "Actor",
                             cell: (item) => item.actor || "-",
@@ -366,6 +386,7 @@ const ComplianceAuditLog: React.FC = () => {
                         {
                             id: "details",
                             header: "Details",
+                            minWidth: AUDIT_DETAILS_MIN_WIDTH,
                             cell: (item) => {
                                 const lines = auditDetailLines(item.details);
                                 if (lines.length === 0) return "-";
@@ -373,12 +394,12 @@ const ComplianceAuditLog: React.FC = () => {
                                     <SpaceBetween size="xxxs">
                                         {lines.map((line) => (
                                             <Box key={line.key} fontSize="body-s">
-                                                <span style={WRAP_ANYWHERE_STYLE}>
-                                                    <Box variant="span" fontWeight="bold">
-                                                        {line.key}
-                                                    </Box>
-                                                    : {line.value}
-                                                </span>
+                                                {/* Keys are camelCase, values often identifiers
+                                                    too: both wrap at word boundaries only. */}
+                                                <Box variant="span" fontWeight="bold">
+                                                    <BreakableIdentifier text={line.key} />
+                                                </Box>
+                                                : <BreakableIdentifier text={line.value} />
                                             </Box>
                                         ))}
                                     </SpaceBetween>
