@@ -92,6 +92,7 @@ def _routed_on_from_key(default=None, **pagers):
 def links_table():
     """The links table the create-time gates read; page sequences are set per test."""
     table = MagicMock()
+    table.get_item.return_value = {"Item": {"assetLinkId": "existing-link"}}
     with patch(f"{MOD}.asset_links_table", table):
         yield table
 
@@ -217,6 +218,51 @@ class TestCycleWalkPaging:
 @pytest.mark.unit
 class TestExistingRelationshipPaging:
     """``check_existing_relationship`` -- the duplicate-alias and bidirectional gates."""
+
+    @pytest.mark.parametrize(
+        ("relationship_type", "candidate_direction"),
+        [
+            (cal.RelationshipType.PARENT_CHILD, "forward"),
+            (cal.RelationshipType.PARENT_CHILD, "reverse"),
+            (cal.RelationshipType.RELATED, "forward"),
+            (cal.RelationshipType.RELATED, "reverse"),
+        ],
+        ids=[
+            "parent-child-forward",
+            "parent-child-reverse",
+            "related-forward",
+            "related-reverse",
+        ],
+    )
+    @pytest.mark.parametrize("base_item_exists", [False, True], ids=["stale-gsi", "base-item-present"])
+    def test_gsi_candidates_are_verified_against_the_base_table(
+            self, links_table, relationship_type, candidate_direction, base_item_exists):
+        """A stale GSI row must not block a link after its base-table item is deleted."""
+        candidate = _link(
+            "candidate-link",
+            PARENT if candidate_direction == "forward" else CHILD,
+            CHILD if candidate_direction == "forward" else PARENT,
+            relationship_type=relationship_type,
+        )
+        forward = Pager(
+            {"Items": [candidate] if candidate_direction == "forward" else []},
+            name="forward pair read",
+        )
+        reverse = Pager(
+            {"Items": [candidate] if candidate_direction == "reverse" else []},
+            name="reverse pair read",
+        )
+        links_table.query.side_effect = _routed_on_from_key(
+            **{PARENT: forward, CHILD: reverse})
+        links_table.get_item.return_value = (
+            {"Item": candidate} if base_item_exists else {})
+
+        found = cal.check_existing_relationship(
+            PARENT, DB, CHILD, DB, relationship_type, None)
+
+        assert found is base_item_exists
+        links_table.get_item.assert_called_once_with(
+            Key={"assetLinkId": "candidate-link"}, ConsistentRead=True)
 
     def test_a_duplicate_parent_child_alias_on_a_later_page_is_found(self, links_table):
         pager = Pager(
