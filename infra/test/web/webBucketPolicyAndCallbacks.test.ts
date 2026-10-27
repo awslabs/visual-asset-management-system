@@ -166,9 +166,33 @@ describe("the localhost callbacks can be opted back in", () => {
             mutateKey: "callbacks-oidc-localhost-allowed",
         });
         const urls = callbackUrlsOf(synth);
-        // Cognito matches a registered URL exactly, trailing slash included, and VAMSAuth.tsx derives
+        // Cognito matches a registered URL exactly, trailing slash included, and web/src/FedAuth/Auth.tsx derives
         // the value from window.location.origin — so both forms are required for the workflow to work.
         expect(urls).toContain("http://localhost:3001");
         expect(urls).toContain("http://localhost:3001/");
+    });
+});
+
+describe("the web URL SSM parameter names its distribution", () => {
+    const webUrlParameter = (synth: SynthResult) => {
+        const params = synth
+            .ofType("AWS::SSM::Parameter")
+            .filter((r) => r.logicalId.startsWith("WebUrlDeploymentParamSSM"));
+        expect(params).toHaveLength(1);
+        return params[0];
+    };
+
+    // TEMPORARY-TEST: pins the rewording of the ALB-branch description from "Cloudfront" to "ALB"
+    test("the ALB branch's description does not mention CloudFront", () => {
+        const synth = synthTemplate("commercial", {
+            mutate: (c) => {
+                albBranch(c);
+                oidcFederation(c);
+            },
+            mutateKey: "callbacks-oidc-alb",
+        });
+        const description = String(webUrlParameter(synth).properties.Description);
+        expect(description).not.toMatch(/cloudfront/i);
+        expect(description).toMatch(/ALB/);
     });
 });

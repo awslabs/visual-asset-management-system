@@ -694,7 +694,7 @@ class TestSyncPullExecution:
             assert not target.exists()
             assert len(data['execution']['deletes']['succeeded']) == 1
 
-    def test_pull_interactive_confirmation_abort(self, cli_runner, sync_command_mocks, tmp_path):
+    def test_pull_interactive_confirmation_abort(self, cli_runner, sync_command_mocks, tmp_path, interactive_stdin):
         target = tmp_path / 'local-only.txt'
         target.write_text('x')
         with sync_command_mocks('sync') as mocks:

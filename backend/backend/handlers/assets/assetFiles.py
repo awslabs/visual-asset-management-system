@@ -50,6 +50,7 @@ from common.apiRoutes import (
     API_REVERT_FILE_VERSION, API_SET_PRIMARY_FILE, API_CREATE_FOLDER,
 )
 from common.validators import validate, exceeds_s3_object_key_limit
+from common.s3 import validateUnallowedFileExtensionAndContentType
 from common.dynamodb import validate_pagination_info, query_all_items
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -1409,8 +1410,9 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         if 'NextContinuationToken' in page:
             result['NextToken'] = page['NextContinuationToken']
         
-        # If include_archived is True, also get objects with delete markers
-        if include_archived:
+        # If include_archived is True, also get objects with delete markers. The archived entries
+        # are not part of the S3 continuation token, so they are listed once, on the first page.
+        if include_archived and not query_params.get('startingToken'):
             logger.info("Including archived files with delete markers")
             # Use list_object_versions to get delete markers
             try:
@@ -1434,6 +1436,11 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                     # Process delete markers
                     for marker in page.get('DeleteMarkers', []):
                         key = marker['Key']
+                        
+                        # Only a delete marker that is the key's current version archives the
+                        # file; an older marker belongs to a file that was restored since
+                        if not marker.get('IsLatest', False):
+                            continue
                         
                         # Skip if we already have this key in our results
                         if key in existing_keys:
@@ -2606,6 +2613,10 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     # over-long destination is a plain 400 rather than a misleading "Error accessing destination path".
     if exceeds_s3_object_key_limit(dest_key):
         raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
+
+    # The destination name gets the same blocked-extension check as an uploaded file name.
+    if not validateUnallowedFileExtensionAndContentType(dest_key, ""):
+        raise VAMSGeneralErrorResponse("File type not allowed for the destination file name.")
     
     # Check if source exists
     try:
@@ -2721,6 +2732,10 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     # destination is a plain 400 rather than a misleading "Error checking destination file".
     if exceeds_s3_object_key_limit(dest_key):
         raise VAMSGeneralErrorResponse("File key exceeds the maximum S3 object key length")
+
+    # The destination name gets the same blocked-extension check as an uploaded file name.
+    if not validateUnallowedFileExtensionAndContentType(dest_key, ""):
+        raise VAMSGeneralErrorResponse("File type not allowed for the destination file name.")
     
     # Check if source exists and is not archived
     try:
@@ -3128,6 +3143,9 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
         # For preview files or folders, set empty preview file
         metadata['previewFile'] = ""
     
+    # The path relative to the asset's base key, whatever that base key is
+    metadata['relativePath'] = '/' + relative_path_for_lookup
+    
     # Return response model
     return FileInfoResponseModel(**metadata)
 
@@ -3364,6 +3382,11 @@ def list_asset_files_current(databaseId: str, assetId: str, asset: Dict,
                 # Store in lookup dictionary for preview file matching
                 base_files[item['key']] = len(file_items) - 1
 
+        # The page's first and last keys from the S3 listing (archived entries are not part of it)
+        listed_keys = [item['key'] for item in result.get('items', []) if not item.get('isArchived')]
+        first_listed_key = min(listed_keys) if listed_keys else None
+        last_listed_key = max(listed_keys) if listed_keys else None
+
         # Process preview files: collect each base file's candidates, then attach the newest
         orphaned_preview_files = []
         preview_candidates = {}  # base file index -> [(key, lastModified, isArchived)]
@@ -3379,18 +3402,37 @@ def list_asset_files_current(databaseId: str, assetId: str, asset: Dict,
                     preview_item.get('dateCreatedCurrentVersion'),
                     bool(preview_item.get('isArchived')),
                 ))
+            elif request_model.startingToken and first_listed_key is not None and base_key < first_listed_key:
+                # The base file sorts before this page, so it was listed on an earlier page
+                continue
             else:
                 # Base file doesn't exist, this is an orphaned preview file
                 orphaned_preview_files.append(preview_item['key'])
+
+        def _relative_preview_path(preview_key):
+            if preview_key.startswith(key):
+                return '/' + preview_key[len(key):]
+            return '/' + preview_key
 
         for base_file_index, candidates in preview_candidates.items():
             newest_preview = select_newest_preview_file(candidates)
             if newest_preview:
                 # Add relative path to the preview file
-                if newest_preview.startswith(key):
-                    file_items[base_file_index].previewFile = '/' + newest_preview[len(key):]
-                else:
-                    file_items[base_file_index].previewFile = '/' + newest_preview
+                file_items[base_file_index].previewFile = _relative_preview_path(newest_preview)
+
+        # '<file>.previewFile.<ext>' sorts after '<file>', so a file near the end of a page that is
+        # followed by another page can have its previews on that next page. Each such file still
+        # without a preview is looked up by its own preview prefix.
+        if result.get('NextToken') and last_listed_key is not None:
+            for base_file_key, base_file_index in base_files.items():
+                base_item = file_items[base_file_index]
+                if base_file_index in preview_candidates or base_item.isFolder or base_item.isArchived:
+                    continue
+                if base_file_key + PREVIEW_FILE_PATTERN <= last_listed_key:
+                    continue
+                newest_preview = find_newest_preview_file_for_base(bucket, base_file_key)
+                if newest_preview:
+                    base_item.previewFile = _relative_preview_path(newest_preview)
 
         # Log orphaned preview files
         if orphaned_preview_files:

@@ -34,8 +34,6 @@ const MANIFEST_PATH = "$.ConstructPipelineResult.Payload.jobManifest";
 
 function enableEksPipeline(c: any) {
     c.app.useGlobalVpc.enabled = true;
-    c.app.pipelines.useRapidPipeline.enabled = true;
-    c.app.pipelines.useRapidPipeline.autoRegisterWithVAMS = false;
     c.app.pipelines.useRapidPipeline.useEks.enabled = true;
     c.app.pipelines.useRapidPipeline.useEks.ecrContainerImageURI =
         "709825985650.dkr.ecr.us-east-1.amazonaws.com/vendor/product:0.0.1";

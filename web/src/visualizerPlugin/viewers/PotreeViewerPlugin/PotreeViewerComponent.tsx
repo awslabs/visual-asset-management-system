@@ -11,6 +11,8 @@ import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
 import { describeStreamFailure, probeStreamFailure } from "../../core/streamFailure";
 
 const PREVIEW_MISSING_MESSAGE = "Potree Viewer Auxiliary Preview files not currently available";
+// How often the point cloud's authorization header is renewed while the viewer is open.
+const AUTH_HEADER_REFRESH_MS = 30_000;
 
 const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
@@ -29,6 +31,25 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
     // The preview files are absent (404), the one failure the Potree pipeline fixes.
     const [previewMissing, setPreviewMissing] = useState(false);
     const [dismissedVersionWarning, setDismissedVersionWarning] = useState(false);
+    // The header object handed to loadPointCloud. Potree's node loader copies its properties into
+    // every node and hierarchy request, so renewing Authorization in place keeps later requests
+    // authorized after the ID token is refreshed.
+    const authHeaderRef = useRef<{ Authorization: string } | null>(null);
+
+    useEffect(() => {
+        const timer = setInterval(async () => {
+            if (!authHeaderRef.current) return;
+            try {
+                const authorizationHeader = await getDualAuthorizationHeader();
+                if (authHeaderRef.current && authorizationHeader) {
+                    authHeaderRef.current.Authorization = authorizationHeader;
+                }
+            } catch (refreshError) {
+                console.warn("Unable to refresh the point cloud authorization:", refreshError);
+            }
+        }, AUTH_HEADER_REFRESH_MS);
+        return () => clearInterval(timer);
+    }, []);
 
     useEffect(() => {
         const initializePotree = async () => {
@@ -68,6 +89,7 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
                 const authHeader = {
                     Authorization: authorizationHeader,
                 };
+                authHeaderRef.current = authHeader;
 
                 // Potree's loader rejects without the HTTP status, so a failure is probed for it.
                 const reportLoadFailure = async (cause: unknown) => {
@@ -174,7 +196,10 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
             <div style={{ position: "relative", height: "100%" }} id="potree-root">
                 <div
                     style={{
-                        color: "#d13212",
+                        color: "var(--vams-color-error)",
+                        background: "var(--vams-bg-primary)",
+                        borderRadius: "8px",
+                        boxSizing: "border-box",
                         fontSize: "1.4em",
                         lineHeight: "1.5",
                         width: "100%",
@@ -191,7 +216,7 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
                         <>
                             <br />
                             <br />
-                            <span style={{ fontSize: ".9em", color: "#d13212" }}>
+                            <span style={{ fontSize: ".9em", color: "var(--vams-color-error)" }}>
                                 Please run the Point Cloud Potree Viewer Pipeline to enable
                                 visualization for this asset file
                             </span>
@@ -207,7 +232,11 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
             <div style={{ position: "relative", height: "100%" }} id="potree-root">
                 <div
                     style={{
-                        color: "#666",
+                        color: "var(--vams-text-secondary)",
+                        background: "var(--vams-bg-primary)",
+                        borderRadius: "8px",
+                        boxSizing: "border-box",
+                        padding: "12px 16px",
                         fontSize: "1.2em",
                         lineHeight: "1.5",
                         width: "100%",

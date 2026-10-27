@@ -34,7 +34,7 @@ Files are uploaded using a multipart upload process:
 2. **Upload parts** -- Upload file data directly to Amazon S3 using the pre-signed URLs.
 3. **Complete** -- Notify VAMS that all parts have been uploaded. VAMS completes the multipart upload in Amazon S3.
 
-VAMS supports uploading up to 1,000 files per request, with a maximum of 5,000 total parts across all files. Zero-byte files are supported with special handling (no multipart upload needed).
+VAMS supports uploading up to 1,000 files per request, with a maximum of 1,500 total parts across all files. A request whose pre-signed URL response would be too large for the API, which can happen below 1,500 parts when file names are long and use non-ASCII characters, is refused; see [Upload request size limits](../troubleshooting/known-limitations.md#upload-request-size-limits). Zero-byte files are supported with special handling (no multipart upload needed).
 
 :::info[Upload types]
 Two upload types are supported: `assetFile` for regular asset files, and `assetPreview` for asset-level preview images. Preview uploads accept exactly one file.
@@ -321,7 +321,7 @@ If the destination file already has metadata with the same keys, the copy operat
 
 ## Viewing files
 
-VAMS includes 20 built-in viewer plugins that render files directly in the browser. When you select a file in the file manager, VAMS opens it in the viewer that supports its file extension, or, when several viewers support it, lets you choose one from a dropdown. Viewers cover 3D models, point clouds, Gaussian splats, USD scenes, images, video, audio, documents, and tabular data.
+VAMS includes 21 built-in viewer plugins that render files directly in the browser. When you select a file in the file manager, VAMS opens it in the viewer that supports its file extension, or, when several viewers support it, lets you choose one from a dropdown. Viewers cover 3D models, point clouds, Gaussian splats, USD scenes, images, video, audio, documents, and tabular data.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](viewers.md).
 

@@ -121,6 +121,30 @@ def test_search_files_entity_type(mock_client):
     assert request["entityTypes"] == ["file"]
 
 
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: server.search_assets(query="bridge"),
+        lambda: server.search_files(query="texture"),
+        lambda: server.get_search_fields(),
+        lambda: server.find_and_summarize("bridge"),
+    ],
+    ids=["search_assets", "search_files", "get_search_fields", "find_and_summarize"],
+)
+def test_search_tools_refuse_without_opensearch(mock_client, call):
+    """Under NOOPENSEARCH every search tool returns the not-enabled error and sends no request."""
+    mock_client.search_enabled.return_value = False
+
+    result = call()
+
+    assert result == {
+        "error": server.SEARCH_DISABLED_MESSAGE,
+        "error_type": "SearchDisabledError",
+    }
+    mock_client.api.search_query.assert_not_called()
+    mock_client.api.get_search_mapping.assert_not_called()
+
+
 # --- Database-scoped search must not over-match sibling databases ------------
 #
 # S6-TOOLS-003. The filter was `str_databaseid:"{database_id}"` on the ANALYZED field, so the standard
@@ -202,12 +226,28 @@ def test_search_defaults_to_relevance_ordering(searching_client):
     assert searching_client.api.search_query.call_args.args[0]["sort"] == ["_score"]
 
 
+@pytest.mark.parametrize("tool", ["search_assets", "search_files"])
 @pytest.mark.parametrize("descending,expected", [(True, "desc"), (False, "asc")])
-def test_search_orders_by_a_named_field(searching_client, descending, expected):
-    server.search_assets(query="x", sort_field="dateCreated", sort_desc=descending)
+def test_search_orders_by_a_named_field(searching_client, tool, descending, expected):
+    """The search API's request model takes a sort entry as a bare field name or as
+    `{field, order}` (SearchSortModel). The OpenSearch-native `{<field>: {order}}` this test used
+    to pin is rejected with 400 (`sort.0.field: field required`) before it reaches OpenSearch."""
+    getattr(server, tool)(query="x", sort_field="str_assetname", sort_desc=descending)
     assert searching_client.api.search_query.call_args.args[0]["sort"] == [
-        {"dateCreated": {"order": expected}}
+        {"field": "str_assetname", "order": expected}
     ]
+
+
+@pytest.mark.parametrize("descending", [True, False])
+def test_search_sort_matches_the_cli_request_shape(searching_client, descending):
+    """`vamscli search ... --sort-field` sends the shape the deployed API accepts. Pinning the server
+    to the CLI's own builder keeps a mocked API from hiding a shape the real one refuses."""
+    from vamscli.commands.search import _build_sort_config
+
+    server.search_assets(query="x", sort_field="str_assetname", sort_desc=descending)
+    assert searching_client.api.search_query.call_args.args[0]["sort"] == _build_sort_config(
+        "str_assetname", descending
+    )
 
 
 def test_search_negative_offset_is_clamped(searching_client):

@@ -6,16 +6,16 @@ This guide covers how to set up a local development environment for all VAMS com
 
 Before starting, ensure you have the following installed on your development machine.
 
-| Tool        | Minimum Version    | Purpose                             |
-| ----------- | ------------------ | ----------------------------------- |
-| Python      | 3.13+              | Backend Lambda handlers, CLI tool   |
-| Node.js     | 22.22.3+           | Frontend build, CDK infrastructure  |
-| npm         | Included with Node | Package management (never use yarn) |
-| Docker      | Latest             | CDK deployment, container pipelines |
-| AWS CLI     | v2                 | AWS account access                  |
-| AWS CDK CLI | Latest             | Infrastructure deployment           |
-| Git         | Latest             | Version control                     |
-| nvm         | Latest             | Node version management             |
+| Tool        | Minimum Version                | Purpose                                                   |
+| ----------- | ------------------------------ | --------------------------------------------------------- |
+| Python      | 3.13+                          | Backend Lambda handlers, CLI tool                         |
+| Node.js     | 22.22.3+                       | Frontend build, CDK infrastructure                        |
+| npm         | Included with Node             | Package management (never use yarn)                       |
+| Docker      | Latest                         | CDK deployment, container pipelines                       |
+| AWS CLI     | v2                             | AWS account access                                        |
+| AWS CDK CLI | Pinned in `infra/package.json` | Infrastructure deployment; run as `npx cdk` from `infra/` |
+| Git         | Latest                         | Version control                                           |
+| nvm         | Latest                         | Node version management                                   |
 
 :::info[Python Version Note]
 While AWS Lambda functions run on Python 3.12, local development and testing use Python 3.13+. The `backend/requirements.txt` file targets Python 3.13+ for development dependencies.
@@ -46,7 +46,7 @@ cd web
 npm run start    # Starts Vite dev server on port 3001
 ```
 
-The development server uses Vite's proxy configuration to forward API calls. You have two options for the backend:
+The development server has no API proxy: the web app calls the API set in `DEV_API_ENDPOINT` directly. You have two options for the backend:
 
 #### Option 1: Remote Backend (Recommended)
 

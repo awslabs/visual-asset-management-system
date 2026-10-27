@@ -235,7 +235,7 @@ Review existing custom install scripts in `web/customInstalls/` for patterns. Vi
 | `canFullscreen`              | boolean  | Yes      | Whether the viewer supports fullscreen mode                        |
 | `priority`                   | number   | Yes      | Selection order (lower = listed first when multiple viewers match) |
 | `dependencies`               | string[] | Yes      | Required library names (informational)                             |
-| `loadStrategy`               | string   | Yes      | `"lazy"` (load on demand) or `"eager"` (load at startup)           |
+| `loadStrategy`               | string   | Yes      | `"lazy"` or `"eager"`. Not read; every viewer loads on first use.  |
 | `category`                   | string   | Yes      | Viewer category: `3d`, `media`, `document`, `data`, or `preview`   |
 | `enabled`                    | boolean  | Yes      | Whether the plugin is active                                       |
 | `dependencyManager`          | string   | No       | Path to the dependency manager module                              |
@@ -316,10 +316,10 @@ To enable this viewer, set `app.webUi.allowUnsafeEvalFeatures` to `true` in the 
 
 ### Available Feature Flags
 
-| Flag               | Effect on Viewers                                                                                                                                    |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ALLOWUNSAFEEVAL`  | Enables the Needle USD, SuperSplat Editor, and ThatOpen IFC BIM viewers, plus the Three.js CAD formats (all require the `unsafe-eval` CSP directive) |
-| `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                                                                                               |
+| Flag               | Effect on Viewers                                                                                                                                                  |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ALLOWUNSAFEEVAL`  | Enables the Needle USD, SuperSplat Editor, ThatOpen IFC BIM and Robotics Data viewers, plus the Three.js CAD formats (all require the `unsafe-eval` CSP directive) |
+| `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                                                                                                             |
 
 ### Multiple Requirements
 

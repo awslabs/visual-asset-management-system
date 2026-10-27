@@ -9,6 +9,7 @@ import { BabylonJSGaussianSplatViewerProps } from "./types/viewer.types";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import { BabylonJSGaussianSplatDependencyManager } from "./dependencies";
 import BabylonJSPanel from "./BabylonJSPanel";
+import { identifySplatFile, readFileHead, unsupportedSplatMessage } from "./splatFileHead";
 
 // Declare BABYLON as it will be loaded dynamically
 declare const BABYLON: any;
@@ -24,6 +25,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
     const initializationRef = useRef(false);
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState("Initializing viewer...");
+    const [unsupportedMessage, setUnsupportedMessage] = useState<string | null>(null);
 
     // Viewer instance refs (populated after BabylonJS finishes loading the
     // splat). These power the floating control panel and HUD.
@@ -57,6 +59,7 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
         // panel and HUD don't stay mounted against the disposed scene.
         setSceneReady(false);
         setIsLoading(true);
+        setUnsupportedMessage(null);
         setLoadingMessage("Initializing viewer...");
 
         // Add CSS to hide any unwanted UI elements (Spectrum color pickers)
@@ -86,7 +89,6 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                 ".sp-container",
                 ".sp-palette-container",
                 ".sp-picker-container",
-                '[class*="sp-"]',
             ];
 
             unwantedSelectors.forEach((selector) => {
@@ -257,6 +259,24 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
                         "BabylonJS Gaussian Splat Viewer: Asset URL retrieved, downloading asset..."
                     );
                     // Keep "Downloading asset..." message since the actual download happens in GaussianSplattingMesh
+
+                    // Refuse a file the bundled loader cannot read (SPZ version 4 and later, or not a
+                    // splat file at all); handed over, it throws outside the load promise and the
+                    // viewer never leaves the loading state. Unreadable first bytes skip the check.
+                    const head = await readFileHead(response[1]);
+                    if (cancelled) return;
+                    if (head) {
+                        const refusal = unsupportedSplatMessage(
+                            identifySplatFile(head),
+                            assetKey.split("/").pop() || assetKey
+                        );
+                        if (refusal) {
+                            console.warn(`BabylonJS Gaussian Splat Viewer: ${refusal}`);
+                            setUnsupportedMessage(refusal);
+                            setIsLoading(false);
+                            return;
+                        }
+                    }
 
                     try {
                         console.log(
@@ -488,6 +508,29 @@ const BabylonJSGaussianSplatViewerComponent: React.FC<BabylonJSGaussianSplatView
         >
             {/* Loading overlay */}
             {isLoading && <LoadingSpinner message={loadingMessage} />}
+
+            {/* File the loader cannot open */}
+            {unsupportedMessage && (
+                <div
+                    role="alert"
+                    style={{
+                        color: "#d13212",
+                        fontSize: "1.2em",
+                        lineHeight: "1.5",
+                        width: "100%",
+                        position: "absolute",
+                        top: "50%",
+                        left: "50%",
+                        transform: "translate(-50%, -50%)",
+                        textAlign: "center",
+                        padding: "20px",
+                        boxSizing: "border-box",
+                        zIndex: 1000,
+                    }}
+                >
+                    {unsupportedMessage}
+                </div>
+            )}
 
             {/* Floating control panel — visible after the splat loads */}
             {sceneReady && viewerInstanceRef.current && showPanel && (

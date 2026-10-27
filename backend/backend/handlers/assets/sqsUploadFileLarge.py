@@ -879,11 +879,11 @@ def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlat
             return create_zero_byte_file(bucket_name, temp_s3_key, upload_id, database_id, asset_id,
                                          change_metadata=resolve_change_metadata(file_info))
 
-        # Handle abandoned uploads (no parts provided) - create empty file
+        # Cancelled uploads (a multipart upload with no parts): abort the multipart upload,
+        # store nothing and report the file as not completed
         if not parts or len(parts) == 0:
-            logger.info(f"No parts provided for file {relative_key}, creating empty file")
+            logger.info(f"No parts provided for file {relative_key}, cancelling its upload")
 
-            # Abort the existing multipart upload
             try:
                 s3.abort_multipart_upload(
                     Bucket=bucket_name,
@@ -891,11 +891,9 @@ def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlat
                     UploadId=upload_id_s3
                 )
             except Exception as abort_error:
-                logger.warning(f"Error aborting multipart upload for abandoned file: {abort_error}")
+                logger.warning(f"Error aborting multipart upload for cancelled file: {abort_error}")
 
-            # Create empty file in temporary location
-            return create_zero_byte_file(bucket_name, temp_s3_key, upload_id, database_id, asset_id,
-                                         change_metadata=resolve_change_metadata(file_info))
+            return False
 
         # Regular multipart upload completion
         actual_parts = sorted([p['PartNumber'] for p in parts])

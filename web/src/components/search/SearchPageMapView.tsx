@@ -28,7 +28,7 @@ import {
 import { appCache } from "../../services/appCache";
 import type { LngLatBoundsLike } from "maplibre-gl";
 import PreviewThumbnailCell from "./SearchPreviewThumbnail/PreviewThumbnailCell";
-import { SearchExplanation, getTotalResultCount } from "./types";
+import { SearchExplanation, getTotalResultCount, getPageCount } from "./types";
 import { extractLocationData } from "./utils/locationUtils";
 import { isFileHitSource } from "./utils/recordType";
 import { colorForKey } from "./utils/polygonColor";
@@ -244,7 +244,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     const pageSize = state.tablePreferences?.pageSize || 50;
     const currentPage = 1 + Math.floor((state.pagination?.from || 0) / pageSize);
     const totalResults = getTotalResultCount(state?.result);
-    const pageCount = Math.ceil(totalResults / pageSize);
+    const pageCount = getPageCount(totalResults, pageSize);
 
     // The "Files" / "Assets" toggle on the search page is driven by the
     // `_rectype` filter on search state, not by a per-document field. Read

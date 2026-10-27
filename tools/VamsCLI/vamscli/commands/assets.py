@@ -19,6 +19,7 @@ from ..utils.decorators import (
 )
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning, output_info
+from ..utils.confirmation import confirm_destructive_action
 from ..utils.exceptions import (
     AssetNotFoundError, AssetAlreadyExistsError, DatabaseNotFoundError,
     InvalidAssetDataError, AssetAlreadyArchivedError, AssetNotArchivedError, AssetDeletionError,
@@ -608,7 +609,7 @@ def delete(ctx: click.Context, asset_id: str, database: str, reason: Optional[st
             output_warning(f"⚠️  You are about to permanently delete asset '{asset_id}' from database '{database}'", False)
             output_warning("This action cannot be undone!", False)
             
-            if not click.confirm("Are you sure you want to proceed?"):
+            if not confirm_destructive_action():
                 output_info("Deletion cancelled.", False)
                 return None
         

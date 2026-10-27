@@ -68,16 +68,15 @@ code {
 //}
 
 #headerWrapper {
-    z-index: 1002;
-}
-
-#headerWrapper {
     display: block;
     position: sticky;
     top: 0;
     left: 0;
     right: 0;
-    z-index: 1000;
+    /* Above the Cloudscape AppLayout mobile toolbar (1000) and mobile drawers (1001). A menu opened
+       from the header paints inside this stacking context, so at an equal z-index the toolbar, later
+       in the document, covers the menu's first item. Cloudscape's demos use 1002 for this container. */
+    z-index: 1002;
     margin: 0;
     background: #232f3e;
     font-family: "Amazon Ember", "Helvetica Neue", Roboto, Arial, sans-serif;
@@ -195,21 +194,33 @@ code {
     width: auto;
 }
 
-.visualizer-footer a {
+.visualizer-footer button {
     margin-left: 10px;
+    background: none;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    line-height: 0;
     cursor: pointer;
 }
 
-.visualizer-footer a:first-child {
+.visualizer-footer button:focus-visible {
+    outline: 2px solid white;
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+.visualizer-footer button:first-child {
     margin-left: 0;
 }
 
-.visualizer-footer a.selected svg {
+.visualizer-footer button.selected svg {
     transform: scale(1);
     fill: yellow;
 }
 
-.visualizer-footer a.selected svg path {
+.visualizer-footer button.selected svg path {
     color: yellow;
 }
 

@@ -1,7 +1,7 @@
 {
     "metadata": {
         "name": "Database Admin",
-        "description": "Administrative access for a specific database. Can update/delete the database, full CRUD on assets (including permanent delete), create/delete pipelines/workflows/metadata schemas, execute workflows, and ingest assets. Can view and execute global pipelines and workflows. Cannot create new databases.",
+        "description": "Administrative access for a specific database. Can create, update and delete (archive) the database and view its archived record, full CRUD on assets (including permanent delete) and on the database's archived assets (view, unarchive, permanent delete), create/delete pipelines/workflows/metadata schemas, execute workflows, and ingest assets. Can view and execute global pipelines and workflows.",
         "version": "1.0"
     },
     "variables": [
@@ -264,19 +264,28 @@
         },
         {
             "name": "{{ROLE_NAME}}-database",
-            "description": "Allow read, update, and delete of the {{DATABASE_ID}} database entity (no create)",
+            "description": "Allow read, create, update and delete (archive) of {{DATABASE_ID}} and read of its archived record (creating it again restores it). Names both ids: an archived record must match both.",
             "objectType": "database",
-            "criteriaAnd": [
+            "criteriaAnd": [],
+            "criteriaOr": [
                 {
                     "field": "databaseId",
                     "operator": "equals",
                     "value": "{{DATABASE_ID}}"
+                },
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}#deleted"
                 }
             ],
-            "criteriaOr": [],
             "groupPermissions": [
                 {
                     "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
                     "type": "allow"
                 },
                 {
@@ -291,16 +300,21 @@
         },
         {
             "name": "{{ROLE_NAME}}-assets",
-            "description": "Allow full CRUD on assets in {{DATABASE_ID}} including permanent delete",
+            "description": "Allow full CRUD on assets in {{DATABASE_ID}} including permanent delete, and on its archived assets (view, unarchive, permanent delete). Names both ids: an archived asset must match both.",
             "objectType": "asset",
-            "criteriaAnd": [
+            "criteriaAnd": [],
+            "criteriaOr": [
                 {
                     "field": "databaseId",
                     "operator": "equals",
                     "value": "{{DATABASE_ID}}"
+                },
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}#deleted"
                 }
             ],
-            "criteriaOr": [],
             "groupPermissions": [
                 {
                     "action": "GET",

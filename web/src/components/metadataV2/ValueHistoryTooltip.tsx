@@ -41,7 +41,8 @@ export const ValueHistoryTooltip: React.FC<ValueHistoryTooltipProps> = React.mem
                                     style={{
                                         marginTop: "4px",
                                         padding: "8px",
-                                        background: "#f5f5f5",
+                                        background: "var(--vams-bg-secondary)",
+                                        color: "var(--vams-text-primary)",
                                         borderRadius: "4px",
                                         fontFamily: "monospace",
                                         fontSize: "12px",
@@ -61,7 +62,8 @@ export const ValueHistoryTooltip: React.FC<ValueHistoryTooltipProps> = React.mem
                                     style={{
                                         marginTop: "4px",
                                         padding: "8px",
-                                        background: "#f5f5f5",
+                                        background: "var(--vams-bg-secondary)",
+                                        color: "var(--vams-text-primary)",
                                         borderRadius: "4px",
                                         fontFamily: "monospace",
                                         fontSize: "12px",
@@ -81,7 +83,8 @@ export const ValueHistoryTooltip: React.FC<ValueHistoryTooltipProps> = React.mem
                                     style={{
                                         marginTop: "4px",
                                         padding: "8px",
-                                        background: "#f5f5f5",
+                                        background: "var(--vams-bg-secondary)",
+                                        color: "var(--vams-text-primary)",
                                         borderRadius: "4px",
                                         fontFamily: "monospace",
                                         fontSize: "12px",
@@ -101,7 +104,8 @@ export const ValueHistoryTooltip: React.FC<ValueHistoryTooltipProps> = React.mem
                                     style={{
                                         marginTop: "4px",
                                         padding: "8px",
-                                        background: "#e8f4f8",
+                                        background: "var(--vams-bg-selected)",
+                                        color: "var(--vams-text-primary)",
                                         borderRadius: "4px",
                                         fontFamily: "monospace",
                                         fontSize: "12px",

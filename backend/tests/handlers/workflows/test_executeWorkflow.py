@@ -1532,6 +1532,59 @@ class TestExecuteOrchestration:
         assert errors == []
         assert set(resolved.keys()) == {"GLOBAL:convert", "db1:convert"}
 
+    def test_same_id_pipelines_across_databases_with_params_are_refused(self):
+        # Execute parameters are keyed by pipelineId alone, so parameters for an id two of the
+        # workflow's pipelines share would apply to both; the run is refused before any resolution.
+        records = [
+            {"databaseId": "GLOBAL", "pipelineId": "convert", "systemConfig": {}, "_jobName": "g"},
+            {"databaseId": "db1", "pipelineId": "convert", "systemConfig": {}, "_jobName": "d"},
+        ]
+        params = {"convert": {"templateId": "t1"}}
+        with patch(f"{MOD}._get_template_row") as mock_row, \
+             patch(f"{MOD}._get_default_template_id", return_value=""):
+            errors, resolved = ewv2._resolve_pipeline_configs(records, params, "run-bucket")
+        assert errors == [ewv2.PIPELINE_PARAMS_AMBIGUOUS_MESSAGE]
+        assert resolved == {}
+        mock_row.assert_not_called()
+
+    def test_same_pipeline_in_two_steps_with_params_resolves(self):
+        # One pipeline (same database and id) referenced by two steps is not ambiguous: its
+        # parameters belong to that one pipeline, so the run resolves instead of being refused.
+        records = [
+            {"databaseId": "db1", "pipelineId": "convert", "systemConfig": {}, "_jobName": "a"},
+            {"databaseId": "db1", "pipelineId": "convert", "systemConfig": {}, "_jobName": "b"},
+        ]
+        params = {"convert": {"templateId": "t1"}}
+        template_row = {"templateId": "t1", "configBody": "x: 1", "configFormat": "yaml",
+                        "bodyStorage": "inline"}
+        with patch(f"{MOD}._get_template_row", return_value=template_row) as mock_row, \
+             patch(f"{MOD}._rehydrate_template_row", return_value=template_row), \
+             patch(f"{MOD}._load_tag_schema_fields", return_value=[]), \
+             patch(f"{MOD}._get_default_template_id", return_value=""):
+            errors, resolved = ewv2._resolve_pipeline_configs(records, params, "run-bucket")
+        assert errors == []
+        assert set(resolved.keys()) == {"db1:convert"}
+        assert resolved["db1:convert"]["templateId"] == "t1"
+        mock_row.assert_called_with("db1", "convert", "t1")
+
+    def test_params_for_a_distinct_pipeline_id_still_resolve(self):
+        # Control: parameters for an id only one pipeline carries are not affected by another id
+        # that two pipelines share without parameters.
+        records = [
+            {"databaseId": "GLOBAL", "pipelineId": "convert", "systemConfig": {}, "_jobName": "g"},
+            {"databaseId": "db1", "pipelineId": "convert", "systemConfig": {}, "_jobName": "d"},
+            {"databaseId": "db1", "pipelineId": "other", "systemConfig": {}, "_jobName": "o"},
+        ]
+        params = {"other": {"customTemplateOverride": "x: 1"}}
+        with patch(f"{MOD}._get_template_row", return_value=None), \
+             patch(f"{MOD}._get_default_template_id", return_value=""):
+            errors, resolved = ewv2._resolve_pipeline_configs(records, params, "run-bucket")
+        # 'other' is resolved on its own terms (this pipeline refuses an override); the shared id is
+        # not refused because no parameters name it.
+        assert ewv2.PIPELINE_PARAMS_AMBIGUOUS_MESSAGE not in errors
+        assert [e for e in errors if not e.startswith("pipeline 'db1:other'")] == []
+        assert {"GLOBAL:convert", "db1:convert"} <= set(resolved.keys())
+
     def test_require_template_auto_selects_pipeline_default(self):
         # A require-template pipeline with no run-supplied templateId falls back to the pipeline's
         # default template (isDefault), so the run resolves against it instead of erroring.

@@ -117,7 +117,7 @@
 
 .not-included-label {
     background-color: var(--vams-color-warning);
-    color: #000716;
+    color: var(--vams-bg-primary);
     font-weight: bold;
     padding: 2px 8px;
     border-radius: 4px;

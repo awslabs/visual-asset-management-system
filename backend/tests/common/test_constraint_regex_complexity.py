@@ -92,6 +92,10 @@ SHIPPED_CRITERION_VALUES = [
     '/workflows',
     '/workflows/executions',
     '/workflows/executions/',
+    '{{DATABASE_ID}}#deleted',
+    '/database/{{DATABASE_ID}}/',
+    '/database/{{DATABASE_ID}}/metadata',
+    '/unarchiveAsset',
 ]
 
 
