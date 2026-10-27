@@ -25,7 +25,7 @@ import pytest
 _CONTAINER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PIPELINE_DIR = os.path.dirname(_CONTAINER_DIR)
 _SCHEMA_DIR = os.path.join(_PIPELINE_DIR, "vamsSchema")
-_REFINE_SCHEMA_DIR = os.path.join(_PIPELINE_DIR, "vamsSchema-refine")
+_REFINE_SCHEMA_DIR = os.path.join(_PIPELINE_DIR, "vamsSchema", "refine")
 _TEMPLATE_DIR = os.path.join(_SCHEMA_DIR, "templates")
 _BACKEND_DIR = os.path.abspath(
     os.path.join(_PIPELINE_DIR, "..", "..", "..", "backend", "backend"))

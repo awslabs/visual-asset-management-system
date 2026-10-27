@@ -523,7 +523,7 @@ partition. Author it with the block for your execution type present but empty:
     successor also needs the input file copies that file into its own outputs. Image to 3D does this with
     the `PASS_THROUGH_INPUTS` template tag, and registers the Blender agent's refine mode as
     `genai-image-to-3d-refine` (a second `VamsSchemaRegistration` on the same Lambda, bundle
-    `vamsSchema-refine/`) so "reconstruct, then refine" is one workflow.
+    `vamsSchema/refine/`) so "reconstruct, then refine" is one workflow.
 11. **A sub-state-machine execution name must be unique at millisecond concurrency.** `openPipeline.py`
     derives the name a pipeline's own state machine runs under (`PipelineJob_<stamp>_<random>`), and
     Step Functions rejects a repeat with `ExecutionAlreadyExists`. A workflow may carry several triggers

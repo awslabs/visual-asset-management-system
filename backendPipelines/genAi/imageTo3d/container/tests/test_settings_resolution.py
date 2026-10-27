@@ -714,7 +714,7 @@ class TestTheFieldDumpSettingReachesTheSam3dDriver:
 # The Blender agent's refit forms and the mode each one runs. Each sits in both bundles.
 _REFIT_TEMPLATES = {"image-to-3d-blenderagent-refit": "refit",
                     "image-to-3d-blenderagent-refit-agent": "refit-agent"}
-_REFIT_CASES = [(bundle, name) for bundle in ("vamsSchema", "vamsSchema-refine") for name in _REFIT_TEMPLATES]
+_REFIT_CASES = [(bundle, name) for bundle in ("vamsSchema", os.path.join("vamsSchema", "refine")) for name in _REFIT_TEMPLATES]
 
 
 @pytest.mark.unit
@@ -789,7 +789,7 @@ class TestTheRefitTemplates:
     @pytest.mark.parametrize("name", list(_REFIT_TEMPLATES))
     def test_both_bundles_carry_the_same_form_and_neither_makes_it_the_default(self, name):
         main = self._load("vamsSchema", name)
-        assert main == self._load("vamsSchema-refine", name)
+        assert main == self._load(os.path.join("vamsSchema", "refine"), name)
         assert main["isDefault"] is False
 
     @pytest.mark.parametrize("bundle, name", _REFIT_CASES)

@@ -57,23 +57,23 @@ class TestTheRefineBundleNarrowsWhatAPriorStepHandsOn:
             return json.load(handle)
 
     def test_the_refine_pipeline_takes_photographs_and_the_gltf_only(self):
-        filters = self._load("vamsSchema-refine", "pipeline.json")["systemConfig"]["inputFileFilters"]
+        filters = self._load("vamsSchema", "refine", "pipeline.json")["systemConfig"]["inputFileFilters"]
         assert set(filters["allow"]) == {"*.png", "*.jpg", "*.jpeg", "*.glb"}
         assert "material*.png" in filters["exclude"] and "*.previewFile.*" in filters["exclude"]
 
     def test_the_refine_templates_exclude_the_obj_texture_sidecar(self):
         for path in [(bundle, "templates", f"image-to-3d-blenderagent-{name}.json")
-                     for bundle in ("vamsSchema-refine", "vamsSchema") for name in ("refine", "refit", "refit-agent")]:
+                     for bundle in (os.path.join("vamsSchema", "refine"), "vamsSchema") for name in ("refine", "refit", "refit-agent")]:
             filters = self._load(*path)["overrides"]["inputFileFilters"]
             assert "material*.png" in filters["exclude"], path
 
     def test_the_two_step_workflow_lists_the_reconstruction_pipeline_then_the_refine(self):
-        workflow = self._load("vamsSchema-refine", "workflow.json")
+        workflow = self._load("vamsSchema", "refine", "workflow.json")
         assert [p["pipelineId"] for p in workflow["specifiedPipelines"]] == ["genai-image-to-3d", "genai-image-to-3d-refine"]
         assert workflow["systemConfig"]["inputFileArity"] == "multi"
 
     def test_the_refine_bundle_template_is_its_pipelines_default(self):
-        template = self._load("vamsSchema-refine", "templates", "image-to-3d-blenderagent-refine.json")
+        template = self._load("vamsSchema", "refine", "templates", "image-to-3d-blenderagent-refine.json")
         assert template["isDefault"] is True
         assert template["templateId"] == "image-to-3d-blenderagent-refine"
 

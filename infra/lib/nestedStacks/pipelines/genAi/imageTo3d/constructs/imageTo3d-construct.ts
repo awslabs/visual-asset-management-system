@@ -1127,7 +1127,8 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
                             "backendPipelines",
                             "genAi",
                             "imageTo3d",
-                            "vamsSchema-refine"
+                            "vamsSchema",
+                            "refine"
                         ),
                         resourceOverrides: {
                             lambdaName: vamsExecuteFunction.functionName,
