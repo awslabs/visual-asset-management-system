@@ -376,7 +376,8 @@
                 "useSaml": false,
                 "useOidc": false,
                 "useUserPasswordAuthFlow": false,
-                "credTokenTimeoutSeconds": 3600
+                "credTokenTimeoutSeconds": 3600,
+                "retainLegacyGroupsAttribute": false
             },
             "useExternalOAuthIdp": {
                 "enabled": false,

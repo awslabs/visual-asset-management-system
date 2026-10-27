@@ -1353,6 +1353,18 @@ export function getConfig(app: cdk.App): Config {
         config.app.authProvider.useCognito.useUserPasswordAuthFlow = false;
     }
 
+    if (config.app.authProvider.useCognito.retainLegacyGroupsAttribute == undefined) {
+        config.app.authProvider.useCognito.retainLegacyGroupsAttribute = true;
+        if (config.app.authProvider.useCognito.enabled) {
+            console.warn(
+                "Configuration Warning: app.authProvider.useCognito.retainLegacyGroupsAttribute is not set, so it defaults to true " +
+                    "and the Amazon Cognito user pool keeps declaring the custom:groups attribute that existing deployments' user pools carry. " +
+                    "Leave it unset or true for an existing deployment. A NEW deployment must set it to false, or creating the user pool fails " +
+                    "with Amazon Cognito's attribute name error: Attribute names MUST conform to the following rules."
+            );
+        }
+    }
+
     if (config.app.pipelines.useConversion3dBasic.enabled == undefined) {
         config.app.pipelines.useConversion3dBasic.enabled = true;
     }
@@ -4675,6 +4687,9 @@ export interface ConfigPublic {
                 useOidc: boolean;
                 useUserPasswordAuthFlow: boolean;
                 credTokenTimeoutSeconds: number;
+                // When true, the user pool declares the `custom:groups` attribute that user pools created
+                // by earlier versions carry; Amazon Cognito keeps a custom attribute for the life of the pool.
+                retainLegacyGroupsAttribute: boolean;
             };
             useExternalOAuthIdp: {
                 enabled: boolean;
