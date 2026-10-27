@@ -52,13 +52,14 @@ def _file_sha256(path):
         return _sha256(fh.read())
 
 
-def download_archive(url=ARCHIVE_URL):
-    """The archive bytes, bounded to ARCHIVE_MAX_BYTES."""
-    if not url.startswith("https://"):
+def download_archive():
+    """The archive bytes from ARCHIVE_URL, bounded to ARCHIVE_MAX_BYTES."""
+    if not ARCHIVE_URL.startswith("https://"):
         raise FetchError("the archive is fetched over HTTPS only")
-    request = urllib.request.Request(url, headers={"User-Agent": "vams-cad-step-agent-evaluation"})
+    request = urllib.request.Request(ARCHIVE_URL, headers={"User-Agent": "vams-cad-step-agent-evaluation"})
+    # The URL is the module constant ARCHIVE_URL, an https address; nothing else reaches urlopen.
     # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:  # nosec B310 - fixed https URL
+    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:  # nosec B310 - constant https URL
         data = response.read(ARCHIVE_MAX_BYTES + 1)
     if len(data) > ARCHIVE_MAX_BYTES:
         raise FetchError(f"the archive exceeds {ARCHIVE_MAX_BYTES} bytes")

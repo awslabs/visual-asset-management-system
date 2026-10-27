@@ -387,8 +387,9 @@ def run_wave(args, wave):
         started = time.time()
         with open(log_path, "w", encoding="utf-8") as log:
             try:
-                rc = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, timeout=per_case_timeout,  # nosec B603
-                                    check=False).returncode
+                # Argument list, no shell: this script's own path and its parsed arguments.
+                proc = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, timeout=per_case_timeout, check=False)  # nosec B603 - argument list, no shell
+                rc = proc.returncode
             except subprocess.TimeoutExpired:
                 rc = "timeout"
         return case_id, rc, round(time.time() - started)
