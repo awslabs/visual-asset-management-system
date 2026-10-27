@@ -91,12 +91,7 @@ class APIGatewayProxyResponseV2(TypedDict):
     body: str
 
 
-# Response headers a cross-origin browser may read. CORS-safelisted names alone are
-# not enough; anything else must appear here or JS sees an empty string.
-CORS_EXPOSE_HEADERS = (
-    'Retry-After, Location, ETag, Last-Modified, Accept-Ranges, '
-    'Content-Range, Content-Encoding, x-amz-version-id, x-amz-storage-class'
-)
+CORS_EXPOSE_HEADERS = 'Retry-After, Location, ETag'
 
 
 def commonHeaders() -> Dict[str, str]:
@@ -108,18 +103,20 @@ def commonHeaders() -> Dict[str, str]:
         # handled separately by the API's MOCK method). Mirrors the preflight's
         # allow-origin so cross-origin browser callers can read the response.
         'Access-Control-Allow-Origin': '*',
-        # Lets a cross-origin browser caller read Retry-After (429), Location
-        # (export/stream redirects), and ETag (conditional GET / HEAD).
+        # Lets a cross-origin browser caller read the Retry-After of a 429, the
+        # Location of a redirect (e.g. the asset export's 303), and the ETag.
         'Access-Control-Expose-Headers': CORS_EXPOSE_HEADERS,
     }
 
 
 def streamCorsHeaders() -> Dict[str, str]:
-    """CORS + cache headers for asset stream / HEAD / 307 redirect responses."""
     return {
         'Access-Control-Allow-Headers': 'Range',
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Expose-Headers': CORS_EXPOSE_HEADERS,
+        'Access-Control-Expose-Headers': (
+            'Location, ETag, Last-Modified, Accept-Ranges, Content-Range, '
+            'Content-Encoding, x-amz-version-id, x-amz-storage-class'
+        ),
         'Cache-Control': 'no-cache, no-store',
     }
 

@@ -12,6 +12,7 @@ def test_common_headers_exposes_location_and_etag():
     assert "Retry-After" in exposed
     assert "Location" in exposed
     assert "ETag" in exposed
+    assert CORS_EXPOSE_HEADERS == headers["Access-Control-Expose-Headers"]
 
 
 def test_stream_cors_headers_exposes_stream_metadata():
@@ -30,4 +31,3 @@ def test_stream_cors_headers_exposes_stream_metadata():
         assert name in exposed
     assert headers["Access-Control-Allow-Origin"] == "*"
     assert headers["Access-Control-Allow-Headers"] == "Range"
-    assert CORS_EXPOSE_HEADERS == headers["Access-Control-Expose-Headers"]
