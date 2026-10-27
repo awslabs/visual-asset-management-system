@@ -59,7 +59,13 @@ export const writeUrlFilters = (values: Record<string, string>): void => {
     window.history.replaceState(window.history.state, "", url);
 };
 
-/** Filter state initialised from, and written back to, the URL. */
+/**
+ * Filter state initialised from, and written back to, the URL. A filter changed on the page
+ * replaces the history entry (Back leaves the page rather than stepping through filters). When the
+ * URL itself changes while the page is open — an in-app link or a URL pasted into the tab, which
+ * change the hash, or Back / Forward between two entries of the page — the values follow it, so
+ * the page reloads for the filters the URL now names.
+ */
 export const useUrlFilters = <K extends string>(
     keys: readonly K[]
 ): [Record<K, string>, (patch: Partial<Record<K, string>>) => void] => {
@@ -71,6 +77,22 @@ export const useUrlFilters = <K extends string>(
             return next;
         });
     }, []);
+    useEffect(() => {
+        const follow = () => {
+            const fromUrl = readUrlFilters(keys);
+            // Unchanged values keep their object, so a hash change that names the same filters
+            // (or another page's hash, as this one unmounts) starts no reload.
+            setValues((previous) =>
+                keys.every((key) => previous[key] === fromUrl[key]) ? previous : fromUrl
+            );
+        };
+        window.addEventListener("hashchange", follow);
+        window.addEventListener("popstate", follow);
+        return () => {
+            window.removeEventListener("hashchange", follow);
+            window.removeEventListener("popstate", follow);
+        };
+    }, [keys]);
     return [values, update];
 };
 
