@@ -10,7 +10,7 @@
  * permission denial or a throttle.
  */
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import PotreeViewerComponent from "./PotreeViewerComponent";
 
 const mockLoadPointCloud = jest.fn();
@@ -165,5 +165,56 @@ describe("Potree viewer load failure", () => {
         expect(fetchMock).not.toHaveBeenCalled();
         expect(screen.queryByText(MISSING)).not.toBeInTheDocument();
         expect(screen.queryByText(/^Unable to/)).not.toBeInTheDocument();
+    });
+});
+
+describe("Potree viewer messages", () => {
+    it("draws the failure message on a theme panel", async () => {
+        respond(404, { message: "File not found" });
+        mount();
+        const message = await screen.findByText(MISSING);
+        expect(message.style.background).toBe("var(--vams-bg-primary)");
+        expect(message.style.color).toBe("var(--vams-color-error)");
+        expect((screen.getByText(PIPELINE_HINT) as HTMLElement).style.color).toBe(
+            "var(--vams-color-error)"
+        );
+    });
+
+    it("draws the loading message on a theme panel", () => {
+        const { PotreeDependencyManager } = jest.requireMock("./dependencies");
+        PotreeDependencyManager.loadPotree.mockReturnValueOnce(new Promise(() => undefined));
+        mount();
+        const message = screen.getByText("Loading Potree viewer...");
+        expect(message.style.background).toBe("var(--vams-bg-primary)");
+        expect(message.style.color).toBe("var(--vams-text-secondary)");
+    });
+});
+
+describe("Potree viewer authorization", () => {
+    afterEach(() => jest.useRealTimers());
+
+    it("renews the Authorization of the header object the node loader reads", async () => {
+        jest.useFakeTimers();
+        const { getDualAuthorizationHeader } = jest.requireMock("../../../utils/authTokenUtils");
+        mockLoadPointCloud.mockReturnValue(Promise.resolve({ pointcloud: { material: {} } }));
+        mount();
+
+        // Each round lets React run the effects the previous round's updates scheduled.
+        for (let round = 0; round < 6 && mockLoadPointCloud.mock.calls.length === 0; round++) {
+            await act(async () => {
+                await jest.advanceTimersByTimeAsync(150);
+            });
+        }
+        expect(mockLoadPointCloud).toHaveBeenCalled();
+        const header = mockLoadPointCloud.mock.calls[0][2];
+        expect(header.Authorization).toBe("Bearer t");
+
+        getDualAuthorizationHeader.mockResolvedValueOnce("Bearer t2");
+        await act(async () => {
+            await jest.advanceTimersByTimeAsync(30_000);
+        });
+        // The same object, renewed in place: the loader keeps the reference it was given.
+        expect(mockLoadPointCloud.mock.calls[0][2]).toBe(header);
+        expect(header.Authorization).toBe("Bearer t2");
     });
 });

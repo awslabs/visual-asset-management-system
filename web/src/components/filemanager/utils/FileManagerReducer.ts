@@ -1,7 +1,6 @@
 import { FileManagerState, FileManagerAction, FileTree } from "../types/FileManagerTypes";
 import {
     toggleExpanded,
-    downloadFile,
     searchFileTree,
     calculateTotalAssetSize,
     addFiles,
@@ -227,19 +226,6 @@ export function fileManagerReducer(
                 multiSelectMode: false,
                 lastSelectedIndex: -1,
             };
-
-        case "DOWNLOAD_FILE":
-            const handleDownloadFile = async () => {
-                await downloadFile(
-                    state.assetId,
-                    state.databaseId,
-                    action.payload.key,
-                    action.payload.versionId || "",
-                    action.payload.assetVersionId || state.assetVersionId
-                );
-            };
-            handleDownloadFile();
-            return state;
 
         case "UPLOAD_FILES":
             return state;

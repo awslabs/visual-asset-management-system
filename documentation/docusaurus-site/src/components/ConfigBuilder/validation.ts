@@ -269,6 +269,8 @@ function physnaHasInlineCreds(cfg: ConfigShape): boolean {
 /**
  * True if any external-OAuth IdP required field is unset (config.ts: the
  * `useExternalOAuthIdp` required-field checks under "Check when implementing auth providers").
+ * The MFA scope, principal domain and discovery endpoint are optional there: only "" and the
+ * "UNDEFINED" placeholder are rejected for them, so their template null passes.
  */
 function oauthFieldsMissing(cfg: ConfigShape): boolean {
     const base = "app.authProvider.useExternalOAuthIdp";
@@ -277,14 +279,20 @@ function oauthFieldsMissing(cfg: ConfigShape): boolean {
         "lambdaAuthorizorJWTIssuerUrl",
         "lambdaAuthorizorJWTAudience",
         "idpAuthClientId",
-        "idpAuthPrincipalDomain",
         "idpAuthProviderScope",
-        "idpAuthProviderScopeMfa",
         "idpAuthProviderTokenEndpoint",
         "idpAuthProviderAuthorizationEndpoint",
+    ];
+    const optionalPaths = [
+        "idpAuthPrincipalDomain",
+        "idpAuthProviderScopeMfa",
         "idpAuthProviderDiscoveryEndpoint",
     ];
-    return requiredPaths.some((p) => isUnset(g(cfg, `${base}.${p}`)));
+    const isPlaceholder = (value: unknown) => value === "" || value === "UNDEFINED";
+    return (
+        requiredPaths.some((p) => isUnset(g(cfg, `${base}.${p}`))) ||
+        optionalPaths.some((p) => isPlaceholder(g(cfg, `${base}.${p}`)))
+    );
 }
 
 /** True if any Cosmos model is enabled (config.ts: "Cosmos Predict/Transfer validation"). */
@@ -1832,10 +1840,9 @@ export const RULES: Rule[] = [
     // (config.ts: "Cloudfront + ALB check (not more than 1)", "Cloudfront + ALB neither warning
     // check", "CloudFront Custom Domain Configuration Validation") -----
     //
-    // Take the severities from the two branches, not from those two leading comments: in config.ts
-    // the comment naming a check sits above the OTHER one's branch. Enabling BOTH distributions is
-    // the `throw new Error("...cannot have both enabled.")`; enabling NEITHER is the
-    // `console.warn("...API-DRIVEN SOLUTION-ONLY DEPLOYMENT.")`, which is a supported topology.
+    // Enabling BOTH distributions is the `throw new Error("...cannot have both enabled.")` under
+    // "not more than 1"; enabling NEITHER is the `console.warn("...API-DRIVEN SOLUTION-ONLY
+    // DEPLOYMENT.")` under "neither warning check", which is a supported topology.
     {
         id: "frontend-both",
         severity: "error",
@@ -1889,6 +1896,21 @@ export const RULES: Rule[] = [
             g(c, "app.useAlb.enabled") &&
             (isUnset(g(c, "app.useAlb.certificateArn")) || isUnset(g(c, "app.useAlb.domainHost"))),
         message: "ALB deployment requires both a domain hostname and an ACM certificate ARN.",
+    },
+    {
+        id: "alb-domain-bucket-name",
+        severity: "error",
+        fieldPaths: ["app.useAlb.domainHost"],
+        appliesWhen: (c) => {
+            const host = g(c, "app.useAlb.domainHost");
+            return (
+                g(c, "app.useAlb.enabled") &&
+                !isUnset(host) &&
+                !/^[a-z0-9][a-z0-9.-]{1,44}[a-z0-9]$/.test(String(host))
+            );
+        },
+        message:
+            "app.useAlb.domainHost names the ALB web app bucket and its '-webappaccesslogs' access-logs bucket, so it must be 3 to 46 characters of lowercase letters, digits, dots and hyphens, beginning and ending with a letter or digit.",
     },
 
     // ----- Stack name (config.ts: "app.baseStackName is required") -----
@@ -2027,7 +2049,7 @@ export const RULES: Rule[] = [
         appliesWhen: (c) =>
             g(c, "app.authProvider.useExternalOAuthIdp.enabled") && oauthFieldsMissing(c),
         message:
-            "External OAuth IdP requires all of its fields (provider URL, client ID, scopes, principal domain, endpoints, JWT issuer URL and audience).",
+            "External OAuth IdP requires its provider URL, client ID, scope, token and authorization endpoints, JWT issuer URL and audience. The MFA scope, principal domain and discovery endpoint may be left null, but not empty or UNDEFINED.",
     },
 
     // ----- Cognito federation: SAML or OIDC, or neither

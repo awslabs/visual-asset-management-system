@@ -1120,7 +1120,7 @@ _PERMISSION_OBJECTS_RESPONSE = {
     ],
     'permissions': [
         {'label': 'View/GET', 'value': 'GET'},
-        {'label': 'Add/PUT', 'value': 'PUT'},
+        {'label': 'PUT', 'value': 'PUT'},
     ],
     'permissionTypes': [
         {'label': 'Allow', 'value': 'allow'},
