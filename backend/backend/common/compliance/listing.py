@@ -118,17 +118,20 @@ def query_page(table, query_kwargs: Dict[str, Any], max_items: int, key_attribut
         response = table.query(**kwargs)
         reads += 1
         page = response.get("Items", [])
-        evaluated_key = response.get("LastEvaluatedKey")
+        # Continue on the key's presence: the value form loops forever against a reader that
+        # answers every query with the same key.
+        has_more = "LastEvaluatedKey" in response
+        evaluated_key = response["LastEvaluatedKey"] if has_more else None
         for position, item in enumerate(page):
             if accept is not None and not accept(item):
                 continue
             items.append(item)
             if len(items) == max_items:
-                exhausted = evaluated_key is None and position == len(page) - 1
+                exhausted = not has_more and position == len(page) - 1
                 if exhausted:
                     return items, None, reads
                 return items, {name: item[name] for name in key_attributes if name in item}, reads
-        if not evaluated_key:
+        if "LastEvaluatedKey" not in response:
             return items, None, reads
         last_key = evaluated_key
         if reads >= read_budget:
@@ -146,6 +149,6 @@ def count_items(table, query_kwargs: Dict[str, Any]) -> Tuple[int, int]:
         response = table.query(**kwargs)
         reads += 1
         total += response.get("Count", 0)
-        if not response.get("LastEvaluatedKey"):
+        if "LastEvaluatedKey" not in response:
             return total, reads
         kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
