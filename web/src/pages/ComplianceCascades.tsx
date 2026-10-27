@@ -10,7 +10,7 @@ import Header from "@cloudscape-design/components/header";
 import Pagination from "@cloudscape-design/components/pagination";
 import Select from "@cloudscape-design/components/select";
 import SpaceBetween from "@cloudscape-design/components/space-between";
-import StatusIndicator from "@cloudscape-design/components/status-indicator";
+import { StatusLabel } from "../components/compliance/complianceStateBadge";
 import Table from "@cloudscape-design/components/table";
 import Alert from "@cloudscape-design/components/alert";
 import Synonyms from "../synonyms";
@@ -427,9 +427,9 @@ const ComplianceCascades: React.FC = () => {
                                     label: item.state || "Unknown",
                                 };
                                 return (
-                                    <StatusIndicator type={indicator.type as any}>
+                                    <StatusLabel type={indicator.type as any}>
                                         {indicator.label}
-                                    </StatusIndicator>
+                                    </StatusLabel>
                                 );
                             },
                             sortingField: "state",

@@ -38,6 +38,7 @@ import RevokeExceptionModal from "../../compliance/RevokeExceptionModal";
 import {
     ComplianceStateBadge,
     EvaluationErrorIndicator,
+    StatusLabel,
     schemaSourceLabel,
 } from "../../compliance/complianceStateBadge";
 import Synonyms from "../../../synonyms";
@@ -405,19 +406,15 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                                     verdictIndicatorMap.error;
                                 return (
                                     <SpaceBetween direction="horizontal" size="xs">
-                                        <StatusIndicator type={verdict.type as any}>
+                                        <StatusLabel type={verdict.type as any}>
                                             {verdict.label}
-                                        </StatusIndicator>
+                                        </StatusLabel>
                                         {item.exceptionApplied && (
-                                            <StatusIndicator type="info">
-                                                Exception applied
-                                            </StatusIndicator>
+                                            <StatusLabel type="info">Exception applied</StatusLabel>
                                         )}
                                         {(item.hasRuleErrors ||
                                             erroredRuleNames(item).length > 0) && (
-                                            <StatusIndicator type="error">
-                                                Rule errors
-                                            </StatusIndicator>
+                                            <StatusLabel type="error">Rule errors</StatusLabel>
                                         )}
                                     </SpaceBetween>
                                 );

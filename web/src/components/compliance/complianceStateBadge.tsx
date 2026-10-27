@@ -60,10 +60,32 @@ interface ComplianceStateBadgeProps {
     state?: string | null;
 }
 
-/** A compliance state as a Cloudscape status indicator. */
+/**
+ * Style of the wrapper that keeps a status label on one line, its icon included. Cloudscape's
+ * status indicator lets its text break between any two letters (`word-break: break-all`), so in a
+ * table that wraps its columns (`wrapLines`) a label such as "Non-Compliant" or "Quarantined"
+ * broke mid-word wherever the column was narrower than the label. Kept on one line, the label is
+ * the narrowest the column can be, so the table sizes the column to the label instead of a fixed
+ * minimum width.
+ */
+export const STATUS_LABEL_STYLE: React.CSSProperties = { whiteSpace: "nowrap" };
+
+interface StatusLabelProps {
+    type: StatusIndicatorProps.Type;
+    children: string;
+}
+
+/** A Cloudscape status indicator whose icon and label always stay on one line. */
+export const StatusLabel: React.FC<StatusLabelProps> = ({ type, children }) => (
+    <span style={STATUS_LABEL_STYLE} data-status-label="">
+        <StatusIndicator type={type}>{children}</StatusIndicator>
+    </span>
+);
+
+/** A compliance state as a Cloudscape status indicator, on one line. */
 export const ComplianceStateBadge: React.FC<ComplianceStateBadgeProps> = ({ state }) => {
     const indicator = complianceStateIndicator(state);
-    return <StatusIndicator type={indicator.type}>{indicator.label}</StatusIndicator>;
+    return <StatusLabel type={indicator.type}>{indicator.label}</StatusLabel>;
 };
 
 /** Label of the indicator shown beside a state whose last evaluation ended in an error. */
@@ -85,7 +107,7 @@ export const EvaluationErrorIndicator: React.FC<EvaluationErrorIndicatorProps> =
     if (lastEvaluationStatus !== "error") {
         return null;
     }
-    return <StatusIndicator type="error">{EVALUATION_ERROR_LABEL}</StatusIndicator>;
+    return <StatusLabel type="error">{EVALUATION_ERROR_LABEL}</StatusLabel>;
 };
 
 export default ComplianceStateBadge;

@@ -20,6 +20,7 @@ import {
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../../services/ComplianceService";
 import Synonyms from "../../synonyms";
+import { StatusLabel } from "./complianceStateBadge";
 
 const VERDICTS: Record<string, { type: string; label: string }> = {
     compliant: { type: "success", label: "Compliant" },
@@ -192,19 +193,15 @@ const EvaluationHistoryModal: React.FC<EvaluationHistoryModalProps> = ({
                                     VERDICTS[item.verdict || item.result] || VERDICTS.error;
                                 return (
                                     <SpaceBetween size="xxs">
-                                        <StatusIndicator type={verdict.type as any}>
+                                        <StatusLabel type={verdict.type as any}>
                                             {verdict.label}
-                                        </StatusIndicator>
+                                        </StatusLabel>
                                         {item.exceptionApplied && (
-                                            <StatusIndicator type="info">
-                                                Exception applied
-                                            </StatusIndicator>
+                                            <StatusLabel type="info">Exception applied</StatusLabel>
                                         )}
                                         {(item.hasRuleErrors ||
                                             erroredRuleNames(item).length > 0) && (
-                                            <StatusIndicator type="error">
-                                                Rule errors
-                                            </StatusIndicator>
+                                            <StatusLabel type="error">Rule errors</StatusLabel>
                                         )}
                                     </SpaceBetween>
                                 );
