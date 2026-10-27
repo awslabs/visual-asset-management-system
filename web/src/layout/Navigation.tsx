@@ -6,6 +6,7 @@
 import React, { useEffect } from "react";
 import { useState } from "react";
 import { SideNavigation, Spinner } from "@cloudscape-design/components";
+import Button from "@cloudscape-design/components/button";
 import { checkWebRoutesAllowed } from "../services/webRoutesCheck";
 import config from "../config";
 import Synonyms from "../synonyms";
@@ -13,7 +14,7 @@ import { addonNavSections } from "../addons/addonNavigation";
 import { customNavSections } from "../custom/customNavigation";
 
 const navHeader: { href: string; logo?: { alt: string; src: string } } = {
-    href: "/",
+    href: "#/",
 };
 
 if (config.CUSTOMER_LOGO) {
@@ -40,6 +41,15 @@ function CenterSpinner() {
 }
 
 /**
+ * A nav href as the route path the router checks: "#/databases/" becomes "/databases".
+ * The root "/" keeps its slash.
+ */
+function normaliseHref(href: string): string {
+    const path = href.replace("#", "");
+    return path.length > 1 ? path.replace(/\/+$/, "") : path;
+}
+
+/**
  * Recursively collects all link hrefs from navigation items,
  * supporting both flat items arrays and nested expandable-link-group items.
  */
@@ -49,7 +59,7 @@ function collectRoutes(items: any[]): any[] {
         if (item.type === "link" && item.href) {
             routes.push({
                 method: "GET",
-                route__path: item.href.replace("#", ""),
+                route__path: normaliseHref(item.href),
             });
         }
         if (item.type === "expandable-link-group" && item.items) {
@@ -76,7 +86,7 @@ function filterNavItems(items: any[], allowedRoutes: any[]): any[] {
         }
         if (item.type === "section" || item.type === "expandable-link-group") {
             const filteredChildren = (item.items || []).filter((child: any) =>
-                allowedRoutes.includes(child.href)
+                allowedRoutes.includes(normaliseHref(child.href))
             );
             if (filteredChildren.length > 0) {
                 result.push({ ...item, items: filteredChildren });
@@ -84,7 +94,7 @@ function filterNavItems(items: any[], allowedRoutes: any[]): any[] {
             continue;
         }
         if (item.type === "link" && item.href) {
-            if (allowedRoutes.includes(item.href)) {
+            if (allowedRoutes.includes(normaliseHref(item.href))) {
                 result.push(item);
             }
             continue;
@@ -186,6 +196,8 @@ export function Navigation({
 
     const [navigationItems, setNavigationItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadFailed, setLoadFailed] = useState(false);
+    const [loadAttempt, setLoadAttempt] = useState(0);
 
     useEffect(() => {
         const allRoutes = collectRoutes(filteredNavItems);
@@ -193,7 +205,7 @@ export function Navigation({
         try {
             checkWebRoutesAllowed(allRoutes)
                 .then((allowed) => {
-                    const allowedRoutes = allowed.map((r) => "#" + r.route__path);
+                    const allowedRoutes = allowed.map((r) => r.route__path);
 
                     const filtered = filterNavItems(filteredNavItems, allowedRoutes);
                     setNavigationItems(filtered);
@@ -201,14 +213,36 @@ export function Navigation({
                 })
                 .catch((error) => {
                     console.error(error);
-                    setNavigationItems([]);
+                    setLoadFailed(true);
                     setLoading(false);
                 });
         } catch (e) {}
-    }, []);
+    }, [loadAttempt]);
+
+    const retryLoad = () => {
+        setLoadFailed(false);
+        setLoading(true);
+        setLoadAttempt((attempt) => attempt + 1);
+    };
 
     return loading ? (
         <CenterSpinner />
+    ) : loadFailed ? (
+        <div
+            style={{
+                padding: "20px",
+                textAlign: "center",
+                color: "var(--vams-text-secondary)",
+            }}
+        >
+            <div style={{ marginBottom: "10px", fontSize: "16px", fontWeight: "bold" }}>
+                Navigation could not be loaded
+            </div>
+            <div style={{ marginBottom: "10px", fontSize: "14px", lineHeight: "1.5" }}>
+                The check for which pages you can open did not complete.
+            </div>
+            <Button onClick={retryLoad}>Retry</Button>
+        </div>
     ) : navigationItems.length === 0 ? (
         <div
             style={{

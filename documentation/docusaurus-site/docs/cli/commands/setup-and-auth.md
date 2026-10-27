@@ -387,7 +387,7 @@ vamscli auth routes list --json-output
 
 ## auth routes allowed
 
-List the VAMS API routes (and the HTTP methods on each) the current user is authorized to call, based on the user's authorization constraints.
+List the VAMS API routes (and the HTTP methods on each) the current user is authorized to call, based on the user's authorization constraints. Each `{param}` path segment is checked as the placeholder `vams:any`, so constraints that name a concrete value in a parameter position can hide an allowed route or list a refused one; see [List allowed API routes](../../api/auth.md#list-allowed-api-routes).
 
 ```bash
 vamscli auth routes allowed [OPTIONS]

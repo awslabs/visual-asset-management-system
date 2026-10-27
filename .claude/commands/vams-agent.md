@@ -24,7 +24,8 @@ hosts). This command is the Claude Code entry point for it.
       are four entities across three command groups, and the execute request takes
       input-file references rather than an asset.
     - **Authorization has two tiers**; a `403` on a route the user is allowed to
-      call is an entity-level refusal to report, not to retry. A `403` with
+      call is an entity-level refusal (or, when the user's constraints name a
+      concrete path value, a refusal of that path) to report, not to retry. A `403` with
       `error_type` `RequestBlockedError` is the deployment's AWS WAF web ACL, ahead
       of both tiers: report its `requestId`; never retry, re-authenticate, or
       rephrase the request to get past it.

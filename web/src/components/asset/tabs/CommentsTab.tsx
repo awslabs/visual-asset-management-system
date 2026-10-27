@@ -329,10 +329,11 @@ export const CommentsTab: React.FC<CommentsTabProps> = ({ assetId, databaseId, i
                                                 (!loading || displayItemsWhileLoading) &&
                                                 !showLoadingIcon
                                             }
+                                            style={{ color: "var(--vams-text-primary)" }}
                                         >
                                             <LoadingIcons.SpinningCircles
                                                 className="center"
-                                                fill="#000716"
+                                                fill="currentColor"
                                             />
                                         </div>
                                         {asset && (
