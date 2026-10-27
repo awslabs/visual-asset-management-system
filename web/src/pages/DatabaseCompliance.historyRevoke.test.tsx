@@ -127,11 +127,16 @@ it("opens an asset's evaluation history with schema version and rule results", a
     expect(await screen.findByText("Evaluation history: excepted-asset")).toBeInTheDocument();
     expect(screen.getByText("std (version 3)")).toBeInTheDocument();
     expect(screen.getByText("Exception applied")).toBeInTheDocument();
-    expect(screen.getByText(/units-required: Failed — missing fw_units/)).toBeInTheDocument();
+    // Each rule result is its name, its outcome and its message beneath.
+    const ruleLine = (name: string) =>
+        [...document.querySelectorAll("[data-rule-result]")].find((el) =>
+            el.textContent?.startsWith(name)
+        ) as HTMLElement;
+    expect(within(ruleLine("units-required")).getByText("Failed")).toBeInTheDocument();
+    expect(within(ruleLine("units-required")).getByText("missing fw_units")).toBeInTheDocument();
+    expect(within(ruleLine("convert")).getByText("Error (not evaluated)")).toBeInTheDocument();
     expect(
-        screen.getByText(
-            /convert: Error \(not evaluated\) — Pipeline execution could not be started/
-        )
+        within(ruleLine("convert")).getByText("Pipeline execution could not be started")
     ).toBeInTheDocument();
 });
 

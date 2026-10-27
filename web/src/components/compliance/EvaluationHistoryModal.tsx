@@ -9,7 +9,6 @@ import Button from "@cloudscape-design/components/button";
 import Modal from "@cloudscape-design/components/modal";
 import Pagination from "@cloudscape-design/components/pagination";
 import SpaceBetween from "@cloudscape-design/components/space-between";
-import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import Table from "@cloudscape-design/components/table";
 import Alert from "@cloudscape-design/components/alert";
 import {
@@ -21,6 +20,7 @@ import {
 } from "../../services/ComplianceService";
 import Synonyms from "../../synonyms";
 import { StatusLabel } from "./complianceStateBadge";
+import BreakableIdentifier from "./BreakableIdentifier";
 
 const VERDICTS: Record<string, { type: string; label: string }> = {
     compliant: { type: "success", label: "Compliant" },
@@ -49,15 +49,27 @@ export const schemaWithVersion = (evaluation: EvaluationRecord): string =>
         ? `${evaluation.schemaName} (version ${evaluation.schemaVersion})`
         : evaluation.schemaName || "-";
 
+/**
+ * One rule's result: the rule name, its outcome as a one-line status label, and the rule's message
+ * beneath, which wraps between words. The whole line used to be one status indicator, whose text
+ * breaks between any two letters, so a long message could not wrap without splitting words.
+ */
 const RuleResultLine: React.FC<{ rule: ComplianceRuleResult }> = ({ rule }) => {
     const errored = rule.status === "error";
     const type = errored ? "error" : rule.passed ? "success" : "warning";
     const label = errored ? "Error (not evaluated)" : rule.passed ? "Passed" : "Failed";
     return (
-        <StatusIndicator type={type as any}>
-            {rule.ruleName}: {label}
-            {rule.message ? ` — ${rule.message}` : ""}
-        </StatusIndicator>
+        <div data-rule-result="">
+            <Box variant="span" fontWeight="bold">
+                <BreakableIdentifier text={rule.ruleName} />
+            </Box>{" "}
+            <StatusLabel type={type as any}>{label}</StatusLabel>
+            {rule.message && (
+                <Box variant="small" display="block" color="text-body-secondary">
+                    {rule.message}
+                </Box>
+            )}
+        </div>
     );
 };
 
@@ -143,6 +155,8 @@ const EvaluationHistoryModal: React.FC<EvaluationHistoryModalProps> = ({
             <SpaceBetween size="m">
                 {error && <Alert type="error">{error}</Alert>}
                 <Table
+                    // Columns wrap, so long rule messages stay within the dialog.
+                    wrapLines
                     loading={loading}
                     items={evaluations}
                     variant="embedded"
