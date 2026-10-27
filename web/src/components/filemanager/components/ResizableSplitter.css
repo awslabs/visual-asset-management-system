@@ -28,6 +28,13 @@
     align-items: center;
     justify-content: center;
     transition: background-color 0.2s ease;
+    /* The splitter handles touch drags itself instead of letting them scroll the page */
+    touch-action: none;
+}
+
+.resizable-splitter:focus-visible {
+    outline: 2px solid var(--vams-border-selected);
+    outline-offset: -1px;
 }
 
 .resizable-splitter:hover {

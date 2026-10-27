@@ -147,18 +147,20 @@ Cognito federation uses the Amazon Cognito hosted UI, which is available only in
 
 1. Set `app.authProvider.useCognito.enabled: false` in your configuration.
 2. Set `app.authProvider.useExternalOAuthIdp.enabled: true`.
-3. Provide the required OAuth 2.0 endpoints:
+3. Provide the required OAuth 2.0 settings. The MFA scope, principal domain and discovery endpoint (`idpAuthProviderScopeMfa`, `idpAuthPrincipalDomain` and `idpAuthProviderDiscoveryEndpoint`) are optional and may be left null.
     - `idpAuthProviderUrl` -- Identity provider base URL
     - `idpAuthClientId` -- OAuth client ID
+    - `idpAuthProviderScope` -- OAuth scope requested by VAMS
     - `idpAuthProviderTokenEndpoint` -- Token endpoint
     - `idpAuthProviderAuthorizationEndpoint` -- Authorization endpoint
-    - `idpAuthProviderDiscoveryEndpoint` -- Discovery endpoint
     - `lambdaAuthorizorJWTIssuerUrl` -- JWT issuer URL for token validation
     - `lambdaAuthorizorJWTAudience` -- Expected JWT audience
 4. Optionally, name the token claims VAMS reads:
     - `lambdaAuthorizorJWTAudienceClaims` -- the claims compared with the audience, in order (default `["aud"]`; `["aud", "client_id"]` for an IdP whose access tokens carry `client_id` instead of `aud`, such as an Amazon Cognito user pool)
     - `lambdaAuthorizorJWTUserIdClaim` -- the claim whose value is the VAMS user id (default: `cognito:username`, then `username`, then `sub`)
 5. Deploy the stack with the updated configuration.
+
+The authorizer compares the access-token claims `lambdaAuthorizorJWTAudienceClaims` names with `lambdaAuthorizorJWTAudience`, and the web application and the authorizer identify the user by the same claim; see the token requirements in the [Configuration Guide](../deployment/configuration-reference.md).
 
 Refer to the [Configuration Guide](../deployment/configuration-reference.md) for the complete field list for both paths, and to [Plan your deployment](../deployment/plan-your-deployment.md) for the authentication decision table.
 

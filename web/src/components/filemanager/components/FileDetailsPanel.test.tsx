@@ -14,6 +14,7 @@ import type { FileManagerState, FileTree } from "../types/FileManagerTypes";
 
 jest.mock("../../../services/APIService", () => ({
     createFolder: jest.fn(),
+    downloadAsset: jest.fn(),
     fetchAsset: jest.fn().mockResolvedValue({ assetId: "a1", isDistributable: true }),
     fetchFileInfo: jest.fn(),
     fetchAllowedApiRoutes: jest.fn(),
@@ -41,7 +42,15 @@ jest.mock("../../../visualizerPlugin/core/viewableExtensions", () => ({
 }));
 jest.mock("../../../visualizerPlugin/components/EyeIconSvg", () => ({ EYE_ICON_SVG: null }));
 jest.mock("../../metadata/FileMetadata", () => ({ __esModule: true, default: () => null }));
-jest.mock("../modals/CreateFolderModal", () => ({ CreateFolderModal: () => null }));
+jest.mock("../modals/CreateFolderModal", () => ({
+    CreateFolderModal: ({ visible, onSubmit, submitError }: any) =>
+        visible ? (
+            <div data-testid="create-folder-modal">
+                <span data-testid="create-folder-error">{submitError}</span>
+                <button onClick={() => onSubmit("new-folder")}>Submit folder</button>
+            </div>
+        ) : null,
+}));
 jest.mock("../../modals/AssetDeleteModal", () => ({ __esModule: true, default: () => null }));
 jest.mock("../../modals/UnarchiveFileModal", () => ({ __esModule: true, default: () => null }));
 jest.mock("../modals/MoveFilesModal", () => ({ MoveFilesModal: () => null }));
@@ -201,5 +210,90 @@ describe("FileDetailsPanel — workflow execution provenance link", () => {
         // The context is shared with hosts that mount the panel without a quick view.
         renderPanel(fileNode(), undefined);
         expect(screen.queryByText("View execution")).not.toBeInTheDocument();
+    });
+});
+
+describe("FileDetailsPanel — request failures", () => {
+    const { createFolder, downloadAsset } = jest.requireMock("../../../services/APIService");
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockCan.mockReturnValue(true);
+        jest.spyOn(console, "error").mockImplementation(() => undefined);
+        jest.spyOn(console, "log").mockImplementation(() => undefined);
+    });
+
+    afterEach(() => jest.restoreAllMocks());
+
+    const folderNode = (): FileTree => ({
+        name: "optimized",
+        displayName: "optimized",
+        relativePath: "/optimized/",
+        keyPrefix: "a1/optimized/",
+        level: 1,
+        expanded: true,
+        subTree: [],
+        isFolder: true,
+    });
+
+    it("keeps the create-folder modal open and shows the request error", async () => {
+        createFolder.mockResolvedValue([false, "Forbidden"]);
+        renderPanel(folderNode());
+
+        await userEvent.click(screen.getByRole("button", { name: "Folder Operations" }));
+        await userEvent.click(await screen.findByText("Create Sub-Folder"));
+        await userEvent.click(screen.getByRole("button", { name: "Submit folder" }));
+
+        await waitFor(() =>
+            expect(screen.getByTestId("create-folder-error")).toHaveTextContent(
+                "Failed to create folder: Forbidden"
+            )
+        );
+        expect(createFolder).toHaveBeenCalledWith({
+            databaseId: "db1",
+            assetId: "a1",
+            relativeKey: "/optimized/new-folder/",
+        });
+        expect(screen.getByTestId("create-folder-modal")).toBeInTheDocument();
+    });
+
+    it("treats an empty create-folder reply as a failure", async () => {
+        createFolder.mockResolvedValue(false);
+        renderPanel(folderNode());
+
+        await userEvent.click(screen.getByRole("button", { name: "Folder Operations" }));
+        await userEvent.click(await screen.findByText("Create Sub-Folder"));
+        await userEvent.click(screen.getByRole("button", { name: "Submit folder" }));
+
+        await waitFor(() =>
+            expect(screen.getByTestId("create-folder-error")).toHaveTextContent(
+                "Failed to create folder: Unknown error"
+            )
+        );
+        expect(screen.getByTestId("create-folder-modal")).toBeInTheDocument();
+    });
+
+    it("shows a dismissible alert with the status and message when a file download fails", async () => {
+        downloadAsset.mockResolvedValue([false, "Asset not distributable", 403]);
+        renderPanel(fileNode());
+
+        await userEvent.click(await screen.findByRole("button", { name: "Export" }));
+        await userEvent.click(await screen.findByText("Download File"));
+
+        const alert = await screen.findByText("Download failed (403): Asset not distributable");
+        expect(alert).toBeInTheDocument();
+        expect(downloadAsset).toHaveBeenCalledWith(
+            expect.objectContaining({
+                assetId: "a1",
+                databaseId: "db1",
+                key: "a1/optimized/BoomBox.glb",
+                versionId: "g.cFP5H7RuKiXmhtKp26tyfdu3_IF8Bg",
+            })
+        );
+
+        await userEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+        await waitFor(() =>
+            expect(screen.queryByText(/Download failed \(403\)/)).not.toBeInTheDocument()
+        );
     });
 });

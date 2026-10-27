@@ -21,7 +21,7 @@ from common.constants import STANDARD_JSON_RESPONSE
 from common.resourceNames import get_table_name, ResourceKeys
 from common.apiRoutes import API_SEARCH, API_SEARCH_SIMPLE
 from common.validators import validate
-from common.dynamodb import validate_pagination_info
+from common.dynamodb import validate_pagination_info, batch_get_items
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -62,6 +62,8 @@ try:
     opensearch_file_index_ssm_param = os.environ["OPENSEARCH_FILE_INDEX_SSM_PARAM"]
     opensearch_endpoint_ssm_param = os.environ["OPENSEARCH_ENDPOINT_SSM_PARAM"]
     opensearch_type = os.environ.get("OPENSEARCH_TYPE", "serverless")
+    # 'true' on a deployment built without OpenSearch, which has no index or endpoint parameters
+    opensearch_disabled = os.environ.get("OPENSEARCH_DISABLED", "false").lower() == "true"
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
@@ -78,9 +80,14 @@ def get_ssm_parameter_value(parameter_name: str) -> str:
         raise VAMSGeneralErrorResponse(f"Error getting configuration parameter: {parameter_name}")
 
 # Load OpenSearch configuration from SSM
-opensearch_asset_index = get_ssm_parameter_value(opensearch_asset_index_ssm_param)
-opensearch_file_index = get_ssm_parameter_value(opensearch_file_index_ssm_param)
-opensearch_endpoint = get_ssm_parameter_value(opensearch_endpoint_ssm_param)
+if opensearch_disabled:
+    opensearch_asset_index = None
+    opensearch_file_index = None
+    opensearch_endpoint = None
+else:
+    opensearch_asset_index = get_ssm_parameter_value(opensearch_asset_index_ssm_param)
+    opensearch_file_index = get_ssm_parameter_value(opensearch_file_index_ssm_param)
+    opensearch_endpoint = get_ssm_parameter_value(opensearch_endpoint_ssm_param)
 
 # Initialize DynamoDB tables
 asset_storage_table = dynamodb.Table(asset_storage_table_name)
@@ -100,7 +107,10 @@ class DualIndexSearchManager:
         self._initialize_client()
     
     def _initialize_client(self):
-        """Initialize OpenSearch client"""
+        """Initialize OpenSearch client; without OpenSearch the client stays None"""
+        if opensearch_disabled:
+            logger.info("OpenSearch is not enabled on this deployment; search is unavailable")
+            return
         try:
             from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
             
@@ -1238,13 +1248,19 @@ class DualIndexQueryBuilder:
             
             # Add aggregations if requested
             if request.aggregations:
-                query["aggs"] = self._build_aggregations(index_type)
+                query["aggs"] = self._build_aggregations(index_type, bool(request.includeArchived))
             
             # Add minimum score for text searches
             if request.query or request.metadataQuery:
                 query["min_score"] = 0.01
+
+            # Match explanations are built from the highlights
+            if request.includeHighlights is False and not request.explainResults:
+                query.pop("highlight")
             
             return query
+        except VAMSGeneralErrorResponse:
+            raise
         except Exception as e:
             logger.exception(f"Error building {index_type} query: {e}")
             raise VAMSGeneralErrorResponse(f"Error building {index_type} search query")
@@ -1363,6 +1379,9 @@ class DualIndexQueryBuilder:
     
     def _build_metadata_search_query(self, metadata_query: str, search_mode: str, index_type: str = "asset") -> Dict[str, Any]:
         """Build dedicated metadata search query with backward compatibility for flat objects
+
+        The query is split on ' AND ' or ' OR ' into terms. In 'both' mode a term holding
+        ':' is a field:value pair; in 'key' and 'value' mode every term is a key or a value.
         
         Args:
             metadata_query: The metadata query string
@@ -1371,126 +1390,101 @@ class DualIndexQueryBuilder:
             
         Returns:
             OpenSearch query dict
+
+        Raises:
+            VAMSGeneralErrorResponse: when a non-empty query yields no search clause
         """
         if not metadata_query:
             return {}
         
-        # Check if query contains AND or OR operator for multiple field:value pairs
+        # Check if query contains AND or OR operator for multiple terms
         operator = None
-        pairs = []
-        
+        terms = [metadata_query]
         if ' AND ' in metadata_query:
             operator = 'AND'
-            pairs = [pair.strip() for pair in metadata_query.split(' AND ') if pair.strip()]
+            terms = metadata_query.split(' AND ')
         elif ' OR ' in metadata_query:
             operator = 'OR'
-            pairs = [pair.strip() for pair in metadata_query.split(' OR ') if pair.strip()]
-        
-        if operator and pairs:
-            # Build individual queries for each pair
-            pair_queries = []
-            for pair in pairs:
-                if ':' in pair:
-                    parts = pair.split(':', 1)
-                    field_part = parts[0].strip()
-                    value_part = parts[1].strip() if len(parts) > 1 else ''
-                    
-                    # Extract field name with backward compatibility
-                    prefix, field_name = self._extract_metadata_field_name(field_part)
+            terms = metadata_query.split(' OR ')
+        terms = [term.strip() for term in terms if term.strip()]
 
-                    # Escape the field name too -- it is user-controlled and interpolated
-                    # into the query_string text, so an unescaped special character could
-                    # otherwise alter the parsed query. Wildcards are never meaningful in a
-                    # field name, so do not preserve them here.
-                    escaped_field_name = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=False)
-
-                    # Check if user provided wildcards
-                    has_wildcards = '*' in value_part or '?' in value_part
-
-                    # Escape the value part (preserve wildcards if user provided them)
-                    escaped_value = self.field_classifier.escape_opensearch_query_string(value_part, preserve_wildcards=has_wildcards)
-
-                    # Build flat object query
-                    if has_wildcards:
-                        query_str = f"{prefix}.{escaped_field_name}:{escaped_value}"
-                    else:
-                        # Exact match - quote the value for phrase matching
-                        query_str = f'{prefix}.{escaped_field_name}:"{escaped_value}"'
-                    
-                    # Build query for this specific field:value pair
-                    pair_queries.append({
-                        "query_string": {
-                            "query": query_str,
-                            "analyze_wildcard": True,
-                            "lenient": True
-                        }
-                    })
-            
-            # Return bool query with appropriate logic
-            if len(pair_queries) == 1:
-                return pair_queries[0]
-            elif len(pair_queries) > 1:
-                if operator == 'AND':
-                    # All must match
-                    return {
-                        "bool": {
-                            "must": pair_queries
-                        }
-                    }
-                else:  # OR
-                    # Any can match
-                    return {
-                        "bool": {
-                            "should": pair_queries,
-                            "minimum_should_match": 1
-                        }
-                    }
+        term_queries = []
+        for term in terms:
+            if search_mode not in ("key", "value") and ':' in term:
+                field_part, value_part = term.split(':', 1)
+                term_query = self._build_metadata_pair_query(field_part.strip(), value_part.strip())
             else:
-                return {}
-        
-        # Single field:value pair
-        if ':' in metadata_query:
-            parts = metadata_query.split(':', 1)
-            field_part = parts[0].strip()
-            value_part = parts[1].strip() if len(parts) > 1 else ''
-            
-            # Extract field name with backward compatibility
-            prefix, field_name = self._extract_metadata_field_name(field_part)
+                term_query = self._build_metadata_term_query(term, search_mode, index_type)
+            if term_query:
+                term_queries.append(term_query)
 
-            # Escape the user-controlled field name so it cannot alter the parsed query.
-            escaped_field_name = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=False)
+        if not term_queries:
+            raise VAMSGeneralErrorResponse("metadataQuery contains no metadata key, value or field:value term to search for")
 
-            # Check if user provided wildcards
-            has_wildcards = '*' in value_part or '?' in value_part
-
-            # Escape the value part for query_string (preserve wildcards if user provided them)
-            escaped_value = self.field_classifier.escape_opensearch_query_string(value_part, preserve_wildcards=has_wildcards)
-
-            # Build flat object query
-            if has_wildcards:
-                query_str = f"{prefix}.{escaped_field_name}:{escaped_value}"
-            else:
-                # Exact match - quote the value for phrase matching
-                query_str = f'{prefix}.{escaped_field_name}:"{escaped_value}"'
-            
-            # Build query for specific field:value pair
+        # Return bool query with appropriate logic
+        if len(term_queries) == 1:
+            return term_queries[0]
+        if operator == 'AND':
+            # All must match
             return {
-                "query_string": {
-                    "query": query_str,
-                    "analyze_wildcard": True,
-                    "lenient": True
+                "bool": {
+                    "must": term_queries
                 }
             }
-        
-        # If no colon, treat as a general metadata search based on mode
+        # OR: any can match
+        return {
+            "bool": {
+                "should": term_queries,
+                "minimum_should_match": 1
+            }
+        }
+
+    def _build_metadata_pair_query(self, field_part: str, value_part: str) -> Dict[str, Any]:
+        """query_string clause matching one metadata field:value pair."""
+        # Extract field name with backward compatibility
+        prefix, field_name = self._extract_metadata_field_name(field_part)
+
+        # Escape the field name too -- it is user-controlled and interpolated
+        # into the query_string text, so an unescaped special character could
+        # otherwise alter the parsed query. Wildcards are never meaningful in a
+        # field name, so do not preserve them here.
+        escaped_field_name = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=False)
+        # Whitespace ends a field name in query_string syntax, so escape it in the name only
+        escaped_field_name = re.sub(r'(\s)', r'\\\1', escaped_field_name)
+
         # Check if user provided wildcards
-        has_wildcards = '*' in metadata_query or '?' in metadata_query
-        escaped_query = self.field_classifier.escape_opensearch_query_string(metadata_query, preserve_wildcards=has_wildcards)
+        has_wildcards = '*' in value_part or '?' in value_part
+
+        # Escape the value part (preserve wildcards if user provided them)
+        escaped_value = self.field_classifier.escape_opensearch_query_string(value_part, preserve_wildcards=has_wildcards)
+
+        # Build flat object query
+        if has_wildcards:
+            query_str = f"{prefix}.{escaped_field_name}:{escaped_value}"
+        else:
+            # Exact match - quote the value for phrase matching
+            query_str = f'{prefix}.{escaped_field_name}:"{escaped_value}"'
+
+        return {
+            "query_string": {
+                "query": query_str,
+                "analyze_wildcard": True,
+                "lenient": True
+            }
+        }
+
+    def _build_metadata_term_query(self, term: str, search_mode: str, index_type: str) -> Dict[str, Any]:
+        """Clause for one metadata term that is a key ('key' mode) or a value ('value' and 'both')."""
+        # Check if user provided wildcards
+        has_wildcards = '*' in term or '?' in term
+        escaped_query = self.field_classifier.escape_opensearch_query_string(term, preserve_wildcards=has_wildcards)
         
         if search_mode == "key":
             # Search for documents that have metadata fields matching the pattern
             # Extract field name with backward compatibility
-            prefix, field_name = self._extract_metadata_field_name(metadata_query)
+            prefix, field_name = self._extract_metadata_field_name(term)
+            if not field_name:
+                return {}
             
             if has_wildcards:
                 escaped_key = self.field_classifier.escape_opensearch_query_string(field_name, preserve_wildcards=True)
@@ -1639,15 +1633,18 @@ class DualIndexQueryBuilder:
             "fragment_size": 2147483647
         }
     
-    def _build_aggregations(self, index_type: str) -> Dict[str, Any]:
-        """Build aggregations for specific index"""
-        base_filter = {
-            "bool": {
-                "must_not": [
-                    {"term": {"bool_archived": True}}
-                ]
+    def _build_aggregations(self, index_type: str, include_archived: bool = False) -> Dict[str, Any]:
+        """Build aggregations for specific index, over the same archived scope as the hits"""
+        if include_archived:
+            base_filter = {"match_all": {}}
+        else:
+            base_filter = {
+                "bool": {
+                    "must_not": [
+                        {"term": {"bool_archived": True}}
+                    ]
+                }
             }
-        }
         
         if index_type == "asset":
             return {
@@ -1761,6 +1758,9 @@ class DualIndexResponseProcessor:
     def __init__(self, database_access_manager: DatabaseAccessManager):
         self.database_access_manager = database_access_manager
         self.field_classifier = FieldClassifier()
+        # Parent asset rows of file hits for this request, keyed (databaseId, assetId);
+        # None records a parent that exists in neither the live nor the archived partition.
+        self._parent_assets: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
     
     def process_dual_search_response(self, opensearch_response: Dict[str, Any], 
                                    request: SearchRequestModel, claims_and_roles: Dict[str, Any]) -> SearchResponseModel:
@@ -1768,6 +1768,10 @@ class DualIndexResponseProcessor:
         try:
             # Log the raw response for debugging
             logger.info(f"Processing response with {len(opensearch_response.get('hits', {}).get('hits', []))} hits")
+
+            # File documents carry no assetType, so each file hit is checked against its
+            # parent asset's row; read those rows once, before the per-hit checks
+            self._load_parent_assets(opensearch_response.get("hits", {}).get("hits", []))
             
             # Apply Casbin filtering to hits
             filtered_hits = []
@@ -1958,6 +1962,67 @@ class DualIndexResponseProcessor:
             logger.warning(f"[Sort] Error re-sorting filtered hits: {e}, returning unsorted")
             return hits
     
+    @staticmethod
+    def _is_file_hit(hit: Dict[str, Any]) -> bool:
+        """Whether a hit came from the file index."""
+        return hit.get("_index_type") == "file" or hit.get("_source", {}).get("str_rectype") == "file"
+
+    @staticmethod
+    def _parent_asset_key(hit: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+        """(databaseId, assetId) of a file hit's parent asset, or None when either is empty."""
+        source = hit.get("_source", {})
+        database_id = source.get("str_databaseid") or ""
+        asset_id = source.get("str_assetid") or ""
+        if not database_id or not asset_id or database_id.endswith("#deleted"):
+            return None
+        return database_id, asset_id
+
+    @staticmethod
+    def _read_asset_rows(keys: List[Dict[str, str]]) -> Dict[Tuple[str, str], Dict[str, Any]]:
+        """Asset rows for `keys`, keyed (databaseId, assetId) as stored.
+
+        Keys the batch read leaves unresolved are read one at a time, so a throttled read
+        neither drops a row nor reports it missing. A failed call propagates.
+        """
+        rows, unresolved = batch_get_items(dynamodb, asset_storage_table_name, keys)
+        for key in unresolved:
+            item = asset_storage_table.get_item(Key=key).get("Item")
+            if item:
+                rows.append(item)
+        return {(row.get("databaseId"), row.get("assetId")): row for row in rows}
+
+    def _load_parent_assets(self, hits: List[Dict[str, Any]]) -> None:
+        """Read the parent asset row of every file hit not yet in the request's memo.
+
+        A file document keeps its asset's live databaseId after the asset is archived, so
+        the live key is read first and the '{databaseId}#deleted' key only for parents with
+        no live row. Hits with an empty databaseId or assetId are not read: one empty key
+        attribute fails a whole BatchGetItem chunk.
+        """
+        wanted = []
+        for hit in hits:
+            if not self._is_file_hit(hit):
+                continue
+            key = self._parent_asset_key(hit)
+            if key and key not in self._parent_assets and key not in wanted:
+                wanted.append(key)
+        if not wanted:
+            return
+
+        live = self._read_asset_rows(
+            [{"databaseId": database_id, "assetId": asset_id} for database_id, asset_id in wanted]
+        )
+        missing = [key for key in wanted if key not in live]
+        archived = {}
+        if missing:
+            archived = self._read_asset_rows(
+                [{"databaseId": f"{database_id}#deleted", "assetId": asset_id} for database_id, asset_id in missing]
+            )
+        for database_id, asset_id in wanted:
+            self._parent_assets[(database_id, asset_id)] = (
+                live.get((database_id, asset_id)) or archived.get((f"{database_id}#deleted", asset_id))
+            )
+
     def _is_hit_authorized(self, hit: Dict[str, Any], claims_and_roles: Dict[str, Any]) -> bool:
         """Check if user is authorized to see this search hit"""
         try:
@@ -1968,13 +2033,28 @@ class DualIndexResponseProcessor:
                 return False
             
             # Build document for Casbin check
-            hit_document = {
-                "databaseId": source.get("str_databaseid", ""),
-                "assetName": source.get("str_assetname", ""),
-                "tags": source.get("list_tags", []),
-                "assetType": source.get("str_assettype", ""),
-                "object__type": "asset"  # For ABAC purposes, treat all as assets
-            }
+            if self._is_file_hit(hit):
+                # A file hit is checked as its parent asset: assetName, tags and assetType
+                # come from the asset row, databaseId from the hit. No parent row, no access.
+                parent_key = self._parent_asset_key(hit)
+                parent = self._parent_assets.get(parent_key) if parent_key else None
+                if not parent:
+                    return False
+                hit_document = {
+                    "databaseId": source.get("str_databaseid", ""),
+                    "assetName": parent.get("assetName", ""),
+                    "tags": parent.get("tags", []),
+                    "assetType": parent.get("assetType", ""),
+                    "object__type": "asset"
+                }
+            else:
+                hit_document = {
+                    "databaseId": source.get("str_databaseid", ""),
+                    "assetName": source.get("str_assetname", ""),
+                    "tags": source.get("list_tags", []),
+                    "assetType": source.get("str_assettype", ""),
+                    "object__type": "asset"  # For ABAC purposes, treat all as assets
+                }
             
             # Apply Casbin enforcement
             if len(claims_and_roles.get("tokens", [])) > 0:

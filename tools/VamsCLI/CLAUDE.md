@@ -1063,7 +1063,8 @@ Each item duplicates a Critical Rule; the rule is authoritative. Do NOT:
 | `MAX_SEQUENCE_SIZE`           | 3 GB   | Max sequence size          |
 | `MAX_PREVIEW_FILE_SIZE`       | 5 MB   | Preview image limit        |
 | `MAX_FILES_PER_REQUEST`       | 50     | Files per upload request   |
-| `MAX_TOTAL_PARTS_PER_REQUEST` | 200    | Total parts per request    |
+| `MAX_TOTAL_PARTS_PER_REQUEST` | 1000   | Client parts per request   |
+| `MAX_PARTS_PER_FILE`          | 1000   | Client parts per file      |
 | `MAX_PART_SIZE`               | 5 GB   | S3 part size limit         |
 
 ### Retry Configuration

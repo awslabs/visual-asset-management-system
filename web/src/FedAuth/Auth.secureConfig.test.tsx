@@ -18,7 +18,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { signOut } from "aws-amplify/auth";
 import { appCache } from "../services/appCache";
 import { fetchLoginProfile } from "../services/APIService";
@@ -87,25 +87,38 @@ jest.mock("../services/APIService", () => ({
     fetchAllowedApiRoutes: jest.fn().mockResolvedValue([true, { routes: [] }]),
 }));
 
-jest.mock("../utils/sessionManager", () => ({
-    ensureValidSession: jest.fn().mockResolvedValue(true),
-    scheduleExpiryTimer: jest.fn().mockResolvedValue(undefined),
-    clearExpiryTimer: jest.fn(),
-    registerFocusRevalidation: jest.fn(() => () => {}),
-    SESSION_EXPIRED_KEY: "session_expired",
-    SESSION_RETURN_TO_KEY: "session_return_to",
-}));
+jest.mock("../utils/sessionManager", () => {
+    // The sign-out steps run for real (Amplify's signOut is the mock above), so a sign-out
+    // test sees localStorage cleared the way the app clears it.
+    const actual = jest.requireActual("../utils/sessionManager");
+    return {
+        ensureValidSession: jest.fn().mockResolvedValue(true),
+        scheduleExpiryTimer: jest.fn().mockResolvedValue(undefined),
+        clearExpiryTimer: jest.fn(),
+        registerFocusRevalidation: jest.fn(() => () => {}),
+        clearLocalStore: jest.fn().mockResolvedValue(undefined),
+        clearStoredSession: actual.clearStoredSession,
+        revokeSession: actual.revokeSession,
+        SESSION_EXPIRED_KEY: "session_expired",
+        SESSION_RETURN_TO_KEY: "session_return_to",
+    };
+});
 
 jest.mock("../hooks/useThemeSettings", () => ({
     useThemeSettings: () => ({ theme: "dark", setTheme: jest.fn() }),
 }));
 
-jest.mock("../common/GlobalHeader", () => ({ GlobalHeader: () => null }));
+jest.mock("../common/GlobalHeader", () => ({
+    GlobalHeader: () => <div data-testid="global-header" />,
+}));
 jest.mock("../authenticator/Header", () => ({ Header: () => null }));
 jest.mock("../authenticator/Footer", () => ({ Footer: () => null, PageFooter: () => null }));
 jest.mock("../authenticator/SignInHeader", () => ({ SignInHeader: () => null }));
 jest.mock("../authenticator/SignInFooter", () => ({ SignInFooter: () => null }));
-jest.mock("../components/loading/LoadingScreen", () => ({ __esModule: true, default: () => null }));
+jest.mock("../components/loading/LoadingScreen", () => ({
+    __esModule: true,
+    default: () => <div data-testid="loading-screen" />,
+}));
 
 /** A cached config is enough to reach ampInit synchronously on the first render. */
 const COGNITO_CONFIG = {
@@ -214,11 +227,11 @@ describe("Auth secure-config fetch", () => {
 
         renderAuth();
 
-        expect(await screen.findByTestId("app-children")).toBeInTheDocument();
-        expect((window as any).DISABLE_COGNITO).toBe(true); // the OAuth2 branch really was taken
         await waitFor(() => expect(mockGetSecureConfig).toHaveBeenCalledTimes(2), {
             timeout: 15000,
         });
+        expect(await screen.findByTestId("app-children")).toBeInTheDocument();
+        expect((window as any).DISABLE_COGNITO).toBe(true); // the OAuth2 branch really was taken
         await waitFor(() =>
             expect(appCache.getItem("config").featuresEnabled).toContain("LOCATIONSERVICES")
         );
@@ -236,6 +249,125 @@ describe("Auth secure-config fetch", () => {
         await new Promise((resolve) => setTimeout(resolve, 2500));
         expect(mockGetSecureConfig).toHaveBeenCalledTimes(3);
     }, 30000);
+});
+
+/**
+ * Pages and the viewer registry read the feature switches once, when they mount, so the app
+ * shell waits for secure-config when no switches are cached (a fresh sign-in), and renders at
+ * once when a reload finds them cached. The wait shows the deployment banner above the loading
+ * screen and lasts at most 10 seconds, so a request that never answers does not strand the user.
+ */
+describe("Auth holds the app until the feature switches are known", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
+    it("does not render the app while secure-config is pending with no cached switches", async () => {
+        seedMode(COGNITO_CONFIG);
+        let resolveSecureConfig!: (value: any) => void;
+        mockGetSecureConfig.mockReturnValue(
+            new Promise((resolve) => {
+                resolveSecureConfig = resolve;
+            })
+        );
+
+        renderAuth();
+
+        await waitFor(() => expect(mockGetSecureConfig).toHaveBeenCalledTimes(1));
+        expect(screen.queryByTestId("app-children")).not.toBeInTheDocument();
+
+        resolveSecureConfig(SECURE_CONFIG);
+
+        expect(await screen.findByTestId("app-children")).toBeInTheDocument();
+        expect(appCache.getItem("config").featuresEnabled).toContain("LOCATIONSERVICES");
+    });
+
+    it("renders the app after the last failed attempt", async () => {
+        seedMode(COGNITO_CONFIG);
+        mockGetSecureConfig.mockRejectedValue(new Error("503 Service Unavailable"));
+
+        renderAuth();
+
+        await waitFor(() => expect(mockGetSecureConfig).toHaveBeenCalledTimes(2), {
+            timeout: 15000,
+        });
+        expect(screen.queryByTestId("app-children")).not.toBeInTheDocument();
+        await waitFor(() => expect(mockGetSecureConfig).toHaveBeenCalledTimes(3), {
+            timeout: 15000,
+        });
+        expect(await screen.findByTestId("app-children")).toBeInTheDocument();
+    }, 30000);
+
+    it("renders at once when the switches are already cached", async () => {
+        seedMode({ ...COGNITO_CONFIG, featuresEnabled: ["LOCATIONSERVICES"] });
+        mockGetSecureConfig.mockReturnValue(new Promise(() => {}));
+
+        renderAuth();
+
+        expect(await screen.findByTestId("app-children")).toBeInTheDocument();
+        expect(mockGetSecureConfig).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows the deployment banner above the loading screen while it holds", async () => {
+        seedMode(COGNITO_CONFIG);
+        mockGetSecureConfig.mockReturnValue(new Promise(() => undefined));
+
+        renderAuth();
+
+        await waitFor(() => expect(mockGetSecureConfig).toHaveBeenCalledTimes(1));
+        const banner = screen.getByTestId("global-header");
+        const loading = screen.getByTestId("loading-screen");
+        expect(
+            banner.compareDocumentPosition(loading) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+        expect(screen.queryByTestId("app-children")).not.toBeInTheDocument();
+    });
+
+    it("renders the app after the hold's 10-second bound when secure-config never answers", async () => {
+        jest.useFakeTimers();
+        try {
+            seedMode(COGNITO_CONFIG);
+            mockGetSecureConfig.mockReturnValue(new Promise(() => undefined));
+
+            renderAuth();
+
+            await waitFor(() => expect(mockGetSecureConfig).toHaveBeenCalledTimes(1));
+            act(() => {
+                jest.advanceTimersByTime(9000);
+            });
+            expect(screen.queryByTestId("app-children")).not.toBeInTheDocument();
+
+            act(() => {
+                jest.advanceTimersByTime(1000);
+            });
+            expect(screen.getByTestId("app-children")).toBeInTheDocument();
+            expect(mockGetSecureConfig).toHaveBeenCalledTimes(1);
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+});
+
+describe("Auth federated Cognito detection", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockGetSecureConfig.mockResolvedValue(SECURE_CONFIG);
+    });
+
+    it.each([
+        ["an IdP configuration object", { customCognitoAuthDomain: "auth.test" }, true],
+        ["absent", undefined, false],
+        ["null", null, false],
+    ])(
+        "treats cognitoFederatedConfig that is %s (%p) as federated: %p",
+        async (_label, federated, expected) => {
+            seedMode({ ...COGNITO_CONFIG, cognitoFederatedConfig: federated });
+
+            renderAuth();
+
+            await waitFor(() => expect((window as any).COGNITO_FEDERATED).toBe(expected));
+        }
+    );
 });
 
 /**
@@ -329,6 +461,15 @@ describe("Auth external OAuth access token without the configured user id claim"
         expect(screen.queryByTestId("app-children")).not.toBeInTheDocument();
     };
 
+    /** An opaque state as the sign-in stores it, and the callback that returns it. */
+    const STATE = "0123456789abcdef".repeat(4);
+    const storeSignInAttemptAndCallback = () => {
+        localStorage.setItem("auth_state", STATE);
+        localStorage.setItem("auth_return_to", "http://localhost/#/assets");
+        localStorage.setItem("code_verifier", "verifier");
+        window.history.replaceState(null, "", `/?code=abc&state=${STATE}`);
+    };
+
     beforeEach(() => {
         jest.clearAllMocks();
         localStorage.clear();
@@ -340,6 +481,7 @@ describe("Auth external OAuth access token without the configured user id claim"
 
     afterEach(() => {
         (console.error as jest.Mock).mockRestore();
+        window.history.replaceState(null, "", "/");
     });
 
     it("the sign-in page names the claim after the sign-out", async () => {
@@ -356,8 +498,7 @@ describe("Auth external OAuth access token without the configured user id claim"
 
     it("the code exchange stores no session and signs out", async () => {
         appCache.setItem("config", OAUTH2_CONFIG_EMAIL);
-        localStorage.setItem("auth_state", "http://localhost/#/assets");
-        localStorage.setItem("code_verifier", "verifier");
+        storeSignInAttemptAndCallback();
         mockGetAmplifyConfig.mockResolvedValue({ ...OAUTH2_CONFIG_EMAIL });
         mockGetTokenFromCodeRedirect.mockResolvedValue({
             accessToken: jwtWith(LACKS_EMAIL),
@@ -374,8 +515,7 @@ describe("Auth external OAuth access token without the configured user id claim"
 
     it("positive control: a code exchange whose token carries the claim stores the session", async () => {
         appCache.setItem("config", OAUTH2_CONFIG_EMAIL);
-        localStorage.setItem("auth_state", "http://localhost/#/assets");
-        localStorage.setItem("code_verifier", "verifier");
+        storeSignInAttemptAndCallback();
         mockGetAmplifyConfig.mockResolvedValue({ ...OAUTH2_CONFIG_EMAIL });
         mockGetTokenFromCodeRedirect.mockResolvedValue({
             accessToken: jwtWith({ ...LACKS_EMAIL, email: "first.last@example.com" }),
