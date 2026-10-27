@@ -155,6 +155,21 @@ class TestTheSchemaListing:
         assert body_of(response)["createScopes"] == ["GLOBAL"]
         assert len(body_of(response)["schemas"]) == 3
 
+    def test_a_soft_deleted_database_is_not_a_creatable_scope(self):
+        # The database service keeps a deleted database as `<id>#deleted`; a schema POST into it
+        # is refused, so the create form must not offer it.
+        database_table = MagicMock(name="database_table")
+        database_table.scan.return_value = {"Items": [
+            {"databaseId": DB}, {"databaseId": f"{OTHER_DB}#deleted"},
+            {"databaseId": "old-db#deleted"}, {"databaseId": OTHER_DB}]}
+        allow_all = MagicMock(name="CasbinEnforcer")
+        allow_all.enforce.return_value = True
+        with patch.object(schema_svc, "database_table", database_table):
+            scopes = schema_svc.creatable_scopes(allow_all)
+        assert scopes == ["GLOBAL", DB, OTHER_DB]
+        checked = [call.args[0]["databaseId"] for call in allow_all.enforce.call_args_list]
+        assert not any("#deleted" in database_id for database_id in checked)
+
 
 def _create(database_id, name="new-1"):
     return rest_event("POST", "/compliance/schemas", body={

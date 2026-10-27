@@ -52,7 +52,7 @@ GET /compliance/schemas
 }
 ```
 
-Each schema carries `permissions`: `edit` (`PUT` on the schema in its scope), `delete` (`DELETE`), and `bind` (a `vams-rules-v1` schema the caller may read, and `PUT` on the `complianceBinding` of the database named by `databaseId`, or of the schema's own database for a database-scoped schema; for a `GLOBAL` schema listed without `databaseId`, whether a given database may bind it is checked when it is bound). A system schema is never editable or deletable by a caller other than the system. Without `databaseId`, the response also carries `createScopes`: the scopes (`GLOBAL` and database IDs) the caller may register a schema in.
+Each schema carries `permissions`: `edit` (`PUT` on the schema in its scope), `delete` (`DELETE`), and `bind` (a `vams-rules-v1` schema the caller may read, and `PUT` on the `complianceBinding` of the database named by `databaseId`, or of the schema's own database for a database-scoped schema; for a `GLOBAL` schema listed without `databaseId`, whether a given database may bind it is checked when it is bound). A system schema is never editable or deletable by a caller other than the system. Without `databaseId`, the response also carries `createScopes`: the scopes (`GLOBAL` and database IDs) the caller may register a schema in; a deleted database is not one.
 
 The listing is not paged; a schema appears once, at its highest version. The top-level `schemaFormat` is derived from the body: `vams-rules-v1`, or `legacy` for a row whose body is not a `vams-rules-v1` document. A legacy schema cannot be bound (see [Bind a schema to a database](#bind-a-schema-to-a-database)), updated or evaluated; it is listed so that it can be found and [deleted](#delete-a-compliance-schema).
 

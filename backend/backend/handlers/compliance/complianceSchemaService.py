@@ -58,6 +58,8 @@ claims_and_roles = {}
 
 COMPLIANCE_SCHEMA_OBJECT_TYPE = "complianceSchema"
 COMPLIANCE_BINDING_OBJECT_TYPE = "complianceBinding"
+# What the database service appends to the id of a soft-deleted database (`<id>#deleted`).
+DELETED_DATABASE_MARKER = "#deleted"
 # The system actor: the only identity that registers or modifies system schemas.
 SYSTEM_USER = "SYSTEM_USER"
 
@@ -345,10 +347,13 @@ def schema_permissions(casbin_enforcer, schema, binding_database_id=None):
 
 def creatable_scopes(casbin_enforcer):
     """The scopes the caller may create a schema in: GLOBAL and every database whose
-    `complianceSchema` POST passes. The database table is small and is scanned for its ids."""
+    `complianceSchema` POST passes. The database table is small and is scanned for its ids. A
+    soft-deleted database (its id carries `#deleted`) is not a scope, as the database listing
+    leaves it out: a schema cannot be created in it."""
     candidates = [GLOBAL_DATABASE_ID] + sorted(
         item["databaseId"] for item in _scan_all_items(database_table, ProjectionExpression="databaseId")
-        if item.get("databaseId") and item["databaseId"] != GLOBAL_DATABASE_ID)
+        if item.get("databaseId") and item["databaseId"] != GLOBAL_DATABASE_ID
+        and DELETED_DATABASE_MARKER not in item["databaseId"])
     return [database_id for database_id in candidates
             if casbin_enforcer.enforce(_schema_object("", database_id), "POST")]
 
