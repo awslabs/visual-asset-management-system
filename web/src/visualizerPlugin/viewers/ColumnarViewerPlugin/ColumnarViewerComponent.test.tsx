@@ -12,7 +12,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import ColumnarViewerComponent from "./ColumnarViewerComponent";
 
 const mockDownloadAsset = jest.fn();
@@ -27,7 +27,12 @@ jest.mock("react-papaparse", () => ({
 
 jest.mock("react-data-grid", () => ({
     __esModule: true,
-    default: ({ columns }: any) => <div>{`grid:${columns.length}`}</div>,
+    default: ({ columns, rows, className }: any) => (
+        <div data-testid="data-grid" className={className}>
+            <span>{`grid:${columns.length}`}</span>
+            <span>{`rows:${rows.length}`}</span>
+        </div>
+    ),
 }));
 
 jest.mock("fcs", () => ({
@@ -115,6 +120,29 @@ describe("ColumnarViewerComponent", () => {
             expect(screen.getByText(/\.rds is not supported/i)).toBeInTheDocument()
         );
         expect(mockReadRemoteFile).not.toHaveBeenCalled();
+        // The message sits on a theme panel over the striped viewer background.
+        const message = screen.getByText(/\.rds is not supported/i);
+        expect(message.style.background).toBe("var(--vams-bg-primary)");
+        expect(message.style.color).toBe("var(--vams-color-error)");
+    });
+
+    it("styles the grid for the VAMS theme and follows a theme switch", async () => {
+        mockReadRemoteFile.mockImplementation((_url: string, options: any) =>
+            options.complete({ data: [["a"], ["1"]] })
+        );
+        document.body.classList.remove("awsui-dark-mode");
+        try {
+            render(<ColumnarViewerComponent {...props("tables/data.csv")} />);
+            const grid = await screen.findByTestId("data-grid");
+            expect(grid).toHaveClass("rdg-light");
+
+            act(() => {
+                document.body.classList.add("awsui-dark-mode");
+            });
+            await waitFor(() => expect(screen.getByTestId("data-grid")).toHaveClass("rdg-dark"));
+        } finally {
+            document.body.classList.remove("awsui-dark-mode");
+        }
     });
 
     it("dispatches on the real extension, not a substring of the name", async () => {
@@ -136,5 +164,66 @@ describe("ColumnarViewerComponent", () => {
         // positive evidence of the branch taken.
         await waitFor(() => expect(xhrs).toHaveLength(1));
         expect(mockReadRemoteFile).not.toHaveBeenCalled();
+    });
+
+    describe("FCS events", () => {
+        const FCS = jest.requireMock("fcs").default as jest.Mock;
+
+        /** An FCS parse of `events` events with `params` values each. */
+        const fcsData = (events: number, params: number, total?: number) => {
+            const text: Record<string, string> = {};
+            for (let p = 1; p <= params; p++) text[`$P${p}N`] = `P${p}`;
+            if (total !== undefined) text.$TOT = String(total);
+            return {
+                dataAsStrings: Array.from(
+                    { length: events },
+                    (_, e) => `[${Array.from({ length: params }, (_, p) => e * 10 + p).join(",")}]`
+                ),
+                text,
+                meta: {},
+            };
+        };
+
+        const loadFcs = async (parse: () => any) => {
+            FCS.mockImplementation(parse);
+            render(<ColumnarViewerComponent {...props("cells/sample.fcs")} />);
+            await waitFor(() => expect(xhrs).toHaveLength(1));
+            act(() => {
+                xhrs[0].response = new ArrayBuffer(8);
+                xhrs[0].onload();
+            });
+        };
+
+        it("builds one row per event and one column per parameter", async () => {
+            await loadFcs(() => fcsData(20, 3, 20));
+            await waitFor(() => expect(screen.getByText("rows:20")).toBeInTheDocument());
+            expect(screen.getByText("grid:3")).toBeInTheDocument();
+            expect(screen.queryByTestId("fcs-event-count")).toBeNull();
+        });
+
+        it("reads a file with fewer events than parameters", async () => {
+            await loadFcs(() => fcsData(2, 5));
+            await waitFor(() => expect(screen.getByText("rows:2")).toBeInTheDocument());
+            expect(screen.getByText("grid:5")).toBeInTheDocument();
+        });
+
+        it("says how many events were read when the file holds more", async () => {
+            await loadFcs(() => fcsData(20, 3, 5000));
+            await waitFor(() =>
+                expect(screen.getByTestId("fcs-event-count")).toHaveTextContent(
+                    "Showing 20 of 5,000 events"
+                )
+            );
+        });
+
+        it("reports a parse that throws instead of spinning", async () => {
+            jest.spyOn(console, "error").mockImplementation(() => undefined);
+            await loadFcs(() => {
+                throw new Error("bad header");
+            });
+            await waitFor(() =>
+                expect(screen.getByText(/Unable to read this file as FCS data/)).toBeInTheDocument()
+            );
+        });
     });
 });

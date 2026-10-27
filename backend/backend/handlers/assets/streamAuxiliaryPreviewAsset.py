@@ -200,6 +200,8 @@ def handle_head_request(event, claims_and_roles):
         response_headers = {
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Headers': 'Range',
+            # Lets a cross-origin browser caller read the metadata headers below
+            'Access-Control-Expose-Headers': 'ETag, Last-Modified, Accept-Ranges, x-amz-version-id, x-amz-storage-class',
             'Cache-Control': 'no-cache, no-store',
             'Content-Type': content_type,
             'Content-Length': str(head_response.get('ContentLength', 0)),
@@ -457,6 +459,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                             'Location': presigned_url,
                             'Access-Control-Allow-Headers': 'Range',
                             'Access-Control-Allow-Origin': '*',
+                            # Lets a cross-origin browser caller read the redirect target
+                            'Access-Control-Expose-Headers': 'Location',
                             'Cache-Control': 'no-cache, no-store',
                         },
                         'body': ''
@@ -486,6 +490,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     'headers': {
                             'Access-Control-Allow-Headers': 'Range',
                             'Access-Control-Allow-Origin': '*',
+                            # Lets a cross-origin browser caller read the range/encoding metadata below
+                            'Access-Control-Expose-Headers': 'Accept-Ranges, Content-Range, Content-Encoding',
                             'Cache-Control': 'no-cache, no-store',
                             'Accept-Ranges': s3_response['ResponseMetadata']['HTTPHeaders']['accept-ranges'],
                             'Content-Type': s3_response['ResponseMetadata']['HTTPHeaders']['content-type'],

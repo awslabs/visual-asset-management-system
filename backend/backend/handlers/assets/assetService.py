@@ -22,7 +22,7 @@ from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
 from customLogging.logger import safeLogger
-from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items
+from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
@@ -207,7 +207,7 @@ def enrich_asset_listing_page(items):
     the page, so a page costs a handful of reads rather than two per asset. Each returned record is
     identical to what the per-asset enhance_asset_with_version_info + get_default_bucket_details pair
     produces. Records without a bucketId are skipped so one malformed item cannot fail the whole
-    listing.
+    listing, and a record whose bucket cannot be read is listed with bucketName None.
 
     Args:
         items: Asset dictionaries for the page, in response order
@@ -225,13 +225,20 @@ def enrich_asset_listing_page(items):
 
     enhanced_items = enhance_assets_with_version_info(listed_items)
 
-    # Per-request memo: a page typically spans one or two buckets
+    # Per-request memo: a page typically spans one or two buckets. A bucketId whose bucket record
+    # cannot be read is memoized as None, and its assets are listed with a null bucketName.
     bucket_details_by_id = {}
     for enhanced_item in enhanced_items:
         bucket_id = enhanced_item['bucketId']
         if bucket_id not in bucket_details_by_id:
-            bucket_details_by_id[bucket_id] = get_default_bucket_details(bucket_id)
-        enhanced_item["bucketName"] = bucket_details_by_id[bucket_id]['bucketName']
+            try:
+                bucket_details_by_id[bucket_id] = get_default_bucket_details(bucket_id)
+            except VAMSGeneralErrorResponse:
+                logger.error(f"Bucket details unavailable for bucketId {bucket_id}; "
+                             f"its assets are listed without a bucketName")
+                bucket_details_by_id[bucket_id] = None
+        bucket_details = bucket_details_by_id[bucket_id]
+        enhanced_item["bucketName"] = bucket_details['bucketName'] if bucket_details else None
 
     return enhanced_items
 
@@ -264,7 +271,9 @@ def _current_version_from_row(version_item):
         DateModified=version_item.get('dateCreated', ''),
         Comment=version_item.get('comment', ''),
         description=version_item.get('description', ''),
-        createdBy=version_item.get('createdBy', 'SYSTEM_USER')
+        createdBy=version_item.get('createdBy', 'SYSTEM_USER'),
+        # A version without an alias is stored with '' and reported as null
+        versionAlias=version_item.get('versionAlias') or None
     )
 
 def get_current_version_info(asset):
@@ -293,11 +302,12 @@ def enhance_assets_with_version_info(assets):
     """Batched counterpart of enhance_asset_with_version_info for one listing page.
 
     Reads every asset's current-version row through the shared common.dynamodb.batch_get_items
-    (which owns the 100-key chunking and the UnprocessedKeys re-requests) instead of one get_item
-    per asset. Each enhanced copy is identical to what enhance_asset_with_version_info would return
-    for that asset: a key the batch could not resolve falls back to the per-item read, and an asset
-    without a currentVersionId (or whose version row does not exist) carries no currentVersion.
-    The batch path never raises -- a failed batch call degrades the page to per-item reads.
+    instead of one get_item per asset, calling it once per BATCH_GET_CHUNK_SIZE slice of the keys;
+    the helper owns the UnprocessedKeys re-requests. Each enhanced copy is identical to what
+    enhance_asset_with_version_info would return for that asset: a key the batch could not resolve
+    falls back to the per-item read, and an asset without a currentVersionId (or whose version row
+    does not exist) carries no currentVersion. The batch path never raises -- a failed call sends
+    only its own chunk's keys to per-item reads, and the other chunks keep their batched rows.
 
     Args:
         assets: Asset dictionaries, in response order
@@ -317,12 +327,18 @@ def enhance_assets_with_version_info(assets):
     if keyed and asset_versions_table_name:
         # (rows, unresolved): a key absent from both is a row that does not exist, a key in
         # `unresolved` is a read that did not complete -- only the latter takes the per-item read
-        try:
-            rows, unresolved = batch_get_items(dynamodb, asset_versions_table_name, list(keyed.values()))
-        except Exception as e:
-            logger.warning(f"Batch read of asset versions failed "
-                           f"(falling back to per-item reads): {e}")
-            rows, unresolved = [], list(keyed.values())
+        all_keys = list(keyed.values())
+        rows, unresolved = [], []
+        for start in range(0, len(all_keys), BATCH_GET_CHUNK_SIZE):
+            chunk = all_keys[start:start + BATCH_GET_CHUNK_SIZE]
+            try:
+                chunk_rows, chunk_unresolved = batch_get_items(dynamodb, asset_versions_table_name, chunk)
+            except Exception as e:
+                logger.warning(f"Batch read of {len(chunk)} asset versions failed "
+                               f"(falling back to per-item reads for that chunk): {e}")
+                chunk_rows, chunk_unresolved = [], chunk
+            rows.extend(chunk_rows)
+            unresolved.extend(chunk_unresolved)
         if unresolved:
             logger.info(f"Batch read of asset versions left {len(unresolved)} keys unprocessed; "
                         f"reading them individually")
@@ -355,6 +371,32 @@ def enhance_assets_with_version_info(assets):
                 enhanced_asset['currentVersion'] = current_version
         enhanced_assets.append(enhanced_asset)
     return enhanced_assets
+
+def format_asset_response(record):
+    """The response body for one enriched asset record.
+
+    The record is validated as an AssetResponseModel. A stored record without a description or an
+    isDistributable flag gets '' and False. A record that still does not validate is returned at the
+    top level as stored, without its object__type and with currentVersion as a plain dictionary, so
+    it serializes like a validated one.
+    """
+    try:
+        return AssetResponseModel(**record).dict()
+    except ValidationError:
+        pass
+    normalized = {k: v for k, v in record.items() if k != 'object__type'}
+    if normalized.get('description') is None:
+        normalized['description'] = ''
+    if normalized.get('isDistributable') is None:
+        normalized['isDistributable'] = False
+    if isinstance(normalized.get('currentVersion'), CurrentVersionModel):
+        normalized['currentVersion'] = normalized['currentVersion'].dict()
+    try:
+        return AssetResponseModel(**normalized).dict()
+    except ValidationError as v:
+        logger.warning(f"Asset {normalized.get('databaseId')}:{normalized.get('assetId')} does not match "
+                       f"the response model, returned as stored: {v}")
+        return normalized
 
 def enhance_asset_with_version_info(asset):
     """Enhance asset with version information from versions table
@@ -1072,14 +1114,38 @@ def get_assets(databaseId, query_params, showArchived=False):
     db_ids = [databaseId]
     if showArchived:
         db_ids.append(f"{databaseId}#deleted")
+
+    # maxItems is the per-response ceiling and pageSize the per-query batch size
+    page_size = _listing_limit(query_params)
+
+    # A token is the LastEvaluatedKey of one partition. The listing resumes in that partition,
+    # and any partition before it was already read to the end.
+    exclusive_start_key = None
+    if query_params.get('startingToken'):
+        try:
+            decoded_token = base64.b64decode(query_params['startingToken']).decode('utf-8')
+            exclusive_start_key = json.loads(decoded_token)
+        except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
+            logger.exception(f"Invalid startingToken format: {e}")
+            raise VAMSGeneralErrorResponse("Invalid pagination token")
+        token_db_id = None
+        if isinstance(exclusive_start_key, dict) and isinstance(exclusive_start_key.get('databaseId'), dict):
+            token_db_id = exclusive_start_key['databaseId'].get('S')
+        if token_db_id not in db_ids:
+            logger.warning("startingToken does not belong to the listed database partitions")
+            raise VAMSGeneralErrorResponse("Invalid pagination token")
+        db_ids = db_ids[db_ids.index(token_db_id):]
     
     all_items = []
     next_token = None
+    rows_read = 0
     
-    # Query for each database ID (active and possibly archived)
+    # Query each partition in order (active, then archived), filling one page across them
     for db_id in db_ids:
         try:
-            # Build query parameters
+            # Build query parameters. A later partition reads only what is left of the page;
+            # DynamoDB reports a LastEvaluatedKey whenever it stops at the Limit, so at least
+            # one row is left whenever the loop gets here.
             query_params_dict = {
                 'TableName': asset_database,
                 'KeyConditionExpression': 'databaseId = :dbId',
@@ -1087,20 +1153,17 @@ def get_assets(databaseId, query_params, showArchived=False):
                     ':dbId': {'S': db_id}
                 },
                 'ScanIndexForward': False,
-                'Limit': int(query_params['pageSize'])
+                'Limit': max(page_size - rows_read, 1)
             }
             
-            # Add ExclusiveStartKey if startingToken provided
-            if query_params.get('startingToken'):
-                try:
-                    decoded_token = base64.b64decode(query_params['startingToken']).decode('utf-8')
-                    query_params_dict['ExclusiveStartKey'] = json.loads(decoded_token)
-                except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
-                    logger.exception(f"Invalid startingToken format: {e}")
-                    raise VAMSGeneralErrorResponse("Invalid pagination token")
+            # Resume the partition the token was read from
+            if exclusive_start_key is not None:
+                query_params_dict['ExclusiveStartKey'] = exclusive_start_key
+                exclusive_start_key = None
             
             # Single query call with pagination
             response = dynamodb_client.query(**query_params_dict)
+            rows_read += len(response.get('Items', []))
             
             # Process items and check permissions
             # Create enforcer once outside the loop to avoid per-item instantiation overhead
@@ -1122,10 +1185,11 @@ def get_assets(databaseId, query_params, showArchived=False):
                 if casbin_enforcer and casbin_enforcer.enforce(deserialized_item, "GET"):
                     all_items.append(deserialized_item)
             
-            # Keep track of the next token from the last query (base64 encoded)
+            # A partition that stopped at the Limit ends the page; its key is the next token
             if 'LastEvaluatedKey' in response:
                 json_str = json.dumps(response['LastEvaluatedKey'])
                 next_token = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+                break
                 
         except Exception as e:
             logger.exception(f"Error querying assets for database {db_id}: {e}")
@@ -1142,6 +1206,13 @@ def get_assets(databaseId, query_params, showArchived=False):
 
     return result
 
+def _listing_limit(query_params):
+    """Rows one listing response reads: pageSize, capped by maxItems when it is given."""
+    limit = int(query_params['pageSize'])
+    if query_params.get('maxItems'):
+        limit = min(limit, int(query_params['maxItems']))
+    return limit
+
 def get_all_assets(query_params, showArchived=False):
     """Get all assets across all databases
     
@@ -1154,25 +1225,20 @@ def get_all_assets(query_params, showArchived=False):
     """
     deserializer = TypeDeserializer()
     
-    # Set up the filter based on showArchived
-    operator = "NOT_CONTAINS"
-    if showArchived:
-        operator = "CONTAINS"
-    
-    filter_expression = {
-        "databaseId": {
-            "AttributeValueList": [{"S": "#deleted"}],
-            "ComparisonOperator": f"{operator}"
-        }
-    }
-    
     try:
-        # Build scan parameters
+        # Build scan parameters. Archived assets sit under a '#deleted' partition key, so
+        # without showArchived they are filtered out; with it, every asset is returned.
         scan_params = {
             'TableName': asset_database,
-            'ScanFilter': filter_expression,
-            'Limit': int(query_params['pageSize'])
+            'Limit': _listing_limit(query_params)
         }
+        if not showArchived:
+            scan_params['ScanFilter'] = {
+                "databaseId": {
+                    "AttributeValueList": [{"S": "#deleted"}],
+                    "ComparisonOperator": "NOT_CONTAINS"
+                }
+            }
         
         # Add ExclusiveStartKey if startingToken provided
         if query_params.get('startingToken'):
@@ -2008,13 +2074,7 @@ def handle_get_request(event):
             enhanced_asset["bucketName"] = bucketDetails['bucketName']
 
             # Convert to AssetResponseModel for consistent response format
-            try:
-                response_model = AssetResponseModel(**enhanced_asset)
-                return success(body=response_model.dict())
-            except ValidationError as v:
-                logger.exception(f"Error converting asset to response model: {v}")
-                # Fall back to raw response if conversion fails
-                return success(body={"message": enhanced_asset})
+            return success(body=format_asset_response(enhanced_asset))
 
         # Case 2: Get assets for a specific database
         elif 'databaseId' in path_parameters:
@@ -2064,14 +2124,7 @@ def handle_get_request(event):
             enhanced_items = enrich_asset_listing_page(assets_result.get('Items', []))
             
             # Convert enhanced items to AssetResponseModel instances
-            formatted_items = []
-            for item in enhanced_items:
-                try:
-                    asset_model = AssetResponseModel(**item)
-                    formatted_items.append(asset_model.dict())
-                except ValidationError:
-                    # Fall back to raw item if conversion fails
-                    formatted_items.append(item)
+            formatted_items = [format_asset_response(item) for item in enhanced_items]
             
             # Build response with formatted items
             response = {
@@ -2079,6 +2132,8 @@ def handle_get_request(event):
             }
             if 'NextToken' in assets_result:
                 response['NextToken'] = assets_result['NextToken']
+            if 'truncated' in assets_result:
+                response['truncated'] = assets_result['truncated']
                 
             return success(body=response)
         
@@ -2119,14 +2174,7 @@ def handle_get_request(event):
             enhanced_items = enrich_asset_listing_page(assets_result.get('Items', []))
             
             # Convert enhanced items to AssetResponseModel instances
-            formatted_items = []
-            for item in enhanced_items:
-                try:
-                    asset_model = AssetResponseModel(**item)
-                    formatted_items.append(asset_model.dict())
-                except ValidationError:
-                    # Fall back to raw item if conversion fails
-                    formatted_items.append(item)
+            formatted_items = [format_asset_response(item) for item in enhanced_items]
             
             # Build response with formatted items
             response = {
@@ -2134,6 +2182,8 @@ def handle_get_request(event):
             }
             if 'NextToken' in assets_result:
                 response['NextToken'] = assets_result['NextToken']
+            if 'truncated' in assets_result:
+                response['truncated'] = assets_result['truncated']
                 
             return success(body=response)
             

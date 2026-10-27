@@ -16,9 +16,11 @@ export function CreateFolderModal({
     onSubmit,
     parentFolder,
     isLoading,
+    submitError,
 }: CreateFolderModalProps) {
     const [folderName, setFolderName] = useState("");
     const [error, setError] = useState("");
+    const [showSubmitError, setShowSubmitError] = useState(false);
 
     // Reset state when modal opens/closes
     useEffect(() => {
@@ -27,6 +29,11 @@ export function CreateFolderModal({
             setError("");
         }
     }, [visible]);
+
+    // Show each new request error, until the name is edited
+    useEffect(() => {
+        setShowSubmitError(!!submitError);
+    }, [submitError]);
 
     // Validate folder name
     const validateFolderName = (name: string): boolean => {
@@ -70,11 +77,14 @@ export function CreateFolderModal({
                 </Box>
             }
         >
-            <Form errorText={error}>
+            <Form errorText={error || (showSubmitError ? submitError : "")}>
                 <FormField label="Folder name" description="Enter a name for the new folder">
                     <Input
                         value={folderName}
-                        onChange={({ detail }) => setFolderName(detail.value)}
+                        onChange={({ detail }) => {
+                            setFolderName(detail.value);
+                            setShowSubmitError(false);
+                        }}
                         placeholder="New folder"
                         autoFocus
                     />

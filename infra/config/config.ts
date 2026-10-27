@@ -1453,8 +1453,9 @@ export function getConfig(app: cdk.App): Config {
     // developer running the web front locally can complete a federated sign-in against a deployed
     // user pool. Defaults off: the URLs are registered on the same user pool that serves real users,
     // and a redirect target on the user's own machine is a code-delivery destination the deployment
-    // does not control. Only read when Cognito SAML or OIDC federation is enabled — without
-    // federation VAMS uses no OAuth redirect at all.
+    // does not control. The callback URLs are only read when Cognito SAML or OIDC federation is
+    // enabled — without federation VAMS uses no OAuth redirect at all. In every auth mode the flag
+    // also admits http://localhost:3001 as a referer for the Location Service map API key.
     if (config.app.webUi.allowLocalhostAuthCallbacks == undefined) {
         config.app.webUi.allowLocalhostAuthCallbacks = false;
     }
@@ -2581,17 +2582,17 @@ export function getConfig(app: cdk.App): Config {
             }
         }
     }
-    //Cloudfront + ALB check (not more than 1)
+    //Cloudfront + ALB neither warning check
     if (!config.app.useCloudFront.enabled && !config.app.useAlb.enabled) {
         console.warn(
             "Configuration Warning: YOU HAVE DISABLED DEPLOYING ANY VAMS FRONT-END WITH CLOUDFRONT OR ALB. THIS WILL BE A API-DRIVEN SOLUTION-ONLY DEPLOYMENT."
         );
     }
 
-    //Cloudfront + ALB neither warning check
+    //Cloudfront + ALB check (not more than 1)
     if (config.app.useCloudFront.enabled && config.app.useAlb.enabled) {
         throw new Error(
-            "Configuration Error: Must choose either only Cloufront or ALB for static website deployment use (or neither), cannot have both enabled."
+            "Configuration Error: Must choose either only CloudFront or ALB for static website deployment use (or neither), cannot have both enabled."
         );
     }
 
@@ -2614,7 +2615,7 @@ export function getConfig(app: cdk.App): Config {
         const certArnPattern = /^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[a-f0-9-]+$/;
         if (!certArnPattern.test(config.app.useCloudFront.customDomain.certificateArn)) {
             throw new Error(
-                "Configuration Warning: CloudFront custom domain certificate ARN should be in us-east-1 region. CloudFront requires certificates to be in us-east-1 regardless of deployment region. Provided ARN: " +
+                "Configuration Error: CloudFront custom domain certificate ARN should be in us-east-1 region. CloudFront requires certificates to be in us-east-1 regardless of deployment region. Provided ARN: " +
                     config.app.useCloudFront.customDomain.certificateArn
             );
         }
@@ -2652,6 +2653,19 @@ export function getConfig(app: cdk.App): Config {
     ) {
         throw new Error(
             "Configuration Error: Cannot use ALB deployment without specifying a valid domain hostname and a ACM Certificate ARN to use for SSL/TLS security!"
+        );
+    }
+
+    // The ALB web app bucket is named domainHost and its access-logs bucket domainHost +
+    // "-webappaccesslogs", so domainHost must be a bucket name 17 characters short of the
+    // 63-character limit.
+    if (
+        config.app.useAlb.enabled &&
+        !/^[a-z0-9][a-z0-9.-]{1,44}[a-z0-9]$/.test(config.app.useAlb.domainHost)
+    ) {
+        throw new Error(
+            "Configuration Error: app.useAlb.domainHost names the ALB web app bucket and its '-webappaccesslogs' access-logs bucket, so it must be 3 to 46 characters of lowercase letters, digits, dots and hyphens, beginning and ending with a letter or digit. Provided: " +
+                config.app.useAlb.domainHost
         );
     }
 
@@ -3119,39 +3133,34 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
-    if (
-        config.app.authProvider.useExternalOAuthIdp.enabled &&
-        (!config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl == "" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl ==
-                "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTIssuerUrl == "" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience ==
-                "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.lambdaAuthorizorJWTAudience == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthClientId == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthPrincipalDomain == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScope == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderScopeMfa == "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderTokenEndpoint ==
-                "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint ==
-                "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderAuthorizationEndpoint ==
-                "UNDEFINED" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint == "" ||
-            config.app.authProvider.useExternalOAuthIdp.idpAuthProviderDiscoveryEndpoint ==
-                "UNDEFINED")
-    ) {
-        throw new Error(
-            "Configuration Error: Must specify a external IDP auth URL, external IDP principal domain, external IDP client ID, external IDP client secret, Lambda Authorizer JWT Issuer URL, Lambda Authorizer JWT Identity Source, and Lambda Authorizer JWT Audience when using an external OAUTH provider!"
-        );
+    // Fields VAMS passes to the authorizer and the web client must be set: null, "" and "UNDEFINED"
+    // all count as unset. The MFA scope, principal domain and discovery endpoint are optional, so
+    // only "" and the "UNDEFINED" placeholder are rejected for them and their template null passes.
+    if (config.app.authProvider.useExternalOAuthIdp.enabled) {
+        const externalIdp = config.app.authProvider.useExternalOAuthIdp;
+        const isUnsetValue = (value: unknown) =>
+            value == null || value === "" || value === "UNDEFINED";
+        const isPlaceholder = (value: unknown) => value === "" || value === "UNDEFINED";
+        if (
+            [
+                externalIdp.idpAuthProviderUrl,
+                externalIdp.idpAuthClientId,
+                externalIdp.idpAuthProviderScope,
+                externalIdp.idpAuthProviderTokenEndpoint,
+                externalIdp.idpAuthProviderAuthorizationEndpoint,
+                externalIdp.lambdaAuthorizorJWTIssuerUrl,
+                externalIdp.lambdaAuthorizorJWTAudience,
+            ].some(isUnsetValue) ||
+            [
+                externalIdp.idpAuthProviderScopeMfa,
+                externalIdp.idpAuthPrincipalDomain,
+                externalIdp.idpAuthProviderDiscoveryEndpoint,
+            ].some(isPlaceholder)
+        ) {
+            throw new Error(
+                "Configuration Error: External OAuth IdP requires its provider URL, client ID, scope, token and authorization endpoints, JWT issuer URL and audience. The MFA scope, principal domain and discovery endpoint may be left null, but not empty or UNDEFINED."
+            );
+        }
     }
 
     //API Configuration Error Checks

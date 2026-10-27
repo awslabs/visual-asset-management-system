@@ -420,6 +420,21 @@ export function getTotalResultCount(result: SearchResponse | null | undefined): 
     return result.hits?.total?.value || 0;
 }
 
+/**
+ * The search API pages with from + size and rejects a request whose from + size exceeds this
+ * window (backend/backend/models/search.py), so no page past it can load.
+ */
+export const SEARCH_RESULT_WINDOW = 10000;
+
+/** Number of result pages that can be requested: the total's pages, capped at the result window. */
+export function getPageCount(totalResults: number, pageSize: number): number {
+    if (!pageSize || pageSize <= 0) return 0;
+    return Math.min(
+        Math.ceil(totalResults / pageSize),
+        Math.floor(SEARCH_RESULT_WINDOW / pageSize)
+    );
+}
+
 export const DEFAULT_PREFERENCES: SearchPreferences = {
     viewMode: "table",
     assetTableColumns: [

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 
@@ -46,7 +46,7 @@ describe("Navigation", () => {
     });
 
     it("renders only the links the user has access to", async () => {
-        allowRoutes("/databases/", "/assets/");
+        allowRoutes("/databases", "/assets");
         const container = await renderNavigation();
 
         await waitFor(() => {
@@ -59,7 +59,7 @@ describe("Navigation", () => {
     });
 
     it("renders admin auth links when allowed", async () => {
-        allowRoutes("/auth/constraints/", "/auth/roles/", "/auth/userroles/");
+        allowRoutes("/auth/constraints", "/auth/roles", "/auth/userroles");
         const container = await renderNavigation();
 
         await waitFor(() => {
@@ -71,7 +71,7 @@ describe("Navigation", () => {
     });
 
     it("renders the User section with API Key Management when allowed", async () => {
-        allowRoutes("/auth/api-keys/");
+        allowRoutes("/auth/api-keys");
         const container = await renderNavigation();
 
         await waitFor(() => {
@@ -80,7 +80,7 @@ describe("Navigation", () => {
     });
 
     it("hides the User section when API Key Management is not allowed", async () => {
-        allowRoutes("/databases/");
+        allowRoutes("/databases");
         const container = await renderNavigation();
 
         await waitFor(() => {
@@ -88,6 +88,21 @@ describe("Navigation", () => {
         });
         expect(findNavLink(container, "#/auth/api-keys/")).toBeFalsy();
         expect(screen.queryByText("User")).not.toBeInTheDocument();
+    });
+
+    it("checks the same route paths the router checks, without a trailing slash", async () => {
+        allowRoutes("/databases", "/");
+        const container = await renderNavigation();
+
+        await waitFor(() => {
+            expect(findNavLink(container, "#/databases/")).toBeTruthy();
+        });
+        // Home keeps its root path.
+        expect(findNavLink(container, "#/")).toBeTruthy();
+        const checked = mockCheckWebRoutesAllowed.mock.calls[0][0].map((r) => r.route__path);
+        expect(checked).toContain("/databases");
+        expect(checked).toContain("/");
+        expect(checked.filter((path) => path.length > 1 && path.endsWith("/"))).toEqual([]);
     });
 
     it("shows the no-access message when no routes are allowed", async () => {
@@ -99,13 +114,22 @@ describe("Navigation", () => {
         });
     });
 
-    it("shows the no-access message when the permission check fails", async () => {
-        mockCheckWebRoutesAllowed.mockRejectedValue(new Error("auth/routes failed"));
-        await renderNavigation();
+    it("shows a could-not-load message with Retry when the permission check fails", async () => {
+        mockCheckWebRoutesAllowed.mockRejectedValueOnce(new Error("auth/routes failed"));
+        allowRoutes("/databases");
+        const container = await renderNavigation();
 
         await waitFor(() => {
-            expect(screen.getByText(/don't have access/i)).toBeInTheDocument();
+            expect(screen.getByText("Navigation could not be loaded")).toBeInTheDocument();
         });
+        expect(screen.queryByText(/don't have access/i)).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByText("Retry"));
+
+        await waitFor(() => {
+            expect(findNavLink(container, "#/databases/")).toBeTruthy();
+        });
+        expect(mockCheckWebRoutesAllowed).toHaveBeenCalledTimes(2);
     });
 
     // TEMPORARY-TEST: pins the removal of the COMPLIANCE feature-flag gate on the Compliance

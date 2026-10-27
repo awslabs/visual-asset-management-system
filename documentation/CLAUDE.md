@@ -203,7 +203,7 @@ When adding new pages, always update `sidebars.ts` to include the page in the co
 Documentation is deployed automatically via CI/CD when changes are pushed to `main` or `release/*` branches:
 
 -   **GitLab**: `.gitlab-ci.yml` → builds with `node:22-slim`, outputs to `public/` for GitLab Pages
--   **GitHub**: `.github/workflows/docs.yml` → builds with `actions/setup-node@v4`, deploys via `actions/deploy-pages@v4`
+-   **GitHub**: `.github/workflows/docs.yml` → builds with `actions/setup-node@v4`, then publishes to the `gh-pages` branch with `peaceiris/actions-gh-pages` pinned to a commit SHA (v4.1.0), with `keep_files: true`, under `contents: write`. `main` publishes at the branch root; each `release/*` branch publishes to its own subdirectory named from the branch (`release/2.5.0` becomes `release-2.5.0`), which the "Determine deploy path" step passes as `destination_dir`
 
 Both pipelines only trigger when files under `documentation/docusaurus-site/` change.
 

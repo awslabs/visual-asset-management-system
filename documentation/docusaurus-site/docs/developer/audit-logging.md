@@ -44,9 +44,27 @@ All audit events follow a structured format with bracketed metadata fields follo
 
 ### Authorization Events
 
+A data-level denial inside a handler records the action and the object that was checked:
+
 ```text
-[AUTHORIZATION][authorized: False] [user: jane.smith] [roles: ["viewer"]] [mfaEnabled: True] {"resource": "database:db-123", "action": "DELETE", "reason": "insufficient permissions"}
+[AUTHORIZATION][authorized: False] [user: jane.smith] [roles: ["viewer"]] [mfaEnabled: True] {"action": "DELETE", "obj": {"object__type": "database", "databaseId": "db-123"}} --- [event: {"requestContext": {"authorizer": {"jwt": {"claims": {"sub": "jane.smith"}}}}}]
 ```
+
+#### Permission Probe Records
+
+The web interface asks which routes the user may use through two probe endpoints, `POST /auth/routes` (web routes) and `GET /auth/routes/api/allowed` (API routes). Each route the user may not use is recorded as one denial, marked with a fixed `[probe: <endpoint>]` segment straight after the record prefix. The server sets the marker; no header, query string or body field can set or clear it. Only these two endpoints write it: decisions made inside other handlers, including the gateway authorizer and the API-level check, are unmarked.
+
+```text
+[AUTHORIZATION][authorized: False] [probe: GET /auth/routes/api/allowed] [user: jane.smith] [roles: ["viewer"]] [mfaEnabled: True] {"action": "DELETE", "obj": {"object__type": "api", "route__path": "/database/vams:any"}} --- [event: {"requestContext": {"authorizer": {"jwt": {"claims": {"sub": "jane.smith"}}}}}]
+```
+
+To leave probe records out of a query, anchor the pattern on the prefix plus the marker, for example `/^\[AUTHORIZATION\]\[authorized: False\] \[probe: /`. Never match the marker as a bare substring: asset fields, request paths, headers and query strings later in a real denial record are caller-controlled.
+
+Probe records written before the marker existed carry no `[probe: ...]` segment. They can be told apart by their object and event echo:
+
+-   `object__type` `web` is written only by `POST /auth/routes`.
+-   An `object__type` `api` record whose event echo is the minimal `{"requestContext": {"authorizer": {"jwt": {"claims": {"sub": ...}}}}}` is a probe, because the API-level check on a real call echoes the full request. Probes of templated routes also carry the `vams:any` path segment; probes of untemplated routes, such as `/database`, do not.
+-   Data-level denials carry the same minimal echo, so the echo identifies a probe only together with `object__type` `api`.
 
 ### File Operation Events
 
@@ -286,6 +304,16 @@ Amazon CloudWatch Logs Insights provides a powerful query language for analyzing
 ```text
 fields @timestamp, @message
 | filter @message like /\[AUTHORIZATION\]\[authorized: False\]/
+| sort @timestamp desc
+| limit 100
+```
+
+### Find Failed Authorization Attempts, Excluding Permission Probes
+
+```text
+fields @timestamp, @message
+| filter @message like /\[AUTHORIZATION\]\[authorized: False\]/
+| filter @message not like /^\[AUTHORIZATION\]\[authorized: False\] \[probe: /
 | sort @timestamp desc
 | limit 100
 ```

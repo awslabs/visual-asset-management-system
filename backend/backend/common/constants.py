@@ -386,8 +386,8 @@ CONSTRAINT_OPERATOR_LABELS = [
 # Display labels for the constraint permissions (HTTP actions) and permission types.
 CONSTRAINT_PERMISSION_LABELS = [
     {"label": "View/GET", "value": "GET"},
-    {"label": "Add/PUT", "value": "PUT"},
-    {"label": "Update/POST", "value": "POST"},
+    {"label": "PUT", "value": "PUT"},
+    {"label": "POST", "value": "POST"},
     {"label": "DELETE", "value": "DELETE"},
 ]
 

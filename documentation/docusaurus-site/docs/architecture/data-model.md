@@ -131,7 +131,7 @@ The partition key is the hierarchical object identifier by `objectType`: `databa
 
 ### Asset Uploads Storage Table
 
-Tracks in-progress file uploads.
+Tracks in-progress file uploads. Each record carries `expiresAt` (epoch seconds; 7 days after an upload is initialized, 1 day for a workflow output upload), and the table's DynamoDB time to live on `expiresAt` removes a record after it expires.
 
 | Attribute  | Type   | Key           |
 | ---------- | ------ | ------------- |

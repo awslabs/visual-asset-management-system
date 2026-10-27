@@ -37,7 +37,7 @@ from models.indexing import FileDocumentModel, FileIndexRequest, IndexOperationR
 from common.indexing.geoLocation import build_geo_location
 from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN, join_asset_location_key
-from common.dynamoDbMetadataKeys import is_excluded_metadata_record
+from common.dynamoDbMetadataKeys import is_excluded_metadata_record, is_internal_metadata_field
 
 # Configure AWS clients with retry configuration
 retry_config = Config(
@@ -686,6 +686,10 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> tuple[
                 logger.debug(f"Skipping system metadata: {metadata_key}")
                 continue
 
+            # VAMS_ and leading-underscore keys are internal and not indexed
+            if metadata_key and is_internal_metadata_field(metadata_key):
+                continue
+
             # Accept any non-None value (including "", 0, False after normalization).
             # Drop only records that have no key at all.
             if metadata_key and metadata_value is not None:
@@ -723,6 +727,10 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> tuple[
             attribute_value_type = (
                 item.get('attributeValueType') or item.get('metadataValueType')
             )
+
+            # VAMS_ and leading-underscore keys are internal and not indexed
+            if attribute_key and is_internal_metadata_field(attribute_key):
+                continue
 
             if attribute_key and attribute_value is not None:
                 attributes[attribute_key] = normalize_metadata_value(

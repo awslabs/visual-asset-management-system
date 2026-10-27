@@ -124,8 +124,8 @@ def get_comments(assetId: str, queryParams: dict, showDeleted=False) -> dict:
         return response["Items"]
     except Exception as e:
         logger.exception(f"Error in get_comments: {str(e)}")
-        # Return empty result on error
-        return []
+        # A failed read reaches the handler's 500 path rather than reading as no comments
+        raise
 
 
 def get_comments_version(assetId: str, assetVersionId: str, queryParams: dict, showDeleted=False) -> dict:
@@ -160,8 +160,8 @@ def get_comments_version(assetId: str, assetVersionId: str, queryParams: dict, s
         return response["Items"]
     except Exception as e:
         logger.exception(f"Error in get_comments_version: {str(e)}")
-        # Return empty result on error
-        return []
+        # A failed read reaches the handler's 500 path rather than reading as no comments
+        raise
 
 
 def get_single_comment(assetId: str, assetVersionIdAndCommentId: str, showDeleted=False) -> dict:
