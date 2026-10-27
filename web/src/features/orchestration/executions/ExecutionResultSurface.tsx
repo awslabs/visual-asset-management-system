@@ -122,7 +122,7 @@ const ExecutionResultSurface: React.FC<ExecutionResultSurfaceProps> = ({
                             // Monospace, pre-wrapped, scrollable, and selectable — a result is arbitrary
                             // text, so it must not reflow or clip. The fixed max height keeps the modal
                             // bounded; the body scrolls within it.
-                            className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded bg-surface-container-low p-3 font-mono text-xs text-text-primary"
+                            className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded border border-border-default bg-surface-secondary p-3 font-mono text-xs text-text-primary"
                             tabIndex={0}
                             data-testid="result-surface-content"
                         >

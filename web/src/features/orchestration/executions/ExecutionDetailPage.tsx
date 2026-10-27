@@ -352,7 +352,7 @@ const ResultsSection: React.FC<{
                         </p>
                     )}
                     {serverContent ? (
-                        <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-words rounded bg-surface-container-low p-3 font-mono text-xs text-text-primary">
+                        <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-words rounded border border-border-default bg-surface-secondary p-3 font-mono text-xs text-text-primary">
                             {serverContent}
                         </pre>
                     ) : (
