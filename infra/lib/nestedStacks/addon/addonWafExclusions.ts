@@ -11,7 +11,10 @@ import { WafScopedRuleExclusion } from "../../constructs/wafv2-basic-construct";
  * `lib/cf-waf-stack.ts`): managed rules relaxed under an add-on's own API route prefixes and
  * re-blocked on every other path. Empty while no add-on needs one.
  */
-export function addonWafRuleExclusions(config: Config.Config): WafScopedRuleExclusion[] {
+export function addonWafRuleExclusions(
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    config: Config.Config
+): WafScopedRuleExclusion[] {
     // Each enabled add-on that needs an exclusion appends the ones it builds from `config` here.
     return [];
 }

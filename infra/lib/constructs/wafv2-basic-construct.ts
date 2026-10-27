@@ -99,26 +99,78 @@ export interface WafPolicyConfig {
  * Managed rules relaxed on a set of URI paths only. Applied on the policy path: in each policy
  * group for the named managed rule group that is in block mode, each named rule is set to count,
  * and a rule evaluated after every other rule in the ACL blocks a request carrying any of their
- * labels unless its URI path starts with one of the prefixes. A rule the policy counts or allows
- * keeps the policy's action and is not re-blocked; a rule the policy blocks is relaxed and re-blocked
- * like any other.
+ * labels unless its URI path is at or below one of the prefixes of an exclusion that relaxes that
+ * label. A rule the policy counts or allows keeps the policy's action and is not re-blocked; a rule
+ * the policy blocks is relaxed and re-blocked like any other. Synth fails for an exclusion whose
+ * shape `validateScopedRuleExclusions` rejects.
  */
 export interface WafScopedRuleExclusion {
     managedRuleGroupName: string; // e.g. AWSManagedRulesCommonRuleSet
-    // The rule's name within the group and the label it adds when it matches (the group's
-    // AvailableLabels). A rule set to count still adds its label, which the re-block rule matches.
+    // At least one rule: its name within the group and the label it adds when it matches (the
+    // group's AvailableLabels). A rule set to count still adds its label, which the re-block rule
+    // matches. AWS WAF accepts a label nothing emits, so a wrong label would leave the rule relaxed
+    // on every path: synth fails unless the label is the group's namespace
+    // (AWS_MANAGED_RULE_GROUP_LABEL_NAMESPACES) followed by the rule name in any letter case, or by
+    // the suffix the group documents for that rule (AWS_MANAGED_RULE_LABEL_SUFFIXES).
     rules: Array<{ name: string; label: string }>;
-    // Compared with STARTS_WITH against the path as received and again after URL_DECODE then
-    // NORMALIZE_PATH, and both must match, so neither an encoded slash inside a path parameter nor a
-    // dot segment lets a request to another route fall under a prefix.
+    // API route prefixes, each matched against the URI path the REST API stage receives. That path
+    // begins with `/${Config.API_GATEWAY_STAGE_NAME}` for a request to the invoke URL, to the API
+    // custom domain (base path `api`) and forwarded by CloudFront, so build each prefix from
+    // `Config.API_GATEWAY_STAGE_NAME`. A prefix covers the path itself and every path below it, at a
+    // segment boundary: `/api/x` covers `/api/x` and `/api/x/y`, not `/api/xy`, and a trailing slash
+    // is ignored. The path must be at or below the prefix both as received and after URL_DECODE then
+    // NORMALIZE_PATH, so neither an encoded slash inside a path parameter nor a dot segment lets a
+    // request to another route fall under a prefix. Synth fails for a prefix that is empty, covers
+    // the whole API or does not start with `/${Config.API_GATEWAY_STAGE_NAME}/`. An exclusion with no
+    // prefix relaxes nothing.
     uriPathPrefixes: string[];
-    reapplyRuleName: string; // name and metric name of the rule that blocks the labels elsewhere
+    // Name and metric name of the rule that blocks the exclusion's labels elsewhere: 1 to 128 of
+    // A-Z, a-z, 0-9, - and _, not a reserved metric name, and unique among the exclusions and the
+    // policy's rules.
+    reapplyRuleName: string;
     // Managed rules outside the exclusion that requests under its prefixes are known to match. A
     // synth warning names each one the policy enforces: a named rule while its group runs in block
     // mode and the policy neither counts nor allows it, a whole group (no name) while it runs in
     // block mode.
     unrelaxedRules?: Array<{ managedRuleGroupName: string; name?: string }>;
 }
+
+/**
+ * The label namespace of each AWS managed rule group a scoped exclusion may relax, from the
+ * group's page in the AWS WAF Developer Guide (baseline, IP reputation and use-case specific rule
+ * groups). A rule's label is the namespace followed by the rule name, in the letter case the
+ * group's AvailableLabels list (rule `GenericRFI_BODY`, label
+ * `awswaf:managed:aws:core-rule-set:GenericRFI_Body`). To relax a rule of another group, add the
+ * group here with the namespace its page documents.
+ */
+export const AWS_MANAGED_RULE_GROUP_LABEL_NAMESPACES: Readonly<Record<string, string>> = {
+    AWSManagedRulesCommonRuleSet: "awswaf:managed:aws:core-rule-set:",
+    AWSManagedRulesAdminProtectionRuleSet: "awswaf:managed:aws:admin-protection:",
+    AWSManagedRulesKnownBadInputsRuleSet: "awswaf:managed:aws:known-bad-inputs:",
+    AWSManagedRulesSQLiRuleSet: "awswaf:managed:aws:sql-database:",
+    AWSManagedRulesLinuxRuleSet: "awswaf:managed:aws:linux-os:",
+    AWSManagedRulesUnixRuleSet: "awswaf:managed:aws:posix-os:",
+    AWSManagedRulesWindowsRuleSet: "awswaf:managed:aws:windows-os:",
+    AWSManagedRulesPHPRuleSet: "awswaf:managed:aws:php-app:",
+    AWSManagedRulesWordPressRuleSet: "awswaf:managed:aws:wordpress-app:",
+    AWSManagedRulesAmazonIpReputationList: "awswaf:managed:aws:amazon-ip-list:",
+    AWSManagedRulesAnonymousIpList: "awswaf:managed:aws:anonymous-ip-list:",
+};
+
+/**
+ * Rules whose documented label does not end in the rule name, by group: the label suffix (after the
+ * namespace) the group's page lists for the rule.
+ */
+export const AWS_MANAGED_RULE_LABEL_SUFFIXES: Readonly<
+    Record<string, Readonly<Record<string, string>>>
+> = {
+    AWSManagedRulesCommonRuleSet: { UserAgent_BadBots_HEADER: "BadBots_Header" },
+};
+
+// AWS WAF rule names: 1 to 128 of A-Z, a-z, 0-9, - and _. The re-block rule's metric name is the
+// same string, and a metric name may not be one AWS WAF reserves.
+const WAF_RULE_AND_METRIC_NAME = /^[A-Za-z0-9_-]{1,128}$/;
+const WAF_RESERVED_METRIC_NAMES = ["All", "Default_Action"];
 
 export interface Wafv2BasicConstructProps extends cdk.StackProps {
     readonly wafScope?: WAFScope;
@@ -166,64 +218,202 @@ function anyOf(
     return statements.length === 1 ? statements[0] : { orStatement: { statements } };
 }
 
-/** A STARTS_WITH match of `prefix` against the URI path after `textTransformations`. */
-function uriPathStartsWith(
-    prefix: string,
+/** A byte match of `searchString` against the URI path after `textTransformations`. */
+function uriPathMatch(
+    searchString: string,
+    positionalConstraint: "EXACTLY" | "STARTS_WITH",
     textTransformations: Array<wafv2.CfnWebACL.TextTransformationProperty>
 ): wafv2.CfnWebACL.StatementProperty {
     return {
         byteMatchStatement: {
-            searchString: prefix,
+            searchString,
             fieldToMatch: { uriPath: {} },
             textTransformations,
-            positionalConstraint: "STARTS_WITH",
+            positionalConstraint,
         },
     };
 }
 
 /**
- * The rule re-applying a scoped exclusion's relaxed rules off its paths: block a request carrying
- * any of `labels` unless its URI path starts with one of the exclusion's prefixes both as received
+ * The URI path, after `textTransformations`, is `prefix` itself or a path below it: it equals the
+ * prefix or starts with the prefix and a slash, so a sibling route whose segment only begins with
+ * the same characters is not covered.
+ */
+function uriPathAtOrBelow(
+    prefix: string,
+    textTransformations: () => Array<wafv2.CfnWebACL.TextTransformationProperty>
+): wafv2.CfnWebACL.StatementProperty {
+    return {
+        orStatement: {
+            statements: [
+                uriPathMatch(prefix, "EXACTLY", textTransformations()),
+                uriPathMatch(`${prefix}/`, "STARTS_WITH", textTransformations()),
+            ],
+        },
+    };
+}
+
+const rawPath = (): Array<wafv2.CfnWebACL.TextTransformationProperty> => [
+    { priority: 0, type: "NONE" },
+];
+const decodedNormalizedPath = (): Array<wafv2.CfnWebACL.TextTransformationProperty> => [
+    { priority: 0, type: "URL_DECODE" },
+    { priority: 1, type: "NORMALIZE_PATH" },
+];
+
+/** A prefix as the re-block rule matches it: without trailing slashes. */
+function canonicalPrefix(prefix: string): string {
+    return prefix.replace(/\/+$/, "");
+}
+
+/** Labels re-blocked together because the same prefixes exempt them. */
+interface ScopedExclusionClause {
+    labels: string[];
+    prefixes: string[];
+}
+
+/**
+ * The rule re-applying a scoped exclusion's relaxed rules off their paths: block a request carrying
+ * a clause's label unless its URI path is at or below one of the clause's prefixes both as received
  * and once URL decoded and then normalized. API Gateway routes on the path as received, where an
  * encoded slash stays inside one path parameter, and normalization resolves `..` segments, so a
  * request reaching another route through either is not taken for one under the prefix.
  */
 function buildScopedExclusionRule(
-    exclusion: WafScopedRuleExclusion,
-    labels: string[],
+    name: string,
+    clauses: ScopedExclusionClause[],
     priority: number
 ): wafv2.CfnWebACL.RuleProperty {
-    const onExcludedPath = anyOf(
-        exclusion.uriPathPrefixes.map((prefix) => ({
-            andStatement: {
-                statements: [
-                    uriPathStartsWith(prefix, [{ priority: 0, type: "NONE" }]),
-                    uriPathStartsWith(prefix, [
-                        { priority: 0, type: "URL_DECODE" },
-                        { priority: 1, type: "NORMALIZE_PATH" },
-                    ]),
-                ],
-            },
-        }))
-    );
+    const clauseStatement = (clause: ScopedExclusionClause): wafv2.CfnWebACL.StatementProperty => ({
+        andStatement: {
+            statements: [
+                anyOf(
+                    clause.labels.map((key) => ({ labelMatchStatement: { scope: "LABEL", key } }))
+                ),
+                {
+                    notStatement: {
+                        statement: anyOf(
+                            clause.prefixes.map((prefix) => ({
+                                andStatement: {
+                                    statements: [
+                                        uriPathAtOrBelow(prefix, rawPath),
+                                        uriPathAtOrBelow(prefix, decodedNormalizedPath),
+                                    ],
+                                },
+                            }))
+                        ),
+                    },
+                },
+            ],
+        },
+    });
     return {
-        name: exclusion.reapplyRuleName,
+        name,
         priority,
         action: { block: {} },
-        statement: {
-            andStatement: {
-                statements: [
-                    anyOf(labels.map((key) => ({ labelMatchStatement: { scope: "LABEL", key } }))),
-                    { notStatement: { statement: onExcludedPath } },
-                ],
-            },
-        },
+        statement: anyOf(clauses.map(clauseStatement)),
         visibilityConfig: {
             sampledRequestsEnabled: true,
             cloudWatchMetricsEnabled: true,
-            metricName: exclusion.reapplyRuleName,
+            metricName: name,
         },
     };
+}
+
+/**
+ * Fails synth for a scoped exclusion AWS WAF would reject at deploy time or that would not do what
+ * it says: a re-block rule name that is not a valid rule and metric name, repeats another
+ * exclusion's or names a policy rule; an exclusion relaxing no rule; a label that is not the named
+ * rule's label in the named group (AWS WAF accepts a label nothing emits, which would leave the rule
+ * relaxed on every path) or a group whose label namespace is not known; and a prefix that is empty,
+ * covers the whole API or lies outside the API stage path (which would never match).
+ */
+function validateScopedRuleExclusions(
+    policy: WafPolicyConfig,
+    exclusions: Array<WafScopedRuleExclusion>
+): void {
+    const stagePath = `/${Config.API_GATEWAY_STAGE_NAME}`;
+    const policyRuleNames = [
+        ...(policy.managedRuleGroups || []).map((g) => g.name),
+        ...(policy.rateBasedRules || []).map((r) => r.name),
+    ];
+    const seen = new Set<string>();
+    for (const exclusion of exclusions) {
+        const name = exclusion.reapplyRuleName;
+        const subject = `Wafv2BasicConstruct: scoped rule exclusion ${JSON.stringify(name)}`;
+        if (
+            typeof name !== "string" ||
+            !WAF_RULE_AND_METRIC_NAME.test(name) ||
+            WAF_RESERVED_METRIC_NAMES.includes(name)
+        ) {
+            throw new Error(
+                `${subject}: reapplyRuleName is not a valid AWS WAF rule and metric name. Use 1 ` +
+                    `to 128 of A-Z, a-z, 0-9, - and _, other than ` +
+                    `${WAF_RESERVED_METRIC_NAMES.join(" and ")}.`
+            );
+        }
+        if (seen.has(name)) {
+            throw new Error(
+                `Wafv2BasicConstruct: more than one scoped rule exclusion is named "${name}"; ` +
+                    `each reapplyRuleName must be unique in the web ACL.`
+            );
+        }
+        seen.add(name);
+        if (policyRuleNames.includes(name)) {
+            throw new Error(
+                `${subject}: reapplyRuleName is also the name of a rule in the WAF policy ` +
+                    `(config/policy/wafPolicyConfig.json); rule names must be unique in the web ACL.`
+            );
+        }
+
+        if (!exclusion.rules || exclusion.rules.length === 0) {
+            throw new Error(`${subject} relaxes no rule; list at least one { name, label }.`);
+        }
+        const group = exclusion.managedRuleGroupName;
+        const namespace = AWS_MANAGED_RULE_GROUP_LABEL_NAMESPACES[group];
+        if (!namespace) {
+            throw new Error(
+                `${subject} names managed rule group "${group}", whose label namespace is not ` +
+                    `known. Add the group and the label namespace its page in the AWS WAF Developer ` +
+                    `Guide documents to AWS_MANAGED_RULE_GROUP_LABEL_NAMESPACES in ` +
+                    `infra/lib/constructs/wafv2-basic-construct.ts.`
+            );
+        }
+        for (const rule of exclusion.rules) {
+            const expectedSuffix = AWS_MANAGED_RULE_LABEL_SUFFIXES[group]?.[rule.name] ?? rule.name;
+            const suffix = rule.label.startsWith(namespace)
+                ? rule.label.slice(namespace.length)
+                : undefined;
+            if (!rule.name || suffix?.toLowerCase() !== expectedSuffix.toLowerCase()) {
+                throw new Error(
+                    `${subject}: the label "${rule.label}" of rule "${rule.name}" is not that ` +
+                        `rule's label in ${group}. It must be "${namespace}${expectedSuffix}", in ` +
+                        `the letter case the group's AvailableLabels list. AWS WAF accepts a label ` +
+                        `nothing emits, so a wrong one would leave the rule relaxed on every path.`
+                );
+            }
+        }
+
+        for (const prefix of exclusion.uriPathPrefixes) {
+            if (!prefix) {
+                throw new Error(`${subject} has an empty URI path prefix.`);
+            }
+            const canonical = canonicalPrefix(prefix);
+            if (canonical === "" || canonical === stagePath) {
+                throw new Error(
+                    `${subject}: URI path prefix "${prefix}" covers the whole API; name a route ` +
+                        `prefix below ${stagePath}/.`
+                );
+            }
+            if (!canonical.startsWith(`${stagePath}/`)) {
+                throw new Error(
+                    `${subject}: URI path prefix "${prefix}" does not start with "${stagePath}/", ` +
+                        `which begins the path of every request the REST API stage receives, so it ` +
+                        `would never match. Build it from Config.API_GATEWAY_STAGE_NAME.`
+                );
+            }
+        }
+    }
 }
 
 /**
@@ -257,9 +447,10 @@ function originVerifyScopeDownStatement(secretArn: string): wafv2.CfnWebACL.Stat
 /**
  * Build WAF rules from a policy config: managed rule groups (block or count-only per
  * `block`), rate-based rules for L7 DDoS / brute-force throttling, and one re-block rule per
- * scoped exclusion that relaxed a rule. `wafScopeString` is the ACL scope the rules are being
- * built for, reported alongside any policy warning. `originVerifySecretArn` adds the origin
- * verification scope-down to every rate-based rule; the re-block rules are unaffected.
+ * scoped exclusion that relaxed a rule, after validating the exclusions. `wafScopeString` is the
+ * ACL scope the rules are being built for, reported alongside any policy warning.
+ * `originVerifySecretArn` adds the origin verification scope-down to every rate-based rule; the
+ * re-block rules are unaffected.
  */
 function buildRulesFromPolicy(
     policy: WafPolicyConfig,
@@ -269,6 +460,8 @@ function buildRulesFromPolicy(
     originVerifySecretArn?: string
 ): Array<wafv2.CfnWebACL.RuleProperty> {
     const rules: Array<wafv2.CfnWebACL.RuleProperty> = [];
+
+    validateScopedRuleExclusions(policy, exclusions);
 
     // The labels each scoped exclusion relaxed, re-blocked after the other rules. An exclusion
     // with no path prefix relaxes nothing.
@@ -290,10 +483,10 @@ function buildRulesFromPolicy(
                     ? { allow: {} }
                     : { block: {} },
         }));
-        // Scoped exclusions: in a group in block mode each named rule counts, and the re-block rule
-        // built after the loop blocks its label off the exclusion's paths. A rule the policy counts
-        // or allows is relaxed everywhere already and keeps the policy's action; a rule the policy
-        // blocks is relaxed here and re-blocked off the paths like any other.
+        // Scoped exclusions: in a group in block mode each named rule counts, and the re-block rules
+        // built after the loop block its label off the paths of every exclusion relaxing it. A rule
+        // the policy counts or allows is relaxed everywhere already and keeps the policy's action; a
+        // rule the policy blocks is relaxed here and re-blocked off the paths like any other.
         if (group.block !== false) {
             scopedExclusions.forEach((exclusion, index) => {
                 if (exclusion.managedRuleGroupName !== group.managedRuleGroupName) return;
@@ -394,11 +587,35 @@ function buildRulesFromPolicy(
     }
 
     // Re-block rules come after every other rule, so the relaxed rules' labels are already set.
+    // A label two exclusions relax is exempt on the prefixes of both: each exclusion's rule
+    // re-blocks its labels in clauses, one per set of prefixes that exempts them, so neither
+    // exclusion's rule blocks the other's paths. Each exclusion keeps its own rule name.
+    const labelPrefixes = new Map<string, string[]>();
+    scopedExclusions.forEach((exclusion, index) => {
+        for (const label of relaxedLabels[index]) {
+            const prefixes = labelPrefixes.get(label) || [];
+            for (const prefix of exclusion.uriPathPrefixes.map(canonicalPrefix)) {
+                if (!prefixes.includes(prefix)) prefixes.push(prefix);
+            }
+            labelPrefixes.set(label, prefixes);
+        }
+    });
+    const prefixSetKey = (prefixes: string[]): string => JSON.stringify([...prefixes].sort());
     let reapplyPriority = Math.max(0, ...rules.map((r) => r.priority)) + 1;
     scopedExclusions.forEach((exclusion, index) => {
-        if (relaxedLabels[index].length) {
+        const clauses: ScopedExclusionClause[] = [];
+        for (const label of relaxedLabels[index]) {
+            const prefixes = labelPrefixes.get(label) || [];
+            const clause = clauses.find((c) => prefixSetKey(c.prefixes) === prefixSetKey(prefixes));
+            if (clause) {
+                clause.labels.push(label);
+            } else {
+                clauses.push({ labels: [label], prefixes });
+            }
+        }
+        if (clauses.length) {
             rules.push(
-                buildScopedExclusionRule(exclusion, relaxedLabels[index], reapplyPriority++)
+                buildScopedExclusionRule(exclusion.reapplyRuleName, clauses, reapplyPriority++)
             );
         }
     });

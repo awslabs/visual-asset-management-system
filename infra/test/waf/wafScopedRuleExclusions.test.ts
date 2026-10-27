@@ -16,8 +16,15 @@
  *   * the relaxed rules are overridden to count and the policy's own overrides are kept;
  *   * the re-block rule is evaluated after every other rule, blocks, matches either rule's label
  *     and exempts only a path whose raw form, which API Gateway routes on, and whose URL-decoded,
- *     normalized form both start with the prefix, so neither an encoded slash inside a path
- *     parameter nor a dot segment lets a request to another route borrow the exemption;
+ *     normalized form are both the prefix itself or a path below it, so neither a sibling route
+ *     that begins with the same characters, an encoded slash inside a path parameter nor a dot
+ *     segment lets a request to another route borrow the exemption (checked against a model of
+ *     the statements' evaluation as well as by their exact shape);
+ *   * two exclusions relaxing the same rule exempt its label on the prefixes of both, and each
+ *     keeps its own re-block rule name;
+ *   * synth fails for a label that is not the named rule's, a managed group whose label namespace
+ *     is not known, an exclusion relaxing no rule, an empty, whole-API or off-stage prefix, and a
+ *     duplicate, policy-colliding or invalid re-block rule name;
  *   * a CfWafStack passes the exclusions to its web ACL;
  *   * with no exclusion supplied, or an empty list, the ACL is the one the policy alone produces;
  *   * a rule the policy counts or allows keeps the policy's action and is not re-blocked; a rule
@@ -121,27 +128,139 @@ const overridesOf = (acl: any): any[] =>
 
 const labelMatch = (key: string): any => ({ LabelMatchStatement: { Scope: "LABEL", Key: key } });
 
-const uriPathStartsWith = (prefix: string, textTransformations: any[]): any => ({
+/** A text transformation as the template renders it. */
+interface TextTransformationJson {
+    Priority: number;
+    Type: string;
+}
+
+/** The rendered statement shapes the re-block rules use. */
+interface StatementJson {
+    AndStatement?: { Statements: StatementJson[] };
+    OrStatement?: { Statements: StatementJson[] };
+    NotStatement?: { Statement: StatementJson };
+    LabelMatchStatement?: { Scope: string; Key: string };
+    ByteMatchStatement?: {
+        SearchString: string;
+        FieldToMatch: unknown;
+        TextTransformations: TextTransformationJson[];
+        PositionalConstraint: string;
+    };
+}
+
+const RAW_PATH: TextTransformationJson[] = [{ Priority: 0, Type: "NONE" }];
+const NORMALIZED_PATH: TextTransformationJson[] = [
+    { Priority: 0, Type: "URL_DECODE" },
+    { Priority: 1, Type: "NORMALIZE_PATH" },
+];
+
+const uriPathMatch = (
+    searchString: string,
+    positionalConstraint: string,
+    textTransformations: TextTransformationJson[]
+): StatementJson => ({
     ByteMatchStatement: {
-        SearchString: prefix,
+        SearchString: searchString,
         FieldToMatch: { UriPath: {} },
         TextTransformations: textTransformations,
-        PositionalConstraint: "STARTS_WITH",
+        PositionalConstraint: positionalConstraint,
     },
 });
 
-/** The raw path and its decoded, normalized form must both start with the prefix. */
-const prefixMatch = (prefix: string): any => ({
-    AndStatement: {
+/** The path, in one form, is the prefix itself or a path below it (a segment boundary). */
+const atOrBelow = (
+    prefix: string,
+    textTransformations: TextTransformationJson[]
+): StatementJson => ({
+    OrStatement: {
         Statements: [
-            uriPathStartsWith(prefix, [{ Priority: 0, Type: "NONE" }]),
-            uriPathStartsWith(prefix, [
-                { Priority: 0, Type: "URL_DECODE" },
-                { Priority: 1, Type: "NORMALIZE_PATH" },
-            ]),
+            uriPathMatch(prefix, "EXACTLY", textTransformations),
+            uriPathMatch(`${prefix}/`, "STARTS_WITH", textTransformations),
         ],
     },
 });
+
+/** The raw path and its decoded, normalized form must both be at or below the prefix. */
+const prefixMatch = (prefix: string): StatementJson => ({
+    AndStatement: {
+        Statements: [atOrBelow(prefix, RAW_PATH), atOrBelow(prefix, NORMALIZED_PATH)],
+    },
+});
+
+/**
+ * A model of how AWS WAF evaluates the statements the re-block rules use, for the behaviour tables
+ * below: label match, AND / OR / NOT, and an EXACTLY or STARTS_WITH byte match on the URI path after
+ * NONE, URL_DECODE or NORMALIZE_PATH. NORMALIZE_PATH removes repeated slashes and resolves `.` and
+ * `..` segments that are not at the start of the path, as the AWS WAF text transformation reference
+ * describes. Any other statement fails the test rather than being guessed at.
+ */
+interface ModelRequest {
+    path: string;
+    labels: string[];
+}
+
+const urlDecode = (value: string): string =>
+    value.replace(/%([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+
+const normalizePath = (value: string): string => {
+    const segments = value.replace(/\/{2,}/g, "/").split("/");
+    const out: string[] = [];
+    segments.forEach((segment, index) => {
+        const last = index === segments.length - 1;
+        if (segment === "." && index > 0) {
+            if (last) out.push("");
+        } else if (segment === ".." && out.length > 1) {
+            out.pop();
+            if (last) out.push("");
+        } else {
+            out.push(segment);
+        }
+    });
+    return out.join("/");
+};
+
+const transformPath = (path: string, textTransformations: TextTransformationJson[]): string =>
+    [...textTransformations]
+        .sort((a, b) => a.Priority - b.Priority)
+        .reduce((value, { Type }) => {
+            if (Type === "NONE") return value;
+            if (Type === "URL_DECODE") return urlDecode(value);
+            if (Type === "NORMALIZE_PATH") return normalizePath(value);
+            throw new Error(`unmodelled text transformation ${Type}`);
+        }, path);
+
+const modelMatches = (statement: StatementJson, request: ModelRequest): boolean => {
+    if (statement.AndStatement) {
+        return statement.AndStatement.Statements.every((s) => modelMatches(s, request));
+    }
+    if (statement.OrStatement) {
+        return statement.OrStatement.Statements.some((s) => modelMatches(s, request));
+    }
+    if (statement.NotStatement) {
+        return !modelMatches(statement.NotStatement.Statement, request);
+    }
+    if (statement.LabelMatchStatement) {
+        expect(statement.LabelMatchStatement.Scope).toBe("LABEL");
+        return request.labels.includes(statement.LabelMatchStatement.Key);
+    }
+    if (statement.ByteMatchStatement) {
+        const match = statement.ByteMatchStatement;
+        expect(match.FieldToMatch).toEqual({ UriPath: {} });
+        const value = transformPath(request.path, match.TextTransformations);
+        if (match.PositionalConstraint === "EXACTLY") return value === match.SearchString;
+        if (match.PositionalConstraint === "STARTS_WITH") {
+            return value.startsWith(match.SearchString);
+        }
+    }
+    throw new Error(`unmodelled statement ${JSON.stringify(statement)}`);
+};
+
+/** The name of the first re-block rule, by priority, that blocks the request in the model. */
+const reblockedBy = (acl: unknown, request: ModelRequest): string | undefined =>
+    [...rulesOf(acl)]
+        .filter((r) => r.Action?.Block && !r.Statement.RateBasedStatement)
+        .sort((a, b) => a.Priority - b.Priority)
+        .find((r) => modelMatches(r.Statement, request))?.Name;
 
 describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])(
     "%s-scoped web ACL with a scoped rule exclusion",
@@ -178,7 +297,7 @@ describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])(
                 .forEach((other) => expect(rule.Priority).toBeGreaterThan(other.Priority));
         });
 
-        test("blocks either label unless the raw and normalized paths start with the prefix", () => {
+        test("blocks either label unless the raw and normalized paths are at or below the prefix", () => {
             expect(ruleNamed(acl, REBLOCK_RULE).Statement).toEqual({
                 AndStatement: {
                     Statements: [
@@ -484,6 +603,275 @@ describe("scoped rule exclusions outside the shipped policy", () => {
                 ],
             },
         });
+    });
+});
+
+describe("a scoped exclusion's prefix covers the path and the paths below it only", () => {
+    const wafScope = WAFScope.REGIONAL;
+    const acl = synthAcl(wafScope, shippedPolicy, fixtureExclusions);
+
+    test("a trailing slash on the prefix builds the same rule", () => {
+        const withSlash = fixtureExclusions.map((e) => ({
+            ...e,
+            uriPathPrefixes: [`${FIXTURE_PREFIX}/`],
+        }));
+        expect(rulesOf(synthAcl(wafScope, shippedPolicy, withSlash))).toEqual(rulesOf(acl));
+    });
+
+    test.each([
+        [FIXTURE_PREFIX],
+        [`${FIXTURE_PREFIX}/`],
+        [`${FIXTURE_PREFIX}/item`],
+        [`${FIXTURE_PREFIX}/item/part`],
+    ])("exempts %s", (path) => {
+        expect(reblockedBy(acl, { path, labels: [RFI_LABEL] })).toBeUndefined();
+    });
+
+    test.each([
+        // A sibling route whose segment begins with the prefix's last segment.
+        [`${FIXTURE_PREFIX}foo`],
+        [`${FIXTURE_PREFIX}foo/item`],
+        // Another route.
+        ["/api/fixture/bodie"],
+        ["/api/assets/item"],
+        // Dot segments, plain and encoded, leaving the prefix.
+        [`${FIXTURE_PREFIX}/../../assets`],
+        [`${FIXTURE_PREFIX}/%2e%2e/%2e%2e/assets`],
+        // A sibling that normalizes onto the prefix: the raw path is not under it.
+        [`${FIXTURE_PREFIX}foo/../bodies/item`],
+        // An encoded slash inside one path parameter, a leading double slash, another case.
+        ["/api/fixture%2Fbodies/item"],
+        [`/${FIXTURE_PREFIX}/item`],
+        [FIXTURE_PREFIX.toUpperCase() + "/item"],
+    ])("re-blocks %s", (path) => {
+        expect(reblockedBy(acl, { path, labels: [RFI_LABEL] })).toBe(REBLOCK_RULE);
+    });
+
+    test("blocks nothing without a relaxed label", () => {
+        expect(reblockedBy(acl, { path: "/api/assets/item", labels: [] })).toBeUndefined();
+    });
+});
+
+describe("two scoped exclusions relaxing the same rule", () => {
+    const wafScope = WAFScope.REGIONAL;
+    const ADDON_A = "/api/addon/a";
+    const ADDON_B = "/api/addon/b";
+    const exclusionsSharingRfi: WafScopedRuleExclusion[] = [
+        {
+            managedRuleGroupName: COMMON_RULE_SET,
+            rules: [
+                { name: RFI_RULE, label: RFI_LABEL },
+                { name: SSRF_RULE, label: SSRF_LABEL },
+            ],
+            uriPathPrefixes: [ADDON_A],
+            reapplyRuleName: "VAMS-A",
+        },
+        {
+            managedRuleGroupName: COMMON_RULE_SET,
+            rules: [{ name: RFI_RULE, label: RFI_LABEL }],
+            uriPathPrefixes: [ADDON_B],
+            reapplyRuleName: "VAMS-B",
+        },
+    ];
+    const acl = synthAcl(wafScope, shippedPolicy, exclusionsSharingRfi);
+
+    test.each([
+        [`${ADDON_A}/item`, [RFI_LABEL], undefined],
+        [`${ADDON_B}/item`, [RFI_LABEL], undefined],
+        ["/api/assets/item", [RFI_LABEL], "VAMS-A"],
+        [`${ADDON_A}/item`, [SSRF_LABEL], undefined],
+        // A label only the first exclusion relaxes stays scoped to its own prefix.
+        [`${ADDON_B}/item`, [SSRF_LABEL], "VAMS-A"],
+        [`${ADDON_B}/item`, [RFI_LABEL, SSRF_LABEL], "VAMS-A"],
+    ] as const)("a request to %s carrying %j is re-blocked by %s", (path, labels, rule) => {
+        expect(reblockedBy(acl, { path, labels: [...labels] })).toBe(rule);
+    });
+
+    test("each re-block rule exempts a shared label on the prefixes of every exclusion relaxing it", () => {
+        const sharedRfi = {
+            AndStatement: {
+                Statements: [
+                    labelMatch(RFI_LABEL),
+                    {
+                        NotStatement: {
+                            Statement: {
+                                OrStatement: {
+                                    Statements: [prefixMatch(ADDON_A), prefixMatch(ADDON_B)],
+                                },
+                            },
+                        },
+                    },
+                ],
+            },
+        };
+        expect(ruleNamed(acl, "VAMS-A").Statement).toEqual({
+            OrStatement: {
+                Statements: [
+                    sharedRfi,
+                    {
+                        AndStatement: {
+                            Statements: [
+                                labelMatch(SSRF_LABEL),
+                                { NotStatement: { Statement: prefixMatch(ADDON_A) } },
+                            ],
+                        },
+                    },
+                ],
+            },
+        });
+        expect(ruleNamed(acl, "VAMS-B").Statement).toEqual(sharedRfi);
+    });
+
+    test("keeps each exclusion's rule and metric name, in exclusion order after every policy rule", () => {
+        const maxPolicyPriority = Math.max(
+            ...rulesOf(synthAcl(wafScope, shippedPolicy)).map((r) => r.Priority)
+        );
+        ["VAMS-A", "VAMS-B"].forEach((name, index) => {
+            const rule = ruleNamed(acl, name);
+            expect(rule.Priority).toBe(maxPolicyPriority + 1 + index);
+            expect(rule.Action).toEqual({ Block: {} });
+            expect(rule.VisibilityConfig.MetricName).toBe(name);
+        });
+        expect(rulesOf(synthAcl(wafScope, shippedPolicy, exclusionsSharingRfi))).toEqual(
+            rulesOf(acl)
+        );
+    });
+});
+
+describe("a scoped exclusion is validated at synth", () => {
+    const wafScope = WAFScope.REGIONAL;
+    const withExclusion = (change: Partial<WafScopedRuleExclusion>): WafScopedRuleExclusion[] => [
+        { ...fixtureExclusions[0], ...change },
+    ];
+    const synthWith = (exclusions: WafScopedRuleExclusion[]) => () =>
+        synthAcl(wafScope, shippedPolicy, exclusions);
+
+    test("the fixture exclusion is accepted (control)", () => {
+        expect(synthWith(fixtureExclusions)).not.toThrow();
+    });
+
+    describe("each label must be the named rule's label in the named managed rule group", () => {
+        test.each([
+            ["the rule name used as the label", RFI_RULE],
+            ["another group's namespace", "awswaf:managed:aws:known-bad-inputs:GenericRFI_Body"],
+            ["another rule's label", "awswaf:managed:aws:core-rule-set:GenericLFI_Body"],
+            ["a label with an extra segment", "awswaf:managed:aws:core-rule-set:x:GenericRFI_Body"],
+        ])("rejects %s", (_, label) => {
+            expect(synthWith(withExclusion({ rules: [{ name: RFI_RULE, label }] }))).toThrow(
+                new RegExp(`label "${label}" of rule "${RFI_RULE}"`)
+            );
+        });
+
+        test("accepts a documented label whose last segment differs from the rule name", () => {
+            const rules = [
+                {
+                    name: "UserAgent_BadBots_HEADER",
+                    label: "awswaf:managed:aws:core-rule-set:BadBots_Header",
+                },
+            ];
+            expect(synthWith(withExclusion({ rules }))).not.toThrow();
+        });
+
+        test("rejects a managed rule group whose label namespace is not known", () => {
+            expect(
+                synthWith(
+                    withExclusion({
+                        managedRuleGroupName: "AWSManagedRulesBotControlRuleSet",
+                        rules: [
+                            {
+                                name: "CategoryAI",
+                                label: "awswaf:managed:aws:bot-control:bot:category:ai",
+                            },
+                        ],
+                    })
+                )
+            ).toThrow(
+                /AWSManagedRulesBotControlRuleSet.*label namespace is not known.*Add the group/
+            );
+        });
+
+        // One documented label per managed rule group the shipped policy enables.
+        const shippedGroupLabels: Record<string, { name: string; label: string }> = {
+            AWSManagedRulesCommonRuleSet: { name: RFI_RULE, label: RFI_LABEL },
+            AWSManagedRulesKnownBadInputsRuleSet: {
+                name: "Log4JRCE_BODY",
+                label: "awswaf:managed:aws:known-bad-inputs:Log4JRCE_Body",
+            },
+            AWSManagedRulesAmazonIpReputationList: {
+                name: "AWSManagedIPReputationList",
+                label: "awswaf:managed:aws:amazon-ip-list:AWSManagedIPReputationList",
+            },
+        };
+        test.each((shippedPolicy.managedRuleGroups || []).map((g) => g.managedRuleGroupName))(
+            "knows the label namespace of %s, which the shipped policy enables",
+            (managedRuleGroupName) => {
+                const rule = shippedGroupLabels[managedRuleGroupName];
+                expect(rule).toBeDefined();
+                expect(
+                    synthWith(withExclusion({ managedRuleGroupName, rules: [rule] }))
+                ).not.toThrow();
+            }
+        );
+    });
+
+    test("rejects an exclusion that relaxes no rule", () => {
+        expect(synthWith(withExclusion({ rules: [] }))).toThrow(/relaxes no rule/);
+    });
+
+    test("rejects an empty URI path prefix", () => {
+        expect(synthWith(withExclusion({ uriPathPrefixes: [""] }))).toThrow(
+            /empty URI path prefix/
+        );
+    });
+
+    test.each([["/"], ["/api"], ["/api/"]])(
+        "rejects the prefix %s, which covers the whole API",
+        (prefix) => {
+            expect(synthWith(withExclusion({ uriPathPrefixes: [prefix] }))).toThrow(
+                /covers the whole API/
+            );
+        }
+    );
+
+    test("rejects a prefix outside the API stage path", () => {
+        expect(synthWith(withExclusion({ uriPathPrefixes: ["/fixture/bodies"] }))).toThrow(
+            /does not start with "\/api\/"/
+        );
+    });
+
+    test("rejects two exclusions with the same reapplyRuleName", () => {
+        const second = { ...fixtureExclusions[0], uriPathPrefixes: ["/api/other"] };
+        expect(synthWith([...fixtureExclusions, second])).toThrow(
+            new RegExp(`more than one scoped rule exclusion is named "${REBLOCK_RULE}"`)
+        );
+    });
+
+    test.each([
+        ...(shippedPolicy.managedRuleGroups || []).map((g) => g.name),
+        ...(shippedPolicy.rateBasedRules || []).map((r) => r.name),
+    ])("rejects a reapplyRuleName equal to the policy rule %s", (name) => {
+        expect(synthWith(withExclusion({ reapplyRuleName: name }))).toThrow(
+            /also the name of a rule in the WAF policy/
+        );
+    });
+
+    test.each([
+        ["an empty name", ""],
+        ["a space", "VAMS Fixture"],
+        ["a colon", "VAMS:Fixture"],
+        ["129 characters", "V".repeat(129)],
+        ["the reserved metric name All", "All"],
+        ["the reserved metric name Default_Action", "Default_Action"],
+    ])("rejects a reapplyRuleName with %s", (_, name) => {
+        expect(synthWith(withExclusion({ reapplyRuleName: name }))).toThrow(
+            /not a valid AWS WAF rule and metric name/
+        );
+    });
+
+    test("accepts a reapplyRuleName of 128 letters, digits, hyphens and underscores", () => {
+        const name = `VAMS-Fixture_9${"x".repeat(114)}`;
+        expect(name).toHaveLength(128);
+        expect(synthWith(withExclusion({ reapplyRuleName: name }))).not.toThrow();
     });
 });
 
