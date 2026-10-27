@@ -11,7 +11,8 @@
  *     matches; `ORIGIN_VERIFY_HEADER_NAME` in `common/auth/originVerify.py` is the header the REST
  *     authorizer reads and the rotation function rewrites. A mismatch leaves every CloudFront request
  *     resolved to the edge address and the rotation unable to find the origin headers.
- *   - The header is a `SENSITIVE_KEYS` entry of `customLogging/logger.py`, so handler, authorizer and
+ *   - The header is a `CORE_LOG_SENSITIVE_KEYS` entry of `common/constants.py`, whose merged
+ *     `LOG_SENSITIVE_KEYS` `customLogging/logger.py` imports, so handler, authorizer and
  *     audit logs redact it.
  *   - `current` / `previous` are the JSON keys CDK generates and references and the backend reads.
  */
@@ -48,11 +49,15 @@ describe("API origin verification constants: CDK and backend agree", () => {
     });
 
     test("the logger redacts the header", () => {
-        const logger = read(path.join("customLogging", "logger.py"));
-        const block = logger.match(/^SENSITIVE_KEYS = \(([\s\S]*?)\)\s*$/m);
+        // The core list lives in common/constants.py; customLogging/logger.py imports the merged
+        // LOG_SENSITIVE_KEYS built from it.
+        const constants = read(path.join("common", "constants.py"));
+        const block = constants.match(/^CORE_LOG_SENSITIVE_KEYS = \(([\s\S]*?)\)\s*$/m);
         expect(block).not.toBeNull();
         const keys = [...(block as RegExpMatchArray)[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
         expect(keys).toContain("authorization"); // control: the block was parsed
         expect(keys).toContain(Config.API_ORIGIN_VERIFY_HEADER_NAME);
+        const logger = read(path.join("customLogging", "logger.py"));
+        expect(logger).toMatch(/^from common\.constants import LOG_SENSITIVE_KEYS as SENSITIVE_KEYS$/m);
     });
 });

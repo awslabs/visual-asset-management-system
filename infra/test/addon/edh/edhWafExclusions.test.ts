@@ -9,15 +9,22 @@
  * The AMI recipe admin routes carry Image Builder component scripts in their request bodies, and
  * the shipped Linux recipes' components read the instance metadata service at
  * `http://169.254.169.254/...`. The Common Rule Set's EC2MetaDataSSRF_BODY and GenericRFI_BODY
- * rules block such a body, so with the add-on's AMI builds on, both rules count inside the managed
- * group and one VAMS rule blocks on their labels everywhere except under the recipe route prefix.
+ * rules block such a body, so with the add-on's AMI builds on, each of the two the policy blocks
+ * counts inside the managed group and one VAMS rule blocks on its label everywhere except at or
+ * below the recipe route prefix. The shipped policy counts GenericRFI_BODY on every path already,
+ * so with it only EC2MetaDataSSRF_BODY is relaxed and re-blocked.
  *
  * What is pinned here:
  *   * `buildEdhWafRuleExclusions` returns the exclusion only while the add-on and its AMI builds are
- *     on, and `addonWafRuleExclusions` carries it to the regional web ACL;
+ *     on, and `addonWafRuleExclusions` carries it to `buildWafStacks`, which applies it in both web
+ *     ACLs;
  *   * the prefix covers every AMI recipe route the add-on stack registers;
- *   * for both ACL scopes and the shipped policy, the two rules count, the policy's own overrides
- *     are kept, and the re-block rule, after every other rule, exempts only the recipe prefix;
+ *   * for both ACL scopes and the shipped policy, EC2MetaDataSSRF_BODY counts, the policy's own
+ *     overrides are kept (GenericRFI_BODY among them), and the re-block rule, after every other
+ *     rule, blocks the EC2MetaDataSSRF_BODY label off the recipe routes only: the prefix itself and
+ *     the paths below it, not a sibling such as `.../ami-recipesX` (checked by the statement's shape
+ *     and against a model of its evaluation);
+ *   * under a policy that blocks GenericRFI_BODY, both rules count and both labels are re-blocked;
  *   * bin/infra.ts builds the WAF stacks through buildWafStacks, whose variations
  *     `edhWafVariations.test.ts` pins.
  *
@@ -55,17 +62,35 @@ const shippedPolicy: WafPolicyConfig = JSON.parse(
     })
 );
 
+/** A fork's policy: the shipped one without its GenericRFI_BODY override, so the rule blocks. */
+const policyBlockingRfi: WafPolicyConfig = (() => {
+    const policy: WafPolicyConfig = JSON.parse(JSON.stringify(shippedPolicy));
+    for (const group of policy.managedRuleGroups || []) {
+        if (group.managedRuleGroupName !== COMMON_RULE_SET) continue;
+        group.ruleActionOverrides = (group.ruleActionOverrides || []).filter(
+            (o) => o.name !== RFI_RULE
+        );
+    }
+    return policy;
+})();
+
+/** The Common Rule Set overrides a policy declares, as the ACL renders them. */
+const commonOverridesOf = (policy: WafPolicyConfig) =>
+    (policy.managedRuleGroups || [])
+        .filter((group) => group.managedRuleGroupName === COMMON_RULE_SET)
+        .flatMap((group) => group.ruleActionOverrides || [])
+        .map((override) => ({
+            Name: override.name,
+            ActionToUse: {
+                [override.action.charAt(0).toUpperCase() + override.action.slice(1)]: {},
+            },
+        }));
+
 /**
- * The Common Rule Set overrides the shipped policy declares, as the ACL renders them. The exact set
- * is pinned by `wafCommonRuleSetOverrides.test.ts`; here it is what the exclusion must keep.
+ * The Common Rule Set overrides the shipped policy declares. The exact set is pinned by
+ * `wafCommonRuleSetOverrides.test.ts`; here it is what the exclusion must keep.
  */
-const shippedCommonOverrides = (shippedPolicy.managedRuleGroups || [])
-    .filter((group) => group.managedRuleGroupName === COMMON_RULE_SET)
-    .flatMap((group) => group.ruleActionOverrides || [])
-    .map((override) => ({
-        Name: override.name,
-        ActionToUse: { [override.action.charAt(0).toUpperCase() + override.action.slice(1)]: {} },
-    }));
+const shippedCommonOverrides = commonOverridesOf(shippedPolicy);
 
 /** The two config switches the EDH helper reads; nothing else in the config is consulted. */
 const edhConfig = (edhEnabled: boolean, amiBuildsEnabled: boolean): Config.Config =>
@@ -107,27 +132,107 @@ const overridesOf = (acl: any): any[] =>
 
 const labelMatch = (key: string): any => ({ LabelMatchStatement: { Scope: "LABEL", Key: key } });
 
-const uriPathStartsWith = (prefix: string, textTransformations: any[]): any => ({
+const RAW_PATH = [{ Priority: 0, Type: "NONE" }];
+const NORMALIZED_PATH = [
+    { Priority: 0, Type: "URL_DECODE" },
+    { Priority: 1, Type: "NORMALIZE_PATH" },
+];
+
+const uriPathMatch = (searchString: string, positionalConstraint: string, transforms: any[]) => ({
     ByteMatchStatement: {
-        SearchString: prefix,
+        SearchString: searchString,
         FieldToMatch: { UriPath: {} },
-        TextTransformations: textTransformations,
-        PositionalConstraint: "STARTS_WITH",
+        TextTransformations: transforms,
+        PositionalConstraint: positionalConstraint,
     },
 });
 
-/** The raw path and its decoded, normalized form must both start with the prefix. */
-const prefixMatch = (prefix: string): any => ({
-    AndStatement: {
+/** The path, in one form, is the prefix itself or a path below it (a segment boundary). */
+const atOrBelow = (prefix: string, transforms: any[]): any => ({
+    OrStatement: {
         Statements: [
-            uriPathStartsWith(prefix, [{ Priority: 0, Type: "NONE" }]),
-            uriPathStartsWith(prefix, [
-                { Priority: 0, Type: "URL_DECODE" },
-                { Priority: 1, Type: "NORMALIZE_PATH" },
-            ]),
+            uriPathMatch(prefix, "EXACTLY", transforms),
+            uriPathMatch(`${prefix}/`, "STARTS_WITH", transforms),
         ],
     },
 });
+
+/** The raw path and its decoded, normalized form must both be at or below the prefix. */
+const prefixMatch = (prefix: string): any => ({
+    AndStatement: {
+        Statements: [atOrBelow(prefix, RAW_PATH), atOrBelow(prefix, NORMALIZED_PATH)],
+    },
+});
+
+/**
+ * A model of how AWS WAF evaluates the re-block rule's statements (label match, AND / OR / NOT, and
+ * an EXACTLY or STARTS_WITH match on the URI path after NONE, URL_DECODE or NORMALIZE_PATH), the
+ * one `wafScopedRuleExclusions.test.ts` documents. Any other statement fails the test.
+ */
+interface ModelRequest {
+    path: string;
+    labels: string[];
+}
+
+const urlDecode = (value: string): string =>
+    value.replace(/%([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+
+const normalizePath = (value: string): string => {
+    const segments = value.replace(/\/{2,}/g, "/").split("/");
+    const out: string[] = [];
+    segments.forEach((segment, index) => {
+        const last = index === segments.length - 1;
+        if (segment === "." && index > 0) {
+            if (last) out.push("");
+        } else if (segment === ".." && out.length > 1) {
+            out.pop();
+            if (last) out.push("");
+        } else {
+            out.push(segment);
+        }
+    });
+    return out.join("/");
+};
+
+const transformPath = (path: string, transforms: Array<{ Priority: number; Type: string }>) =>
+    [...transforms]
+        .sort((a, b) => a.Priority - b.Priority)
+        .reduce((value, { Type }) => {
+            if (Type === "NONE") return value;
+            if (Type === "URL_DECODE") return urlDecode(value);
+            if (Type === "NORMALIZE_PATH") return normalizePath(value);
+            throw new Error(`unmodelled text transformation ${Type}`);
+        }, path);
+
+const modelMatches = (statement: any, request: ModelRequest): boolean => {
+    if (statement.AndStatement) {
+        return statement.AndStatement.Statements.every((s: any) => modelMatches(s, request));
+    }
+    if (statement.OrStatement) {
+        return statement.OrStatement.Statements.some((s: any) => modelMatches(s, request));
+    }
+    if (statement.NotStatement) {
+        return !modelMatches(statement.NotStatement.Statement, request);
+    }
+    if (statement.LabelMatchStatement) {
+        expect(statement.LabelMatchStatement.Scope).toBe("LABEL");
+        return request.labels.includes(statement.LabelMatchStatement.Key);
+    }
+    if (statement.ByteMatchStatement) {
+        const match = statement.ByteMatchStatement;
+        expect(match.FieldToMatch).toEqual({ UriPath: {} });
+        const value = transformPath(request.path, match.TextTransformations);
+        if (match.PositionalConstraint === "EXACTLY") return value === match.SearchString;
+        if (match.PositionalConstraint === "STARTS_WITH") {
+            return value.startsWith(match.SearchString);
+        }
+    }
+    throw new Error(`unmodelled statement ${JSON.stringify(statement)}`);
+};
+
+/** Whether the EDH re-block rule blocks the request in the model. */
+const reblocks = (acl: any, request: ModelRequest): boolean =>
+    modelMatches(ruleNamed(acl, REBLOCK_RULE).Statement, request);
 
 describe("buildEdhWafRuleExclusions", () => {
     test.each([
@@ -183,7 +288,9 @@ describe("buildEdhWafRuleExclusions", () => {
         expect(routePaths).toContain("/addon/edh/admin/ami-recipes/{recipeId}");
         const recipeRoutes = routePaths.filter((p) => p.includes("/ami-recipes"));
         recipeRoutes.forEach((routePath) => {
-            expect(`/${Config.API_GATEWAY_STAGE_NAME}${routePath}`.startsWith(RECIPE_PREFIX)).toBe(
+            const stagePath = `/${Config.API_GATEWAY_STAGE_NAME}${routePath}`;
+            // At or below the prefix: the prefix itself or a path below it, at a segment boundary.
+            expect(stagePath === RECIPE_PREFIX || stagePath.startsWith(`${RECIPE_PREFIX}/`)).toBe(
                 true
             );
         });
@@ -207,28 +314,36 @@ describe("addonWafRuleExclusions", () => {
 });
 
 describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])(
-    "%s-scoped web ACL with the EDH AMI recipe exclusion",
+    "%s-scoped web ACL with the EDH AMI recipe exclusion and the shipped policy",
     (wafScope) => {
         const acl = synthAcl(wafScope, shippedPolicy, edhExclusions);
         const baseline = synthAcl(wafScope, shippedPolicy);
 
-        test("counts both body rules in the Common Rule Set, keeping the policy's overrides", () => {
+        test("counts EC2MetaDataSSRF_BODY in the Common Rule Set, keeping the policy's overrides", () => {
             const overrides = overridesOf(acl);
-            // Control: the shipped policy overrides rules of its own, so "keeping" them is tested.
-            expect(shippedCommonOverrides.length).toBeGreaterThan(0);
-            expect(overrides).toHaveLength(shippedCommonOverrides.length + 2);
+            // Control: the shipped policy counts GenericRFI_BODY itself, and overrides other rules
+            // of its own, so "keeping" them is tested.
+            expect(shippedCommonOverrides).toContainEqual({
+                Name: RFI_RULE,
+                ActionToUse: { Count: {} },
+            });
+            expect(shippedCommonOverrides.length).toBeGreaterThan(1);
+            expect(overrides).toHaveLength(shippedCommonOverrides.length + 1);
             expect(overrides).toEqual(
                 expect.arrayContaining([
                     ...shippedCommonOverrides,
                     { Name: SSRF_RULE, ActionToUse: { Count: {} } },
-                    { Name: RFI_RULE, ActionToUse: { Count: {} } },
                 ])
             );
+            // GenericRFI_BODY keeps the policy's one count override.
+            expect(overrides.filter((o) => o.Name === RFI_RULE)).toEqual([
+                { Name: RFI_RULE, ActionToUse: { Count: {} } },
+            ]);
             // The rest of the group stays in block mode.
             expect(commonRuleSetOf(acl).OverrideAction).toEqual({ None: {} });
         });
 
-        test("re-blocks the relaxed rules after every other rule", () => {
+        test("re-blocks the relaxed rule after every other rule", () => {
             const rule = ruleNamed(acl, REBLOCK_RULE);
             expect(rule).toBeDefined();
             expect(rule.Action).toEqual({ Block: {} });
@@ -237,19 +352,43 @@ describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])(
                 .forEach((other) => expect(rule.Priority).toBeGreaterThan(other.Priority));
         });
 
-        test("blocks either label unless the raw and normalized paths start with the prefix", () => {
+        test("blocks the EC2MetaDataSSRF_BODY label unless the raw and normalized paths are at or below the prefix", () => {
             expect(ruleNamed(acl, REBLOCK_RULE).Statement).toEqual({
                 AndStatement: {
                     Statements: [
-                        {
-                            OrStatement: {
-                                Statements: [labelMatch(SSRF_LABEL), labelMatch(RFI_LABEL)],
-                            },
-                        },
+                        labelMatch(SSRF_LABEL),
                         { NotStatement: { Statement: prefixMatch(RECIPE_PREFIX) } },
                     ],
                 },
             });
+        });
+
+        test.each([
+            [RECIPE_PREFIX],
+            [`${RECIPE_PREFIX}/`],
+            [`${RECIPE_PREFIX}/al2023-desktop`],
+            [`${RECIPE_PREFIX}/al2023-desktop/builds`],
+        ])("exempts %s", (path) => {
+            expect(reblocks(acl, { path, labels: [SSRF_LABEL] })).toBe(false);
+        });
+
+        test.each([
+            // A sibling path whose last segment begins with the prefix's last segment.
+            [`${RECIPE_PREFIX}X`],
+            [`${RECIPE_PREFIX}X/al2023-desktop`],
+            // Another admin route of the add-on.
+            ["/api/addon/edh/admin/images"],
+            // Dot segments, plain and encoded, leaving the prefix.
+            [`${RECIPE_PREFIX}/../images`],
+            [`${RECIPE_PREFIX}/%2e%2e/images`],
+        ])("re-blocks %s", (path) => {
+            expect(reblocks(acl, { path, labels: [SSRF_LABEL] })).toBe(true);
+        });
+
+        test("does not re-block GenericRFI_BODY, which the policy counts on every path", () => {
+            expect(reblocks(acl, { path: "/api/assets/item", labels: [RFI_LABEL] })).toBe(false);
+            // Control: the same path is re-blocked for the relaxed rule's label.
+            expect(reblocks(acl, { path: "/api/assets/item", labels: [SSRF_LABEL] })).toBe(true);
         });
 
         test.each([
@@ -269,14 +408,53 @@ describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])(
     }
 );
 
-describe("the regional web ACL stack takes the exclusions", () => {
-    test("bin/infra.ts builds the web ACL stacks through buildWafStacks", () => {
+describe.each([WAFScope.CLOUDFRONT, WAFScope.REGIONAL])(
+    "%s-scoped web ACL with the EDH AMI recipe exclusion and a policy that blocks GenericRFI_BODY",
+    (wafScope) => {
+        const acl = synthAcl(wafScope, policyBlockingRfi, edhExclusions);
+
+        test("counts both body rules in the Common Rule Set, keeping the policy's overrides", () => {
+            const policyOverrides = commonOverridesOf(policyBlockingRfi);
+            // Control: the policy no longer overrides GenericRFI_BODY.
+            expect(policyOverrides.map((o) => o.Name)).not.toContain(RFI_RULE);
+            const overrides = overridesOf(acl);
+            expect(overrides).toHaveLength(policyOverrides.length + 2);
+            expect(overrides).toEqual(
+                expect.arrayContaining([
+                    ...policyOverrides,
+                    { Name: SSRF_RULE, ActionToUse: { Count: {} } },
+                    { Name: RFI_RULE, ActionToUse: { Count: {} } },
+                ])
+            );
+        });
+
+        test("blocks either label unless the raw and normalized paths are at or below the prefix", () => {
+            expect(ruleNamed(acl, REBLOCK_RULE).Statement).toEqual({
+                AndStatement: {
+                    Statements: [
+                        {
+                            OrStatement: {
+                                Statements: [labelMatch(SSRF_LABEL), labelMatch(RFI_LABEL)],
+                            },
+                        },
+                        { NotStatement: { Statement: prefixMatch(RECIPE_PREFIX) } },
+                    ],
+                },
+            });
+            expect(reblocks(acl, { path: `${RECIPE_PREFIX}X`, labels: [RFI_LABEL] })).toBe(true);
+            expect(reblocks(acl, { path: `${RECIPE_PREFIX}/x`, labels: [RFI_LABEL] })).toBe(false);
+        });
+    }
+);
+
+describe("bin/infra.ts", () => {
+    test("builds the web ACL stacks through buildWafStacks", () => {
         // The stacks buildWafStacks returns are what edhWafVariations.test.ts asserts per deployment
         // variation; a CfWafStack constructed in the app itself would bypass every one of them.
         const appSource = readFileSync(join(__dirname, "..", "..", "..", "bin", "infra.ts"), {
             encoding: "utf8",
         });
-        expect(appSource).toContain("buildWafStacks(app, config)");
+        expect(appSource).toMatch(/buildWafStacks\(app, config\b/);
         expect(appSource).not.toContain("new CfWafStack(");
     });
 });

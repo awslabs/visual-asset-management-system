@@ -7,7 +7,9 @@ import * as Config from "../../../../config/config";
 import { WafScopedRuleExclusion } from "../../../constructs/wafv2-basic-construct";
 
 /**
- * Web ACL rule exclusions for the EDH Workstations add-on, applied to the regional CfWafStack ACL.
+ * Web ACL rule exclusions for the EDH Workstations add-on, applied to both web ACLs: the regional
+ * one on the API stage and, with CloudFront, the CloudFront one, which evaluates a request to
+ * `<distribution>/api/*` first on the same path.
  *
  * The AMI recipe admin routes carry Image Builder component scripts in their request bodies, and a
  * build component commonly reads the instance metadata service at `http://169.254.169.254/...`. The
@@ -15,7 +17,10 @@ import { WafScopedRuleExclusion } from "../../../constructs/wafv2-basic-construc
  * GenericRFI_BODY (a URL holding an IPv4 address). VAMS stores those scripts for the Image Builder
  * build instance to run and never dereferences a URL in them, and the routes are admin-only at both
  * authorization tiers, so the two rules are relaxed under the recipe route prefix and keep blocking
- * on every other path. None while the add-on or its AMI builds are off.
+ * on every other path. The shipped policy already counts GenericRFI_BODY on every path, so with it
+ * only EC2MetaDataSSRF_BODY is relaxed and re-blocked; GenericRFI_BODY stays listed so the
+ * exemption also holds under a policy that blocks it. None while the add-on or its AMI builds are
+ * off.
  */
 export function buildEdhWafRuleExclusions(config: Config.Config): WafScopedRuleExclusion[] {
     const edh = config.app.addons?.useEdhWorkstations;

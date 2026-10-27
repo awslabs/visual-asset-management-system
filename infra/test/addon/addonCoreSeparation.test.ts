@@ -136,9 +136,11 @@ const CORE_FILES_WITH_ADDON_LINES: Record<string, string[]> = {
 
 /**
  * The add-ons VAMS ships: the stacks under `infra/lib/nestedStacks/addon/<name>` and the licensed
- * viewers, which ship disabled from the add-on viewer files.
+ * viewers, which ship disabled from the add-on viewer files. EDH Workstations is `workstation` here
+ * (`Workstation`, `WORKSTATIONS`, `useEdhWorkstations`); its short name `edh` is `EDH_NAME`, matched
+ * case-sensitively below.
  */
-const ADDON_NAME = /physna|garnet|vntana|veerum/i;
+const ADDON_NAME = /physna|garnet|vntana|veerum|workstation/i;
 
 /**
  * The EDH Workstations add-on, in the spellings its identifiers use: `edh` where no letter precedes
@@ -277,6 +279,24 @@ describe("core files without an add-on lane hold only their allowed add-on lines
 });
 
 describe("[control] the detectors", () => {
+    test.each(["WorkstationLaunchPanel", "ADDON_APP_FEATURES.EDH_WORKSTATIONS", "workstations"])(
+        "the add-on detector finds the EDH Workstations name in %s",
+        (text) => {
+            expect(ADDON_NAME.test(text)).toBe(true);
+        }
+    );
+
+    test("the WAF exclusion lane pair is scanned as a core file beside a filled add-on file", () => {
+        // The pair the reviewed WAF lane registered as empty: EDH fills the add-on file, so the core
+        // file is scanned and the add-on file must name an add-on.
+        const pair = {
+            core: "infra/lib/cf-waf-stack.ts",
+            addon: "infra/lib/nestedStacks/addon/addonWafExclusions.ts",
+        };
+        expect(CORE_AND_ADDON_FILES).toContainEqual(pair);
+        expect(ADDON_DETECTORS.some((detector) => detector.test(readAddon(pair.addon)))).toBe(true);
+    });
+
     test.each([
         "useEdhWorkstations",
         "EDH_CONTAINERS",

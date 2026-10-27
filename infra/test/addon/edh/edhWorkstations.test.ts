@@ -1335,8 +1335,9 @@ describe("EDH AMI builds", () => {
     });
 
     test("the REST API paths under the WAF exemption prefix are exactly the AMI recipe routes", () => {
-        // The regional web ACL relaxes two body rules under this prefix (edhWafExclusions.test.ts),
-        // so a route of any other surface under it would borrow the relaxation.
+        // Both web ACLs relax the AMI recipe body rules at or below this prefix
+        // (edhWafExclusions.test.ts), so a route of any other surface under it would borrow the
+        // relaxation. Matched here on the prefix's characters alone, which also catches a sibling.
         const exclusions = buildEdhWafRuleExclusions(
             buildTemplateConfig("commercial", enableEdhAmiBuilds)
         );
