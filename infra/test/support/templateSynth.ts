@@ -71,7 +71,8 @@ const RAW: Record<TemplateName, unknown> = {
     eusovereign: eusovereignTemplate,
 };
 
-const ACCOUNT = "123456789012";
+/** The account every synthesized template is bound to; the region is each template's own. */
+export const ACCOUNT = "123456789012";
 
 export interface Resource {
     logicalId: string;
@@ -155,8 +156,13 @@ function escapeRegExp(s: string): string {
     return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** A deployable Config from a shipped template, with the placeholders getConfig() would fill. */
-function buildConfig(name: TemplateName, mutate?: (c: any) => void): Config.Config {
+/**
+ * A deployable Config from a shipped template, with the placeholders getConfig() would fill: the
+ * config `synthTemplate` synthesizes, for a test that builds part of the app from it. The ALB's
+ * domain host and certificate ARN are replaced only when the shipped template enables the ALB, so
+ * a mutate that enables it on the commercial template keeps that template's placeholder values.
+ */
+export function buildTemplateConfig(name: TemplateName, mutate?: (c: any) => void): Config.Config {
     const t = TARGET[name];
     const config = JSON.parse(JSON.stringify(RAW[name])) as Config.Config;
     const stackName = `vams-t1-${name}`;
@@ -306,15 +312,24 @@ const cache = new Map<string, SynthResult>();
 /**
  * Synthesize one shipped config template and return every emitted resource.
  *
- * Results are cached per (template, mutation key) because a synth costs ~20 s. Pass `mutateKey` when
- * using `mutate`, or the cache will return a result built with different settings — a silent way to
- * assert against the wrong template.
+ * Results are cached per (template, mutation key, WAF ARNs) because a synth costs ~20 s. Pass
+ * `mutateKey` when using `mutate`, or the cache will return a result built with different settings —
+ * a silent way to assert against the wrong template.
+ *
+ * `wafArns` hands the core stack a regional and a CloudFront web ACL ARN, the way `bin/infra.ts` does
+ * when the WAF stacks exist. Without it both are empty, as in a deployment with no WAF stacks.
  */
 export function synthTemplate(
     name: TemplateName,
-    opts: { mutate?: (c: any) => void; mutateKey?: string } = {}
+    opts: {
+        mutate?: (c: any) => void;
+        mutateKey?: string;
+        wafArns?: { regional: string; cloudfront: string };
+    } = {}
 ): SynthResult {
-    const key = `${name}::${opts.mutateKey ?? (opts.mutate ? "UNKEYED" : "")}`;
+    const key = `${name}::${opts.mutateKey ?? (opts.mutate ? "UNKEYED" : "")}${
+        opts.wafArns ? `::waf:${opts.wafArns.regional}:${opts.wafArns.cloudfront}` : ""
+    }`;
     if (opts.mutate && !opts.mutateKey) {
         throw new Error(
             "synthTemplate(): pass mutateKey alongside mutate, or two different mutations share a " +
@@ -328,7 +343,7 @@ export function synthTemplate(
     stubSplatToolboxSourceSync();
     resetGlobalRegistries();
     const t = TARGET[name];
-    const config = buildConfig(name, opts.mutate);
+    const config = buildTemplateConfig(name, opts.mutate);
     const stackName = config.env.coreStackName;
 
     const app = newTestApp({
@@ -364,8 +379,8 @@ export function synthTemplate(
     const stack = new Infra.CoreVAMSStack(app, stackName, {
         env: { account: ACCOUNT, region: t.region },
         stackName,
-        ssmWafArnRegional: "",
-        ssmWafArnCloudfront: "",
+        ssmWafArnRegional: opts.wafArns?.regional ?? "",
+        ssmWafArnCloudfront: opts.wafArns?.cloudfront ?? "",
         apiOriginVerifySecret: apiOriginVerifyStack?.secretRef,
         crossRegionBucketTopics: crossRegionBuckets.topics,
         config,
