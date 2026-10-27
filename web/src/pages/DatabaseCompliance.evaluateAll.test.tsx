@@ -83,10 +83,43 @@ describe("DatabaseCompliance Evaluate All", () => {
         await screen.findByText("override-asset");
         await userEvent.click(screen.getByRole("button", { name: /Evaluate All/ }));
         await waitFor(() =>
-            expect(service().evaluateDatabaseCompliance).toHaveBeenCalledWith("db1")
+            expect(service().evaluateDatabaseCompliance).toHaveBeenCalledWith("db1", undefined)
         );
         expect(service().sweepSchema).not.toHaveBeenCalled();
         expect(await screen.findByText(/Evaluation triggered for 1 assets/)).toBeInTheDocument();
+    });
+
+    it("continues an evaluation that left assets with the token it returned", async () => {
+        overview("std");
+        const page = (token?: string, remaining = 0) => [
+            true,
+            {
+                message: "Evaluation triggered for 200 assets",
+                databaseId: "db1",
+                assetsTriggered: [],
+                assetsRemaining: remaining,
+                ...(token ? { NextToken: token } : {}),
+            },
+        ];
+        service()
+            .evaluateDatabaseCompliance.mockResolvedValueOnce(page("tok-2", 113))
+            .mockResolvedValueOnce(page())
+            .mockResolvedValueOnce(page());
+        render(<DatabaseCompliancePage />);
+        await screen.findByText("override-asset");
+        const evaluateAll = () => screen.getByRole("button", { name: /Evaluate All/ });
+        await userEvent.click(evaluateAll());
+        expect(await screen.findByText(/113 not reached yet/)).toBeInTheDocument();
+        await waitFor(() => expect(evaluateAll()).toBeEnabled());
+        await userEvent.click(evaluateAll());
+        await waitFor(() => expect(service().evaluateDatabaseCompliance).toHaveBeenCalledTimes(2));
+        await waitFor(() => expect(evaluateAll()).toBeEnabled());
+        await userEvent.click(evaluateAll());
+        await waitFor(() => expect(service().evaluateDatabaseCompliance).toHaveBeenCalledTimes(3));
+        // The second call continues the first; the finished evaluation leaves no token for the third.
+        expect(
+            service().evaluateDatabaseCompliance.mock.calls.map((call: any[]) => call[1])
+        ).toEqual([undefined, "tok-2", undefined]);
     });
 
     it("is offered for a database whose only tracked assets carry their own schema", async () => {

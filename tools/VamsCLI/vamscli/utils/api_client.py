@@ -7406,36 +7406,50 @@ class APIClient(CustomAPIClientMixin):
         return self._compliance_request(
             'POST', endpoint, f"Evaluating asset '{asset_id}'", body=body)
 
-    def sweep_compliance_schema(self, schema_name: str) -> Dict[str, Any]:
+    def sweep_compliance_schema(self, schema_name: str,
+                                starting_token: Optional[str] = None) -> Dict[str, Any]:
         """
         Re-evaluate every asset bound to a schema using the /compliance/sweep/{schemaName} POST
-        endpoint.
+        endpoint (one call of the sweep).
+
+        Args:
+            starting_token: The previous call's NextToken, to continue that sweep; omit to start one.
 
         Returns:
             API response data: {message, schemaName, assetsTriggered: [{databaseId, assetId, ...}],
-            skipped, assetsRemaining}. `skipped` counts the bound assets the caller is not
-            authorized to evaluate; they are never listed. `assetsRemaining` counts the bound assets
-            beyond the per-call cap, which a repeated sweep works through.
+            skipped, superseded, assetsRemaining, NextToken?}. `skipped` counts the bound assets the
+            caller is not authorized to evaluate; they are never listed. `assetsRemaining` counts the
+            bound assets still to evaluate; while it is above 0 the response carries `NextToken`,
+            which the next call passes back to continue.
         """
         endpoint = API_COMPLIANCE_SWEEP_SCHEMA.format(schemaName=schema_name)
-        return self._compliance_request('POST', endpoint, f"Sweeping schema '{schema_name}'")
+        body = {'startingToken': starting_token} if starting_token else {}
+        return self._compliance_request('POST', endpoint, f"Sweeping schema '{schema_name}'",
+                                        body=body)
 
-    def evaluate_database_compliance(self, database_id: str) -> Dict[str, Any]:
+    def evaluate_database_compliance(self, database_id: str,
+                                     starting_token: Optional[str] = None) -> Dict[str, Any]:
         """
         Evaluate every tracked asset of one database, each against its own bound schema (the
         database binding or the asset's override), using the /compliance/evaluate/{databaseId}
-        POST endpoint. No other database is evaluated.
+        POST endpoint (one call of the evaluation). No other database is evaluated.
+
+        Args:
+            starting_token: The previous call's NextToken, to continue that evaluation; omit to
+                start one.
 
         Returns:
             API response data: {message, databaseId, assetsTriggered: [{databaseId, assetId,
             schemaName, evaluationId, verdict, superseded?}], assetsRemaining, superseded,
-            registered, withoutSchema}. `assetsRemaining` above 0 means call again; `registered`
-            counts assets of a bound database registered under the binding by this call;
-            `withoutSchema` counts tracked assets whose record names no schema (not evaluated).
+            registered, withoutSchema, NextToken?}. While `assetsRemaining` is above 0 the response
+            carries `NextToken`: pass it back to continue. `registered` counts assets of a bound
+            database registered under the binding by this call; `withoutSchema` counts tracked
+            assets whose record names no schema (not evaluated).
         """
         endpoint = API_COMPLIANCE_EVALUATE_DATABASE.format(databaseId=database_id)
+        body = {'startingToken': starting_token} if starting_token else {}
         return self._compliance_request(
-            'POST', endpoint, f"Evaluating the assets of database '{database_id}'")
+            'POST', endpoint, f"Evaluating the assets of database '{database_id}'", body=body)
 
     def list_compliance_evaluations(self, database_id: str, asset_id: str,
                                     max_items: Optional[int] = None,

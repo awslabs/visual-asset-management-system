@@ -883,11 +883,15 @@ def evaluate(ctx: click.Context, database_id: str, asset_id: str, schema_name: O
               help='Schema whose assets to re-evaluate (in every database it is bound to)')
 @click.option('-d', '--database-id', default=None,
               help='Database whose tracked assets to re-evaluate, each against its own schema')
+@click.option('--starting-token', default=None,
+              help='Continue an earlier sweep from the NextToken it printed')
+@click.option('--no-follow', is_flag=True,
+              help='Make one call only and print the NextToken to continue with')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def sweep(ctx: click.Context, schema_name: Optional[str], database_id: Optional[str],
-          json_output: bool):
+          starting_token: Optional[str], no_follow: bool, json_output: bool):
     """Re-evaluate every asset bound to a schema (-n), or every tracked asset of a database (-d).
 
     Give exactly one of -n and -d. With -n, run after 'compliance schema update' so existing
@@ -895,14 +899,17 @@ def sweep(ctx: click.Context, schema_name: Optional[str], database_id: Optional[
     evaluate are counted as skipped and never listed. With -d, every asset of that database with a
     compliance record is evaluated against the schema it is bound to (the database binding or its
     own override) and no other database is touched: the web overview's Evaluate All. Assets
-    awaiting evaluation are evaluated first; assets a call does not reach (its per-call cap or its
-    time budget) are counted as remaining, and a repeated call works through them. An asset whose
-    evaluation found a newer one of it already started is listed as superseded and counted: its
-    state is that newer evaluation's.
+    awaiting evaluation are evaluated first. One API call evaluates a bounded number of assets;
+    the command calls again with the response's NextToken until every asset has been evaluated
+    once (--no-follow makes one call and prints the token; --starting-token continues from one).
+    An asset whose evaluation found a newer one of it already started is listed as superseded and
+    counted: its state is that newer evaluation's.
 
     Examples:
         vamscli compliance sweep -n cad-quality
         vamscli compliance sweep -d my-database
+        vamscli compliance sweep -d my-database --no-follow
+        vamscli compliance sweep -d my-database --starting-token "token123"
         vamscli compliance sweep -n cad-quality --json-output
     """
     if bool(schema_name) == bool(database_id):
@@ -914,12 +921,17 @@ def sweep(ctx: click.Context, schema_name: Optional[str], database_id: Optional[
     else:
         output_status(f"Sweeping assets bound to schema '{schema_name}'...", json_output)
     try:
-        result = (api_client.evaluate_database_compliance(database_id) if database_id
-                  else api_client.sweep_compliance_schema(schema_name))
+        result = _follow_sweep(
+            lambda token: (api_client.evaluate_database_compliance(database_id, starting_token=token)
+                           if database_id
+                           else api_client.sweep_compliance_schema(schema_name, starting_token=token)),
+            starting_token, follow=not no_follow, json_output=json_output)
 
         def _fmt(r):
             triggered = r.get('assetsTriggered') or []
             lines = [f"  Assets Triggered: {len(triggered)}"]
+            if r.get('calls', 1) > 1:
+                lines[0] += f" (in {r['calls']} calls)"
             lines.extend(f"    {t.get('databaseId', 'N/A')}:{t.get('assetId', 'N/A')}"
                          + (" (superseded)" if t.get('superseded') else "")
                          for t in triggered)
@@ -932,7 +944,10 @@ def sweep(ctx: click.Context, schema_name: Optional[str], database_id: Optional[
             if r.get('withoutSchema'):
                 lines.append(f"  Without a bound schema (not evaluated): {r['withoutSchema']}")
             if r.get('assetsRemaining'):
-                lines.append(f"  Remaining (beyond this call's cap): {r['assetsRemaining']}")
+                lines.append(f"  Remaining (not evaluated yet): {r['assetsRemaining']}")
+            if r.get('NextToken'):
+                lines.append(f"  Next token: {r['NextToken']}")
+                lines.append("  Continue with --starting-token (the token continues this sweep).")
             return '\n'.join(lines)
 
         output_result(result, json_output, success_message=f"✓ {result.get('message', 'Sweep triggered.')}",
@@ -940,6 +955,37 @@ def sweep(ctx: click.Context, schema_name: Optional[str], database_id: Optional[
         return result
     except _COMPLIANCE_ERRORS as e:
         _handle_compliance_error(e, json_output)
+
+
+def _follow_sweep(call, starting_token: Optional[str], follow: bool,
+                  json_output: bool) -> Dict[str, Any]:
+    """Call a sweep route, following its NextToken until the sweep is done (no token), and merge
+    the calls into one result: every call's `assetsTriggered`, the summed `superseded` and
+    `registered`, the last call's `skipped`, `withoutSchema` and `assetsRemaining` (each call counts
+    those across the whole sweep), and `calls`. Stops early, keeping the last `NextToken`, when
+    `follow` is off or a call evaluated nothing (no progress: continue later with the token)."""
+    result = call(starting_token)
+    triggered = list(result.get('assetsTriggered') or [])
+    superseded = result.get('superseded') or 0
+    registered = result.get('registered') or 0
+    calls = 1
+    while follow and result.get('NextToken') and result.get('assetsTriggered'):
+        output_status(f"  {len(triggered)} evaluated, {result.get('assetsRemaining', 0)} "
+                      f"remaining; continuing...", json_output)
+        result = call(result['NextToken'])
+        calls += 1
+        triggered.extend(result.get('assetsTriggered') or [])
+        superseded += result.get('superseded') or 0
+        registered += result.get('registered') or 0
+    if calls == 1:
+        return result
+    merged = dict(result, assetsTriggered=triggered, calls=calls)
+    if 'superseded' in result or superseded:
+        merged['superseded'] = superseded
+    if 'registered' in result or registered:
+        merged['registered'] = registered
+    merged['message'] = f"Sweep triggered for {len(triggered)} assets in {calls} calls"
+    return merged
 
 
 @compliance.command('state')

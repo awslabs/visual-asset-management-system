@@ -9580,7 +9580,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/evaluate/{databaseId}:
         post:
             summary: "Evaluate every tracked asset of a database."
-            description: "Evaluates every asset of the database that has a compliance record, each against the schema its record binds (the database binding or the asset's own override); no other database is read or evaluated. In a bound database, an asset with no compliance record yet is first registered under the binding (`registered`). Assets in `pending_evaluation` first, then the rest, at most 200 per call, and a call stops launching evaluations after about 20 seconds; `assetsRemaining` reports how many tracked assets were not reached — a value above 0 means call again. `withoutSchema` counts tracked assets whose record names no schema (not evaluated). Authorized on the database's `complianceEvaluation` object."
+            description: "Evaluates every asset of the database that has a compliance record, each against the schema its record binds (the database binding or the asset's own override); no other database is read or evaluated. In a bound database, an asset with no compliance record yet is first registered under the binding (`registered`). Assets in `pending_evaluation` first, then the least recently evaluated, at most 200 per call, and a call stops launching evaluations after about 20 seconds. While assets remain the response carries `NextToken` and `assetsRemaining` counts the assets still to evaluate: send the token as `startingToken` and the call evaluates only the assets not evaluated since the evaluation started, until no token is returned. `withoutSchema` counts tracked assets whose record names no schema (not evaluated). Authorized on the database's `complianceEvaluation` object."
             parameters:
                 - name: databaseId
                   in: path
@@ -9588,6 +9588,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   required: true
                   schema:
                       type: string
+            requestBody:
+                required: false
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/sweepContinuationRequest"
             responses:
                 "200":
                     description: Evaluation completed.
@@ -9596,7 +9602,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/evaluateDatabaseResponse"
                 "400":
-                    description: Invalid database id, or the database does not exist.
+                    description: Invalid database id or starting token, or the database does not exist.
                     content:
                         application/json:
                             schema:
@@ -9618,7 +9624,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/sweep/{schemaName}:
         post:
             summary: "Sweep the assets bound to a schema."
-            description: "Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate: assets in `pending_evaluation` first, then the rest, at most 200 per call, and a call stops launching evaluations after about 20 seconds so that it returns within the API Gateway integration window. `skipped` counts the bound assets the caller is not authorized to evaluate (they are never listed); `superseded` counts the listed assets whose evaluation did not run because a newer evaluation of the asset had already started; `assetsRemaining` reports how many were not reached — a value above 0 means call again."
+            description: "Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate: assets in `pending_evaluation` first, then the least recently evaluated, at most 200 per call, and a call stops launching evaluations after about 20 seconds so that it returns within the API Gateway integration window. While assets remain the response carries `NextToken`; a call with it as `startingToken` evaluates only the assets not evaluated since the sweep started, so repeated calls finish. `skipped` counts the bound assets the caller is not authorized to evaluate (they are never listed); `superseded` counts the listed assets whose evaluation did not run because a newer evaluation of the asset had already started; `assetsRemaining` counts the assets still to evaluate."
             parameters:
                 - name: schemaName
                   in: path
@@ -9626,6 +9632,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   required: true
                   schema:
                       type: string
+            requestBody:
+                required: false
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/sweepContinuationRequest"
             responses:
                 "200":
                     description: Sweep completed.
@@ -9634,7 +9646,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/sweepSchemaResponse"
                 "400":
-                    description: Invalid schema name, or the schema does not exist.
+                    description: Invalid schema name or starting token, or the schema does not exist.
                     content:
                         application/json:
                             schema:
@@ -16921,7 +16933,10 @@ components:
                                 type: boolean
                 assetsRemaining:
                     type: integer
-                    description: "Tracked assets the call did not reach, beyond the 200-asset cap or after the time budget; a value above 0 means call again."
+                    description: "Tracked assets still to evaluate after this call (not evaluated since the evaluation started); above 0, `NextToken` is present."
+                NextToken:
+                    type: string
+                    description: "Present while assets remain: send it as `startingToken` to continue this evaluation."
                 superseded:
                     type: integer
                 registered:
@@ -16935,6 +16950,14 @@ components:
                 - databaseId
                 - assetsTriggered
                 - assetsRemaining
+        sweepContinuationRequest:
+            type: object
+            description: "The body of a sweep or database-evaluation call."
+            properties:
+                startingToken:
+                    type: string
+                    maxLength: 1024
+                    description: "The previous call's `NextToken`, to continue that sweep or evaluation; omit it to start one."
         sweepSchemaResponse:
             type: object
             properties:
@@ -16964,7 +16987,10 @@ components:
                                 description: "Present and `true` on a `superseded` entry."
                 assetsRemaining:
                     type: integer
-                    description: "Bound assets the call did not reach, beyond the 200-asset cap or after the time budget; a value above 0 means call again."
+                    description: "Bound assets still to evaluate after this call (not evaluated since the sweep started); above 0, `NextToken` is present."
+                NextToken:
+                    type: string
+                    description: "Present while assets remain: send it as `startingToken` to continue this sweep."
                 skipped:
                     type: integer
                     description: "Bound assets the caller is not authorized to evaluate; counted, never listed."

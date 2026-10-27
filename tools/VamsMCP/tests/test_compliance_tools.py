@@ -565,9 +565,18 @@ def test_evaluate_and_sweep_forward_their_arguments(gated):
     srv.evaluate_asset_compliance("db1", "a1", schema_name="cad-quality")
     srv.sweep_compliance_schema("cad-quality")
     client.api.evaluate_asset_compliance.assert_called_once_with("db1", "a1", schema_name="cad-quality")
-    client.api.sweep_compliance_schema.assert_called_once_with("cad-quality")
+    client.api.sweep_compliance_schema.assert_called_once_with("cad-quality", starting_token=None)
     srv.evaluate_database_compliance("db1")
-    client.api.evaluate_database_compliance.assert_called_once_with("db1")
+    client.api.evaluate_database_compliance.assert_called_once_with("db1", starting_token=None)
+
+
+def test_the_sweep_tools_forward_the_continuation_token(gated):
+    # A sweep of more assets than one call evaluates is continued with the response's NextToken.
+    srv, client = gated
+    srv.sweep_compliance_schema("cad-quality", starting_token="tok-1")
+    client.api.sweep_compliance_schema.assert_called_once_with("cad-quality", starting_token="tok-1")
+    srv.evaluate_database_compliance("db1", starting_token="tok-2")
+    client.api.evaluate_database_compliance.assert_called_once_with("db1", starting_token="tok-2")
 
 
 def test_quarantine_tools_forward_the_reason(gated):

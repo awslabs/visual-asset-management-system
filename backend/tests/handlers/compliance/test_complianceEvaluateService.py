@@ -507,14 +507,13 @@ class TestSweep:
         mocks["state"].query.assert_not_called()
 
     def test_bound_assets_are_read_from_the_schema_name_index_to_exhaustion(self):
-        """Both index reads — the pending rows and the whole partition — follow LastEvaluatedKey."""
+        """The schema's index partition is read once, following LastEvaluatedKey; the pending row
+        is evaluated first, then the rest."""
         pending_row = {"databaseId": DB, "assetId": "p", "complianceState": PENDING}
         state_table = MagicMock()
         state_table.query.side_effect = [
-            {"Items": [pending_row], "LastEvaluatedKey": {"k": 1}},
-            {"Items": []},
-            {"Items": [pending_row, {"databaseId": DB, "assetId": "a"}], "LastEvaluatedKey": {"k": 2}},
-            {"Items": [{"databaseId": DB, "assetId": "b"}]},
+            {"Items": [{"databaseId": DB, "assetId": "a"}], "LastEvaluatedKey": {"k": 1}},
+            {"Items": [{"databaseId": DB, "assetId": "b"}, pending_row]},
         ]
         with patch(f"{MOD}.request_to_claims", claims_for(USER)), \
                 patch(f"{MOD}.CasbinEnforcer", return_value=enforcer()), \
@@ -526,22 +525,20 @@ class TestSweep:
                 rest_event("POST", SWEEP_PATH, SCHEMA_PARAMS, body={}), MagicMock())
         assert [t["assetId"] for t in body_of(response)["assetsTriggered"]] == ["p", "a", "b"]
         queries = state_table.query.call_args_list
-        assert len(queries) == 4
+        assert len(queries) == 2
         assert all(q.kwargs["IndexName"] == "SchemaNameIndex" for q in queries)
         assert queries[1].kwargs["ExclusiveStartKey"] == {"k": 1}
-        assert queries[3].kwargs["ExclusiveStartKey"] == {"k": 2}
         assert run.call_count == 3
 
-    def test_sweep_queries_pending_rows_first(self):
+    def test_sweep_reads_the_whole_schema_partition(self):
+        """Pending rows go first by an in-memory order, so the read is the schema's whole index
+        partition: no state narrows the key condition."""
         _, mocks = _run(rest_event("POST", SWEEP_PATH, SCHEMA_PARAMS, body={}),
                         schema_item=schema_row(),
                         state_rows=[{"databaseId": DB, "assetId": "a", "complianceState": "compliant"}])
         queries = mocks["state"].query.call_args_list
-        assert len(queries) >= 2
-        first = _key_equalities(queries[0].kwargs["KeyConditionExpression"])
-        assert first.get("schemaName") == SCHEMA
-        assert first.get("complianceState") == PENDING
-        assert all(_key_equalities(q.kwargs["KeyConditionExpression"]).get("schemaName") == SCHEMA
+        assert queries
+        assert all(_key_equalities(q.kwargs["KeyConditionExpression"]) == {"schemaName": SCHEMA}
                    for q in queries)
         assert all(q.kwargs["IndexName"] == "SchemaNameIndex" for q in queries)
 
@@ -646,10 +643,11 @@ class TestSweep:
             evaluation_side_effect=evaluation)
         assert response["statusCode"] == 200, response
         body = body_of(response)
+        # Neither row was ever evaluated, so they go in key order.
         assert body["assetsTriggered"] == [
+            {"databaseId": DB, "assetId": "a", "evaluationId": "eval-a", "verdict": "compliant"},
             {"databaseId": DB, "assetId": "busy", "evaluationId": "eval-lost",
              "verdict": "superseded", "superseded": True},
-            {"databaseId": DB, "assetId": "a", "evaluationId": "eval-a", "verdict": "compliant"},
         ]
         assert body["superseded"] == 1
         assert body["skipped"] == 0

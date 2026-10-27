@@ -30,6 +30,8 @@ GLOBAL_DATABASE_ID = "GLOBAL"
 MAX_RULE_NAME_LENGTH = 256
 MAX_DESCRIPTION_LENGTH = 1024
 MAX_REASON_LENGTH = 1024
+# Upper bound of a sweep's continuation token (a Base64 JSON timestamp; far shorter in practice).
+MAX_SWEEP_TOKEN_LENGTH = 1024
 
 
 # --- vams-rules-v1 schema format ---
@@ -718,14 +720,16 @@ class EvaluateAssetRequestModel(BaseModel, extra='ignore'):
 
 
 class SweepSchemaRequestModel(BaseModel, extra='ignore'):
-    """Request model for sweeping a schema (POST /compliance/sweep/{schemaName}); no fields."""
-    pass
+    """Request model for sweeping a schema (POST /compliance/sweep/{schemaName}). `startingToken`
+    is the previous call's `NextToken`: it continues that sweep (omit it to start one)."""
+    startingToken: Optional[str] = Field(None, max_length=MAX_SWEEP_TOKEN_LENGTH)
 
 
 class EvaluateDatabaseRequestModel(BaseModel, extra='ignore'):
     """Request model for evaluating every tracked asset of a database
-    (POST /compliance/evaluate/{databaseId}); no fields."""
-    pass
+    (POST /compliance/evaluate/{databaseId}). `startingToken` is the previous call's `NextToken`:
+    it continues that evaluation (omit it to start one)."""
+    startingToken: Optional[str] = Field(None, max_length=MAX_SWEEP_TOKEN_LENGTH)
 
 
 # --- Quarantine request models ---

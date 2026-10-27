@@ -669,19 +669,26 @@ export interface EvaluateDatabaseResponse {
     superseded?: number;
     registered?: number;
     withoutSchema?: number;
+    /** Present while assets remain: pass it back as `startingToken` to continue the evaluation. */
+    NextToken?: string;
 }
+
+/** The body of a sweep or database-evaluation call: the token continues an earlier one. */
+const sweepBody = (startingToken?: string) => (startingToken ? { startingToken } : {});
 
 /**
  * Evaluates every tracked asset of one database, each against its own bound schema (the database
- * binding or the asset's override); no other database is evaluated. Bounded like a sweep:
- * `assetsRemaining` above 0 means call again.
+ * binding or the asset's override); no other database is evaluated. Bounded like a sweep: while
+ * `assetsRemaining` is above 0 the response carries `NextToken`, and a call with it as
+ * `startingToken` continues with the assets not evaluated yet.
  */
 export const evaluateDatabaseCompliance = async (
-    databaseId: string
+    databaseId: string,
+    startingToken?: string
 ): Promise<[boolean, EvaluateDatabaseResponse | string]> => {
     try {
         const response = await apiClient.post(`compliance/evaluate/${databaseId}`, {
-            body: {},
+            body: sweepBody(startingToken),
         });
         if (
             response?.message &&
@@ -696,10 +703,14 @@ export const evaluateDatabaseCompliance = async (
     }
 };
 
-export const sweepSchema = async (schemaName: string): Promise<[boolean, any]> => {
+/** One call of a schema sweep; `startingToken` (the previous call's `NextToken`) continues it. */
+export const sweepSchema = async (
+    schemaName: string,
+    startingToken?: string
+): Promise<[boolean, any]> => {
     try {
         const response = await apiClient.post(`compliance/sweep/${schemaName}`, {
-            body: {},
+            body: sweepBody(startingToken),
         });
         if (
             response?.message &&

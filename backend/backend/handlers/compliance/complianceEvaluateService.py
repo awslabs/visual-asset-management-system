@@ -18,6 +18,7 @@ synchronously; pipeline rules launch workflow executions that the workflow callb
 import base64
 import json
 import time
+from datetime import datetime, timedelta, timezone
 
 from aws_lambda_powertools.utilities.parser import ValidationError, parse
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -84,9 +85,9 @@ OVERVIEW_ERROR_BUCKET = "error"
 # The asset-state table's (complianceState, databaseId) index.
 COMPLIANCE_STATE_INDEX = "ComplianceStateIndex"
 
-# Bound on the assets one sweep evaluates synchronously inside the API Lambda timeout. The bound
-# rows are ordered `pending_evaluation` first; a schema bound to more assets sweeps the first
-# MAX_SWEEP_ASSETS of that order and reports the remainder.
+# Bound on the assets one sweep evaluates synchronously inside the API Lambda timeout. A sweep
+# that reaches more is continued by the next call with the response's `NextToken`
+# (`_sweep_candidates`).
 MAX_SWEEP_ASSETS = 200
 
 # Wall-clock budget for launching a sweep's synchronous per-asset evaluations. API Gateway closes a
@@ -168,11 +169,11 @@ def handle_post_request(event):
         return evaluate_asset(event, path_params.get("databaseId"), path_params.get("assetId"),
                               request)
     if API_COMPLIANCE_EVALUATE_DATABASE.matches(path):
-        parse(_parse_body(event), model=EvaluateDatabaseRequestModel)
-        return evaluate_database(event, path_params.get("databaseId"))
+        request = parse(_parse_body(event), model=EvaluateDatabaseRequestModel)
+        return evaluate_database(event, path_params.get("databaseId"), request.startingToken)
     if API_COMPLIANCE_SWEEP_SCHEMA.matches(path):
-        parse(_parse_body(event), model=SweepSchemaRequestModel)
-        return sweep_schema(event, path_params.get("schemaName"))
+        request = parse(_parse_body(event), model=SweepSchemaRequestModel)
+        return sweep_schema(event, path_params.get("schemaName"), request.startingToken)
     return validation_error(body={"message": "Method not allowed"}, event=event)
 
 
@@ -282,7 +283,7 @@ def run_evaluation_for_asset(database_id, asset_id, schema_name, actor):
     return result
 
 
-def sweep_schema(event, schema_name):
+def sweep_schema(event, schema_name, starting_token=None):
     """Evaluate the assets whose state row is bound to `schema_name` (SchemaNameIndex GSI) and whose
     database the caller may evaluate; the rest are counted as `skipped` (and in
     `skippedNotAuthorized`, the reason they were skipped) and never listed. The caller needs read
@@ -290,17 +291,23 @@ def sweep_schema(event, schema_name):
     schema, and the sweep then reaches the assets of the databases that administrator may evaluate
     only. Every evaluation runs as the caller, never with the system identity.
 
-    Rows in `pending_evaluation` are evaluated first, then the rest of the bound rows. One call
-    evaluates at most MAX_SWEEP_ASSETS assets and stops launching once SWEEP_TIME_BUDGET_SECONDS has
-    elapsed; `assetsRemaining` counts the bound assets this call did not reach under either bound,
-    and tells the caller to call again. An asset whose evaluation found a newer one of it already
-    started (a trigger evaluation running at the same time) is listed with verdict `superseded` and
-    `superseded: true` and counted under `superseded`: its state is that evaluation's, and the
-    listed `evaluationId` names no evaluation record."""
+    One call evaluates at most MAX_SWEEP_ASSETS assets and stops launching once
+    SWEEP_TIME_BUDGET_SECONDS has elapsed. A sweep is continued across calls: while assets remain,
+    the response carries `NextToken`, and a call that passes it back as `startingToken` evaluates
+    only the assets not evaluated since the sweep started (`_sweep_candidates`), so the calls
+    advance and the sweep ends; `assetsRemaining` counts the assets still to evaluate after this
+    call. `pending_evaluation` rows go first, then the least recently evaluated. An asset whose
+    evaluation found a newer one of it already started (a trigger evaluation running at the same
+    time) is listed with verdict `superseded` and `superseded: true` and counted under
+    `superseded`: its state is that evaluation's, and the listed `evaluationId` names no evaluation
+    record."""
     started_at = monotonic()
     (valid, message) = validate({"schemaName": {"value": schema_name, "validator": "ID"}})
     if not valid:
         return validation_error(body={"message": message}, event=event)
+    sweep_started_at, token_ok = _sweep_started_at(starting_token)
+    if not token_ok:
+        return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
@@ -324,7 +331,8 @@ def sweep_schema(event, schema_name):
         if database_allowed[database_id]:
             registered += store.register_unrecorded_assets(database_id, schema_name)
 
-    bound_assets = _bound_assets_pending_first(schema_name)
+    bound_assets, evaluated_earlier = _sweep_candidates(
+        _bound_assets(schema_name), sweep_started_at, _asset_key)
     actor = claims_and_roles["tokens"][0]
 
     triggered = []
@@ -334,6 +342,14 @@ def sweep_schema(event, schema_name):
     beyond_budget = 0
     budget_spent = False
     for asset in bound_assets:
+        # A database the caller may not evaluate is skipped whatever the bounds: its assets are
+        # never this caller's to evaluate, so they are not counted as remaining either.
+        database_id = asset["databaseId"]
+        if database_id not in database_allowed:
+            database_allowed[database_id] = _enforce_evaluation(database_id, "POST")
+        if not database_allowed[database_id]:
+            skipped += 1
+            continue
         if len(triggered) >= MAX_SWEEP_ASSETS:
             beyond_cap += 1
             continue
@@ -341,12 +357,6 @@ def sweep_schema(event, schema_name):
             budget_spent = True
         if budget_spent:
             beyond_budget += 1
-            continue
-        database_id = asset["databaseId"]
-        if database_id not in database_allowed:
-            database_allowed[database_id] = _enforce_evaluation(database_id, "POST")
-        if not database_allowed[database_id]:
-            skipped += 1
             continue
         result = run_evaluation_for_asset(database_id, asset["assetId"], schema_name, actor)
         entry = {
@@ -364,8 +374,9 @@ def sweep_schema(event, schema_name):
     logger.info(f"Sweep of schema {schema_name}: {registered} registered under a database binding")
     logger.info(f"Sweep of schema {schema_name}: {len(triggered)} triggered ({superseded} "
                 f"superseded by a newer evaluation), {skipped} skipped, {remaining} remaining "
-                f"({beyond_cap} beyond the cap, {beyond_budget} beyond the time budget)")
-    return success(body={
+                f"({beyond_cap} beyond the cap, {beyond_budget} beyond the time budget), "
+                f"{evaluated_earlier} evaluated earlier in this sweep")
+    body = {
         "message": f"Sweep triggered for {len(triggered)} assets",
         "schemaName": schema_name,
         "assetsTriggered": triggered,
@@ -373,14 +384,20 @@ def sweep_schema(event, schema_name):
         "skipped": skipped,
         "skippedNotAuthorized": skipped,
         "superseded": superseded,
-    })
+    }
+    if remaining:
+        body["NextToken"] = _sweep_token(sweep_started_at)
+    return success(body=body)
 
 
-def evaluate_database(event, database_id):
+def evaluate_database(event, database_id, starting_token=None):
     """Evaluate every tracked asset of one database — every asset-state row of it, each against
     the schema its row binds (the database binding or the asset's own override) — with the sweep's
-    bounds: `pending_evaluation` rows first, at most MAX_SWEEP_ASSETS evaluations, no launch after
-    SWEEP_TIME_BUDGET_SECONDS, `assetsRemaining` the tracked assets not reached.
+    bounds and continuation: at most MAX_SWEEP_ASSETS evaluations and no launch after
+    SWEEP_TIME_BUDGET_SECONDS per call, `pending_evaluation` rows first and then the least recently
+    evaluated, a `NextToken` while assets remain that the next call passes back as `startingToken`
+    to evaluate only the assets not evaluated since the evaluation started, and `assetsRemaining`
+    the tracked assets still to evaluate after this call (`_sweep_candidates`).
 
     A database binding governs every asset of the database, so an asset of a bound database that
     has no compliance record yet is registered under the binding first (`registered`). A tracked
@@ -397,6 +414,9 @@ def evaluate_database(event, database_id):
     })
     if not valid:
         return validation_error(body={"message": message}, event=event)
+    sweep_started_at, token_ok = _sweep_started_at(starting_token)
+    if not token_ok:
+        return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
@@ -418,7 +438,9 @@ def evaluate_database(event, database_id):
     beyond_cap = 0
     beyond_budget = 0
     budget_spent = False
-    for row in _database_rows_pending_first(database_id):
+    rows, evaluated_earlier = _sweep_candidates(
+        _database_rows(database_id), sweep_started_at, lambda row: row.get("assetId", ""))
+    for row in rows:
         schema_name = row.get("schemaName")
         if not schema_name:
             without_schema += 1
@@ -448,8 +470,8 @@ def evaluate_database(event, database_id):
     logger.info(f"Evaluation of database {database_id}: {registered} registered, {len(triggered)} "
                 f"triggered ({superseded} superseded), {without_schema} without a schema, "
                 f"{remaining} remaining ({beyond_cap} beyond the cap, {beyond_budget} beyond the "
-                f"time budget)")
-    return success(body={
+                f"time budget), {evaluated_earlier} evaluated earlier in this evaluation")
+    body = {
         "message": f"Evaluation triggered for {len(triggered)} assets",
         "databaseId": database_id,
         "assetsTriggered": triggered,
@@ -457,35 +479,88 @@ def evaluate_database(event, database_id):
         "superseded": superseded,
         "registered": registered,
         "withoutSchema": without_schema,
-    })
+    }
+    if remaining:
+        body["NextToken"] = _sweep_token(sweep_started_at)
+    return success(body=body)
 
 
-def _database_rows_pending_first(database_id):
-    """Every asset-state row of a database (read to exhaustion), the `pending_evaluation` rows
-    first and the rest after, each in asset-id order."""
-    rows = query_all_items(asset_state_table, KeyConditionExpression=Key("databaseId").eq(database_id))
-    pending = [r for r in rows if r.get("complianceState") == engine.STATE_PENDING_EVALUATION]
-    rest = [r for r in rows if r.get("complianceState") != engine.STATE_PENDING_EVALUATION]
-    return pending + rest
+def _database_rows(database_id):
+    """Every asset-state row of a database (read to exhaustion)."""
+    return query_all_items(asset_state_table, KeyConditionExpression=Key("databaseId").eq(database_id))
 
 
-def _bound_assets_pending_first(schema_name):
-    """The state rows bound to `schema_name`, each once: the `pending_evaluation` rows first (the GSI
-    sorts on `complianceState`, so a plain partition read would place them after every verdict-bearing
-    state), then the rest of the partition."""
-    pending = query_all_items(
-        asset_state_table,
-        IndexName="SchemaNameIndex",
-        KeyConditionExpression=(Key("schemaName").eq(schema_name)
-                                & Key("complianceState").eq(engine.STATE_PENDING_EVALUATION)),
-    )
-    seen = {_asset_key(row) for row in pending}
-    rest = [row for row in query_all_items(
+def _bound_assets(schema_name):
+    """Every state row bound to `schema_name` (its SchemaNameIndex partition, read to exhaustion)."""
+    return query_all_items(
         asset_state_table,
         IndexName="SchemaNameIndex",
         KeyConditionExpression=Key("schemaName").eq(schema_name),
-    ) if _asset_key(row) not in seen]
-    return pending + rest
+    )
+
+
+# The field of a sweep's continuation token: the instant its first call started.
+SWEEP_TOKEN_FIELD = "sweepStartedAt"
+
+
+def _parse_instant(value):
+    """An ISO-8601 instant as an aware datetime (UTC when it names no zone), or None."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        instant = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return instant if instant.tzinfo else instant.replace(tzinfo=timezone.utc)
+
+
+def _sweep_started_at(starting_token):
+    """`(started_at, ok)`: the instant the sweep a token continues started, or now for a sweep's
+    first call (no token). `ok` is False for a malformed token, or one naming a future instant."""
+    now = datetime.now(timezone.utc)
+    if not starting_token:
+        return now, True
+    try:
+        decoded = json.loads(base64.b64decode(starting_token, validate=True).decode("utf-8"))
+    except (ValueError, TypeError):
+        return None, False
+    started_at = _parse_instant(decoded.get(SWEEP_TOKEN_FIELD)) if isinstance(decoded, dict) else None
+    if started_at is None or started_at > now + timedelta(minutes=5):
+        return None, False
+    return started_at, True
+
+
+def _sweep_token(started_at):
+    return base64.b64encode(json.dumps(
+        {SWEEP_TOKEN_FIELD: started_at.isoformat()}).encode("utf-8")).decode("utf-8")
+
+
+def _sweep_candidates(rows, started_at, key):
+    """The rows a sweep call still has to evaluate, in the order it evaluates them.
+
+    A sweep is a walk over consecutive calls: the first call starts it (`started_at` is then now),
+    and each call that leaves rows unreached returns a token naming that instant. Every evaluation
+    records its start on the row (`lastEvaluatedAt`) before it evaluates anything, so a row evaluated
+    since the sweep started (by an earlier call of it, or by an evaluation of the trigger meanwhile)
+    is done and left out; the rest is what remains, and each call shrinks it. Order:
+    `pending_evaluation` rows first, then the least recently evaluated (never evaluated first), then
+    `key`, so even calls that do not pass the token work through the rows instead of repeating the
+    same ones. Returns `(candidates, evaluated since the sweep started)`."""
+    candidates = []
+    evaluated = 0
+    for row in rows:
+        last = _parse_instant(row.get("lastEvaluatedAt"))
+        if last is not None and last >= started_at:
+            evaluated += 1
+        else:
+            candidates.append(row)
+    oldest = datetime.min.replace(tzinfo=timezone.utc)
+    candidates.sort(key=lambda row: (
+        row.get("complianceState") != engine.STATE_PENDING_EVALUATION,
+        _parse_instant(row.get("lastEvaluatedAt")) or oldest,
+        key(row),
+    ))
+    return candidates, evaluated
 
 
 def _asset_key(state_row):

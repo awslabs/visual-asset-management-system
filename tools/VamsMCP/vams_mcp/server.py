@@ -2590,29 +2590,33 @@ if CONFIG.enable_writes:
 
     @mcp.tool()
     @tool_result
-    def sweep_compliance_schema(schema_name: str) -> Dict[str, Any]:
+    def sweep_compliance_schema(schema_name: str,
+                                starting_token: Optional[str] = None) -> Dict[str, Any]:
         """Re-evaluate EVERY asset bound to a schema that the caller may evaluate; returns
-        `assetsTriggered` (databaseId, assetId pairs), `skipped`, `superseded` and
-        `assetsRemaining`.
+        `assetsTriggered` (databaseId, assetId pairs), `skipped`, `superseded`,
+        `assetsRemaining` and, while assets remain, `NextToken`.
 
         `skipped` counts the bound assets the caller is not authorized to evaluate — they are
         counted, never listed, so a sweep by a narrowly scoped caller can trigger nothing and still
         succeed. `superseded` counts the listed assets whose evaluation did not run because a newer
         evaluation of the same asset had already started (such an entry carries verdict
         `superseded` and `superseded: true`); that is not a failure, and the asset's state is the
-        newer evaluation's. Assets awaiting evaluation are evaluated first; `assetsRemaining`
-        counts the bound assets this call did not reach (its per-call cap or its time budget) —
-        call again to work through them. The usual follow-up to update_compliance_schema(). Each
+        newer evaluation's. Assets awaiting evaluation are evaluated first. One call evaluates a
+        bounded number of assets: `assetsRemaining` counts those still to evaluate, and while it is
+        above 0 call again with the response's `NextToken` as `starting_token` — each call then
+        evaluates only assets not evaluated since the sweep started, so the calls finish. The
+        usual follow-up to update_compliance_schema(). Each
         asset is evaluated as by evaluate_asset_compliance(), so a schema with pipeline rules
         starts one workflow execution per bound asset — real AWS compute, multiplied by the
         binding count. Keep this tool out of `autoApprove` and check get_compliance_bindings() for
         the blast radius first.
         """
-        return CLIENT.api.sweep_compliance_schema(schema_name)
+        return CLIENT.api.sweep_compliance_schema(schema_name, starting_token=starting_token)
 
     @mcp.tool()
     @tool_result
-    def evaluate_database_compliance(database_id: str) -> Dict[str, Any]:
+    def evaluate_database_compliance(database_id: str,
+                                     starting_token: Optional[str] = None) -> Dict[str, Any]:
         """Re-evaluate EVERY tracked asset of one database — each asset with a compliance record,
         against the schema it is bound to (the database binding or its own override) — and nothing
         in any other database. Returns `assetsTriggered` (databaseId, assetId, schemaName),
@@ -2622,13 +2626,14 @@ if CONFIG.enable_writes:
         instead evaluates every database bound to one schema. In a bound database, assets that
         have no compliance record yet are registered under the binding first (`registered`);
         `withoutSchema` counts tracked assets whose record names no schema (not evaluated).
-        Assets awaiting evaluation are evaluated first; `assetsRemaining` counts the tracked assets
-        this call did not reach (its per-call cap or its time budget) — call again to work through
-        them. Each asset is evaluated as by evaluate_asset_compliance(), so a schema with pipeline
+        Assets awaiting evaluation are evaluated first. One call evaluates a bounded number of
+        assets: `assetsRemaining` counts those still to evaluate, and while it is above 0 call
+        again with the response's `NextToken` as `starting_token` until no token is returned. Each
+        asset is evaluated as by evaluate_asset_compliance(), so a schema with pipeline
         rules starts one workflow execution per asset — real AWS compute. Keep this tool out of
         `autoApprove` and check get_database_compliance_overview() for the asset count first.
         """
-        return CLIENT.api.evaluate_database_compliance(database_id)
+        return CLIENT.api.evaluate_database_compliance(database_id, starting_token=starting_token)
 
     @mcp.tool()
     @tool_result

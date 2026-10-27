@@ -210,6 +210,13 @@ class TestComplianceRequestPathsAndMethods:
         assert calls[0]['endpoint'] == '/compliance/sweep/cad-quality'
         assert calls[0]['kwargs']['json'] == {}
 
+    def test_a_sweep_call_with_a_token_posts_it_as_the_starting_token(self):
+        client, calls = _recording_client({'assetsTriggered': []})
+        client.sweep_compliance_schema('cad-quality', starting_token='tok-1')
+        client.evaluate_database_compliance('my-database', starting_token='tok-2')
+        assert [call['kwargs']['json'] for call in calls] == [
+            {'startingToken': 'tok-1'}, {'startingToken': 'tok-2'}]
+
     def test_evaluate_database_posts_the_database_route_with_an_empty_body(self):
         client, calls = _recording_client({'assetsTriggered': []})
         client.evaluate_database_compliance('my-database')
@@ -934,7 +941,8 @@ class TestComplianceEvaluationCommands:
             assert 'Skipped' not in result.output
             assert 'Remaining' not in result.output
             assert 'uperseded' not in result.output
-            mocks['api_client'].sweep_compliance_schema.assert_called_once_with('cad-quality')
+            mocks['api_client'].sweep_compliance_schema.assert_called_once_with(
+                'cad-quality', starting_token=None)
 
     def test_sweep_marks_and_counts_the_assets_a_newer_evaluation_superseded(self, cli_runner,
                                                                              generic_command_mocks):
@@ -967,7 +975,7 @@ class TestComplianceEvaluationCommands:
             result = cli_runner.invoke(cli, ['compliance', 'sweep', '-n', 'cad-quality'])
             assert result.exit_code == 0
             assert 'Skipped (not authorized to evaluate): 3' in result.output
-            assert 'Remaining (beyond this call\'s cap): 12' in result.output
+            assert 'Remaining (not evaluated yet): 12' in result.output
 
     def test_sweep_json_output(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
@@ -992,12 +1000,67 @@ class TestComplianceEvaluationCommands:
                 'assetsRemaining': 3, 'registered': 1, 'withoutSchema': 1}
             result = cli_runner.invoke(cli, ['compliance', 'sweep', '-d', 'my-database'])
             assert result.exit_code == 0
-            mocks['api_client'].evaluate_database_compliance.assert_called_once_with('my-database')
+            mocks['api_client'].evaluate_database_compliance.assert_called_once_with(
+                'my-database', starting_token=None)
             mocks['api_client'].sweep_compliance_schema.assert_not_called()
             assert 'Assets Triggered: 2' in result.output
             assert 'Registered under the database binding: 1' in result.output
             assert 'Without a bound schema (not evaluated): 1' in result.output
-            assert "Remaining (beyond this call's cap): 3" in result.output
+            assert "Remaining (not evaluated yet): 3" in result.output
+
+    def test_sweep_follows_the_token_until_every_asset_is_evaluated(self, cli_runner,
+                                                                  generic_command_mocks):
+        # One call evaluates a bounded number of assets; the command continues with NextToken
+        # until a response carries none, and reports the calls together.
+        pages = [
+            {'message': 'Evaluation triggered for 2 assets', 'databaseId': 'my-database',
+             'assetsTriggered': [{'databaseId': 'my-database', 'assetId': 'a'},
+                                 {'databaseId': 'my-database', 'assetId': 'b'}],
+             'assetsRemaining': 1, 'superseded': 1, 'registered': 2, 'NextToken': 'tok-2'},
+            {'message': 'Evaluation triggered for 1 assets', 'databaseId': 'my-database',
+             'assetsTriggered': [{'databaseId': 'my-database', 'assetId': 'c'}],
+             'assetsRemaining': 0, 'superseded': 0, 'registered': 0},
+        ]
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].evaluate_database_compliance.side_effect = pages
+            result = cli_runner.invoke(cli, ['compliance', 'sweep', '-d', 'my-database',
+                                             '--json-output'])
+            assert result.exit_code == 0, result.output
+            body = json.loads(result.output)
+            assert [t['assetId'] for t in body['assetsTriggered']] == ['a', 'b', 'c']
+            assert body['calls'] == 2 and body['assetsRemaining'] == 0
+            assert body['superseded'] == 1 and body['registered'] == 2
+            assert 'NextToken' not in body
+            assert [c.kwargs['starting_token'] for c in
+                    mocks['api_client'].evaluate_database_compliance.call_args_list] == [
+                None, 'tok-2']
+
+    def test_sweep_stops_with_the_token_when_a_call_makes_no_progress(self, cli_runner,
+                                                                    generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].sweep_compliance_schema.side_effect = [
+                {'assetsTriggered': [{'databaseId': 'd', 'assetId': 'a'}], 'assetsRemaining': 5,
+                 'NextToken': 'tok-2'},
+                {'assetsTriggered': [], 'assetsRemaining': 5, 'NextToken': 'tok-2'},
+            ]
+            result = cli_runner.invoke(cli, ['compliance', 'sweep', '-n', 'cad-quality'])
+            assert result.exit_code == 0, result.output
+            assert mocks['api_client'].sweep_compliance_schema.call_count == 2
+            assert 'Remaining (not evaluated yet): 5' in result.output
+            assert 'Next token: tok-2' in result.output
+
+    def test_sweep_no_follow_makes_one_call_and_starting_token_continues(self, cli_runner,
+                                                                       generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].sweep_compliance_schema.return_value = {
+                'assetsTriggered': [{'databaseId': 'd', 'assetId': 'a'}], 'assetsRemaining': 5,
+                'NextToken': 'tok-3'}
+            result = cli_runner.invoke(cli, ['compliance', 'sweep', '-n', 'cad-quality',
+                                             '--no-follow', '--starting-token', 'tok-2'])
+            assert result.exit_code == 0, result.output
+            mocks['api_client'].sweep_compliance_schema.assert_called_once_with(
+                'cad-quality', starting_token='tok-2')
+            assert 'Next token: tok-3' in result.output
 
     @pytest.mark.parametrize("args", [[], ['-n', 'cad-quality', '-d', 'my-database']],
                              ids=["neither", "both"])

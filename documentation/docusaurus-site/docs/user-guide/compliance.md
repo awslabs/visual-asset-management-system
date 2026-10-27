@@ -432,7 +432,7 @@ POST /compliance/evaluate/{databaseId}/{assetId}
 
 ### Database evaluation
 
-**Evaluate All Assets** on the [database compliance overview](#database-compliance-overview) evaluates every tracked asset of that database, each against its own bound schema (the database binding, or the asset's override), and no asset of any other database. In a bound database, assets without a compliance record are registered under the binding first. Like a sweep, one request evaluates up to 200 assets and reports how many remain.
+**Evaluate All Assets** on the [database compliance overview](#database-compliance-overview) evaluates every tracked asset of that database, each against its own bound schema (the database binding, or the asset's override), and no asset of any other database. In a bound database, assets without a compliance record are registered under the binding first. Like a sweep, one request evaluates up to 200 assets and reports how many remain; choose **Evaluate All Assets** again to continue with the assets not evaluated yet, until none remain.
 
 ```bash
 POST /compliance/evaluate/{databaseId}
@@ -445,7 +445,7 @@ A sweep evaluates every asset bound to a schema — for example after registerin
 1. Navigate to **Compliance > Compliance Schemas** in the left sidebar.
 2. Locate the schema and choose **Sweep** in the Actions column.
 
-A sweep evaluates up to 200 assets per request and reports how many remain; run it again to reach the rest.
+A sweep evaluates up to 200 assets per request and reports how many remain; choose **Sweep** again to continue with the assets not evaluated yet, until none remain (`vamscli compliance sweep` continues on its own).
 
 ```bash
 POST /compliance/sweep/{schemaName}

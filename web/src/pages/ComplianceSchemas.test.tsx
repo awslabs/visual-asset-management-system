@@ -157,6 +157,33 @@ describe("ComplianceSchemas row actions", () => {
         });
         expect(screen.getByText("Sweep failed for that schema")).toBeInTheDocument();
     });
+
+    it("continues a sweep that left assets with the token it returned", async () => {
+        service().fetchComplianceSchemas.mockResolvedValue([true, [rulesSchema]]);
+        service()
+            .sweepSchema.mockResolvedValueOnce([
+                true,
+                { assetsTriggered: [], assetsRemaining: 313, NextToken: "tok-2" },
+            ])
+            .mockResolvedValueOnce([true, { assetsTriggered: [], assetsRemaining: 0 }])
+            .mockResolvedValueOnce([true, { assetsTriggered: [], assetsRemaining: 0 }]);
+
+        render(<ComplianceSchemas />);
+        await screen.findByText("cad-quality");
+        const sweep = () =>
+            userEvent.click(within(rowOf("cad-quality")).getByRole("button", { name: "Sweep" }));
+        await sweep();
+        expect(await screen.findByText(/313 not reached yet/)).toBeInTheDocument();
+        await sweep();
+        await sweep();
+        await waitFor(() => expect(service().sweepSchema).toHaveBeenCalledTimes(3));
+        // The second sweep continues the first; the finished sweep leaves no token for the third.
+        expect(service().sweepSchema.mock.calls).toEqual([
+            ["cad-quality", undefined],
+            ["cad-quality", "tok-2"],
+            ["cad-quality", undefined],
+        ]);
+    });
 });
 
 describe("ComplianceSchemas save errors", () => {

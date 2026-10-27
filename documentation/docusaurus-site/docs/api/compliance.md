@@ -592,11 +592,17 @@ POST /compliance/evaluate/{databaseId}/{assetId}
 
 ## Evaluate every tracked asset of a database
 
-Evaluates every asset of the database that has a compliance record, each against the schema its record binds — the database binding, or the asset's own override — and nothing in any other database. This is what **Evaluate All Assets** on the database compliance overview runs. In a bound database, an asset that has no compliance record yet is first registered under the binding and counted in `registered`. Assets in `pending_evaluation` are evaluated first, then the rest, with the bounds of a [sweep](#sweep-the-assets-bound-to-a-schema): at most 200 per call, no new evaluation after about 20 seconds, and `assetsRemaining` counting the tracked assets not reached (above 0 means call again). An asset whose record names no schema (one evaluated on demand against a named schema in a database without a binding) is counted in `withoutSchema` and not evaluated. A `superseded` entry means a newer evaluation of the asset had already started, as in a sweep. The request is authorized on `POST` of the database's `complianceEvaluation` object.
+Evaluates every asset of the database that has a compliance record, each against the schema its record binds — the database binding, or the asset's own override — and nothing in any other database. This is what **Evaluate All Assets** on the database compliance overview runs. In a bound database, an asset that has no compliance record yet is first registered under the binding and counted in `registered`. Assets in `pending_evaluation` are evaluated first, then the least recently evaluated, with the bounds and the continuation of a [sweep](#sweep-the-assets-bound-to-a-schema): at most 200 per call, no new evaluation after about 20 seconds, `assetsRemaining` counting the tracked assets still to evaluate, and a `NextToken` while it is above 0 that the next call sends as `startingToken`. An asset whose record names no schema (one evaluated on demand against a named schema in a database without a binding) is counted in `withoutSchema` and not evaluated. A `superseded` entry means a newer evaluation of the asset had already started, as in a sweep. The request is authorized on `POST` of the database's `complianceEvaluation` object.
 
 ```
 POST /compliance/evaluate/{databaseId}
 ```
+
+### Request body
+
+| Field           | Type   | Required | Description                                                                     |
+| --------------- | ------ | -------- | ------------------------------------------------------------------------------- |
+| `startingToken` | string | No       | The previous call's `NextToken`, to continue that evaluation; omit to start one |
 
 ### Response
 
@@ -629,21 +635,27 @@ POST /compliance/evaluate/{databaseId}
 
 ### Error responses
 
-| Status | Description                                          |
-| ------ | ---------------------------------------------------- |
-| `400`  | Invalid `databaseId`, or the database does not exist |
-| `403`  | Not authorized                                       |
-| `500`  | Internal server error                                |
+| Status | Description                                                             |
+| ------ | ----------------------------------------------------------------------- |
+| `400`  | Invalid `databaseId` or `startingToken`, or the database does not exist |
+| `403`  | Not authorized                                                          |
+| `500`  | Internal server error                                                   |
 
 ---
 
 ## Sweep the assets bound to a schema
 
-Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate. In each database bound to the schema that the caller may evaluate, an asset with no compliance record yet is first registered under the binding (`pending_evaluation`). Assets in `pending_evaluation` are evaluated first, then the rest. One call evaluates at most 200 assets and stops launching evaluations after about 20 seconds so that it returns within the API Gateway integration window; `assetsRemaining` reports how many bound assets were not reached — a value above 0 means call again — and repeated calls work through them. The caller needs `GET` on the schema in its scope, so a database's compliance administrator may sweep a `GLOBAL` schema; the sweep then evaluates the assets of the databases the caller may evaluate only. Bound assets the caller is not authorized to evaluate are counted in `skipped` and `skippedNotAuthorized` and never listed; no asset is evaluated with the system identity instead. An asset whose evaluation found a newer evaluation of it already started (for example, a trigger evaluation running at the same time) did not run: its entry carries `verdict` `superseded` and `superseded: true`, its `evaluationId` names no evaluation record, and `superseded` counts these entries. The asset's state is the newer evaluation's; a superseded entry is not an error.
+Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate. In each database bound to the schema that the caller may evaluate, an asset with no compliance record yet is first registered under the binding (`pending_evaluation`). Assets in `pending_evaluation` are evaluated first, then the least recently evaluated. One call evaluates at most 200 assets and stops launching evaluations after about 20 seconds so that it returns within the API Gateway integration window. A sweep of more assets takes several calls: while assets remain, the response carries `NextToken` and `assetsRemaining` counts the assets still to evaluate; send the token back as `startingToken` and the call evaluates only the assets not evaluated since the sweep started (by an earlier call, or by an automatic evaluation meanwhile). Repeat until the response carries no `NextToken`: each asset is then evaluated once. A malformed token is refused with `400` `Invalid pagination token`. The caller needs `GET` on the schema in its scope, so a database's compliance administrator may sweep a `GLOBAL` schema; the sweep then evaluates the assets of the databases the caller may evaluate only. Bound assets the caller is not authorized to evaluate are counted in `skipped` and `skippedNotAuthorized` and never listed; no asset is evaluated with the system identity instead. An asset whose evaluation found a newer evaluation of it already started (for example, a trigger evaluation running at the same time) did not run: its entry carries `verdict` `superseded` and `superseded: true`, its `evaluationId` names no evaluation record, and `superseded` counts these entries. The asset's state is the newer evaluation's; a superseded entry is not an error.
 
 ```
 POST /compliance/sweep/{schemaName}
 ```
+
+### Request body
+
+| Field           | Type   | Required | Description                                                                |
+| --------------- | ------ | -------- | -------------------------------------------------------------------------- |
+| `startingToken` | string | No       | The previous call's `NextToken`, to continue that sweep; omit to start one |
 
 ### Response
 
@@ -681,11 +693,11 @@ POST /compliance/sweep/{schemaName}
 
 ### Error responses
 
-| Status | Description                                        |
-| ------ | -------------------------------------------------- |
-| `400`  | Invalid `schemaName`, or the schema does not exist |
-| `403`  | Not authorized                                     |
-| `500`  | Internal server error                              |
+| Status | Description                                                           |
+| ------ | --------------------------------------------------------------------- |
+| `400`  | Invalid `schemaName` or `startingToken`, or the schema does not exist |
+| `403`  | Not authorized                                                        |
+| `500`  | Internal server error                                                 |
 
 ---
 

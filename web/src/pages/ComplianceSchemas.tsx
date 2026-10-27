@@ -456,6 +456,8 @@ export default function ComplianceSchemas() {
     const [flashMessages, setFlashMessages] = useState<FlashbarProps.MessageDefinition[]>([]);
     // Sequence for flash message ids; two messages raised in the same millisecond stay distinct.
     const flashSequence = useRef(0);
+    // The NextToken of each schema's last sweep while assets remained (see handleSweep).
+    const sweepTokens = useRef<Record<string, string>>({});
 
     // Modal state
     const [modalVisible, setModalVisible] = useState(false);
@@ -649,7 +651,15 @@ export default function ComplianceSchemas() {
     };
 
     const handleSweep = async (schemaName: string) => {
-        const [success, result] = await sweepSchema(schemaName);
+        // A sweep that left assets unreached is continued by the next Sweep of the same schema.
+        const [success, result] = await sweepSchema(schemaName, sweepTokens.current[schemaName]);
+        if (success) {
+            if (result?.NextToken) {
+                sweepTokens.current[schemaName] = result.NextToken;
+            } else {
+                delete sweepTokens.current[schemaName];
+            }
+        }
         if (success) {
             addFlashMessage("info", sweepMessage(schemaName, result));
         } else {

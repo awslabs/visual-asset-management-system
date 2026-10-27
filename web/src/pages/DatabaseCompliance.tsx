@@ -155,6 +155,9 @@ const DatabaseCompliancePage: React.FC = () => {
     // than that the database tracks no assets.
     const [loadFailed, setLoadFailed] = useState(false);
     const [actionMessage, setActionMessage] = useState<string | null>(null);
+    // The NextToken of the last Evaluate All while assets remained: the next Evaluate All
+    // continues that evaluation with the assets not evaluated yet.
+    const [evaluateAllToken, setEvaluateAllToken] = useState<string | undefined>(undefined);
 
     // The database's schema binding. The control is offered to a caller who may list schemas and
     // bind or unbind one; asset-level bindings are set in the asset editor.
@@ -356,8 +359,9 @@ const DatabaseCompliancePage: React.FC = () => {
         setActionMessage(null);
         setError(null);
 
-        const [success, result] = await evaluateDatabaseCompliance(databaseId);
+        const [success, result] = await evaluateDatabaseCompliance(databaseId, evaluateAllToken);
         if (success && typeof result !== "string") {
+            setEvaluateAllToken(result.NextToken || undefined);
             setActionMessage(evaluateAllMessage(result));
             await loadData();
         } else {
