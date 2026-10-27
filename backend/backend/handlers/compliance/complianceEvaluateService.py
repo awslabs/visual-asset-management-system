@@ -619,10 +619,12 @@ def _overview_filters(event, query_params):
 
 
 def _overview_query(database_id, filters):
-    """`(query kwargs, token key attributes, filtered)` for the overview's filters: a state filter
-    reads the ComplianceStateIndex partition of that state narrowed to the database; `sort=name`
-    reads the DatabaseAssetNameIndex; otherwise the database's partition of the table, in assetId
-    order. The other filters are a FilterExpression on that read."""
+    """`(query kwargs, token key attributes, filtered, accept)` for the overview's filters: a state
+    filter reads the ComplianceStateIndex partition of that state narrowed to the database;
+    `sort=name` reads the DatabaseAssetNameIndex; otherwise the database's partition of the table,
+    in assetId order. The other filters are a FilterExpression on that read, which never names a
+    key attribute of the table or index read (DynamoDB refuses it); `accept` (or None) is the part
+    of the text filter matched in code (`listing.asset_text_filter`)."""
     if filters["state"]:
         kwargs = {"IndexName": COMPLIANCE_STATE_INDEX,
                   "KeyConditionExpression": (Key("complianceState").eq(filters["state"])
@@ -636,6 +638,7 @@ def _overview_query(database_id, filters):
         kwargs = {"KeyConditionExpression": Key("databaseId").eq(database_id)}
         keys = listing.BASE_STATE_KEYS
     conditions = []
+    accept = None
     if filters["schemaName"]:
         conditions.append(Attr("schemaName").eq(filters["schemaName"]))
     if filters["schemaSource"]:
@@ -645,15 +648,15 @@ def _overview_query(database_id, filters):
     elif filters["evaluationError"] == "false":
         conditions.append(Attr("lastEvaluationStatus").ne(engine.EVALUATION_STATUS_ERROR))
     if filters["text"]:
-        # A row written before the search attribute existed is matched on its id.
-        conditions.append(Attr("assetSearchText").contains(filters["text"])
-                          | Attr("assetId").contains(filters["text"]))
+        # A row written before the search attribute existed is matched on its id, in code.
+        condition, accept = listing.asset_text_filter(filters["text"])
+        conditions.append(condition)
     if conditions:
         expression = conditions[0]
         for condition in conditions[1:]:
             expression = expression & condition
         kwargs["FilterExpression"] = expression
-    return kwargs, keys, bool(conditions)
+    return kwargs, keys, bool(conditions), accept
 
 
 def get_database_compliance_overview(event, database_id, query_params):
@@ -690,7 +693,7 @@ def get_database_compliance_overview(event, database_id, query_params):
     filters, error = _overview_filters(event, query_params)
     if error:
         return error
-    kwargs, keys, filtered = _overview_query(database_id, filters)
+    kwargs, keys, filtered, accept = _overview_query(database_id, filters)
     start_key = None
     if query_params.get("startingToken"):
         start_key = listing.decode_token(query_params["startingToken"], keys)
@@ -698,7 +701,7 @@ def get_database_compliance_overview(event, database_id, query_params):
             return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
 
     rows, next_key, _ = listing.query_page(asset_state_table, kwargs, page_size, keys,
-                                           start_key=start_key, filtered=filtered)
+                                           start_key=start_key, filtered=filtered, accept=accept)
     if filters["state"] and filters["sort"] == "name":
         rows.sort(key=lambda row: row.get("assetNameSort") or row.get("assetId", ""))
     for row in rows:

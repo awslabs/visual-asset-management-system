@@ -21,6 +21,8 @@ import base64
 import json
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
+from boto3.dynamodb.conditions import Attr
+
 # Upper bound of `maxItems` on every compliance listing.
 MAX_LISTING_PAGE_SIZE = 200
 # Queries one listing request may spend filling a page (a selective filter can match few items).
@@ -55,6 +57,22 @@ def asset_name_attributes(asset_id: str, asset_name: Optional[str]) -> Dict[str,
         "assetNameSort": f"{sort_name}#{asset_id}",
         "assetSearchText": f"{normalized_text(name)} {normalized_text(asset_id)}".strip(),
     }
+
+
+def asset_text_filter(text: str) -> Tuple[Any, Callable[[Dict[str, Any]], bool]]:
+    """`(condition, accept)` matching asset-state rows on a normalized `text`.
+
+    The FilterExpression `condition` keeps the rows whose `assetSearchText` (lowercased name and
+    id) contains `text`, plus the rows written before that attribute existed; `accept` matches those
+    older rows on their asset id, in code, over the same bounded page fill. The id is never named in
+    the FilterExpression: `assetId` is the sort key of the asset-state table, and DynamoDB refuses a
+    filter on a key attribute of the table or index it queries (moto does not)."""
+    condition = Attr("assetSearchText").contains(text) | Attr("assetSearchText").not_exists()
+
+    def accept(row: Dict[str, Any]) -> bool:
+        return "assetSearchText" in row or text in normalized_text(row.get("assetId"))
+
+    return condition, accept
 
 
 def audit_search_text(asset_name: Optional[str], asset_id: Optional[str], actor: Optional[str]) -> str:

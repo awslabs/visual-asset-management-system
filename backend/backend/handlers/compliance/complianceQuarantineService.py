@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 
 from aws_lambda_powertools.utilities.parser import ValidationError, parse
 from aws_lambda_powertools.utilities.typing import LambdaContext
-from boto3.dynamodb.conditions import Attr, Key
+from boto3.dynamodb.conditions import Key
 
 from common.apiRoutes import (
     API_COMPLIANCE_QUARANTINE,
@@ -252,14 +252,16 @@ def list_quarantined(event, query_params):
     if database_id:
         key_condition = key_condition & Key("databaseId").eq(database_id)
     query_kwargs = {"IndexName": COMPLIANCE_STATE_INDEX, "KeyConditionExpression": key_condition}
+    text_accept = None
     if text:
-        query_kwargs["FilterExpression"] = (Attr("assetSearchText").contains(text)
-                                            | Attr("assetId").contains(text))
+        query_kwargs["FilterExpression"], text_accept = listing.asset_text_filter(text)
 
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
 
     def may_get(item):
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
+        if text_accept is not None and not text_accept(item):
+            return False
         return bool(casbin_enforcer) and casbin_enforcer.enforce(
             _evaluation_object(item.get("databaseId"), engine.STATE_QUARANTINED), "GET")
 
