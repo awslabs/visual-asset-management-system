@@ -430,7 +430,7 @@ vamscli metadata-schema create [OPTIONS]
 | `--json-output`               | FLAG   | No       | Output raw JSON response                                                                               |
 
 ```bash
-vamscli metadata-schema create -d my-database -e assetMetadata -n "Asset core fields" -f '[{"name":"projectCode","type":"string","required":true}]'
+vamscli metadata-schema create -d my-database -e assetMetadata -n "Asset core fields" -f '[{"metadataFieldKeyName":"projectCode","metadataFieldValueType":"string","required":true}]'
 vamscli metadata-schema create -d my-database -e fileMetadata -n "File fields" -f ./file-fields.json --disabled
 ```
 
