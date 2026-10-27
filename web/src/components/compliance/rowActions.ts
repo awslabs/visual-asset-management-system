@@ -17,3 +17,23 @@ export const ROW_ACTIONS_STICKY_COLUMNS = { first: 0, last: 1 };
  * window's edges.
  */
 export const VAMS_PAGE_PADDING = { top: "m", horizontal: "l" } as const;
+
+/**
+ * Minimum width (px) of a compliance State column: the widest state label, "Quarantined", with
+ * its icon and the cell padding (about 130 px). The other columns wrap (`wrapLines`), and a State
+ * column narrower than its longest word broke it mid-word ("Qua / rantine / d") at 1440 px.
+ */
+export const STATE_COLUMN_MIN_WIDTH = 150;
+
+/**
+ * Minimum width (px) of a timestamp column headed by a long word, such as "Quarantined At": the
+ * header word with the sort control and the padding, so it is neither broken nor clipped.
+ */
+export const TIMESTAMP_COLUMN_MIN_WIDTH = 170;
+
+/**
+ * Minimum column width (px) of the database overview's summary tiles: the longest tile label word
+ * ("Quarantined", "Non-Compliant") in the key-label style plus the grid's padding. Below it the
+ * labels broke mid-word ("Quarantin / ed"); the tiles flow onto a second row instead.
+ */
+export const SUMMARY_TILE_MIN_WIDTH = 150;

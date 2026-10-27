@@ -43,7 +43,12 @@ import { useAllowedRoutes } from "../features/orchestration/permissions/useAllow
 import EvaluationHistoryModal from "../components/compliance/EvaluationHistoryModal";
 import { schemaSourceLabel } from "../components/compliance/complianceStateBadge";
 import RevokeExceptionModal from "../components/compliance/RevokeExceptionModal";
-import { ROW_ACTIONS_STICKY_COLUMNS, VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
+import {
+    ROW_ACTIONS_STICKY_COLUMNS,
+    STATE_COLUMN_MIN_WIDTH,
+    SUMMARY_TILE_MIN_WIDTH,
+    VAMS_PAGE_PADDING,
+} from "../components/compliance/rowActions";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 import { TextFilterInput, useUrlFilters } from "../components/compliance/listingFilters";
 
@@ -520,7 +525,11 @@ const DatabaseCompliancePage: React.FC = () => {
                         </Header>
                     }
                 >
-                    <ColumnLayout columns={9} minColumnWidth={130} variant="text-grid">
+                    <ColumnLayout
+                        columns={9}
+                        minColumnWidth={SUMMARY_TILE_MIN_WIDTH}
+                        variant="text-grid"
+                    >
                         {/* Each tile lists its assets: a state tile sets the state filter, the
                             errors tile the evaluation-error filter, Tracked clears both. */}
                         <div>
@@ -753,6 +762,8 @@ const DatabaseCompliancePage: React.FC = () => {
                             {
                                 id: "complianceState",
                                 header: "State",
+                                // Wide enough for "Quarantined" on one line (the table wraps).
+                                minWidth: STATE_COLUMN_MIN_WIDTH,
                                 cell: (item: any) => (
                                     <SpaceBetween direction="horizontal" size="xs">
                                         <ComplianceStateBadge state={item.complianceState} />

@@ -25,7 +25,12 @@ import ReasonModal from "../components/compliance/ReasonModal";
 import { ComplianceStateBadge } from "../components/compliance/complianceStateBadge";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
-import { ROW_ACTIONS_STICKY_COLUMNS, VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
+import {
+    ROW_ACTIONS_STICKY_COLUMNS,
+    STATE_COLUMN_MIN_WIDTH,
+    TIMESTAMP_COLUMN_MIN_WIDTH,
+    VAMS_PAGE_PADDING,
+} from "../components/compliance/rowActions";
 import {
     DatabaseFilter,
     TextFilterInput,
@@ -285,12 +290,15 @@ const ComplianceQuarantine: React.FC = () => {
                         {
                             id: "complianceState",
                             header: "State",
+                            // Wide enough for "Quarantined" on one line (the table wraps).
+                            minWidth: STATE_COLUMN_MIN_WIDTH,
                             cell: (item) => <ComplianceStateBadge state={item.complianceState} />,
                             sortingField: "complianceState",
                         },
                         {
                             id: "updatedAt",
                             header: "Quarantined At",
+                            minWidth: TIMESTAMP_COLUMN_MIN_WIDTH,
                             cell: (item) =>
                                 item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "-",
                             sortingField: "updatedAt",
