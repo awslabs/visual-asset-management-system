@@ -27,6 +27,7 @@ jest.mock("../../services/APIService", () => ({
     updateAsset: jest.fn(),
 }));
 jest.mock("../../services/ComplianceService", () => ({
+    bindableSchemas: jest.requireActual("../../services/ComplianceService").bindableSchemas,
     fetchComplianceSchemas: jest.fn(),
     fetchComplianceState: jest.fn(),
     bindSchemaToAsset: jest.fn(),

@@ -22,6 +22,7 @@ jest.mock("../../services/APIService", () => ({
     fetchBuckets: jest.fn(),
 }));
 jest.mock("../../services/ComplianceService", () => ({
+    bindableSchemas: jest.requireActual("../../services/ComplianceService").bindableSchemas,
     fetchComplianceSchemas: jest.fn(),
     getDatabaseBindings: jest.fn(),
     bindSchemaToDatabase: jest.fn(),
