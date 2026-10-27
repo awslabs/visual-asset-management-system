@@ -1,8 +1,8 @@
 {
     "metadata": {
         "name": "Compliance Readonly",
-        "description": "Read-only access for compliance operations. Can view compliance schemas, evaluation state, audit logs, and cascade status. Cannot trigger evaluations, modify schemas, or release quarantined assets. Grants no asset pages: evaluation history is on the database compliance overview.",
-        "version": "1.0"
+        "description": "Read-only compliance access for one database. Can view the database's and GLOBAL compliance schemas, the database's evaluation state, history, audit log and cascades. Cannot trigger evaluations, modify or bind schemas, or release quarantined assets. Grants no asset pages: evaluation history is on the database compliance overview.",
+        "version": "2.0"
     },
     "variables": [
         {
@@ -59,11 +59,19 @@
         },
         {
             "name": "{{ROLE_NAME}}-compliance-schemas-readonly",
-            "description": "Allow viewing compliance schemas",
+            "description": "Allow read of the database's compliance schemas",
             "objectType": "complianceSchema",
             "criteriaAnd": [
-                { "field": "complianceSchemaName", "operator": "contains", "value": ".*" }
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
             ],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-schemas-global-readonly",
+            "description": "Allow read of GLOBAL compliance schemas",
+            "objectType": "complianceSchema",
+            "criteriaAnd": [{ "field": "databaseId", "operator": "equals", "value": "GLOBAL" }],
             "criteriaOr": [],
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
         },
@@ -79,9 +87,11 @@
         },
         {
             "name": "{{ROLE_NAME}}-compliance-cascades-readonly",
-            "description": "Allow viewing cascade operations",
+            "description": "Allow read of the database's compliance cascades",
             "objectType": "complianceCascade",
-            "criteriaAnd": [{ "field": "cascadeId", "operator": "contains", "value": ".*" }],
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
             "criteriaOr": [],
             "groupPermissions": [{ "action": "GET", "type": "allow" }]
         },

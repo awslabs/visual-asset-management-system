@@ -301,39 +301,56 @@ The split between the two constraint pairs is what makes the pattern work. Read 
 
 ### Compliance administrator
 
-Compliance management for one database: schema management across the deployment, schema binding on the database and its assets, evaluation and sweeps, quarantine release and exceptions, and cascade approval.
+Compliance management for one database: the database's schemas, read access to `GLOBAL` schemas (bindable, not editable), schema binding on the database and its assets, evaluation and sweeps, quarantine release and exceptions, and approval of the database's cascades.
 
-**Key constraints (9 constraints):**
+**Key constraints (10 constraints):**
 
 -   `web` -- Allow GET on paths starting with `/compliance` or `/databases` (the compliance pages and the database compliance overview)
 -   `api` -- Allow GET, PUT, POST, and DELETE on paths starting with `/compliance`, `/secure-config`, `/amplify-config`, `/auth/routes`, or `/auth/loginProfile` (one `criteriaOr` constraint)
 -   `api` -- Allow GET on the path that `equals` `/database`: the database list, from which the Databases page links to the database's compliance overview. The exact match leaves every route below it (`/database/{databaseId}/...`) and `/buckets` ungranted
--   `complianceSchema` -- Allow GET, PUT, POST, DELETE where `complianceSchemaName contains .*`
+-   `complianceSchema` -- Allow GET, PUT, POST, DELETE where `databaseId equals {DATABASE_ID}`
+-   `complianceSchema` -- Allow GET where `databaseId equals GLOBAL`
 -   `complianceEvaluation` -- Allow GET, POST, DELETE where `databaseId equals {DATABASE_ID}`
--   `complianceCascade` -- Allow GET, POST where `cascadeId contains .*`
+-   `complianceCascade` -- Allow GET, POST where `databaseId equals {DATABASE_ID}`
 -   `complianceBinding` -- Allow GET, PUT, DELETE where `databaseId equals {DATABASE_ID}`
 -   `asset` -- Allow GET where `databaseId equals {DATABASE_ID}`
 -   `database` -- Allow GET where `databaseId equals {DATABASE_ID}`
 
-Binding a schema is authorized on the database's `complianceBinding` object (`PUT` binds and `DELETE` unbinds, on the database and on each of its assets), on the schema, and on a `GET` of the database or asset the binding targets. A binding changes compliance records only, so the `asset` and `database` constraints are read-only and the role adds no write on the database or its assets to any other role a user holds. The database list returns only the databases the caller may `GET`, which for this role is `{DATABASE_ID}`. A user who holds only this role binds, changes and removes the database's schema on the database compliance overview, with the API or with `vamscli compliance bind`; the Databases page does not offer the role its **Create**, **Edit** and **Delete Selected** actions, and links the database name to the compliance overview, because the role cannot search the database's assets. For the same reason the Databases page shows the role no **Metadata** link, and the compliance pages show the database name in the breadcrumb and each asset name as plain text rather than as links to pages the role cannot open. The role reads an asset's evaluation history and revokes an exception from the asset's row on the database compliance overview (**History**, **Revoke exception**), since it cannot open the asset's Compliance tab.
+Binding a schema is authorized on the database's `complianceBinding` object (`PUT` binds and `DELETE` unbinds, on the database and on each of its assets), on a `GET` of the schema in its scope, and on a `GET` of the database or asset the binding targets. The Database Admin template carries the same compliance constraints for its database. A binding changes compliance records only, so the `asset` and `database` constraints are read-only and the role adds no write on the database or its assets to any other role a user holds. The database list returns only the databases the caller may `GET`, which for this role is `{DATABASE_ID}`. A user who holds only this role binds, changes and removes the database's schema on the database compliance overview, with the API or with `vamscli compliance bind`; the Databases page does not offer the role its **Create**, **Edit** and **Delete Selected** actions, and links the database name to the compliance overview, because the role cannot search the database's assets. For the same reason the Databases page shows the role no **Metadata** link, and the compliance pages show the database name in the breadcrumb and each asset name as plain text rather than as links to pages the role cannot open. The role reads an asset's evaluation history and revokes an exception from the asset's row on the database compliance overview (**History**, **Revoke exception**), since it cannot open the asset's Compliance tab.
 
 ### Compliance read-only
 
-Read-only compliance access: every schema, and the evaluation history, compliance state, quarantine list, cascades and audit trail of one database.
+Read-only compliance access: the database's and `GLOBAL` schemas, and the evaluation history, compliance state, quarantine list, cascades and audit trail of one database. The Database User template carries the same compliance constraints for its database.
 
-**Key constraints (9 constraints):**
+**Key constraints (10 constraints):**
 
 -   `web` -- Allow GET on paths starting with `/compliance` or `/databases`
 -   `api` -- Allow GET on paths starting with `/compliance`, `/secure-config`, `/amplify-config`, `/auth/routes`, or `/auth/loginProfile`
 -   `api` -- Allow POST on paths starting with `/auth/routes` or `/auth/loginProfile` (non-mutating)
 -   `api` -- Allow GET on the path that `equals` `/database`: the database list, from which the Databases page links to the database's compliance overview. As for the Compliance Admin, the exact match leaves every route below it and `/buckets` ungranted
--   `complianceSchema` -- Allow GET where `complianceSchemaName contains .*`
+-   `complianceSchema` -- Allow GET where `databaseId equals {DATABASE_ID}`
+-   `complianceSchema` -- Allow GET where `databaseId equals GLOBAL`
 -   `complianceEvaluation` -- Allow GET where `databaseId equals {DATABASE_ID}`
--   `complianceCascade` -- Allow GET where `cascadeId contains .*`
+-   `complianceCascade` -- Allow GET where `databaseId equals {DATABASE_ID}`
 -   `asset` -- Allow GET where `databaseId equals {DATABASE_ID}`
 -   `database` -- Allow GET where `databaseId equals {DATABASE_ID}`
 
 The role reads each asset's evaluation history from **History** on the database compliance overview. Neither compliance template grants the `/assets` or `/search` API routes or any route below `/database/`; both grant only the database list (`GET /database`). To browse the database's assets and files, a user also needs a role that grants those routes, such as Database Read-Only.
+
+### Compliance global administrator
+
+Management of `GLOBAL` compliance schemas and read access to every database's compliance, for a central compliance team (`compliance-global-admin.json`, `ROLE_NAME` only).
+
+**Key constraints (10 constraints):**
+
+-   `web` -- Allow GET on paths starting with `/compliance` or `/databases`
+-   `api` -- Allow GET on paths starting with `/compliance`, `/secure-config`, `/amplify-config`, `/auth/routes`, or `/auth/loginProfile`, and POST on `/auth/routes` and `/auth/loginProfile`
+-   `api` -- Allow POST, PUT, DELETE on paths starting with `/compliance/schemas`
+-   `api` -- Allow GET on the path that `equals` `/database`
+-   `complianceSchema` -- Allow GET, PUT, POST, DELETE where `databaseId equals GLOBAL`, and GET where `databaseId contains .*`
+-   `complianceEvaluation`, `complianceCascade`, `database` -- Allow GET where `databaseId contains .*`
+
+The role binds no schema, evaluates nothing, releases nothing and approves no cascade; a sweep it starts would evaluate no asset.
 
 ### Multi-database access
 
@@ -470,16 +487,17 @@ VAMS includes pre-built permission templates that you can import to quickly set 
 
 ### Available templates
 
-| Template            | File                       | Variables                  | Description                                                                                                                        |
-| ------------------- | -------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Database Admin      | `database-admin.json`      | `DATABASE_ID`, `ROLE_NAME` | Full management of a specific database (14 constraints)                                                                            |
-| Database User       | `database-user.json`       | `DATABASE_ID`, `ROLE_NAME` | Standard user access with archive-only delete (17 constraints)                                                                     |
-| Database Read-Only  | `database-readonly.json`   | `DATABASE_ID`, `ROLE_NAME` | View-only access to a specific database (13 constraints)                                                                           |
-| Database Tag Admin  | `database-tag-admin.json`  | `DATABASE_ID`, `ROLE_NAME` | Database-scoped tag and tag type management with global read (6 constraints)                                                       |
-| Global Read-Only    | `global-readonly.json`     | `ROLE_NAME`                | Read-only access across all databases (13 constraints)                                                                             |
-| Deny Tagged Assets  | `deny-tagged-assets.json`  | `ROLE_NAME`, `TAG_VALUE`   | Overlay: deny editing of assets with a specific tag (1 constraint)                                                                 |
-| Compliance Admin    | `compliance-admin.json`    | `DATABASE_ID`, `ROLE_NAME` | Compliance schema management, schema binding, evaluation, quarantine actions and cascade approval for one database (9 constraints) |
-| Compliance Readonly | `compliance-readonly.json` | `DATABASE_ID`, `ROLE_NAME` | Read-only compliance access for one database (9 constraints)                                                                       |
+| Template                | File                           | Variables                  | Description                                                                                                                         |
+| ----------------------- | ------------------------------ | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Database Admin          | `database-admin.json`          | `DATABASE_ID`, `ROLE_NAME` | Full management of a specific database, including its compliance (19 constraints)                                                   |
+| Database User           | `database-user.json`           | `DATABASE_ID`, `ROLE_NAME` | Standard user access with archive-only delete, read-only compliance (21 constraints)                                                |
+| Database Read-Only      | `database-readonly.json`       | `DATABASE_ID`, `ROLE_NAME` | View-only access to a specific database (13 constraints)                                                                            |
+| Database Tag Admin      | `database-tag-admin.json`      | `DATABASE_ID`, `ROLE_NAME` | Database-scoped tag and tag type management with global read (6 constraints)                                                        |
+| Global Read-Only        | `global-readonly.json`         | `ROLE_NAME`                | Read-only access across all databases (13 constraints)                                                                              |
+| Deny Tagged Assets      | `deny-tagged-assets.json`      | `ROLE_NAME`, `TAG_VALUE`   | Overlay: deny editing of assets with a specific tag (1 constraint)                                                                  |
+| Compliance Admin        | `compliance-admin.json`        | `DATABASE_ID`, `ROLE_NAME` | Compliance schema management, schema binding, evaluation, quarantine actions and cascade approval for one database (10 constraints) |
+| Compliance Readonly     | `compliance-readonly.json`     | `DATABASE_ID`, `ROLE_NAME` | Read-only compliance access for one database (10 constraints)                                                                       |
+| Compliance Global Admin | `compliance-global-admin.json` | `ROLE_NAME`                | `GLOBAL` schema management and read-only compliance across every database (10 constraints)                                          |
 
 Templates are located in the `documentation/permissionsTemplates/` directory.
 

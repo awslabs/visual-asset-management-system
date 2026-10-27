@@ -586,14 +586,16 @@ Controls which users can call the compliance API and open the compliance pages. 
 
 Controls which compliance resources a user can act on. Four object types govern compliance operations:
 
-| Object type            | Controls                                                       | Constraint fields               | Use case                                                       |
-| ---------------------- | -------------------------------------------------------------- | ------------------------------- | -------------------------------------------------------------- |
-| `complianceSchema`     | Schema registration, update, deletion, the schema bound, sweep | `complianceSchemaName`          | Restrict which schemas a user can view or manage               |
-| `complianceBinding`    | Bind (`PUT`) and unbind (`DELETE`) a schema in a database      | `databaseId`                    | Scope who can bind schemas to a database and its assets        |
-| `complianceEvaluation` | Evaluate, state, quarantine, audit                             | `databaseId`, `complianceState` | Scope evaluations and quarantine actions to specific databases |
-| `complianceCascade`    | Cascade create, approve, reject                                | `cascadeId`                     | Control who can approve cascade propagations                   |
+| Object type            | Controls                                                       | Constraint fields                    | Use case                                                            |
+| ---------------------- | -------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------- |
+| `complianceSchema`     | Schema registration, update, deletion, the schema bound, sweep | `databaseId`, `complianceSchemaName` | Scope schema management to a database's schemas or to `GLOBAL` ones |
+| `complianceBinding`    | Bind (`PUT`) and unbind (`DELETE`) a schema in a database      | `databaseId`                         | Scope who can bind schemas to a database and its assets             |
+| `complianceEvaluation` | Evaluate, state, quarantine, audit                             | `databaseId`, `complianceState`      | Scope evaluations and quarantine actions to specific databases      |
+| `complianceCascade`    | Cascade create, approve, reject                                | `databaseId`, `cascadeId`            | Scope cascade approval to the parent asset's database               |
 
-Binding a schema to a database or an asset, and removing the binding, also needs `GET` on that `database` or `asset` object. It needs no write permission on either, because a binding changes compliance records only.
+A schema's `databaseId` is its scope: a database ID, or `GLOBAL` for a schema any database may bind. Binding a schema to a database or an asset, and removing the binding, needs `GET` on the schema in its scope, `PUT` or `DELETE` on the database's `complianceBinding`, and `GET` on that `database` or `asset` object. It needs no write permission on the schema, the database or the asset, because a binding changes compliance records only, so a database's compliance administrator may bind a `GLOBAL` schema it cannot edit.
+
+The compliance pages show each action only on the items the caller may act on: the service returns the caller's allowed actions with every listed schema, cascade and quarantined asset. A sweep of a `GLOBAL` schema, and a cascade, evaluate only the databases the caller (for a cascade, its approver) may evaluate, and report the other assets as skipped (not authorized).
 
 ### Default admin access
 
@@ -601,28 +603,45 @@ The built-in admin role holds full access (GET, PUT, POST, DELETE) to all four c
 
 ### Permission templates
 
-VAMS includes two permission templates for compliance roles:
+VAMS includes three permission templates for compliance roles, and the Database Admin and Database User templates include compliance for their database:
 
-| Template            | File                       | Description                                                                                                                                                                                                                                                                    |
-| ------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Compliance Admin    | `compliance-admin.json`    | Full schema management, schema binding on one database and its assets, evaluation and quarantine actions within that database, cascade approval, the compliance web and API routes, the database list route (`GET /database`), and read access to the database and its assets. |
-| Compliance Readonly | `compliance-readonly.json` | View-only access: schemas, evaluation results and compliance state within one database, the quarantine list, pending cascades and the audit log. Cannot trigger evaluations or change state.                                                                                   |
+| Template                | File                           | Description                                                                                                                                                                                                                                                                    |
+| ----------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Compliance Admin        | `compliance-admin.json`        | Full schema management, schema binding on one database and its assets, evaluation and quarantine actions within that database, cascade approval, the compliance web and API routes, the database list route (`GET /database`), and read access to the database and its assets. |
+| Compliance Readonly     | `compliance-readonly.json`     | View-only access: schemas, evaluation results and compliance state within one database, the quarantine list, pending cascades and the audit log. Cannot trigger evaluations or change state.                                                                                   |
+| Compliance Global Admin | `compliance-global-admin.json` | Manages `GLOBAL` schemas and reads every database's compliance, for a central compliance team. Cannot bind, evaluate, release, approve, or write any asset or database.                                                                                                        |
 
-Both templates take `DATABASE_ID` and `ROLE_NAME` variables. Apply them with `vamscli role constraint template import`, the `tools/permissionsSetup/apply_template.py` script, or `POST /auth/constraintsTemplateImport`; see [Developer Guide: Permissions](../developer/permissions.md#applying-templates).
+The database-scoped templates take `DATABASE_ID` and `ROLE_NAME` variables; Compliance Global Admin takes `ROLE_NAME` only. Each database-scoped template manages (or reads) the database's own schemas and reads `GLOBAL` ones.
+
+#### Who can do what
+
+| Action                                           | Compliance Global Admin | Compliance Admin / Database Admin (own database) | Compliance Readonly / Database User (own database) |
+| ------------------------------------------------ | ----------------------- | ------------------------------------------------ | -------------------------------------------------- |
+| View `GLOBAL` schemas                            | Yes                     | Yes                                              | Yes                                                |
+| Create, edit, delete `GLOBAL` schemas            | Yes                     | No                                               | No                                                 |
+| View the database's schemas                      | Yes (every database)    | Yes                                              | Yes                                                |
+| Create, edit, delete the database's schemas      | No                      | Yes                                              | No                                                 |
+| Bind and unbind schemas (`GLOBAL` or own)        | No                      | Yes                                              | No                                                 |
+| Evaluate, sweep                                  | No                      | Yes                                              | No                                                 |
+| Release quarantine, grant or revoke exceptions   | No                      | Yes                                              | No                                                 |
+| Approve or reject cascades                       | No                      | Yes                                              | No                                                 |
+| View state, history, quarantine, cascades, audit | Yes (every database)    | Yes                                              | Yes                                                |
+
+A compliance role imported before schemas and cascades carried a database (`databaseId`) keeps its earlier reach (every schema and cascade) until it is re-imported from the current template. Apply them with `vamscli role constraint template import`, the `tools/permissionsSetup/apply_template.py` script, or `POST /auth/constraintsTemplateImport`; see [Developer Guide: Permissions](../developer/permissions.md#applying-templates).
 
 ### Example: database-scoped compliance admin
 
 1. Apply the `compliance-admin` template with `DATABASE_ID` set to the target database.
 2. Assign the resulting role to the user.
 
-The user manages schemas across the deployment but evaluates assets and acts on quarantine only within the scoped database. The template grants no asset pages: the user reads evaluation history and revokes exceptions on the database compliance overview.
+The user manages the scoped database's schemas, binds them or `GLOBAL` ones, and evaluates assets, acts on quarantine and approves cascades only within the scoped database. The template grants no asset pages: the user reads evaluation history and revokes exceptions on the database compliance overview.
 
 ### Example: read-only compliance viewer
 
 1. Apply the `compliance-readonly` template with `DATABASE_ID` set to the target database.
 2. Assign the resulting role to the user.
 
-The user views schemas, evaluation history (from **History** on the database compliance overview), quarantine status and the audit log but cannot evaluate, release, grant exceptions or approve cascades.
+The user views the database's and `GLOBAL` schemas, evaluation history (from **History** on the database compliance overview), quarantine status and the audit log but cannot evaluate, release, grant exceptions or approve cascades.
 
 :::tip[Troubleshooting 403 errors]
 If a user receives **Not Authorized** on compliance pages or calls, verify they hold both:

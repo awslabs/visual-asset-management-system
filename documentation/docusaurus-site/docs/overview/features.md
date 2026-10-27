@@ -133,7 +133,7 @@ For the full list of command groups and every command in each, see the [Command 
 -   **GLOBAL keyword** -- Apply constraints across all databases or resources
 -   **Deny overlay** -- Layer deny constraints on top of allow constraints for exception-based access patterns
 -   **Extension object types** -- A deployment can register object types and constraint fields for the entities its own extensions add; a registered type starts with no access for any role, administrators included, until a constraint grants it
--   **Pre-built templates** -- Pre-built permission profiles in `documentation/permissionsTemplates/`: database-admin, database-user, database-readonly, database-tag-admin, global-readonly, deny-tagged-assets, compliance-admin, compliance-readonly
+-   **Pre-built templates** -- Pre-built permission profiles in `documentation/permissionsTemplates/`: database-admin, database-user, database-readonly, database-tag-admin, global-readonly, deny-tagged-assets, compliance-admin, compliance-readonly, compliance-global-admin
 
 ### Metadata System
 

@@ -14,16 +14,17 @@ The tool orchestrates:
 
 Pre-built JSON templates are located in `documentation/permissionsTemplates/`. For detailed explanations of what each template provides (constraint matrices, design decisions, GLOBAL keyword usage, etc.), see [Permissions (developer guide)](https://awslabs.github.io/visual-asset-management-system/developer/permissions).
 
-| Template                   | Variables (besides `ROLE_NAME`) | Profile                                                   |
-| -------------------------- | ------------------------------- | --------------------------------------------------------- |
-| `database-admin.json`      | `DATABASE_ID`                   | Full management of one database                           |
-| `database-user.json`       | `DATABASE_ID`                   | Standard user access with archive-only delete             |
-| `database-readonly.json`   | `DATABASE_ID`                   | Read-only access to one database                          |
-| `database-tag-admin.json`  | `DATABASE_ID`                   | Tag and tag type management for one database, global read |
-| `global-readonly.json`     | —                               | Read-only access across all databases                     |
-| `deny-tagged-assets.json`  | `TAG_VALUE`                     | Overlay: deny editing of assets carrying a tag            |
-| `compliance-admin.json`    | `DATABASE_ID`                   | Compliance management and schema binding for one database |
-| `compliance-readonly.json` | `DATABASE_ID`                   | Read-only compliance access for one database              |
+| Template                       | Variables (besides `ROLE_NAME`) | Profile                                                     |
+| ------------------------------ | ------------------------------- | ----------------------------------------------------------- |
+| `database-admin.json`          | `DATABASE_ID`                   | Full management of one database                             |
+| `database-user.json`           | `DATABASE_ID`                   | Standard user access with archive-only delete               |
+| `database-readonly.json`       | `DATABASE_ID`                   | Read-only access to one database                            |
+| `database-tag-admin.json`      | `DATABASE_ID`                   | Tag and tag type management for one database, global read   |
+| `global-readonly.json`         | —                               | Read-only access across all databases                       |
+| `deny-tagged-assets.json`      | `TAG_VALUE`                     | Overlay: deny editing of assets carrying a tag              |
+| `compliance-admin.json`        | `DATABASE_ID`                   | Compliance management and schema binding for one database   |
+| `compliance-readonly.json`     | `DATABASE_ID`                   | Read-only compliance access for one database                |
+| `compliance-global-admin.json` | —                               | `GLOBAL` schema management, read-only compliance everywhere |
 
 `ROLE_NAME` is set from `--role-name`.
 

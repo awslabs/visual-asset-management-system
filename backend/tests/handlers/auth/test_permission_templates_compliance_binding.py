@@ -108,8 +108,8 @@ def _binding(database_id):
     return {"object__type": "complianceBinding", "databaseId": database_id}
 
 
-def _schema(name=SCHEMA):
-    return {"object__type": "complianceSchema", "complianceSchemaName": name}
+def _schema(name=SCHEMA, scope="GLOBAL"):
+    return {"object__type": "complianceSchema", "complianceSchemaName": name, "databaseId": scope}
 
 
 def _database(database_id):
@@ -158,7 +158,9 @@ class TestTheComplianceAdminTemplate:
         enforcer = roles_enforcer({"compliance": ("compliance-admin.json", DB_A)})
         for action in ("PUT", "DELETE"):
             assert enforcer.enforce(_binding(DB_A), action) is True, action
-            assert enforcer.enforce(_schema(), action) is True, action
+        # The schema half of a binding is a GET in the schema's scope: GLOBAL or the database's own.
+        assert enforcer.enforce(_schema(scope="GLOBAL"), "GET") is True
+        assert enforcer.enforce(_schema(scope=DB_A), "GET") is True
         assert enforcer.enforce(_database(DB_A), "GET") is True
         assert enforcer.enforce(_asset(DB_A), "GET") is True
 
@@ -230,26 +232,31 @@ class TestAComplianceRoleListsItsDatabase:
 
 
 @pytest.mark.unit
-class TestDatabaseRolesDoNotBind:
-    """The database templates grant writes on the database and its assets, and no binding."""
+class TestDatabaseRolesAndBinding:
+    """Database Admin administers its database's compliance, so it binds there and nowhere else;
+    Database User writes assets but is read-only for compliance, so it binds nowhere."""
 
-    @pytest.mark.parametrize("template_name", ("database-admin.json", "database-user.json"))
-    def test_a_database_role_cannot_bind_in_its_own_database(self, roles_enforcer, template_name):
-        enforcer = roles_enforcer({"data": (template_name, DB_A)})
+    def test_database_admin_binds_in_its_own_database_only(self, roles_enforcer):
+        enforcer = roles_enforcer({"data": ("database-admin.json", DB_A)})
+        for action in ("PUT", "DELETE"):
+            assert enforcer.enforce(_binding(DB_A), action) is True, action
+            assert enforcer.enforce(_binding(DB_B), action) is False, action
+
+    def test_database_user_cannot_bind_in_its_own_database(self, roles_enforcer):
+        enforcer = roles_enforcer({"data": ("database-user.json", DB_A)})
         # Control: the role does hold the writes an old bind check asked for.
         assert enforcer.enforce(_asset(DB_A), "PUT") is True
         for action in ("PUT", "DELETE"):
             assert enforcer.enforce(_binding(DB_A), action) is False, action
 
-    def test_database_admin_plus_compliance_admin_elsewhere_cannot_bind_in_the_admin_database(
+    def test_database_user_plus_compliance_admin_elsewhere_cannot_bind_in_the_user_database(
             self, roles_enforcer):
-        """Compliance Admin's schema grant is deployment-wide, so a binding scoped only by the
-        target's write permission would have reached database A; the binding object keeps it to
-        database B."""
-        enforcer = roles_enforcer({"data": ("database-admin.json", DB_A),
+        """A binding scoped only by the target's write permission would have reached database A;
+        the binding object keeps it to database B."""
+        enforcer = roles_enforcer({"data": ("database-user.json", DB_A),
                                    "compliance": ("compliance-admin.json", DB_B)})
-        assert enforcer.enforce(_schema(), "PUT") is True
-        assert enforcer.enforce(_database(DB_A), "PUT") is True
+        assert enforcer.enforce(_schema(), "GET") is True
+        assert enforcer.enforce(_asset(DB_A), "PUT") is True
         for action in ("PUT", "DELETE"):
             assert enforcer.enforce(_binding(DB_A), action) is False, action
             assert enforcer.enforce(_binding(DB_B), action) is True, action

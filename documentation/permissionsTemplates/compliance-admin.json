@@ -1,8 +1,8 @@
 {
     "metadata": {
         "name": "Compliance Admin",
-        "description": "Administrative access for compliance operations. Can manage compliance schemas, bind and unbind them on the database and its assets, trigger evaluations, release quarantined assets, grant exceptions, and approve/reject cascades. Read-only on the database and its assets. Scoped to a specific database. Grants no asset pages: evaluation history and exception revocation are on the database compliance overview.",
-        "version": "1.0"
+        "description": "Compliance administration for one database. Can manage the database's compliance schemas, read GLOBAL schemas and bind them (not edit them), bind and unbind schemas on the database and its assets, trigger evaluations, release quarantined assets, grant and revoke exceptions, and approve/reject the database's cascades. Read-only on the database and its assets. Grants no asset pages: evaluation history and exception revocation are on the database compliance overview.",
+        "version": "2.0"
     },
     "variables": [
         {
@@ -53,10 +53,10 @@
         },
         {
             "name": "{{ROLE_NAME}}-compliance-schemas",
-            "description": "Allow full management of compliance schemas",
+            "description": "Allow management of the database's compliance schemas",
             "objectType": "complianceSchema",
             "criteriaAnd": [
-                { "field": "complianceSchemaName", "operator": "contains", "value": ".*" }
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
             ],
             "criteriaOr": [],
             "groupPermissions": [
@@ -65,6 +65,14 @@
                 { "action": "POST", "type": "allow" },
                 { "action": "DELETE", "type": "allow" }
             ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-schemas-global",
+            "description": "Allow read of GLOBAL compliance schemas (bindable, not editable)",
+            "objectType": "complianceSchema",
+            "criteriaAnd": [{ "field": "databaseId", "operator": "equals", "value": "GLOBAL" }],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "GET", "type": "allow" }]
         },
         {
             "name": "{{ROLE_NAME}}-compliance-evaluations",
@@ -82,9 +90,11 @@
         },
         {
             "name": "{{ROLE_NAME}}-compliance-cascades",
-            "description": "Allow viewing, approving, and rejecting cascade operations",
+            "description": "Allow read, approval and rejection of the database's cascades",
             "objectType": "complianceCascade",
-            "criteriaAnd": [{ "field": "cascadeId", "operator": "contains", "value": ".*" }],
+            "criteriaAnd": [
+                { "field": "databaseId", "operator": "equals", "value": "{{DATABASE_ID}}" }
+            ],
             "criteriaOr": [],
             "groupPermissions": [
                 { "action": "GET", "type": "allow" },

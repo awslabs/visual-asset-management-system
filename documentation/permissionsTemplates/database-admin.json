@@ -1,7 +1,7 @@
 {
     "metadata": {
         "name": "Database Admin",
-        "description": "Administrative access for a specific database. Can update/delete the database, full CRUD on assets (including permanent delete), create/delete pipelines/workflows/metadata schemas, execute workflows, and ingest assets. Can view and execute global pipelines and workflows. Cannot create new databases.",
+        "description": "Administrative access for a specific database. Can update/delete the database, full CRUD on assets (including permanent delete), create/delete pipelines/workflows/metadata schemas, execute workflows, and ingest assets. Can view and execute global pipelines and workflows. Cannot create new databases. Administers the database's compliance: its schemas (GLOBAL schemas read-only), bindings, evaluations, quarantine and exceptions, and cascade approval.",
         "version": "1.0"
     },
     "variables": [
@@ -103,6 +103,11 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/auth/api-keys"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/compliance"
                 }
             ],
             "groupPermissions": [
@@ -217,6 +222,11 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/addon/physna/viewer"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/compliance"
                 }
             ],
             "groupPermissions": [
@@ -504,6 +514,133 @@
             "groupPermissions": [
                 {
                     "action": "GET",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-schemas",
+            "description": "Allow management of the database's compliance schemas",
+            "objectType": "complianceSchema",
+            "criteriaAnd": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "PUT",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-schemas-global",
+            "description": "Allow read of GLOBAL compliance schemas (bindable, not editable)",
+            "objectType": "complianceSchema",
+            "criteriaAnd": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "GLOBAL"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-evaluations",
+            "description": "Allow compliance evaluation, quarantine and exception actions for the database",
+            "objectType": "complianceEvaluation",
+            "criteriaAnd": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-cascades",
+            "description": "Allow read, approval and rejection of the database's cascades",
+            "objectType": "complianceCascade",
+            "criteriaAnd": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "POST",
+                    "type": "allow"
+                }
+            ]
+        },
+        {
+            "name": "{{ROLE_NAME}}-compliance-bindings",
+            "description": "Allow binding and unbinding compliance schemas in the database",
+            "objectType": "complianceBinding",
+            "criteriaAnd": [
+                {
+                    "field": "databaseId",
+                    "operator": "equals",
+                    "value": "{{DATABASE_ID}}"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [
+                {
+                    "action": "GET",
+                    "type": "allow"
+                },
+                {
+                    "action": "PUT",
+                    "type": "allow"
+                },
+                {
+                    "action": "DELETE",
                     "type": "allow"
                 }
             ]

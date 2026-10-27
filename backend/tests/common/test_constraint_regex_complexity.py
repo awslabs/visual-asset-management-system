@@ -73,6 +73,7 @@ SHIPPED_CRITERION_VALUES = [
     '/check-subscription',
     '/comments',
     '/compliance',
+    '/compliance/schemas',
     '/database',
     '/database/',
     '/databases',

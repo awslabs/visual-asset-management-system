@@ -52,7 +52,8 @@ administrative routes that `admin` holds: detailed execution logs
 broad path prefixes such as `/workflows`, those two routes are withheld by explicit `deny` constraints,
 which override a matching `allow`. It holds no compliance constraint, so its users see no Compliance
 section in the navigation; grant compliance access with the `compliance-readonly` or
-`compliance-admin` template.
+`compliance-admin` template. The Database Admin and Database User templates include compliance
+for their database (administration and read-only respectively).
 
 In the web interface a user without execution-log access still sees the **Logs** tab on an execution,
 and the tab reports that the logs are not viewable.
