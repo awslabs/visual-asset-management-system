@@ -540,7 +540,7 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 | `/compliance/schemas/{schemaName}`                        | GET, PUT, DELETE | `complianceSchema` (in the schema's scope; a move needs `PUT` in the new one too)    | `databaseId`, `complianceSchemaName` |
 | `/compliance/sweep/{schemaName}`                          | POST             | `complianceSchema` (`GET`) + `complianceEvaluation` (`POST`, per bound database)     | `complianceSchemaName`, `databaseId` |
 | `/compliance/bind/{databaseId}`                           | GET, PUT, DELETE | `complianceSchema` + `database` (`GET`); `PUT` and `DELETE` also `complianceBinding` | `complianceSchemaName`, `databaseId` |
-| `/compliance/bind/{databaseId}/{assetId}`                 | PUT, DELETE      | `complianceBinding` + `complianceSchema` + `asset` (`GET`)                           | `complianceSchemaName`, `databaseId` |
+| `/compliance/bind/{databaseId}/{assetId}`                 | PUT, DELETE      | `complianceBinding` + `complianceSchema` and `asset` (both `GET`)                    | `complianceSchemaName`, `databaseId` |
 | `/compliance/evaluate/{databaseId}/{assetId}`             | POST             | `complianceEvaluation`                                                               | `databaseId`                         |
 | `/compliance/evaluate/{databaseId}`                       | POST             | `complianceEvaluation`                                                               | `databaseId`                         |
 | `/compliance/evaluations/{databaseId}/{assetId}`          | GET              | `complianceEvaluation`                                                               | `databaseId`                         |
