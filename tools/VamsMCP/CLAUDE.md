@@ -190,11 +190,13 @@ asymmetry other callers rely on):
 
     **Repeat a filter-pinned endpoint's filters on every page.** Some continuation
     tokens are only valid alongside the filters they were issued with — the paged
-    execution-detail metadata read (`page_execution_detail_metadata`) pins its
-    token to the `collection` and `pipelineId` of the request that produced it, and
-    the handler answers a mismatch with a 400. `paginate()` passes only `pageSize`
+    execution-detail metadata read (`page_execution_detail_metadata`) and the paged
+    execution-detail FILES read (`page_execution_detail_files`) pin their token to
+    the `collection` and `pipelineId` of the request that produced it, and the
+    handler answers a mismatch with a 400. `paginate()` passes only `pageSize`
     and `startingToken`, so merge the filters into the params inside the
     `fetch_page` callable rather than sending them on the first request alone.
+    (`get_execution_results` is a single full read, not paged.)
 
 8. **Never let a bounded response read as a complete one.** A VAMS handler can
    answer successfully while withholding rows, and it reports that out of band: a

@@ -338,6 +338,7 @@ def test_find_and_summarize_within_the_clamp_adds_no_note(mock_client):
         lambda: server.list_workflow_triggers("db1", "w1", starting_token="tok"),
         lambda: server.list_executions(starting_token="tok"),
         lambda: server.page_execution_detail_metadata("e1", starting_token="tok"),
+        lambda: server.page_execution_detail_files("e1", starting_token="tok"),
         lambda: server.list_subscriptions(starting_token="tok"),
     ],
 )
@@ -1668,3 +1669,64 @@ def test_list_workflow_executions_docstring_states_the_id_identifies_the_workflo
     assert _CROSS_DATABASE_RULE in docstring
     assert "narrowing filter" in docstring
     assert _DATABASE_SCOPED_CLAIM not in docstring
+
+
+# ---------------------------------------------------------------------------
+# #858: page_execution_detail_files + get_execution_results
+# ---------------------------------------------------------------------------
+
+
+def test_page_execution_detail_files_forwards_collection_and_pipeline(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    result = server.page_execution_detail_files("e1", collection="output", pipeline_id="pA")
+    assert result["collection"] == "output"
+    # The collection + pipelineId ride on every page's request params (the token is pinned to them).
+    call = mock_client.paginate.call_args
+    # paginate is called with a _call closure; invoke it to see the params handed to the API.
+    inner = call.args[0]
+    mock_client.api.get_execution_details_files.return_value = {"Items": []}
+    inner({})
+    params = mock_client.api.get_execution_details_files.call_args.kwargs["params"]
+    assert params["collection"] == "output"
+    assert params["pipelineId"] == "pA"
+
+
+def test_page_execution_detail_files_rejects_inputdatabase(mock_client):
+    # Files have no inputDatabase collection (metadata-only split); it must be a clean ValueError.
+    result = server.page_execution_detail_files("e1", collection="inputDatabase")
+    assert result.get("error_type") == "ValueError"
+    assert not mock_client.paginate.called
+
+
+def test_page_execution_detail_files_defaults_to_input(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    result = server.page_execution_detail_files("e1")
+    assert result["collection"] == "input"
+
+
+def test_page_execution_detail_files_is_capped_at_the_page_size(mock_client):
+    mock_client.paginate.return_value = {"Items": [], "count": 0}
+    server.page_execution_detail_files("e1", collection="output")
+    page_size = mock_client.paginate.call_args.kwargs["page_size"]
+    assert page_size <= server.EXECUTION_DETAIL_METADATA_MAX_PAGE_SIZE
+
+
+def test_get_execution_results_unwraps_the_message_envelope(mock_client):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.api.get_execution_results.return_value = {
+        "message": {"resultContent": "hello", "resultContentTruncated": False,
+                    "resultRowCount": 1, "resultContentBytes": 5}}
+    result = server.get_execution_results("e1")
+    assert result == {"resultContent": "hello", "resultContentTruncated": False,
+                      "resultRowCount": 1, "resultContentBytes": 5}
+    mock_client.api.get_execution_results.assert_called_once_with("e1")
+
+
+def test_get_execution_results_empty_shape(mock_client):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.api.get_execution_results.return_value = {
+        "message": {"resultContent": "", "resultContentTruncated": False,
+                    "resultRowCount": 0, "resultContentBytes": 0}}
+    result = server.get_execution_results("e1")
+    assert result["resultContent"] == ""
+    assert result["resultRowCount"] == 0

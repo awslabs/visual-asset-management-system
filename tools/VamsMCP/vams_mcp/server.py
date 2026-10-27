@@ -76,6 +76,9 @@ _FIND_AND_SUMMARIZE_MAX_HITS = 25
 # Its collections. 'input' is the asset/file rows, 'inputDatabase' the database-scope rows, 'output'
 # the per-pipeline output metadata; anything else is a 400.
 EXECUTION_DETAIL_METADATA_COLLECTIONS = ("input", "inputDatabase", "output")
+# The FILE collections of the detail view (no inputDatabase — that split is metadata-only): 'input'
+# is the workflow-level input files, 'output' the per-pipeline output files.
+EXECUTION_DETAIL_FILE_COLLECTIONS = ("input", "output")
 
 # The maxItems/pageSize the comment routes apply when the request names neither
 # (common.dynamodb.validate_pagination_info). Named here because those routes return no
@@ -1077,6 +1080,11 @@ def list_executions(
 
     The walk is also BOUNDED independently of that: `note` says which bound stopped it, and
     `NextToken` continues it — pass the token back as `starting_token`.
+
+    Each listed execution carries `outputTypes`, the subset of ["File","Metadata","Result"] the run
+    produced (File->Metadata->Result order). It is [] for a run that produced none and for a legacy
+    run whose configuration row predates the attribute — read it, do not infer output kinds from the
+    output target. "Result" present means get_execution_results() has text to return.
     """
     extra = {
         key: value
@@ -1146,7 +1154,8 @@ def get_execution_details(execution_id: str, include_sub_executions: bool = Fals
     "outputs.files", "outputs.metadata", "outputs.results"). Check it before reporting a count or
     concluding something is absent — a name in that list means more rows exist than are shown. For a
     truncated METADATA collection, read the rest with page_execution_detail_metadata(); a truncated
-    FILE collection has no paged equivalent, so the flag is the only signal it is incomplete.
+    FILE collection ("inputFiles", "outputs.files") with page_execution_detail_files(); and the full
+    result text (for "outputs.results", or any run) with get_execution_results().
 
     A pipeline entry reports its configuration in TWO places, at different STAGES of the same body:
 
@@ -1244,6 +1253,77 @@ def page_execution_detail_metadata(
     )
     result["collection"] = collection
     return result
+
+
+@mcp.tool()
+@tool_result
+def page_execution_detail_files(
+    execution_id: str,
+    collection: str = "input",
+    pipeline_id: Optional[str] = None,
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Read one FILE collection of an execution's detail view in full (auto-paginated).
+
+    get_execution_details() bounds its file lists and names any it cut in `truncatedCollections`.
+    This tool reads a named collection past that bound, so reach for it when `truncatedCollections`
+    contains "inputFiles" or "outputs.files" — a count from the truncated details response understates
+    the run's files.
+
+    `collection` is one of "input" (the workflow-level input files, the default) or "output" (the
+    per-pipeline output files); any other value — including "inputDatabase", which is metadata-only —
+    is rejected. Pass pipeline_id to narrow the OUTPUT collection to a single workflow step; it does
+    not apply to input files (they are workflow-level).
+
+    Rows carry the same scrubbed fields the details view returns: input rows give {databaseId,
+    assetId, inputAssetFileKey, versionId}, and output rows give {relativeFilePath, fileType,
+    fileSize, contentType, s3VersionId, pipelineId}. No S3 bucket/key is returned. `truncated` means
+    the row cap was reached before the walk finished, not that the collection ends there — `NextToken`
+    continues it, passed back as `starting_token` alongside the SAME collection and pipeline_id (the
+    token is pinned to them and a mismatch is answered with a 400).
+    """
+    if collection not in EXECUTION_DETAIL_FILE_COLLECTIONS:
+        return {
+            "error": f"collection must be one of {list(EXECUTION_DETAIL_FILE_COLLECTIONS)}",
+            "error_type": "ValueError",
+        }
+
+    extra: Dict[str, Any] = {"collection": collection}
+    if pipeline_id:
+        extra["pipelineId"] = pipeline_id
+
+    def _call(params: Dict[str, Any]) -> Dict[str, Any]:
+        # The continuation token is only valid alongside the collection and pipelineId it was issued
+        # with, so every page carries the same filters.
+        return CLIENT.api.get_execution_details_files(execution_id, params={**params, **extra})
+
+    result = CLIENT.paginate(
+        _call,
+        max_items=max_items,
+        page_size=min(CONFIG.page_size, EXECUTION_DETAIL_METADATA_MAX_PAGE_SIZE),
+        starting_token=starting_token,
+    )
+    result["collection"] = collection
+    return result
+
+
+@mcp.tool()
+@tool_result
+def get_execution_results(execution_id: str) -> Dict[str, Any]:
+    """Get an execution's FULL concatenated result text (output-only; no collection).
+
+    This is the tool for "what did the run output / return", for a pipeline that produces a textual
+    result (an LLM-style response) rather than asset files. It returns {resultContent,
+    resultContentTruncated, resultRowCount, resultContentBytes}: `resultContent` is the whole
+    concatenated result unless `resultContentTruncated` is true, in which case it was cut server-side
+    at a 5 MiB payload-safety budget (the remainder is in the details output-results section).
+
+    An execution that produced no result — most runs, and every run that predates result capture —
+    returns the empty shape (resultContent "", counts zero), never an error. An execution's
+    list/details `outputTypes` includes "Result" exactly when there is result content to read here.
+    """
+    return CLIENT.unwrap_message(CLIENT.api.get_execution_results(execution_id))
 
 
 @mcp.tool()
