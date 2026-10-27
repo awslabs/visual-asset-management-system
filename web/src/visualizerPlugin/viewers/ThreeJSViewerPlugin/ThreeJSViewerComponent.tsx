@@ -321,6 +321,11 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         // the abandoned first load carry on writing into the live scene. The closure gives each run
         // its own flag, so the abandoned one stops and the live one proceeds.
         let cancelled = false;
+        // Held in the effect closure so cleanup can dispose a renderer that never made it onto
+        // viewerInstanceRef (every load failed, or the effect tore down mid-download). Publishing
+        // the instance only after a successful load left those WebGL contexts alive until the tab
+        // hit the browser's per-page limit.
+        let renderer: any = null;
 
         const loadAssets = async () => {
             try {
@@ -348,7 +353,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                     1000
                 );
                 camera.position.set(5, 5, 5);
-                const renderer = new THREE.WebGLRenderer({ antialias: true });
+                renderer = new THREE.WebGLRenderer({ antialias: true });
                 renderer.setSize(
                     containerRef.current!.clientWidth,
                     containerRef.current!.clientHeight
@@ -769,36 +774,45 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
             downloadAbortRef.current?.abort();
             downloadAbortRef.current = null;
 
-            if (viewerInstanceRef.current) {
-                const { renderer, controls, clickHandler, blobUrls } = viewerInstanceRef.current;
+            const instance = viewerInstanceRef.current;
+            if (instance) {
+                const { controls, clickHandler, blobUrls } = instance;
+                const instanceRenderer = instance.renderer;
 
-                if (clickHandler && renderer?.domElement) {
-                    renderer.domElement.removeEventListener("click", clickHandler);
+                if (clickHandler && instanceRenderer?.domElement) {
+                    instanceRenderer.domElement.removeEventListener("click", clickHandler);
                 }
 
-                if (viewerInstanceRef.current.resizeHandler) {
-                    window.removeEventListener("resize", viewerInstanceRef.current.resizeHandler);
+                if (instance.resizeHandler) {
+                    window.removeEventListener("resize", instance.resizeHandler);
                 }
 
                 controls?.dispose();
-
-                if (renderer?.domElement?.parentNode) {
-                    renderer.domElement.parentNode.removeChild(renderer.domElement);
-                }
-
-                // Before the renderer: the environment is a render target that belongs to this
-                // renderer's context, so releasing it afterwards releases nothing.
-                sceneEnvironmentRef.current?.dispose();
-                sceneEnvironmentRef.current = null;
-
-                renderer?.dispose();
 
                 // Cleanup blob URLs
                 if (blobUrls && blobUrls.length > 0) {
                     cleanupBlobUrls(blobUrls);
                     console.log(`Cleaned up ${blobUrls.length} blob URLs`);
                 }
+
+                viewerInstanceRef.current = null;
             }
+
+            // Dispose this run's WebGL resources even when the load never published an instance
+            // (all files failed, or cleanup ran while a download was still in flight). Prefer the
+            // closure renderer; fall back to a published instance renderer if that is all we have.
+            const toDispose = renderer ?? instance?.renderer ?? null;
+            if (toDispose?.domElement?.parentNode) {
+                toDispose.domElement.parentNode.removeChild(toDispose.domElement);
+            }
+
+            // Before the renderer: the environment is a render target that belongs to this
+            // renderer's context, so releasing it afterwards releases nothing.
+            sceneEnvironmentRef.current?.dispose();
+            sceneEnvironmentRef.current = null;
+
+            toDispose?.dispose();
+            renderer = null;
 
             // Clear global THREE.js reference to prevent contamination
             delete (window as any).THREE;
