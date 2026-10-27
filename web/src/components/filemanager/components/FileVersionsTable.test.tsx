@@ -7,6 +7,7 @@ import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
+import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import { FileVersionsTable } from "./FileVersionsTable";
 
 jest.mock("../../../services/APIService", () => ({
@@ -129,5 +130,25 @@ describe("FileVersionsTable — View execution link", () => {
         renderTable([version()], undefined);
         await userEvent.click(await screen.findByText("View execution"));
         await waitFor(() => expect(screen.getByTestId("execution-page")).toBeInTheDocument());
+    });
+});
+
+describe("FileVersionsTable — sorting", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockCan.mockReturnValue(true);
+    });
+
+    it("offers no sort control, since the history is listed newest first", async () => {
+        renderTable([version(), version({ versionId: "v-old", isLatest: false, size: 10 })]);
+        await screen.findAllByText("View execution");
+        const table = createWrapper(document.body).findTable();
+        expect(table).not.toBeNull();
+        const headers = table!.findColumnHeaders();
+        expect(headers.length).toBeGreaterThan(0);
+        headers.forEach((_header, index) => {
+            expect(table!.findColumnSortingArea(index + 1)).toBeNull();
+        });
+        expect(document.querySelector("th[aria-sort]")).toBeNull();
     });
 });

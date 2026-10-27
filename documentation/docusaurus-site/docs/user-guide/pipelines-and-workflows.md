@@ -613,6 +613,10 @@ VAMS may include built-in pipelines depending on your deployment configuration. 
 
 For detailed pipeline documentation, see the [Pipelines overview](../pipelines/overview.md), [deployment configuration reference](../deployment/configuration-reference.md), and [custom pipelines guide](../pipelines/custom-pipelines.md).
 
+:::note[Edits to a built-in pipeline are reverted]
+A built-in pipeline is re-registered from its deployment definition after a change to its `vamsSchema` bundle, an override value, or its auto-trigger setting. Re-registration overwrites any edit made in the web interface, the API, or the CLI. To customize a built-in pipeline durably, create a separate pipeline. See [custom pipelines](../pipelines/custom-pipelines.md#registration-with-the-vamsschema-bundle).
+:::
+
 ## Permissions
 
 Access to pipelines and workflows is controlled by the VAMS permission system. Users need appropriate constraints on the `pipeline` and `workflow` object types to view, create, edit, or delete pipelines and workflows. For details, see [Permissions](permissions.md).

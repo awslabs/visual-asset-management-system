@@ -663,3 +663,33 @@ class TestTheWalkCarriesFix009sTightenedPredicate:
         assert set(reads) == ({f"h{i}" for i in range(PAGE_SIZE)}
                               | {f"v{i}" for i in range(PAGE_SIZE)})
         assert len(message["Items"]) == PAGE_SIZE
+
+
+def _condition_values(condition):
+    """Every literal value in a boto3 condition tree."""
+    values = []
+    for value in condition.get_expression()["values"]:
+        if hasattr(value, "get_expression"):
+            values.extend(_condition_values(value))
+        elif not hasattr(value, "name"):
+            values.append(value)
+    return values
+
+
+@pytest.mark.unit
+class TestTriggerTypeFilterSpelling:
+    """The global list matches triggerType in its stored spelling, whichever spelling was sent."""
+
+    @pytest.mark.parametrize("sent,stored", [
+        ("fileUpload", "File-Upload"),
+        ("File-Upload", "File-Upload"),
+        ("manual", "Manual"),
+    ])
+    def test_filter_expression_carries_the_stored_spelling(self, sent, stored):
+        row = dict(_rows("v", 1)[0], triggerType=stored)
+        message, calls = _run_global_list(
+            [_page([row])], lambda execution_id: [("db", "visible-asset")], _allow_all(),
+            query={"pageSize": str(PAGE_SIZE), "triggerType": sent})
+
+        assert stored in _condition_values(calls[0]["FilterExpression"])
+        assert [item["workflowExecutionId"] for item in message["Items"]] == ["v0"]

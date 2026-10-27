@@ -56,7 +56,7 @@ interface UploadState {
     overallProgress: number;
     finalCompletionTriggered: boolean;
     largeFileAsynchronousHandling: boolean;
-    has503Warnings: boolean;
+    hasUnverifiedCompletions: boolean;
     // Sequence IDs that failed initialization and are awaiting user retry/skip
     failedInitSequenceIds: number[];
     // Sequence IDs that failed completion and are awaiting user retry/skip
@@ -92,7 +92,7 @@ export default function UploadManager({
         overallProgress: 0,
         finalCompletionTriggered: false,
         largeFileAsynchronousHandling: false,
-        has503Warnings: false,
+        hasUnverifiedCompletions: false,
         failedInitSequenceIds: [],
         failedCompletionSequenceIds: [],
     });
@@ -229,8 +229,8 @@ export default function UploadManager({
                 );
 
                 if (result && typeof result === "object") {
-                    if ("is503" in result) {
-                        setUploadState((prev) => ({ ...prev, has503Warnings: true }));
+                    if ("outcomeUnverified" in result) {
+                        setUploadState((prev) => ({ ...prev, hasUnverifiedCompletions: true }));
                     } else if ("largeFileAsynchronousHandling" in result) {
                         if (result.largeFileAsynchronousHandling === true) {
                             setUploadState((prev) => ({
@@ -1537,7 +1537,8 @@ export default function UploadManager({
                     </Alert>
                 )}
 
-                {(uploadState.largeFileAsynchronousHandling || uploadState.has503Warnings) && (
+                {(uploadState.largeFileAsynchronousHandling ||
+                    uploadState.hasUnverifiedCompletions) && (
                     <Alert type="warning" header="Extended Processing Time">
                         The service returned some responses indicating longer processing times. Your
                         files may not be immediately available yet and may take a few minutes to

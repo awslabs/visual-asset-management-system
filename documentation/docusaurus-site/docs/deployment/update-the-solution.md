@@ -119,6 +119,10 @@ created through the web interface, the API, or the CLI are not touched by a depl
 [Permissions model](../concepts/permissions-model.md) for the constraint structure.
 :::
 
+:::info[Default metadata schemas are refreshed only while unedited]
+The default metadata schemas (`app.metadataSchema.autoLoadDefault*`) are not rewritten unconditionally. A deployment refreshes a default schema only while no user has edited it; a default edited or disabled through the web interface, the API, or the CLI keeps its changes. Setting a flag to `false` leaves its schema in place, and a deleted default stays deleted until its seed resource is created again (after a deployment with its flag `false` and the next with it `true`, or after a change to an earlier `autoLoadDefault*` flag, because the seed resources are numbered by position). A replaced metadata schema table starts with no defaults. When a release adds a field to a default schema, its release notes name the schema ID and the field; if you edited that schema, add the field in the **Metadata Schema** page or with `vamscli metadata-schema update`, sending the full field list.
+:::
+
 :::danger[Do not change `app.adminUserId` or `app.adminEmailAddress` after the first deployment]
 The seeded Amazon Cognito administrator is an `AWS::Cognito::UserPoolUser` whose `Username`,
 `UserPoolId`, `UserAttributes` and `DesiredDeliveryMediums` are all **Update-requires-Replacement**.
@@ -633,7 +637,7 @@ The output-asset half narrows access for a deployment that already ran workflows
 
 Deleting an asset does not delete the executions that ran against it. An asset that has been **permanently deleted** is authorized on the database it lived in, under the same action — a database is never removed, since deleting one archives the record — so the history of runs against a deleted asset stays reachable by whoever can read that database.
 
-**Archiving** an asset is not a deletion and does not change how its executions are authorized. An archived asset's record is retained, so it is still authorized on its own attributes (name, type, tags) exactly as it was before archiving, and any asset-level constraint that applied to it continues to apply.
+**Archiving** an asset is not a deletion. An archived asset's record is retained, and its executions are authorized on that record's own attributes (name, type, tags) and its stored database id, `<databaseId>#deleted`. The record must pass on both that id and `<databaseId>`, so a role whose constraints name only `databaseId equals <databaseId>` does not see the runs of an archived asset, and a constraint that also names `<databaseId>#deleted` does (see [Permissions model: Archived records](../concepts/permissions-model.md#archived-records)).
 
 #### Permission constraint audit for `pipelineType`
 

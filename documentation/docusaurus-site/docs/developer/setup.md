@@ -46,7 +46,7 @@ cd web
 npm run start    # Starts Vite dev server on port 3001
 ```
 
-The development server uses Vite's proxy configuration to forward API calls. You have two options for the backend:
+The development server has no API proxy: the web app calls the API set in `DEV_API_ENDPOINT` directly. You have two options for the backend:
 
 #### Option 1: Remote Backend (Recommended)
 

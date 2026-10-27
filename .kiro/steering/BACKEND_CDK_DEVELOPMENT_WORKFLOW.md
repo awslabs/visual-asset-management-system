@@ -95,6 +95,7 @@ Every list VAMS aggregates is `core + add-on + custom`. The custom part is fork-
 | CDK resources                               | `infra/lib/nestedStacks/addon/addonBuilder-nestedStack.ts`                                | `infra/lib/nestedStacks/custom/customResources.ts` (built inside the `CustomBuilder` stack) |
 | Feature switches                            | `infra/common/addonAppFeatures.ts`, pushed by `AddonBuilderNestedStack.enabledFeatures`   | `infra/common/customAppFeatures.ts`, returned by `buildCustomResources()`                   |
 | CSP / default routes                        | `addon/addonCsp.ts`, `addon/addonDefaultRoutes.ts`                                        | CSP: the existing `infra/config/csp/cspAdditionalConfig.json`                               |
+| WAF rule exclusions                         | `addon/addonWafExclusions.ts`, passed by `buildWafStacks()` (`infra/lib/cf-waf-stack.ts`) | none; a fork edits `infra/config/policy/wafPolicyConfig.json`                               |
 | Fork settings                               | `app.addons.*` in `config.json`                                                           | `infra/config/custom/customConfig.json`, read with `loadCustomConfig()`                     |
 
 Custom routes go through `attachFunctionToApi` with the shared `RouteRegistry` (so they get the `VamsAuthorizer` scheme) and cannot be anonymous: `CustomBuilderNestedStack` fails synth on an `allowAnonymous` custom route and on an earlier route made anonymous, and `RouteRegistry` stores frozen descriptors. It also fails synth when `buildCustomResources()` returns a core `VAMS_APP_FEATURES` or add-on `ADDON_APP_FEATURES` value. `publishCustomResourceName()` (`custom/customStackHelpers.ts`) and `publishAddonResourceName()` (`addon/addonStackHelpers.ts`) fail synth on a key equal to a core key or one the other lane declares; the parameters hold names only, never a secret. The backend constants lanes are merged by `common/constants.py` at import and fail closed on a broken rule (names `^[A-Za-z][A-Za-z0-9]{1,63}$`, no reserved key, no field named as a Python keyword or an `EVALUATOR_RESERVED_ATTRIBUTES` name, no redefinition, fields that exist, samples `""`/`[]` with list-valued fields taking only `is_one_of` / `is_not_one_of`, append-only lower-case deny entries). Type and field names are compared ignoring letter case when checking for a repeat, so `Asset` repeats `asset` and `DatabaseId` repeats `databaseId`; authorization still matches a name exactly. An extension object type gets no seeded constraint, so even admin is denied on it until the fork adds one, and the `dynamodb-authdefaults-*` constructs are never extended for it. Naming conventions (`/custom/` routes, `custom/` keys, `CUSTOM_*` switches) are recommended, not enforced. `customConfigCommon/` is the separate place for overriding **existing** behaviour (authorizer MFA check, login profile).
@@ -336,8 +337,13 @@ accumulate every record for a user-facing GET. When ordering or enrichment requi
 the full set first (e.g. metadata schema injection/ordering), enrich the full set,
 then offset-slice to the page. Limits that bound response size or protect Lambda
 runtime (e.g. `MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST`, worker-pool caps) stay as named
-constants with a rationale comment — keep them. CLI and web clients that consume a
-paginated GET must follow `NextToken` to retrieve the complete set.
+constants with a rationale comment — keep them. A count cap does not bound a response
+whose items vary in size: upload initialization (`uploadFile.py` `initialize_upload`)
+also estimates its presigned-URL response from each file's part count and key
+(`MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES` and the overhead constants in `models/assetsV3.py`)
+and refuses an over-budget request with a generic `400` before it creates any multipart
+upload. CLI and web clients that consume a paginated GET must follow `NextToken` to
+retrieve the complete set.
 
 **The token must round-trip, and nothing checks that for you.** The value the handler emits
 has to be something the request model accepts back, on the parameter the handler actually
@@ -971,6 +977,14 @@ def handle_get_request(event):
         return internal_error(event=event)
 ```
 
+**An archived record must pass on its stored id and on its database id.** Archiving an asset and deleting a
+database rewrite the record under the partition key `<databaseId>#deleted`; `CasbinEnforcerService.enforce`
+allows such a record only when both the stored `databaseId` and the id with the suffix removed pass. A deny on
+the database therefore covers its archived records, and an allow written only as `databaseId equals <id>` does
+not reach them; to grant archived records, a rule must also name `<databaseId>#deleted` (for example
+`criteriaOr`: `equals <id>` OR `equals <id>#deleted`). Pass the stored record to `enforce()` unchanged; do not
+strip or add the suffix in a handler for authorization.
+
 **Compiled matcher expressions are cached per user enforcer, never decisions.**
 `ExpressionCachingEnforcer` (`handlers/authz/__init__.py`, the `FastEnforcer` subclass that
 `_create_casbin_enforcer_helper` builds) keeps an **instance-level** dict of compiled `SimpleEval`
@@ -1108,23 +1122,10 @@ export const [operationName] = async (
             },
         });
 
-        if (response.message) {
-            if (
-                response.message.indexOf &&
-                (response.message.indexOf("error") !== -1 ||
-                    response.message.indexOf("Error") !== -1)
-            ) {
-                console.log("[Operation] error:", response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else if (response.success !== undefined) {
-            // New API response format
-            return [response.success, response.message || "Operation completed"];
-        } else {
-            return [false, "No response received"];
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error) {
         console.log("Error in [operationName]:", error);
         return [false, error?.message || "Failed to [operation]"];
@@ -2433,6 +2434,12 @@ optional_table = dynamodb.Table(optional_table_name) if optional_table_name else
 **`PRESIGNED_URL_TIMEOUT_SECONDS` is not global.** Only `infra/lib/lambdaBuilder/assetFunctions.ts` sets it, for the five asset handlers that mint presigned URLs (`downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, `uploadFile`, `assetExportService`), and all five index it (`os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]`) at module level. A handler built by any other lambda builder that copies that idiom raises `KeyError` during module import and returns `500` on every request from cold start — CDK synth, lint, and env-patching unit tests all pass. Add the variable to the handler's own builder before reading it.
 
 **Every path that hands out asset file content applies three controls on top of Casbin.** A presigned GET URL or a streamed body — in `downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, and `assetExportService` — is refused (or, for the export's per-asset entries, withheld) when the asset's `isDistributable` is false; is refused (export: withheld, the file stays in the listing) when `validateUnallowedFileExtensionAndContentType` rejects the file's key or the `ContentType` a `head_object` of the version about to be served reports, or when that head fails; and every URL or body actually issued is written to the file-download audit log (`log_file_download` / `log_file_download_bulk` / `log_file_download_streamed` in `customLogging/auditLogging.py`). A new download surface gets all three; `downloadAsset.py`'s `lambda_handler` is the reference call shape, and `assetExportService.py` `file_type_allowed_for_download` is the withhold-not-refuse form. A surface that checks many files in one request runs the heads through a bounded pool (`downloadAsset.py`'s bulk branch, `assetExportService.py` `mark_files_allowed_for_download`): serial per-file heads over an asset of thousands of files exceed the API Gateway integration timeout.
+
+**Every path that writes an object under a new name checks that name first.** Upload initialize and completion (`uploadFile.py`) and the move, rename and copy destination (`assetFiles.py` `move_file` / `copy_file`) call `validateUnallowedFileExtensionAndContentType` on the key before any S3 write. A new write path gets the same check.
+
+**A multipart file completed with no parts is cancelled.** `complete_upload` (`uploadFile.py`) aborts that file's multipart upload, stores nothing and reports the file with `success=False`; `sqsUploadFileLarge.py` `complete_multipart_upload_for_large_file` does the same and returns `False`. Only a file initialized as `zero-byte` completes with an empty `parts` list.
+
+**Upload records expire on `expiresAt`.** `AssetUploadsStorageTable` has a DynamoDB TTL on `expiresAt` (epoch seconds, set by every writer: 7 days from upload initialize, 1 day for workflow-output records). TTL removes an expired record only some time after it expires, so `complete_upload` still refuses a record whose `expiresAt` has passed. A new writer to the table sets `expiresAt` as a Number.
 
 ### **AWS Client Configuration Pattern**
 
