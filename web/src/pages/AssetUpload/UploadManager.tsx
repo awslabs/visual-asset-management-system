@@ -33,7 +33,12 @@ import {
 } from "./hooks/useMultiSequenceUpload";
 import { useFilePartsUpload } from "./hooks/useFilePartsUpload";
 import { useAssetOperations } from "./hooks/useAssetOperations";
-import { formatRetryMessage } from "./uploadRetry";
+import {
+    MANUAL_PART_RETRY_LIMIT,
+    formatRetryMessage,
+    partsEligibleForManualRetry,
+    partsExhaustedManualRetries,
+} from "./uploadRetry";
 import { storedNoFile, UploadOutcome } from "./uploadOutcome";
 import { PREVIEW_FILE_PATTERN } from "../../common/constants/fileFormats";
 import Synonyms from "../../synonyms";
@@ -862,9 +867,13 @@ export default function UploadManager({
     const handleRetry = useCallback(async () => {
         // Get the updated parts synchronously by using functional state update
         let updatedParts: any[] = [];
+        let eligibleCount = 0;
+        let exhaustedCount = 0;
         setFileParts((prev) => {
+            eligibleCount = partsEligibleForManualRetry(prev).length;
+            exhaustedCount = partsExhaustedManualRetries(prev).length;
             updatedParts = prev.map((part) => {
-                if (part.status === "failed" && part.retryCount < 5) {
+                if (part.status === "failed" && part.retryCount < MANUAL_PART_RETRY_LIMIT) {
                     return {
                         ...part,
                         status: "pending",
@@ -875,6 +884,24 @@ export default function UploadManager({
             });
             return updatedParts;
         });
+
+        // No parts left to re-queue: empty uploadFileParts queues report success and leave the
+        // page stuck on In Progress with no Retry/Skip path (see #812).
+        if (eligibleCount === 0) {
+            const message =
+                exhaustedCount > 0
+                    ? `${exhaustedCount} file part(s) failed after ${MANUAL_PART_RETRY_LIMIT} retries. Skip the failed parts or go back to review.`
+                    : "No failed file parts are available to retry.";
+            setUploadState((prev) => ({
+                ...prev,
+                uploadStatus: "failed",
+                errors: [
+                    ...prev.errors.filter((e) => e.step !== "File Upload"),
+                    { step: "File Upload", message },
+                ],
+            }));
+            return;
+        }
 
         // Calculate current progress based on completed parts only
         const completedPartsCount = updatedParts.filter((p) => p.status === "completed").length;
@@ -956,12 +983,16 @@ export default function UploadManager({
 
             // Get the updated parts synchronously for this specific file
             let updatedParts: any[] = [];
+            let eligibleCount = 0;
+            let exhaustedCount = 0;
             setFileParts((prev) => {
+                eligibleCount = partsEligibleForManualRetry(prev, fileIndex).length;
+                exhaustedCount = partsExhaustedManualRetries(prev, fileIndex).length;
                 updatedParts = prev.map((part) => {
                     if (
                         part.status === "failed" &&
                         part.fileIndex === fileIndex &&
-                        part.retryCount < 5
+                        part.retryCount < MANUAL_PART_RETRY_LIMIT
                     ) {
                         return {
                             ...part,
@@ -973,6 +1004,22 @@ export default function UploadManager({
                 });
                 return updatedParts;
             });
+
+            if (eligibleCount === 0) {
+                const message =
+                    exhaustedCount > 0
+                        ? `File part(s) for this file failed after ${MANUAL_PART_RETRY_LIMIT} retries. Skip the failed parts or go back to review.`
+                        : "No failed file parts are available to retry for this file.";
+                setUploadState((prev) => ({
+                    ...prev,
+                    uploadStatus: "failed",
+                    errors: [
+                        ...prev.errors.filter((e) => e.step !== "File Upload"),
+                        { step: "File Upload", message },
+                    ],
+                }));
+                return;
+            }
 
             // Calculate current progress based on completed parts only
             const completedPartsCount = updatedParts.filter((p) => p.status === "completed").length;

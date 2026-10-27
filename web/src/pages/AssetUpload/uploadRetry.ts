@@ -223,3 +223,47 @@ export function formatRetryMessage(
         isRateLimit: false,
     };
 }
+
+/**
+ * Manual part-upload retries (UploadManager Retry button) are capped separately
+ * from the automatic HTTP backoff in RETRY_CONFIG.MAX_RETRIES.
+ */
+export const MANUAL_PART_RETRY_LIMIT = 5;
+
+export type RetryablePart = {
+    status: string;
+    retryCount: number;
+    fileIndex?: number;
+};
+
+/**
+ * Parts that the Retry button may re-queue. Failed parts at or above
+ * MANUAL_PART_RETRY_LIMIT stay failed so an empty queue is not treated as success.
+ */
+export function partsEligibleForManualRetry<T extends RetryablePart>(
+    parts: T[],
+    fileIndex?: number
+): T[] {
+    return parts.filter((part) => {
+        if (part.status !== "failed") return false;
+        if (part.retryCount >= MANUAL_PART_RETRY_LIMIT) return false;
+        if (fileIndex !== undefined && part.fileIndex !== fileIndex) return false;
+        return true;
+    });
+}
+
+/**
+ * Failed parts that have already used every manual retry.
+ */
+export function partsExhaustedManualRetries<T extends RetryablePart>(
+    parts: T[],
+    fileIndex?: number
+): T[] {
+    return parts.filter((part) => {
+        if (part.status !== "failed") return false;
+        if (part.retryCount < MANUAL_PART_RETRY_LIMIT) return false;
+        if (fileIndex !== undefined && part.fileIndex !== fileIndex) return false;
+        return true;
+    });
+}
+

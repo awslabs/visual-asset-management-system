@@ -8,7 +8,15 @@
  * from the error's status fields, never guessed from its message text.
  */
 
-import { RETRY_CONFIG, extractStatusCode, isRetryableError, retryWithBackoff } from "./uploadRetry";
+import {
+    MANUAL_PART_RETRY_LIMIT,
+    RETRY_CONFIG,
+    extractStatusCode,
+    isRetryableError,
+    partsEligibleForManualRetry,
+    partsExhaustedManualRetries,
+    retryWithBackoff,
+} from "./uploadRetry";
 
 function httpError(status: number, message = `HTTP ${status}`) {
     return Object.assign(new Error(message), { status });
@@ -82,4 +90,28 @@ describe("uploadRetry", () => {
             expect(operation).toHaveBeenCalledTimes(2);
         });
     });
+
+    describe("manual part retry eligibility", () => {
+        const parts = [
+            { status: "failed", retryCount: 0, fileIndex: 0 },
+            { status: "failed", retryCount: MANUAL_PART_RETRY_LIMIT - 1, fileIndex: 0 },
+            { status: "failed", retryCount: MANUAL_PART_RETRY_LIMIT, fileIndex: 0 },
+            { status: "completed", retryCount: 0, fileIndex: 0 },
+            { status: "failed", retryCount: 1, fileIndex: 1 },
+        ];
+
+        it("selects only failed parts under the manual limit", () => {
+            expect(partsEligibleForManualRetry(parts).map((p) => p.retryCount)).toEqual([0, 4, 1]);
+        });
+
+        it("scopes eligibility to a fileIndex", () => {
+            expect(partsEligibleForManualRetry(parts, 1).map((p) => p.retryCount)).toEqual([1]);
+        });
+
+        it("lists exhausted failed parts so the UI can stop empty retries", () => {
+            expect(partsExhaustedManualRetries(parts).map((p) => p.retryCount)).toEqual([5]);
+            expect(partsExhaustedManualRetries(parts, 1)).toEqual([]);
+        });
+    });
+
 });
