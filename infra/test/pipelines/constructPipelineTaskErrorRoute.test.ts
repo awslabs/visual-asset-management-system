@@ -92,6 +92,8 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
                         pipelines.useNvidiaCosmos3.huggingFaceToken = "synth-only";
                     if (pipelines.useNvidiaGr00t)
                         pipelines.useNvidiaGr00t.huggingFaceToken = "synth-only";
+                    if (pipelines.useImageTo3d)
+                        pipelines.useImageTo3d.huggingFaceToken = "synth-only";
                     if (pipelines.useIsaacLabTraining)
                         pipelines.useIsaacLabTraining.acceptNvidiaEula = true;
                     // The restricted templates ship the Video SOP/BOM model id empty (the commercial

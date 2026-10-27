@@ -6,11 +6,11 @@
 /**
  * Core aggregator files name no add-on.
  *
- * Every list VAMS aggregates (API routes, CSP sources, default-role routes, feature switches, web
- * routes and navigation, API service calls, viewer configuration and manifest) is composed from a
- * core part and an add-on part kept in a file of its own beside it. The core files are the ones
- * edited on every release and by forks, so an add-on entry placed back in one of them puts add-on
- * code on the path of every core change again.
+ * Every list VAMS aggregates (API routes, CSP sources, default-role routes, WAF rule exclusions,
+ * feature switches, web routes and navigation, API service calls, viewer configuration and
+ * manifest) is composed from a core part and an add-on part kept in a file of its own beside it.
+ * The core files are the ones edited on every release and by forks, so an add-on entry placed
+ * back in one of them puts add-on code on the path of every core change again.
  *
  * Asserted on the source text, across the backend, CDK and web trees, because the seam is a file
  * boundary rather than a synthesized behaviour.
@@ -67,6 +67,10 @@ const CORE_AND_EMPTY_ADDON_FILES: Array<{ core: string; addon: string }> = [
     },
     { core: "web/src/routes.tsx", addon: "web/src/addons/addonRoutes.tsx" },
     { core: "web/src/layout/Navigation.tsx", addon: "web/src/addons/addonNavigation.ts" },
+    {
+        core: "infra/lib/cf-waf-stack.ts",
+        addon: "infra/lib/nestedStacks/addon/addonWafExclusions.ts",
+    },
 ];
 
 /**
