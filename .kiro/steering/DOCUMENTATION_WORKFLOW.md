@@ -365,6 +365,25 @@ When documentation standards, patterns, or structure change, update all affected
 
 ---
 
+### **Rule 13: A Pipeline With Selectable Models or Stages Carries an Options Page, Kept Current**
+
+Where a pipeline offers a choice -- which model generates, which stages run, which combinations produce
+colour -- the reference page mapping those choices is a maintained artefact, not a one-off write-up. It
+carries the stage map, every option each stage takes, the combinations that interact, the licence of each
+component, and what has actually been measured.
+
+`documentation/docusaurus-site/docs/pipelines/image-to-3d-options.md` is the worked example. Update it in
+the same change as:
+
+-   a new or removed model, or a change to what a model produces
+-   a new template tag, a changed default, or a changed enum
+-   a new stage, or a change to the stage ORDER (the order is load-bearing in that pipeline)
+-   a new dependency carrying its own licence, especially a use-limited one
+-   a recorded benchmark round, and any selection guidance drawn from it
+
+A stale matrix is worse than none, because it is read as the list of what is possible. Mirrors the Rule 11
+row in the root `CLAUDE.md`.
+
 ## 📋 **When to Update Documentation**
 
 | Change Type                                      | Documentation to Update                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |

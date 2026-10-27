@@ -63,6 +63,11 @@ DEFAULT_ROLE_NAME = os.environ.get("DEFAULT_ROLE_NAME", "").strip()
 #
 POLICY_TEXT_DENY_ALL = "g,,\0,*,deny\np,,,*,deny"
 
+# An object type name written into a policy line's opening type check as it is (see
+# CasbinEnforcerService._object_type_rule). Every registered object type has this shape.
+#
+_PLAIN_OBJECT_TYPE_NAME = re.compile(r"[A-Za-z0-9_]+")
+
 # Archived assets and deleted databases are stored under "<databaseId>#deleted". Authorization
 # allows such a record only when it passes both on its stored id and on its database id
 # (CasbinEnforcerService.enforce, _evaluated_database_id).
@@ -651,15 +656,33 @@ class CasbinEnforcerService:
 
     @staticmethod
     def _escape_rule_value(value):
-        """Escape a constraint value before it is interpolated into a Casbin obj_rule
-        expression that is evaluated via eval() in the matcher.
+        """Write a constraint value as the body of the Casbin obj_rule string literal it is
+        interpolated into: every character as its Python source escape.
 
         Every operator wraps the value inside a single-quoted string literal (either a
-        regex pattern argument to regexMatch(...) or the left side of an `in` test). The
-        value therefore must never be able to terminate that string literal and inject
-        additional expression syntax. Escaping the backslash first (so we do not
-        double-escape the escapes we add) and then the single quote keeps the value a
-        single inert string literal.
+        regex pattern argument to regexMatch(...) or the left side of an `in` test). The matcher
+        expression is compiled from that text by simpleeval, and Python's parser turns each escape
+        back into exactly the character it stands for, so the string Casbin compares -- and the
+        pattern `regexMatch` compiles -- is the value as stored; only the source representation
+        differs.
+
+        Spelling out EVERY character, rather than escaping a chosen few, keeps the value out of
+        reach of everything that reads or rewrites the rule text before it is compiled. The literal
+        body is nothing but '\\x' / '\\u' / '\\U' escapes and lower-case hex digits, so:
+
+        * it cannot terminate its string literal and inject additional expression syntax -- a
+          quote or a backslash in the value is one more escape;
+        * Casbin's policy reader finds nothing structural in it. `StringAdapter` splits the policy
+          text on newlines, and `load_policy_line` splits each line on commas at bracket depth 0
+          while tracking '()' and '[]' as depth, neither of them honouring quotes. A line whose
+          field count does not match the policy definition makes the enforcer fail as a whole, so
+          one such value would deny every check for every user holding the role;
+        * pycasbin's rewrites of the rule text before it compiles a line find nothing to rewrite:
+          `util.escape_assertion` turns every 'p.' / 'p<digits>.' / 'r.' at a word boundary into
+          'p_' / 'r_', and `CoreEnforcer._get_expression` turns every '&&' / '||' / '!' into
+          'and' / 'or' / 'not', string literals included. That holds where the value meets the
+          operator's own pattern text too ('^', '.*', '(?s:.*)', '\\Z'), since an escape ends in
+          a hex digit.
 
         Takes ONE value: a list-valued criterion is expanded by the caller into a clause per
         element, so each element is escaped separately and reaches its own string literal.
@@ -669,29 +692,17 @@ class CasbinEnforcerService:
         the value as a regular expression (e.g. ".*" is allowed), but it must remain
         contained within the quoted regexMatch argument and cannot break out into the
         surrounding expression.
-
-        Quoting alone does not make the value inert, because Casbin's policy reader is
-        structure-unaware: `StringAdapter` splits the policy text on newlines, and
-        `load_policy_line` splits each line on commas at bracket depth 0 while tracking '()' and
-        '[]' as depth, neither of them honouring quotes. A value carrying one of those characters
-        therefore alters the SHAPE of the emitted line rather than its content -- a comma adds a
-        field, a bracket shifts the depth so that a later comma splits the line (or pops an empty
-        stack), and a line terminator starts a new record. A line whose field count does not match
-        the policy definition makes the enforcer fail as a whole, so ONE such value denies every
-        check for every user holding the role, including constraints it has nothing to do with.
-
-        Those characters are rewritten as the equivalent '\\xNN' source escape. The matcher
-        expression is compiled from this text by simpleeval, and Python's parser turns each escape
-        back into exactly the character it stands for, so the string Casbin compares -- and the
-        pattern `regexMatch` compiles -- is unchanged; only the source representation differs. The
-        C0 control range is covered wholesale rather than picking out the individual offenders,
-        since a raw control character is either a line terminator or, for NUL, not parseable as
-        source at all.
         """
-        escaped = str(value).replace("\\", "\\\\").replace("'", "\\'")
-        contained = {code: "\\x%02x" % code for code in range(32)}
-        contained.update({ord(character): "\\x%02x" % ord(character) for character in ",()[]"})
-        return escaped.translate(contained)
+        escaped = []
+        for character in str(value):
+            code = ord(character)
+            if code <= 0xFF:
+                escaped.append("\\x%02x" % code)
+            elif code <= 0xFFFF:
+                escaped.append("\\u%04x" % code)
+            else:
+                escaped.append("\\U%08x" % code)
+        return "".join(escaped)
 
     def _generate_criteria_object_rules(self, policyCriteria, object_type=None):
         obj_rule = []
@@ -714,8 +725,9 @@ class CasbinEnforcerService:
             # A criterion value is either a single value or a list of alternatives. Each element
             # gets its own comparison clause and its own escaping, so the elements stay separate
             # values instead of collapsing into one stringified container that matches nothing.
-            # Escaping keeps a value from breaking out of its string literal and injecting
-            # arbitrary expression syntax into the eval()'d matcher (authz expression injection).
+            # Escaping writes each value as source escapes, so it neither breaks out of its string
+            # literal into the eval()'d matcher nor is altered by the rewrites Casbin applies to the
+            # rule text before compiling it (see _escape_rule_value).
             raw_value = criterion['value']
             values = raw_value if isinstance(raw_value, list) else [raw_value]
             values = [self._escape_rule_value(entry) for entry in values]
@@ -796,6 +808,22 @@ class CasbinEnforcerService:
             else:
                 obj_rule.append(f"({group})")
         return obj_rule
+
+    def _object_type_rule(self, object_type):
+        """The clause every policy line opens with: the request object's type is ``object_type``.
+
+        A type name of ASCII letters, digits and '_' only -- the shape of every registered object
+        type -- is written as it is, giving the exact type check
+        ``(regexMatch(r.obj.object__type, '^asset\\Z'))``: no such character can take part in the
+        policy reader's structure or in the rewrites Casbin applies to the rule text. Any other
+        stored type string (a regex such as ``asset|database`` on an older constraint) is an
+        ``equals`` criterion like any other and is escaped by the criteria generator.
+        """
+        if isinstance(object_type, str) and _PLAIN_OBJECT_TYPE_NAME.fullmatch(object_type):
+            return f"""(regexMatch(r.obj.object__type, '^{object_type}\\\\Z'))"""
+        return self._generate_criteria_object_rules(
+            [{"field": "object__type", "operator": "equals", "value": object_type}]
+        )[0]
 
     # Returns a guaranteed valid policy statement.
     # Note: a deny all policy_text value (POLICY_TEXT_DENY_ALL) is returned if policy_text cannot be determined
@@ -966,12 +994,7 @@ class CasbinEnforcerService:
                     policy["criteriaAnd"].extend(policy["criteria"])
 
                 # Get the explicit criteria for the object to be of the type mentioned in "objectType"
-                obj_rule_ObjectType = self._generate_criteria_object_rules(
-                    [{
-                        "field": "object__type",
-                        "operator": "equals",
-                        "value": policy["objectType"]
-                    }])
+                obj_rule_ObjectType = self._object_type_rule(policy["objectType"])
 
                 #Generate object rules
                 obj_rule_And = []
@@ -992,7 +1015,7 @@ class CasbinEnforcerService:
                 # some(where allow) effect would treat as alternatives) both
                 # enforces the combined semantics and halves the rules the
                 # matcher evaluates per request.
-                rule_parts = [obj_rule_ObjectType[0]]
+                rule_parts = [obj_rule_ObjectType]
                 rule_parts.extend(obj_rule_And)
                 if len(obj_rule_Or) > 0:
                     rule_parts.append(f"({' || '.join(obj_rule_Or)})")

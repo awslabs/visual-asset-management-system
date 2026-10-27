@@ -93,6 +93,33 @@ def _stored_constraint(item):
     }
 
 
+def _skip_bracketed(source, position):
+    """Index just past the bracket that closes the one at ``position``. Comments and string and
+    template literals are skipped, so a bracket inside one does not count."""
+    depth = 0
+    while True:
+        char = source[position]
+        if char in "\"'`":
+            end = position + 1
+            while source[end] != char:
+                end += 2 if source[end] == "\\" else 1
+            position = end + 1
+            continue
+        if source.startswith("//", position):
+            position = source.index("\n", position)
+            continue
+        if source.startswith("/*", position):
+            position = source.index("*/", position) + 2
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+            if depth == 0:
+                return position + 1
+        position += 1
+
+
 def _ts_array_to_json(source, array_name, constants):
     """JSON text of the array literal assigned to ``const <array_name>``."""
     marker = f"const {array_name} = ["
@@ -139,10 +166,10 @@ def _ts_array_to_json(source, array_name, constants):
             out.append(json.dumps(_TEMPLATE_PLACEHOLDER.sub(lambda m: constants[m.group(1)], text)))
             position = end + 1
         elif source.startswith("...", position):
-            # An add-on spread such as `...addonReadOnlyApiRouteCriteria(props.config, roleNameIDClean),`
-            # contributes elements only when the add-on is enabled: skip the call and its comma.
-            close = source.index(")", source.index("(", position))
-            position = close + 1
+            # An add-on spread contributes elements only when the add-on is enabled: skip it and its
+            # comma. Either a call, `...addonReadOnlyApiRouteCriteria(props.config, roleNameIDClean),`,
+            # or an inline conditional, `...(props.config.app.addons.<name>.enabled ? [...] : []),`.
+            position = _skip_bracketed(source, source.index("(", position))
             while source[position].isspace():
                 position += 1
             if source[position] == ",":

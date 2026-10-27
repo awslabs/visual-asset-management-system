@@ -497,7 +497,7 @@ def test_mfa_flip_rebuilds_service_with_fresh_cache():
         assert with_mfa.enforce(dict(db2), "GET") is True
         cache_mfa = with_mfa.service_object._enforcer._expression_cache
         assert len(cache_mfa) == 2
-        (db1_key,) = [k for k in cache_mfa if "'^db1" in k]
+        (db1_key,) = [k for k in cache_mfa if "'^" + CasbinEnforcerService._escape_rule_value("db1") in k]
 
         clock.advance(5)  # well inside the TTL: only the MFA flip can invalidate
         without_mfa = _public_enforcer("mfa-user", roles, policies, False, mfa_free_roles=("roleB",))
@@ -623,8 +623,10 @@ def test_cache_keys_are_full_inlined_rule_strings():
         assert key.startswith("g(r_sub, p_sub) && (")
         assert key.endswith(") && r_act == p_act")
         assert "regexMatch(r_obj.object__type, '^asset" in key
-        assert "regexMatch(r_obj.databaseId, '^db" in key
-    assert any("'^db1" in key for key in keys) and any("'^db2" in key for key in keys)
+        # Criterion values are written as source escapes (CasbinEnforcerService._escape_rule_value).
+        assert "regexMatch(r_obj.databaseId, '^" + CasbinEnforcerService._escape_rule_value("db") in key
+    assert any("'^" + CasbinEnforcerService._escape_rule_value("db1") in key for key in keys)
+    assert any("'^" + CasbinEnforcerService._escape_rule_value("db2") in key for key in keys)
     for value in svc._enforcer._expression_cache.values():
         assert isinstance(value, casbin_expression.SimpleEval)
 

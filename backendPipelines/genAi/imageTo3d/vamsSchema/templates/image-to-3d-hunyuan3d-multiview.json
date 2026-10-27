@@ -1,0 +1,291 @@
+{
+    "templateId": "image-to-3d-hunyuan3d-multiview",
+    "templateName": "Hunyuan3D-2 (Tencent): mesh from several views",
+    "description": "Generate a textured 3D mesh from up to four views of one subject with Tencent Hunyuan3D-2. Licensed under the Tencent Hunyuan 3D 2.0 Community License Agreement, which grants no licence in the European Union, the United Kingdom or South Korea.",
+    "configFormat": "json",
+    "configBody": "{\"MODEL\": \"hunyuan3d\", \"IMAGE_CLEANUP\": \"{{IMAGE_CLEANUP}}\", \"BACKGROUND_REMOVAL\": \"{{BACKGROUND_REMOVAL}}\", \"SAM_PROMPT\": \"{{SAM_PROMPT}}\", \"FRAMING_RATIO\": \"{{FRAMING_RATIO}}\", \"FRAMING_BACKGROUND\": \"{{FRAMING_BACKGROUND}}\", \"PROJECT_PHOTO_COLOUR\": \"{{PROJECT_PHOTO_COLOUR}}\", \"PROJECT_PHOTO_POSE\": \"{{PROJECT_PHOTO_POSE}}\", \"MESH_CLEANUP\": \"{{MESH_CLEANUP}}\", \"PRINT_GATE_POLICY\": \"{{PRINT_GATE_POLICY}}\", \"REPAIR_BACKENDS\": \"{{REPAIR_BACKENDS}}\", \"MIN_VOLUME_RETENTION\": \"{{MIN_VOLUME_RETENTION}}\", \"CLOSE_HOLE_MAX_EDGES\": \"{{CLOSE_HOLE_MAX_EDGES}}\", \"BENCHMARK_REPORT\": \"{{BENCHMARK_REPORT}}\", \"TARGET_FACE_COUNT\": {{TARGET_FACE_COUNT}}, \"TARGET_SIZE_MM\": {{TARGET_SIZE_MM}}, \"PRINT_FEATURES\": \"{{PRINT_FEATURES}}\", \"PRINT_FEATURE_JOIN\": \"{{PRINT_FEATURE_JOIN}}\", \"PRINT_FEATURE_COLOR\": \"{{PRINT_FEATURE_COLOR}}\", \"LOOP_DIAMETER_MM\": {{LOOP_DIAMETER_MM}}, \"LOOP_THICKNESS_MM\": {{LOOP_THICKNESS_MM}}, \"BASE_DIAMETER_MM\": {{BASE_DIAMETER_MM}}, \"BASE_HEIGHT_MM\": {{BASE_HEIGHT_MM}}, \"EXPORT_FORMATS\": \"{{EXPORT_FORMATS}}\", \"HUNYUAN3D_SEED\": {{HUNYUAN3D_SEED}}, \"HUNYUAN3D_GUIDANCE_SCALE\": {{HUNYUAN3D_GUIDANCE_SCALE}}, \"HUNYUAN3D_GEOMETRY_STEPS\": {{HUNYUAN3D_GEOMETRY_STEPS}}, \"HUNYUAN3D_OCTREE_RESOLUTION\": \"{{HUNYUAN3D_OCTREE_RESOLUTION}}\", \"HUNYUAN3D_GENERATE_TEXTURE\": \"{{HUNYUAN3D_GENERATE_TEXTURE}}\", \"HUNYUAN3D_POSTPROCESS\": \"{{HUNYUAN3D_POSTPROCESS}}\", \"HUNYUAN3D_REMOVE_BG\": \"{{HUNYUAN3D_REMOVE_BG}}\", \"PASS_THROUGH_INPUTS\": \"{{PASS_THROUGH_INPUTS}}\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Reconstructs one textured 3D mesh from SEVERAL views of the same subject, using Tencent Hunyuan3D-2's multi-view checkpoint. Select between two and four input files on the execute form; one file is a single-view run and the ordinary Hunyuan3D-2 template is the better choice for it.\n\nNAME EACH FILE FOR THE VIEW IT SHOWS. Each input file's name must contain exactly one of front, left, back or right -- for example cat_front.png, cat_left.png, cat_back.png. Views are assigned from the filename rather than from the order the files are selected, because an ordering is not visible on the form and a wrong one would reconstruct the subject's faces in the wrong places with nothing to indicate it. A front view is required. A file naming no view, a file naming two, and two files claiming the same view are all rejected before any GPU work.\n\nWhat the extra views do and do not change: they condition the SHAPE stage, which is where a single photograph loses what it cannot see -- a raised tail, a limb behind the body, the back of a head. They do NOT change the texture: the painting stage is conditioned on the front view alone, which is upstream's own behaviour, so the back of the subject is still painted from its front.\n\nAll four views should show one subject at one scale, segmented the same way. The pipeline runs its own background removal and framing over every view identically, so supplying one cut-out view alongside one uncut view is not necessary and not helpful.\n\nLicensing: the Tencent Hunyuan 3D 2.0 Community License Agreement grants no licence in the European Union, the United Kingdom or South Korea, and a deployment serving more than one million monthly active users must obtain a separate licence from Tencent. Outputs may not be used to improve any other AI model.\n\nPrint readiness: with Mesh cleanup on, the mesh is decimated, repaired and rescaled, then checked for printability. failClosed rejects the run and writes no mesh when any check fails; bestEffort writes every output and records the results in the report.\n\nFORM. Each field is labelled with the stage that reads it, in the order a run executes them: [1 Input] prepares the photographs, [2 Generate] is this template's model, [3 Cleanup] repairs the mesh and brings it to the face count, [4 Colour] projects the photograph onto it, [5 Print] sizes it, adds print features and applies the print gate, and [6 Output] chooses the formats and reports. A template shows only the stages its model uses.",
+    "isDefault": false,
+    "tagSchema": [
+        {
+            "tagKey": "IMAGE_CLEANUP",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "skip"],
+            "label": "[1 Input] Image cleanup",
+            "description": "auto segments the subject from its background and frames it for the selected model. skip takes the image as already segmented and hands it to the model exactly as supplied, which removes that stage's time and cost -- choose it when the input is known to be a clean cutout. Skipping also bypasses framing, because without a mask there is no way to locate the subject."
+        },
+        {
+            "tagKey": "BACKGROUND_REMOVAL",
+            "type": "enum",
+            "required": false,
+            "default": "rembg",
+            "enumValues": ["none", "rembg", "birefnet", "rmbg2", "sam"],
+            "label": "[1 Input] Background removal",
+            "description": "Segmentation model used to isolate the subject before reconstruction. Choose none when the photo already has a clean background. rembg, birefnet and rmbg2 decide for themselves which object the photo is of, so on a frame holding several they pick one and there is no way to ask for another; sam segments whatever SAM prompt points at. sam returns a hard-edged mask with no soft alpha through hair, so it is the choice for selecting an object rather than for a difficult edge."
+        },
+        {
+            "tagKey": "SAM_PROMPT",
+            "type": "string",
+            "required": false,
+            "default": "centre",
+            "label": "[1 Input] SAM prompt",
+            "description": "Where to look, used only when Background removal is sam. centre takes the middle of the frame, which is where a framed subject sits. x,y names a point and x0,y0,x1,y1 a box, given as fractions of the image between 0 and 1 rather than as pixels so one value holds at any resolution. A point asks for the object there; a box also bounds the answer, which is the stronger prompt where objects overlap."
+        },
+        {
+            "tagKey": "FRAMING_RATIO",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "label": "[1 Input] Framing ratio",
+            "description": "Fraction of the frame the subject is scaled to fill before reconstruction. auto uses the framing the selected model expects and is the right choice unless you are comparing runs. A lower value leaves more margin around the subject; a higher value gives the model more pixels on it but crops closer to its edges.",
+            "enumValues": ["auto", "0.95", "0.90", "0.85", "0.80", "0.75", "0.70"]
+        },
+        {
+            "tagKey": "FRAMING_BACKGROUND",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "none", "gray", "black", "white"],
+            "label": "[1 Input] Framing background",
+            "description": "Flat colour composited behind the subject before reconstruction. The subject is always cropped and scaled to the framing ratio; this setting decides only what sits behind it. auto uses the background the selected model was trained against, which for this model is none -- it reads the alpha channel as the object mask and recentres the subject itself, so compositing a colour behind the subject removes the mask it needs."
+        },
+        {
+            "tagKey": "HUNYUAN3D_SEED",
+            "type": "integer",
+            "required": false,
+            "default": 1,
+            "label": "[2 Generate] Seed",
+            "description": "Random seed for the shape stage. The same seed on the same photo and settings reproduces the same mesh; change it to get a different interpretation of an ambiguous subject."
+        },
+        {
+            "tagKey": "HUNYUAN3D_GUIDANCE_SCALE",
+            "type": "number",
+            "required": false,
+            "default": 5.0,
+            "label": "[2 Generate] Guidance scale",
+            "description": "How closely the shape stage follows the photo. Higher tracks the silhouette more literally and can harden noise into geometry; lower gives a smoother, more generic shape."
+        },
+        {
+            "tagKey": "HUNYUAN3D_GEOMETRY_STEPS",
+            "type": "integer",
+            "required": false,
+            "default": 50,
+            "label": "[2 Generate] Geometry steps",
+            "description": "Sampling steps in the shape stage. More steps resolve thin features and separated parts better and add roughly proportional run time."
+        },
+        {
+            "tagKey": "HUNYUAN3D_OCTREE_RESOLUTION",
+            "type": "enum",
+            "required": false,
+            "default": "384",
+            "enumValues": ["256", "320", "380", "384", "512"],
+            "label": "[2 Generate] Octree resolution",
+            "description": "Grid resolution the shape stage extracts its surface at. Higher recovers finer detail and produces many more faces, at steeply rising GPU memory and run time."
+        },
+        {
+            "tagKey": "HUNYUAN3D_GENERATE_TEXTURE",
+            "type": "enum",
+            "required": false,
+            "default": "true",
+            "enumValues": ["true", "false"],
+            "label": "[2 Generate] Generate texture",
+            "description": "Whether the painting stage runs and produces a texture. Set false for a geometry-only run — it roughly halves the run time and drops the GPU memory the run needs from about 16 GB to about 6 GB, and the result carries no colour for the GLB preview."
+        },
+        {
+            "tagKey": "HUNYUAN3D_POSTPROCESS",
+            "type": "enum",
+            "required": false,
+            "default": "off",
+            "enumValues": ["off", "floaters", "degenerate", "floaters,degenerate"],
+            "label": "[2 Generate] Upstream mesh tidy-up",
+            "description": "Tidy-up steps the model's own authors ship, applied to the shape before it is painted. floaters discards disconnected fragments the shape stage left behind, which is worth trying on a subject whose report shows separated bodies or tunnels; degenerate drops zero-area faces. off returns the shape exactly as the model produced it, which is the honest starting point when comparing models. Face reduction is deliberately not offered here — Target face count decimates once, after the repair ladder, and decimating twice loses detail the ladder could have kept."
+        },
+        {
+            "tagKey": "HUNYUAN3D_REMOVE_BG",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "true", "false"],
+            "label": "[2 Generate] Model segments the photo again",
+            "description": "Whether the model runs its own background removal before reconstruction. It reads the alpha channel as the object mask and recentres the subject from it, so an image with no alpha is never cropped to the subject and the whole composition is reconstructed instead. auto runs the model's own segmentation only when the image reaching it carries no transparency, which is the case when Background removal is none. true always runs it and false never does."
+        },
+        {
+            "tagKey": "MESH_CLEANUP",
+            "type": "enum",
+            "required": false,
+            "default": "true",
+            "enumValues": ["true", "false"],
+            "label": "[3 Cleanup] Mesh cleanup",
+            "description": "Run the print-readiness cleanup (decimate, repair, rescale, gate). Set false to return the mesh exactly as generated, which is not guaranteed to be printable."
+        },
+        {
+            "tagKey": "REPAIR_BACKENDS",
+            "type": "enum",
+            "required": false,
+            "default": "trimesh,manifold3d,pymeshfix,pymeshlab",
+            "label": "[3 Cleanup] Mesh repair ladder",
+            "description": "Which repair backends the print-readiness cleanup may walk, least to most invasive. The full ladder gives the best chance of a watertight, printable result; the permissive-only option limits the run to trimesh (MIT) and manifold3d (Apache-2.0) and excludes the GPL-3.0 backends. Applies only when Mesh cleanup is on.",
+            "enumValues": [
+                "trimesh,manifold3d,pymeshfix,pymeshlab",
+                "trimesh,manifold3d",
+                "trimesh"
+            ]
+        },
+        {
+            "tagKey": "MIN_VOLUME_RETENTION",
+            "type": "enum",
+            "required": false,
+            "default": "0.5",
+            "enumValues": ["0.5", "0.25", "0.75", "0.9", "0"],
+            "label": "[3 Cleanup] Minimum volume retained by a repair",
+            "description": "Fraction of the mesh's original volume a repair step must leave behind for its result to be kept. The print-readiness gate measures printability, not likeness, so a step that discards most of the model produces something trivially watertight and useless; a repair falling below this floor is discarded and the ladder continues without it. Lower the floor to allow more aggressive repair, or set 0 to accept any result."
+        },
+        {
+            "tagKey": "CLOSE_HOLE_MAX_EDGES",
+            "type": "enum",
+            "required": false,
+            "default": "10000",
+            "enumValues": ["10000", "1000", "100", "30", "0"],
+            "label": "[3 Cleanup] Largest hole the repair may close (edges)",
+            "description": "Boundary size, in edges, of the largest hole the pymeshlab repair rung will close. The library's own default is 30 and it leaves anything wider open without reporting it, which is why a run could finish with the rung applied and still fail the gate. Printing needs a closed surface, so the generous default is usually right; lower it when a hole is part of the subject -- the opening of a cup, say -- and you would rather keep the shape than close it. 0 closes nothing."
+        },
+        {
+            "tagKey": "TARGET_FACE_COUNT",
+            "type": "integer",
+            "required": false,
+            "default": 200000,
+            "label": "[3 Cleanup] Target face count",
+            "description": "Face budget the cleaned mesh is decimated to. 0 leaves the generated face count untouched."
+        },
+        {
+            "tagKey": "PROJECT_PHOTO_COLOUR",
+            "type": "enum",
+            "required": false,
+            "default": "off",
+            "enumValues": ["off", "auto"],
+            "label": "[4 Colour] Colour from the photograph",
+            "description": "auto colours a mesh that has no colour of its own by sampling the input photograph onto the surface the camera could see, and giving everything it could not see the colour of the nearest surface it could -- so the back of a subject is inferred from its front rather than measured. Useful here when Generate texture is off, which produces geometry in a fraction of the time. Has no effect on a mesh that already carries colour, and is skipped rather than guessed when no view matches the outline. The view used and the share of the surface actually sampled are recorded in the run report."
+        },
+        {
+            "tagKey": "PROJECT_PHOTO_POSE",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "0", "45", "90", "135", "180", "225", "270", "315"],
+            "label": "[4 Colour] View the photograph was taken from",
+            "description": "Only used when Colour from the photograph is on. auto recovers the view from the outline for this model, because the view it reconstructs from has not been calibrated. An angle states the view instead, in degrees around the subject, and the tilt is still worked out from the outline. State it when the run report says the pose was not decisive and the colour looks placed wrongly on the model: a subject whose outline looks much the same from several directions -- a figure, a plain cylinder -- cannot have its view worked out from that outline."
+        },
+        {
+            "tagKey": "TARGET_SIZE_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Target size (mm)",
+            "description": "Longest-edge size the mesh is rescaled to, in millimetres. 0 leaves the model's own scale untouched."
+        },
+        {
+            "tagKey": "PRINT_FEATURES",
+            "type": "enum",
+            "required": false,
+            "default": "none",
+            "enumValues": ["none", "loop", "base", "loop+base"],
+            "label": "[5 Print] Print features",
+            "description": "Parametric geometry added to the finished mesh for printing. loop adds a hanging ring at the top of the model,; base adds a flat-bottomed cylinder underneath, so the model stands and the slicer gets a stable first layer. The dimensions below are millimetres of the printed object and are applied after the rescale, so set Target size (mm) as well — with it left at 0 the model keeps its own arbitrary scale and a millimetre dimension has no fixed meaning."
+        },
+        {
+            "tagKey": "PRINT_FEATURE_JOIN",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "concat", "union"],
+            "label": "[5 Print] How the feature is attached",
+            "description": "A boolean union fuses the feature into one solid but discards the mesh's texture entirely, so it cannot be used on a colour print. concat keeps the texture and leaves the feature as a second closed shell overlapping the model, which slicers resolve when they fill. auto chooses per mesh — concat when the mesh carries a texture, union when it is geometry-only and so has no colour to lose — and is the right choice unless you are comparing runs. The join used and the resulting body count are recorded in the run report, because the print gate accepts both."
+        },
+        {
+            "tagKey": "PRINT_FEATURE_COLOR",
+            "type": "string",
+            "required": false,
+            "default": "#3C3C3C",
+            "label": "[5 Print] Print feature colour",
+            "description": "Flat colour the added geometry is given, as #RRGGBB, so a colour print shows a deliberate solid-coloured fitting. Without its own colour the feature samples whatever part of the model's texture its unwrap lands on and prints as a smear of the subject's colours. Has no effect when the join fuses to a single solid, which carries no texture."
+        },
+        {
+            "tagKey": "LOOP_DIAMETER_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Loop hole diameter (mm)",
+            "description": "Clear opening a ring has to pass through, in millimetres. 0 sizes the loop to the model's own height."
+        },
+        {
+            "tagKey": "LOOP_THICKNESS_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Loop thickness (mm)",
+            "description": "Thickness of the loop's tube, in millimetres. 0 uses a fraction of the hole diameter. Must stay below the hole diameter, or the opening closes and the loop cannot be threaded."
+        },
+        {
+            "tagKey": "BASE_DIAMETER_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Base diameter (mm)",
+            "description": "Diameter of the stand base, in millimetres. 0 sizes it slightly wider than the model's own footprint."
+        },
+        {
+            "tagKey": "BASE_HEIGHT_MM",
+            "type": "number",
+            "required": false,
+            "default": 0,
+            "label": "[5 Print] Base height (mm)",
+            "description": "Height of the stand base, in millimetres. 0 uses a fraction of the model's own height."
+        },
+        {
+            "tagKey": "PRINT_GATE_POLICY",
+            "type": "enum",
+            "required": false,
+            "default": "failClosed",
+            "enumValues": ["failClosed", "bestEffort"],
+            "label": "[5 Print] Print gate policy",
+            "description": "What happens when a print-readiness check fails. failClosed writes no mesh, only the gate report; bestEffort writes the outputs and records the failures."
+        },
+        {
+            "tagKey": "EXPORT_FORMATS",
+            "type": "enum",
+            "required": false,
+            "default": "glb,obj,stl",
+            "label": "[6 Output] Export formats",
+            "description": "Which containers the finished mesh is written as. glb carries geometry and texture in one file and is what the VAMS viewer reads; obj writes the texture as a separate file set; stl is geometry only and is the 3D-printing format. Choose stl alone for a print-only run, or glb alone for a viewer-only preview.",
+            "enumValues": ["glb,obj,stl", "glb,stl", "glb,obj", "glb", "obj", "stl"]
+        },
+        {
+            "tagKey": "BENCHMARK_REPORT",
+            "type": "enum",
+            "required": false,
+            "default": "false",
+            "enumValues": ["false", "true"],
+            "label": "[6 Output] Benchmark report",
+            "description": "Records per-stage timings and the hardware the run landed on into the run report, so model, segmentation path and quality settings can be compared on speed and cost as well as on the mesh. Off by default; it adds no GPU work but does add detail to the report."
+        },
+        {
+            "tagKey": "PASS_THROUGH_INPUTS",
+            "type": "enum",
+            "required": false,
+            "default": "false",
+            "enumValues": ["false", "true"],
+            "label": "[6 Output] Pass the input photographs on",
+            "description": "true copies the input photograph(s) into this run's outputs beside the mesh, so a later pipeline in the same workflow receives them together with the mesh. A workflow's second step is handed only the first step's outputs, so a reconstruct-then-refine workflow needs this on its first step. false leaves the outputs as the mesh, its formats and the reports."
+        }
+    ],
+    "overrides": {
+        "inputFileFilters": {
+            "allow": ["*.png", "*.jpg", "*.jpeg"],
+            "exclude": []
+        },
+        "inputFileArity": "multi"
+    }
+}

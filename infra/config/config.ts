@@ -57,6 +57,28 @@ export const STACK_ORIGIN_VERIFY_DESCRIPTION =
     VAMS_VERSION +
     ") API origin verification secret for the Visual Asset Management Systems";
 
+/**
+ * Whether a Region sits outside the Territory the Tencent Hunyuan 3D 2.0 Community License Agreement
+ * grants any licence in. The agreement defines the Territory as "the worldwide territory, excluding the
+ * territory of the European Union, United Kingdom and South Korea" and states that "any such use outside
+ * the Territory is unlicensed and unauthorized", so `getConfig()` refuses to enable that model here.
+ *
+ * A Region is a PROXY for where the use happens rather than a decision of it: a deployment in a permitted
+ * Region can still serve users inside the excluded territory, which nothing at synthesis time can see. So
+ * this catches the unambiguous case and the licence still has to be read.
+ *
+ * European Regions are matched by prefix rather than enumerated, so a newly launched one is excluded by
+ * default rather than silently permitted. Zurich (`eu-central-2`) carries the `eu-` prefix and is in
+ * neither the European Union nor the United Kingdom, so it is named as the exception.
+ */
+export function isOutsideHunyuan3dLicenceTerritory(region: string | undefined): boolean {
+    const name = region ?? "";
+    const switzerland = ["eu-central-2"];
+    const southKorea = ["ap-northeast-2"];
+    if (switzerland.includes(name)) return false;
+    return name.startsWith("eu-") || name.startsWith("eusc-") || southKorea.includes(name);
+}
+
 // Custom Authorizer Configuration
 export const CUSTOM_AUTHORIZER_IGNORED_PATHS = ["/api/amplify-config", "/api/version"];
 
@@ -1200,6 +1222,71 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useNvidiaGr00t.enabled = false;
     }
 
+    // Image to 3D defaults
+    if (config.app.pipelines.useImageTo3d == undefined) {
+        config.app.pipelines.useImageTo3d = {
+            enabled: false,
+            huggingFaceToken: "",
+            useCodeBuild: true,
+            autoRegisterWithVAMS: true,
+            autoTriggerOnFileExtensionsUpload: "",
+            instanceTypes: [
+                "g6e.xlarge",
+                "g6e.2xlarge",
+                "g6e.4xlarge",
+                "g6.2xlarge",
+                "g6.4xlarge",
+                "g6.8xlarge",
+                "g5.2xlarge",
+                "g5.4xlarge",
+                "g5.8xlarge",
+            ],
+            maxVCpus: 48,
+            models: {
+                sam3d: { enabled: false },
+                // Stable3DGen is the default model: it builds from wheels alone, carries no
+                // NVIDIA-licensed component, and its weights are ungated.
+                stable3dgen: { enabled: true },
+                // TRELLIS.2's container needs a different Python and CUDA toolchain from the other
+                // models, and it pulls NVIDIA-licensed rendering components whose redistribution terms
+                // need review before an image carrying them is distributed. Off by default for that reason.
+                trellis2: { enabled: false },
+                triposr: { enabled: false },
+                step1x3d: { enabled: false },
+                // Hunyuan3D-2's licence is territorial: it does not apply in the European Union, the
+                // United Kingdom or South Korea, and a deployment above one million monthly active
+                // users needs a separate licence from Tencent. Off by default for that reason.
+                hunyuan3d: { enabled: false },
+                // An agent (OpenAI Codex CLI) driving headless Blender against a vision model on Amazon
+                // Bedrock. Off by default: it needs Bedrock model access, and the model id is
+                // per-partition and per-account entitlement like the labeling pipeline's.
+                blenderagent: {
+                    enabled: false,
+                    bedrockModelId: "",
+                    useStabilityImageEditing: false,
+                },
+            },
+        };
+    }
+    if (config.app.pipelines.useImageTo3d.models.blenderagent == undefined) {
+        config.app.pipelines.useImageTo3d.models.blenderagent = {
+            enabled: false,
+            bedrockModelId: "",
+            useStabilityImageEditing: false,
+        };
+    }
+    // The Stability AI image-editing models run only through their us. inference profiles, which exist in
+    // the commercial partition's US Regions; a configuration written without the field gets it there.
+    if (
+        config.app.pipelines.useImageTo3d.models.blenderagent.useStabilityImageEditing == undefined
+    ) {
+        config.app.pipelines.useImageTo3d.models.blenderagent.useStabilityImageEditing =
+            config.env.partition === "aws" && config.env.region.startsWith("us-");
+    }
+    if (config.app.pipelines.useImageTo3d.enabled == undefined) {
+        config.app.pipelines.useImageTo3d.enabled = false;
+    }
+
     // Deadline Cloud pipeline execution-type support (workflow createJob task states +
     // job-callback lambda). Off by default.
     if (config.app.pipelines.deadlineCloudExecutionTypeEnabled == undefined) {
@@ -1264,6 +1351,18 @@ export function getConfig(app: cdk.App): Config {
 
     if (config.app.authProvider.useCognito.useUserPasswordAuthFlow == undefined) {
         config.app.authProvider.useCognito.useUserPasswordAuthFlow = false;
+    }
+
+    if (config.app.authProvider.useCognito.retainLegacyGroupsAttribute == undefined) {
+        config.app.authProvider.useCognito.retainLegacyGroupsAttribute = true;
+        if (config.app.authProvider.useCognito.enabled) {
+            console.warn(
+                "Configuration Warning: app.authProvider.useCognito.retainLegacyGroupsAttribute is not set, so it defaults to true " +
+                    "and the Amazon Cognito user pool keeps declaring the custom:groups attribute that existing deployments' user pools carry. " +
+                    "Leave it unset or true for an existing deployment. A NEW deployment must set it to false, or creating the user pool fails " +
+                    "with Amazon Cognito's attribute name error: Attribute names MUST conform to the following rules."
+            );
+        }
     }
 
     if (config.app.pipelines.useConversion3dBasic.enabled == undefined) {
@@ -1381,6 +1480,7 @@ export function getConfig(app: cdk.App): Config {
     defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.superText2Image64B);
     defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.superImage2Video64B);
     defaultAutoRegisterFlags(config.app.pipelines.useNvidiaGr00t.modelsFinetune?.gr00tN1_5_3B);
+    defaultAutoRegisterFlags(config.app.pipelines.useImageTo3d);
 
     //The upload trigger ships with the VamsSchemaRegistration custom resource, which is created only
     //when autoRegisterWithVAMS is true, so an armed trigger on an unregistered pipeline is discarded.
@@ -1801,6 +1901,7 @@ export function getConfig(app: cdk.App): Config {
             "useNvidiaCosmos3",
             "useNvidiaGr00t",
             "useGenAiVideoSopBom",
+            "useImageTo3d",
         ];
         const enabledOutsideSupport = codeBuildPipelinePaths.filter(
             (name) => pipelines[name]?.useCodeBuild === true
@@ -1928,6 +2029,8 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useNvidiaCosmos3");
     if (config.app.pipelines.useNvidiaGr00t.enabled)
         vpcRequiringFeatures.push("pipelines.useNvidiaGr00t");
+    if (config.app.pipelines.useImageTo3d?.enabled)
+        vpcRequiringFeatures.push("pipelines.useImageTo3d");
     if (config.app.pipelines.useConversionCoordinateTransform.enabled)
         vpcRequiringFeatures.push("pipelines.useConversionCoordinateTransform");
     if (config.app.pipelines.useGenAiVideoSopBom.enabled)
@@ -2194,6 +2297,98 @@ export function getConfig(app: cdk.App): Config {
         ) {
             throw new Error(
                 "Configuration Error: useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.instanceTypes must be a non-empty array."
+            );
+        }
+    }
+
+    // Image to 3D validation
+    if (config.app.pipelines.useImageTo3d?.enabled) {
+        const imageTo3dModels = config.app.pipelines.useImageTo3d.models;
+        const anyImageTo3dModelEnabled =
+            imageTo3dModels?.sam3d?.enabled ||
+            imageTo3dModels?.stable3dgen?.enabled ||
+            imageTo3dModels?.trellis2?.enabled ||
+            imageTo3dModels?.triposr?.enabled ||
+            imageTo3dModels?.step1x3d?.enabled ||
+            imageTo3dModels?.hunyuan3d?.enabled ||
+            imageTo3dModels?.blenderagent?.enabled;
+
+        if (!anyImageTo3dModelEnabled) {
+            throw new Error(
+                "Configuration Error: useImageTo3d is enabled but no models are enabled. " +
+                    "Enable at least one model in useImageTo3d.models."
+            );
+        }
+
+        if (
+            !config.app.pipelines.useImageTo3d.huggingFaceToken ||
+            config.app.pipelines.useImageTo3d.huggingFaceToken.trim() === ""
+        ) {
+            throw new Error(
+                "Configuration Error: useImageTo3d requires huggingFaceToken " +
+                    "for model downloads from HuggingFace."
+            );
+        }
+
+        if (
+            !config.app.pipelines.useImageTo3d.instanceTypes ||
+            config.app.pipelines.useImageTo3d.instanceTypes.length === 0
+        ) {
+            throw new Error(
+                "Configuration Error: useImageTo3d.instanceTypes must be a non-empty array."
+            );
+        }
+
+        // The Blender agent reasons with a Bedrock foundation model, and which models an account may invoke
+        // differs by partition and by entitlement -- the same position as the labeling pipeline's model id,
+        // handled the same way: the commercial template carries a model id, the restricted-partition
+        // templates ship it empty, and a commercial-only inference-profile prefix is rejected elsewhere.
+        const agent = imageTo3dModels?.blenderagent;
+        if (agent?.enabled) {
+            const agentModelId = (agent.bedrockModelId ?? "").trim();
+            if (agentModelId === "" || agentModelId === "UNDEFINED") {
+                throw new Error(
+                    `Configuration Error: useImageTo3d.models.blenderagent.bedrockModelId must be set when ` +
+                        `the Blender agent is enabled. Foundation model availability differs by partition ` +
+                        `and account, so VAMS does not assume one. Set it to a model id or inference-profile ` +
+                        `id your account is entitled to that accepts image input (the commercial template ` +
+                        `ships global.openai.gpt-6-astra).`
+                );
+            }
+            const agentCommercialOnlyPrefix = ["global.", "us."].find((prefix) =>
+                agentModelId.startsWith(prefix)
+            );
+            if (agentCommercialOnlyPrefix && config.env.partition !== "aws") {
+                throw new Error(
+                    `Configuration Error: useImageTo3d.models.blenderagent.bedrockModelId is ` +
+                        `"${agentModelId}", whose "${agentCommercialOnlyPrefix}" cross-Region inference-profile ` +
+                        `prefix exists only in the commercial partition. This deployment targets ` +
+                        `${config.env.partition}. Use a model id or inference profile offered there.`
+                );
+            }
+            if (
+                agent.useStabilityImageEditing &&
+                !(config.env.partition === "aws" && config.env.region.startsWith("us-"))
+            ) {
+                throw new Error(
+                    `Configuration Error: useImageTo3d.models.blenderagent.useStabilityImageEditing cannot be ` +
+                        `enabled in region ${config.env.region}. The Stability AI image-editing models run on ` +
+                        `Amazon Bedrock only through their us. inference profiles, in the commercial ` +
+                        `partition's US Regions. Set it to false; the agent then textures from the ` +
+                        `photographs alone.`
+                );
+            }
+        }
+
+        if (
+            isOutsideHunyuan3dLicenceTerritory(config.env.region) &&
+            imageTo3dModels?.hunyuan3d?.enabled
+        ) {
+            throw new Error(
+                `Configuration Error: useImageTo3d.models.hunyuan3d cannot be enabled in region ` +
+                    `${config.env.region}. The Tencent Hunyuan 3D 2.0 Community License Agreement grants ` +
+                    `no licence in the European Union, the United Kingdom or South Korea. Disable the ` +
+                    `model or deploy in a region inside the licence Territory.`
             );
         }
     }
@@ -2569,7 +2764,8 @@ export function getConfig(app: cdk.App): Config {
             config.app.pipelines.useIsaacLabTraining.enabled ||
             config.app.pipelines.useNvidiaCosmos.enabled ||
             config.app.pipelines.useNvidiaCosmos3?.enabled ||
-            config.app.pipelines.useNvidiaGr00t.enabled
+            config.app.pipelines.useNvidiaGr00t.enabled ||
+            config.app.pipelines.useImageTo3d?.enabled
         ) {
             if (
                 !config.app.useGlobalVpc.optionalExternalPrivateSubnetIds ||
@@ -4466,6 +4662,28 @@ export interface ConfigPublic {
                     };
                 };
             };
+            useImageTo3d: {
+                enabled: boolean;
+                huggingFaceToken: string;
+                useCodeBuild: boolean;
+                autoRegisterWithVAMS: boolean;
+                autoTriggerOnFileExtensionsUpload: string;
+                instanceTypes: string[];
+                maxVCpus: number;
+                models: {
+                    sam3d: { enabled: boolean };
+                    stable3dgen: { enabled: boolean };
+                    trellis2: { enabled: boolean };
+                    triposr: { enabled: boolean };
+                    step1x3d: { enabled: boolean };
+                    hunyuan3d: { enabled: boolean };
+                    blenderagent: {
+                        enabled: boolean;
+                        bedrockModelId: string;
+                        useStabilityImageEditing: boolean;
+                    };
+                };
+            };
         };
         addons: {
             useGarnetFramework: {
@@ -4501,6 +4719,9 @@ export interface ConfigPublic {
                 useOidc: boolean;
                 useUserPasswordAuthFlow: boolean;
                 credTokenTimeoutSeconds: number;
+                // When true, the user pool declares the `custom:groups` attribute that user pools created
+                // by earlier versions carry; Amazon Cognito keeps a custom attribute for the life of the pool.
+                retainLegacyGroupsAttribute: boolean;
             };
             useExternalOAuthIdp: {
                 enabled: boolean;
