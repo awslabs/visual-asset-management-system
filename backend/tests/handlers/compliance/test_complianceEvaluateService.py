@@ -261,7 +261,7 @@ class TestAuthorization:
         instance.enforce.assert_called_once_with(
             {"object__type": "complianceEvaluation", "databaseId": DB, "complianceState": ""}, "POST")
 
-    def test_sweep_checks_the_schema_object(self):
+    def test_sweep_checks_read_access_to_the_schema_in_its_scope(self):
         instance = enforcer()
         state_table = MagicMock()
         state_table.query.return_value = {"Items": []}
@@ -270,8 +270,24 @@ class TestAuthorization:
                 patch(f"{MOD}.asset_state_table", state_table), \
                 patch(f"{STORE}.load_schema_item", return_value=schema_row()):
             svc.lambda_handler(rest_event("POST", SWEEP_PATH, SCHEMA_PARAMS, body={}), MagicMock())
+        # A sweep evaluates only where the caller may evaluate, so the schema needs only GET in
+        # its scope: a database's compliance administrator may sweep a GLOBAL schema.
         instance.enforce.assert_called_once_with(
-            {"object__type": "complianceSchema", "complianceSchemaName": SCHEMA}, "POST")
+            {"object__type": "complianceSchema", "complianceSchemaName": SCHEMA,
+             "databaseId": "GLOBAL"}, "GET")
+
+    def test_sweep_checks_a_database_scoped_schema_in_its_database(self):
+        instance = enforcer()
+        state_table = MagicMock()
+        state_table.query.return_value = {"Items": []}
+        with patch(f"{MOD}.request_to_claims", claims_for(USER)), \
+                patch(f"{MOD}.CasbinEnforcer", return_value=instance), \
+                patch(f"{MOD}.asset_state_table", state_table), \
+                patch(f"{STORE}.load_schema_item", return_value=dict(schema_row(), databaseId=DB)):
+            svc.lambda_handler(rest_event("POST", SWEEP_PATH, SCHEMA_PARAMS, body={}), MagicMock())
+        instance.enforce.assert_called_once_with(
+            {"object__type": "complianceSchema", "complianceSchemaName": SCHEMA,
+             "databaseId": DB}, "GET")
 
     def test_sweep_checks_the_evaluation_object_of_each_bound_database_once(self):
         _, mocks = _run(
@@ -280,7 +296,8 @@ class TestAuthorization:
                         {"databaseId": OTHER_DB, "assetId": "c"}])
         calls = [c.args for c in mocks["casbin"].enforce.call_args_list]
         assert calls == [
-            ({"object__type": "complianceSchema", "complianceSchemaName": SCHEMA}, "POST"),
+            ({"object__type": "complianceSchema", "complianceSchemaName": SCHEMA,
+              "databaseId": "GLOBAL"}, "GET"),
             ({"object__type": "complianceEvaluation", "databaseId": DB, "complianceState": ""}, "POST"),
             ({"object__type": "complianceEvaluation", "databaseId": OTHER_DB, "complianceState": ""},
              "POST"),

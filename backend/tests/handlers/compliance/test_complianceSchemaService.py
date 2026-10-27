@@ -182,7 +182,8 @@ class TestAuthorization:
                 rest_event("DELETE", f"/compliance/schemas/{SCHEMA}", {"schemaName": SCHEMA}),
                 MagicMock())
         instance.enforce.assert_called_once_with(
-            {"object__type": "complianceSchema", "complianceSchemaName": SCHEMA}, "DELETE")
+            {"object__type": "complianceSchema", "complianceSchemaName": SCHEMA,
+             "databaseId": "GLOBAL"}, "DELETE")
 
     def test_post_denied_at_tier_two_writes_nothing(self):
         response, tables = _run(

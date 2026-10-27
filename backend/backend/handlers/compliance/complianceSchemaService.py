@@ -57,6 +57,7 @@ logger = safeLogger(service_name="ComplianceSchemaService")
 claims_and_roles = {}
 
 COMPLIANCE_SCHEMA_OBJECT_TYPE = "complianceSchema"
+COMPLIANCE_BINDING_OBJECT_TYPE = "complianceBinding"
 # The system actor: the only identity that registers or modifies system schemas.
 SYSTEM_USER = "SYSTEM_USER"
 
@@ -295,19 +296,57 @@ def normalize_schema_item(item):
     }
 
 
-def _schema_object(schema_name):
-    """The Tier-2 authorization object for a schema."""
+def _schema_object(schema_name, database_id):
+    """The Tier-2 authorization object for a schema: its name and its scope (`databaseId`, a
+    database id or GLOBAL)."""
     return {
         "object__type": COMPLIANCE_SCHEMA_OBJECT_TYPE,
         "complianceSchemaName": schema_name or "",
+        "databaseId": database_id or GLOBAL_DATABASE_ID,
     }
 
 
-def _enforce(schema_name, action):
-    """Tier-2 check on a schema. Fails closed on an empty token list."""
+def _enforce(schema_name, database_id, action):
+    """Tier-2 check on a schema in its scope. Fails closed on an empty token list."""
     if len(claims_and_roles["tokens"]) == 0:
         return False
-    return CasbinEnforcer(claims_and_roles).enforce(_schema_object(schema_name), action)
+    return CasbinEnforcer(claims_and_roles).enforce(_schema_object(schema_name, database_id), action)
+
+
+def _binding_object(database_id):
+    return {"object__type": COMPLIANCE_BINDING_OBJECT_TYPE, "databaseId": database_id or ""}
+
+
+def schema_permissions(casbin_enforcer, schema, binding_database_id=None):
+    """The caller's allowed actions on one listed schema, computed server-side so a client hides
+    what the caller cannot do: `edit` (PUT), `delete` (DELETE) and `bind`. `bind` needs GET on the
+    schema (the caller has it, the schema is listed) and PUT on the `complianceBinding` of the
+    database it would be bound in: `binding_database_id` when the listing names one, the schema's
+    own database for a database-scoped schema, and for a GLOBAL schema listed without a database
+    the GET alone (whether a given database may bind it is checked when it is bound). A system
+    schema is never editable or deletable by a caller other than the system user."""
+    name, database_id = schema["schemaName"], schema["databaseId"]
+    is_system_locked = schema.get("isSystem") and claims_and_roles["tokens"][0] != SYSTEM_USER
+    target = binding_database_id or (database_id if database_id != GLOBAL_DATABASE_ID else None)
+    bind = schema.get("schemaFormat") == engine.VAMS_RULES_V1 and (
+        target is None or casbin_enforcer.enforce(_binding_object(target), "PUT"))
+    return {
+        "edit": not is_system_locked and casbin_enforcer.enforce(
+            _schema_object(name, database_id), "PUT"),
+        "delete": not is_system_locked and casbin_enforcer.enforce(
+            _schema_object(name, database_id), "DELETE"),
+        "bind": bool(bind),
+    }
+
+
+def creatable_scopes(casbin_enforcer):
+    """The scopes the caller may create a schema in: GLOBAL and every database whose
+    `complianceSchema` POST passes. The database table is small and is scanned for its ids."""
+    candidates = [GLOBAL_DATABASE_ID] + sorted(
+        item["databaseId"] for item in _scan_all_items(database_table, ProjectionExpression="databaseId")
+        if item.get("databaseId") and item["databaseId"] != GLOBAL_DATABASE_ID)
+    return [database_id for database_id in candidates
+            if casbin_enforcer.enforce(_schema_object("", database_id), "POST")]
 
 
 def list_schemas(event, database_id_filter=None):
@@ -342,10 +381,16 @@ def list_schemas(event, database_id_filter=None):
     allowed = []
     for schema in schemas_by_name.values():
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
-        if casbin_enforcer and casbin_enforcer.enforce(_schema_object(schema["schemaName"]), "GET"):
+        if casbin_enforcer and casbin_enforcer.enforce(
+                _schema_object(schema["schemaName"], schema["databaseId"]), "GET"):
+            schema["permissions"] = schema_permissions(casbin_enforcer, schema, database_id_filter)
             allowed.append(schema)
 
-    return success(body={"schemas": allowed})
+    body = {"schemas": allowed}
+    if not database_id_filter:
+        # The Schemas page's create form offers these scopes only.
+        body["createScopes"] = creatable_scopes(casbin_enforcer) if casbin_enforcer else []
+    return success(body=body)
 
 
 def _query_schemas_for_databases(database_ids):
@@ -385,13 +430,19 @@ def get_schema(event, schema_name):
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforce(schema_name, "GET"):
-        return authorization_error()
-
     item = _latest_schema_item(schema_name)
+    # An absent schema is checked in the GLOBAL scope, so a caller without schema read access is
+    # refused rather than told whether the name exists.
+    if not _enforce(schema_name, _scope_of(item), "GET"):
+        return authorization_error()
     if not item:
         return general_error(body={"message": "Schema not found"}, event=event)
     return success(body=normalize_schema_item(item))
+
+
+def _scope_of(item):
+    """The scope (`databaseId`) of a stored schema row; GLOBAL for a row without one or no row."""
+    return (item or {}).get("databaseId") or GLOBAL_DATABASE_ID
 
 
 def _latest_schema_item(schema_name):
@@ -409,7 +460,13 @@ def register_schema(event, request: CreateSchemaRequestModel):
     """Register a schema. A name that already exists gains a new version."""
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforce(request.schemaName, "POST"):
+    # Creating checks the target scope: POST on a schema of that database, or of GLOBAL.
+    if not _enforce(request.schemaName, request.databaseId, "POST"):
+        return authorization_error()
+    # A name that exists gains a new version, which replaces the current one (and may move it to
+    # another scope), so the caller must also be allowed to update the current version.
+    current = _latest_schema_item(request.schemaName)
+    if current and not _enforce(request.schemaName, _scope_of(current), "PUT"):
         return authorization_error()
 
     if request.databaseId != GLOBAL_DATABASE_ID and not _database_exists(request.databaseId):
@@ -470,10 +527,9 @@ def update_schema(event, schema_name, request: UpdateSchemaRequestModel):
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforce(schema_name, "PUT"):
-        return authorization_error()
-
     current = _latest_schema_item(schema_name)
+    if not _enforce(schema_name, _scope_of(current), "PUT"):
+        return authorization_error()
     if not current:
         return general_error(body={"message": "Schema not found"}, event=event)
 
@@ -481,6 +537,9 @@ def update_schema(event, schema_name, request: UpdateSchemaRequestModel):
         return general_error(body={"message": "System schemas cannot be modified"}, event=event)
 
     database_id = request.databaseId or current.get("databaseId", GLOBAL_DATABASE_ID)
+    # Moving a schema to another scope also needs PUT in the scope it moves to.
+    if database_id != _scope_of(current) and not _enforce(schema_name, database_id, "PUT"):
+        return authorization_error()
     if database_id != GLOBAL_DATABASE_ID and not _database_exists(database_id):
         return general_error(body={"message": "Database not found"}, event=event)
 
@@ -510,7 +569,7 @@ def delete_schema(event, schema_name):
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforce(schema_name, "DELETE"):
+    if not _enforce(schema_name, _scope_of(_latest_schema_item(schema_name)), "DELETE"):
         return authorization_error()
 
     rows = query_all_items(

@@ -117,6 +117,7 @@ def deployment(*rows, invoke_raises=False):
                 patch.object(trigger, "asset_table", MagicMock(name="asset_table")), \
                 patch(f"{STORE}.get_child_links", return_value=CHILDREN), \
                 patch(f"{STORE}.write_audit", env.audit), \
+                patch(f"{STORE}.all_database_ids", return_value=[DB]), \
                 patch(NOTIFY), \
                 patch(f"{SVC}.request_to_claims", claims_for(USER)), \
                 patch(f"{SVC}.CasbinEnforcer", return_value=enforcer()), \

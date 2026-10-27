@@ -279,6 +279,19 @@ def databases_bound_to_schema(schema_name: str) -> List[str]:
         scan_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
 
 
+def all_database_ids() -> List[str]:
+    """The id of every database (the database table is small and is scanned for its key, paged)."""
+    database_ids = []
+    scan_kwargs = {"ProjectionExpression": "databaseId"}
+    while True:
+        response = database_table.scan(**scan_kwargs)
+        database_ids.extend(item["databaseId"] for item in response.get("Items", [])
+                            if item.get("databaseId"))
+        if "LastEvaluatedKey" not in response:
+            return database_ids
+        scan_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+
+
 def register_unrecorded_assets(database_id: str, schema_name: str) -> int:
     """Register under the database binding every live asset of the database that has no
     asset-state row yet (`register_under_database_binding`); returns how many were registered. An

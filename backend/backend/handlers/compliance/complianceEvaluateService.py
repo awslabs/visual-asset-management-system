@@ -50,6 +50,7 @@ from models.common import (
     validation_error_message,
 )
 from models.compliance import (
+    GLOBAL_DATABASE_ID,
     EvaluateAssetRequestModel,
     EvaluateDatabaseRequestModel,
     EvaluationVerdict,
@@ -199,13 +200,15 @@ def _enforce_evaluation(database_id, action, compliance_state=""):
     }, action)
 
 
-def _enforce_schema(schema_name, action):
-    """Tier-2 check on a compliance schema object. Fails closed on an empty token list."""
+def _enforce_schema(schema_name, database_id, action):
+    """Tier-2 check on a compliance schema object in its scope (`databaseId`: a database id or
+    GLOBAL). Fails closed on an empty token list."""
     if len(claims_and_roles["tokens"]) == 0:
         return False
     return CasbinEnforcer(claims_and_roles).enforce({
         "object__type": COMPLIANCE_SCHEMA_OBJECT_TYPE,
         "complianceSchemaName": schema_name,
+        "databaseId": database_id or GLOBAL_DATABASE_ID,
     }, action)
 
 
@@ -280,7 +283,11 @@ def run_evaluation_for_asset(database_id, asset_id, schema_name, actor):
 
 def sweep_schema(event, schema_name):
     """Evaluate the assets whose state row is bound to `schema_name` (SchemaNameIndex GSI) and whose
-    database the caller may evaluate; the rest are counted as `skipped` and never listed.
+    database the caller may evaluate; the rest are counted as `skipped` (and in
+    `skippedNotAuthorized`, the reason they were skipped) and never listed. The caller needs read
+    access to the schema in its scope: a database's compliance administrator may sweep a GLOBAL
+    schema, and the sweep then reaches the assets of the databases that administrator may evaluate
+    only. Every evaluation runs as the caller, never with the system identity.
 
     Rows in `pending_evaluation` are evaluated first, then the rest of the bound rows. One call
     evaluates at most MAX_SWEEP_ASSETS assets and stops launching once SWEEP_TIME_BUDGET_SECONDS has
@@ -296,10 +303,12 @@ def sweep_schema(event, schema_name):
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforce_schema(schema_name, "POST"):
+    schema_item = store.load_schema_item(schema_name)
+    # An absent schema is checked in the GLOBAL scope, so a caller without schema read access is
+    # refused rather than told whether the name exists.
+    if not _enforce_schema(schema_name, (schema_item or {}).get("databaseId"), "GET"):
         return authorization_error()
-
-    if store.load_schema_item(schema_name) is None:
+    if schema_item is None:
         return general_error(body={"message": "Schema not found"}, event=event)
 
     # The evaluation object depends only on the database, so one verdict serves every asset in it.
@@ -361,6 +370,7 @@ def sweep_schema(event, schema_name):
         "assetsTriggered": triggered,
         "assetsRemaining": remaining,
         "skipped": skipped,
+        "skippedNotAuthorized": skipped,
         "superseded": superseded,
     })
 

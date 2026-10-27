@@ -359,6 +359,9 @@ export function buildComplianceCascadeServiceFunction(
     // An audit entry records the asset's name at the time of the event, read from its compliance
     // record when the caller does not pass it.
     storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
+    // Approving or starting a cascade records the databases the caller may evaluate, read from the
+    // database ids.
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

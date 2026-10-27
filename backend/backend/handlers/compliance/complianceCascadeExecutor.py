@@ -42,6 +42,9 @@ NODE_STATE_SKIPPED = "skipped"
 # done and the asset's state is that newer evaluation's to settle.
 NODE_STATE_SUPERSEDED = store.SUPERSEDED_VERDICT
 NODE_STATE_ERROR = "error"
+# A descendant in a database the caller who started the cascade (approver, or creator of a cascade
+# without approval) may not evaluate: it is not evaluated, with that caller's reach or any other.
+NODE_STATE_SKIPPED_NOT_AUTHORIZED = "skipped_not_authorized"
 
 # Bound on the descendants one cascade evaluates; a DAG larger than this is truncated and the
 # omission recorded on the cascade row, so a runaway graph cannot exhaust the Lambda timeout.
@@ -237,9 +240,15 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
         },
     )
 
+    authorized = _authorized_database_ids(cascade)
     results = []
     for node in execution_order:
         node_key = _node_key(node["databaseId"], node["assetId"])
+        if authorized is not None and node["databaseId"] not in authorized:
+            nodes[node_key] = NODE_STATE_SKIPPED_NOT_AUTHORIZED
+            _write_nodes(cascade_id, nodes)
+            results.append({"node": node_key, "status": NODE_STATE_SKIPPED_NOT_AUTHORIZED})
+            continue
         schema_name = (store.get_compliance_record(node["databaseId"], node["assetId"]) or {}).get(
             "schemaName", "")
         if not schema_name:
@@ -287,6 +296,21 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
         "evaluated": len(results),
         "results": results,
     }
+
+
+def _authorized_database_ids(cascade: Dict[str, Any]) -> Any:
+    """The databases whose descendants this cascade may evaluate, as recorded when a caller started
+    it; None for a cascade without the record (one started before it was kept), whose descendants
+    are all evaluated as before. An unreadable record authorizes nothing."""
+    raw = cascade.get("authorizedDatabaseIds")
+    if raw is None:
+        return None
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        logger.warning("Cascade authorizedDatabaseIds is unreadable; no descendant is evaluated")
+        return set()
+    return set(value) if isinstance(value, (list, tuple, set)) else set()
 
 
 def _node_state_for(evaluation: Dict[str, Any]) -> str:

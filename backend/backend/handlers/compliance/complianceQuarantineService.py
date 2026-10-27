@@ -266,10 +266,18 @@ def list_quarantined(event, query_params):
     rows, next_key, _ = listing.query_page(
         asset_state_table, query_kwargs, page_size, listing.COMPLIANCE_STATE_INDEX_KEYS,
         start_key=start_key, filtered=bool(text), accept=may_get)
+    may_act = {}
     for row in rows:
         row.setdefault("assetName", "")
         row.pop("assetNameSort", None)
         row.pop("assetSearchText", None)
+        # The caller's allowed actions on the row, computed server-side: releasing and granting an
+        # exception are both a POST on the quarantined evaluation object of the row's database.
+        database_id = row.get("databaseId")
+        if database_id not in may_act:
+            may_act[database_id] = bool(casbin_enforcer.enforce(
+                _evaluation_object(database_id, engine.STATE_QUARANTINED), "POST"))
+        row["permissions"] = {"release": may_act[database_id], "exception": may_act[database_id]}
     result = {"quarantinedAssets": rows}
     if next_key:
         result["NextToken"] = listing.encode_token(next_key)

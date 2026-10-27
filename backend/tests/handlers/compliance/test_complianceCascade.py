@@ -36,7 +36,7 @@ CREATE_NOW_BODY = dict(CREATE_BODY, requireApproval=False)
 PENDING = {"cascadeId": CASCADE_ID, "state": "pending_approval",
            "triggeredByDatabaseId": DB, "triggeredByAssetId": ASSET}
 
-CASCADE_OBJECT = {"object__type": "complianceCascade", "cascadeId": CASCADE_ID}
+CASCADE_OBJECT = {"object__type": "complianceCascade", "cascadeId": CASCADE_ID, "databaseId": DB}
 EVALUATION_OBJECT = {"object__type": "complianceEvaluation", "databaseId": DB,
                      "complianceState": ""}
 
@@ -72,6 +72,7 @@ def _run(event, tokens=(USER,), api=True, obj=True, cascade_item=PENDING, pendin
             patch(f"{MOD}.cascade_executor_function_name", EXECUTOR_FUNCTION), \
             patch(f"{STORE}.get_asset_item",
                   return_value={"assetId": ASSET} if asset_exists else None), \
+            patch(f"{STORE}.all_database_ids", return_value=[DB]), \
             patch(f"{STORE}.write_audit") as write_audit:
         response = svc.lambda_handler(event, MagicMock())
     return response, {"table": cascade_table, "audit": write_audit, "invoke": lambda_client.invoke,
@@ -219,12 +220,14 @@ class TestAuthorization:
     @pytest.mark.parametrize("method,path,params,body", SINGLE_RESOURCE_REQUESTS,
                              ids=SINGLE_RESOURCE_IDS)
     def test_a_cascade_object_denial_changes_nothing(self, method, path, params, body):
+        # The cascade object carries the parent's database, so the row is read before the check;
+        # a denial still writes, audits and invokes nothing.
         response, mocks = _run(rest_event(method, path, params, body=body), obj=False)
         assert response["statusCode"] == 403
         mocks["table"].put_item.assert_not_called()
         mocks["table"].update_item.assert_not_called()
-        mocks["table"].get_item.assert_not_called()
         mocks["invoke"].assert_not_called()
+        mocks["audit"].assert_not_called()
 
     @pytest.mark.parametrize("method,path,params,body", SINGLE_RESOURCE_REQUESTS,
                              ids=SINGLE_RESOURCE_IDS)
@@ -243,10 +246,13 @@ class TestAuthorization:
     def test_create_enforces_the_cascade_object_and_the_request_database(self):
         _, mocks = _run(rest_event("POST", LIST_PATH, body=CREATE_NOW_BODY))
         calls = [c.args for c in mocks["enforcer"].enforce.call_args_list]
-        assert len(calls) == 2
+        # The two checks, then the caller's reach: an evaluation POST per database.
+        assert len(calls) == 3
+        assert calls[2] == (EVALUATION_OBJECT, "POST")
         cascade_object, cascade_action = calls[0]
         assert cascade_object["object__type"] == "complianceCascade"
         assert cascade_object["cascadeId"] == _invoked_cascade_id(mocks["invoke"])
+        assert cascade_object["databaseId"] == DB
         assert cascade_action == "POST"
         assert calls[1] == (EVALUATION_OBJECT, "POST")
 
@@ -257,8 +263,8 @@ class TestAuthorization:
     def test_the_row_is_read_and_its_trigger_database_enforced(self, method, path, body, action):
         row = dict(PENDING, triggeredByDatabaseId="other-db")
         _, mocks = _run(rest_event(method, path, ID_PARAMS, body=body), cascade_item=row)
-        assert [c.args for c in mocks["enforcer"].enforce.call_args_list] == [
-            (CASCADE_OBJECT, action),
+        assert [c.args for c in mocks["enforcer"].enforce.call_args_list][:2] == [
+            (dict(CASCADE_OBJECT, databaseId="other-db"), action),
             (dict(EVALUATION_OBJECT, databaseId="other-db"), action),
         ]
         mocks["table"].get_item.assert_called_once_with(Key={"cascadeId": CASCADE_ID})
@@ -270,9 +276,12 @@ class TestAuthorization:
 
     def test_the_listing_enforces_the_cascade_object_and_the_trigger_database(self):
         _, mocks = _run(rest_event("GET", LIST_PATH), pending_rows=[PENDING])
+        # The two read checks, then the row's `permissions.approve` (POST on both objects).
         assert [c.args for c in mocks["enforcer"].enforce.call_args_list] == [
             (CASCADE_OBJECT, "GET"),
             (EVALUATION_OBJECT, "GET"),
+            (CASCADE_OBJECT, "POST"),
+            (EVALUATION_OBJECT, "POST"),
         ]
 
     @pytest.mark.parametrize("cascade,evaluation", [(True, False), (False, True)],
@@ -492,6 +501,7 @@ class TestCreate:
                 patch(f"{MOD}.lambda_client", lambda_client), \
                 patch(f"{MOD}.cascade_executor_function_name", EXECUTOR_FUNCTION), \
                 patch(f"{STORE}.get_asset_item", return_value={"assetId": ASSET}), \
+                patch(f"{STORE}.all_database_ids", return_value=[DB]), \
                 patch(f"{STORE}.write_audit", write_audit):
             response = svc.lambda_handler(rest_event("POST", LIST_PATH, body=CREATE_NOW_BODY),
                                           MagicMock())

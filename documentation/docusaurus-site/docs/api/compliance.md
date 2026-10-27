@@ -5,7 +5,7 @@ The Compliance API registers compliance schemas, binds them to databases and ass
 All compliance endpoints live under the `/compliance` prefix. Identifiers follow the VAMS conventions: a `databaseId` or `schemaName` is 3-63 characters of letters, digits, hyphens and underscores (`GLOBAL` is accepted wherever a database is named), and an `assetId` follows the asset identifier rules.
 
 :::info[Authorization]
-All compliance endpoints require a valid credential in the `Authorization` header and are subject to two-tier authorization: API-level access to the `/compliance/*` route is checked first, followed by object-level Casbin enforcement on the compliance object types. Schema and sweep operations are enforced on a `complianceSchema` object (`complianceSchemaName`); binding and unbinding on the `complianceBinding` object of the database (`databaseId`; an asset override uses the asset's database) and on the `complianceSchema` object of the schema bound or removed; evaluation, state, quarantine and audit operations on a `complianceEvaluation` object (`databaseId`, `complianceState`); cascade operations on a `complianceCascade` object (`cascadeId`). Operations that reach into a database or asset are additionally enforced on that target: binding, unbinding and reading a database's bindings on a `GET` of the `database` object, binding and unbinding an asset override on a `GET` of the `asset` object, a sweep on the `complianceEvaluation` object of each bound database (assets in databases the caller may not evaluate are skipped and counted), and creating, approving, rejecting or reading a cascade on the `complianceEvaluation` object of the triggering asset's database. The object action mirrors the HTTP method, except on the `database` and `asset` targets of a binding, which are always checked with `GET`: a binding changes compliance records only. Listings return only the items the caller may `GET`: the global audit trail and the pending-cascade listing return only rows whose database the caller may read, so a page can be empty while `NextToken` is present.
+All compliance endpoints require a valid credential in the `Authorization` header and are subject to two-tier authorization: API-level access to the `/compliance/*` route is checked first, followed by object-level Casbin enforcement on the compliance object types. Schema and sweep operations are enforced on a `complianceSchema` object (`complianceSchemaName`, and `databaseId`: the schema's scope, a database ID or `GLOBAL`); binding and unbinding on the `complianceBinding` object of the database (`databaseId`; an asset override uses the asset's database) and on a `GET` of the `complianceSchema` object of the schema bound or removed; evaluation, state, quarantine and audit operations on a `complianceEvaluation` object (`databaseId`, `complianceState`); cascade operations on a `complianceCascade` object (`cascadeId`, and `databaseId`: the database of the cascade's parent asset). Operations that reach into a database or asset are additionally enforced on that target: binding, unbinding and reading a database's bindings on a `GET` of the `database` object, binding and unbinding an asset override on a `GET` of the `asset` object, a sweep on the `complianceEvaluation` object of each bound database (assets in databases the caller may not evaluate are skipped and counted), and creating, approving, rejecting or reading a cascade on the `complianceEvaluation` object of the triggering asset's database. The object action mirrors the HTTP method, except on the `database` and `asset` targets of a binding, which are always checked with `GET`: a binding changes compliance records only. Listings return only the items the caller may `GET`: the global audit trail and the pending-cascade listing return only rows whose database the caller may read, so a page can be empty while `NextToken` is present. The schema, cascade and quarantine listings carry a `permissions` object on each item: the actions the caller may take on it, computed by the service, so a client can hide what the caller cannot do.
 :::
 
 :::note[Error responses]
@@ -44,11 +44,15 @@ GET /compliance/schemas
             "schemaFormat": "vams-rules-v1",
             "version": 2,
             "createdAt": "2026-03-15T10:30:00+00:00",
-            "isSystem": false
+            "isSystem": false,
+            "permissions": { "edit": false, "delete": false, "bind": true }
         }
-    ]
+    ],
+    "createScopes": ["survey-project"]
 }
 ```
+
+Each schema carries `permissions`: `edit` (`PUT` on the schema in its scope), `delete` (`DELETE`), and `bind` (a `vams-rules-v1` schema the caller may read, and `PUT` on the `complianceBinding` of the database named by `databaseId`, or of the schema's own database for a database-scoped schema; for a `GLOBAL` schema listed without `databaseId`, whether a given database may bind it is checked when it is bound). A system schema is never editable or deletable by a caller other than the system. Without `databaseId`, the response also carries `createScopes`: the scopes (`GLOBAL` and database IDs) the caller may register a schema in.
 
 The listing is not paged; a schema appears once, at its highest version. The top-level `schemaFormat` is derived from the body: `vams-rules-v1`, or `legacy` for a row whose body is not a `vams-rules-v1` document. A legacy schema cannot be bound (see [Bind a schema to a database](#bind-a-schema-to-a-database)), updated or evaluated; it is listed so that it can be found and [deleted](#delete-a-compliance-schema).
 
@@ -64,7 +68,7 @@ The listing is not paged; a schema appears once, at its highest version. The top
 
 ## Register a compliance schema
 
-Registers a schema body under a name. Registering a name that already exists writes the next version of that schema; the highest version is the one evaluation reads.
+Registers a schema body under a name. Registering a name that already exists writes the next version of that schema; the highest version is the one evaluation reads. The request is authorized on `POST` of the `complianceSchema` object in the target scope (`databaseId`, `GLOBAL` when omitted); re-registering an existing name also needs `PUT` on it in its current scope.
 
 ```
 POST /compliance/schemas
@@ -391,7 +395,7 @@ GET /compliance/bind/{databaseId}
 
 ## Bind a schema to a database
 
-Binds a `GLOBAL` or database-scoped schema to a database. Every asset in the database that has no asset-level override becomes `pending_evaluation` under the schema; assets with an override are left as they are. Run a [sweep](#sweep-the-assets-bound-to-a-schema) or evaluate assets individually to produce verdicts. The request is authorized on `PUT` of the database's `complianceBinding` object, `PUT` of the schema, and `GET` of the database.
+Binds a `GLOBAL` or database-scoped schema to a database. Every asset in the database that has no asset-level override becomes `pending_evaluation` under the schema; assets with an override are left as they are. Run a [sweep](#sweep-the-assets-bound-to-a-schema) or evaluate assets individually to produce verdicts. The request is authorized on `PUT` of the database's `complianceBinding` object, `GET` of the schema in its scope, and `GET` of the database: a database's compliance administrator may bind a `GLOBAL` schema it may read but not edit.
 
 ```
 PUT /compliance/bind/{databaseId}
@@ -635,7 +639,7 @@ POST /compliance/evaluate/{databaseId}
 
 ## Sweep the assets bound to a schema
 
-Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate. In each database bound to the schema that the caller may evaluate, an asset with no compliance record yet is first registered under the binding (`pending_evaluation`). Assets in `pending_evaluation` are evaluated first, then the rest. One call evaluates at most 200 assets and stops launching evaluations after about 20 seconds so that it returns within the API Gateway integration window; `assetsRemaining` reports how many bound assets were not reached — a value above 0 means call again — and repeated calls work through them. Bound assets the caller is not authorized to evaluate are counted in `skipped` and never listed. An asset whose evaluation found a newer evaluation of it already started (for example, a trigger evaluation running at the same time) did not run: its entry carries `verdict` `superseded` and `superseded: true`, its `evaluationId` names no evaluation record, and `superseded` counts these entries. The asset's state is the newer evaluation's; a superseded entry is not an error.
+Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate. In each database bound to the schema that the caller may evaluate, an asset with no compliance record yet is first registered under the binding (`pending_evaluation`). Assets in `pending_evaluation` are evaluated first, then the rest. One call evaluates at most 200 assets and stops launching evaluations after about 20 seconds so that it returns within the API Gateway integration window; `assetsRemaining` reports how many bound assets were not reached — a value above 0 means call again — and repeated calls work through them. The caller needs `GET` on the schema in its scope, so a database's compliance administrator may sweep a `GLOBAL` schema; the sweep then evaluates the assets of the databases the caller may evaluate only. Bound assets the caller is not authorized to evaluate are counted in `skipped` and `skippedNotAuthorized` and never listed; no asset is evaluated with the system identity instead. An asset whose evaluation found a newer evaluation of it already started (for example, a trigger evaluation running at the same time) did not run: its entry carries `verdict` `superseded` and `superseded: true`, its `evaluationId` names no evaluation record, and `superseded` counts these entries. The asset's state is the newer evaluation's; a superseded entry is not an error.
 
 ```
 POST /compliance/sweep/{schemaName}
@@ -669,6 +673,7 @@ POST /compliance/sweep/{schemaName}
         }
     ],
     "skipped": 0,
+    "skippedNotAuthorized": 0,
     "superseded": 1,
     "assetsRemaining": 0
 }
@@ -852,7 +857,7 @@ A `state` filter reads the state index, `sort=name` reads the database's name in
 
 ## List quarantined assets
 
-Retrieves one page of assets in the `quarantined` state across databases, each with its `assetName`; an asset released under an exception (state `exception`) is not listed. The page is filtered to the databases the caller may read after it is read, so a page can be empty while `NextToken` is present — keep following the token until none is returned.
+Retrieves one page of assets in the `quarantined` state across databases, each with its `assetName` and `permissions` (`release`, `exception`: whether the caller may release the asset or grant it an exception, a `POST` on the quarantined evaluation object of its database); an asset released under an exception (state `exception`) is not listed. The page is filtered to the databases the caller may read after it is read, so a page can be empty while `NextToken` is present — keep following the token until none is returned.
 
 ```
 GET /compliance/quarantine
@@ -998,7 +1003,9 @@ DELETE /compliance/quarantine/{databaseId}/{assetId}/exception
 
 ## List cascades
 
-Retrieves one page of the cascades in a state — `pending_approval` unless `state` names another — that the caller may read, newest first. A row is listed only when the caller may read both the cascade and the compliance evaluations of the trigger asset's database.
+Retrieves one page of the cascades in a state — `pending_approval` unless `state` names another — that the caller may read, newest first. A row is listed only when the caller may read both the cascade (in the parent asset's database) and the compliance evaluations of that database. Each row carries `permissions.approve`: whether the caller may approve or reject it.
+
+Approving a cascade (or creating one with `requireApproval: false`) records the databases the caller may evaluate. The cascade evaluates only the descendants in those databases; the others are recorded `skipped_not_authorized`, never evaluated with the system identity. The record is not returned.
 
 A cascade still pending at its `approvalTimeoutAt` (24 hours after creation) can no longer be approved. Whichever request reads it first aborts it: this listing (which then leaves it out), [Get a cascade](#get-a-cascade), an approve or reject (refused with `400`), or the next evaluation of the parent, which then opens a new cascade. The cascade is recorded `aborted` with `abortReason` `approval timed out` and a `cascade_timed_out` audit entry.
 
@@ -1124,7 +1131,7 @@ GET /compliance/cascades/{cascadeId}
 }
 ```
 
-`state` is `pending_approval`, `executing`, `completed` or `aborted`. `nodes` is a JSON-encoded map of `databaseId:assetId` to the node's status — `pending`, `evaluating`, the verdict the evaluation produced (`compliant`, `non_compliant`, `quarantined`, `pending_pipeline`, `error`), `skipped` for a descendant with no bound schema, or `superseded` for a descendant whose evaluation found a newer one of it already started (that evaluation settles the asset's state; not an error) — and `executionOrder` the JSON-encoded list of the same `databaseId:assetId` keys in evaluation order. A `completed` cascade also carries `results`, a JSON-encoded list of `{node, status, evaluationId}` with the same statuses. A skipped or superseded node does not abort the cascade. A rejected cascade carries `rejectedBy`, `rejectedAt` and `rejectionReason` instead of the approval fields. An `aborted` cascade carries `abortReason`: the rejection, or the failure that ended the run.
+`state` is `pending_approval`, `executing`, `completed` or `aborted`. `nodes` is a JSON-encoded map of `databaseId:assetId` to the node's status — `pending`, `evaluating`, the verdict the evaluation produced (`compliant`, `non_compliant`, `quarantined`, `pending_pipeline`, `error`), `skipped` for a descendant with no bound schema, `skipped_not_authorized` for a descendant in a database the caller who started the cascade (its approver, or the creator of a cascade without approval) may not evaluate, or `superseded` for a descendant whose evaluation found a newer one of it already started (that evaluation settles the asset's state; not an error) — and `executionOrder` the JSON-encoded list of the same `databaseId:assetId` keys in evaluation order. A `completed` cascade also carries `results`, a JSON-encoded list of `{node, status, evaluationId}` with the same statuses. A skipped or superseded node does not abort the cascade. The response carries `permissions.approve`: whether the caller may approve or reject it (a pending cascade, `POST` on the cascade and on the evaluation object of its parent's database). A rejected cascade carries `rejectedBy`, `rejectedAt` and `rejectionReason` instead of the approval fields. An `aborted` cascade carries `abortReason`: the rejection, or the failure that ended the run.
 
 ### Error responses
 

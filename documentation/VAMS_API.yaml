@@ -16160,6 +16160,19 @@ components:
                 isSystem:
                     type: boolean
                     description: "Whether the schema was registered by the system. A system schema is only updated by the system user."
+                permissions:
+                    type: object
+                    description: "Listing only: the caller's allowed actions on the schema, computed by the service."
+                    properties:
+                        edit:
+                            type: boolean
+                            description: "`PUT` on the schema in its scope (never for a system schema and a caller other than the system)."
+                        delete:
+                            type: boolean
+                            description: "`DELETE` on the schema in its scope (never for a system schema and a caller other than the system)."
+                        bind:
+                            type: boolean
+                            description: "A vams-rules-v1 schema the caller may read, with `PUT` on the `complianceBinding` of the listing's `databaseId` (or the schema's own database). For a GLOBAL schema listed without `databaseId`, the binding permission is checked when it is bound."
             required:
                 - schemaName
                 - databaseId
@@ -16584,6 +16597,11 @@ components:
                     items:
                         $ref: "#/components/schemas/complianceSchema"
                     description: "The latest version of each schema the caller may read."
+                createScopes:
+                    type: array
+                    items:
+                        type: string
+                    description: "Without `databaseId` only: the scopes (`GLOBAL` and database ids) the caller may register a schema in."
             required:
                 - schemas
 
@@ -16950,6 +16968,9 @@ components:
                 skipped:
                     type: integer
                     description: "Bound assets the caller is not authorized to evaluate; counted, never listed."
+                skippedNotAuthorized:
+                    type: integer
+                    description: "Bound assets skipped because the caller may not evaluate their database (the same count as `skipped`); none is evaluated with the system identity."
                 superseded:
                     type: integer
                     description: "Listed assets whose evaluation did not run because a newer evaluation of the asset had already started."
@@ -17165,7 +17186,18 @@ components:
                     type: array
                     description: "One page of assets in state `quarantined` (an asset released under an exception is not listed), filtered to the databases the caller may read; may be empty while `NextToken` is present."
                     items:
-                        $ref: "#/components/schemas/complianceState"
+                        allOf:
+                            - $ref: "#/components/schemas/complianceState"
+                            - type: object
+                              properties:
+                                  permissions:
+                                      type: object
+                                      description: "The caller's allowed actions on the row: a `POST` on the quarantined evaluation object of its database."
+                                      properties:
+                                          release:
+                                              type: boolean
+                                          exception:
+                                              type: boolean
                 NextToken:
                     type: string
                     description: "Continuation token for the next page; absent on the last page."
@@ -17293,7 +17325,14 @@ components:
                     type: integer
                 nodes:
                     type: string
-                    description: "JSON-encoded map of `databaseId:assetId` to node status (`pending`, `evaluating`, the evaluation verdict, `skipped`, `superseded` when a newer evaluation of the asset had already started so this one did not run, `error`). A skipped or superseded node does not abort the cascade."
+                    description: "JSON-encoded map of `databaseId:assetId` to node status (`pending`, `evaluating`, the evaluation verdict, `skipped`, `skipped_not_authorized` for a descendant in a database the caller who started the cascade may not evaluate, `superseded` when a newer evaluation of the asset had already started so this one did not run, `error`). A skipped or superseded node does not abort the cascade."
+                permissions:
+                    type: object
+                    description: "The caller's allowed actions on the cascade, computed by the service."
+                    properties:
+                        approve:
+                            type: boolean
+                            description: "Approve or reject: a pending cascade with `POST` on the cascade and on the evaluation object of its parent's database."
                 executionOrder:
                     type: string
                     description: "JSON-encoded list of the downstream assets' `databaseId:assetId` keys in evaluation order."

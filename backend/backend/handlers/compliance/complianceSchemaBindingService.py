@@ -17,7 +17,8 @@ override falls the asset back to the database schema (or removes its row when th
 
 Binding and unbinding are authorized on three objects: the `complianceBinding` object of the
 database (`PUT` binds, `DELETE` unbinds; an asset-level binding uses the asset's database), the
-compliance schema being bound (or currently bound), and a `GET` on the target — the `database` row
+compliance schema being bound (or currently bound) with `GET` in the schema's scope (its
+`databaseId`, a database id or GLOBAL), and a `GET` on the target — the `database` row
 for database paths, the `asset` row for asset paths — so ABAC constraints on the target's
 attributes still apply. A binding writes only compliance records, never the database or asset row,
 so it needs no write permission on either: a role that may edit a database's assets cannot bind a
@@ -189,14 +190,38 @@ def _parse_body(event):
 # Authorization helpers
 #######################
 
-def _enforce(schema_name, action):
-    """Tier-2 check on a schema object. Fails closed on an empty token list."""
+def _enforce_schema_read(schema_name, database_id, schema_row=None):
+    """Tier-2 GET check on the schema a binding names, in the schema's own scope (its `databaseId`:
+    a database id or GLOBAL). Binding, unbinding and reading a binding each need read access to the
+    schema involved; the write itself is authorized on the database's `complianceBinding` object.
+    With no schema (a database or asset without a binding) the database operated on stands in as
+    the scope. `schema_row` is the schema's latest version when the caller has already read it.
+    Fails closed on an empty token list."""
     if len(claims_and_roles["tokens"]) == 0:
         return False
+    if not schema_name:
+        scope = database_id
+    else:
+        row = schema_row if schema_row is not None else _latest_schema_row(schema_name)
+        # An absent schema is checked in the GLOBAL scope, so a caller without schema read access
+        # is refused rather than told whether the name exists.
+        scope = (row or {}).get("databaseId") or GLOBAL_DATABASE_ID
     return CasbinEnforcer(claims_and_roles).enforce({
         "object__type": COMPLIANCE_SCHEMA_OBJECT_TYPE,
         "complianceSchemaName": schema_name or "",
-    }, action)
+        "databaseId": scope or "",
+    }, "GET")
+
+
+def _latest_schema_row(schema_name):
+    """A schema's latest version row, or None."""
+    response = schema_table.query(
+        KeyConditionExpression=Key("schemaName").eq(schema_name),
+        ScanIndexForward=False,
+        Limit=1,
+    )
+    items = response.get("Items", [])
+    return items[0] if items else None
 
 
 def _enforce_binding(database_id, action):
@@ -317,13 +342,14 @@ def bind_schema_to_database(event, database_id, request: BindSchemaRequestModel)
         return authorization_error()
     if not _enforce_binding(database_id, "PUT"):
         return authorization_error()
-    if not _enforce(request.schemaName, "PUT"):
+    schema_row = _latest_schema_row(request.schemaName)
+    if not _enforce_schema_read(request.schemaName, database_id, schema_row):
         return authorization_error()
     db_item = database_table.get_item(Key={"databaseId": database_id}).get("Item")
     if not _enforce_database(db_item, database_id, "GET"):
         return authorization_error()
 
-    refused = _schema_bindable(event, request.schemaName, database_id)
+    refused = _schema_bindable(event, request.schemaName, database_id, schema_row)
     if refused is not None:
         return refused
 
@@ -381,7 +407,7 @@ def unbind_schema_from_database(event, database_id):
     if not _enforce_database(db_item, database_id, "GET"):
         return authorization_error()
     old_schema = (db_item or {}).get("complianceSchemaName")
-    if not _enforce(old_schema or "", "DELETE"):
+    if not _enforce_schema_read(old_schema, database_id):
         return authorization_error()
 
     if not db_item:
@@ -430,13 +456,14 @@ def bind_schema_to_asset(event, database_id, asset_id, request: BindSchemaReques
     # The asset is read by (database_id, asset_id), so the path's database is the asset's database.
     if not _enforce_binding(database_id, "PUT"):
         return authorization_error()
-    if not _enforce(request.schemaName, "PUT"):
+    schema_row = _latest_schema_row(request.schemaName)
+    if not _enforce_schema_read(request.schemaName, database_id, schema_row):
         return authorization_error()
     asset_item = store.get_asset_item(database_id, asset_id)
     if not _enforce_asset(asset_item, database_id, asset_id, "GET"):
         return authorization_error()
 
-    refused = _schema_bindable(event, request.schemaName, database_id)
+    refused = _schema_bindable(event, request.schemaName, database_id, schema_row)
     if refused is not None:
         return refused
 
@@ -491,7 +518,7 @@ def unbind_schema_from_asset(event, database_id, asset_id):
         return authorization_error()
     existing = store.get_compliance_record(database_id, asset_id)
     current_schema = (existing or {}).get("schemaName", "")
-    if not _enforce(current_schema, "DELETE"):
+    if not _enforce_schema_read(current_schema, database_id):
         return authorization_error()
 
     if not existing or existing.get("schemaSource") != SCHEMA_SOURCE_ASSET:
@@ -550,7 +577,7 @@ def get_bindings(event, database_id, query_params):
     if not _enforce_database(db_item, database_id, "GET"):
         return authorization_error()
     db_schema = (db_item or {}).get("complianceSchemaName")
-    if not _enforce(db_schema or "", "GET"):
+    if not _enforce_schema_read(db_schema, database_id):
         return authorization_error()
 
     if not db_item:
@@ -639,27 +666,22 @@ def _remove_database_compliance_records(database_id):
     return removed
 
 
-def _schema_visibility(schema_name, database_id):
-    """(visible, exists, is_vams_rules): whether the schema's latest version exists, whether it is
-    GLOBAL or scoped to `database_id`, and whether its body is a vams-rules-v1 document (a legacy
-    body cannot be evaluated, so it cannot be bound)."""
-    response = schema_table.query(
-        KeyConditionExpression=Key("schemaName").eq(schema_name),
-        ScanIndexForward=False,
-        Limit=1,
-    )
-    items = response.get("Items", [])
-    if not items:
+def _schema_visibility(schema_row, database_id):
+    """(visible, exists, is_vams_rules) of a schema's latest version row (None when absent):
+    whether it exists, whether it is GLOBAL or scoped to `database_id`, and whether its body is a
+    vams-rules-v1 document (a legacy body cannot be evaluated, so it cannot be bound)."""
+    if not schema_row:
         return False, False, False
-    schema_db_id = items[0].get("databaseId", GLOBAL_DATABASE_ID)
-    is_vams_rules = engine.schema_format(items[0].get("schemaBody")) == engine.VAMS_RULES_V1
+    schema_db_id = schema_row.get("databaseId", GLOBAL_DATABASE_ID)
+    is_vams_rules = engine.schema_format(schema_row.get("schemaBody")) == engine.VAMS_RULES_V1
     return schema_db_id in (GLOBAL_DATABASE_ID, database_id), True, is_vams_rules
 
 
-def _schema_bindable(event, schema_name, database_id):
+def _schema_bindable(event, schema_name, database_id, schema_row):
     """The 400 that refuses binding `schema_name` in `database_id` — absent, scoped to another
-    database, or not a vams-rules-v1 document — or None when it may be bound."""
-    visible, exists, is_vams_rules = _schema_visibility(schema_name, database_id)
+    database, or not a vams-rules-v1 document — or None when it may be bound. `schema_row` is the
+    schema's latest version (None when absent), read once for this and the authorization check."""
+    visible, exists, is_vams_rules = _schema_visibility(schema_row, database_id)
     if not exists:
         return general_error(body={"message": "Schema not found"}, event=event)
     if not visible:

@@ -82,6 +82,7 @@ def _run(event, *rows):
                 patch(f"{MOD}.cascade_table", table), \
                 patch(f"{MOD}.lambda_client", lambda_client), \
                 patch(f"{MOD}.cascade_executor_function_name", "vams-complianceCascadeExecutor"), \
+                patch(f"{STORE}.all_database_ids", return_value=[DB]), \
                 patch(f"{STORE}.write_audit") as write_audit:
             response = svc.lambda_handler(event, MagicMock())
         rows_after = {item["cascadeId"]: item for item in table.scan()["Items"]}

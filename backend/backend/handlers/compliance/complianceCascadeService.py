@@ -182,15 +182,45 @@ def _parse_body(event):
 # Authorization helpers
 #######################
 
-def _cascade_object(cascade_id):
-    return {"object__type": COMPLIANCE_CASCADE_OBJECT_TYPE, "cascadeId": cascade_id or ""}
+def _cascade_object(cascade_id, database_id):
+    """The Tier-2 object of a cascade: its id and the database of its parent (trigger) asset."""
+    return {"object__type": COMPLIANCE_CASCADE_OBJECT_TYPE, "cascadeId": cascade_id or "",
+            "databaseId": database_id or ""}
 
 
-def _enforce_cascade(cascade_id, action):
+def _enforce_cascade(cascade_id, database_id, action):
     """Tier-2 check on a cascade object. Fails closed on an empty token list."""
     if len(claims_and_roles["tokens"]) == 0:
         return False
-    return CasbinEnforcer(claims_and_roles).enforce(_cascade_object(cascade_id), action)
+    return CasbinEnforcer(claims_and_roles).enforce(_cascade_object(cascade_id, database_id), action)
+
+
+def _evaluable_database_ids():
+    """The databases the caller may evaluate (`complianceEvaluation` POST), recorded on a cascade
+    when it is started by a caller (approved, or created without approval). The executor evaluates
+    only the descendants in these databases and records the others as skipped (not authorized):
+    it runs without the caller's identity, so the caller's reach is fixed when the caller acts and
+    a descendant is never evaluated with the system identity instead."""
+    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+    return [database_id for database_id in store.all_database_ids()
+            if casbin_enforcer.enforce(_evaluation_object(database_id), "POST")]
+
+
+def _read_authorized_cascade(event, cascade_id, cascade_action, evaluation_action, not_found_message):
+    """(cascade, None) when the cascade exists and the caller passes both of its checks: the
+    cascade object and the evaluation object of its parent's database. Otherwise (None, response):
+    403, or `not_found_message` for a cascade that does not exist and a caller who may act on
+    cascades in general (an absent cascade is checked with no database, which a role scoped to
+    databases does not match, so such a caller is refused rather than told it is absent)."""
+    cascade = cascade_table.get_item(Key={"cascadeId": cascade_id}).get("Item")
+    database_id = (cascade or {}).get("triggeredByDatabaseId", "")
+    if not _enforce_cascade(cascade_id, database_id, cascade_action):
+        return None, authorization_error()
+    if not cascade:
+        return None, general_error(body={"message": not_found_message}, event=event)
+    if not _enforce_evaluation(database_id, evaluation_action):
+        return None, authorization_error()
+    return cascade, None
 
 
 def _evaluation_object(database_id, compliance_state=""):
@@ -269,7 +299,7 @@ def create_cascade(event, request: CreateCascadeRequestModel):
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
     cascade_id = str(uuid.uuid4())
-    if not _enforce_cascade(cascade_id, "POST"):
+    if not _enforce_cascade(cascade_id, request.databaseId, "POST"):
         return authorization_error()
     if not _enforce_evaluation(request.databaseId, "POST"):
         return authorization_error()
@@ -302,6 +332,9 @@ def create_cascade(event, request: CreateCascadeRequestModel):
     if request.requireApproval:
         item["approvalTimeoutAt"] = (
             now + timedelta(hours=CASCADE_APPROVAL_TIMEOUT_HOURS)).isoformat()
+    else:
+        # Started by this caller now: its descendants are evaluated within the caller's reach.
+        item["authorizedDatabaseIds"] = json.dumps(_evaluable_database_ids())
     cascade_table.put_item(Item=item)
 
     store.write_audit(
@@ -326,15 +359,10 @@ def approve_cascade(event, cascade_id, request: ApproveCascadeRequestModel):
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforce_cascade(cascade_id, "POST"):
-        return authorization_error()
-
-    cascade = cascade_table.get_item(Key={"cascadeId": cascade_id}).get("Item")
-    if not cascade:
-        return general_error(
-            body={"message": "Cascade not found or not in pending_approval state"}, event=event)
-    if not _enforce_evaluation(cascade.get("triggeredByDatabaseId", ""), "POST"):
-        return authorization_error()
+    cascade, refused = _read_authorized_cascade(
+        event, cascade_id, "POST", "POST", "Cascade not found or not in pending_approval state")
+    if refused:
+        return refused
     if store.cascade_approval_timed_out(cascade):
         store.expire_timed_out_cascade(cascade_table, cascade)
         return general_error(body={"message": CASCADE_TIMED_OUT_MESSAGE}, event=event)
@@ -347,7 +375,8 @@ def approve_cascade(event, cascade_id, request: ApproveCascadeRequestModel):
         cascade_table.update_item(
             Key={"cascadeId": cascade_id},
             UpdateExpression=(
-                "SET #s = :state, approvedBy = :actor, approvedAt = :now, approvalReason = :reason"
+                "SET #s = :state, approvedBy = :actor, approvedAt = :now, approvalReason = :reason,"
+                " authorizedDatabaseIds = :authorized"
             ),
             ExpressionAttributeNames={"#s": "state"},
             ExpressionAttributeValues={
@@ -356,6 +385,8 @@ def approve_cascade(event, cascade_id, request: ApproveCascadeRequestModel):
                 ":now": now,
                 ":reason": reason,
                 ":pending": CASCADE_STATE_PENDING_APPROVAL,
+                # The approver's reach: the executor evaluates descendants in these databases only.
+                ":authorized": json.dumps(_evaluable_database_ids()),
             },
             # Still pending and not past its timeout: a cascade that times out between the read
             # above and this write is not started.
@@ -395,15 +426,10 @@ def reject_cascade(event, cascade_id, request: RejectCascadeRequestModel):
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforce_cascade(cascade_id, "POST"):
-        return authorization_error()
-
-    cascade = cascade_table.get_item(Key={"cascadeId": cascade_id}).get("Item")
-    if not cascade:
-        return general_error(
-            body={"message": "Cascade not found or not in pending_approval state"}, event=event)
-    if not _enforce_evaluation(cascade.get("triggeredByDatabaseId", ""), "POST"):
-        return authorization_error()
+    cascade, refused = _read_authorized_cascade(
+        event, cascade_id, "POST", "POST", "Cascade not found or not in pending_approval state")
+    if refused:
+        return refused
     if store.cascade_approval_timed_out(cascade):
         store.expire_timed_out_cascade(cascade_table, cascade)
         return general_error(body={"message": CASCADE_TIMED_OUT_MESSAGE}, event=event)
@@ -461,21 +487,23 @@ def get_cascade(event, cascade_id):
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforce_cascade(cascade_id, "GET"):
-        return authorization_error()
-
-    item = cascade_table.get_item(Key={"cascadeId": cascade_id}).get("Item")
-    if not item:
-        return general_error(body={"message": "Cascade not found"}, event=event)
-    if not _enforce_evaluation(item.get("triggeredByDatabaseId", ""), "GET"):
-        return authorization_error()
-    return success(body=store.expire_timed_out_cascade(cascade_table, item))
+    item, refused = _read_authorized_cascade(event, cascade_id, "GET", "GET", "Cascade not found")
+    if refused:
+        return refused
+    item = store.expire_timed_out_cascade(cascade_table, item)
+    body = {key: value for key, value in item.items() if key not in PRIVATE_CASCADE_ATTRIBUTES}
+    body["permissions"] = _cascade_permissions(CasbinEnforcer(claims_and_roles), item)
+    return success(body=body)
 
 
 # The states the cascade listing may be asked for (`state`); pending approval by default.
 CASCADE_LISTING_STATES = ("pending_approval", "executing", "completed", "aborted")
 CASCADE_STATE_INDEX_KEYS = ("cascadeId", "state", "createdAt")
 DEFAULT_CASCADE_PAGE_SIZE = 100
+# Stored on a cascade row for the service and the executor, never returned: the listing's search
+# column, and the starting caller's evaluable databases (which databases another caller may
+# evaluate is not the reader's to learn).
+PRIVATE_CASCADE_ATTRIBUTES = ("searchText", "authorizedDatabaseIds")
 
 
 def list_pending_cascades(event):
@@ -542,16 +570,30 @@ def list_pending_cascades(event):
             return False
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
         return bool(casbin_enforcer) and casbin_enforcer.enforce(
-            _cascade_object(item.get("cascadeId")), "GET") and casbin_enforcer.enforce(
+            _cascade_object(item.get("cascadeId"), item.get("triggeredByDatabaseId", "")),
+            "GET") and casbin_enforcer.enforce(
             _evaluation_object(item.get("triggeredByDatabaseId", "")), "GET")
 
     rows, next_key, _ = listing.query_page(
         cascade_table, query_kwargs, page_size, CASCADE_STATE_INDEX_KEYS, start_key=start_key,
         filtered=bool(conditions), accept=listable)
-    body = {"cascades": [_cascade_row(item) for item in rows]}
+    body = {"cascades": [dict(_cascade_row(item),
+                              permissions=_cascade_permissions(casbin_enforcer, item))
+                         for item in rows]}
     if next_key:
         body["NextToken"] = listing.encode_token(next_key)
     return success(body=body)
+
+
+def _cascade_permissions(casbin_enforcer, item):
+    """The caller's allowed actions on one cascade, computed server-side: `approve` (approve or
+    reject) needs POST on the cascade object and on the evaluation object of its parent's database,
+    and applies to a cascade still pending approval only."""
+    database_id = item.get("triggeredByDatabaseId", "")
+    approve = (item.get("state") == CASCADE_STATE_PENDING_APPROVAL
+               and casbin_enforcer.enforce(_cascade_object(item.get("cascadeId"), database_id), "POST")
+               and casbin_enforcer.enforce(_evaluation_object(database_id), "POST"))
+    return {"approve": bool(approve)}
 
 
 def _cascade_row(item):
@@ -563,5 +605,6 @@ def _cascade_row(item):
         "assetId": item.get("triggeredByAssetId", ""),
         "assetName": item.get("triggeredByAssetName", ""),
     }
-    row.pop("searchText", None)
+    for attribute in PRIVATE_CASCADE_ATTRIBUTES:
+        row.pop(attribute, None)
     return row

@@ -156,13 +156,13 @@ Each object type supports specific constraint fields that can be used in criteri
 | `tagType`              | `tagTypeName`, `databaseId`                                             | Tag type CRUD operations.                                                        |
 | `role`                 | `roleName`                                                              | Role management.                                                                 |
 | `userRole`             | `roleName`, `userId`                                                    | User-to-role assignment management.                                              |
-| `complianceSchema`     | `complianceSchemaName`                                                  | Compliance schema management and the schema named in a binding.                  |
+| `complianceSchema`     | `databaseId`, `complianceSchemaName`                                    | Compliance schema management and the schema named in a binding. `databaseId` is the schema's scope: a database ID, or `GLOBAL`. |
 | `complianceBinding`    | `databaseId`                                                            | Binding (`PUT`) and unbinding (`DELETE`) compliance schemas in a database.       |
 | `complianceEvaluation` | `databaseId`, `complianceState`                                         | Compliance evaluation, quarantine, and audit operations.                         |
-| `complianceCascade`    | `cascadeId`                                                             | Cascade approval and execution operations.                                       |
+| `complianceCascade`    | `databaseId`, `cascadeId`                                               | Cascade approval and execution operations. `databaseId` is the database of the cascade's parent asset. |
 
 :::info[Compliance object types]
-The default admin role includes constraints for all four compliance object types with `contains .*` (match all) criteria. For non-admin roles, use the `compliance-admin` or `compliance-readonly` permission templates for quick setup; see [Compliance](compliance.md#authorization-model).
+The default admin role includes constraints for all four compliance object types with `contains .*` (match all) criteria. A constraint with no `databaseId` criterion matches every scope, so a compliance role stored before `complianceSchema` and `complianceCascade` gained `databaseId` keeps its earlier reach until it is re-imported from the current templates. For non-admin roles, use the `compliance-admin` or `compliance-readonly` permission templates for quick setup; see [Compliance](compliance.md#authorization-model).
 :::
 
 This object-type and field matrix — along with the criteria operators, the permissions, and the permission types — is served by the `GET /auth/constraints/permissionObjects` API and is the authoritative source the constraint editor and CLI use. Constraints are validated against it: a criterion whose field is not valid for its object type is rejected at create/update time and ignored during authorization evaluation.
@@ -536,9 +536,9 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 
 | Route                                                     | Methods          | Tier 2 Object Type                                                                   | Tier 2 Fields                        |
 | --------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------ | ------------------------------------ |
-| `/compliance/schemas`                                     | GET, POST        | `complianceSchema`                                                                   | `complianceSchemaName`               |
-| `/compliance/schemas/{schemaName}`                        | GET, PUT, DELETE | `complianceSchema`                                                                   | `complianceSchemaName`               |
-| `/compliance/sweep/{schemaName}`                          | POST             | `complianceSchema` + `complianceEvaluation` (per bound database)                     | `complianceSchemaName`, `databaseId` |
+| `/compliance/schemas`                                     | GET, POST        | `complianceSchema` (`POST`: in the target scope)                                     | `databaseId`, `complianceSchemaName` |
+| `/compliance/schemas/{schemaName}`                        | GET, PUT, DELETE | `complianceSchema` (in the schema's scope; a move needs `PUT` in the new one too)    | `databaseId`, `complianceSchemaName` |
+| `/compliance/sweep/{schemaName}`                          | POST             | `complianceSchema` (`GET`) + `complianceEvaluation` (`POST`, per bound database)     | `complianceSchemaName`, `databaseId` |
 | `/compliance/bind/{databaseId}`                           | GET, PUT, DELETE | `complianceSchema` + `database` (`GET`); `PUT` and `DELETE` also `complianceBinding` | `complianceSchemaName`, `databaseId` |
 | `/compliance/bind/{databaseId}/{assetId}`                 | PUT, DELETE      | `complianceBinding` + `complianceSchema` + `asset` (`GET`)                           | `complianceSchemaName`, `databaseId` |
 | `/compliance/evaluate/{databaseId}/{assetId}`             | POST             | `complianceEvaluation`                                                               | `databaseId`                         |
@@ -549,7 +549,7 @@ On a `pipeline` or `workflow` object, `POST` means **create** and `PUT` means **
 | `/compliance/quarantine`                                  | GET              | `complianceEvaluation`                                                               | `complianceState`                    |
 | `/compliance/quarantine/{databaseId}/{assetId}/release`   | POST             | `complianceEvaluation`                                                               | `complianceState`                    |
 | `/compliance/quarantine/{databaseId}/{assetId}/exception` | POST, DELETE     | `complianceEvaluation`                                                               | `complianceState`                    |
-| `/compliance/cascades`                                    | GET, POST        | `complianceCascade` + `complianceEvaluation` (trigger asset's database)              | `cascadeId`, `databaseId`            |
+| `/compliance/cascades`                                    | GET, POST        | `complianceCascade` + `complianceEvaluation` (both in the parent asset's database)   | `cascadeId`, `databaseId`            |
 | `/compliance/cascades/{cascadeId}`                        | GET              | `complianceCascade` + `complianceEvaluation`                                         | `cascadeId`, `databaseId`            |
 | `/compliance/cascades/{cascadeId}/approve`                | POST             | `complianceCascade` + `complianceEvaluation`                                         | `cascadeId`, `databaseId`            |
 | `/compliance/cascades/{cascadeId}/reject`                 | POST             | `complianceCascade` + `complianceEvaluation`                                         | `cascadeId`, `databaseId`            |

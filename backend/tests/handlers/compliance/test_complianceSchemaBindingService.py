@@ -230,7 +230,8 @@ class TestAuthorization:
         calls = [c.args for c in tables["casbin"].enforce.call_args_list]
         assert calls == [
             ({"object__type": "complianceBinding", "databaseId": DB}, "PUT"),
-            ({"object__type": "complianceSchema", "complianceSchemaName": SCHEMA}, "PUT"),
+            ({"object__type": "complianceSchema", "complianceSchemaName": SCHEMA,
+              "databaseId": "GLOBAL"}, "GET"),
             (dict(DATABASE_ROW, object__type="database"), "GET"),
         ]
 
@@ -241,7 +242,8 @@ class TestAuthorization:
         assert calls == [
             ({"object__type": "complianceBinding", "databaseId": DB}, "DELETE"),
             (dict(row, object__type="database"), "GET"),
-            ({"object__type": "complianceSchema", "complianceSchemaName": "old-schema"}, "DELETE"),
+            ({"object__type": "complianceSchema", "complianceSchemaName": "old-schema",
+              "databaseId": "GLOBAL"}, "GET"),
         ]
 
     def test_binding_an_asset_checks_the_binding_the_schema_and_the_stored_asset_row(self):
@@ -249,7 +251,8 @@ class TestAuthorization:
         calls = [c.args for c in tables["casbin"].enforce.call_args_list]
         assert calls == [
             ({"object__type": "complianceBinding", "databaseId": DB}, "PUT"),
-            ({"object__type": "complianceSchema", "complianceSchemaName": SCHEMA}, "PUT"),
+            ({"object__type": "complianceSchema", "complianceSchemaName": SCHEMA,
+              "databaseId": "GLOBAL"}, "GET"),
             (dict(ASSET_ROW, object__type="asset"), "GET"),
         ]
 
@@ -261,7 +264,8 @@ class TestAuthorization:
         assert calls == [
             ({"object__type": "complianceBinding", "databaseId": DB}, "DELETE"),
             (dict(ASSET_ROW, object__type="asset"), "GET"),
-            ({"object__type": "complianceSchema", "complianceSchemaName": "old-schema"}, "DELETE"),
+            ({"object__type": "complianceSchema", "complianceSchemaName": "old-schema",
+              "databaseId": "GLOBAL"}, "GET"),
         ]
 
     def test_reading_the_bindings_checks_the_stored_database_row(self):
@@ -269,7 +273,8 @@ class TestAuthorization:
         calls = [c.args for c in tables["casbin"].enforce.call_args_list]
         assert calls == [
             (dict(DATABASE_ROW, object__type="database"), "GET"),
-            ({"object__type": "complianceSchema", "complianceSchemaName": SCHEMA}, "GET"),
+            ({"object__type": "complianceSchema", "complianceSchemaName": SCHEMA,
+              "databaseId": "GLOBAL"}, "GET"),
         ]
 
     @pytest.mark.parametrize("method,path,params,body", ASSET_PATHS)
