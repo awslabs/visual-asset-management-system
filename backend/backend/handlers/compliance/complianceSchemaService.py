@@ -327,6 +327,10 @@ def schema_permissions(casbin_enforcer, schema, binding_database_id=None):
     schema is never editable or deletable by a caller other than the system user."""
     name, database_id = schema["schemaName"], schema["databaseId"]
     is_system_locked = schema.get("isSystem") and claims_and_roles["tokens"][0] != SYSTEM_USER
+    # A GLOBAL filter names no database to bind in (a new database's form asks for the schemas any
+    # database may bind), so it is treated as no filter.
+    if binding_database_id == GLOBAL_DATABASE_ID:
+        binding_database_id = None
     target = binding_database_id or (database_id if database_id != GLOBAL_DATABASE_ID else None)
     bind = schema.get("schemaFormat") == engine.VAMS_RULES_V1 and (
         target is None or casbin_enforcer.enforce(_binding_object(target), "PUT"))

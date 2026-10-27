@@ -129,6 +129,15 @@ class TestTheSchemaListing:
             schema_rows=SCHEMA_ROWS[:2])
         assert all(s["permissions"]["bind"] is False for s in body_of(response)["schemas"])
 
+    def test_a_global_filter_names_no_database_to_bind_in(self):
+        # The new-database form lists the schemas any database may bind with `databaseId=GLOBAL`;
+        # there is no `complianceBinding` named GLOBAL to check.
+        rules = {**database_admin_rules(), ("complianceBinding", "PUT"): set()}
+        response, _ = _run_schema(
+            rest_event("GET", "/compliance/schemas", query_params={"databaseId": "GLOBAL"}),
+            rules, schema_rows=SCHEMA_ROWS[:1])
+        assert body_of(response)["schemas"][0]["permissions"]["bind"] is True
+
     def test_a_system_schema_is_never_editable_by_another_caller(self):
         rows = [dict(schema_row("own-1", database_id=DB), isSystem=True)]
         response, _ = _run_schema(rest_event("GET", "/compliance/schemas"), database_admin_rules(),
