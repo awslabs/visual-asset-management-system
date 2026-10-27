@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useState, useCallback } from "react";
-import { VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
+import { VAMS_PAGE_PADDING, WRAP_ANYWHERE_STYLE } from "../components/compliance/rowActions";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import Header from "@cloudscape-design/components/header";
@@ -200,6 +200,8 @@ const ComplianceAuditLog: React.FC = () => {
                 )}
 
                 <Table
+                    // Columns wrap, so the trail fits the page at 1280 px instead of scrolling.
+                    wrapLines
                     header={
                         <Header
                             variant="h1"
@@ -310,7 +312,10 @@ const ComplianceAuditLog: React.FC = () => {
                         {
                             id: "eventType",
                             header: "Event Type",
-                            cell: (item) => item.eventType || "-",
+                            // An event type is one long identifier (schema_bound_to_database).
+                            cell: (item) => (
+                                <span style={WRAP_ANYWHERE_STYLE}>{item.eventType || "-"}</span>
+                            ),
                             sortingField: "eventType",
                         },
                         {
@@ -368,10 +373,12 @@ const ComplianceAuditLog: React.FC = () => {
                                     <SpaceBetween size="xxxs">
                                         {lines.map((line) => (
                                             <Box key={line.key} fontSize="body-s">
-                                                <Box variant="span" fontWeight="bold">
-                                                    {line.key}
-                                                </Box>
-                                                : {line.value}
+                                                <span style={WRAP_ANYWHERE_STYLE}>
+                                                    <Box variant="span" fontWeight="bold">
+                                                        {line.key}
+                                                    </Box>
+                                                    : {line.value}
+                                                </span>
                                             </Box>
                                         ))}
                                     </SpaceBetween>

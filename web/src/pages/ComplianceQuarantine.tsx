@@ -11,7 +11,6 @@ import Pagination from "@cloudscape-design/components/pagination";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Table from "@cloudscape-design/components/table";
 import Alert from "@cloudscape-design/components/alert";
-import Link from "@cloudscape-design/components/link";
 import Synonyms from "../synonyms";
 import {
     fetchQuarantinedAssets,
@@ -22,14 +21,14 @@ import {
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../services/ComplianceService";
 import ReasonModal from "../components/compliance/ReasonModal";
-import { ComplianceStateBadge } from "../components/compliance/complianceStateBadge";
+import ComplianceAssetCell from "../components/compliance/ComplianceAssetCell";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
 import {
     ROW_ACTIONS_STICKY_COLUMNS,
-    STATE_COLUMN_MIN_WIDTH,
     TIMESTAMP_COLUMN_MIN_WIDTH,
     VAMS_PAGE_PADDING,
+    WRAP_ANYWHERE_STYLE,
 } from "../components/compliance/rowActions";
 import {
     DatabaseFilter,
@@ -250,25 +249,17 @@ const ComplianceQuarantine: React.FC = () => {
                     }
                     columnDefinitions={[
                         {
-                            id: "assetName",
-                            header: `${Synonyms.Asset} Name`,
-                            cell: (item) =>
-                                canOpenAsset ? (
-                                    <Link
-                                        href={`#/databases/${item.databaseId}/assets/${item.assetId}`}
-                                    >
-                                        {item.assetName || item.assetId}
-                                    </Link>
-                                ) : (
-                                    item.assetName || item.assetId
-                                ),
+                            id: "asset",
+                            header: Synonyms.Asset,
+                            cell: (item) => (
+                                <ComplianceAssetCell
+                                    databaseId={item.databaseId}
+                                    assetId={item.assetId}
+                                    assetName={item.assetName}
+                                    linked={canOpenAsset}
+                                />
+                            ),
                             sortingField: "assetName",
-                        },
-                        {
-                            id: "assetId",
-                            header: `${Synonyms.Asset} ID`,
-                            cell: (item) => item.assetId,
-                            sortingField: "assetId",
                         },
                         {
                             id: "databaseId",
@@ -285,16 +276,15 @@ const ComplianceQuarantine: React.FC = () => {
                         {
                             id: "quarantineReason",
                             header: "Reason",
-                            cell: (item) => item.quarantineReason || "-",
+                            // A reason quotes rule messages (paths, patterns) that may hold long
+                            // unbroken tokens; they wrap anywhere rather than widen the table.
+                            cell: (item) => (
+                                <span style={WRAP_ANYWHERE_STYLE}>
+                                    {item.quarantineReason || "-"}
+                                </span>
+                            ),
                         },
-                        {
-                            id: "complianceState",
-                            header: "State",
-                            // Wide enough for "Quarantined" on one line (the table wraps).
-                            minWidth: STATE_COLUMN_MIN_WIDTH,
-                            cell: (item) => <ComplianceStateBadge state={item.complianceState} />,
-                            sortingField: "complianceState",
-                        },
+                        // No State column: every asset on this page is quarantined.
                         {
                             id: "updatedAt",
                             header: "Quarantined At",

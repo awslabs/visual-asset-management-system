@@ -156,7 +156,8 @@ describe("ComplianceCascades filters and paging", () => {
         ]);
         const { container } = render(<ComplianceCascades />);
         expect(await screen.findByText("Turbine Blade")).toBeTruthy();
-        expect(screen.getByText("a1")).toBeTruthy();
+        // The trigger asset's database and ID beneath its name.
+        expect(screen.getByText("db1 / a1")).toBeTruthy();
         expect(service().fetchCascades.mock.calls[0][0]).toEqual(
             expect.objectContaining({ state: "pending_approval", startingToken: undefined })
         );

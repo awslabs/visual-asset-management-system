@@ -176,24 +176,19 @@ describe("ComplianceQuarantine", () => {
         expect(screen.queryByRole("columnheader", { name: "Schema" })).not.toBeInTheDocument();
     });
 
-    it("renders each row's state through the shared badge", async () => {
+    it("shows each asset's name with its ID beneath, and no State column", async () => {
+        // Every asset the listing returns is quarantined, so a State column would say
+        // "Quarantined" on every row; it is left out so the table fits the page at 1280 px.
         service().fetchQuarantinedAssets.mockResolvedValue([
             true,
-            {
-                quarantinedAssets: [
-                    quarantined("asset-1"),
-                    { ...quarantined("asset-2"), complianceState: "exception" },
-                ],
-                nextToken: undefined,
-            },
+            { quarantinedAssets: [quarantined("asset-1")], nextToken: undefined },
         ]);
         render(<ComplianceQuarantine />);
         await screen.findByText("Name of asset-1");
-        const rowOf = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
-        expect(within(rowOf("Name of asset-1")).getByText("Quarantined")).toBeInTheDocument();
-        // The badge shares its label with the row's "Exception" action button.
-        expect(within(rowOf("Name of asset-1")).getAllByText("Exception")).toHaveLength(1);
-        expect(within(rowOf("Name of asset-2")).getAllByText("Exception")).toHaveLength(2);
+        const row = screen.getByText("Name of asset-1").closest("tr") as HTMLElement;
+        expect(within(row).getByText("asset-1")).toBeInTheDocument();
+        expect(within(row).queryByText("Quarantined")).toBeNull();
+        expect(screen.queryByRole("columnheader", { name: /^State/ })).toBeNull();
     });
 });
 

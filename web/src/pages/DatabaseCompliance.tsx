@@ -16,7 +16,6 @@ import Table from "@cloudscape-design/components/table";
 import Alert from "@cloudscape-design/components/alert";
 import BreadcrumbGroup from "@cloudscape-design/components/breadcrumb-group";
 import ColumnLayout from "@cloudscape-design/components/column-layout";
-import Link from "@cloudscape-design/components/link";
 import FormField from "@cloudscape-design/components/form-field";
 import Select, { SelectProps } from "@cloudscape-design/components/select";
 import Modal from "@cloudscape-design/components/modal";
@@ -45,12 +44,12 @@ import { schemaSourceLabel } from "../components/compliance/complianceStateBadge
 import RevokeExceptionModal from "../components/compliance/RevokeExceptionModal";
 import {
     ROW_ACTIONS_STICKY_COLUMNS,
-    STATE_COLUMN_MIN_WIDTH,
     SUMMARY_TILE_MIN_WIDTH,
     VAMS_PAGE_PADDING,
 } from "../components/compliance/rowActions";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 import { TextFilterInput, useUrlFilters } from "../components/compliance/listingFilters";
+import ComplianceAssetCell from "../components/compliance/ComplianceAssetCell";
 
 /** The overview's server-side filters and sort, kept in the URL. */
 export const OVERVIEW_FILTER_KEYS = [
@@ -743,31 +742,23 @@ const DatabaseCompliancePage: React.FC = () => {
                         }
                         columnDefinitions={[
                             {
-                                id: "assetName",
-                                header: `${Synonyms.Asset} Name`,
-                                cell: (item: any) =>
-                                    canOpenAsset ? (
-                                        <Link
-                                            href={`#/databases/${databaseId}/assets/${item.assetId}`}
-                                        >
-                                            {item.assetName || item.assetId}
-                                        </Link>
-                                    ) : (
-                                        item.assetName || item.assetId
-                                    ),
+                                id: "asset",
+                                header: Synonyms.Asset,
+                                cell: (item: any) => (
+                                    <ComplianceAssetCell
+                                        databaseId={databaseId || ""}
+                                        assetId={item.assetId}
+                                        assetName={item.assetName}
+                                        linked={canOpenAsset}
+                                    />
+                                ),
                                 sortingField: "assetName",
-                            },
-                            {
-                                id: "assetId",
-                                header: `${Synonyms.Asset} ID`,
-                                cell: (item: any) => item.assetId,
-                                sortingField: "assetId",
                             },
                             {
                                 id: "complianceState",
                                 header: "State",
-                                // Wide enough for "Quarantined" on one line (the table wraps).
-                                minWidth: STATE_COLUMN_MIN_WIDTH,
+                                // The labels are one line each (StatusLabel): the column is as
+                                // wide as the longest one on the page.
                                 cell: (item: any) => (
                                     <SpaceBetween direction="horizontal" size="xs">
                                         <ComplianceStateBadge state={item.complianceState} />
@@ -779,16 +770,22 @@ const DatabaseCompliancePage: React.FC = () => {
                                 sortingField: "complianceState",
                             },
                             {
+                                // The bound schema with where its binding comes from beneath (the
+                                // database's binding or the asset's own), in one column so the
+                                // table fits the page at 1280 px.
                                 id: "schemaName",
                                 header: "Bound schema",
-                                cell: (item: any) => item.schemaName || "-",
+                                cell: (item: any) => (
+                                    <SpaceBetween size="xxxs">
+                                        <span>{item.schemaName || "-"}</span>
+                                        {item.schemaSource && (
+                                            <Box variant="small" color="text-body-secondary">
+                                                {schemaSourceLabel(item.schemaSource)}
+                                            </Box>
+                                        )}
+                                    </SpaceBetween>
+                                ),
                                 sortingField: "schemaName",
-                            },
-                            {
-                                id: "schemaSource",
-                                header: "Source",
-                                cell: (item: any) => schemaSourceLabel(item.schemaSource),
-                                sortingField: "schemaSource",
                             },
                             {
                                 id: "updatedAt",

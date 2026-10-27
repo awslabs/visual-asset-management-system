@@ -19,13 +19,6 @@ export const ROW_ACTIONS_STICKY_COLUMNS = { first: 0, last: 1 };
 export const VAMS_PAGE_PADDING = { top: "m", horizontal: "l" } as const;
 
 /**
- * Minimum width (px) of a compliance State column: the widest state label, "Quarantined", with
- * its icon and the cell padding (about 130 px). The other columns wrap (`wrapLines`), and a State
- * column narrower than its longest word broke it mid-word ("Qua / rantine / d") at 1440 px.
- */
-export const STATE_COLUMN_MIN_WIDTH = 150;
-
-/**
  * Minimum width (px) of a timestamp column headed by a long word, such as "Quarantined At": the
  * header word with the sort control and the padding, so it is neither broken nor clipped.
  */
@@ -37,3 +30,10 @@ export const TIMESTAMP_COLUMN_MIN_WIDTH = 170;
  * labels broke mid-word ("Quarantin / ed"); the tiles flow onto a second row instead.
  */
 export const SUMMARY_TILE_MIN_WIDTH = 150;
+
+/**
+ * Style of free text that may hold long unbroken tokens (a quarantine reason quoting a path or a
+ * pattern): it wraps anywhere, so such a token cannot make its column, and the table, wider than
+ * the page.
+ */
+export const WRAP_ANYWHERE_STYLE = { overflowWrap: "anywhere" } as const;

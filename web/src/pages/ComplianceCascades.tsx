@@ -413,47 +413,48 @@ const ComplianceCascades: React.FC = () => {
                     }
                     columnDefinitions={[
                         {
-                            id: "cascadeId",
-                            header: "Cascade ID",
-                            cell: (item) => shortId(item.cascadeId),
-                            sortingField: "cascadeId",
-                        },
-                        {
+                            // The cascade's status with its short ID beneath, in one column so
+                            // the table fits the page at 1280 px.
                             id: "state",
-                            header: "Status",
+                            header: "Cascade",
                             cell: (item) => {
                                 const indicator = statusIndicatorMap[item.state] || {
                                     type: "stopped",
                                     label: item.state || "Unknown",
                                 };
                                 return (
-                                    <StatusLabel type={indicator.type as any}>
-                                        {indicator.label}
-                                    </StatusLabel>
+                                    <SpaceBetween size="xxxs">
+                                        <StatusLabel type={indicator.type as any}>
+                                            {indicator.label}
+                                        </StatusLabel>
+                                        <Box variant="small" color="text-body-secondary">
+                                            {shortId(item.cascadeId)}
+                                        </Box>
+                                    </SpaceBetween>
                                 );
                             },
                             sortingField: "state",
                         },
                         {
-                            id: "databaseId",
-                            header: `Trigger ${Synonyms.Database}`,
-                            cell: (item) => cascadeTriggerDatabaseId(item) || "-",
-                            sortingField: "triggeredByDatabaseId",
-                        },
-                        {
+                            // The trigger asset with its database and ID beneath, in one column
+                            // so the table fits the page at 1280 px.
                             id: "assetId",
                             header: `Trigger ${Synonyms.Asset}`,
-                            cell: (item) =>
-                                item.assetName ? (
-                                    <SpaceBetween size="xxxs">
-                                        <span>{item.assetName}</span>
-                                        <Box variant="small" color="text-body-secondary">
-                                            {cascadeTriggerAssetId(item)}
-                                        </Box>
-                                    </SpaceBetween>
-                                ) : (
-                                    cascadeTriggerAssetId(item) || "-"
-                                ),
+                            cell: (item) => (
+                                <SpaceBetween size="xxxs">
+                                    <span>
+                                        {item.assetName || cascadeTriggerAssetId(item) || "-"}
+                                    </span>
+                                    <Box variant="small" color="text-body-secondary">
+                                        {[
+                                            cascadeTriggerDatabaseId(item),
+                                            item.assetName ? cascadeTriggerAssetId(item) : "",
+                                        ]
+                                            .filter(Boolean)
+                                            .join(" / ")}
+                                    </Box>
+                                </SpaceBetween>
+                            ),
                             sortingField: "triggeredByAssetId",
                         },
                         {
@@ -462,10 +463,23 @@ const ComplianceCascades: React.FC = () => {
                             cell: (item) => item.triggerReason || "-",
                         },
                         {
+                            // When the cascade was created, and by whom beneath.
                             id: "createdAt",
                             header: "Created",
-                            cell: (item) =>
-                                item.createdAt ? new Date(item.createdAt).toLocaleString() : "-",
+                            cell: (item) => (
+                                <SpaceBetween size="xxxs">
+                                    <span>
+                                        {item.createdAt
+                                            ? new Date(item.createdAt).toLocaleString()
+                                            : "-"}
+                                    </span>
+                                    {item.actor && (
+                                        <Box variant="small" color="text-body-secondary">
+                                            by {item.actor}
+                                        </Box>
+                                    )}
+                                </SpaceBetween>
+                            ),
                             sortingField: "createdAt",
                         },
                         {
@@ -476,11 +490,6 @@ const ComplianceCascades: React.FC = () => {
                                     ? new Date(item.approvalTimeoutAt).toLocaleString()
                                     : "-",
                             sortingField: "approvalTimeoutAt",
-                        },
-                        {
-                            id: "actor",
-                            header: "Actor",
-                            cell: (item) => item.actor || "-",
                         },
                         ...(canApprove || canReject
                             ? [

@@ -21,7 +21,6 @@ import ComplianceQuarantine from "./ComplianceQuarantine";
 import DatabaseCompliancePage from "./DatabaseCompliance";
 import {
     ROW_ACTIONS_STICKY_COLUMNS,
-    STATE_COLUMN_MIN_WIDTH,
     SUMMARY_TILE_MIN_WIDTH,
     TIMESTAMP_COLUMN_MIN_WIDTH,
 } from "../components/compliance/rowActions";
@@ -95,20 +94,15 @@ beforeEach(() => {
 
 describe("compliance labels keep their words whole", () => {
     it("the minimum widths fit the longest words on one line", () => {
-        expect(STATE_COLUMN_MIN_WIDTH).toBeGreaterThanOrEqual(oneLineWidth("Quarantined"));
         // The header word plus the sort control (about 30 px) and the padding.
         expect(TIMESTAMP_COLUMN_MIN_WIDTH).toBeGreaterThanOrEqual(oneLineWidth("Quarantined", 30));
         // A tile label has no icon; "Non-Compliant" is the longest word.
         expect(SUMMARY_TILE_MIN_WIDTH).toBeGreaterThanOrEqual(oneLineWidth("Non-Compliant", 0));
     });
 
-    it("Quarantine: the State and Quarantined At columns keep a minimum width", async () => {
+    it("Quarantine: the Quarantined At column keeps a minimum width", async () => {
         render(<ComplianceQuarantine />);
         await waitFor(() => expect(mockTableProps.length).toBeGreaterThan(0));
-        expect(column("complianceState").minWidth).toBe(STATE_COLUMN_MIN_WIDTH);
-        expect(column("complianceState").minWidth).toBeGreaterThanOrEqual(
-            oneLineWidth("Quarantined")
-        );
         expect(column("updatedAt").header).toBe("Quarantined At");
         expect(column("updatedAt").minWidth).toBe(TIMESTAMP_COLUMN_MIN_WIDTH);
         expect(column("updatedAt").minWidth).toBeGreaterThanOrEqual(
@@ -122,14 +116,16 @@ describe("compliance labels keep their words whole", () => {
         expect(columns[columns.length - 1].id).toBe("actions");
     });
 
-    it("database overview: the tiles and the State column keep a minimum width", async () => {
+    it("database overview: the tiles keep a minimum width", async () => {
         render(<DatabaseCompliancePage />);
         await waitFor(() => expect(mockTableProps.length).toBeGreaterThan(0));
         const tiles = mockColumnLayoutProps.find((props) => props.variant === "text-grid");
         expect(tiles).toBeDefined();
         expect(tiles.minColumnWidth).toBe(SUMMARY_TILE_MIN_WIDTH);
         expect(tiles.minColumnWidth).toBeGreaterThanOrEqual(oneLineWidth("Non-Compliant", 0));
-        expect(column("complianceState").minWidth).toBe(STATE_COLUMN_MIN_WIDTH);
+        // The State column has no fixed width: its labels are one line each (StatusLabel), so the
+        // table sizes it to the longest one.
+        expect(column("complianceState").minWidth).toBeUndefined();
         const columns = mockTableProps[mockTableProps.length - 1].columnDefinitions as any[];
         expect(columns[columns.length - 1].id).toBe("actions");
     });

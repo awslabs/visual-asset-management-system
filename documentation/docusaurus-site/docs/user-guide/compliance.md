@@ -32,7 +32,7 @@ Each row lists the rules that failed as violations. A row flagged **Exception ap
     - A **Schema Binding** panel, for users who may list schemas and bind or unbind one, with the **Bound schema** selector and the **Bind**, **Change** and **Remove** actions. See [Binding schemas to databases](#binding-schemas-to-databases).
     - A summary row with counts for each state: Compliant, Non-Compliant, Quarantined, Exception, Pending Evaluation, and Unknown, plus an **Evaluation errors** tile counting the assets whose last evaluation produced no verdict. That tile is an overlay on the state counts, not a state of its own: each of those assets is also counted under the state it kept.
     - A compliance rate (compliant assets divided by tracked assets).
-    - A table of tracked assets with Asset Name, Asset ID, compliance state (with the **Evaluation error** indicator beside it where the last evaluation errored), the **Bound schema** — the schema the asset is currently bound to, which is not necessarily the schema whose evaluation produced the state shown — and last evaluation time.
+    - A table of tracked assets with each asset's name (its ID beneath), compliance state (with the **Evaluation error** indicator beside it where the last evaluation errored), the **Bound schema** — the schema the asset is currently bound to, which is not necessarily the schema whose evaluation produced the state shown, with whether it is inherited from the database or set on the asset beneath — and last evaluation time.
     - On each asset row, for users who may read evaluations, **History**: the asset's evaluations newest first, each with its verdict, the schema and version it read, and every rule's result, including rules whose tooling failed (shown as errors, not evaluated). For an asset in the `exception` state, users who may revoke exceptions also get **Revoke exception**, with the same confirmation as the asset's Compliance tab. Both work without access to the asset page, which is how the Compliance Admin and Compliance Readonly roles reach them: neither template grants asset pages.
 
 Only assets with a compliance record are counted; an asset that has never been bound does not appear.
@@ -460,7 +460,7 @@ An asset that fails a rule with `quarantine` enforcement enters the `quarantined
 ### Viewing quarantined assets
 
 1. Navigate to **Compliance > Quarantine** in the left sidebar.
-2. The page lists every quarantined asset you may read with its Asset Name, Asset ID, Database ID, **Bound schema** (the schema the asset is currently bound to; the quarantine may have been produced by an evaluation against a different version or schema) and the quarantine reason. The list is paged: use the pagination control to move through the pages.
+2. The page lists every quarantined asset you may read with its name (its ID beneath), Database ID, **Bound schema** (the schema the asset is currently bound to; the quarantine may have been produced by an evaluation against a different version or schema) the quarantine reason and when it was quarantined. The list is paged: use the pagination control to move through the pages.
 3. Narrow the list with the **database** filter and the search box, which matches the asset name or ID. The filters are applied by the server across every quarantined asset, not only the page shown, and are kept in the page URL, so a filtered view can be reloaded or shared.
 
 ### Releasing from quarantine
@@ -503,7 +503,7 @@ A cascade re-evaluates the downstream assets of a parent — every descendant li
 ### Reviewing pending cascades
 
 1. Navigate to **Compliance > Cascade Approvals** in the left sidebar.
-2. The page lists cascades in `pending_approval` with the asset that triggered them (its name, with the ID beneath), the reason, and the **Approval timeout**: 24 hours after creation.
+2. The page lists cascades in `pending_approval` with their status (the cascade's short ID beneath), the asset that triggered them (its name, with its database and ID beneath), the reason, when and by whom each was created, and the **Approval timeout**: 24 hours after creation.
 3. Use the state filter to list executing, completed or aborted cascades instead, and the database filter and search box (trigger asset name or ID) to narrow the list. The list is paged, and the filters are kept in the page URL.
 
 A cascade nobody approves or rejects before its approval timeout is aborted with the reason `approval timed out` and recorded as `cascade_timed_out`. It leaves the list, and the next evaluation of its parent may open a new one.
