@@ -25,6 +25,14 @@ import { ComplianceStateBadge } from "../components/compliance/complianceStateBa
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
 import { ROW_ACTIONS_STICKY_COLUMNS, VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
+import {
+    DatabaseFilter,
+    TextFilterInput,
+    useUrlFilters,
+} from "../components/compliance/listingFilters";
+
+/** The listing's server-side filters, kept in the URL. */
+export const QUARANTINE_FILTER_KEYS = ["databaseId", "text"] as const;
 
 /**
  * Width (px) of the Actions column: the Release and Exception inline links side by side (about
@@ -56,6 +64,7 @@ const ComplianceQuarantine: React.FC = () => {
     const [granting, setGranting] = useState(false);
     const [releaseTarget, setReleaseTarget] = useState<QuarantinedAsset | null>(null);
     const [releasing, setReleasing] = useState(false);
+    const [filters, setFilters] = useUrlFilters(QUARANTINE_FILTER_KEYS);
 
     // Server-side token paging: tokens[i] is the startingToken that fetches page i
     // (tokens[0] is undefined). hasMore tracks whether the loaded page reported a
@@ -65,33 +74,36 @@ const ComplianceQuarantine: React.FC = () => {
     const [currentPageIndex, setCurrentPageIndex] = useState(1);
     const [loadedPages, setLoadedPages] = useState(1);
 
-    const loadPage = useCallback(async (pageNumber: number, startingToken: string | undefined) => {
-        setLoading(true);
-        setError(null);
-        setSelectedItems([]);
-        const [success, result] = await fetchQuarantinedAssets({
-            maxItems: COMPLIANCE_LISTING_PAGE_SIZE,
-            startingToken,
-        });
-        if (success && typeof result !== "string") {
-            setItems(result.quarantinedAssets);
-            setLoadedPages((prev) => Math.max(prev, pageNumber + 1));
-            if (result.nextToken) {
-                setTokens((prev) => ({ ...prev, [pageNumber + 1]: result.nextToken }));
-                setHasMore(true);
+    const loadPage = useCallback(
+        async (pageNumber: number, startingToken: string | undefined) => {
+            setLoading(true);
+            setError(null);
+            setSelectedItems([]);
+            const [success, result] = await fetchQuarantinedAssets(
+                { maxItems: COMPLIANCE_LISTING_PAGE_SIZE, startingToken },
+                { databaseId: filters.databaseId, text: filters.text }
+            );
+            if (success && typeof result !== "string") {
+                setItems(result.quarantinedAssets);
+                setLoadedPages((prev) => Math.max(prev, pageNumber + 1));
+                if (result.nextToken) {
+                    setTokens((prev) => ({ ...prev, [pageNumber + 1]: result.nextToken }));
+                    setHasMore(true);
+                } else {
+                    setHasMore(false);
+                }
             } else {
+                setError(typeof result === "string" ? result : "Failed to load quarantined assets");
+                setItems([]);
                 setHasMore(false);
             }
-        } else {
-            setError(typeof result === "string" ? result : "Failed to load quarantined assets");
-            setItems([]);
-            setHasMore(false);
-        }
-        setLoading(false);
-    }, []);
+            setLoading(false);
+        },
+        [filters.databaseId, filters.text]
+    );
 
-    // A reload restarts the walk: tokens held from a previous listing address rows that
-    // may no longer be quarantined.
+    // A reload (or a filter change) restarts the walk: tokens held from a previous listing
+    // address rows that may no longer be quarantined, and a token is issued for its filters.
     const loadData = useCallback(() => {
         setTokens({});
         setCurrentPageIndex(1);
@@ -185,6 +197,20 @@ const ComplianceQuarantine: React.FC = () => {
                         >
                             Quarantined {Synonyms.Assets}
                         </Header>
+                    }
+                    filter={
+                        <SpaceBetween direction="horizontal" size="xs">
+                            <DatabaseFilter
+                                value={filters.databaseId}
+                                onChange={(databaseId) => setFilters({ databaseId })}
+                            />
+                            <TextFilterInput
+                                value={filters.text}
+                                onCommit={(text) => setFilters({ text })}
+                                placeholder={`Search ${Synonyms.asset} name or ID`}
+                                ariaLabel={`Search quarantined ${Synonyms.assets}`}
+                            />
+                        </SpaceBetween>
                     }
                     loading={loading}
                     items={items}

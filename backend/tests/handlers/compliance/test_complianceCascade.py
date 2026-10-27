@@ -327,6 +327,72 @@ class TestListingRows:
         row = body_of(response)["cascades"][0]
         assert row["databaseId"] == "" and row["assetId"] == ""
 
+    def test_a_row_carries_the_trigger_asset_name_and_not_its_search_text(self):
+        named = dict(PENDING, triggeredByAssetName="Turbine Blade", searchText="turbine blade a1")
+        response, _ = _run(rest_event("GET", LIST_PATH), pending_rows=[named])
+        row = body_of(response)["cascades"][0]
+        assert row["assetName"] == "Turbine Blade" and "searchText" not in row
+
+
+@pytest.mark.unit
+class TestListingFilters:
+    """`state` picks the StateIndex partition; `databaseId` and `text` are a FilterExpression."""
+
+    def _query(self, params, rows=()):
+        response, mocks = _run(rest_event("GET", LIST_PATH, query_params=params),
+                               pending_rows=list(rows))
+        return response, mocks["table"].query.call_args.kwargs
+
+    def test_the_default_state_is_pending_approval_without_a_filter(self):
+        response, kwargs = self._query(None)
+        assert response["statusCode"] == 200
+        assert kwargs["IndexName"] == "StateIndex" and kwargs["ScanIndexForward"] is False
+        assert "FilterExpression" not in kwargs
+        assert kwargs["KeyConditionExpression"].get_expression()["values"][1] == "pending_approval"
+
+    def test_another_state_reads_its_partition(self):
+        _, kwargs = self._query({"state": "aborted"})
+        assert kwargs["KeyConditionExpression"].get_expression()["values"][1] == "aborted"
+
+    def test_the_database_and_text_filters_are_a_filter_expression(self):
+        from common.compliance import listing
+        _, kwargs = self._query({"databaseId": DB, "text": "  BLADE "})
+        from boto3.dynamodb.conditions import ConditionExpressionBuilder
+        built = ConditionExpressionBuilder().build_expression(kwargs["FilterExpression"])
+        values = set(built.attribute_value_placeholders.values())
+        assert {DB, "blade"} <= values
+        assert kwargs["Limit"] == listing.FILTERED_READ_LIMIT
+
+    def test_a_full_page_resumes_after_its_last_row(self):
+        rows = [dict(PENDING, cascadeId=f"c{i}", createdAt=f"2026-10-0{i}") for i in range(1, 4)]
+        response, _ = self._query({"maxItems": "2"}, rows)
+        body = body_of(response)
+        assert [r["cascadeId"] for r in body["cascades"]] == ["c1", "c2"]
+        from common.compliance import listing
+        assert listing.decode_token(body["NextToken"], svc.CASCADE_STATE_INDEX_KEYS) == {
+            "cascadeId": "c2", "state": "pending_approval", "createdAt": "2026-10-02"}
+
+    @pytest.mark.parametrize("params", [{"state": "deleted"}, {"maxItems": "x"},
+                                        {"startingToken": "bm90LWpzb24="}])
+    def test_a_bad_parameter_is_refused_before_any_read(self, params):
+        response, mocks = _run(rest_event("GET", LIST_PATH, query_params=params))
+        assert response["statusCode"] == 400
+        mocks["table"].query.assert_not_called()
+
+    def test_rows_the_caller_may_not_read_do_not_fill_the_page(self):
+        other = dict(PENDING, cascadeId="c-other", triggeredByDatabaseId="secret-db")
+        instance = _enforcer_by_object(cascade=True, evaluation=True)
+        original = instance.enforce.side_effect
+
+        def enforce(obj, action):
+            if obj.get("databaseId") == "secret-db":
+                return False
+            return original(obj, action) if original else True
+        instance.enforce.side_effect = enforce
+        response, _ = _run(rest_event("GET", LIST_PATH), pending_rows=[other, PENDING],
+                           instance=instance)
+        assert [r["cascadeId"] for r in body_of(response)["cascades"]] == [CASCADE_ID]
+
 
 @pytest.mark.unit
 class TestValidation:

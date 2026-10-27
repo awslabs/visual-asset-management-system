@@ -146,6 +146,7 @@ def _run(event, database_item=None, compliance_record=None, children=(), asset_r
     with patch(f"{MOD}.database_table", database_table), \
             patch(f"{MOD}.cascade_table", cascade_table), \
             patch(f"{MOD}.asset_state_table", state_table), \
+            patch(f"{STORE}.asset_state_table", state_table), \
             patch(f"{MOD}.asset_table", asset_table), \
             patch(f"{MOD}.s3_client", s3_client), \
             patch(f"{MOD}.logger", logger), \

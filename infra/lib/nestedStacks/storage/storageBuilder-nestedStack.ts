@@ -2364,6 +2364,23 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // A database's assets by name, for the database compliance overview's name sort. The sort key
+    // `assetNameSort` is the lowercased name (the asset id for an asset without one) with the id
+    // appended, written with the row and kept current by the trigger. The only new index of the
+    // asset-state table in its update: a table accepts one GSI creation per CloudFormation update.
+    complianceAssetStateStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseAssetNameIndex",
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "assetNameSort",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const complianceEvaluationStorageTable = new dynamodb.Table(
         scope,
         "ComplianceEvaluationStorageTable",

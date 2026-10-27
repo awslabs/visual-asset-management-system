@@ -7,6 +7,8 @@ import React, { useEffect, useState, useCallback, useRef } from "react";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import Header from "@cloudscape-design/components/header";
+import Pagination from "@cloudscape-design/components/pagination";
+import Select from "@cloudscape-design/components/select";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import Table from "@cloudscape-design/components/table";
@@ -19,10 +21,27 @@ import {
     rejectCascade,
     CascadeNodeState,
     CascadeRecord,
+    COMPLIANCE_LISTING_PAGE_SIZE,
+    PagedCascades,
 } from "../services/ComplianceService";
+import {
+    DatabaseFilter,
+    TextFilterInput,
+    useUrlFilters,
+} from "../components/compliance/listingFilters";
 import ReasonModal from "../components/compliance/ReasonModal";
 import { ROW_ACTIONS_STICKY_COLUMNS, VAMS_PAGE_PADDING } from "../components/compliance/rowActions";
 import { useAllowedRoutes } from "../features/orchestration/permissions/useAllowedRoutes";
+
+/** The listing's server-side filters, kept in the URL; an empty state is pending approval. */
+export const CASCADE_FILTER_KEYS = ["state", "databaseId", "text"] as const;
+
+export const CASCADE_STATE_FILTER_OPTIONS = [
+    { value: "pending_approval", label: "Pending approval" },
+    { value: "executing", label: "Executing" },
+    { value: "completed", label: "Completed" },
+    { value: "aborted", label: "Aborted" },
+];
 
 const statusIndicatorMap: Record<string, { type: string; label: string }> = {
     pending_approval: { type: "pending", label: "Pending Approval" },
@@ -97,6 +116,13 @@ const ComplianceCascades: React.FC = () => {
     const [approveTarget, setApproveTarget] = useState<CascadeRecord | null>(null);
     const [approving, setApproving] = useState(false);
     const [tracked, setTracked] = useState<Record<string, TrackedCascade>>({});
+    const [filters, setFilters] = useUrlFilters(CASCADE_FILTER_KEYS);
+    const stateFilter = filters.state || "pending_approval";
+    // Server-side token paging: tokens[i] fetches page i + 1 (tokens[0] is undefined).
+    const [tokens, setTokens] = useState<Record<number, string | undefined>>({});
+    const [hasMore, setHasMore] = useState(false);
+    const [currentPageIndex, setCurrentPageIndex] = useState(1);
+    const [loadedPages, setLoadedPages] = useState(1);
 
     const mountedRef = useRef(true);
     const pollTimersRef = useRef<Record<string, number>>({});
@@ -110,17 +136,52 @@ const ComplianceCascades: React.FC = () => {
         };
     }, []);
 
-    const loadData = useCallback(async () => {
-        setLoading(true);
-        setError(null);
-        const [success, result] = await fetchCascades();
-        if (success && Array.isArray(result)) {
-            setItems(result);
-        } else {
-            setError(typeof result === "string" ? result : "Failed to load cascades");
-        }
-        setLoading(false);
-    }, []);
+    const loadPage = useCallback(
+        async (pageNumber: number, startingToken: string | undefined) => {
+            setLoading(true);
+            setError(null);
+            const [success, result] = await fetchCascades({
+                maxItems: COMPLIANCE_LISTING_PAGE_SIZE,
+                startingToken,
+                state: stateFilter,
+                databaseId: filters.databaseId,
+                text: filters.text,
+            });
+            if (success && typeof result !== "string") {
+                // An array is the shape of the listing before it was paged.
+                const page: PagedCascades = Array.isArray(result)
+                    ? { cascades: result as CascadeRecord[] }
+                    : result;
+                setItems(page.cascades);
+                setLoadedPages((prev) => Math.max(prev, pageNumber + 1));
+                if (page.nextToken) {
+                    setTokens((prev) => ({ ...prev, [pageNumber + 1]: page.nextToken }));
+                    setHasMore(true);
+                } else {
+                    setHasMore(false);
+                }
+            } else {
+                setError(typeof result === "string" ? result : "Failed to load cascades");
+                setHasMore(false);
+            }
+            setLoading(false);
+        },
+        [stateFilter, filters.databaseId, filters.text]
+    );
+
+    // A reload or a filter change restarts the walk: a token is issued for its filters.
+    const loadData = useCallback(() => {
+        setTokens({});
+        setCurrentPageIndex(1);
+        setLoadedPages(1);
+        setHasMore(false);
+        return loadPage(0, undefined);
+    }, [loadPage]);
+
+    const handlePageChange = ({ detail }: { detail: { currentPageIndex: number } }) => {
+        setCurrentPageIndex(detail.currentPageIndex);
+        loadPage(detail.currentPageIndex - 1, tokens[detail.currentPageIndex - 1]);
+    };
 
     useEffect(() => {
         loadData();
@@ -282,7 +343,7 @@ const ComplianceCascades: React.FC = () => {
                     header={
                         <Header
                             variant="h1"
-                            counter={`(${items.length})`}
+                            counter={`(${items.length}${hasMore ? "+" : ""})`}
                             actions={
                                 <Button
                                     iconName="refresh"
@@ -295,13 +356,57 @@ const ComplianceCascades: React.FC = () => {
                             Cascade Approval Queue
                         </Header>
                     }
+                    filter={
+                        <SpaceBetween direction="horizontal" size="xs">
+                            <Select
+                                selectedOption={
+                                    CASCADE_STATE_FILTER_OPTIONS.find(
+                                        (option) => option.value === stateFilter
+                                    ) || CASCADE_STATE_FILTER_OPTIONS[0]
+                                }
+                                options={CASCADE_STATE_FILTER_OPTIONS}
+                                ariaLabel="Filter by cascade state"
+                                onChange={({ detail }) =>
+                                    setFilters({
+                                        state:
+                                            detail.selectedOption.value === "pending_approval"
+                                                ? ""
+                                                : detail.selectedOption.value || "",
+                                    })
+                                }
+                            />
+                            <DatabaseFilter
+                                value={filters.databaseId}
+                                onChange={(databaseId) => setFilters({ databaseId })}
+                            />
+                            <TextFilterInput
+                                value={filters.text}
+                                onCommit={(text) => setFilters({ text })}
+                                placeholder={`Search trigger ${Synonyms.asset} name or ID`}
+                                ariaLabel="Search cascades"
+                            />
+                        </SpaceBetween>
+                    }
+                    pagination={
+                        <Pagination
+                            currentPageIndex={currentPageIndex}
+                            pagesCount={hasMore ? loadedPages + 1 : loadedPages}
+                            openEnd={hasMore}
+                            onChange={handlePageChange}
+                            disabled={loading}
+                        />
+                    }
                     loading={loading}
                     items={items}
                     empty={
                         <Box textAlign="center" padding="l">
                             <b>No cascades</b>
                             <Box variant="p" color="inherit">
-                                No cascade operations are pending approval.
+                                {stateFilter === "pending_approval" &&
+                                !filters.databaseId &&
+                                !filters.text
+                                    ? "No cascade operations are pending approval."
+                                    : "No cascades match the filters."}
                             </Box>
                         </Box>
                     }
@@ -337,7 +442,17 @@ const ComplianceCascades: React.FC = () => {
                         {
                             id: "assetId",
                             header: `Trigger ${Synonyms.Asset}`,
-                            cell: (item) => cascadeTriggerAssetId(item) || "-",
+                            cell: (item) =>
+                                item.assetName ? (
+                                    <SpaceBetween size="xxxs">
+                                        <span>{item.assetName}</span>
+                                        <Box variant="small" color="text-body-secondary">
+                                            {cascadeTriggerAssetId(item)}
+                                        </Box>
+                                    </SpaceBetween>
+                                ) : (
+                                    cascadeTriggerAssetId(item) || "-"
+                                ),
                             sortingField: "triggeredByAssetId",
                         },
                         {

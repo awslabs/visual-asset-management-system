@@ -44,7 +44,7 @@ class TestTheTriggerRegistersANewAsset:
 
     def test_an_insert_in_a_bound_database_with_auto_eval_off_is_registered_not_evaluated(self):
         mocks = self._run(_stream_message("INSERT"), OFF_DB)
-        mocks["register"].assert_called_once_with(DB, ASSET, SCHEMA)
+        mocks["register"].assert_called_once_with(DB, ASSET, SCHEMA, asset_name=mocks["register"].call_args.kwargs["asset_name"])
         mocks["run_evaluation"].assert_not_called()
         assert all(c.kwargs == {"consistent_read": True}
                    for c in mocks["get_compliance_record"].call_args_list)

@@ -14,6 +14,13 @@ import Table from "@cloudscape-design/components/table";
 import Alert from "@cloudscape-design/components/alert";
 import Select, { SelectProps } from "@cloudscape-design/components/select";
 import FormField from "@cloudscape-design/components/form-field";
+import DatePicker from "@cloudscape-design/components/date-picker";
+import Input from "@cloudscape-design/components/input";
+import {
+    DatabaseFilter,
+    TextFilterInput,
+    useUrlFilters,
+} from "../components/compliance/listingFilters";
 import Link from "@cloudscape-design/components/link";
 import Synonyms from "../synonyms";
 import {
@@ -88,15 +95,31 @@ export const eventTypeOptions: SelectProps.Option[] = [
     { label: `${Synonyms.Asset} Deleted`, value: "asset_deleted" },
 ];
 
+/** The listing's server-side filters, kept in the URL. Dates are days (YYYY-MM-DD, UTC). */
+export const AUDIT_FILTER_KEYS = [
+    "eventType",
+    "databaseId",
+    "assetId",
+    "text",
+    "from",
+    "to",
+] as const;
+
+/** A day filter as the inclusive timestamp bound the route takes. */
+export const dayBound = (day: string, end: boolean): string | undefined =>
+    day ? `${day}T${end ? "23:59:59" : "00:00:00"}Z` : undefined;
+
 const ComplianceAuditLog: React.FC = () => {
     // Asset ids link to the asset page only when the caller may open it.
     const { canOpenAsset } = useAssetPageAccess();
     const [items, setItems] = useState<AuditEntry[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [selectedEventType, setSelectedEventType] = useState<SelectProps.Option>(
-        eventTypeOptions[0]
-    );
+    const [filters, setFilters] = useUrlFilters(AUDIT_FILTER_KEYS);
+    const selectedEventType =
+        eventTypeOptions.find((option) => option.value === filters.eventType) ||
+        eventTypeOptions[0];
+    const [assetDraft, setAssetDraft] = useState(filters.assetId);
 
     // Server-side token paging: tokens[i] is the startingToken that fetches page i
     // (tokens[0] is undefined). hasMore tracks whether the loaded page reported a
@@ -111,9 +134,14 @@ const ComplianceAuditLog: React.FC = () => {
             setLoading(true);
             setError(null);
             const [success, result] = await fetchAuditLog({
-                eventType: selectedEventType.value || undefined,
+                eventType: filters.eventType || undefined,
                 maxItems: COMPLIANCE_LISTING_PAGE_SIZE,
                 startingToken,
+                ...(filters.databaseId ? { databaseId: filters.databaseId } : {}),
+                ...(filters.databaseId && filters.assetId ? { assetId: filters.assetId } : {}),
+                ...(filters.text ? { text: filters.text } : {}),
+                ...(filters.from ? { startDate: dayBound(filters.from, false) } : {}),
+                ...(filters.to ? { endDate: dayBound(filters.to, true) } : {}),
             });
             if (success && typeof result !== "string") {
                 setItems(result.entries);
@@ -131,7 +159,14 @@ const ComplianceAuditLog: React.FC = () => {
             }
             setLoading(false);
         },
-        [selectedEventType]
+        [
+            filters.eventType,
+            filters.databaseId,
+            filters.assetId,
+            filters.text,
+            filters.from,
+            filters.to,
+        ]
     );
 
     // A reload (or a filter change) restarts the walk from the first page: a token belongs
@@ -175,7 +210,9 @@ const ComplianceAuditLog: React.FC = () => {
                                         <Select
                                             selectedOption={selectedEventType}
                                             onChange={({ detail }) =>
-                                                setSelectedEventType(detail.selectedOption)
+                                                setFilters({
+                                                    eventType: detail.selectedOption.value || "",
+                                                })
                                             }
                                             options={eventTypeOptions}
                                             filteringType="auto"
@@ -193,6 +230,50 @@ const ComplianceAuditLog: React.FC = () => {
                         >
                             Compliance Audit Log
                         </Header>
+                    }
+                    filter={
+                        <SpaceBetween direction="horizontal" size="xs">
+                            <DatabaseFilter
+                                value={filters.databaseId}
+                                onChange={(databaseId) =>
+                                    setFilters({
+                                        databaseId,
+                                        assetId: databaseId ? filters.assetId : "",
+                                    })
+                                }
+                            />
+                            <Input
+                                value={assetDraft}
+                                disabled={!filters.databaseId}
+                                placeholder={`${Synonyms.Asset} ID (in the ${Synonyms.database})`}
+                                ariaLabel={`Filter by ${Synonyms.asset} ID`}
+                                onChange={({ detail }) => setAssetDraft(detail.value)}
+                                onBlur={() => setFilters({ assetId: assetDraft.trim() })}
+                                onKeyDown={({ detail }) => {
+                                    if (detail.key === "Enter") {
+                                        setFilters({ assetId: assetDraft.trim() });
+                                    }
+                                }}
+                            />
+                            <TextFilterInput
+                                value={filters.text}
+                                onCommit={(text) => setFilters({ text })}
+                                placeholder={`Search ${Synonyms.asset} name, ID or actor`}
+                                ariaLabel="Search audit entries"
+                            />
+                            <DatePicker
+                                value={filters.from}
+                                placeholder="From (YYYY/MM/DD)"
+                                ariaLabel="Entries from"
+                                onChange={({ detail }) => setFilters({ from: detail.value })}
+                            />
+                            <DatePicker
+                                value={filters.to}
+                                placeholder="To (YYYY/MM/DD)"
+                                ariaLabel="Entries to"
+                                onChange={({ detail }) => setFilters({ to: detail.value })}
+                            />
+                        </SpaceBetween>
                     }
                     loading={loading}
                     items={items}
@@ -241,16 +322,29 @@ const ComplianceAuditLog: React.FC = () => {
                         {
                             id: "assetId",
                             header: Synonyms.Asset,
-                            cell: (item) =>
-                                item.assetId && item.assetId !== "*" && canOpenAsset ? (
-                                    <Link
-                                        href={`#/databases/${item.databaseId}/assets/${item.assetId}`}
-                                    >
-                                        {item.assetId}
-                                    </Link>
+                            cell: (item) => {
+                                const label =
+                                    item.assetId && item.assetId !== "*" && canOpenAsset ? (
+                                        <Link
+                                            href={`#/databases/${item.databaseId}/assets/${item.assetId}`}
+                                        >
+                                            {item.assetName || item.assetId}
+                                        </Link>
+                                    ) : (
+                                        item.assetName || item.assetId || "-"
+                                    );
+                                // The name recorded with the entry, with the id beneath it.
+                                return item.assetName ? (
+                                    <SpaceBetween size="xxxs">
+                                        {label}
+                                        <Box variant="small" color="text-body-secondary">
+                                            {item.assetId}
+                                        </Box>
+                                    </SpaceBetween>
                                 ) : (
-                                    item.assetId || "-"
-                                ),
+                                    label
+                                );
+                            },
                             sortingField: "assetId",
                         },
                         {

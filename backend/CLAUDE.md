@@ -44,6 +44,9 @@ backend/
 │   │   ├── compliance/auditRecord.py               # build_audit_item(): the ONE builder of audit rows;
 │   │   │                                           #   sets allListPartition for AuditByDateGSI (guard test
 │   │   │                                           #   fails any audit put_item that bypasses it)
+│   │   ├── compliance/listing.py                   # Compliance listings: query_page() (bounded page
+│   │   │                                           #   fill, ≤200 rows, token = last row's index key),
+│   │   │                                           #   count_items() (Select=COUNT), name attributes
 │   │   ├── compliance/evaluationEngine.py          # Pure vams-rules-v1 rule logic (no AWS access):
 │   │   │                                           #   rule parsing/inheritance, the six rule types
 │   │   │                                           #   (pipeline, metadata, relationship, fileStructure,

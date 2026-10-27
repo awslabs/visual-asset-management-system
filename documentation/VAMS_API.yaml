@@ -9325,7 +9325,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   required: true
                   schema:
                       type: string
-                - $ref: "#/components/parameters/complianceListMaxItemsParam"
+                - $ref: "#/components/parameters/complianceBindingsMaxItemsParam"
                 - $ref: "#/components/parameters/complianceStartingTokenParam"
             responses:
                 "200":
@@ -9746,7 +9746,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/state/{databaseId}:
         get:
             summary: "Get the compliance overview of a database."
-            description: "Returns per-state counts covering every tracked asset of a database, and one page of the tracked assets in `assetId` order, each with its asset name; `NextToken` continues the page."
+            description: "Returns per-state counts covering every tracked asset of a database (whatever the filters; counted with COUNT queries), and one page of the tracked assets in `assetId` order (or by name with `sort=name`), each with its asset name, filtered on the server. A filtered page reads a bounded amount of the table and can hold fewer rows than `maxItems` while `NextToken` is present; a token is valid only with the filters it was issued for."
             parameters:
                 - name: databaseId
                   in: path
@@ -9754,6 +9754,46 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   required: true
                   schema:
                       type: string
+                - name: state
+                  in: query
+                  description: "Only assets in this compliance state."
+                  required: false
+                  schema:
+                      type: string
+                      enum: [compliant, non_compliant, pending_evaluation, quarantined, exception, unknown]
+                - name: schemaName
+                  in: query
+                  description: "Only assets bound to this schema."
+                  required: false
+                  schema:
+                      type: string
+                - name: schemaSource
+                  in: query
+                  description: "Only assets bound by the database binding (`database`) or an asset override (`asset`)."
+                  required: false
+                  schema:
+                      type: string
+                      enum: [database, asset]
+                - name: evaluationError
+                  in: query
+                  description: "`true`: only assets whose last evaluation errored; `false`: only those whose last evaluation did not."
+                  required: false
+                  schema:
+                      type: string
+                      enum: ["true", "false"]
+                - name: text
+                  in: query
+                  description: "Case-insensitive contains on the asset name or ID (at most 256 characters)."
+                  required: false
+                  schema:
+                      type: string
+                - name: sort
+                  in: query
+                  description: "Row order: `assetId` (default) or `name`."
+                  required: false
+                  schema:
+                      type: string
+                      enum: [assetId, name]
                 - $ref: "#/components/parameters/complianceListMaxItemsParam"
                 - $ref: "#/components/parameters/complianceStartingTokenParam"
             responses:
@@ -9764,7 +9804,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/databaseComplianceOverviewResponse"
                 "400":
-                    description: Invalid database identifier or pagination token.
+                    description: Invalid database identifier, filter value or pagination token.
                     content:
                         application/json:
                             schema:
@@ -9788,6 +9828,18 @@ Several triggers of one type are supported: address each with its own key ('<typ
             summary: "List quarantined assets."
             description: "Returns one page of quarantined assets across databases, each with its asset name, filtered to the databases the caller may read after the page is read — a page can be empty while `NextToken` is present, so keep following the token."
             parameters:
+                - name: databaseId
+                  in: query
+                  description: "Only the quarantined assets of this database."
+                  required: false
+                  schema:
+                      type: string
+                - name: text
+                  in: query
+                  description: "Case-insensitive contains on the asset name or ID."
+                  required: false
+                  schema:
+                      type: string
                 - $ref: "#/components/parameters/complianceListMaxItemsParam"
                 - $ref: "#/components/parameters/complianceStartingTokenParam"
             responses:
@@ -9962,15 +10014,43 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - DefaultCognitoAuthorizer: []
     /compliance/cascades:
         get:
-            summary: "List pending cascades."
-            description: "Returns every cascade in the `pending_approval` state that the caller may read, newest first. A row is listed only when the caller may read both the cascade and the compliance evaluations of the trigger asset's database; each row carries `databaseId` / `assetId` naming the trigger asset beside `triggeredByDatabaseId` / `triggeredByAssetId`."
+            summary: "List cascades."
+            description: "Returns one page of the cascades in a state (`pending_approval` by default) that the caller may read, newest first, filtered on the server. A row is listed only when the caller may read both the cascade and the compliance evaluations of the trigger asset's database; each row carries `databaseId` / `assetId` / `assetName` naming the trigger asset beside `triggeredByDatabaseId` / `triggeredByAssetId`."
+            parameters:
+                - name: state
+                  in: query
+                  description: "Cascades in this state (default `pending_approval`)."
+                  required: false
+                  schema:
+                      type: string
+                      enum: [pending_approval, executing, completed, aborted]
+                - name: databaseId
+                  in: query
+                  description: "Only cascades whose trigger asset is in this database."
+                  required: false
+                  schema:
+                      type: string
+                - name: text
+                  in: query
+                  description: "Case-insensitive contains on the trigger asset's name or ID."
+                  required: false
+                  schema:
+                      type: string
+                - $ref: "#/components/parameters/complianceListMaxItemsParam"
+                - $ref: "#/components/parameters/complianceStartingTokenParam"
             responses:
                 "200":
-                    description: Pending cascades retrieved successfully.
+                    description: Cascades retrieved successfully.
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/listCascadesResponse"
+                "400":
+                    description: Invalid state, filter value or pagination token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
                 "403":
                     description: Not authorized.
                     content:
@@ -10161,6 +10241,24 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - name: eventType
                   in: query
                   description: "Restrict the page to one event type (for example `compliance_check`, `quarantine_released`, `exception_granted`, `cascade_triggered`)."
+                  required: false
+                  schema:
+                      type: string
+                - name: databaseId
+                  in: query
+                  description: "Only entries of this database."
+                  required: false
+                  schema:
+                      type: string
+                - name: assetId
+                  in: query
+                  description: "Only entries of this asset; requires `databaseId`, and combines with `eventType`."
+                  required: false
+                  schema:
+                      type: string
+                - name: text
+                  in: query
+                  description: "Case-insensitive contains on the asset name recorded with the entry, the asset ID or the actor."
                   required: false
                   schema:
                       type: string
@@ -17154,7 +17252,10 @@ components:
                     description: "Database of the trigger asset (a copy of `triggeredByDatabaseId`). Present on the rows of the pending-cascade listing."
                 assetId:
                     type: string
-                    description: "The trigger asset (a copy of `triggeredByAssetId`). Present on the rows of the pending-cascade listing."
+                    description: "The trigger asset (a copy of `triggeredByAssetId`). Present on the rows of the cascade listing."
+                assetName:
+                    type: string
+                    description: "The trigger asset's name when the cascade was created. Present on the rows of the cascade listing."
                 triggerReason:
                     type: string
                 createdAt:
@@ -17212,6 +17313,9 @@ components:
                     type: array
                     items:
                         $ref: "#/components/schemas/cascadeDetail"
+                NextToken:
+                    type: string
+                    description: "Continuation token for the next page; absent on the last page."
             required:
                 - cascades
 
@@ -17324,6 +17428,9 @@ components:
                 assetId:
                     type: string
                     description: "`*` on entries that are not about one asset."
+                assetName:
+                    type: string
+                    description: "The asset's name when the entry was written; absent on older entries."
                 actor:
                     type: string
                     description: "User, or `SYSTEM_USER`, that caused the event."
@@ -17512,11 +17619,11 @@ components:
       complianceAuditMaxItemsParam:
         name: maxItems
         in: query
-        description: "Number of audit entries returned in one page. Default is 100, reduced to 500; follow NextToken for the rest. Takes precedence over limit"
+        description: "Number of audit entries returned in one page. Default is 100, reduced to 200; follow NextToken for the rest. Takes precedence over limit"
         schema:
             type: integer
             minimum: 1
-            maximum: 500
+            maximum: 200
             default: 100
       complianceAuditLimitParam:
         name: limit
@@ -17525,12 +17632,21 @@ components:
         schema:
             type: integer
             minimum: 1
-            maximum: 500
+            maximum: 200
             default: 100
       complianceListMaxItemsParam:
         name: maxItems
         in: query
-        description: "Number of records returned in one page of the database compliance overview, the quarantine listing or the asset overrides of a binding. Default is 100, reduced to 500; follow NextToken for the rest"
+        description: "Number of records returned in one page of the database compliance overview, the quarantine listing or the cascade listing. Default is 100, reduced to 200; follow NextToken for the rest"
+        schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      complianceBindingsMaxItemsParam:
+        name: maxItems
+        in: query
+        description: "Number of asset overrides returned in one page of a database's bindings. Default is 100, reduced to 500; follow NextToken for the rest"
         schema:
             type: integer
             minimum: 1

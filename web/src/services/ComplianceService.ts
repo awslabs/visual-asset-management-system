@@ -389,6 +389,8 @@ export interface CascadeRecord {
     /** The trigger asset as the listing carries it; the same ids as `triggeredBy*`. */
     databaseId?: string;
     assetId?: string;
+    /** The trigger asset's name when the cascade was created. */
+    assetName?: string;
     triggerReason?: string;
     actor?: string;
     requireApproval: boolean;
@@ -414,6 +416,8 @@ export interface AuditEntry {
     eventType: string;
     databaseId?: string;
     assetId?: string;
+    /** The asset's name when the entry was written (absent on older entries). */
+    assetName?: string;
     schemaName?: string;
     actor: string;
     timestamp: string;
@@ -449,6 +453,19 @@ const pagingQuery = (paging?: PagingParams): Record<string, string> => {
     if (paging?.startingToken) {
         query.startingToken = paging.startingToken;
     }
+    return query;
+};
+
+/** Adds the non-empty filter values to a listing query. */
+const withFilters = (
+    query: Record<string, string>,
+    filters?: Record<string, string | undefined>
+): Record<string, string> => {
+    Object.entries(filters || {}).forEach(([key, value]) => {
+        if (value) {
+            query[key] = value;
+        }
+    });
     return query;
 };
 
@@ -699,13 +716,25 @@ export interface DatabaseComplianceOverview {
     nextToken?: string;
 }
 
+/** Server-side filters of the database overview; the summary ignores them. */
+export interface OverviewFilters {
+    state?: string;
+    schemaName?: string;
+    schemaSource?: string;
+    /** "true": the last evaluation errored; "false": it did not. */
+    evaluationError?: string;
+    text?: string;
+    sort?: string;
+}
+
 export const fetchDatabaseComplianceOverview = async (
     databaseId: string,
-    paging?: PagingParams
+    paging?: PagingParams,
+    filters?: OverviewFilters
 ): Promise<[boolean, DatabaseComplianceOverview | string]> => {
     try {
         const response = await apiClient.get(`compliance/state/${databaseId}`, {
-            queryStringParameters: pagingQuery(paging),
+            queryStringParameters: withFilters(pagingQuery(paging), { ...filters }),
         });
         if (responseErrored(response)) {
             return [false, response.message];
@@ -737,11 +766,12 @@ export interface PagedQuarantinedAssets {
  * be empty while `nextToken` is still set; callers keep paging until it is absent.
  */
 export const fetchQuarantinedAssets = async (
-    paging?: PagingParams
+    paging?: PagingParams,
+    filters?: { databaseId?: string; text?: string }
 ): Promise<[boolean, PagedQuarantinedAssets | string]> => {
     try {
         const response = await apiClient.get("compliance/quarantine", {
-            queryStringParameters: pagingQuery(paging),
+            queryStringParameters: withFilters(pagingQuery(paging), { ...filters }),
         });
         if (responseErrored(response)) {
             return [false, response.message];
@@ -852,16 +882,43 @@ export const revokeException = async (
 
 // --- Cascades ---
 
-export const fetchCascades = async (): Promise<[boolean, CascadeRecord[] | string]> => {
+export interface CascadeListParams extends PagingParams {
+    /** pending_approval (the default), executing, completed or aborted. */
+    state?: string;
+    databaseId?: string;
+    text?: string;
+}
+
+export interface PagedCascades {
+    cascades: CascadeRecord[];
+    nextToken?: string;
+}
+
+/** One page of cascades, newest first, filtered on the server. */
+export const fetchCascades = async (
+    params?: CascadeListParams
+): Promise<[boolean, PagedCascades | string]> => {
     try {
-        const response = await apiClient.get("compliance/cascades", {});
+        const response = await apiClient.get("compliance/cascades", {
+            queryStringParameters: withFilters(pagingQuery(params), {
+                state: params?.state,
+                databaseId: params?.databaseId,
+                text: params?.text,
+            }),
+        });
         if (
             response?.message &&
             (response.message.includes("error") || response.message.includes("Error"))
         ) {
             return [false, response.message];
         }
-        return [true, response.cascades || response.Items || []];
+        return [
+            true,
+            {
+                cascades: response.cascades || response.Items || [],
+                nextToken: response.NextToken || undefined,
+            },
+        ];
     } catch (error: any) {
         console.log("fetchCascades error:", error);
         return [false, error?.message || "Failed to fetch cascades"];
@@ -1062,6 +1119,10 @@ export interface AuditQueryParams extends PagingParams {
     eventType?: string;
     startDate?: string;
     endDate?: string;
+    /** Global listing only: one database, one asset of it, and a contains search. */
+    databaseId?: string;
+    assetId?: string;
+    text?: string;
 }
 
 const auditQuery = (params?: AuditQueryParams): Record<string, string> => {
@@ -1077,6 +1138,13 @@ const auditQuery = (params?: AuditQueryParams): Record<string, string> => {
     }
     return query;
 };
+
+const globalAuditQuery = (params?: AuditQueryParams): Record<string, string> =>
+    withFilters(auditQuery(params), {
+        databaseId: params?.databaseId,
+        assetId: params?.assetId,
+        text: params?.text,
+    });
 
 const pagedEntries = (response: any): PagedAuditEntries => ({
     entries: response.entries || response.Items || [],
@@ -1107,7 +1175,7 @@ export const fetchAuditLog = async (
 ): Promise<[boolean, PagedAuditEntries | string]> => {
     try {
         const response = await apiClient.get("compliance/audit", {
-            queryStringParameters: auditQuery(params),
+            queryStringParameters: globalAuditQuery(params),
         });
         if (responseErrored(response)) {
             return [false, response.message];

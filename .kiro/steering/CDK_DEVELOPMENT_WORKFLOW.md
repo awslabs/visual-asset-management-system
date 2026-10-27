@@ -188,7 +188,7 @@ interface storageResources {
 
         // Compliance tables
         complianceSchemaStorageTable: dynamodb.Table; // PK schemaName, SK internalVersion; GSI DatabaseIdIndex
-        complianceAssetStateStorageTable: dynamodb.Table; // PK databaseId, SK assetId; GSIs SchemaNameIndex, ComplianceStateIndex (PK complianceState, SK databaseId — paged quarantine list)
+        complianceAssetStateStorageTable: dynamodb.Table; // PK databaseId, SK assetId; GSIs SchemaNameIndex, ComplianceStateIndex (PK complianceState, SK databaseId — paged quarantine list, overview state filter/counts), DatabaseAssetNameIndex (PK databaseId, SK assetNameSort — overview sort by name)
         complianceEvaluationStorageTable: dynamodb.Table; // PK evaluationId; GSIs AssetIndex, ExecutionIdIndex (PK executionId — pipeline-rule workflow callback)
         complianceCascadeStorageTable: dynamodb.Table; // PK cascadeId (also per-parent pendingCascadeMarker:<db>:<asset> rows, no state); GSI StateIndex
         complianceAuditStorageTable: dynamodb.Table; // PK entryId; GSIs AssetIndex, EventTypeIndex, AuditByDateGSI (PK allListPartition — unfiltered newest-first listing)

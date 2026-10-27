@@ -211,7 +211,7 @@ API_COMPLIANCE_AUDIT_ASSET = "/compliance/audit/{databaseId}/{assetId}"
 # the handler applies the default when the request names no page size and clamps larger values to
 # the cap.
 COMPLIANCE_AUDIT_DEFAULT_LIMIT = 100
-MAX_COMPLIANCE_AUDIT_PAGE_SIZE = 500
+MAX_COMPLIANCE_AUDIT_PAGE_SIZE = 200
 # The evaluation-history route pages on `maxItems` (its page size) + `startingToken`, returning a
 # `NextToken`; the handler applies the default when none is given and clamps larger values to the cap.
 DEFAULT_COMPLIANCE_EVALUATIONS_PAGE_SIZE = 50
@@ -222,6 +222,8 @@ MAX_COMPLIANCE_EVALUATIONS_PAGE_SIZE = 200
 # full set.
 DEFAULT_COMPLIANCE_LIST_PAGE_SIZE = 100
 MAX_COMPLIANCE_LIST_PAGE_SIZE = 500
+# The overview, quarantine, cascade and audit listings filter on the server and cap a page at 200.
+MAX_COMPLIANCE_LISTING_PAGE_SIZE = 200
 
 # Workflow execution list page-size cap (Step Functions throttling on the asset-scoped list).
 MAX_WORKFLOW_EXECUTION_PAGE_SIZE = 50

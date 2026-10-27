@@ -786,7 +786,7 @@ GET /compliance/state/{databaseId}/{assetId}
 
 ## Get the compliance overview of a database
 
-Retrieves per-state counts covering every tracked asset of a database, and one page of the tracked assets. Only assets with a compliance record are counted.
+Retrieves per-state counts covering every tracked asset of a database, and one page of the tracked assets, filtered and sorted on the server. Only assets with a compliance record are counted.
 
 ```
 GET /compliance/state/{databaseId}
@@ -794,10 +794,16 @@ GET /compliance/state/{databaseId}
 
 ### Query parameters
 
-| Parameter       | Type   | Required | Default | Description                                                                                  |
-| --------------- | ------ | -------- | ------- | -------------------------------------------------------------------------------------------- |
-| `maxItems`      | number | No       | `100`   | Asset records per page. A larger value is reduced to 500; the remainder follows `NextToken`. |
-| `startingToken` | string | No       | `null`  | Continuation token from a previous response's `NextToken`.                                   |
+| Parameter         | Type   | Required | Default   | Description                                                                                                          |
+| ----------------- | ------ | -------- | --------- | -------------------------------------------------------------------------------------------------------------------- |
+| `state`           | string | No       | `null`    | Only assets in this state: `compliant`, `non_compliant`, `pending_evaluation`, `quarantined`, `exception`, `unknown` |
+| `schemaName`      | string | No       | `null`    | Only assets bound to this schema                                                                                     |
+| `schemaSource`    | string | No       | `null`    | `database` (the database binding) or `asset` (an asset override)                                                     |
+| `evaluationError` | string | No       | `null`    | `true`: only assets whose last evaluation errored; `false`: only those whose last evaluation did not                 |
+| `text`            | string | No       | `null`    | Case-insensitive contains on the asset name or ID (at most 256 characters)                                           |
+| `sort`            | string | No       | `assetId` | `assetId` or `name`                                                                                                  |
+| `maxItems`        | number | No       | `100`     | Asset records per page. A larger value is reduced to 200; the remainder follows `NextToken`.                         |
+| `startingToken`   | string | No       | `null`    | Continuation token from a previous response's `NextToken`, valid only with the filters it was issued for.            |
 
 ### Response
 
@@ -830,15 +836,17 @@ GET /compliance/state/{databaseId}
 }
 ```
 
-`totalAssets` and `summary` cover every tracked asset of the database regardless of the page; `summary` holds one bucket per state (`compliant`, `non_compliant`, `pending_evaluation`, `quarantined`, `exception`, `unknown`) plus `error`, the number of assets whose `lastEvaluationStatus` is `error`. `error` is an overlay on the state buckets, not a state: an asset whose last evaluation produced no verdict is counted under the state it kept and again under `error`, so the state buckets sum to `totalAssets` without it. `assets` is one page of their records in `assetId` order — each a compliance record as returned by [Get the compliance state of an asset](#get-the-compliance-state-of-an-asset), plus the asset's display name as `assetName` — and `NextToken` is absent on the last page.
+`totalAssets` and `summary` cover every tracked asset of the database regardless of the page and the filters; they are counted with `COUNT` queries on the state index, so no records are read back for them. `summary` holds one bucket per state (`compliant`, `non_compliant`, `pending_evaluation`, `quarantined`, `exception`, `unknown`) plus `error`, the number of assets whose `lastEvaluationStatus` is `error`. `error` is an overlay on the state buckets, not a state: an asset whose last evaluation produced no verdict is counted under the state it kept and again under `error`, so the state buckets sum to `totalAssets` without it. `assets` is one page of their records in `assetId` order (or by name with `sort=name`) — each a compliance record as returned by [Get the compliance state of an asset](#get-the-compliance-state-of-an-asset), plus the asset's display name as `assetName`, kept on the compliance record — and `NextToken` is absent on the last page.
+
+A `state` filter reads the state index, `sort=name` reads the database's name index, and the other filters are applied to the records read. A filtered page reads a bounded amount of the table, so it can hold fewer records than `maxItems`, even none, while `NextToken` is present: keep paging until no token is returned. With both `state` and `sort=name`, each page is sorted by name, not the listing as a whole. A record written before asset names were kept on compliance records has no `assetName` until the asset is next modified or re-registered; until then it is absent from `sort=name` and matches `text` by its ID only.
 
 ### Error responses
 
-| Status | Description                              |
-| ------ | ---------------------------------------- |
-| `400`  | Invalid `databaseId` or pagination token |
-| `403`  | Not authorized                           |
-| `500`  | Internal server error                    |
+| Status | Description                                            |
+| ------ | ------------------------------------------------------ |
+| `400`  | Invalid `databaseId`, filter value or pagination token |
+| `403`  | Not authorized                                         |
+| `500`  | Internal server error                                  |
 
 ---
 
@@ -854,7 +862,9 @@ GET /compliance/quarantine
 
 | Parameter       | Type   | Required | Default | Description                                                                                  |
 | --------------- | ------ | -------- | ------- | -------------------------------------------------------------------------------------------- |
-| `maxItems`      | number | No       | `100`   | Asset records per page. A larger value is reduced to 500; the remainder follows `NextToken`. |
+| `databaseId`    | string | No       | `null`  | Only the quarantined assets of this database                                                 |
+| `text`          | string | No       | `null`  | Case-insensitive contains on the asset name or ID                                            |
+| `maxItems`      | number | No       | `100`   | Asset records per page. A larger value is reduced to 200; the remainder follows `NextToken`. |
 | `startingToken` | string | No       | `null`  | Continuation token from a previous response's `NextToken`.                                   |
 
 ### Response
@@ -986,15 +996,25 @@ DELETE /compliance/quarantine/{databaseId}/{assetId}/exception
 
 ---
 
-## List pending cascades
+## List cascades
 
-Retrieves every cascade in the `pending_approval` state that the caller may read, newest first. A row is listed only when the caller may read both the cascade and the compliance evaluations of the trigger asset's database.
+Retrieves one page of the cascades in a state — `pending_approval` unless `state` names another — that the caller may read, newest first. A row is listed only when the caller may read both the cascade and the compliance evaluations of the trigger asset's database.
 
 A cascade still pending at its `approvalTimeoutAt` (24 hours after creation) can no longer be approved. Whichever request reads it first aborts it: this listing (which then leaves it out), [Get a cascade](#get-a-cascade), an approve or reject (refused with `400`), or the next evaluation of the parent, which then opens a new cascade. The cascade is recorded `aborted` with `abortReason` `approval timed out` and a `cascade_timed_out` audit entry.
 
 ```
 GET /compliance/cascades
 ```
+
+### Query parameters
+
+| Parameter       | Type   | Required | Default            | Description                                                                             |
+| --------------- | ------ | -------- | ------------------ | --------------------------------------------------------------------------------------- |
+| `state`         | string | No       | `pending_approval` | `pending_approval`, `executing`, `completed` or `aborted`                               |
+| `databaseId`    | string | No       | `null`             | Only cascades whose trigger asset is in this database                                   |
+| `text`          | string | No       | `null`             | Case-insensitive contains on the trigger asset's name or ID                             |
+| `maxItems`      | number | No       | `100`              | Cascades per page. A larger value is reduced to 200; the remainder follows `NextToken`. |
+| `startingToken` | string | No       | `null`             | Continuation token from a previous response's `NextToken`.                              |
 
 ### Response
 
@@ -1008,6 +1028,7 @@ GET /compliance/cascades
             "triggeredByAssetId": "x1a2b3c4-control-0001",
             "databaseId": "survey-project",
             "assetId": "x1a2b3c4-control-0001",
+            "assetName": "Control 0001",
             "triggerReason": "Parent asset updated; downstream re-evaluation needed",
             "createdAt": "2026-03-15T10:31:12+00:00",
             "actor": "SYSTEM_USER",
@@ -1016,18 +1037,20 @@ GET /compliance/cascades
             "nodes": "{}",
             "executionOrder": "[]"
         }
-    ]
+    ],
+    "NextToken": "eyJjYXNjYWRlSWQiOiAiLi4uIn0="
 }
 ```
 
-The listing is not paged. Each row carries `databaseId` and `assetId` naming the trigger asset, copies of `triggeredByDatabaseId` and `triggeredByAssetId`.
+Each row carries `databaseId` and `assetId` naming the trigger asset, copies of `triggeredByDatabaseId` and `triggeredByAssetId`, and `assetName`, the trigger asset's name when the cascade was created. A page can hold fewer rows than `maxItems` while `NextToken` is present; `NextToken` is absent on the last page.
 
 ### Error responses
 
-| Status | Description           |
-| ------ | --------------------- |
-| `403`  | Not authorized        |
-| `500`  | Internal server error |
+| Status | Description                                       |
+| ------ | ------------------------------------------------- |
+| `400`  | Invalid `state`, filter value or pagination token |
+| `403`  | Not authorized                                    |
+| `500`  | Internal server error                             |
 
 ---
 
@@ -1193,9 +1216,12 @@ GET /compliance/audit
 | Parameter       | Type   | Required | Default | Description                                                                                                           |
 | --------------- | ------ | -------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
 | `eventType`     | string | No       | `null`  | Restrict the page to one event type — see [Event types](#event-types).                                                |
+| `databaseId`    | string | No       | `null`  | Only entries of this database.                                                                                        |
+| `assetId`       | string | No       | `null`  | Only entries of this asset; requires `databaseId`, and combines with `eventType`.                                     |
+| `text`          | string | No       | `null`  | Case-insensitive contains on the asset name recorded with the entry, the asset ID or the actor.                       |
 | `startDate`     | string | No       | `null`  | ISO-8601 timestamp; only entries at or after it are returned.                                                         |
 | `endDate`       | string | No       | `null`  | ISO-8601 timestamp; only entries at or before it are returned.                                                        |
-| `maxItems`      | number | No       | `100`   | Entries per page. A larger value is reduced to 500; the remainder follows `NextToken`. Takes precedence over `limit`. |
+| `maxItems`      | number | No       | `100`   | Entries per page. A larger value is reduced to 200; the remainder follows `NextToken`. Takes precedence over `limit`. |
 | `limit`         | number | No       | `100`   | Alias of `maxItems`, read when `maxItems` is absent.                                                                  |
 | `startingToken` | string | No       | `null`  | Continuation token from a previous response's `NextToken`.                                                            |
 
@@ -1211,6 +1237,7 @@ GET /compliance/audit
             "eventType": "compliance_check",
             "databaseId": "survey-project",
             "assetId": "x1a2b3c4-scan-0043",
+            "assetName": "Scan 0043",
             "actor": "user@example.com",
             "schemaName": "survey-compliance",
             "evaluationId": "8a1d2c3b-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
@@ -1223,7 +1250,7 @@ GET /compliance/audit
 }
 ```
 
-`details` is a JSON-encoded object whose keys depend on the event type. `previousState` and `newState` are present on entries that changed an asset's compliance state; `schemaName`, `evaluationId` and `cascadeId` are present when the event concerns one. Entries about a schema rather than an asset (`schema_deleted`) carry `*` as `databaseId` and `assetId`. `NextToken` is absent on the last page.
+`details` is a JSON-encoded object whose keys depend on the event type. `previousState` and `newState` are present on entries that changed an asset's compliance state; `schemaName`, `evaluationId` and `cascadeId` are present when the event concerns one. Entries about a schema rather than an asset (`schema_deleted`) carry `*` as `databaseId` and `assetId`. `assetName` is the asset's name when the entry was written; entries written before names were recorded have none. The `databaseId` and `text` filters are applied to the entries read, a bounded amount per page, so a page can hold fewer entries than `maxItems` while `NextToken` is present. `NextToken` is absent on the last page.
 
 ### Event types
 

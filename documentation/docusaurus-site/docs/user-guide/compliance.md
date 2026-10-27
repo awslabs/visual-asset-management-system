@@ -459,6 +459,7 @@ An asset that fails a rule with `quarantine` enforcement enters the `quarantined
 
 1. Navigate to **Compliance > Quarantine** in the left sidebar.
 2. The page lists every quarantined asset you may read with its Asset Name, Asset ID, Database ID, **Bound schema** (the schema the asset is currently bound to; the quarantine may have been produced by an evaluation against a different version or schema) and the quarantine reason. The list is paged: use the pagination control to move through the pages.
+3. Narrow the list with the **database** filter and the search box, which matches the asset name or ID. The filters are applied by the server across every quarantined asset, not only the page shown, and are kept in the page URL, so a filtered view can be reloaded or shared.
 
 ### Releasing from quarantine
 
@@ -500,7 +501,8 @@ A cascade re-evaluates the downstream assets of a parent — every descendant li
 ### Reviewing pending cascades
 
 1. Navigate to **Compliance > Cascade Approvals** in the left sidebar.
-2. The page lists cascades in `pending_approval` with the asset that triggered them, the reason, and the **Approval timeout**: 24 hours after creation.
+2. The page lists cascades in `pending_approval` with the asset that triggered them (its name, with the ID beneath), the reason, and the **Approval timeout**: 24 hours after creation.
+3. Use the state filter to list executing, completed or aborted cascades instead, and the database filter and search box (trigger asset name or ID) to narrow the list. The list is paged, and the filters are kept in the page URL.
 
 A cascade nobody approves or rejects before its approval timeout is aborted with the reason `approval timed out` and recorded as `cascade_timed_out`. It leaves the list, and the next evaluation of its parent may open a new one.
 
@@ -529,8 +531,8 @@ The compliance audit log records every compliance action across the deployment.
 ### Viewing the audit log
 
 1. Navigate to **Compliance > Audit Log** in the left sidebar.
-2. Use the **Event Type** filter to narrow the list (for example, only `quarantine_released` events).
-3. Entries are ordered newest first and the list is paged: use the pagination control to move through the pages.
+2. Use the **Event Type** filter to narrow the list (for example, only `quarantine_released` events), and the database, asset ID (within the chosen database), search box (the asset name recorded with the entry, the asset ID or the actor) and the from / to days to narrow it further. The filters are applied by the server and kept in the page URL.
+3. Entries are ordered newest first and the list is paged: use the pagination control to move through the pages. A filtered page can hold fewer entries than a full page while more follow.
 
 ### Event types
 

@@ -87,12 +87,19 @@ def test_list_compliance_schemas_forwards_the_database_filter(mock_client):
     mock_client.api.list_compliance_schemas.assert_called_once_with(database_id="db1")
 
 
-def test_list_compliance_cascades_lifts_its_field(mock_client):
-    rows = [{"cascadeId": "c1", "state": "pending_approval"}]
-    mock_client.api.list_compliance_cascades.return_value = {"cascades": rows}
-    result = server.list_compliance_cascades()
+def test_list_compliance_cascades_reads_its_field_and_forwards_the_filters(real_paginate_client):
+    rows = [{"cascadeId": "c1", "state": "aborted", "assetName": "Blade"}]
+    real_paginate_client.api.list_compliance_cascades.return_value = {"cascades": rows}
+    result = server.list_compliance_cascades(state="aborted", database_id="db1", text="blade")
     assert result["Items"] == rows
     assert result["count"] == 1
+    real_paginate_client.api.list_compliance_cascades.assert_called_once_with(
+        state="aborted",
+        database_id="db1",
+        text="blade",
+        max_items=min(server.CONFIG.page_size, server.MAX_COMPLIANCE_LISTING_PAGE_SIZE),
+        starting_token=None,
+    )
 
 
 def test_single_response_list_keeps_the_other_top_level_fields():
@@ -106,7 +113,7 @@ def test_single_response_list_tolerates_a_missing_or_non_list_field():
     assert server._single_response_list({"schemas": None}, "schemas")["Items"] == []
 
 
-@pytest.mark.parametrize("tool", ["list_compliance_schemas", "list_compliance_cascades"])
+@pytest.mark.parametrize("tool", ["list_compliance_schemas"])
 def test_whole_list_tools_take_no_paging_parameters(tool):
     """These routes return everything in one response; a paging knob would silently do nothing."""
     parameters = inspect.signature(getattr(server, tool)).parameters
@@ -130,7 +137,17 @@ def test_query_compliance_audit_forwards_every_filter_on_the_page_request(real_p
         end_date="2026-09-30",
         max_items=min(server.CONFIG.page_size, server.MAX_COMPLIANCE_AUDIT_PAGE_SIZE),
         starting_token="resume-here",
+        database_id=None,
+        asset_id=None,
+        text=None,
     )
+
+
+def test_query_compliance_audit_forwards_the_database_asset_and_text_filters(real_paginate_client):
+    real_paginate_client.api.query_compliance_audit.return_value = {"entries": []}
+    server.query_compliance_audit(database_id="db1", asset_id="a1", text="reviewer")
+    kwargs = real_paginate_client.api.query_compliance_audit.call_args.kwargs
+    assert (kwargs["database_id"], kwargs["asset_id"], kwargs["text"]) == ("db1", "a1", "reviewer")
 
 
 def test_query_compliance_audit_reads_the_entries_field(real_paginate_client):
@@ -252,8 +269,10 @@ def test_list_quarantined_assets_reads_its_field_and_follows_the_token(real_pagi
     assert result["pages"] == 2
     calls = real_paginate_client.api.list_quarantined_assets.call_args_list
     assert calls[0].kwargs == {
-        "max_items": min(server.CONFIG.page_size, server.MAX_COMPLIANCE_LIST_PAGE_SIZE),
+        "max_items": min(server.CONFIG.page_size, server.MAX_COMPLIANCE_LISTING_PAGE_SIZE),
         "starting_token": None,
+        "database_id": None,
+        "text": None,
     }
     assert calls[1].kwargs["starting_token"] == "page-2"
 
@@ -277,7 +296,7 @@ def test_list_quarantined_assets_never_asks_for_more_than_the_route_cap(mock_cli
     server.list_quarantined_assets()
     assert (
         mock_client.api.list_quarantined_assets.call_args.kwargs["max_items"]
-        == server.MAX_COMPLIANCE_LIST_PAGE_SIZE
+        == server.MAX_COMPLIANCE_LISTING_PAGE_SIZE
     )
 
 
@@ -292,8 +311,20 @@ def test_get_database_compliance_overview_forwards_the_page_and_returns_it_whole
     result = server.get_database_compliance_overview("db1", max_items=1, starting_token="page-1")
     assert result == page
     mock_client.api.get_database_compliance_state.assert_called_once_with(
-        "db1", max_items=1, starting_token="page-1"
+        "db1", max_items=1, starting_token="page-1", filters={"state": None, "schemaName": None, "schemaSource": None, "evaluationError": None, "text": None, "sort": None}
     )
+
+
+def test_get_database_compliance_overview_sends_the_filters(mock_client):
+    mock_client.api.get_database_compliance_state.return_value = {"assets": []}
+    server.get_database_compliance_overview(
+        "db1", state="quarantined", schema_source="asset", evaluation_error=False,
+        text="blade", sort="name", max_items=900,
+    )
+    kwargs = mock_client.api.get_database_compliance_state.call_args.kwargs
+    assert kwargs["filters"] == {"state": "quarantined", "schemaName": None, "schemaSource": "asset",
+                                 "evaluationError": "false", "text": "blade", "sort": "name"}
+    assert kwargs["max_items"] == server.MAX_COMPLIANCE_LISTING_PAGE_SIZE
 
 
 def test_get_compliance_bindings_forwards_the_page_and_returns_it_whole(mock_client):
@@ -391,7 +422,7 @@ def test_state_tools_route_to_the_asset_and_database_readers(mock_client):
     assert server.get_database_compliance_overview("db1") == {"totalAssets": 0}
     mock_client.api.get_compliance_state.assert_called_once_with("db1", "a1")
     mock_client.api.get_database_compliance_state.assert_called_once_with(
-        "db1", max_items=None, starting_token=None
+        "db1", max_items=None, starting_token=None, filters={"state": None, "schemaName": None, "schemaSource": None, "evaluationError": None, "text": None, "sort": None}
     )
 
 

@@ -19,6 +19,7 @@ from backend.tests.handlers.compliance._harness import (
     ASSET, COMPLIANCE_ASSET_STATE_TABLE_DEFINITION, DB, SCHEMA, USER, body_of, claims_for,
     decode_token, encode_token, enforcer, rest_event, schema_row,
 )
+from common.compliance import listing
 from handlers.compliance import complianceQuarantineService as svc
 
 MOD = "handlers.compliance.complianceQuarantineService"
@@ -88,19 +89,22 @@ def _run(event, tokens=(USER,), api=True, obj=True, compliance_record=None, quar
 class TestRouteDispatch:
 
     def test_get_lists_quarantined_assets_from_the_compliance_state_index(self):
-        rows = [dict(QUARANTINED, assetId="a"), dict(QUARANTINED, databaseId="db2", assetId="b")]
+        rows = [dict(QUARANTINED, assetId="a", assetName="Turbine"),
+                dict(QUARANTINED, databaseId="db2", assetId="b", assetName="Turbine")]
         response, mocks = _run(rest_event("GET", LIST_PATH), quarantined_rows=rows)
         assert response["statusCode"] == 200
         listed = body_of(response)["quarantinedAssets"]
         assert [(r["databaseId"], r["assetId"]) for r in listed] == [(DB, "a"), ("db2", "b")]
+        # The name is the row's own: no lookup per row.
         assert all(r["assetName"] == "Turbine" for r in listed)
+        mocks["asset"].get_item.assert_not_called()
         assert "NextToken" not in body_of(response)
         query = mocks["state"].query.call_args.kwargs
         assert mocks["state"].query.call_count == 1
         assert query["IndexName"] == "ComplianceStateIndex"
         assert query["KeyConditionExpression"]._values[0].name == "complianceState"
         assert query["KeyConditionExpression"]._values[1] == "quarantined"
-        assert 0 < query["Limit"] <= svc.DEFAULT_LIST_PAGE_SIZE
+        assert query["Limit"] == listing.FILTERED_READ_LIMIT
         assert "ExclusiveStartKey" not in query
 
     def test_post_release_reaches_release(self):
@@ -559,7 +563,8 @@ class TestListingPaging:
                                last_evaluated_key=last_key)
         token = body_of(response)["NextToken"]
         assert decode_token(token) == last_key
-        assert mocks["state"].query.call_args.kwargs["Limit"] == 1
+        # Rows the caller may not GET are skipped, so a read evaluates more than a page.
+        assert mocks["state"].query.call_args.kwargs["Limit"] == listing.FILTERED_READ_LIMIT
 
         response, mocks = _run(
             rest_event("GET", LIST_PATH, query_params={"maxItems": "1", "startingToken": token}),
@@ -571,20 +576,22 @@ class TestListingPaging:
         assert query["IndexName"] == "ComplianceStateIndex"
 
     def test_the_page_size_is_clamped_to_the_named_bounds(self):
-        _, mocks = _run(rest_event("GET", LIST_PATH, query_params={"maxItems": "100000"}))
-        clamped = mocks["state"].query.call_args.kwargs["Limit"]
-        assert 0 < clamped <= svc.MAX_LIST_PAGE_SIZE
-        _, mocks = _run(rest_event("GET", LIST_PATH, query_params={"maxItems": "0"}))
-        assert mocks["state"].query.call_args.kwargs["Limit"] == 1
+        rows = [dict(QUARANTINED, assetId=f"a{i:04d}") for i in range(300)]
+        response, _ = _run(rest_event("GET", LIST_PATH, query_params={"maxItems": "100000"}),
+                           quarantined_rows=rows)
+        assert len(body_of(response)["quarantinedAssets"]) == listing.MAX_LISTING_PAGE_SIZE
+        response, _ = _run(rest_event("GET", LIST_PATH, query_params={"maxItems": "0"}),
+                           quarantined_rows=rows)
+        assert len(body_of(response)["quarantinedAssets"]) == 1
         assert svc.DEFAULT_LIST_PAGE_SIZE == 100
-        assert svc.MAX_LIST_PAGE_SIZE == 500
+        assert listing.MAX_LISTING_PAGE_SIZE == 200
 
     def test_only_the_page_rows_are_enriched(self):
         rows = [dict(QUARANTINED, assetId=f"a{i}") for i in range(3)]
         _, mocks = _run(rest_event("GET", LIST_PATH), quarantined_rows=rows,
                         last_evaluated_key={"complianceState": "quarantined", "databaseId": DB,
                                             "assetId": "a2"})
-        assert mocks["asset"].get_item.call_count == 3
+        mocks["asset"].get_item.assert_not_called()
 
     def test_the_pages_partition_the_quarantined_rows_against_the_indexed_table(self):
         """Against a DynamoDB double built from the harness table definition: the GSI the handler

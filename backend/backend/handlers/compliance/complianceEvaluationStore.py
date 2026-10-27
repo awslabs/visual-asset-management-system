@@ -65,6 +65,7 @@ from botocore.exceptions import ClientError
 
 from common.apiRoutes import API_EXECUTE_WORKFLOW
 from common.compliance import evaluationEngine as engine
+from common.compliance import listing
 from common.compliance.auditRecord import build_audit_item
 from common.dynamodb import query_all_items, to_update_expr
 from common.resourceNames import ResourceKeys, get_table_name
@@ -233,22 +234,30 @@ def get_database_item(database_id: str) -> Optional[Dict[str, Any]]:
 SCHEMA_SOURCE_DATABASE = "database"
 
 
-def register_under_database_binding(database_id: str, asset_id: str, schema_name: str) -> None:
+def register_under_database_binding(database_id: str, asset_id: str, schema_name: str,
+                                    asset_name: Optional[str] = None) -> None:
     """Record that the asset is governed by its database's binding `schema_name`, as the binding
     does for the assets it finds when it is made: `schemaName`, `schemaSource` `database`, and
     `pending_evaluation` unless the row already records a state. Conditional on the row naming no
     schema yet, so an asset override or a registration that raced this one is left as it is; the
     rest of an existing row (an on-demand evaluation's state) is kept."""
     now = now_iso()
+    names = listing.asset_name_attributes(asset_id, asset_name)
     try:
         asset_state_table.update_item(
             Key={"databaseId": database_id, "assetId": asset_id},
             UpdateExpression=("SET schemaName = :schema, schemaSource = :source, "
                               "complianceState = if_not_exists(complianceState, :pending), "
-                              "registeredAt = if_not_exists(registeredAt, :now), updatedAt = :now"),
+                              "registeredAt = if_not_exists(registeredAt, :now), updatedAt = :now, "
+                              "assetName = if_not_exists(assetName, :name), "
+                              "assetNameSort = if_not_exists(assetNameSort, :nameSort), "
+                              "assetSearchText = if_not_exists(assetSearchText, :searchText)"),
             ConditionExpression="attribute_not_exists(schemaName)",
             ExpressionAttributeValues={":schema": schema_name, ":source": SCHEMA_SOURCE_DATABASE,
-                                       ":pending": engine.STATE_PENDING_EVALUATION, ":now": now},
+                                       ":pending": engine.STATE_PENDING_EVALUATION, ":now": now,
+                                       ":name": names["assetName"],
+                                       ":nameSort": names["assetNameSort"],
+                                       ":searchText": names["assetSearchText"]},
         )
     except ClientError as e:
         if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
@@ -853,6 +862,51 @@ def update_evaluation(evaluation_id: str, updates: Dict[str, Any], condition=Non
                        condition=condition, **kwargs)
 
 
+def _audit_asset_name(database_id: str, asset_id: str) -> Optional[str]:
+    """The asset's name as an audit entry records it (the name at the time of the event): one
+    GetItem of the `assetName` its compliance record keeps current (`refresh_asset_state_name`),
+    best-effort — an entry is never refused for it, and an entry about no asset in particular
+    (`*`) carries none."""
+    if not database_id or not asset_id or asset_id == "*":
+        return None
+    try:
+        row = asset_state_table.get_item(Key={"databaseId": database_id, "assetId": asset_id},
+                                         ProjectionExpression="assetName",
+                                         ConsistentRead=True).get("Item")
+    except Exception as e:
+        logger.info(f"Could not read the name of asset {database_id}:{asset_id} for its audit entry: {e}")
+        return None
+    name = row.get("assetName") if isinstance(row, dict) else None
+    return name if isinstance(name, str) and name else None
+
+
+def refresh_asset_state_name(database_id: str, asset_id: str, asset_name: Optional[str],
+                             table=None) -> bool:
+    """Keep an asset-state row's name attributes (`listing.asset_name_attributes`) equal to the
+    asset's current name. One conditional UpdateItem: it writes only when the row exists and records
+    another name (or none), so an asset without a compliance record, or one whose name did not
+    change, costs no write. Returns whether the row was updated."""
+    names = listing.asset_name_attributes(asset_id, asset_name)
+    try:
+        (table if table is not None else asset_state_table).update_item(
+            Key={"databaseId": database_id, "assetId": asset_id},
+            UpdateExpression="SET #an = :name, #ans = :nameSort, #ast = :searchText",
+            ConditionExpression=("attribute_exists(#db) AND "
+                                 "(attribute_not_exists(#an) OR #an <> :name OR "
+                                 "attribute_not_exists(#ans))"),
+            ExpressionAttributeNames={"#an": "assetName", "#ans": "assetNameSort",
+                                      "#ast": "assetSearchText", "#db": "databaseId"},
+            ExpressionAttributeValues={":name": names["assetName"],
+                                       ":nameSort": names["assetNameSort"],
+                                       ":searchText": names["assetSearchText"]},
+        )
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
+        return False
+    return True
+
+
 def update_asset_state(database_id: str, asset_id: str, updates: Dict[str, Any],
                        condition=None) -> None:
     """SET attributes on an asset's compliance state row (created when absent), optionally under a
@@ -890,6 +944,7 @@ def write_audit(
     schema_name: Optional[str] = None,
     evaluation_id: Optional[str] = None,
     cascade_id: Optional[str] = None,
+    asset_name: Optional[str] = None,
 ) -> None:
     """One compliance audit entry, built by `auditRecord.build_audit_item` so it is keyed for every
     audit index. Best-effort: a failed write is logged and never raised, so the mutation it
@@ -898,6 +953,7 @@ def write_audit(
         database_id, asset_id, event_type, actor, details,
         previous_state=previous_state, new_state=new_state, schema_name=schema_name,
         evaluation_id=evaluation_id, cascade_id=cascade_id, timestamp=now_iso(),
+        asset_name=asset_name if asset_name is not None else _audit_asset_name(database_id, asset_id),
     )
     try:
         audit_table.put_item(Item=item)

@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 
 from aws_lambda_powertools.utilities.parser import ValidationError, parse
 from aws_lambda_powertools.utilities.typing import LambdaContext
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 
 from common.apiRoutes import (
     API_COMPLIANCE_QUARANTINE,
@@ -33,6 +33,7 @@ from common.apiRoutes import (
     API_COMPLIANCE_QUARANTINE_RELEASE,
 )
 from common.compliance import evaluationEngine as engine
+from common.compliance import listing
 from common.validators import validate
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
@@ -72,7 +73,7 @@ COMPLIANCE_STATE_INDEX_KEY_ATTRIBUTES = ("complianceState", "databaseId", "asset
 # Page bounds for the quarantine listing. The Casbin list filter applies to the page after the
 # read, so an authz-filtered page may be empty while NextToken is present.
 DEFAULT_LIST_PAGE_SIZE = 100
-MAX_LIST_PAGE_SIZE = 500
+MAX_LIST_PAGE_SIZE = listing.MAX_LISTING_PAGE_SIZE
 INVALID_PAGINATION_TOKEN_MESSAGE = "Invalid pagination token"
 
 # Tables are resolved (and clients built) once by the shared store at import.
@@ -195,25 +196,6 @@ def _validate_database_and_asset(database_id, asset_id):
 # Paging helpers
 #######################
 
-def _page_arguments(event, query_params):
-    """(page_size, exclusive_start_key, None) from `maxItems` / `startingToken`, or
-    (None, None, response) when either is malformed."""
-    try:
-        page_size = int(query_params.get("maxItems", str(DEFAULT_LIST_PAGE_SIZE)))
-    except (TypeError, ValueError):
-        return None, None, validation_error(body={"message": "maxItems must be an integer"}, event=event)
-    page_size = max(1, min(page_size, MAX_LIST_PAGE_SIZE))
-
-    exclusive_start_key = None
-    starting_token = query_params.get("startingToken")
-    if starting_token:
-        exclusive_start_key = _decode_key_token(starting_token)
-        if exclusive_start_key is None:
-            return None, None, validation_error(
-                body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
-    return page_size, exclusive_start_key, None
-
-
 def _decode_key_token(token):
     """The ComplianceStateIndex key a token carries, or None when the token is malformed — not
     Base64 JSON, not an object, or missing one of the index's key attributes (a key from another
@@ -238,48 +220,60 @@ def _encode_key_token(last_evaluated_key):
 #######################
 
 def list_quarantined(event, query_params):
-    """One page of quarantined assets, filtered to those the caller may GET, with asset names.
+    """One page of quarantined assets the caller may GET, with their names.
 
-    Access path: one ComplianceStateIndex query (complianceState = quarantined) bounded by
-    `maxItems` and resumed from `startingToken`; `NextToken` is present while more rows remain.
+    Access path: the ComplianceStateIndex partition `complianceState = quarantined`, narrowed to one
+    database by the index's sort key when `databaseId` is given; `text` (case-insensitive contains
+    on the asset name or id) is a FilterExpression. The page is filled across at most
+    `listing.DEFAULT_READ_BUDGET` reads (`listing.query_page`), skipping the rows the caller may
+    not GET; `NextToken` resumes after the last row returned. No per-row lookup: the name is on the
+    row.
     """
-    page_size, exclusive_start_key, error = _page_arguments(event, query_params)
-    if error:
-        return error
+    page_size = listing.page_size_of(query_params.get("maxItems"), DEFAULT_LIST_PAGE_SIZE)
+    if page_size is None:
+        return validation_error(body={"message": "maxItems must be an integer"}, event=event)
+    database_id = query_params.get("databaseId") or None
+    text = listing.normalized_text(query_params.get("text")) or None
+    (valid, message) = validate({
+        "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True,
+                       "optional": True},
+        "text": {"value": text, "validator": "STRING_256", "optional": True},
+    })
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
+    start_key = None
+    if query_params.get("startingToken"):
+        start_key = listing.decode_token(query_params["startingToken"],
+                                         listing.COMPLIANCE_STATE_INDEX_KEYS)
+        if start_key is None:
+            return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
 
-    query_kwargs = {
-        "IndexName": COMPLIANCE_STATE_INDEX,
-        "KeyConditionExpression": Key("complianceState").eq(engine.STATE_QUARANTINED),
-        "Limit": page_size,
-    }
-    if exclusive_start_key:
-        query_kwargs["ExclusiveStartKey"] = exclusive_start_key
-    response = asset_state_table.query(**query_kwargs)
+    key_condition = Key("complianceState").eq(engine.STATE_QUARANTINED)
+    if database_id:
+        key_condition = key_condition & Key("databaseId").eq(database_id)
+    query_kwargs = {"IndexName": COMPLIANCE_STATE_INDEX, "KeyConditionExpression": key_condition}
+    if text:
+        query_kwargs["FilterExpression"] = (Attr("assetSearchText").contains(text)
+                                            | Attr("assetId").contains(text))
 
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
-    allowed = []
-    for item in response.get("Items", []):
+
+    def may_get(item):
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
-        if casbin_enforcer and casbin_enforcer.enforce(
-                _evaluation_object(item.get("databaseId"), engine.STATE_QUARANTINED), "GET"):
-            item["assetName"] = _asset_name(item.get("databaseId"), item.get("assetId"))
-            allowed.append(item)
+        return bool(casbin_enforcer) and casbin_enforcer.enforce(
+            _evaluation_object(item.get("databaseId"), engine.STATE_QUARANTINED), "GET")
 
-    result = {"quarantinedAssets": allowed}
-    if "LastEvaluatedKey" in response:
-        result["NextToken"] = _encode_key_token(response["LastEvaluatedKey"])
+    rows, next_key, _ = listing.query_page(
+        asset_state_table, query_kwargs, page_size, listing.COMPLIANCE_STATE_INDEX_KEYS,
+        start_key=start_key, filtered=bool(text), accept=may_get)
+    for row in rows:
+        row.setdefault("assetName", "")
+        row.pop("assetNameSort", None)
+        row.pop("assetSearchText", None)
+    result = {"quarantinedAssets": rows}
+    if next_key:
+        result["NextToken"] = listing.encode_token(next_key)
     return success(body=result)
-
-
-def _asset_name(database_id, asset_id):
-    if not database_id or not asset_id:
-        return ""
-    row = asset_table.get_item(
-        Key={"databaseId": database_id, "assetId": asset_id},
-        ProjectionExpression="assetName",
-    ).get("Item")
-    return (row or {}).get("assetName", "")
-
 
 def release_quarantine(event, database_id, asset_id, request: ReleaseQuarantineRequestModel):
     """Release a quarantined asset (state becomes compliant; no exception recorded)."""

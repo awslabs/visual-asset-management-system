@@ -17,10 +17,11 @@ import json
 import boto3
 from aws_lambda_powertools.utilities.parser import ValidationError
 from aws_lambda_powertools.utilities.typing import LambdaContext
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
 
 from common.apiRoutes import API_COMPLIANCE_AUDIT, API_COMPLIANCE_AUDIT_ASSET
+from common.compliance import listing
 from common.compliance.auditRecord import AUDIT_LIST_PARTITION
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
@@ -48,7 +49,7 @@ COMPLIANCE_EVALUATION_OBJECT_TYPE = "complianceEvaluation"
 
 # Page bounds for audit listings (newest first).
 DEFAULT_AUDIT_PAGE_SIZE = 100
-MAX_AUDIT_PAGE_SIZE = 500
+MAX_AUDIT_PAGE_SIZE = listing.MAX_LISTING_PAGE_SIZE
 INVALID_PAGINATION_TOKEN_MESSAGE = "Invalid pagination token"
 # The attributes a LastEvaluatedKey of each listing's index carries (the table key plus the index
 # keys); a token missing one belongs to another listing and never reaches DynamoDB.
@@ -249,75 +250,134 @@ def get_asset_audit(event, database_id, asset_id, params):
     return success(body=result)
 
 
-def query_audit(event, params):
-    """Audit entries across assets, newest first, externally paged.
+def _audit_filter(database_id, text):
+    """The FilterExpression of the listing's `databaseId` and `text` filters, or None. An entry
+    written before `searchText` existed is matched on its asset id and actor."""
+    conditions = []
+    if database_id:
+        conditions.append(Attr("databaseId").eq(database_id))
+    if text:
+        conditions.append(Attr("searchText").contains(text) | Attr("assetId").contains(text)
+                          | Attr("actor").contains(text))
+    if not conditions:
+        return None
+    expression = conditions[0]
+    for condition in conditions[1:]:
+        expression = expression & condition
+    return expression
 
-    Without `eventType`, one query on AuditByDateGSI, whose partition is the constant every audit
-    row carries; the token is that index's LastEvaluatedKey. With `eventType`, one EventTypeIndex
-    partition; the token names it and carries its LastEvaluatedKey. Either page is filtered to the
-    entries the caller may GET by databaseId, so it can be short or empty while a NextToken is
-    present.
+
+def query_audit(event, params):
+    """Audit entries across assets, newest first, filtered and paged on the server.
+
+    Query parameters: `eventType`, `databaseId`, `assetId` (with `databaseId`), `startDate` /
+    `endDate` (ISO-8601), `text` (case-insensitive contains on the asset name at the time of the
+    event, the asset id or the actor), `maxItems` (1..200) and `startingToken`.
+
+    Access path — a key condition on one index, the other filters a FilterExpression:
+    - `databaseId` + `assetId`: the asset's AssetIndex partition;
+    - `eventType`: that EventTypeIndex partition; the token names it and carries its key;
+    - otherwise AuditByDateGSI, whose partition is the constant every audit row carries.
+    The time window narrows each index's `timestamp` sort key. The page is filled across at most
+    `listing.DEFAULT_READ_BUDGET` reads with the entries the caller may GET by databaseId
+    (`listing.query_page`); `NextToken` resumes after the last entry returned.
     """
-    event_type = params.get("eventType")
+    event_type = params.get("eventType") or None
     start_date = params.get("startDate")
     end_date = params.get("endDate")
+    database_id = params.get("databaseId") or None
+    asset_id = params.get("assetId") or None
+    text = listing.normalized_text(params.get("text")) or None
     (valid, message) = validate({
         "eventType": {"value": event_type, "validator": "STRING_256", "optional": True},
+        "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True,
+                       "optional": True},
+        "assetId": {"value": asset_id, "validator": "ASSET_ID", "optional": True},
+        "text": {"value": text, "validator": "STRING_256", "optional": True},
     })
     if not valid:
         return validation_error(body={"message": message}, event=event)
+    if asset_id and not database_id:
+        return validation_error(body={"message": "assetId requires databaseId"}, event=event)
     (valid, message) = _validate_dates(start_date, end_date)
     if not valid:
         return validation_error(body={"message": message}, event=event)
+    page_size = listing.page_size_of(params.get("maxItems", params.get("limit")),
+                                     DEFAULT_AUDIT_PAGE_SIZE)
+    if page_size is None:
+        return validation_error(body={"message": "limit must be an integer"}, event=event)
 
-    if event_type:
-        page_size, exclusive_start_key, error = _page_arguments(event, params)
-        if error:
-            return error
-        # A token for the filtered listing is {"partition": <eventType>, "key": <LastEvaluatedKey> |
-        # null}. One naming another partition, or carrying a key that is not this index's, never
-        # reaches DynamoDB.
-        if exclusive_start_key is not None:
-            start_key = exclusive_start_key.get("key")
-            if start_key is not None:
-                start_key = _index_key(start_key, EVENT_TYPE_INDEX_KEY_ATTRIBUTES)
+    filter_database = database_id
+    if asset_id:
+        index_name, keys = "AssetIndex", ASSET_INDEX_KEY_ATTRIBUTES
+        key_condition = Key("databaseId:assetId").eq(f"{database_id}:{asset_id}")
+        filter_database = None
+        if event_type:
+            extra = Attr("eventType").eq(event_type)
+        else:
+            extra = None
+    elif event_type:
+        index_name, keys = "EventTypeIndex", EVENT_TYPE_INDEX_KEY_ATTRIBUTES
+        key_condition = Key("eventType").eq(event_type)
+        extra = None
+    else:
+        index_name, keys = "AuditByDateGSI", DATE_INDEX_KEY_ATTRIBUTES
+        key_condition = Key("allListPartition").eq(AUDIT_LIST_PARTITION)
+        extra = None
+
+    start_key = None
+    starting_token = params.get("startingToken")
+    if starting_token:
+        if event_type and not asset_id:
+            # A token for the event-type listing is {"partition": <eventType>, "key": <key> | null}.
+            # One naming another partition, or carrying a key that is not this index's, never
+            # reaches DynamoDB.
+            raw = None
+            try:
+                raw = json.loads(base64.b64decode(starting_token, validate=True).decode("utf-8"))
+            except (ValueError, TypeError):
+                raw = None
+            if not isinstance(raw, dict) or raw.get("partition") != event_type:
+                logger.info("Audit pagination token rejected: unknown partition")
+                return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE},
+                                        event=event)
+            if raw.get("key") is not None:
+                start_key = _index_key(raw.get("key"), keys)
                 if start_key is None:
                     logger.info("Audit pagination token rejected: malformed key")
-                    return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
-            if exclusive_start_key.get("partition") != event_type:
-                logger.info("Audit pagination token rejected: unknown partition")
-                return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
-            exclusive_start_key = start_key
-        index_name = "EventTypeIndex"
-        key_condition = Key("eventType").eq(event_type)
-    else:
-        page_size, exclusive_start_key, error = _page_arguments(event, params, DATE_INDEX_KEY_ATTRIBUTES)
-        if error:
-            return error
-        index_name = "AuditByDateGSI"
-        key_condition = Key("allListPartition").eq(AUDIT_LIST_PARTITION)
+                    return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE},
+                                            event=event)
+        else:
+            start_key = listing.decode_token(starting_token, keys)
+            if start_key is None:
+                return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE},
+                                        event=event)
 
     query_kwargs = {
         "IndexName": index_name,
         "KeyConditionExpression": _timestamp_condition(key_condition, start_date, end_date),
         "ScanIndexForward": False,
-        "Limit": page_size,
     }
-    if exclusive_start_key:
-        query_kwargs["ExclusiveStartKey"] = exclusive_start_key
-    response = audit_table.query(**query_kwargs)
+    expression = _audit_filter(filter_database, text)
+    if extra is not None:
+        expression = extra if expression is None else expression & extra
+    if expression is not None:
+        query_kwargs["FilterExpression"] = expression
 
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
-    entries = []
-    for item in response.get("Items", []):
-        # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
-        if casbin_enforcer and casbin_enforcer.enforce(
-                _evaluation_object(item.get("databaseId")), "GET"):
-            entries.append(item)
 
+    def may_get(item):
+        # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
+        return bool(casbin_enforcer) and casbin_enforcer.enforce(
+            _evaluation_object(item.get("databaseId")), "GET")
+
+    entries, next_key, _ = listing.query_page(
+        audit_table, query_kwargs, page_size, keys, start_key=start_key,
+        filtered=expression is not None, accept=may_get)
+    for entry in entries:
+        entry.pop("searchText", None)
     result = {"entries": entries}
-    if "LastEvaluatedKey" in response:
-        last_key = response["LastEvaluatedKey"]
+    if next_key:
         result["NextToken"] = _encode_token(
-            {"partition": event_type, "key": last_key} if event_type else last_key)
+            {"partition": event_type, "key": next_key} if event_type and not asset_id else next_key)
     return success(body=result)

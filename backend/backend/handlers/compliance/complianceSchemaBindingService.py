@@ -40,6 +40,7 @@ from botocore.config import Config
 
 from common.apiRoutes import API_COMPLIANCE_BIND_ASSET, API_COMPLIANCE_BIND_DATABASE
 from common.compliance import evaluationEngine as engine
+from common.compliance import listing
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
@@ -451,6 +452,7 @@ def bind_schema_to_asset(event, database_id, asset_id, request: BindSchemaReques
         "schemaSource": SCHEMA_SOURCE_ASSET,
         "complianceState": STATE_PENDING_EVALUATION,
         "updatedAt": now,
+        **listing.asset_name_attributes(asset_id, (asset_item or {}).get("assetName")),
     })
 
     store.write_audit(
@@ -599,7 +601,7 @@ def mark_database_assets_pending(database_id, schema_name, now):
     asset_rows = query_all_items(
         asset_table,
         KeyConditionExpression=Key("databaseId").eq(database_id),
-        ProjectionExpression="assetId",
+        ProjectionExpression="assetId, assetName",
     )
 
     affected = 0
@@ -618,6 +620,7 @@ def mark_database_assets_pending(database_id, schema_name, now):
                 "schemaSource": SCHEMA_SOURCE_DATABASE,
                 "complianceState": STATE_PENDING_EVALUATION,
                 "updatedAt": now,
+                **listing.asset_name_attributes(asset_id, row.get("assetName")),
             })
             affected += 1
     return affected

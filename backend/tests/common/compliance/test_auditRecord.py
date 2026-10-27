@@ -111,7 +111,13 @@ class TestBuildAuditItem:
     def test_optional_fields_are_absent_unless_given(self):
         bare = audit_record.build_audit_item("db1", "a", "compliance_check", "user1")
         assert set(bare) == {"entryId", "databaseId:assetId", "timestamp", "eventType",
-                             "allListPartition", "databaseId", "assetId", "actor", "details"}
+                             "allListPartition", "databaseId", "assetId", "actor", "details",
+                             "searchText"}
+        assert bare["searchText"] == "a user1"
+        named = audit_record.build_audit_item("db1", "a", "compliance_check", "User1",
+                                              asset_name="Turbine Blade")
+        assert named["assetName"] == "Turbine Blade"
+        assert named["searchText"] == "turbine blade a user1"
         full = audit_record.build_audit_item(
             "db1", "a", "compliance_check", "user1", {"ruleNames": ["r"]},
             previous_state="quarantined", new_state="compliant", schema_name="s",

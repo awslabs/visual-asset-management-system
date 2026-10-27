@@ -74,10 +74,28 @@ describe("ComplianceAssetStateStorageTable indexes", () => {
         ]);
     });
 
-    test("carries exactly SchemaNameIndex and ComplianceStateIndex", () => {
+    test("carries exactly SchemaNameIndex, ComplianceStateIndex and DatabaseAssetNameIndex", () => {
         const table = assetStateTable(synth());
         const names = (table.properties.GlobalSecondaryIndexes as any[]).map((g) => g.IndexName);
-        expect(names.sort()).toEqual(["ComplianceStateIndex", "SchemaNameIndex"]);
+        expect(names.sort()).toEqual([
+            "ComplianceStateIndex",
+            "DatabaseAssetNameIndex",
+            "SchemaNameIndex",
+        ]);
+    });
+
+    test("DatabaseAssetNameIndex keys on (databaseId, assetNameSort) with an ALL projection", () => {
+        // The overview's name sort. Added alone in its update: an existing table accepts only one
+        // new GSI per CloudFormation update.
+        const table = assetStateTable(synth());
+        const gsi = (table.properties.GlobalSecondaryIndexes as any[]).find(
+            (g) => g.IndexName === "DatabaseAssetNameIndex"
+        );
+        expect(gsi.KeySchema).toEqual([
+            { AttributeName: "databaseId", KeyType: "HASH" },
+            { AttributeName: "assetNameSort", KeyType: "RANGE" },
+        ]);
+        expect(gsi.Projection).toEqual({ ProjectionType: "ALL" });
     });
 
     test("SchemaNameIndex keys on (schemaName, complianceState) with an ALL projection", () => {
@@ -117,6 +135,7 @@ describe("ComplianceAssetStateStorageTable indexes", () => {
             assetId: "S",
             schemaName: "S",
             complianceState: "S",
+            assetNameSort: "S",
         });
     });
 });

@@ -178,13 +178,13 @@ asset held before it. `get_database_compliance_overview` counts only assets
 that have a compliance record, with an `exception` bucket in its `summary` and an
 `error` count that overlays the state buckets (assets whose last evaluation
 errored) rather than adding to them.
-`list_compliance_schemas` and `list_compliance_cascades` (pending approval only;
-each row carries `databaseId` / `assetId` of the trigger asset, and an
+`list_compliance_schemas` returns its whole list in one response under `Items`
+and takes no paging parameters.
+`list_compliance_cascades` (pending approval unless `state` names another; each
+row carries `databaseId` / `assetId` / `assetName` of the trigger asset, and an
 automatically opened cascade is not duplicated while one for the same parent is
-pending) return their whole
-list in one response under `Items` and take no paging parameters.
-`list_compliance_evaluations`, `list_quarantined_assets`, `query_compliance_audit`
-and `get_asset_compliance_audit` are real pages (`max_items`, `starting_token`,
+pending), `list_compliance_evaluations`, `list_quarantined_assets`,
+`query_compliance_audit` and `get_asset_compliance_audit` are real pages (`max_items`, `starting_token`,
 `NextToken`), auto-paginated and marked `truncated` when a bound stopped the walk;
 the evaluation rows carry the `executionId` of the workflow execution behind a
 pipeline rule, `exceptionApplied` when the evaluation ran under an exception, and
@@ -197,9 +197,13 @@ listing return only rows whose database the caller may read, too).
 `get_database_compliance_overview` and `get_compliance_bindings` take
 `max_items` / `starting_token` too but return the route's own page: `summary` /
 `totalAssets` and `assetOverrideCount` describe the full set while `assets` /
-`assetOverrides` are one page, with `NextToken` when more exist. `event_type`
-exists on the global audit trail only — the per-asset route ignores it, so the
-tool does not offer it.
+`assetOverrides` are one page, with `NextToken` when more exist. The listings
+filter on the server: the overview by `state`, `schema_name`, `schema_source`,
+`evaluation_error` and `text` (sorted by `sort`), the quarantine list and the
+cascade list by `database_id` and `text` (cascades also `state`), and the global
+audit trail by `database_id`, `asset_id` and `text`; a filtered page can be short
+while a `NextToken` remains. `event_type` exists on the global audit trail only —
+the per-asset route ignores it, so the tool does not offer it.
 
 The two comment listings take `max_items` and `page_size` but **no**
 `starting_token`: the routes apply those bounds and then discard the pagination

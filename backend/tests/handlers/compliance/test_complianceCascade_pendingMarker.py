@@ -114,6 +114,7 @@ def deployment(*rows, invoke_raises=False):
             env.invoke.side_effect = RuntimeError("invoke failed")
         with patch.object(DynamoDBBackend, "transact_write_items", atomic), \
                 patch.object(trigger, "cascade_table", table), \
+                patch.object(trigger, "asset_table", MagicMock(name="asset_table")), \
                 patch(f"{STORE}.get_child_links", return_value=CHILDREN), \
                 patch(f"{STORE}.write_audit", env.audit), \
                 patch(NOTIFY), \

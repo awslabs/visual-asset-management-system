@@ -336,17 +336,26 @@ Show compliance state: one asset's record, or a database's overview.
 vamscli compliance state [OPTIONS]
 ```
 
-| Option                | Type    | Required | Description                                                                                     |
-| --------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------- |
-| `-d`, `--database-id` | TEXT    | Yes      | Database ID                                                                                     |
-| `-a`, `--asset-id`    | TEXT    | No       | One asset's record; omit for the database overview                                              |
-| `--max-items`         | INTEGER | No       | Asset records per page of the database overview (the API applies 100 when omitted; at most 500) |
-| `--starting-token`    | TEXT    | No       | Token for pagination of the database overview (the previous page's `NextToken`)                 |
-| `--json-output`       | FLAG    | No       | Output raw JSON response                                                                        |
+| Option                                         | Type    | Required | Description                                                                                     |
+| ---------------------------------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `-d`, `--database-id`                          | TEXT    | Yes      | Database ID                                                                                     |
+| `-a`, `--asset-id`                             | TEXT    | No       | One asset's record; omit for the database overview                                              |
+| `--max-items`                                  | INTEGER | No       | Asset records per page of the database overview (the API applies 100 when omitted; at most 200) |
+| `--starting-token`                             | TEXT    | No       | Token for pagination of the database overview (the previous page's `NextToken`)                 |
+| `--state`                                      | CHOICE  | No       | Overview: only assets in this state                                                             |
+| `--schema-name`                                | TEXT    | No       | Overview: only assets bound to this schema                                                      |
+| `--schema-source`                              | CHOICE  | No       | Overview: `database` (the database binding) or `asset` (an asset override)                      |
+| `--evaluation-error` / `--no-evaluation-error` | FLAG    | No       | Overview: only assets whose last evaluation errored (or did not)                                |
+| `--text`                                       | TEXT    | No       | Overview: case-insensitive contains on the asset name or ID                                     |
+| `--sort`                                       | CHOICE  | No       | Overview: `assetId` (default) or `name`                                                         |
+| `--json-output`                                | FLAG    | No       | Output raw JSON response                                                                        |
+
+The overview's filters apply on the server and the summary still covers the whole database. A filtered page can hold fewer rows than `--max-items` while a `NextToken` is shown; keep paging until none is. With `-a` the filters are refused.
 
 ```bash
 vamscli compliance state -d my-database
 vamscli compliance state -d my-database --max-items 20 --starting-token "token123"
+vamscli compliance state -d my-database --state quarantined --text turbine --sort name
 vamscli compliance state -d my-database -a my-asset
 vamscli compliance state -d my-database --json-output
 ```
@@ -393,15 +402,18 @@ List quarantined assets across every database the caller may read, one page per 
 vamscli compliance quarantine list [OPTIONS]
 ```
 
-| Option             | Type    | Required | Description                                                                 |
-| ------------------ | ------- | -------- | --------------------------------------------------------------------------- |
-| `--max-items`      | INTEGER | No       | Quarantined assets per page (the API applies 100 when omitted; at most 500) |
-| `--starting-token` | TEXT    | No       | Token for pagination (the previous page's `NextToken`)                      |
-| `--json-output`    | FLAG    | No       | Output raw JSON response (`{"quarantinedAssets": [...], "NextToken": ...}`) |
+| Option                | Type    | Required | Description                                                                 |
+| --------------------- | ------- | -------- | --------------------------------------------------------------------------- |
+| `--max-items`         | INTEGER | No       | Quarantined assets per page (the API applies 100 when omitted; at most 200) |
+| `--starting-token`    | TEXT    | No       | Token for pagination (the previous page's `NextToken`)                      |
+| `-d`, `--database-id` | TEXT    | No       | Only the quarantined assets of this database                                |
+| `--text`              | TEXT    | No       | Case-insensitive contains on the asset name or ID                           |
+| `--json-output`       | FLAG    | No       | Output raw JSON response (`{"quarantinedAssets": [...], "NextToken": ...}`) |
 
 ```bash
 vamscli compliance quarantine list
 vamscli compliance quarantine list --max-items 20 --starting-token "token123"
+vamscli compliance quarantine list -d my-database --text turbine
 vamscli compliance quarantine list --json-output
 ```
 
@@ -482,18 +494,24 @@ A cascade re-evaluates the dependents of a changed asset. By default it waits in
 
 ## compliance cascade list
 
-List cascades awaiting approval, each with the `databaseId` and `assetId` of the asset that triggered it. Only cascades whose trigger asset's database the caller may read are listed. Cascades in any other state are read individually with `cascade get`.
+List cascades, newest first, one page per call: those awaiting approval unless `--state` names another. Each row carries the `databaseId`, `assetId` and `assetName` of the asset that triggered it. Only cascades whose trigger asset's database the caller may read are listed.
 
 ```bash
 vamscli compliance cascade list [OPTIONS]
 ```
 
-| Option          | Type | Required | Description                                      |
-| --------------- | ---- | -------- | ------------------------------------------------ |
-| `--json-output` | FLAG | No       | Output raw JSON response (`{"cascades": [...]}`) |
+| Option                | Type    | Required | Description                                                         |
+| --------------------- | ------- | -------- | ------------------------------------------------------------------- |
+| `--state`             | CHOICE  | No       | `pending_approval` (default), `executing`, `completed` or `aborted` |
+| `-d`, `--database-id` | TEXT    | No       | Only cascades whose trigger asset is in this database               |
+| `--text`              | TEXT    | No       | Case-insensitive contains on the trigger asset's name or ID         |
+| `--max-items`         | INTEGER | No       | Cascades per page (at most 200)                                     |
+| `--starting-token`    | TEXT    | No       | Token for pagination (the previous page's `NextToken`)              |
+| `--json-output`       | FLAG    | No       | Output raw JSON response (`{"cascades": [...], "NextToken": ...}`)  |
 
 ```bash
 vamscli compliance cascade list
+vamscli compliance cascade list --state aborted -d my-database
 vamscli compliance cascade list --json-output
 ```
 
@@ -599,21 +617,23 @@ Query the compliance audit trail: the global trail, optionally narrowed to one e
 vamscli compliance audit [OPTIONS]
 ```
 
-| Option                | Type    | Required | Description                                                       |
-| --------------------- | ------- | -------- | ----------------------------------------------------------------- |
-| `-d`, `--database-id` | TEXT    | No       | With `--asset-id`: one asset's history                            |
-| `-a`, `--asset-id`    | TEXT    | No       | With `--database-id`: one asset's history                         |
-| `--event-type`        | TEXT    | No       | Only entries of this event type (global listing only)             |
-| `--start-date`        | TEXT    | No       | Earliest entry timestamp (ISO 8601)                               |
-| `--end-date`          | TEXT    | No       | Latest entry timestamp (ISO 8601)                                 |
-| `--max-items`         | INTEGER | No       | Entries per page (the API applies 100 when omitted; at most 500)  |
-| `--limit`             | INTEGER | No       | Alias of `--max-items`                                            |
-| `--starting-token`    | TEXT    | No       | Token for pagination (the previous page's `NextToken`)            |
-| `--json-output`       | FLAG    | No       | Output raw JSON response (`{"entries": [...], "NextToken": ...}`) |
+| Option                | Type    | Required | Description                                                                |
+| --------------------- | ------- | -------- | -------------------------------------------------------------------------- |
+| `-d`, `--database-id` | TEXT    | No       | Only entries of this database (with `--asset-id`: one asset's history)     |
+| `-a`, `--asset-id`    | TEXT    | No       | With `--database-id`: one asset's history                                  |
+| `--event-type`        | TEXT    | No       | Only entries of this event type                                            |
+| `--text`              | TEXT    | No       | Case-insensitive contains on the asset name at the time, asset ID or actor |
+| `--start-date`        | TEXT    | No       | Earliest entry timestamp (ISO 8601)                                        |
+| `--end-date`          | TEXT    | No       | Latest entry timestamp (ISO 8601)                                          |
+| `--max-items`         | INTEGER | No       | Entries per page (the API applies 100 when omitted; at most 200)           |
+| `--limit`             | INTEGER | No       | Alias of `--max-items`                                                     |
+| `--starting-token`    | TEXT    | No       | Token for pagination (the previous page's `NextToken`)                     |
+| `--json-output`       | FLAG    | No       | Output raw JSON response (`{"entries": [...], "NextToken": ...}`)          |
 
 ```bash
 vamscli compliance audit
 vamscli compliance audit --event-type quarantine_released --max-items 100
+vamscli compliance audit -d my-database --text reviewer
 vamscli compliance audit --start-date 2026-09-01T00:00:00Z --end-date 2026-09-30T23:59:59Z
 vamscli compliance audit --starting-token "token123"
 vamscli compliance audit -d my-database -a my-asset

@@ -37,6 +37,7 @@ from .client import (  # noqa: E402
     MAX_COMPLIANCE_AUDIT_PAGE_SIZE,
     MAX_COMPLIANCE_EVALUATIONS_PAGE_SIZE,
     MAX_COMPLIANCE_LIST_PAGE_SIZE,
+    MAX_COMPLIANCE_LISTING_PAGE_SIZE,
     SUBSCRIPTION_ENTITY_ASSET,
     SUBSCRIPTION_EVENT_ASSET_VERSION_CHANGE,
 )
@@ -1618,10 +1619,24 @@ def get_database_compliance_overview(
     database_id: str,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
+    state: Optional[str] = None,
+    schema_name: Optional[str] = None,
+    schema_source: Optional[str] = None,
+    evaluation_error: Optional[bool] = None,
+    text: Optional[str] = None,
+    sort: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Read a database's compliance overview: `totalAssets` and a per-state `summary` (compliant,
     non_compliant, pending_evaluation, quarantined, exception, unknown) covering EVERY tracked
-    asset, plus `assets` — ONE PAGE of their records, each with its `assetName`, in assetId order.
+    asset, plus `assets` — ONE PAGE of their records, each with its `assetName`, in assetId order
+    (or by name with `sort="name"`).
+
+    The page is filtered ON THE SERVER: `state` (one complianceState), `schema_name`,
+    `schema_source` (`database` or `asset`), `evaluation_error` (True: the last evaluation
+    errored; False: it did not) and `text` (case-insensitive contains on the asset name or id).
+    The summary ignores the filters. A filtered page can hold fewer rows than `max_items` while a
+    `NextToken` is present (each page reads a bounded amount): follow the token before concluding
+    that no more assets match. A token is valid only with the filters it was issued for.
 
     `summary.error` counts the assets whose `lastEvaluationStatus` is `error` (their last
     evaluation produced no verdict). It is an OVERLAY on the state buckets, not a state: those
@@ -1633,8 +1648,19 @@ def get_database_compliance_overview(
     in the response means more records exist — pass it back as `starting_token`. Use `summary` /
     `totalAssets` for counts; do not count the rows of one page.
     """
+    filters = {
+        "state": state,
+        "schemaName": schema_name,
+        "schemaSource": schema_source,
+        "evaluationError": None if evaluation_error is None else str(evaluation_error).lower(),
+        "text": text,
+        "sort": sort,
+    }
     return CLIENT.api.get_database_compliance_state(
-        database_id, max_items=max_items, starting_token=starting_token
+        database_id,
+        max_items=None if max_items is None else min(max_items, MAX_COMPLIANCE_LISTING_PAGE_SIZE),
+        starting_token=starting_token,
+        filters=filters,
     )
 
 
@@ -1684,8 +1710,13 @@ def list_compliance_evaluations(
 def list_quarantined_assets(
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
+    database_id: Optional[str] = None,
+    text: Optional[str] = None,
 ) -> Dict[str, Any]:
     """List the quarantined assets the caller may read, across every database (auto-paginated).
+
+    `database_id` narrows the listing to one database and `text` to the assets whose name or id
+    contains it (case-insensitive); both filter on the server.
 
     Each item is the asset's compliance record (databaseId, assetId, assetName, schemaName,
     quarantineReason, updatedAt). Only assets in state `quarantined` are listed — an asset released
@@ -1700,8 +1731,10 @@ def list_quarantined_assets(
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_quarantined_assets(
             # The route reads its page size from `maxItems` and clamps it to its own cap.
-            max_items=min(params["pageSize"], MAX_COMPLIANCE_LIST_PAGE_SIZE),
+            max_items=min(params["pageSize"], MAX_COMPLIANCE_LISTING_PAGE_SIZE),
             starting_token=params.get("startingToken"),
+            database_id=database_id,
+            text=text,
         ),
         max_items=max_items,
         items_key="quarantinedAssets",
@@ -1711,20 +1744,39 @@ def list_quarantined_assets(
 
 @mcp.tool()
 @tool_result
-def list_compliance_cascades() -> Dict[str, Any]:
-    """List cascades AWAITING APPROVAL, as `Items` with `count`.
+def list_compliance_cascades(
+    state: Optional[str] = None,
+    database_id: Optional[str] = None,
+    text: Optional[str] = None,
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """List cascades, newest first (auto-paginated): those AWAITING APPROVAL unless `state` names
+    another (executing, completed, aborted).
 
-    Only cascades in state pending_approval are listed; an executing, completed or aborted cascade
-    is read with get_compliance_cascade() by id. Each item carries cascadeId, `databaseId` and
-    `assetId` (the trigger asset, copied from triggeredByDatabaseId / triggeredByAssetId, which are
-    present too), triggerReason, createdAt and approvalTimeoutAt (after which an unapproved cascade
-    expires). Only cascades whose trigger asset's database the caller may read are listed, so a
-    short list is a permission boundary as much as a queue length. The route returns the whole
-    list in one response and takes no paging parameters. A cascade opened automatically after the
+    `database_id` narrows to the cascades whose trigger asset is in that database, and `text` to
+    those whose trigger asset's name or id contains it (case-insensitive); both filter on the
+    server. Each item carries cascadeId, `databaseId`, `assetId` and `assetName` (the trigger
+    asset; triggeredByDatabaseId / triggeredByAssetId are present too), triggerReason, createdAt
+    and approvalTimeoutAt (after which an unapproved cascade expires). Only cascades whose trigger
+    asset's database the caller may read are listed, so a short list is a permission boundary as
+    much as a queue length. The walk is BOUNDED: `truncated` means rows were not seen and
+    `NextToken` continues it. A cascade opened automatically after the
     evaluation of a parent is not duplicated: while one for that parent is pending approval, further
     evaluations of it open no new one, so one row per parent is the expected shape.
     """
-    return _single_response_list(CLIENT.api.list_compliance_cascades(), "cascades")
+    return CLIENT.paginate(
+        lambda params: CLIENT.api.list_compliance_cascades(
+            state=state,
+            database_id=database_id,
+            text=text,
+            max_items=min(params["pageSize"], MAX_COMPLIANCE_LISTING_PAGE_SIZE),
+            starting_token=params.get("startingToken"),
+        ),
+        max_items=max_items,
+        items_key="cascades",
+        starting_token=starting_token,
+    )
 
 
 @mcp.tool()
@@ -1753,8 +1805,16 @@ def query_compliance_audit(
     end_date: Optional[str] = None,
     max_items: Optional[int] = None,
     starting_token: Optional[str] = None,
+    database_id: Optional[str] = None,
+    asset_id: Optional[str] = None,
+    text: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Query the global compliance audit trail, most recent first (auto-paginated).
+
+    Server-side filters: `database_id` (one database), `asset_id` (one asset; requires
+    `database_id`, and combines with `event_type` unlike get_asset_compliance_audit()) and `text`
+    (case-insensitive contains on the asset name recorded at the time of the event, the asset id
+    or the actor). Each entry carries `assetName` as it was when the event was written.
 
     `event_type` narrows to one kind of entry (schema_bound_to_database, schema_bound_to_asset,
     schema_unbound_from_database, schema_unbound_from_asset, schema_deleted, compliance_check,
@@ -1779,6 +1839,9 @@ def query_compliance_audit(
             # The route reads its page size from `maxItems` and clamps it to its own cap.
             max_items=min(params["pageSize"], MAX_COMPLIANCE_AUDIT_PAGE_SIZE),
             starting_token=params.get("startingToken"),
+            database_id=database_id,
+            asset_id=asset_id,
+            text=text,
         ),
         max_items=max_items,
         items_key="entries",

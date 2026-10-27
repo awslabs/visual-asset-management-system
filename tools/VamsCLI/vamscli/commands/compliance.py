@@ -32,6 +32,7 @@ from ..constants import (
     MAX_COMPLIANCE_AUDIT_PAGE_SIZE,
     MAX_COMPLIANCE_EVALUATIONS_PAGE_SIZE,
     MAX_COMPLIANCE_LIST_PAGE_SIZE,
+    MAX_COMPLIANCE_LISTING_PAGE_SIZE,
 )
 from ..utils.api_client import APIClient
 from ..utils.decorators import get_profile_manager_from_context, requires_setup_and_auth
@@ -908,16 +909,31 @@ def sweep(ctx: click.Context, schema_name: Optional[str], database_id: Optional[
 @click.option('-d', '--database-id', required=True, help='[REQUIRED] Database ID')
 @click.option('-a', '--asset-id', default=None,
               help='One asset\'s record; omit for the database overview')
-@click.option('--max-items', type=click.IntRange(1, MAX_COMPLIANCE_LIST_PAGE_SIZE), default=None,
+@click.option('--max-items', type=click.IntRange(1, MAX_COMPLIANCE_LISTING_PAGE_SIZE), default=None,
               help=f'Asset records per page of the database overview (the API applies '
-                   f'{DEFAULT_COMPLIANCE_LIST_PAGE_SIZE} when omitted; at most {MAX_COMPLIANCE_LIST_PAGE_SIZE})')
+                   f'{DEFAULT_COMPLIANCE_LIST_PAGE_SIZE} when omitted; at most {MAX_COMPLIANCE_LISTING_PAGE_SIZE})')
 @click.option('--starting-token', default=None,
               help='Token for pagination of the database overview (the previous page\'s NextToken)')
+@click.option('--state', 'state_filter',
+              type=click.Choice(['compliant', 'non_compliant', 'pending_evaluation', 'quarantined',
+                                 'exception', 'unknown']),
+              default=None, help='Overview: only assets in this state')
+@click.option('--schema-name', default=None, help='Overview: only assets bound to this schema')
+@click.option('--schema-source', type=click.Choice(['database', 'asset']), default=None,
+              help='Overview: only assets whose binding is the database\'s or their own')
+@click.option('--evaluation-error/--no-evaluation-error', default=None,
+              help='Overview: only assets whose last evaluation errored (or did not)')
+@click.option('--text', default=None,
+              help='Overview: case-insensitive contains on the asset name or id')
+@click.option('--sort', type=click.Choice(['assetId', 'name']), default=None,
+              help='Overview: order of the rows (assetId by default)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def state(ctx: click.Context, database_id: str, asset_id: Optional[str], max_items: Optional[int],
-          starting_token: Optional[str], json_output: bool):
+          starting_token: Optional[str], state_filter: Optional[str], schema_name: Optional[str],
+          schema_source: Optional[str], evaluation_error: Optional[bool], text: Optional[str],
+          sort: Optional[str], json_output: bool):
     """Show compliance state: one asset's record, or a database's overview.
 
     complianceState is one of compliant, non_compliant, quarantined, exception (released under an
@@ -931,18 +947,30 @@ def state(ctx: click.Context, database_id: str, asset_id: Optional[str], max_ite
     An asset that is not tracked is reported with state 'unknown'. --max-items and
     --starting-token apply to the overview only; the single-asset route is not paged.
 
+    The overview filters on the server (--state, --schema-name, --schema-source,
+    --evaluation-error, --text) and sorts by asset id or --sort name; the summary always covers
+    the whole database. A filtered page can hold fewer rows than --max-items while a NextToken is
+    present: keep paging until no token is returned.
+
     Examples:
         vamscli compliance state -d my-database
+        vamscli compliance state -d my-database --state quarantined --text turbine --sort name
         vamscli compliance state -d my-database --max-items 20 --starting-token "token123"
         vamscli compliance state -d my-database -a my-asset
         vamscli compliance state -d my-database --json-output
     """
     # Setup/auth already validated by decorator
     api_client = _api(ctx)
-    if asset_id and (max_items is not None or starting_token):
+    overview_filters = {
+        'state': state_filter, 'schemaName': schema_name, 'schemaSource': schema_source,
+        'evaluationError': None if evaluation_error is None else str(evaluation_error).lower(),
+        'text': text, 'sort': sort,
+    }
+    if asset_id and (max_items is not None or starting_token
+                     or any(value for value in overview_filters.values())):
         raise click.ClickException(
-            "--max-items and --starting-token apply to the database overview; the single-asset "
-            "route is not paged"
+            "--max-items, --starting-token and the filters apply to the database overview; the "
+            "single-asset route is not paged"
         )
     try:
         if asset_id:
@@ -952,7 +980,8 @@ def state(ctx: click.Context, database_id: str, asset_id: Optional[str], max_ite
         else:
             output_status(f"Retrieving compliance state for database '{database_id}'...", json_output)
             result = api_client.get_database_compliance_state(
-                database_id, max_items=max_items, starting_token=starting_token)
+                database_id, max_items=max_items, starting_token=starting_token,
+                filters=overview_filters)
             output_result(result, json_output, cli_formatter=format_database_state)
         return result
     except _COMPLIANCE_ERRORS as e:
@@ -1005,15 +1034,17 @@ def quarantine():
 
 
 @quarantine.command('list')
-@click.option('--max-items', type=click.IntRange(1, MAX_COMPLIANCE_LIST_PAGE_SIZE), default=None,
+@click.option('--max-items', type=click.IntRange(1, MAX_COMPLIANCE_LISTING_PAGE_SIZE), default=None,
               help=f'Quarantined assets per page (the API applies {DEFAULT_COMPLIANCE_LIST_PAGE_SIZE} '
-                   f'when omitted; at most {MAX_COMPLIANCE_LIST_PAGE_SIZE})')
+                   f'when omitted; at most {MAX_COMPLIANCE_LISTING_PAGE_SIZE})')
 @click.option('--starting-token', default=None, help='Token for pagination (the previous page\'s NextToken)')
+@click.option('-d', '--database-id', default=None, help='Only quarantined assets of this database')
+@click.option('--text', default=None, help='Case-insensitive contains on the asset name or id')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def list_quarantined(ctx: click.Context, max_items: Optional[int], starting_token: Optional[str],
-                     json_output: bool):
+                     database_id: Optional[str], text: Optional[str], json_output: bool):
     """List quarantined assets across every database the caller may read.
 
     The response carries a NextToken when more quarantined assets exist; pass it back as
@@ -1029,7 +1060,8 @@ def list_quarantined(ctx: click.Context, max_items: Optional[int], starting_toke
     api_client = _api(ctx)
     output_status("Retrieving quarantined assets...", json_output)
     try:
-        result = api_client.list_quarantined_assets(max_items=max_items, starting_token=starting_token)
+        result = api_client.list_quarantined_assets(max_items=max_items, starting_token=starting_token,
+                                                    database_id=database_id, text=text)
         output_result(result, json_output, cli_formatter=format_quarantine_list)
         return result
     except _COMPLIANCE_ERRORS as e:
@@ -1143,11 +1175,23 @@ def cascade():
 
 
 @cascade.command('list')
+@click.option('--state', 'state_filter',
+              type=click.Choice(['pending_approval', 'executing', 'completed', 'aborted']),
+              default=None, help='Cascades in this state (pending_approval by default)')
+@click.option('-d', '--database-id', default=None,
+              help='Only cascades whose trigger asset is in this database')
+@click.option('--text', default=None,
+              help='Case-insensitive contains on the trigger asset\'s name or id')
+@click.option('--max-items', type=click.IntRange(1, MAX_COMPLIANCE_LISTING_PAGE_SIZE), default=None,
+              help=f'Cascades per page (at most {MAX_COMPLIANCE_LISTING_PAGE_SIZE})')
+@click.option('--starting-token', default=None, help='Token for pagination (the previous page\'s NextToken)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def list_cascades(ctx: click.Context, json_output: bool):
-    """List cascades awaiting approval.
+def list_cascades(ctx: click.Context, state_filter: Optional[str], database_id: Optional[str],
+                  text: Optional[str], max_items: Optional[int], starting_token: Optional[str],
+                  json_output: bool):
+    """List cascades (awaiting approval by default), newest first, one page per call.
 
     Each row carries databaseId and assetId naming the trigger asset (beside triggeredByDatabaseId
     and triggeredByAssetId), and only cascades whose trigger asset's database the caller may read
@@ -1162,7 +1206,9 @@ def list_cascades(ctx: click.Context, json_output: bool):
     api_client = _api(ctx)
     output_status("Retrieving cascades awaiting approval...", json_output)
     try:
-        result = api_client.list_compliance_cascades()
+        result = api_client.list_compliance_cascades(
+            state=state_filter, database_id=database_id, text=text, max_items=max_items,
+            starting_token=starting_token)
         output_result(result, json_output, cli_formatter=format_cascade_list)
         return result
     except _COMPLIANCE_ERRORS as e:
@@ -1291,8 +1337,11 @@ def reject_cascade(ctx: click.Context, cascade_id: str, reason: Optional[str], j
 # ---------------------------------------------------------------------------
 
 @compliance.command('audit')
-@click.option('-d', '--database-id', default=None, help='With --asset-id: one asset\'s history')
+@click.option('-d', '--database-id', default=None,
+              help='Only entries of this database (with --asset-id: one asset\'s history)')
 @click.option('-a', '--asset-id', default=None, help='With --database-id: one asset\'s history')
+@click.option('--text', default=None,
+              help='Case-insensitive contains on the asset name at the time, asset id or actor')
 @click.option('--event-type', default=None,
               help='Only entries of this event type (global listing only)')
 @click.option('--start-date', default=None, help='Earliest entry timestamp (ISO 8601)')
@@ -1309,7 +1358,7 @@ def reject_cascade(ctx: click.Context, cascade_id: str, reason: Optional[str], j
 def audit(ctx: click.Context, database_id: Optional[str], asset_id: Optional[str],
           event_type: Optional[str], start_date: Optional[str], end_date: Optional[str],
           max_items: Optional[int], limit: Optional[int], starting_token: Optional[str],
-          json_output: bool):
+          text: Optional[str], json_output: bool):
     """Query the compliance audit trail.
 
     Without --database-id/--asset-id the global trail is listed, optionally narrowed to one
@@ -1333,21 +1382,15 @@ def audit(ctx: click.Context, database_id: Optional[str], asset_id: Optional[str
     """
     # Setup/auth already validated by decorator
     api_client = _api(ctx)
-    if bool(database_id) != bool(asset_id):
-        raise click.ClickException(
-            "--database-id and --asset-id must be given together to read one asset's history"
-        )
-    if asset_id and event_type:
-        raise click.ClickException(
-            "--event-type applies to the global audit listing; the per-asset route has no such filter"
-        )
+    if asset_id and not database_id:
+        raise click.ClickException("--asset-id requires --database-id")
     if max_items is not None and limit is not None and max_items != limit:
         raise click.ClickException(
             "--limit is an alias of --max-items; give one of them, or the same value for both"
         )
     page_size = max_items if max_items is not None else limit
     try:
-        if asset_id:
+        if asset_id and not event_type and not text:
             output_status(f"Retrieving the audit history for asset '{asset_id}'...", json_output)
             result = api_client.get_asset_compliance_audit(
                 database_id, asset_id, start_date=start_date, end_date=end_date,
@@ -1356,7 +1399,8 @@ def audit(ctx: click.Context, database_id: Optional[str], asset_id: Optional[str
             output_status("Querying the compliance audit trail...", json_output)
             result = api_client.query_compliance_audit(
                 event_type=event_type, start_date=start_date, end_date=end_date,
-                max_items=page_size, starting_token=starting_token)
+                max_items=page_size, starting_token=starting_token, database_id=database_id,
+                asset_id=asset_id, text=text)
         output_result(result, json_output, cli_formatter=format_audit_entries)
         return result
     except _COMPLIANCE_ERRORS as e:

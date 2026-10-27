@@ -39,7 +39,8 @@ CASCADE_ID = "5b1e2c3d-0000-4000-8000-000000000001"
 
 # The compliance asset-state table as the CDK defines it (storageBuilder-nestedStack.ts): PK
 # databaseId / SK assetId, GSI SchemaNameIndex (schemaName, complianceState) and GSI
-# ComplianceStateIndex (complianceState, databaseId), both projecting ALL. `create_table(**...)`
+# ComplianceStateIndex (complianceState, databaseId) and GSI DatabaseAssetNameIndex (databaseId,
+# assetNameSort), all projecting ALL. `create_table(**...)`
 # kwargs for a moto-backed DynamoDB resource; the name is the one the root harness seeds.
 COMPLIANCE_ASSET_STATE_TABLE_DEFINITION = {
     "TableName": os.environ.get("COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME", "t-compliance-asset-state"),
@@ -52,6 +53,7 @@ COMPLIANCE_ASSET_STATE_TABLE_DEFINITION = {
         {"AttributeName": "assetId", "AttributeType": "S"},
         {"AttributeName": "schemaName", "AttributeType": "S"},
         {"AttributeName": "complianceState", "AttributeType": "S"},
+        {"AttributeName": "assetNameSort", "AttributeType": "S"},
     ],
     "GlobalSecondaryIndexes": [
         {
@@ -67,6 +69,14 @@ COMPLIANCE_ASSET_STATE_TABLE_DEFINITION = {
             "KeySchema": [
                 {"AttributeName": "complianceState", "KeyType": "HASH"},
                 {"AttributeName": "databaseId", "KeyType": "RANGE"},
+            ],
+            "Projection": {"ProjectionType": "ALL"},
+        },
+        {
+            "IndexName": "DatabaseAssetNameIndex",
+            "KeySchema": [
+                {"AttributeName": "databaseId", "KeyType": "HASH"},
+                {"AttributeName": "assetNameSort", "KeyType": "RANGE"},
             ],
             "Projection": {"ProjectionType": "ALL"},
         },
@@ -261,6 +271,15 @@ class FakeAssetStateTable:
         self.calls.append(("update_item", None))
         key = (Key["databaseId"], Key["assetId"])
         row = dict(self.rows.get(key) or {})
+        if ConditionExpression is not None and ConditionExpression.startswith("attribute_exists(#db) AND "):
+            # The name refresh (`store.refresh_asset_state_name`): only an existing row whose name
+            # differs is written.
+            name = ExpressionAttributeValues[":name"]
+            if not row or (row.get("assetName") == name and "assetNameSort" in row):
+                raise ClientError(
+                    {"Error": {"Code": "ConditionalCheckFailedException", "Message": "x"}},
+                    "UpdateItem")
+            ConditionExpression = None
         if ConditionExpression is not None and not any(
                 _ownership_clause_holds(row, clause, ExpressionAttributeNames,
                                         ExpressionAttributeValues)

@@ -21,7 +21,7 @@ import time
 
 from aws_lambda_powertools.utilities.parser import ValidationError, parse
 from aws_lambda_powertools.utilities.typing import LambdaContext
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from common.apiRoutes import (
     API_COMPLIANCE_EVALUATE_ASSET,
     API_COMPLIANCE_EVALUATE_DATABASE,
@@ -31,6 +31,7 @@ from common.apiRoutes import (
     API_COMPLIANCE_SWEEP_SCHEMA,
 )
 from common.compliance import evaluationEngine as engine
+from common.compliance import listing
 from common.dynamodb import query_all_items
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -70,7 +71,7 @@ MAX_EVALUATIONS_PAGE_SIZE = 200
 # summary and total cover the whole database), then offset-sliced to one page in assetId order;
 # the token carries the offset of the next page.
 DEFAULT_OVERVIEW_PAGE_SIZE = 100
-MAX_OVERVIEW_PAGE_SIZE = 500
+MAX_OVERVIEW_PAGE_SIZE = listing.MAX_LISTING_PAGE_SIZE
 INVALID_PAGINATION_TOKEN_MESSAGE = "Invalid pagination token"
 # The attributes a LastEvaluatedKey of the evaluation table's AssetIndex carries (table key plus
 # index keys); a token missing one belongs to another listing and never reaches DynamoDB.
@@ -78,6 +79,8 @@ EVALUATION_ASSET_INDEX_KEY_ATTRIBUTES = ("evaluationId", "databaseId:assetId", "
 # The overview `summary` key counting assets whose latest evaluation errored (`lastEvaluationStatus`
 # of `error`) — an overlay on the state buckets, not a compliance state.
 OVERVIEW_ERROR_BUCKET = "error"
+# The asset-state table's (complianceState, databaseId) index.
+COMPLIANCE_STATE_INDEX = "ComplianceStateIndex"
 
 # Bound on the assets one sweep evaluates synchronously inside the API Lambda timeout. The bound
 # rows are ordered `pending_evaluation` first; a schema bound to more assets sweeps the first
@@ -539,16 +542,126 @@ def get_compliance_state(event, database_id, asset_id):
     return success(body=item)
 
 
-def get_database_compliance_overview(event, database_id, query_params):
-    """Per-state counts over every asset-state row of a database, plus one page of the rows (assetId
-    order) with asset names. The counts cover the whole database; `NextToken` is present while more
-    rows remain.
+# Filters of the database overview (GET /compliance/state/{databaseId}).
+OVERVIEW_STATES = (
+    engine.STATE_COMPLIANT, engine.STATE_NON_COMPLIANT, engine.STATE_PENDING_EVALUATION,
+    engine.STATE_QUARANTINED, engine.STATE_EXCEPTION, engine.STATE_UNKNOWN,
+)
+OVERVIEW_SCHEMA_SOURCES = ("database", "asset")
+OVERVIEW_SORTS = ("assetId", "name")
 
-    `summary` has one bucket per compliance state (each row counted in exactly one; a row with an
-    unrecognized state counts as `unknown`) plus an `error` overlay: the number of rows whose
-    `lastEvaluationStatus` is `error` — assets whose latest evaluation could not run or could not
-    evaluate any rule. `error` is not a state, so an asset in it is also counted in its state bucket
-    and the state buckets alone sum to `totalAssets`.
+
+def overview_summary(database_id):
+    """`(summary, totalAssets, reads)`: per-state counts and the evaluation-error overlay of a
+    database, without reading the rows. Each state is one `Select=COUNT` query on the
+    ComplianceStateIndex partition of that state narrowed to the database (its sort key), so the
+    reads grow with the database's index entries, never with the item sizes, and no row is
+    returned; the overlay is one COUNT over the database's partition filtered on
+    `lastEvaluationStatus`. Exact at the time of the read."""
+    summary = {}
+    reads = 0
+    for state in OVERVIEW_STATES:
+        count, spent = listing.count_items(asset_state_table, {
+            "IndexName": COMPLIANCE_STATE_INDEX,
+            "KeyConditionExpression": (Key("complianceState").eq(state)
+                                       & Key("databaseId").eq(database_id)),
+        })
+        summary[state] = count
+        reads += spent
+    errors, spent = listing.count_items(asset_state_table, {
+        "KeyConditionExpression": Key("databaseId").eq(database_id),
+        "FilterExpression": Attr("lastEvaluationStatus").eq(engine.EVALUATION_STATUS_ERROR),
+    })
+    reads += spent
+    summary[OVERVIEW_ERROR_BUCKET] = errors
+    return summary, sum(summary[state] for state in OVERVIEW_STATES), reads
+
+
+def _overview_filters(event, query_params):
+    """`(filters, None)` from the overview's query parameters, or `(None, response)` when one is
+    not an accepted value."""
+    state = query_params.get("state") or None
+    schema_name = query_params.get("schemaName") or None
+    schema_source = query_params.get("schemaSource") or None
+    evaluation_error = query_params.get("evaluationError")
+    text = listing.normalized_text(query_params.get("text"))
+    sort = query_params.get("sort") or "assetId"
+    if state is not None and state not in OVERVIEW_STATES:
+        return None, validation_error(body={"message": "state must be one of " + ", ".join(
+            OVERVIEW_STATES)}, event=event)
+    if schema_source is not None and schema_source not in OVERVIEW_SCHEMA_SOURCES:
+        return None, validation_error(body={"message": "schemaSource must be database or asset"},
+                                      event=event)
+    if evaluation_error not in (None, "", "true", "false"):
+        return None, validation_error(body={"message": "evaluationError must be true or false"},
+                                      event=event)
+    if sort not in OVERVIEW_SORTS:
+        return None, validation_error(body={"message": "sort must be assetId or name"}, event=event)
+    (valid, message) = validate({
+        "schemaName": {"value": schema_name, "validator": "ID", "optional": True},
+        "text": {"value": text, "validator": "STRING_256", "optional": True},
+    })
+    if not valid:
+        return None, validation_error(body={"message": message}, event=event)
+    return {"state": state, "schemaName": schema_name, "schemaSource": schema_source,
+            "evaluationError": evaluation_error or None, "text": text or None,
+            "sort": sort}, None
+
+
+def _overview_query(database_id, filters):
+    """`(query kwargs, token key attributes, filtered)` for the overview's filters: a state filter
+    reads the ComplianceStateIndex partition of that state narrowed to the database; `sort=name`
+    reads the DatabaseAssetNameIndex; otherwise the database's partition of the table, in assetId
+    order. The other filters are a FilterExpression on that read."""
+    if filters["state"]:
+        kwargs = {"IndexName": COMPLIANCE_STATE_INDEX,
+                  "KeyConditionExpression": (Key("complianceState").eq(filters["state"])
+                                             & Key("databaseId").eq(database_id))}
+        keys = listing.COMPLIANCE_STATE_INDEX_KEYS
+    elif filters["sort"] == "name":
+        kwargs = {"IndexName": listing.DATABASE_ASSET_NAME_INDEX,
+                  "KeyConditionExpression": Key("databaseId").eq(database_id)}
+        keys = listing.DATABASE_ASSET_NAME_INDEX_KEYS
+    else:
+        kwargs = {"KeyConditionExpression": Key("databaseId").eq(database_id)}
+        keys = listing.BASE_STATE_KEYS
+    conditions = []
+    if filters["schemaName"]:
+        conditions.append(Attr("schemaName").eq(filters["schemaName"]))
+    if filters["schemaSource"]:
+        conditions.append(Attr("schemaSource").eq(filters["schemaSource"]))
+    if filters["evaluationError"] == "true":
+        conditions.append(Attr("lastEvaluationStatus").eq(engine.EVALUATION_STATUS_ERROR))
+    elif filters["evaluationError"] == "false":
+        conditions.append(Attr("lastEvaluationStatus").ne(engine.EVALUATION_STATUS_ERROR))
+    if filters["text"]:
+        # A row written before the search attribute existed is matched on its id.
+        conditions.append(Attr("assetSearchText").contains(filters["text"])
+                          | Attr("assetId").contains(filters["text"]))
+    if conditions:
+        expression = conditions[0]
+        for condition in conditions[1:]:
+            expression = expression & condition
+        kwargs["FilterExpression"] = expression
+    return kwargs, keys, bool(conditions)
+
+
+def get_database_compliance_overview(event, database_id, query_params):
+    """One page of a database's asset-state rows, filtered and sorted on the server, with the
+    per-state counts of the whole database.
+
+    Query parameters: `maxItems` (1..200) and `startingToken`; `state`, `schemaName`,
+    `schemaSource` (`database` | `asset`), `evaluationError` (`true` | `false`), `text`
+    (case-insensitive contains on the asset name or id) and `sort` (`assetId`, the default, or
+    `name`). Each filter combination reads with a key condition (`_overview_query`) and fills the
+    page across at most `listing.DEFAULT_READ_BUDGET` reads; `NextToken` resumes after the last row
+    returned. Every row carries `assetName`, kept on the row (no lookup per row).
+
+    `summary` has one bucket per compliance state (each row counted in exactly one) plus an
+    `error` overlay: the rows whose `lastEvaluationStatus` is `error` — assets whose latest
+    evaluation could not run or could not evaluate any rule. `error` is not a state, so an asset in
+    it is also counted in its state bucket and the state buckets alone sum to `totalAssets`. The
+    counts are of the whole database, whatever the filters (`overview_summary`).
     """
     (valid, message) = validate({
         "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True},
@@ -561,80 +674,38 @@ def get_database_compliance_overview(event, database_id, query_params):
     if not _enforce_evaluation(database_id, "GET"):
         return authorization_error()
 
-    page_size, offset, error = _overview_page_arguments(event, query_params)
+    page_size = listing.page_size_of(query_params.get("maxItems"), DEFAULT_OVERVIEW_PAGE_SIZE)
+    if page_size is None:
+        return validation_error(body={"message": "maxItems must be an integer"}, event=event)
+    filters, error = _overview_filters(event, query_params)
     if error:
         return error
+    kwargs, keys, filtered = _overview_query(database_id, filters)
+    start_key = None
+    if query_params.get("startingToken"):
+        start_key = listing.decode_token(query_params["startingToken"], keys)
+        if start_key is None:
+            return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
 
-    items = query_all_items(
-        asset_state_table, KeyConditionExpression=Key("databaseId").eq(database_id))
+    rows, next_key, _ = listing.query_page(asset_state_table, kwargs, page_size, keys,
+                                           start_key=start_key, filtered=filtered)
+    if filters["state"] and filters["sort"] == "name":
+        rows.sort(key=lambda row: row.get("assetNameSort") or row.get("assetId", ""))
+    for row in rows:
+        row.setdefault("assetName", "")
+        row.pop("assetNameSort", None)
+        row.pop("assetSearchText", None)
 
-    summary = {
-        engine.STATE_COMPLIANT: 0,
-        engine.STATE_NON_COMPLIANT: 0,
-        engine.STATE_PENDING_EVALUATION: 0,
-        engine.STATE_QUARANTINED: 0,
-        engine.STATE_EXCEPTION: 0,
-        engine.STATE_UNKNOWN: 0,
-    }
-    evaluation_errors = 0
-    for item in items:
-        state = item.get("complianceState", engine.STATE_UNKNOWN)
-        summary[state if state in summary else engine.STATE_UNKNOWN] += 1
-        if item.get("lastEvaluationStatus") == engine.EVALUATION_STATUS_ERROR:
-            evaluation_errors += 1
-    summary[OVERVIEW_ERROR_BUCKET] = evaluation_errors
-
-    items.sort(key=lambda item: item.get("assetId", ""))
-    page = items[offset:offset + page_size]
-    for item in page:
-        item["assetName"] = _asset_name(database_id, item.get("assetId"))
-
+    summary, total, _ = overview_summary(database_id)
     body = {
         "databaseId": database_id,
-        "totalAssets": len(items),
+        "totalAssets": total,
         "summary": summary,
-        "assets": page,
+        "assets": rows,
     }
-    if offset + page_size < len(items):
-        body["NextToken"] = _encode_offset_token(offset + page_size)
+    if next_key:
+        body["NextToken"] = listing.encode_token(next_key)
     return success(body=body)
-
-
-def _overview_page_arguments(event, query_params):
-    """(page_size, offset, None) from `maxItems` / `startingToken`, or (None, None, response) when
-    either is malformed. The token is Base64 JSON `{"offset": n}`."""
-    try:
-        page_size = int(query_params.get("maxItems", str(DEFAULT_OVERVIEW_PAGE_SIZE)))
-    except (TypeError, ValueError):
-        return None, None, validation_error(body={"message": "maxItems must be an integer"}, event=event)
-    page_size = max(1, min(page_size, MAX_OVERVIEW_PAGE_SIZE))
-
-    offset = 0
-    starting_token = query_params.get("startingToken")
-    if starting_token:
-        offset = _decode_offset_token(starting_token)
-        if offset is None:
-            return None, None, validation_error(
-                body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
-    return page_size, offset, None
-
-
-def _decode_offset_token(token):
-    """The non-negative offset an offset token carries, or None when the token is malformed."""
-    try:
-        decoded = json.loads(base64.b64decode(token, validate=True).decode("utf-8"))
-    except (ValueError, TypeError):
-        return None
-    if not isinstance(decoded, dict):
-        return None
-    offset = decoded.get("offset")
-    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
-        return None
-    return offset
-
-
-def _encode_offset_token(offset):
-    return base64.b64encode(json.dumps({"offset": offset}).encode("utf-8")).decode("utf-8")
 
 
 def _decode_key_token(token, key_attributes):
@@ -652,12 +723,3 @@ def _decode_key_token(token, key_attributes):
     return {name: decoded[name] for name in key_attributes}
 
 
-def _asset_name(database_id, asset_id):
-    """The asset's display name, or "" when the asset row is gone."""
-    if not asset_id:
-        return ""
-    row = asset_table.get_item(
-        Key={"databaseId": database_id, "assetId": asset_id},
-        ProjectionExpression="assetName",
-    ).get("Item")
-    return (row or {}).get("assetName", "")

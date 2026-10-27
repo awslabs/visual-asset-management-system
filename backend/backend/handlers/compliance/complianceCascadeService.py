@@ -32,7 +32,7 @@ from datetime import datetime, timedelta, timezone
 import boto3
 from aws_lambda_powertools.utilities.parser import ValidationError, parse
 from aws_lambda_powertools.utilities.typing import LambdaContext
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
 
 from common.apiRoutes import (
@@ -41,6 +41,7 @@ from common.apiRoutes import (
     API_COMPLIANCE_CASCADE_REJECT,
     API_COMPLIANCE_CASCADES,
 )
+from common.compliance import listing
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
@@ -273,8 +274,10 @@ def create_cascade(event, request: CreateCascadeRequestModel):
     if not _enforce_evaluation(request.databaseId, "POST"):
         return authorization_error()
 
-    if not store.get_asset_item(request.databaseId, request.assetId):
+    asset_item = store.get_asset_item(request.databaseId, request.assetId)
+    if not asset_item:
         return general_error(body={"message": "Asset not found"}, event=event)
+    asset_name = asset_item.get("assetName") if isinstance(asset_item, dict) else None
 
     actor = claims_and_roles["tokens"][0]
     now = datetime.now(timezone.utc)
@@ -286,6 +289,9 @@ def create_cascade(event, request: CreateCascadeRequestModel):
         "state": state,
         "triggeredByDatabaseId": request.databaseId,
         "triggeredByAssetId": request.assetId,
+        "triggeredByAssetName": asset_name or "",
+        "searchText": " ".join(part for part in (listing.normalized_text(asset_name),
+                                                 listing.normalized_text(request.assetId)) if part),
         "triggerReason": reason,
         "createdAt": now.isoformat(),
         "actor": actor,
@@ -466,43 +472,96 @@ def get_cascade(event, cascade_id):
     return success(body=store.expire_timed_out_cascade(cascade_table, item))
 
 
-def list_pending_cascades(event):
-    """Every cascade awaiting approval the caller may GET (StateIndex GSI, newest first).
+# The states the cascade listing may be asked for (`state`); pending approval by default.
+CASCADE_LISTING_STATES = ("pending_approval", "executing", "completed", "aborted")
+CASCADE_STATE_INDEX_KEYS = ("cascadeId", "state", "createdAt")
+DEFAULT_CASCADE_PAGE_SIZE = 100
 
-    A row is listed only when the caller may GET both the cascade object and the compliance
-    evaluation object of the trigger asset's database — the same pair every single-cascade route
-    enforces. Each row carries `databaseId` / `assetId` (the trigger asset) beside the
-    `triggeredBy*` attributes it is stored with. A cascade past its `approvalTimeoutAt` is aborted
-    and not listed.
+
+def list_pending_cascades(event):
+    """One page of the cascades in a state (pending approval by default) the caller may GET, newest
+    first (StateIndex GSI, partition `state`).
+
+    Query parameters: `state`, `databaseId` (the trigger asset's database), `text`
+    (case-insensitive contains on the trigger asset's name or id), `maxItems` (1..200) and
+    `startingToken`. `databaseId` and `text` are a FilterExpression on the state's partition; the
+    page is filled across at most `listing.DEFAULT_READ_BUDGET` reads with the rows the caller may
+    GET (the cascade object AND the compliance evaluation object of the trigger asset's database —
+    the pair every single-cascade route enforces). `NextToken` resumes after the last row returned.
+    A pending cascade past its `approvalTimeoutAt` is aborted and not listed. Each row carries
+    `databaseId` / `assetId` / `assetName` (the trigger asset) beside the `triggeredBy*` attributes
+    it is stored with.
     """
+    params = event.get("queryStringParameters") or {}
+    state = params.get("state") or CASCADE_STATE_PENDING_APPROVAL
+    database_id = params.get("databaseId") or None
+    text = listing.normalized_text(params.get("text")) or None
+    if state not in CASCADE_LISTING_STATES:
+        return validation_error(body={"message": "state must be one of " + ", ".join(
+            CASCADE_LISTING_STATES)}, event=event)
+    (valid, message) = validate({
+        "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True,
+                       "optional": True},
+        "text": {"value": text, "validator": "STRING_256", "optional": True},
+    })
+    if not valid:
+        return validation_error(body={"message": message}, event=event)
+    page_size = listing.page_size_of(params.get("maxItems"), DEFAULT_CASCADE_PAGE_SIZE)
+    if page_size is None:
+        return validation_error(body={"message": "maxItems must be an integer"}, event=event)
+    start_key = None
+    if params.get("startingToken"):
+        start_key = listing.decode_token(params["startingToken"], CASCADE_STATE_INDEX_KEYS)
+        if start_key is None:
+            return validation_error(body={"message": "Invalid pagination token"}, event=event)
+
+    query_kwargs = {
+        "IndexName": "StateIndex",
+        "KeyConditionExpression": Key("state").eq(state),
+        "ScanIndexForward": False,
+    }
+    conditions = []
+    if database_id:
+        conditions.append(Attr("triggeredByDatabaseId").eq(database_id))
+    if text:
+        conditions.append(Attr("searchText").contains(text)
+                          | Attr("triggeredByAssetId").contains(text))
+    if conditions:
+        expression = conditions[0]
+        for condition in conditions[1:]:
+            expression = expression & condition
+        query_kwargs["FilterExpression"] = expression
+
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
 
-    rows = query_all_items(
-        cascade_table,
-        IndexName="StateIndex",
-        KeyConditionExpression=Key("state").eq(CASCADE_STATE_PENDING_APPROVAL),
-        ScanIndexForward=False,
-    )
-    allowed = []
-    for item in rows:
+    def listable(item):
         # A cascade past its approval timeout is aborted here and leaves the queue, whoever reads
         # it: the pending partition holds only cascades that can still be approved.
         if store.cascade_approval_timed_out(item):
             store.expire_timed_out_cascade(cascade_table, item)
-            continue
+            return False
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
-        if casbin_enforcer and casbin_enforcer.enforce(_cascade_object(item.get("cascadeId")), "GET") \
-                and casbin_enforcer.enforce(
-                    _evaluation_object(item.get("triggeredByDatabaseId", "")), "GET"):
-            allowed.append(_cascade_row(item))
-    return success(body={"cascades": allowed})
+        return bool(casbin_enforcer) and casbin_enforcer.enforce(
+            _cascade_object(item.get("cascadeId")), "GET") and casbin_enforcer.enforce(
+            _evaluation_object(item.get("triggeredByDatabaseId", "")), "GET")
+
+    rows, next_key, _ = listing.query_page(
+        cascade_table, query_kwargs, page_size, CASCADE_STATE_INDEX_KEYS, start_key=start_key,
+        filtered=bool(conditions), accept=listable)
+    body = {"cascades": [_cascade_row(item) for item in rows]}
+    if next_key:
+        body["NextToken"] = listing.encode_token(next_key)
+    return success(body=body)
 
 
 def _cascade_row(item):
     """A cascade row for the listing: the stored attributes plus `databaseId` / `assetId` naming the
     trigger asset."""
-    return {
+    row = {
         **item,
         "databaseId": item.get("triggeredByDatabaseId", ""),
         "assetId": item.get("triggeredByAssetId", ""),
+        "assetName": item.get("triggeredByAssetName", ""),
     }
+    row.pop("searchText", None)
+    return row

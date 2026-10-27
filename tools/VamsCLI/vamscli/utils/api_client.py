@@ -7476,7 +7476,8 @@ class APIClient(CustomAPIClientMixin):
             'GET', endpoint, f"Getting compliance state for asset '{asset_id}'")
 
     def get_database_compliance_state(self, database_id: str, max_items: Optional[int] = None,
-                                      starting_token: Optional[str] = None) -> Dict[str, Any]:
+                                      starting_token: Optional[str] = None,
+                                      filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Read a database's compliance overview using the /compliance/state/{databaseId} GET
         endpoint.
@@ -7485,25 +7486,32 @@ class APIClient(CustomAPIClientMixin):
             max_items: Asset records per page; the handler applies DEFAULT_COMPLIANCE_LIST_PAGE_SIZE
                 when omitted and clamps larger values to MAX_COMPLIANCE_LIST_PAGE_SIZE
             starting_token: The NextToken of a previous page
+            filters: Server-side filters, sent as query parameters: `state`, `schemaName`,
+                `schemaSource` (database | asset), `evaluationError` ("true" | "false"), `text`
+                (case-insensitive contains on the asset name or id) and `sort` (assetId | name)
 
         Returns:
             API response data: {databaseId, totalAssets, summary: {compliant, non_compliant,
-            pending_evaluation, quarantined, exception, unknown}, assets: [records with assetName],
-            "NextToken"?: str}. `totalAssets` and `summary` cover every tracked asset; `assets` is
-            one page of them in assetId order.
+            pending_evaluation, quarantined, exception, unknown, error}, assets: [records with
+            assetName], "NextToken"?: str}. `totalAssets` and `summary` cover every tracked asset,
+            whatever the filters; `assets` is one page of the filtered rows.
 
         Raises:
             InvalidComplianceDataError: When the pagination token is malformed
         """
         endpoint = API_COMPLIANCE_STATE_DATABASE.format(databaseId=database_id)
+        params = dict(self._compliance_page_params(max_items, starting_token) or {})
+        params.update({key: value for key, value in (filters or {}).items() if value})
         return self._compliance_request(
             'GET', endpoint, f"Getting compliance state for database '{database_id}'",
-            params=self._compliance_page_params(max_items, starting_token))
+            params=params or None)
 
     # ---- Quarantine ---------------------------------------------------
 
     def list_quarantined_assets(self, max_items: Optional[int] = None,
-                                starting_token: Optional[str] = None) -> Dict[str, Any]:
+                                starting_token: Optional[str] = None,
+                                database_id: Optional[str] = None,
+                                text: Optional[str] = None) -> Dict[str, Any]:
         """
         List quarantined assets using the /compliance/quarantine GET endpoint.
 
@@ -7520,9 +7528,14 @@ class APIClient(CustomAPIClientMixin):
         Raises:
             InvalidComplianceDataError: When the pagination token is malformed
         """
+        params = dict(self._compliance_page_params(max_items, starting_token) or {})
+        if database_id:
+            params['databaseId'] = database_id
+        if text:
+            params['text'] = text
         return self._compliance_request(
             'GET', API_COMPLIANCE_QUARANTINE, "Listing quarantined assets",
-            params=self._compliance_page_params(max_items, starting_token))
+            params=params or None)
 
     def release_quarantine(self, database_id: str, asset_id: str,
                            reason: Optional[str] = None) -> Dict[str, Any]:
@@ -7594,18 +7607,31 @@ class APIClient(CustomAPIClientMixin):
 
     # ---- Cascades -----------------------------------------------------
 
-    def list_compliance_cascades(self) -> Dict[str, Any]:
+    def list_compliance_cascades(self, state: Optional[str] = None,
+                                 database_id: Optional[str] = None, text: Optional[str] = None,
+                                 max_items: Optional[int] = None,
+                                 starting_token: Optional[str] = None) -> Dict[str, Any]:
         """
-        List cascades awaiting approval using the /compliance/cascades GET endpoint.
+        List cascades using the /compliance/cascades GET endpoint.
+
+        Args:
+            state: pending_approval (the default), executing, completed or aborted
+            database_id: Only cascades whose trigger asset is in this database
+            text: Case-insensitive contains on the trigger asset's name or id
+            max_items / starting_token: Paging (at most 200 per page; the previous NextToken)
 
         Returns:
-            API response data: {"cascades": [...]} — pending_approval cascades only, each row
-            carrying `databaseId` / `assetId` (the trigger asset) beside `triggeredByDatabaseId` /
-            `triggeredByAssetId`. The route returns the whole list and takes no paging parameters;
-            a row is listed only when the caller may read the trigger asset's database.
+            API response data: {"cascades": [...], "NextToken"?: str}, newest first, each row
+            carrying `databaseId` / `assetId` / `assetName` (the trigger asset) beside
+            `triggeredByDatabaseId` / `triggeredByAssetId`; a row is listed only when the caller
+            may read the trigger asset's database.
         """
+        params = dict(self._compliance_page_params(max_items, starting_token) or {})
+        for key, value in (('state', state), ('databaseId', database_id), ('text', text)):
+            if value:
+                params[key] = value
         return self._compliance_request(
-            'GET', API_COMPLIANCE_CASCADES, "Listing compliance cascades")
+            'GET', API_COMPLIANCE_CASCADES, "Listing compliance cascades", params=params or None)
 
     def get_compliance_cascade(self, cascade_id: str) -> Dict[str, Any]:
         """
@@ -7709,7 +7735,9 @@ class APIClient(CustomAPIClientMixin):
     def query_compliance_audit(self, event_type: Optional[str] = None,
                                start_date: Optional[str] = None, end_date: Optional[str] = None,
                                max_items: Optional[int] = None,
-                               starting_token: Optional[str] = None) -> Dict[str, Any]:
+                               starting_token: Optional[str] = None,
+                               database_id: Optional[str] = None, asset_id: Optional[str] = None,
+                               text: Optional[str] = None) -> Dict[str, Any]:
         """
         Query the compliance audit trail using the /compliance/audit GET endpoint.
 
@@ -7731,8 +7759,12 @@ class APIClient(CustomAPIClientMixin):
             InvalidComplianceDataError: When the pagination token is malformed
         """
         params = self._compliance_audit_params(start_date, end_date, max_items, starting_token)
-        if event_type:
-            params['eventType'] = event_type
+        # databaseId narrows the trail to one database (with assetId, to one asset); text is a
+        # case-insensitive contains on the asset name at the time, the asset id or the actor.
+        for key, value in (('eventType', event_type), ('databaseId', database_id),
+                           ('assetId', asset_id), ('text', text)):
+            if value:
+                params[key] = value
         return self._compliance_request(
             'GET', API_COMPLIANCE_AUDIT, "Querying the compliance audit trail",
             params=params or None)

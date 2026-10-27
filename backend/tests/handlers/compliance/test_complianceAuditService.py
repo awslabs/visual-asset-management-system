@@ -16,6 +16,7 @@ from backend.tests.handlers.compliance._harness import (
     ASSET, DB, USER, body_of, claims_for, enforcer, rest_event,
 )
 from backend.tests.pagingStub import Pager
+from common.compliance import listing
 from handlers.compliance import complianceAuditService as svc
 
 MOD = "handlers.compliance.complianceAuditService"
@@ -28,9 +29,11 @@ ASSET_PARAMS = {"databaseId": DB, "assetId": ASSET}
 LIST_PARTITION = svc.AUDIT_LIST_PARTITION
 
 
-def _entry(event_type="compliance_check", database_id=DB):
+def _entry(event_type="compliance_check", database_id=DB, timestamp="t1"):
+    """An audit row with the keys of every index it is listed through."""
     return {"entryId": f"{event_type}-{database_id}", "eventType": event_type,
-            "databaseId": database_id, "assetId": ASSET}
+            "databaseId": database_id, "assetId": ASSET, "timestamp": timestamp,
+            "allListPartition": LIST_PARTITION, "databaseId:assetId": f"{database_id}:{ASSET}"}
 
 
 def _date_key(entry_id, timestamp):
@@ -315,7 +318,7 @@ class TestValidation:
 
     def test_the_default_and_maximum_page_sizes_are_the_contract_values(self):
         assert svc.DEFAULT_AUDIT_PAGE_SIZE == 100
-        assert svc.MAX_AUDIT_PAGE_SIZE == 500
+        assert svc.MAX_AUDIT_PAGE_SIZE == 200
         _, table = _run(rest_event("GET", ASSET_PATH, ASSET_PARAMS), pages=[{"Items": []}])
         assert table.query.call_args.kwargs["Limit"] == 100
 
@@ -361,7 +364,8 @@ class TestCrossAssetListing:
         query = table.query.call_args.kwargs
         assert query["IndexName"] == "AuditByDateGSI"
         assert query["ScanIndexForward"] is False
-        assert query["Limit"] == 7
+        # Entries the caller may not GET are skipped, so a read evaluates more than a page.
+        assert query["Limit"] == listing.FILTERED_READ_LIMIT
         assert "ExclusiveStartKey" not in query
         assert _partition_of(query) == LIST_PARTITION
         assert type(query["KeyConditionExpression"]).__name__ == "Equals"
@@ -377,7 +381,7 @@ class TestCrossAssetListing:
     def test_the_token_round_trips_and_page_two_resumes_where_page_one_stopped(self):
         """Page two is read from page one's LastEvaluatedKey, not from the start; the two pages
         together are the full set in index order."""
-        entries = [dict(_entry(), entryId=f"e{i}") for i in range(3)]
+        entries = [dict(_entry(), entryId=f"e{i}", timestamp=f"t{i}") for i in range(3)]
         last_key = _date_key("e1", "t1")
         pager = Pager({"Items": entries[:2], "LastEvaluatedKey": last_key},
                       {"Items": entries[2:]}, name="AuditByDateGSI")
@@ -427,7 +431,9 @@ class TestCrossAssetListing:
         assert timestamp._values[1:] == bounds
 
     def test_a_filtered_listing_pages_one_partition_and_carries_it_in_the_token(self):
-        last_key = {"eventType": "compliance_check", "timestamp": "t", "entryId": "e"}
+        # The page is full at its one entry: the token resumes right after it.
+        last_key = {"eventType": "compliance_check", "timestamp": "t1",
+                    "entryId": "compliance_check-db1"}
         response, table = _run(
             rest_event("GET", LIST_PATH, query_params={"eventType": "compliance_check", "limit": "1"}),
             pages=[{"Items": [_entry()], "LastEvaluatedKey": last_key}])
@@ -435,7 +441,7 @@ class TestCrossAssetListing:
         query = table.query.call_args.kwargs
         assert query["IndexName"] == "EventTypeIndex"
         assert query["ScanIndexForward"] is False
-        assert query["Limit"] == 1
+        assert query["Limit"] == listing.FILTERED_READ_LIMIT
         assert _partition_of(query) == "compliance_check"
         assert _decode(body_of(response)["NextToken"]) == {
             "partition": "compliance_check", "key": last_key}

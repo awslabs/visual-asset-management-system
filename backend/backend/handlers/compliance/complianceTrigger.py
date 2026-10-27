@@ -100,6 +100,7 @@ from common.assetProvenance import (
     record_indexed_change,
 )
 from common.compliance import evaluationEngine as engine
+from common.compliance import listing
 from models.compliance import EvaluationVerdict
 from common.dynamodb import query_all_items
 from common.indexerEvents import s3_records_from_indexer_message
@@ -457,8 +458,14 @@ def _process_stream_record(message, batch, message_id=""):
         return
     if database_id.endswith(ARCHIVED_DATABASE_SUFFIX):
         return
+    asset_name = _image_string(new_image, "assetName")
     if message.get("eventName") == "INSERT":
-        batch.add_candidate(message_id, _register_new_asset, database_id, asset_id)
+        batch.add_candidate(message_id, _register_new_asset, database_id, asset_id,
+                            asset_name=asset_name)
+    else:
+        # Keep the compliance record's name current (one conditional write that changes nothing
+        # for an asset without a record or whose name did not change).
+        batch.add_candidate(message_id, _refresh_state_name, database_id, asset_id, asset_name)
 
     is_modify = message.get("eventName") == "MODIFY"
     if is_modify and _image_change_source(new_image) == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
@@ -541,7 +548,12 @@ def _process_upload_completion(database_id, asset_id, completion=None, stamp_tim
                               batch=batch)
 
 
-def _register_new_asset(database_id, asset_id, batch=None):
+def _refresh_state_name(database_id, asset_id, asset_name, batch=None):
+    """Record the asset's current name on its compliance record (`store.refresh_asset_state_name`)."""
+    store.refresh_asset_state_name(database_id, asset_id, asset_name)
+
+
+def _register_new_asset(database_id, asset_id, batch=None, asset_name=None):
     """A new asset of a bound database whose auto-evaluation is off: register it under the
     database binding without evaluating it, so `evaluate`, the sweep and the database overview reach
     it (the binding governs every asset of the database whatever auto-evaluation says). With
@@ -557,7 +569,8 @@ def _register_new_asset(database_id, asset_id, batch=None):
         return
     if store.get_compliance_record(database_id, asset_id, consistent_read=True):
         return
-    store.register_under_database_binding(database_id, asset_id, schema_name)
+    store.register_under_database_binding(database_id, asset_id, schema_name,
+                                          asset_name=asset_name)
     logger.info(f"Registered asset {database_id}:{asset_id} under the database schema "
                 f"'{schema_name}' (auto-evaluation off; not evaluated)")
 
@@ -1106,7 +1119,10 @@ def check_default_schema(database_id, asset_id, db_item=None):
     schema_name = db_item.get("complianceSchemaName")
     if not schema_name:
         return None
-    if not asset_row_exists(database_id, asset_id):
+    asset_row = asset_table.get_item(Key={"databaseId": database_id, "assetId": asset_id},
+                                     ConsistentRead=True,
+                                     ProjectionExpression="assetId, assetName").get("Item")
+    if not asset_row:
         logger.info(f"Asset {database_id}:{asset_id} no longer exists; not registering it")
         return None
 
@@ -1119,6 +1135,7 @@ def check_default_schema(database_id, asset_id, db_item=None):
         "complianceState": engine.STATE_UNKNOWN,
         "registeredAt": now,
         "updatedAt": now,
+        **listing.asset_name_attributes(asset_id, asset_row.get("assetName")),
     }
     asset_state_table.put_item(Item=record)
     logger.info(f"Registered asset {database_id}:{asset_id} under the database schema '{schema_name}'")
@@ -1163,11 +1180,15 @@ def check_and_trigger_cascade(database_id: str, asset_id: str):
 
     now = datetime.now(timezone.utc)
     cascade_id = str(uuid.uuid4())
+    parent_name = _cascade_parent_name(database_id, asset_id)
     opened = _open_cascade_claiming_parent({
         "cascadeId": cascade_id,
         "state": CASCADE_STATE_PENDING_APPROVAL,
         "triggeredByDatabaseId": database_id,
         "triggeredByAssetId": asset_id,
+        "triggeredByAssetName": parent_name,
+        "searchText": " ".join(part for part in (listing.normalized_text(parent_name),
+                                                 listing.normalized_text(asset_id)) if part),
         "triggerReason": "Parent asset updated; downstream re-evaluation needed",
         "createdAt": now.isoformat(),
         "actor": store.SYSTEM_ACTOR,
@@ -1195,6 +1216,19 @@ def check_and_trigger_cascade(database_id: str, asset_id: str):
         logger.exception(f"Failed sending cascade notification: {e}")
 
     logger.info(f"Created cascade {cascade_id} for parent {asset_key}")
+
+
+def _cascade_parent_name(database_id: str, asset_id: str) -> str:
+    """The parent's name for the cascade listing: one read of its row's `assetName`, in this
+    asynchronous path; best-effort ("" when it cannot be read), the cascade opens either way."""
+    try:
+        row = asset_table.get_item(Key={"databaseId": database_id, "assetId": asset_id},
+                                   ProjectionExpression="assetName").get("Item")
+    except Exception as e:
+        logger.info(f"Could not read the name of cascade parent {database_id}:{asset_id}: {e}")
+        return ""
+    name = row.get("assetName") if isinstance(row, dict) else None
+    return name if isinstance(name, str) else ""
 
 
 def _open_cascade_claiming_parent(cascade) -> bool:
