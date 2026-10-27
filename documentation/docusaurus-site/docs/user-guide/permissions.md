@@ -55,6 +55,13 @@ which override a matching `allow`.
 In the web interface a user without execution-log access still sees the **Logs** tab on an execution,
 and the tab reports that the logs are not viewable.
 
+:::warning[Default roles are restored on every deployment]
+Each deployment rewrites `admin`, `basicReadOnly`, and their `initial_*` constraints. Edits to these
+records are undone, and deleted ones, including deletions made from the **Roles** and **Constraints**
+lists, are re-created. The editors show a notice when you open one of them. Put customizations on a
+separate role with its own constraints.
+:::
+
 ### Creating a custom role
 
 1. Navigate to **Roles** from the left navigation menu.
@@ -152,9 +159,9 @@ Roles can be configured to require multi-factor authentication (MFA). When a rol
 
 ## Web route permissions
 
-Web route constraints control which pages appear in the navigation menu and are accessible by URL. If a user does not have a `web` constraint that allows GET access to a specific route path, that page is hidden from the navigation and returns a 403 error if accessed directly.
+Web route constraints control which pages appear in the navigation menu and are accessible by URL. If a user does not have a `web` constraint that allows GET access to a specific route path, that page is hidden from the navigation, and opening it directly shows **You do not have access to this page** with a **Go to Home** button. An address that matches no page shows **Page not found**.
 
-The landing page routes (`/` and `*`) are always allowed regardless of constraints, ensuring all users can reach the landing information page.
+The landing page route (`/`) is always allowed regardless of constraints, ensuring all users can reach the landing information page.
 
 For the complete list of web routes, see [Permissions Model: Web Route Reference](../concepts/permissions-model.md#web-route-reference).
 
@@ -177,6 +184,7 @@ If you receive a 403 Forbidden error or cannot see expected data, check both aut
 
     - Does the user's role have a constraint on the correct object type (for example, `asset`, `database`)? For an object type the deployment registered itself, even an administrator needs a constraint on that type.
     - Does the criteria match the specific resource? Check `databaseId`, `assetName`, or other filter fields.
+    - For an archived asset or a deleted database's record, does the criteria also match its stored id `<databaseId>#deleted`? An archived record must pass on both its stored id and its database id (see [Permissions Model: Archived records](../concepts/permissions-model.md#archived-records)).
     - Is there a **deny** constraint that overrides the allow?
 
 3. **Check role assignment:**

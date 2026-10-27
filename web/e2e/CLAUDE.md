@@ -144,6 +144,8 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 | `chooseSelectOption(page, trigger, option, describeTrigger?)` | Choose a Cloudscape Select option matching a RegExp, by keyboard, from its trigger locator   |
 | `apiContext(page)`                                            | The app's API base and Cognito ID token, for authenticated `page.request` calls              |
 | `findAssetFiles(page, extensions, options)`                   | First file per extension found via the API, or `null` without an API context                 |
+| `findNestedAssetFile(page, options)`                          | First file inside a folder via the API, plus its stored key when known, or `null`            |
+| `selectedTreeNode(page)`                                      | The File Manager tree's single-selected row label, in the visible tree                       |
 
 **Selector facts worth not rediscovering:**
 

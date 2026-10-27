@@ -32,6 +32,7 @@ backend/
 │   │   ├── auth/apiEvent.py                        #   normalize_event: REST→HTTP-API-v2 shape
 │   │   ├── auth/authorizerCore.py                  #   JWT/API-key/IP validation
 │   │   ├── auth/clientIp.py                        #   True client-IP resolution
+│   │   ├── auth/originVerify.py                    #   CloudFront origin verification value (secret, cache)
 │   │   ├── apiRoutes.py                            # MASTER API route registry: ApiRoute constants,
 │   │   │                                           #   category group arrays, ALL_API_ROUTES
 │   │   │                                           #   (core + ADDON_ROUTES + CUSTOM_ROUTES).
@@ -70,7 +71,8 @@ backend/
 │   │   ├── assets/                                 # assetService.py (GOLD STANDARD),
 │   │   │                                           #   assetVersions, assetHistory, etc.
 │   │   ├── auth/                                   # apiGatewayAuthorizerRest, apiKeyService,
-│   │   │                                           #   constraints, cognito, preTokenGen;
+│   │   │                                           #   constraints, cognito, preTokenGen,
+│   │   │                                           #   apiOriginVerifyRotation (secret rotation);
 │   │   │                                           #   __init__: request_to_claims() → claims
 │   │   ├── authz/__init__.py                       # CasbinEnforcer proxy (ABAC/RBAC)
 │   │   ├── pipelines/                              # Pipeline CRUD (pipelineService = full CRUD;
@@ -237,7 +239,12 @@ backend/
     (e.g. metadata-schema injection/ordering), enrich the full set, then offset-slice to
     the page. Limits that bound response size or protect Lambda runtime (e.g.
     `MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST`, worker-pool caps) stay as named constants with
-    a rationale comment — keep them.
+    a rationale comment — keep them. A count cap does not bound a response whose items vary
+    in size: upload initialization (`uploadFile.py` `initialize_upload`) also estimates its
+    presigned-URL response from each file's part count and key
+    (`MAX_UPLOAD_INITIALIZE_RESPONSE_BYTES` and the overhead constants in `models/assetsV3.py`)
+    and refuses an over-budget request with a generic `400` before it creates any multipart
+    upload.
 
 16. **Normalize the event before reading `requestContext['http']`, `pathParameters`, or
     `queryStringParameters`.** The REST API (v1) proxy event differs from the HTTP API v2
@@ -245,7 +252,7 @@ backend/
     `common.auth.apiEvent`) reconciles — it mutates the event in place, is idempotent, and
     is a no-op for internal `lambdaCrossCall` events:
 
-    1.  **`requestContext.http` block.** Handlers read `event['requestContext']['http']['path']` / `['method']` / `['sourceIp']`, but the REST event exposes these as top-level `path` / `httpMethod` and `requestContext.identity.sourceIp`. `normalize_event` injects the v2-style block.
+    1.  **`requestContext.http` block.** Handlers read `event['requestContext']['http']['path']` / `['method']` / `['sourceIp']`, but the REST event exposes these as top-level `path` / `httpMethod` and `requestContext.identity.sourceIp`. `normalize_event` injects the v2-style block. The injected path is stage-relative on every host: through the optional REST API custom domain the event's `path` keeps the base path (`/api/database` where execute-api delivers `/database`), and `normalize_event` removes that one segment when `requestContext.domainName` is the configured domain (`API_CUSTOM_DOMAIN_NAME` / `API_CUSTOM_DOMAIN_BASE_PATH`, set by the CDK only when the domain is enabled). The top-level `path` is left as delivered, so dispatch on `requestContext.http.path`, never on `event['path']`.
     2.  **Null `pathParameters` / `queryStringParameters`.** The REST event sends explicit JSON `null` when there are none, so `event.get('pathParameters', {})` returns `None` (the default applies only when the key is **absent**, not when it is present-but-`null`). A handler that then does `path_params['id']` crashes with `TypeError` → 500. `normalize_event` coerces present-but-`null` to `{}`.
 
     `request_to_claims(event)` calls `normalize_event(event)` internally, so a handler whose **first** event access is `request_to_claims(event)` — the Gold Standard pattern — is already covered. A handler that reads `requestContext['http']`, `pathParameters`, or `queryStringParameters` **before** calling `request_to_claims` MUST call `normalize_event(event)` as the first statement of `lambda_handler`. Skipping it makes the handler 500 on a real REST request — a failure invisible to CDK synth and to unit tests that hand-build a v2-shaped event. Cover the REST-shaped event, including `null` params, in tests.
@@ -811,6 +818,14 @@ Archived assets live under a `databaseId + "#deleted"` partition-key suffix. Arc
 rewrite items with the suffixed partition key; query archived items with
 `KeyConditionExpression=Key('databaseId').eq(f"{database_id}#deleted")`.
 
+An archived record (asset or deleted database) is authorized in two forms:
+`CasbinEnforcerService.enforce` allows it only when it passes on its stored `databaseId`
+(`<databaseId>#deleted`) AND on its database id (the suffix removed). A deny on the database
+therefore covers its archived records, and an allow written only as `databaseId equals <id>`
+does not reach them; to grant archived records, a rule must also name `<databaseId>#deleted`
+(for example `criteriaOr`: `equals <id>` OR `equals <id>#deleted`). Pass the stored record to
+`enforce()` unchanged; do not strip or add the suffix in a handler for authorization.
+
 ### TypeDeserializer for Low-Level Responses
 
 Low-level client responses use DynamoDB's typed dict shape. Convert with
@@ -900,7 +915,9 @@ asset_table = dynamodb.Table(asset_table_name)
 
 Uploads must be validated against **both** `UNALLOWED_FILE_EXTENSION_LIST` (`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`) and `UNALLOWED_MIME_LIST` (Java archives, MS-executable, shell/JS/PowerShell/VBScript, etc.). Both lists are built in `common/constants.py` from the core lists plus the add-on (`common/addonConstants.py`) and fork (`custom/customConstants.py`) lanes, append-only; extend the core list there or a lane list, never bypass or remove an entry. The one helper that applies them, `common/s3.py` `validateUnallowedFileExtensionAndContentType`, compares case-insensitively: the file extension and the media-type part of the content type (parameters such as `; charset=binary` stripped) are lower-cased before the membership test, so `.EXE` and `Application/X-Msdownload` are rejected like their lower-case forms. The extension is **everything from the last dot of the key's final non-empty segment, read after every trailing dot and whitespace character is removed** (`str.isspace`, so a non-ASCII space counts): `payload.exe.`, `payload.exe `, `.exe`, `..exe` and `payload.exe/` are all checked as `.exe`, while `.gitignore` is checked as `.gitignore` and stays allowed; because the trailing `/` is ignored, a folder whose own name ends in a blocked extension (`builds.exe/`) is refused for prefix download. The segment is split on `:` and every colon-separated piece of the name is checked against the list, each read after its own trailing dots and whitespace are removed and lower-cased (on NTFS a `:` opens a stream name, so `payload.exe::$DATA` and `payload.exe:evil` write `payload.exe`; a browser that cannot write `:` substitutes it and keeps the whole name, so `a:b.exe` lands as `a_b.exe` — both shapes, and `x:payload.exe:evil`, are checked as `.exe`), while a `:` in an ordinary name (`notes:v2.txt`) is still accepted by the helper for an object already in a bucket. The request models complement this on the paths that CREATE a key: `models/assetsV3.py` `validate_asset_file_path(..., new_object=True)` refuses a final path segment ending in a dot or whitespace for upload initialize/completion `relativeKey` and move/copy `destinationPath` (Windows drops that character on download, so `payload.exe.` would land as `payload.exe`), and `file_only=True` additionally refuses a `relativeKey` ending in `/` on the three upload paths (a file key is never a folder; `CreateFolderRequestModel` keeps its own trailing-slash rule); the read paths — download `key`, file info, archive, move/copy `sourcePath` — set neither flag so an object already stored under such a key stays reachable. `new_object=True` also refuses a `:` anywhere in the value, on every created-key path including `CreateFolderRequestModel` (Windows forbids it in any path segment, so no legitimate name is lost), while the read paths keep accepting it. Keep every list entry lower-case and listed once — `tests/common/test_s3_blocklist_case_insensitive.py` fails on an entry of the merged lists that is not (a lane entry that is not is refused at import first); `tests/common/test_s3_blocklist_trailing_dot.py` and `tests/models/test_assetsV3_trailing_dot_write_paths.py` pin the basename rule and the write-path refusal, `tests/common/test_s3_blocklist_ads_suffix.py` and `tests/models/test_assetsV3_ads_suffix_write_paths.py` pin the per-piece `:` check and the created-key `:` refusal, and `tests/models/test_validate_asset_file_path_call_sites.py` fails on a `validate_asset_file_path` call whose field neither passes `new_object=True` nor is declared a read path.
 
-Upload completion (`handlers/assets/uploadFile.py` `complete_upload` / `complete_external_upload`) runs the name-level blocklist (and the preview-extension rule) on every object it creates — zero-byte, abandoned-multipart and regular alike — before anything is written, and accepts only the `relativeKey`s the initialize step recorded on the upload record (`AssetUploadTableModel.files`); a record without that attribute predates the binding and is completed with the blocklist checks but without the membership check, logged as a warning, until it expires: `complete_upload` refuses a record whose `expiresAt` (epoch seconds; 7 days from initialize, 1 day for workflow-output records) has passed, and refuses an external (`isExternalUpload`) record outright — the mirror of the check `complete_external_upload` makes — so the one record class designed without the list cannot be completed by the route that skips membership. `AssetUploadsStorageTable` has no TTL; `expiresAt` is enforced only here.
+Move, rename and copy (`handlers/assets/assetFiles.py` `move_file` / `copy_file`) run the same helper on the resolved destination key, with an empty content type, right after the key-length check and before any S3 call, and refuse a blocked name with a `400`; `tests/handlers/assets/test_assetFiles_destination_extension_check.py` pins it.
+
+Upload completion (`handlers/assets/uploadFile.py` `complete_upload` / `complete_external_upload`) runs the name-level blocklist (and the preview-extension rule) on every object it creates — zero-byte and regular multipart alike — before anything is written (a multipart file completed with no parts is a cancelled file: its multipart upload is aborted, nothing is stored, and its result is `success=False`; `sqsUploadFileLarge.py` `complete_multipart_upload_for_large_file` does the same and returns `False`), and accepts only the `relativeKey`s the initialize step recorded on the upload record (`AssetUploadTableModel.files`); a record without that attribute predates the binding and is completed with the blocklist checks but without the membership check, logged as a warning, until it expires: `complete_upload` refuses a record whose `expiresAt` (epoch seconds; 7 days from initialize, 1 day for workflow-output records) has passed, and refuses an external (`isExternalUpload`) record outright — the mirror of the check `complete_external_upload` makes — so the one record class designed without the list cannot be completed by the route that skips membership. `AssetUploadsStorageTable` has a DynamoDB TTL on `expiresAt`, which removes an expired record some time after it expires; until then this check is what refuses it.
 
 ### Choosing a file's `.previewFile.<ext>`
 

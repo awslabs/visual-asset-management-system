@@ -112,7 +112,7 @@ The frontend steering document (`web/CLAUDE.md`) enforces the use of VAMS Synony
 // CORRECT - use Synonyms for customizable display names
 import Synonyms from "../../synonyms";
 <Header>{Synonyms.Assets}</Header>
-<p>Select a {Synonyms.Database}</p>
+<p>{`Select the ${Synonyms.database} to continue`}</p>
 ```
 
 The steering document specifies that Synonyms must be used in headers, labels, descriptions, placeholders, alt text, error messages, success messages, button text, modal titles, and empty state text. It also specifies that Synonyms must not be used in API request body values, variable names, route paths, or log messages.
@@ -205,7 +205,7 @@ Four tool behaviours are worth knowing before an agent is allowed to call them, 
 -   **`delete_metadata_schema` takes no confirmation argument.** The API's required-true `confirmDelete` field is supplied inside the `APIClient`, and the tool is gated behind `VAMS_ENABLE_DESTRUCTIVE` instead, so the destructive tier is the single interlock rather than one of two. Deleting a schema stops the fields being validated on later writes and leaves metadata already stored untouched.
 -   **The API key read tools return key inventory; the two create tools return the key itself.** `get_api_key`, `get_user_api_key`, `list_api_keys` and `list_user_api_keys` report that a key exists and who it acts as; no key value or hash is returned, and the self-service tools report another user's key as not found. `create_api_key` and `create_user_api_key` (write tier) are different: their response carries the one-time key value, a bearer credential with the acting user's permissions, which is recorded wherever the host records tool output. Keep every API key tool out of the auto-approve sample in `tools/VamsMCP/README.md`, and reach for `update_api_key` / `update_user_api_key` with `is_active=False` — the reversible revoke — before the permanent `delete_*_api_key` tools.
 
-The `list_allowed_api_routes` tool reports the routes the authenticated user is authorized to call. Calling it at the start of a session lets an agent scope its plan to what the user can actually do rather than discovering an authorization failure mid-task.
+The `list_allowed_api_routes` tool reports the routes the authenticated user is authorized to call. Calling it at the start of a session lets an agent scope its plan to what the user can actually do rather than discovering an authorization failure mid-task. The listing checks each `{param}` path segment as the placeholder `vams:any`, so when the user's `api` constraints name a concrete value in a parameter position, a route can be left out although it is allowed on those concrete paths, or listed although it is refused there (see [List allowed API routes](../api/auth.md#list-allowed-api-routes)).
 
 See `tools/VamsMCP/README.md` for installation, host registration, and the full tool list.
 

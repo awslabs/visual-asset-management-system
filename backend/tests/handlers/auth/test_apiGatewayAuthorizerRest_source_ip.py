@@ -38,6 +38,25 @@ def _audit_source_ip(event):
     return event.get("requestContext", {}).get("http", {}).get("sourceIp", AUDIT_UNKNOWN)
 
 
+ORIGIN_VERIFY_TEST_VALUE = "originVerifyTestValue0123456789"
+
+
+@pytest.fixture
+def origin_verify_value(monkeypatch):
+    """Make the origin verification module the authorizer's resolve_client_ip reads accept one value."""
+    origin_verify = rest.resolve_client_ip.__globals__["originVerify"]
+    monkeypatch.setenv(
+        origin_verify.SECRET_ARN_ENV,
+        "arn:aws:secretsmanager:us-east-1:123456789012:secret:vams-origin-verify-AbCdEf",
+    )
+    monkeypatch.setattr(
+        origin_verify, "_fetch_accepted_values", lambda secret_arn: (ORIGIN_VERIFY_TEST_VALUE,)
+    )
+    monkeypatch.setitem(origin_verify._cache, "values", ())
+    monkeypatch.setitem(origin_verify._cache, "fetched_at", None)
+    return ORIGIN_VERIFY_TEST_VALUE
+
+
 def _rest_event(source_ip="203.0.113.7", headers=None):
     """A REST (v1) REQUEST-authorizer event: no requestContext.http block."""
     return {
@@ -119,23 +138,44 @@ class TestAuditSourceIpAttribution:
         _, recorder = _run(event, fronted="alb")
         assert _audit_source_ip(recorder.event) == "198.51.100.42"
 
-    def test_cloudfront_request_records_the_viewer_not_the_edge(self):
+    def test_cloudfront_request_records_the_viewer_not_the_edge(self, origin_verify_value):
         # Behind CloudFront the peer is an edge IP and the viewer is the left-hand XFF entry.
         event = _rest_event(
             source_ip="192.0.2.55",
-            headers={"X-Forwarded-For": "198.51.100.10, 192.0.2.55"},
+            headers={
+                "X-Forwarded-For": "198.51.100.10, 192.0.2.55",
+                "X-Vams-Origin-Verify": origin_verify_value,
+            },
         )
         _, recorder = _run(event, fronted="cloudfront")
         assert _audit_source_ip(recorder.event) == "198.51.100.10"
 
-    def test_cloudfront_viewer_address_header_records_the_viewer(self):
+    def test_cloudfront_viewer_address_header_records_the_viewer(self, origin_verify_value):
         # CloudFront-Viewer-Address is preferred when forwarded; the port is stripped.
         event = _rest_event(
             source_ip="192.0.2.55",
-            headers={"CloudFront-Viewer-Address": "198.51.100.10:41234"},
+            headers={
+                "CloudFront-Viewer-Address": "198.51.100.10:41234",
+                "X-Vams-Origin-Verify": origin_verify_value,
+            },
         )
         _, recorder = _run(event, fronted="cloudfront")
         assert _audit_source_ip(recorder.event) == "198.51.100.10"
+
+    def test_cloudfront_deployment_records_the_peer_without_origin_verification(
+        self, origin_verify_value
+    ):
+        # The same forwarding headers without the origin verification value CloudFront adds:
+        # the record names the TCP peer, the address the IP allow-list decision used.
+        event = _rest_event(
+            source_ip="192.0.2.55",
+            headers={
+                "X-Forwarded-For": "198.51.100.10, 192.0.2.55",
+                "CloudFront-Viewer-Address": "198.51.100.10:41234",
+            },
+        )
+        _, recorder = _run(event, fronted="cloudfront")
+        assert _audit_source_ip(recorder.event) == "192.0.2.55"
 
     def test_forged_forwarding_headers_are_ignored_off_cloudfront(self):
         # On a directly reachable endpoint every header is caller-controlled, so a claimed
@@ -165,12 +205,15 @@ class TestAuditSourceIpAttribution:
         assert recorder.calls[0]["failureReason"] == "IP address not authorized"
         assert _audit_source_ip(recorder.event) == "198.51.100.42"
 
-    def test_immediate_peer_stays_in_the_event_echo(self):
+    def test_immediate_peer_stays_in_the_event_echo(self, origin_verify_value):
         # The audit entry appends the whole event; identity.sourceIp is what a reader
         # consults to see the unforgeable hop, so it must not be rewritten.
         event = _rest_event(
             source_ip="192.0.2.55",
-            headers={"X-Forwarded-For": "198.51.100.10, 192.0.2.55"},
+            headers={
+                "X-Forwarded-For": "198.51.100.10, 192.0.2.55",
+                "X-Vams-Origin-Verify": origin_verify_value,
+            },
         )
         _, recorder = _run(event, fronted="cloudfront")
         assert recorder.event["requestContext"]["identity"]["sourceIp"] == "192.0.2.55"

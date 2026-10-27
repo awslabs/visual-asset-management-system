@@ -640,7 +640,7 @@ class TestConstraintDeleteCommand:
             # Verify API was not called
             mocks['api_client'].delete_constraint.assert_not_called()
 
-    def test_delete_cancelled_prompt(self, cli_runner, constraint_command_mocks):
+    def test_delete_cancelled_prompt(self, cli_runner, constraint_command_mocks, interactive_stdin):
         """Test constraint delete cancelled at confirmation prompt."""
         with constraint_command_mocks as mocks:
             result = cli_runner.invoke(cli, [
@@ -1120,7 +1120,7 @@ _PERMISSION_OBJECTS_RESPONSE = {
     ],
     'permissions': [
         {'label': 'View/GET', 'value': 'GET'},
-        {'label': 'Add/PUT', 'value': 'PUT'},
+        {'label': 'PUT', 'value': 'PUT'},
     ],
     'permissionTypes': [
         {'label': 'Allow', 'value': 'allow'},

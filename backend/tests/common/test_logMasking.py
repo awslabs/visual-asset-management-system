@@ -48,6 +48,24 @@ class TestMaskSensitiveData:
         out = mask_sensitive_data({"headers": {"Authorization": "Bearer abc.def.ghi"}})
         assert out["headers"]["Authorization"] == REDACTED
 
+    def test_origin_verify_header_redacted_at_every_level(self):
+        """CloudFront adds the origin verification value to every API request it forwards, so every
+        handler event, authorizer event and audit echo carries it: in ``headers``, in
+        ``multiValueHeaders``, and nested in the event an audit entry appends."""
+        value = "originVerifyValue0123456789abcdef"
+        event = {
+            "headers": {"X-Vams-Origin-Verify": value, "Host": "abc123.execute-api.us-east-1.amazonaws.com"},
+            "multiValueHeaders": {"x-vams-origin-verify": [value]},
+            "audit": {"event": {"headers": {"x-vams-origin-verify": value}}},
+        }
+        out = mask_sensitive_data(event)
+        assert out["headers"]["X-Vams-Origin-Verify"] == REDACTED
+        assert out["headers"]["Host"] == "abc123.execute-api.us-east-1.amazonaws.com"
+        assert out["multiValueHeaders"]["x-vams-origin-verify"] == REDACTED
+        assert out["audit"]["event"]["headers"]["x-vams-origin-verify"] == REDACTED
+        assert value not in json.dumps(out)
+        assert "x-vams-origin-verify" in SENSITIVE_KEYS
+
     def test_non_sensitive_keys_survive(self):
         event = {
             "requestContext": {"http": {"method": "PUT", "path": "/pipelines/templates/t1"}},

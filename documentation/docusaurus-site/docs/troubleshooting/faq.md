@@ -149,15 +149,17 @@ Cognito federation uses the Amazon Cognito hosted UI, which is available only in
 
 1. Set `app.authProvider.useCognito.enabled: false` in your configuration.
 2. Set `app.authProvider.useExternalOAuthIdp.enabled: true`.
-3. Provide the required OAuth 2.0 endpoints:
+3. Provide the required OAuth 2.0 settings. The MFA scope, principal domain and discovery endpoint (`idpAuthProviderScopeMfa`, `idpAuthPrincipalDomain` and `idpAuthProviderDiscoveryEndpoint`) are optional and may be left null.
     - `idpAuthProviderUrl` -- Identity provider base URL
     - `idpAuthClientId` -- OAuth client ID
+    - `idpAuthProviderScope` -- OAuth scope requested by VAMS
     - `idpAuthProviderTokenEndpoint` -- Token endpoint
     - `idpAuthProviderAuthorizationEndpoint` -- Authorization endpoint
-    - `idpAuthProviderDiscoveryEndpoint` -- Discovery endpoint
     - `lambdaAuthorizorJWTIssuerUrl` -- JWT issuer URL for token validation
     - `lambdaAuthorizorJWTAudience` -- Expected JWT audience
 4. Deploy the stack with the updated configuration.
+
+The IdP's access tokens must carry an `aud` claim equal to `lambdaAuthorizorJWTAudience`, and the web application and the authorizer must resolve the same user from them; see the token requirements in the [Configuration Guide](../deployment/configuration-reference.md).
 
 Refer to the [Configuration Guide](../deployment/configuration-reference.md) for the complete field list for both paths, and to [Plan your deployment](../deployment/plan-your-deployment.md) for the authentication decision table.
 

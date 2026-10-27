@@ -10,7 +10,7 @@ The VAMS web interface is a React 18 application built with Vite and the AWS Clo
 
 ### Viewer Plugins
 
-VAMS includes built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview), covering 3D meshes, CAD, point clouds, Gaussian splats, USD, and IFC/BIM models. The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
+VAMS includes built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview), covering 3D meshes, CAD, point clouds, Gaussian splats, USD, IFC/BIM models, and robotics logs (MCAP, ROS 1 and ROS 2 bags, PX4 ULog). The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 
@@ -49,7 +49,7 @@ For the complete list of supported file viewers and extensions, see [File Viewer
 -   **Amazon Cognito user management** -- Add, update, remove, and reset passwords for Amazon Cognito users directly from the web interface (no AWS Console required)
 -   **API key management** -- Create, update, and delete API keys with user ID impersonation for application-to-application integration
 -   **Role management** -- Create and manage roles with two-tier permission constraints
--   **Permission constraint management** -- Define, import, and manage ABAC/RBAC constraints with bulk JSON template import
+-   **Permission constraint management** -- Define and manage ABAC/RBAC constraints in the web interface; bulk JSON template import is available through the VAMS CLI ([`vamscli role constraint template import`](../cli/commands/permissions.md#role-constraint-template-import)) and the API
 -   **Pipeline management** -- Create, edit, and delete processing pipelines with execution type selection (Lambda, SQS, EventBridge, DeadlineCloud)
 -   **Workflow management** -- Design multi-step processing workflows with pipeline chaining
 -   **Metadata schema management** -- Define and manage metadata schemas for assets, files, databases, and asset links
@@ -263,7 +263,7 @@ VAMS uses a feature flag system to conditionally enable capabilities at deployme
 | Feature Flag                    | Description                                                                                                                                                          |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments)                                                                       |
-| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Three.js CAD formats)                                                  |
+| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Three.js CAD formats)                            |
 | `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views                                                                                                            |
 | `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution                                                                                                                 |
 | `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                                                                                                                         |

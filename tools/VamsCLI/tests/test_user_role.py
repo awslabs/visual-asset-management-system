@@ -591,7 +591,7 @@ class TestUserRoleDeleteCommand:
             assert 'Confirmation required' in result.output
             assert 'Use --confirm flag' in result.output
 
-    def test_delete_cancelled_at_prompt(self, cli_runner, user_role_command_mocks):
+    def test_delete_cancelled_at_prompt(self, cli_runner, user_role_command_mocks, interactive_stdin):
         """Test user role delete cancelled at confirmation prompt."""
         with user_role_command_mocks as mocks:
             result = cli_runner.invoke(cli, [

@@ -203,6 +203,7 @@ The `configFile` context parameter names the configuration file to deploy and de
 3. An Amazon Cognito user account is created using the `adminEmailAddress` from your configuration.
 4. A temporary password is sent to the admin email address from `no-reply@verificationemail.com`.
 5. If WAF is enabled, the web ACL stacks are deployed first. A regional web ACL stack is always created in the deployment Region for the API Gateway stage (and the ALB on ALB deployments); it is named `{name}-waf-{baseStackName}-{region}` on ALB deployments and `{name}-waf-regional-{baseStackName}-{region}` on CloudFront deployments. A CloudFront deployment additionally creates the CloudFront web ACL stack, `{name}-waf-{baseStackName}-{region}`, in `us-east-1`.
+6. A CloudFront deployment first creates the `{name}-origin-verify-{baseStackName}-{region}` stack in the deployment Region, with or without WAF. It holds the AWS Secrets Manager secret whose value CloudFront adds to the API requests it forwards; the regional web ACL stack and the core stack both read it.
 
 :::warning[Wait for every stack to complete before using the deployment]
 The solution is usable only after `npx cdk deploy` reports success for every stack. Resource names -- Amazon DynamoDB tables, the auxiliary and artefacts Amazon S3 buckets, and the audit log groups -- are published to AWS Systems Manager Parameter Store by the `ResourceNamesBuilder` nested stack, which AWS CloudFormation creates after the storage stack. The Amazon S3 bucket-sync functions live in that storage stack and resolve their names from those parameters, so on a first deployment into an account an invocation that arrives before the parameters exist fails at initialization. Its Amazon SQS message returns to the queue and is retried, and the event is processed once the remaining stacks finish. Upload files and call the API after the deployment completes.
@@ -221,6 +222,10 @@ The URL format is `https://dXXXXXXXXXXXXX.cloudfront.net`. If you configured a c
 **ALB deployments:**
 
 The value is `https://` followed by the ALB domain you configured in `app.useAlb.domainHost`.
+
+### Point DNS at the API custom domain (optional)
+
+When `app.api.apiGatewayRest.customDomain` is enabled, the core stack outputs `ApiCustomDomainUrl` (the API base URL, `https://{api-domain}/api/`) and `ApiCustomDomainTarget` (the Regional domain name of the API Gateway custom domain). With `optionalHostedZoneId` set, VAMS creates Amazon Route 53 A and AAAA alias records for the host in that hosted zone. Otherwise, create a DNS record for `domainHost` that points at `ApiCustomDomainTarget` (a `CNAME`, or an alias record in Amazon Route 53) in the DNS service that hosts the domain. The web application uses the custom domain after its users sign out and sign in again, and each VamsCLI profile after `vamscli setup` is run again for it.
 
 ### Sign in
 

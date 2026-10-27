@@ -48,6 +48,7 @@ import * as Config from "../../config/config";
 import * as Service from "../../lib/helper/service-helper";
 import * as Infra from "../../lib/core-stack";
 import { buildCrossRegionBucketNotificationStacks } from "../../lib/crossRegionBucketNotifications-stack";
+import { buildApiOriginVerifyStack } from "../../lib/apiOriginVerify-stack";
 import { s3AssetBucketRecords } from "../../lib/helper/s3AssetBuckets";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import govcloudTemplate from "../../config/config.template.govcloud.json";
@@ -379,18 +380,26 @@ export function synthTemplate(
     // before the core stack and feeding it the topic ARNs. Emits nothing for the shipped templates.
     const crossRegionBuckets = buildCrossRegionBucketNotificationStacks(app, config);
 
+    // Same wiring as bin/infra.ts: the API origin verification secret stack, for a CloudFront
+    // deployment only (the commercial template).
+    const apiOriginVerifyStack = buildApiOriginVerifyStack(app, config);
+
     // Construct id MUST equal stackName — see the header note on Nag suppression paths.
     const stack = new Infra.CoreVAMSStack(app, stackName, {
         env: { account: ACCOUNT, region: t.region },
         stackName,
         ssmWafArnRegional: opts.wafArns?.regional ?? "",
         ssmWafArnCloudfront: opts.wafArns?.cloudfront ?? "",
+        apiOriginVerifySecret: apiOriginVerifyStack?.secretRef,
         crossRegionBucketTopics: crossRegionBuckets.topics,
         config,
         description: `T1 synth assertion stack (${name})`,
     } as any);
     for (const crossRegionStack of crossRegionBuckets.stacks) {
         stack.addStackDependency(crossRegionStack);
+    }
+    if (apiOriginVerifyStack) {
+        stack.addStackDependency(apiOriginVerifyStack);
     }
 
     if (opts.nag) {

@@ -99,6 +99,8 @@ The following service files are the only files that may import `apiClient`:
 
 Always import Cloudscape components from their individual subpaths. Barrel imports cause the entire library to be bundled.
 
+This applies to new imports. A new file, or a Cloudscape component newly imported into an existing file, uses a subpath import, even in a file that already imports from the barrel. Existing barrel imports stay as they are; do not convert them.
+
 ```typescript
 // CORRECT -- tree-shakeable individual imports
 import Button from "@cloudscape-design/components/button";
@@ -186,25 +188,16 @@ Under an ALB deployment the front does **not** proxy `/api/*` — it issues an H
 
 ### The Return Tuple Pattern
 
-Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples:
+Most `APIService.ts` functions return `[boolean, data/errorMessage]` tuples. Failure is decided by the backend's `success` flag or by the request throwing (a non-2xx status), never by searching the response message for words such as "error": a success message can echo caller-chosen text, such as an asset ID.
 
 ```typescript
 export const fetchSomething = async ({ databaseId }: { databaseId: string }) => {
     try {
         const response = await apiClient.get(`database/${databaseId}/something`);
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, response.message];
-            }
-        } else {
-            return response;
+        if (response?.success === false) {
+            return [false, response?.message ?? response];
         }
+        return [true, response?.message ?? response];
     } catch (error: any) {
         console.log(error);
         return [false, error?.message];
@@ -470,7 +463,7 @@ import Synonyms from "../../synonyms";
 <FormField label={`${Synonyms.Asset} Name`}>
 
 // Descriptions and inline text -- use lowercase synonyms
-<p>{`Select a ${Synonyms.database} to continue`}</p>
+<p>{`Select the ${Synonyms.database} to continue`}</p>
 placeholder={`Search ${Synonyms.assets} and files...`}
 
 // Error messages

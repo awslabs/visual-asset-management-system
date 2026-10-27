@@ -105,11 +105,18 @@ cd web && npm run build 2>&1
 
 This validates that the React/TypeScript frontend compiles (Vite build) without errors. Check for:
 
--   TypeScript type errors
 -   Missing imports
 -   Build warnings (report but don't fail)
 
 If the build runs out of memory, use `npm run build.lowmem`.
+
+The Vite build transpiles TypeScript without type-checking it, so it does not report TypeScript type errors. After the build, run the type check:
+
+```bash
+cd web && npm run typecheck 2>&1
+```
+
+Report the number of TypeScript errors `npm run typecheck` (`tsc --noEmit`) prints, and the files they are in, but do not fail the check on them.
 
 #### 8. Cross-Reference Validation
 

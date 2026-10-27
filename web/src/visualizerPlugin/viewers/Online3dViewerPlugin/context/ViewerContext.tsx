@@ -9,6 +9,7 @@ import React, {
     useReducer,
     useCallback,
     useEffect,
+    useRef,
     ReactNode,
 } from "react";
 import {
@@ -116,8 +117,41 @@ interface ViewerProviderProps {
     children: ReactNode;
 }
 
+const isAppDarkMode = () => document.body.classList.contains("awsui-dark-mode");
+
+// The viewer colours for each theme, used for the initial state and by switchTheme.
+const THEME_COLORS = {
+    dark: {
+        backgroundColor: { r: 42, g: 42, b: 42 },
+        defaultColor: { r: 200, g: 200, b: 200 },
+        defaultLineColor: { r: 255, g: 255, b: 255 },
+    },
+    light: {
+        backgroundColor: { r: 245, g: 245, b: 245 },
+        defaultColor: { r: 200, g: 200, b: 200 },
+        defaultLineColor: { r: 0, g: 0, b: 0 },
+    },
+};
+
+// The viewer starts in the VAMS theme: dark mode uses the dark THEME_COLORS.
+const initStateFromAppTheme = (base: CombinedState): CombinedState =>
+    isAppDarkMode()
+        ? {
+              ...base,
+              settings: {
+                  ...base.settings,
+                  themeId: "dark",
+                  ...THEME_COLORS.dark,
+              },
+          }
+        : base;
+
 export const ViewerProvider: React.FC<ViewerProviderProps> = ({ children }) => {
-    const [state, dispatch] = useReducer(viewerReducer, initialCombinedState);
+    const [state, dispatch] = useReducer(
+        viewerReducer,
+        initialCombinedState,
+        initStateFromAppTheme
+    );
 
     // Action creators
     const updateState = useCallback((updates: Partial<ViewerState>) => {
@@ -442,23 +476,26 @@ export const ViewerProvider: React.FC<ViewerProviderProps> = ({ children }) => {
 
     const switchTheme = useCallback(
         (themeId: "light" | "dark") => {
-            const newSettings: Partial<ViewerSettings> = { themeId };
-
-            // Update theme-specific colors
-            if (themeId === "dark") {
-                newSettings.backgroundColor = { r: 42, g: 42, b: 42 };
-                newSettings.defaultColor = { r: 200, g: 200, b: 200 };
-                newSettings.defaultLineColor = { r: 255, g: 255, b: 255 };
-            } else {
-                newSettings.backgroundColor = { r: 245, g: 245, b: 245 };
-                newSettings.defaultColor = { r: 200, g: 200, b: 200 };
-                newSettings.defaultLineColor = { r: 0, g: 0, b: 0 };
-            }
-
-            updateSettings(newSettings);
+            // Theme-specific colours
+            updateSettings({ themeId, ...THEME_COLORS[themeId] });
         },
         [updateSettings]
     );
+
+    // Follow VAMS theme changes. The toolbar toggle stays an override until the next change.
+    const switchThemeRef = useRef(switchTheme);
+    switchThemeRef.current = switchTheme;
+    useEffect(() => {
+        let appDark = isAppDarkMode();
+        const observer = new MutationObserver(() => {
+            // The body class list also changes for reasons other than the theme.
+            if (isAppDarkMode() === appDark) return;
+            appDark = isAppDarkMode();
+            switchThemeRef.current(appDark ? "dark" : "light");
+        });
+        observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+        return () => observer.disconnect();
+    }, []);
 
     // Context value
     const contextValue: ViewerContextType = {

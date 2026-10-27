@@ -161,8 +161,10 @@ describe("route table lanes", () => {
 
         renderAt("/addon-probe");
 
-        // "*" is always added back, so the unmatched path lands on the landing page.
-        await waitFor(() => expect(screen.getByTestId("landing-page")).toBeInTheDocument());
+        // A route the role does not allow shows the no-access panel, not the add-on page.
+        await waitFor(() =>
+            expect(screen.getByText("You do not have access to this page")).toBeInTheDocument()
+        );
         expect(screen.queryByTestId("addon-probe-page")).not.toBeInTheDocument();
     });
 
@@ -184,7 +186,7 @@ describe("navigation lanes", () => {
     }
 
     it("places the add-on main-menu section after Orchestrate & Automate, ahead of the admin area", async () => {
-        allowRoutes("/executions/", "/addon-probe/", "/metadataschema/", "/auth/api-keys/");
+        allowRoutes("/executions", "/addon-probe", "/metadataschema", "/auth/api-keys");
         const container = await renderNavigation();
         const nav = createWrapper(container).findSideNavigation();
 
@@ -198,7 +200,7 @@ describe("navigation lanes", () => {
     });
 
     it("places the add-on admin section after the core admin sections and before User", async () => {
-        allowRoutes("/auth/userroles/", "/addon-admin-probe/", "/auth/api-keys/");
+        allowRoutes("/auth/userroles", "/addon-admin-probe", "/auth/api-keys");
         const container = await renderNavigation();
         const nav = createWrapper(container).findSideNavigation();
 
@@ -213,7 +215,7 @@ describe("navigation lanes", () => {
     });
 
     it("keeps the fork's section after every core and add-on section", async () => {
-        allowRoutes("/addon-probe/", "/addon-admin-probe/", "/auth/api-keys/", "/custom/probe/");
+        allowRoutes("/addon-probe", "/addon-admin-probe", "/auth/api-keys", "/custom/probe");
         const container = await renderNavigation();
         const nav = createWrapper(container).findSideNavigation();
 
@@ -226,7 +228,7 @@ describe("navigation lanes", () => {
     });
 
     it("filters the add-on admin section by the same web-route check", async () => {
-        allowRoutes("/auth/api-keys/");
+        allowRoutes("/auth/api-keys");
         const container = await renderNavigation();
         const nav = createWrapper(container).findSideNavigation();
 
@@ -236,7 +238,7 @@ describe("navigation lanes", () => {
     });
 
     it("filters the add-on section by the same web-route check", async () => {
-        allowRoutes("/databases/");
+        allowRoutes("/databases");
         const container = await renderNavigation();
         const nav = createWrapper(container).findSideNavigation();
 
@@ -246,7 +248,7 @@ describe("navigation lanes", () => {
     });
 
     it("omits an entry restricted to a feature switch that is not enabled, without checking its route", async () => {
-        allowRoutes("/databases/", "/addon-probe/", "/addon-restricted/");
+        allowRoutes("/databases", "/addon-probe", "/addon-restricted");
         const { container } = render(
             <RuntimeConfigContext.Provider value={{ featuresEnabled: ["ADDON_PROBE_OTHER"] }}>
                 <Navigation activeHref={"#/databases"} user={undefined} />
@@ -261,12 +263,12 @@ describe("navigation lanes", () => {
         const checked = mockCheckWebRoutesAllowed.mock.calls.flatMap(([routes]) =>
             routes.map((route) => route.route__path)
         );
-        expect(checked).toContain("/addon-probe/");
-        expect(checked).not.toContain("/addon-restricted/");
+        expect(checked).toContain("/addon-probe");
+        expect(checked).not.toContain("/addon-restricted");
     });
 
     it("adds a restricted entry, its route checked, when its feature switch arrives after mount", async () => {
-        allowRoutes("/databases/", "/addon-restricted/", "/addon-restricted/both/");
+        allowRoutes("/databases", "/addon-restricted", "/addon-restricted/both");
         // The config the shell holds before the secure config lands carries no feature switches.
         const { container, rerender } = render(
             <RuntimeConfigContext.Provider value={{}}>
@@ -286,7 +288,7 @@ describe("navigation lanes", () => {
         await waitFor(() => expect(nav()?.findLinkByHref("#/addon-restricted/")).toBeTruthy());
         expect(screen.getByText("Add-on restricted probe")).toBeInTheDocument();
         const lastCheck = mockCheckWebRoutesAllowed.mock.calls.at(-1)![0];
-        expect(lastCheck.map((route) => route.route__path)).toContain("/addon-restricted/");
+        expect(lastCheck.map((route) => route.route__path)).toContain("/addon-restricted");
         // Every switch an entry lists must be on: the second one is still absent.
         expect(nav()?.findLinkByHref("#/addon-restricted/both/")).toBeFalsy();
         expect(screen.queryByText("Add-on two-switch page")).not.toBeInTheDocument();

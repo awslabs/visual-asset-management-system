@@ -25,6 +25,7 @@ import * as Config from "../config/config";
 import { STACK_WAF_DESCRIPTION } from "../config/config";
 import { buildBootstrapSynthesizer } from "./helper/iamRoleCustomization";
 import { addonWafRuleExclusions } from "./nestedStacks/addon/addonWafExclusions";
+import { ApiOriginVerifyStack } from "./apiOriginVerify-stack";
 
 interface EnvProps {
     env?: cdk.Environment;
@@ -32,6 +33,8 @@ interface EnvProps {
     wafScope?: WAFScope;
     wafPolicy?: WafPolicyConfig;
     scopedRuleExclusions?: WafScopedRuleExclusion[];
+    // Origin verification secret ARN, for the REGIONAL web ACL of a CloudFront deployment.
+    originVerifySecretArn?: string;
     description: string;
     synthesizer?: cdk.IStackSynthesizer;
 }
@@ -51,6 +54,7 @@ export class CfWafStack extends cdk.Stack {
             wafScope: props.wafScope,
             wafPolicy: props.wafPolicy,
             scopedRuleExclusions: props.scopedRuleExclusions,
+            originVerifySecretArn: props.originVerifySecretArn,
         });
 
         new cdk.aws_ssm.StringParameter(this, "waf_acl_arn", {
@@ -71,17 +75,28 @@ export interface WafStacks {
 /**
  * The web ACL stacks of a deployment with WAF enabled, or undefined with WAF off. The regional ACL
  * protects the API stage and, with the ALB, the load balancer; the CloudFront ACL exists only with
- * CloudFront and protects the distribution.
+ * CloudFront and protects the distribution. Both take the add-on scoped rule exclusions.
+ *
+ * `apiOriginVerifyStack` is the origin verification stack `buildApiOriginVerifyStack` returns: defined
+ * for a CloudFront deployment only. When given, the regional ACL takes its secret ARN (the scope-down
+ * on every rate-based rule) and the regional WAF stack deploys after it.
  */
-export function buildWafStacks(app: cdk.App, config: Config.Config): WafStacks | undefined {
+export function buildWafStacks(
+    app: cdk.App,
+    config: Config.Config,
+    apiOriginVerifyStack?: ApiOriginVerifyStack
+): WafStacks | undefined {
     if (!config.app.useWaf) {
         return undefined;
     }
     const wafBaseName = config.app.baseStackName;
 
-    // Managed rules relaxed on add-on API routes only, in the regional ACL on the API stage.
-    // Clients call the stage directly, and CloudFront's /api/* behavior forwards under the
-    // stage's own /api routes, so no add-on route is reachable through the CloudFront ACL.
+    // Managed rules relaxed on add-on API routes only, in both web ACLs. The regional ACL on the API
+    // stage evaluates every request that reaches the stage, on the path the stage receives. A
+    // request to `<distribution>/api/*` is evaluated by the CloudFront ACL first, on the viewer's
+    // path, and CloudFront forwards that path to the stage unchanged (no origin path), so the same
+    // stage-prefixed prefixes match it there; without the exclusions in the CloudFront ACL it would
+    // block an exempted request before the regional ACL saw it.
     const wafScopedRuleExclusions = addonWafRuleExclusions(config);
 
     // A regional-scoped web ACL is ALWAYS created in the core region when WAF is enabled.
@@ -108,9 +123,13 @@ export function buildWafStacks(app: cdk.App, config: Config.Config): WafStacks |
         wafScope: WAFScope.REGIONAL,
         wafPolicy: config.wafPolicyJSON,
         scopedRuleExclusions: wafScopedRuleExclusions,
+        originVerifySecretArn: apiOriginVerifyStack?.secretRef.secretArn,
         description: STACK_WAF_DESCRIPTION,
         synthesizer: buildBootstrapSynthesizer(config),
     });
+    if (apiOriginVerifyStack) {
+        regional.addStackDependency(apiOriginVerifyStack);
+    }
 
     // CloudFront requires a CLOUDFRONT-scoped ACL in us-east-1. Only created when CloudFront
     // is enabled. Keeps the historical "{name}-waf-{base}" name so existing CloudFront
@@ -126,6 +145,7 @@ export function buildWafStacks(app: cdk.App, config: Config.Config): WafStacks |
             },
             wafScope: WAFScope.CLOUDFRONT,
             wafPolicy: config.wafPolicyJSON,
+            scopedRuleExclusions: wafScopedRuleExclusions,
             description: STACK_WAF_DESCRIPTION,
             synthesizer: buildBootstrapSynthesizer(config),
         });

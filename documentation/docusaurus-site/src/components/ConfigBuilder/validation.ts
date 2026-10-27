@@ -47,6 +47,13 @@ import { ADDON_RULES, ADDON_VPC_REQUIRING_FEATURES } from "./addon";
 
 // Regexes copied verbatim from config.ts.
 const CERT_ARN_PATTERN = /^arn:aws[a-z-]*:acm:us-east-1:\d{12}:certificate\/[a-f0-9-]+$/;
+const ACM_CERTIFICATE_ARN_PATTERN =
+    /^arn:(aws[a-z-]*):acm:([a-z0-9-]+):\d{12}:certificate\/[a-f0-9-]+$/;
+const API_CUSTOM_DOMAIN_HOST_PATTERN =
+    /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
+// config.ts API_CUSTOM_DOMAIN_PARTITIONS.
+const API_CUSTOM_DOMAIN_PARTITIONS = ["aws", "aws-us-gov"];
 const COMMERCIAL_DNS_SUFFIX = "amazonaws.com";
 
 /**
@@ -211,6 +218,8 @@ function physnaHasInlineCreds(cfg: ConfigShape): boolean {
 /**
  * True if any external-OAuth IdP required field is unset (config.ts: the
  * `useExternalOAuthIdp` required-field checks under "Check when implementing auth providers").
+ * The MFA scope, principal domain and discovery endpoint are optional there: only "" and the
+ * "UNDEFINED" placeholder are rejected for them, so their template null passes.
  */
 function oauthFieldsMissing(cfg: ConfigShape): boolean {
     const base = "app.authProvider.useExternalOAuthIdp";
@@ -219,14 +228,20 @@ function oauthFieldsMissing(cfg: ConfigShape): boolean {
         "lambdaAuthorizorJWTIssuerUrl",
         "lambdaAuthorizorJWTAudience",
         "idpAuthClientId",
-        "idpAuthPrincipalDomain",
         "idpAuthProviderScope",
-        "idpAuthProviderScopeMfa",
         "idpAuthProviderTokenEndpoint",
         "idpAuthProviderAuthorizationEndpoint",
+    ];
+    const optionalPaths = [
+        "idpAuthPrincipalDomain",
+        "idpAuthProviderScopeMfa",
         "idpAuthProviderDiscoveryEndpoint",
     ];
-    return requiredPaths.some((p) => isUnset(g(cfg, `${base}.${p}`)));
+    const isPlaceholder = (value: unknown) => value === "" || value === "UNDEFINED";
+    return (
+        requiredPaths.some((p) => isUnset(g(cfg, `${base}.${p}`))) ||
+        optionalPaths.some((p) => isPlaceholder(g(cfg, `${base}.${p}`)))
+    );
 }
 
 /** True if any Cosmos model is enabled (config.ts: "Cosmos Predict/Transfer validation"). */
@@ -1770,10 +1785,9 @@ const CORE_RULES: Rule[] = [
     // (config.ts: "Cloudfront + ALB check (not more than 1)", "Cloudfront + ALB neither warning
     // check", "CloudFront Custom Domain Configuration Validation") -----
     //
-    // Take the severities from the two branches, not from those two leading comments: in config.ts
-    // the comment naming a check sits above the OTHER one's branch. Enabling BOTH distributions is
-    // the `throw new Error("...cannot have both enabled.")`; enabling NEITHER is the
-    // `console.warn("...API-DRIVEN SOLUTION-ONLY DEPLOYMENT.")`, which is a supported topology.
+    // Enabling BOTH distributions is the `throw new Error("...cannot have both enabled.")` under
+    // "not more than 1"; enabling NEITHER is the `console.warn("...API-DRIVEN SOLUTION-ONLY
+    // DEPLOYMENT.")` under "neither warning check", which is a supported topology.
     {
         id: "frontend-both",
         severity: "error",
@@ -1827,6 +1841,21 @@ const CORE_RULES: Rule[] = [
             g(c, "app.useAlb.enabled") &&
             (isUnset(g(c, "app.useAlb.certificateArn")) || isUnset(g(c, "app.useAlb.domainHost"))),
         message: "ALB deployment requires both a domain hostname and an ACM certificate ARN.",
+    },
+    {
+        id: "alb-domain-bucket-name",
+        severity: "error",
+        fieldPaths: ["app.useAlb.domainHost"],
+        appliesWhen: (c) => {
+            const host = g(c, "app.useAlb.domainHost");
+            return (
+                g(c, "app.useAlb.enabled") &&
+                !isUnset(host) &&
+                !/^[a-z0-9][a-z0-9.-]{1,44}[a-z0-9]$/.test(String(host))
+            );
+        },
+        message:
+            "app.useAlb.domainHost names the ALB web app bucket and its '-webappaccesslogs' access-logs bucket, so it must be 3 to 46 characters of lowercase letters, digits, dots and hyphens, beginning and ending with a letter or digit.",
     },
 
     // ----- Stack name (config.ts: "app.baseStackName is required") -----
@@ -1965,7 +1994,7 @@ const CORE_RULES: Rule[] = [
         appliesWhen: (c) =>
             g(c, "app.authProvider.useExternalOAuthIdp.enabled") && oauthFieldsMissing(c),
         message:
-            "External OAuth IdP requires all of its fields (provider URL, client ID, scopes, principal domain, endpoints, JWT issuer URL and audience).",
+            "External OAuth IdP requires its provider URL, client ID, scope, token and authorization endpoints, JWT issuer URL and audience. The MFA scope, principal domain and discovery endpoint may be left null, but not empty or UNDEFINED.",
     },
 
     // ----- Cognito federation: SAML or OIDC, or neither
@@ -2218,6 +2247,126 @@ const CORE_RULES: Rule[] = [
         appliesWhen: (c) => Number(g(c, "app.api.apiGatewayRest.apiGatewayTimeoutTime")) > 29,
         message:
             "An integration timeout above 29 seconds requires an approved account-level increase to the Amazon API Gateway 'Integration timeout' quota (L-E5AE38E3) in the deployment Region. Request the increase before deploying, otherwise the deployment fails.",
+    },
+
+    // ----- REST API custom domain (config.ts: "REST API custom domain. A Regional custom domain name") -----
+    {
+        id: "api-custom-domain-fields",
+        severity: "error",
+        fieldPaths: [
+            "app.api.apiGatewayRest.customDomain.domainHost",
+            "app.api.apiGatewayRest.customDomain.certificateArn",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.api.apiGatewayRest.customDomain.enabled") &&
+            (isUnset(g(c, "app.api.apiGatewayRest.customDomain.domainHost")) ||
+                isUnset(g(c, "app.api.apiGatewayRest.customDomain.certificateArn"))),
+        message:
+            "app.api.apiGatewayRest.customDomain.enabled requires app.api.apiGatewayRest.customDomain.domainHost and app.api.apiGatewayRest.customDomain.certificateArn.",
+    },
+    {
+        id: "api-custom-domain-host-format",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.customDomain.domainHost"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.api.apiGatewayRest.customDomain.enabled")) return false;
+            const host = g(c, "app.api.apiGatewayRest.customDomain.domainHost");
+            const cert = g(c, "app.api.apiGatewayRest.customDomain.certificateArn");
+            // Checked once both required fields are present (config.ts checks them first).
+            if (isUnset(host) || isUnset(cert)) return false;
+            return typeof host !== "string" || !API_CUSTOM_DOMAIN_HOST_PATTERN.test(host);
+        },
+        message:
+            "app.api.apiGatewayRest.customDomain.domainHost must be a lowercase host name with no scheme, port or path (for example api.example.com).",
+    },
+    // (config.ts: "the API custom domain needs a host of its own")
+    {
+        id: "api-custom-domain-host-conflict",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.customDomain.domainHost"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.api.apiGatewayRest.customDomain.enabled")) return false;
+            const host = g(c, "app.api.apiGatewayRest.customDomain.domainHost");
+            const cert = g(c, "app.api.apiGatewayRest.customDomain.certificateArn");
+            // Checked once the host has passed the checks before it (config.ts order).
+            if (isUnset(host) || isUnset(cert)) return false;
+            if (typeof host !== "string" || !API_CUSTOM_DOMAIN_HOST_PATTERN.test(host))
+                return false;
+            const webAppHosts = [
+                g(c, "app.useCloudFront.enabled") && g(c, "app.useCloudFront.customDomain.enabled")
+                    ? g(c, "app.useCloudFront.customDomain.domainHost")
+                    : undefined,
+                g(c, "app.useAlb.enabled") ? g(c, "app.useAlb.domainHost") : undefined,
+            ];
+            return webAppHosts.some(
+                (webAppHost) =>
+                    !isUnset(webAppHost) && String(webAppHost).toLowerCase() === host.toLowerCase()
+            );
+        },
+        message:
+            "app.api.apiGatewayRest.customDomain.domainHost must differ from the web application's host (app.useCloudFront.customDomain.domainHost or app.useAlb.domainHost).",
+    },
+    // (config.ts: "customDomain.optionalHostedZoneId must be")
+    {
+        id: "api-custom-domain-hosted-zone-id-format",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.customDomain.optionalHostedZoneId"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.api.apiGatewayRest.customDomain.enabled")) return false;
+            const host = g(c, "app.api.apiGatewayRest.customDomain.domainHost");
+            const cert = g(c, "app.api.apiGatewayRest.customDomain.certificateArn");
+            if (isUnset(host) || isUnset(cert)) return false;
+            const zone = g(c, "app.api.apiGatewayRest.customDomain.optionalHostedZoneId");
+            if (isUnset(zone)) return false;
+            return typeof zone !== "string" || !ROUTE53_HOSTED_ZONE_ID_PATTERN.test(zone);
+        },
+        message:
+            "app.api.apiGatewayRest.customDomain.optionalHostedZoneId must be an Amazon Route 53 hosted zone ID such as Z0123456789ABCDEFGHIJ (no /hostedzone/ prefix), or empty.",
+    },
+    {
+        id: "api-custom-domain-private-endpoint",
+        severity: "error",
+        fieldPaths: [
+            "app.api.apiGatewayRest.customDomain.enabled",
+            "app.api.apiGatewayRest.endpointType",
+        ],
+        appliesWhen: (c) =>
+            !!g(c, "app.api.apiGatewayRest.customDomain.enabled") &&
+            g(c, "app.api.apiGatewayRest.endpointType") === "PRIVATE",
+        message:
+            "app.api.apiGatewayRest.customDomain.enabled is not supported with app.api.apiGatewayRest.endpointType 'PRIVATE'. The custom domain is a Regional (public) domain name; a private API is reached through its VPC endpoint.",
+    },
+    {
+        id: "api-custom-domain-partition",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.customDomain.enabled", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.api.apiGatewayRest.customDomain.enabled")) return false;
+            const partition = partitionForRegionName(g(c, "env.region"));
+            return partition !== undefined && !API_CUSTOM_DOMAIN_PARTITIONS.includes(partition);
+        },
+        message:
+            "app.api.apiGatewayRest.customDomain.enabled is supported in the aws and aws-us-gov partitions only. Set app.api.apiGatewayRest.customDomain.enabled to false for this Region.",
+    },
+    {
+        id: "api-custom-domain-cert-region",
+        severity: "error",
+        fieldPaths: ["app.api.apiGatewayRest.customDomain.certificateArn", "env.region"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.api.apiGatewayRest.customDomain.enabled")) return false;
+            const host = g(c, "app.api.apiGatewayRest.customDomain.domainHost");
+            const cert = g(c, "app.api.apiGatewayRest.customDomain.certificateArn");
+            if (isUnset(host) || isUnset(cert)) return false;
+            const match = typeof cert === "string" ? ACM_CERTIFICATE_ARN_PATTERN.exec(cert) : null;
+            if (!match) return true;
+            // The Region comparison needs env.region, which can also come from CDK context or the
+            // environment at deploy time; with it unset only the ARN format is checked here.
+            const region = g(c, "env.region");
+            if (isUnset(region) || typeof region !== "string") return false;
+            return match[1] !== partitionForRegionName(region) || match[2] !== region;
+        },
+        message:
+            "app.api.apiGatewayRest.customDomain.certificateArn must be an ACM certificate ARN in the deployment Region. A Regional custom domain name uses a certificate from its own Region.",
     },
 
     // ----- Presigned URL timeout

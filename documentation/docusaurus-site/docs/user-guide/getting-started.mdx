@@ -53,7 +53,7 @@ If your deployment uses a federated identity provider through Amazon Cognito, th
 
 If your deployment uses an external OAuth identity provider (without Amazon Cognito), the login page displays **Log in with SSO** and optionally **Log in with MFA** buttons.
 
-1. Select **Log in with SSO** (or **Log in with MFA** if multi-factor authentication is required).
+1. Select **Log in with SSO**, or **Log in with MFA** when the page offers it. **Log in with MFA** asks your identity provider for an MFA sign-in; roles that require MFA accept that sign-in only when your administrator has implemented the external MFA check described in [Authentication Override Hooks](../developer/security.md#authentication-override-hooks).
 2. Complete authentication on your organization's identity provider.
 3. You are redirected back to VAMS and signed in automatically.
 

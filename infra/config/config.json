@@ -390,7 +390,13 @@
                 "globalBurstLimit": 100,
                 "endpointType": "REGIONAL",
                 "optionalExternalPrivateApigVPCEId": "",
-                "apiGatewayTimeoutTime": 29
+                "apiGatewayTimeoutTime": 29,
+                "customDomain": {
+                    "enabled": false,
+                    "domainHost": "",
+                    "certificateArn": "",
+                    "optionalHostedZoneId": ""
+                }
             }
         },
         "metadataSchema": {

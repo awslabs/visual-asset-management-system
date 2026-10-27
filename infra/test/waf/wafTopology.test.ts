@@ -4,17 +4,23 @@
  */
 
 /**
- * Where the deployment's web ACLs attach, and the routing premises a scoped rule exclusion on the
- * regional web ACL rests on, in full synths of the fronting modes.
+ * Where the deployment's web ACLs attach, and the routing premises a scoped rule exclusion rests on,
+ * in full synths of the fronting modes.
  *
- * An add-on's scoped rule exclusion lives on the regional web ACL alone, under stage-prefixed route
- * paths. That is correct only while those routes reach AWS WAF at the REST API stage and nowhere
- * else, so what is pinned here:
+ * A scoped rule exclusion lives on both web ACLs, under stage-prefixed route paths. The regional ACL
+ * is the one on the REST API stage, so it evaluates every API request with the path the stage
+ * receives, the same whether the request is made to the invoke URL or forwarded by CloudFront. The
+ * CloudFront ACL evaluates a request to the distribution first, on the viewer's path, and the same
+ * prefixes match it there because CloudFront forwards `/api/*` with no origin path. What is pinned
+ * here:
  *   * associations: the regional ACL on the stage in every mode and on the ALB when there is one,
- *     the CloudFront ACL on the distribution only, and each ARN nowhere else in any template,
- *     outputs, parameters and conditions included;
- *   * CloudFront forwards `/api/*` to the stage under its own `/api` prefix, so it reaches only the
- *     spec paths under `/api/`, which are the two anonymous routes;
+ *     the CloudFront ACL on the distribution only;
+ *   * each ARN reaches only the resources that need it, outputs, parameters and conditions included:
+ *     its associations or the distribution and, on a CloudFront deployment, the origin verification
+ *     rotation function, which reads both ACLs and updates the regional one;
+ *   * CloudFront forwards `/api/*` to the stage host with no origin path, so the stage receives the
+ *     viewer's path, and the two anonymous routes, the only spec paths under `/api/`, through
+ *     exact-path behaviors whose origin path is the stage;
  *   * the ALB redirects `/api*` and `/secure-config*` to the stage with a 302, ahead of every forward
  *     rule, so it proxies nothing to API Gateway;
  *   * the gateway responses, WAF_FILTERED included, carry the CORS headers, ride on the deployment and
@@ -25,6 +31,7 @@
  * The WAF ARNs are sentinels, so each one can be traced through the templates.
  */
 
+import { API_GATEWAY_STAGE_NAME, API_STAGE_PREFIXED_ROUTE_PATHS } from "../../config/config";
 import { ACCOUNT, Resource, SynthResult, synthTemplate } from "../support/templateSynth";
 
 jest.setTimeout(600_000);
@@ -126,6 +133,35 @@ const restApi = (s: SynthResult): Resource => {
     return apis[0];
 };
 
+/** The origin verification secret's rotation function: one on a CloudFront deployment, else none. */
+const rotationFunctions = (s: SynthResult): Resource[] =>
+    s.where(
+        "AWS::Lambda::Function",
+        (r) =>
+            SynthResult.flatten(r.properties.Handler) ===
+            "handlers.auth.apiOriginVerifyRotation.lambda_handler"
+    );
+
+/** The policies attached to the rotation function's role that have a statement naming `arn`. */
+const rotationPoliciesNaming = (s: SynthResult, arn: string): Resource[] =>
+    rotationFunctions(s).flatMap((fn) =>
+        s.where(
+            "AWS::IAM::Policy",
+            (p) =>
+                p.stack === fn.stack &&
+                ((p.properties.Roles ?? []) as any[]).some(
+                    (ref) => ref?.Ref === fn.properties.Role?.["Fn::GetAtt"]?.[0]
+                ) &&
+                statementsNaming([p], arn).length > 0
+        )
+    );
+
+/** The statements of `policies` whose resources include `arn`. */
+const statementsNaming = (policies: Resource[], arn: string): any[] =>
+    policies
+        .flatMap((p) => (p.properties.PolicyDocument?.Statement ?? []) as any[])
+        .filter((st) => ([] as unknown[]).concat(st.Resource ?? []).includes(arn));
+
 const specPaths = (s: SynthResult): string[] => Object.keys(restApi(s).properties.Body.paths);
 
 /**
@@ -173,15 +209,54 @@ describe.each([CLOUDFRONT, ALB, ALB_PRIVATE, API_ONLY])("WAF topology: $title", 
         expect(stage[0].properties.WebACLArn).toBe(regional);
     });
 
-    it("carries the regional ACL ARN on the associations alone", () => {
-        expect(s.grep(regional).map(where).sort()).toEqual(associations(s).map(where).sort());
+    it("carries the regional ACL ARN on the associations and the origin verification rotation alone", () => {
+        // The rotation function updates the regional ACL's scope-down during a rotation, so on a
+        // CloudFront deployment it has the ARN in its environment and in its role policy.
+        const rotation =
+            t === CLOUDFRONT
+                ? [...rotationFunctions(s), ...rotationPoliciesNaming(s, regional)]
+                : [];
+        expect(s.grep(regional).map(where).sort()).toEqual(
+            [...associations(s), ...rotation].map(where).sort()
+        );
         expect(outsideResources(s, regional)).toEqual([]);
     });
 
-    it("carries the CloudFront ACL ARN on the distribution alone, and only with CloudFront", () => {
-        const expected = t === CLOUDFRONT ? s.ofType("AWS::CloudFront::Distribution") : [];
-        expect(s.grep(cloudfront).map(where)).toEqual(expected.map(where));
+    it("carries the CloudFront ACL ARN on the distribution and the rotation policy alone, and only with CloudFront", () => {
+        // UpdateDistribution resubmits the distribution's web ACL, so the rotation role may read it.
+        const expected =
+            t === CLOUDFRONT
+                ? [
+                      ...s.ofType("AWS::CloudFront::Distribution"),
+                      ...rotationPoliciesNaming(s, cloudfront),
+                  ]
+                : [];
+        expect(s.grep(cloudfront).map(where).sort()).toEqual(expected.map(where).sort());
         expect(outsideResources(s, cloudfront)).toEqual([]);
+    });
+
+    it("builds the origin verification rotation only with CloudFront, reading both ACLs and updating the regional one", () => {
+        if (t !== CLOUDFRONT) {
+            expect(rotationFunctions(s)).toEqual([]);
+            return;
+        }
+        const functions = rotationFunctions(s);
+        expect(functions).toHaveLength(1);
+        expect(functions[0].properties.Environment.Variables.ORIGIN_VERIFY_WEB_ACL_ARN).toBe(
+            regional
+        );
+        const policiesOf = (arn: string) => rotationPoliciesNaming(s, arn);
+        expect(policiesOf(regional)).toHaveLength(1);
+        expect(statementsNaming(policiesOf(regional), regional)).toEqual([
+            {
+                Action: ["wafv2:GetWebACL", "wafv2:UpdateWebACL"],
+                Effect: "Allow",
+                Resource: regional,
+            },
+        ]);
+        expect(statementsNaming(policiesOf(cloudfront), cloudfront)).toEqual([
+            { Action: "wafv2:GetWebACL", Effect: "Allow", Resource: cloudfront },
+        ]);
     });
 
     it("keeps the logical ids of the DEFAULT_4XX and DEFAULT_5XX responses", () => {
@@ -274,27 +349,42 @@ describe("WAF topology: commercial, CloudFront", () => {
         expect(associations(s)[0].properties.WebACLArn).toBe(regional);
     });
 
-    it("forwards /api/* to the stage under its /api prefix, and nothing else to that origin", () => {
+    it("forwards /api/* to the stage host with the viewer's path, and the anonymous routes under the stage", () => {
         const config = s.ofType("AWS::CloudFront::Distribution")[0].properties.DistributionConfig;
         const behaviors: any[] = config.CacheBehaviors ?? [];
-        const api = behaviors.filter((b) => b.PathPattern === "/api/*");
-        expect(api).toHaveLength(1);
-        const origin = (config.Origins as any[]).find((o) => o.Id === api[0].TargetOriginId);
-        expect(origin).toBeDefined();
-        expect(origin.OriginPath).toBe("/api");
-        expect(origin.CustomOriginConfig).toBeDefined();
-        const others = [config.DefaultCacheBehavior, ...behaviors.filter((b) => b !== api[0])];
-        expect(others.filter((b) => b.TargetOriginId === origin.Id)).toEqual([]);
+        const apiBehaviors = behaviors.filter((b) => String(b.PathPattern).startsWith("/api"));
+        expect(apiBehaviors.map((b) => b.PathPattern).sort()).toEqual(
+            ["/api/*", ...API_STAGE_PREFIXED_ROUTE_PATHS].sort()
+        );
+        const originOf = (b: any) =>
+            (config.Origins as any[]).find((o) => o.Id === b.TargetOriginId);
+        for (const b of apiBehaviors) {
+            const origin = originOf(b);
+            expect(origin?.CustomOriginConfig).toBeDefined();
+            expect(SynthResult.flatten(origin.DomainName)).toMatch(
+                new RegExp(`\\.execute-api\\.${TARGET.commercial.region}\\.amazonaws\\.com$`)
+            );
+            // `/api/*` keeps the viewer's path, which already starts with the stage; the exact
+            // paths are routes registered under the stage's own `/api/`, so the stage is prepended.
+            expect(origin.OriginPath ?? "").toBe(
+                b.PathPattern === "/api/*" ? "" : `/${API_GATEWAY_STAGE_NAME}`
+            );
+        }
+        const apiOrigins = new Set(apiBehaviors.map((b) => b.TargetOriginId));
+        const others = [
+            config.DefaultCacheBehavior,
+            ...behaviors.filter((b) => !apiBehaviors.includes(b)),
+        ];
+        expect(others.filter((b) => apiOrigins.has(b.TargetOriginId))).toEqual([]);
     });
 
     it("has only the two anonymous routes under /api/ in the spec, and no greedy path there", () => {
         const paths = specPaths(s);
         // Control: the full spec is present (the commercial template emits 100 paths).
         expect(paths.length).toBeGreaterThan(90);
-        expect(paths.filter((p) => p.startsWith("/api/")).sort()).toEqual([
-            "/api/amplify-config",
-            "/api/version",
-        ]);
+        expect(paths.filter((p) => p.startsWith("/api/")).sort()).toEqual(
+            [...API_STAGE_PREFIXED_ROUTE_PATHS].sort()
+        );
         expect(paths.filter((p) => p.startsWith("/{"))).toEqual([]);
         expect(paths.filter((p) => p.startsWith("/api/") && p.includes("+}"))).toEqual([]);
     });
@@ -406,6 +496,10 @@ const WAF_OFF_ALB: Topology = {
     mutateKey: "waf-topology-alb-waf-off",
 };
 
+/** Whether a resource's properties hold an AWS WAF ARN or ARN part. */
+const propertiesNameWaf = (r: Resource): boolean =>
+    JSON.stringify(r.properties ?? {}).includes(":wafv2:");
+
 /** The gateway responses by response type, without the stack they are in. */
 const gatewayResponsesByType = (s: SynthResult) =>
     Object.fromEntries(
@@ -441,7 +535,11 @@ describe.each([
         expect(associations(withWaf).length).toBeGreaterThan(0);
         expect(s.ofType("AWS::WAFv2::WebACL")).toEqual([]);
         expect(associations(s)).toEqual([]);
-        expect(s.grep(":wafv2:").map(where)).toEqual([]);
+        // Properties only: a resource's Metadata carries the CDK Nag suppressions, one of which is a
+        // pattern for the managed rule group ARNs the rotation function may name with WAF on.
+        expect(s.resources.filter(propertiesNameWaf).map(where)).toEqual([]);
+        // Control: with WAF on, the properties name the web ACLs.
+        expect(withWaf.resources.filter(propertiesNameWaf).length).toBeGreaterThan(0);
         expect(outsideResources(s, ":wafv2:")).toEqual([]);
     });
 

@@ -695,21 +695,6 @@ export class SplatToolboxConstruct extends Construct {
 
         NagSuppressions.addResourceSuppressionsByPath(
             Stack.of(this),
-            `/${this.toString()}/BatchPipeline_SplatToolbox/BatchServiceRole/Resource`,
-            [
-                {
-                    id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for AWS Batch Service uses AWSBatchServiceRole managed policy which is required for batch operations",
-                    appliesTo: [
-                        "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSBatchServiceRole",
-                    ],
-                },
-            ],
-            true
-        );
-
-        NagSuppressions.addResourceSuppressionsByPath(
-            Stack.of(this),
             `/${this.toString()}/BatchPipeline_SplatToolbox/BatchInstanceRole/Resource`,
             [
                 {

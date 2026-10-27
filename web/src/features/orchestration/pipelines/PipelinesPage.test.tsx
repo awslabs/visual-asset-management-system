@@ -296,4 +296,45 @@ describe("PipelinesPage", () => {
         expect(screen.getByRole("menuitem", { name: "Edit" })).toBeInTheDocument();
         expect(screen.getByRole("menuitem", { name: "Archive" })).toBeInTheDocument();
     });
+
+    it("hides the Templates action when the caller may not read pipeline templates", async () => {
+        (queries.usePipelines as jest.Mock).mockReturnValue(infinite(mockPipelines));
+        const templatesRoute = "/database/{databaseId}/pipelines/{pipelineId}/templates";
+        (useAllowedRoutesModule.useAllowedRoutes as jest.Mock).mockReturnValue({
+            loading: false,
+            can: (method: string, route: string) => !(method === "GET" && route === templatesRoute),
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <PipelinesPage databaseId="db1" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        await openActionsFor(userEvent.setup(), "Pipeline One");
+        expect(screen.queryByRole("menuitem", { name: "Templates" })).not.toBeInTheDocument();
+        // Control: the neighbouring actions the caller may use are still offered.
+        expect(screen.getByRole("menuitem", { name: "Archive" })).toBeInTheDocument();
+    });
+
+    it("offers the Templates action when the caller may read pipeline templates", async () => {
+        (queries.usePipelines as jest.Mock).mockReturnValue(infinite(mockPipelines));
+        (useAllowedRoutesModule.useAllowedRoutes as jest.Mock).mockReturnValue({
+            loading: false,
+            can: () => true,
+        });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter>
+                    <PipelinesPage databaseId="db1" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        await openActionsFor(userEvent.setup(), "Pipeline One");
+        expect(screen.getByRole("menuitem", { name: "Templates" })).toBeInTheDocument();
+    });
 });

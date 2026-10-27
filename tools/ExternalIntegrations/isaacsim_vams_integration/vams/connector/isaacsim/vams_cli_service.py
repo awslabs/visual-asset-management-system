@@ -1019,7 +1019,12 @@ class VamsCliService:
             True if the download succeeded.
 
         Raises:
-            VamsTransferError: If the file failed to download. A single-file transfer has no partial
+            VamsCliError: If the CLI refused or could not start the download: the file does not
+                          exist, the asset is not distributable, no file could be presigned, or the
+                          request timed out or failed. ``error_type`` is the CLI's, for example
+                          ``DownloadError``. Most failed single-file downloads end here.
+            VamsTransferError: (a ``VamsCliError`` subclass) If the transfer ran and its report
+                               names the file as failed. A single-file transfer has no partial
                                outcome to report, so the failure is raised with the reported reason
                                rather than returned as False.
         """

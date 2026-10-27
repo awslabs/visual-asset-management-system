@@ -674,7 +674,7 @@ class TestLogKeyMerge:
         # Control: the comparisons above are against the real core keys, not two empty tuples.
         assert C.CORE_LOG_SENSITIVE_KEYS == (
             "authorization", "idJwtToken", "Credentials", "AccessKeyId", "SecretAccessKey",
-            "SessionToken", "apiKey", "apiKeySecret", "rawKey")
+            "SessionToken", "apiKey", "apiKeySecret", "rawKey", "x-vams-origin-verify")
         assert C.CORE_LOG_TEXT_SENSITIVE_KEYS == (
             "authorization", "idJwtToken", "Credentials", "AccessKeyId", "SecretAccessKey",
             "SessionToken", "x-amz-security-token", "TaskToken")

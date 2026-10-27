@@ -40,7 +40,7 @@
         {
             "id": "image-viewer",
             "name": "Image Viewer",
-            "description": "View images with zoom and pan capabilities",
+            "description": "View images fitted to the viewer panel",
             "componentPath": "./viewers/ImageViewerPlugin/ImageViewerComponent",
             "supportedExtensions": [".png", ".jpg", ".jpeg", ".svg", ".gif"],
             "supportsMultiFile": false,
@@ -367,6 +367,25 @@
             "loadStrategy": "lazy",
             "category": "3d",
             "featuresEnabledRestriction": ["ALLOWUNSAFEEVAL"],
+            "enabled": true
+        },
+        {
+            "id": "robotics-data-viewer",
+            "name": "Robotics Data Viewer (Lichtblick)",
+            "description": "View robotics logs (.mcap, ROS 1 .bag, ROS 2 .db3, PX4 .ulg) in the Lichtblick web app: plots, 3D scene, images, raw messages and one shared timeline.",
+            "componentPath": "./viewers/RoboticsDataViewerPlugin/RoboticsDataViewerComponent",
+            "supportedExtensions": [".mcap", ".bag", ".db3", ".ulg", ".ulog"],
+            "supportsMultiFile": true,
+            "canFullscreen": true,
+            "priority": 1,
+            "dependencies": ["lichtblick"],
+            "loadStrategy": "lazy",
+            "category": "data",
+            "featuresEnabledRestriction": ["ALLOWUNSAFEEVAL"],
+            "customParameters": {
+                "basePath": "/viewers/robotics/index.html",
+                "maxWholeFileBytes": 1073741824
+            },
             "enabled": true
         },
         {

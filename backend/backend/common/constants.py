@@ -395,8 +395,8 @@ CONSTRAINT_OPERATOR_LABELS = [
 # Display labels for the constraint permissions (HTTP actions) and permission types.
 CONSTRAINT_PERMISSION_LABELS = [
     {"label": "View/GET", "value": "GET"},
-    {"label": "Add/PUT", "value": "PUT"},
-    {"label": "Update/POST", "value": "POST"},
+    {"label": "PUT", "value": "PUT"},
+    {"label": "POST", "value": "POST"},
     {"label": "DELETE", "value": "DELETE"},
 ]
 
@@ -506,7 +506,10 @@ UNALLOWED_MIME_LIST = merge_deny_list(
 # Matching is on the WHOLE lower-cased key name, so the api-key identifier fields (apiKeyId,
 # apiKeyName, apiKeyHash) stay in the clear and the audit trail keeps naming which key an action used.
 CORE_LOG_SENSITIVE_KEYS = ("authorization", "idJwtToken", "Credentials", "AccessKeyId", "SecretAccessKey",
-                           "SessionToken", "apiKey", "apiKeySecret", "rawKey")
+                           "SessionToken", "apiKey", "apiKeySecret", "rawKey",
+                           # The origin verification value CloudFront adds to forwarded API requests
+                           # (common/auth/originVerify.py ORIGIN_VERIFY_HEADER_NAME).
+                           "x-vams-origin-verify")
 
 # Keys the free-text redactor (common/logRedaction.py) finds in log text returned to a caller: the
 # AWS and token credential keys above, plus the two that reach a caller only through returned log
