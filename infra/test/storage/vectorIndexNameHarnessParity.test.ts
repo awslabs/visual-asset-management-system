@@ -20,7 +20,7 @@
  * that turns it on (the partition tests' vector-search-enabled hybrid arms do exactly that), and a
  * fill that ran before the mutator would name the index from the shipped block — or, with no fill at
  * all, hand the synth `IndexName: undefined`, which `toBe(vectorIndexNameFor(...))` alone cannot tell
- * from a correct name when both sides are undefined. `buildConfig()` is exported so the fill is
+ * from a correct name when both sides are undefined. `buildTemplateConfig()` is exported so the fill is
  * asserted here without a synth.
  */
 
@@ -30,7 +30,7 @@ import commercialTemplate from "../../config/config.template.commercial.json";
 import govcloudTemplate from "../../config/config.template.govcloud.json";
 import eusovereignTemplate from "../../config/config.template.eusovereign.json";
 import { newTestApp } from "../support/testApp";
-import { RESTRICTED_TEMPLATES, TemplateName, buildConfig } from "../support/templateSynth";
+import { RESTRICTED_TEMPLATES, TemplateName, buildTemplateConfig } from "../support/templateSynth";
 import { slugModelId, vectorIndexNameFor } from "../support/vectorIndexName";
 
 const realReadFileSync = jest.requireActual("fs").readFileSync;
@@ -119,13 +119,13 @@ describe("slug rule: lowercase, runs of [^a-z0-9] become one hyphen, ends trimme
     });
 });
 
-describe("templateSynth.buildConfig() fills vectorIndexName after the mutator has run", () => {
+describe("templateSynth.buildTemplateConfig() fills vectorIndexName after the mutator has run", () => {
     test.each(RESTRICTED_TEMPLATES)(
         "%s: a mutator enabling vector search yields a defined name from the mutated block",
         (name) => {
             // Control: the template ships with vector search off, so the mutator is what turns it on.
             expect(TEMPLATES[name].app.vectorSearch.enabled).toBe(false);
-            const built = buildConfig(name, enableVectorSearch);
+            const built = buildTemplateConfig(name, enableVectorSearch);
             expect(built.app.vectorSearch.enabled).toBe(true);
             expect(built.vectorIndexName).toMatch(/^vec-/);
             expect(built.vectorIndexName).toBe(
@@ -135,8 +135,8 @@ describe("templateSynth.buildConfig() fills vectorIndexName after the mutator ha
     );
 
     test("the name follows the mutated model and width, not the shipped ones", () => {
-        const shipped = buildConfig("commercial").vectorIndexName;
-        const built = buildConfig("commercial", (c) => {
+        const shipped = buildTemplateConfig("commercial").vectorIndexName;
+        const built = buildTemplateConfig("commercial", (c) => {
             c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId =
                 "cohere.embed-multilingual-v3";
             c.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions = 512;

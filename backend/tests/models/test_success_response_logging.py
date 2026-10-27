@@ -66,7 +66,7 @@ _RESPONSE_HEADERS = {
     "Content-Type": "application/json",
     "Cache-Control": "no-cache, no-store",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Expose-Headers": "Retry-After",
+    "Access-Control-Expose-Headers": "Retry-After, Location, ETag",
 }
 
 # (helper name, status code, default message) for the four error helpers.
@@ -154,7 +154,7 @@ class TestSuccessResponseUnchanged:
             "Content-Type": "application/json",
             "Cache-Control": "no-cache, no-store",
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Expose-Headers": "Retry-After",
+            "Access-Control-Expose-Headers": "Retry-After, Location, ETag",
         }
         assert response["body"] == (
             '{"assetSize": 1024, "ratio": 1.5, "nested": [{"count": 2}, "text"]}')
@@ -352,7 +352,9 @@ class TestErrorResponsesUnchanged:
 
 
 @pytest.mark.unit
-def test_common_headers_expose_retry_after():
-    """A cross-origin browser caller can read only exposed headers, and the upload limiter's 429
-    carries its wait in Retry-After."""
-    assert response_models.commonHeaders()["Access-Control-Expose-Headers"] == "Retry-After"
+def test_common_headers_expose_retry_after_location_and_etag():
+    """A cross-origin browser caller can read only exposed headers. The upload limiter's 429 carries
+    its wait in Retry-After, the asset export's 303 carries its redirect target in Location, and a
+    response may carry its entity tag in ETag."""
+    assert (response_models.commonHeaders()["Access-Control-Expose-Headers"]
+            == "Retry-After, Location, ETag")

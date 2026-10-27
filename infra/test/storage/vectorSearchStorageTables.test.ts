@@ -17,7 +17,7 @@
  * proves the storage stack's branch keys on the flag alone and carries no partition gate of its own,
  * which is what lets the config rule be the single place that decision is made.
  *
- * The harness derives `vectorIndexName` after each arm's mutator has run (`buildConfig()` in
+ * The harness derives `vectorIndexName` after each arm's mutator has run (`buildTemplateConfig()` in
  * test/support/templateSynth.ts), so a restricted ON arm names its index from the block it was
  * mutated to. The ON assertions check the name is defined before comparing it, because an equality
  * of two undefineds passes.
