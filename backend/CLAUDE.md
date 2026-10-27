@@ -46,7 +46,8 @@ backend/
 │   │   │                                           #   fails any audit put_item that bypasses it)
 │   │   ├── compliance/listing.py                   # Compliance listings: query_page() (bounded page
 │   │   │                                           #   fill, ≤200 rows, token = last row's index key),
-│   │   │                                           #   count_items() (Select=COUNT), name attributes
+│   │   │                                           #   count_items() (Select=COUNT), name attributes,
+│   │   │                                           #   asset_text_filter() (no key attr in a filter)
 │   │   ├── compliance/evaluationEngine.py          # Pure vams-rules-v1 rule logic (no AWS access):
 │   │   │                                           #   rule parsing/inheritance, the six rule types
 │   │   │                                           #   (pipeline, metadata, relationship, fileStructure,
@@ -1104,6 +1105,7 @@ Most anti-patterns are the inverse of a Critical Rule above. The compact list ci
 -   Missing `object__type` annotation before `enforce()` — Rule 4.
 -   Gating a single-resource `enforce()` on `if len(tokens) > 0:` without an `else` that denies — Rule 4. Fails open on empty tokens; the list-filtering "append only when `enforce()` passes" shape is the one exception (fail-closed by construction).
 -   Treating a single filtered `query`/`scan` as a lookup or an existence check — Rule 14. The `FilterExpression` runs after the 1 MB page read, so empty `Items` with a `LastEvaluatedKey` present means "the match is on a later page", not "absent". Loop to exhaustion, or query a GSI on the attribute.
+-   Naming a key attribute of the table or index a `query` reads in its `FilterExpression` — DynamoDB refuses it ("Filter Expression can only contain non-primary key attributes", a 500), and moto does not, so unit tests pass. Put the key in the `KeyConditionExpression`, match a non-key copy (the compliance `assetSearchText`), or match in code. `tests/handlers/compliance/test_complianceQueryFilterKeys.py` checks every compliance read against the key schemas the CDK defines (`tests/handlers/compliance/_cdkTables.py`).
 -   Terminating a paging loop on `response.get('LastEvaluatedKey')` truthiness instead of key presence — see Pagination Patterns. Equivalent in production, divergent under test.
 -   Emitting a pagination token the request model cannot accept back (raw `LastEvaluatedKey` dict vs a declared `str`) — see Pagination Patterns. Caps the listing at page one with no error.
 -   Inline regex validation — Rule 3. Use the `validate()` dispatcher.
