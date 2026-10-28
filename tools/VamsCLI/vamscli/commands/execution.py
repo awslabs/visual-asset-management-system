@@ -121,6 +121,10 @@ class DetailsGroup(click.Group):
         ctx._details_execution_id = None
         return super().parse_args(ctx, args)
 
+    def collect_usage_pieces(self, ctx):
+        # The id is pulled out in parse_args rather than declared, so Click cannot list it itself.
+        return ['[OPTIONS]', 'EXECUTION_ID | COMMAND EXECUTION_ID [ARGS]...']
+
 
 @execution.command('list')
 @click.option('-w', '--workflow-id', help='Filter by workflow ID')
@@ -346,6 +350,8 @@ def details(ctx: click.Context, include_sub_executions: bool, json_output: bool)
 
     Usage: `vamscli execution details <execution-id>` for the whole view, or a subcommand to page one
     part of it in full:
+
+    \b
       metadata  one metadata collection (input / inputDatabase / output), a page at a time
       files     one file collection (input / output), a page at a time
       results   the concatenated result text, a page at a time (--auto-paginate for all of it)
@@ -375,6 +381,7 @@ def details(ctx: click.Context, include_sub_executions: bool, json_output: bool)
     'vamscli execution details files', and the full result text with 'vamscli execution details
     results'.
 
+    \b
     Examples:
         vamscli execution details my-execution-id
         vamscli execution details my-execution-id --include-sub-executions

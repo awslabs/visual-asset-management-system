@@ -1401,6 +1401,15 @@ class TestExecutionDetailsGroup:
             assert result.exit_code == 0, result.output
             mocks['api_client'].get_execution_details_metadata.assert_called_once()
 
+    def test_details_help_usage_names_the_execution_id(self, cli_runner):
+        result = cli_runner.invoke(cli, ['execution', 'details', '--help'])
+        assert result.exit_code == 0, result.output
+        usage = result.output.split('\n\n', 1)[0]
+        assert 'EXECUTION_ID' in usage
+        # The subcommand list keeps one line per subcommand rather than reflowing into a paragraph.
+        assert any(line.strip().startswith('files ') for line in result.output.splitlines())
+        assert any(line.strip().startswith('results ') for line in result.output.splitlines())
+
 
 class TestExecutionDetailsFiles:
     """#858: `execution details files --collection input|output`."""

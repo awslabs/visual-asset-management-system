@@ -181,8 +181,9 @@ def _derive_failure_output_types(pipeline_rows):
 
     A failed run commonly produced nothing, but some pipelines write partial outputs before the step
     that failed, so the real value is derived through the SAME shared helper the success path uses
-    rather than defaulting to []. Scans stop at the first table that has a hit, bounding the reads to
-    at most three existence queries per pipeline execution."""
+    rather than defaulting to []. Each pipeline execution is queried only for the output kinds not yet
+    found on an earlier one, and the walk ends once all three are found, so the reads are bounded by
+    three existence queries per pipeline execution."""
     has_file = has_metadata = has_result = False
     for prow in pipeline_rows or []:
         pexec_id = prow.get('pipelineExecutionId', '')
