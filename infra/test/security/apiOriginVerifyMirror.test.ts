@@ -58,6 +58,8 @@ describe("API origin verification constants: CDK and backend agree", () => {
         expect(keys).toContain("authorization"); // control: the block was parsed
         expect(keys).toContain(Config.API_ORIGIN_VERIFY_HEADER_NAME);
         const logger = read(path.join("customLogging", "logger.py"));
-        expect(logger).toMatch(/^from common\.constants import LOG_SENSITIVE_KEYS as SENSITIVE_KEYS$/m);
+        expect(logger).toMatch(
+            /^from common\.constants import LOG_SENSITIVE_KEYS as SENSITIVE_KEYS$/m
+        );
     });
 });

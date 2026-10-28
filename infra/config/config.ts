@@ -64,28 +64,6 @@ export const STACK_ORIGIN_VERIFY_DESCRIPTION =
     VAMS_VERSION +
     ") API origin verification secret for the Visual Asset Management Systems";
 
-/**
- * Whether a Region sits outside the Territory the Tencent Hunyuan 3D 2.0 Community License Agreement
- * grants any licence in. The agreement defines the Territory as "the worldwide territory, excluding the
- * territory of the European Union, United Kingdom and South Korea" and states that "any such use outside
- * the Territory is unlicensed and unauthorized", so `getConfig()` refuses to enable that model here.
- *
- * A Region is a PROXY for where the use happens rather than a decision of it: a deployment in a permitted
- * Region can still serve users inside the excluded territory, which nothing at synthesis time can see. So
- * this catches the unambiguous case and the licence still has to be read.
- *
- * European Regions are matched by prefix rather than enumerated, so a newly launched one is excluded by
- * default rather than silently permitted. Zurich (`eu-central-2`) carries the `eu-` prefix and is in
- * neither the European Union nor the United Kingdom, so it is named as the exception.
- */
-export function isOutsideHunyuan3dLicenceTerritory(region: string | undefined): boolean {
-    const name = region ?? "";
-    const switzerland = ["eu-central-2"];
-    const southKorea = ["ap-northeast-2"];
-    if (switzerland.includes(name)) return false;
-    return name.startsWith("eu-") || name.startsWith("eusc-") || southKorea.includes(name);
-}
-
 // Custom Authorizer Configuration
 export const CUSTOM_AUTHORIZER_IGNORED_PATHS = ["/api/amplify-config", "/api/version"];
 
@@ -399,6 +377,28 @@ const EXECUTION_LOG_READ_PREFIX_PATTERN =
     /^\/aws\/[A-Za-z0-9\-._#]+\/[A-Za-z0-9\-._#][A-Za-z0-9\-._/#]*\*?$/;
 // CloudWatch Logs caps a log-group name at 512 characters.
 const EXECUTION_LOG_READ_PREFIX_MAX_LENGTH = 512;
+
+/**
+ * Whether a Region sits outside the Territory the Tencent Hunyuan 3D 2.0 Community License Agreement
+ * grants any licence in. The agreement defines the Territory as "the worldwide territory, excluding the
+ * territory of the European Union, United Kingdom and South Korea" and states that "any such use outside
+ * the Territory is unlicensed and unauthorized", so `getConfig()` refuses to enable that model here.
+ *
+ * A Region is a PROXY for where the use happens rather than a decision of it: a deployment in a permitted
+ * Region can still serve users inside the excluded territory, which nothing at synthesis time can see. So
+ * this catches the unambiguous case and the licence still has to be read.
+ *
+ * European Regions are matched by prefix rather than enumerated, so a newly launched one is excluded by
+ * default rather than silently permitted. Zurich (`eu-central-2`) carries the `eu-` prefix and is in
+ * neither the European Union nor the United Kingdom, so it is named as the exception.
+ */
+export function isOutsideHunyuan3dLicenceTerritory(region: string | undefined): boolean {
+    const name = region ?? "";
+    const switzerland = ["eu-central-2"];
+    const southKorea = ["ap-northeast-2"];
+    if (switzerland.includes(name)) return false;
+    return name.startsWith("eu-") || name.startsWith("eusc-") || southKorea.includes(name);
+}
 
 /** Status checks the RapidPipeline EKS poll makes before giving up on a job: its ceiling. */
 export function rapidPipelineEksJobCheckAttempts(jobTimeoutSeconds: number): number {
