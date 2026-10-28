@@ -2,6 +2,7 @@
 
 import json
 import pytest
+from unittest.mock import patch
 
 from vamscli.main import cli
 from vamscli.utils.exceptions import (
@@ -1538,3 +1539,103 @@ class TestExecutionDetailsResults:
             else:
                 assert 'Could not write results' in result.output
             assert not bad.exists()
+
+
+class TestExecutionDetailsResultsPaging:
+    """#858: `execution details results` follows the service's NextToken paging."""
+
+    PAGES = [
+        {'message': {'resultContent': 'first-', 'resultContentTruncated': False,
+                     'resultRowCount': 2, 'resultContentBytes': 6, 'NextToken': 'tok-2'}},
+        {'message': {'resultContent': 'second-', 'resultContentTruncated': True,
+                     'resultRowCount': 1, 'resultContentBytes': 7, 'NextToken': 'tok-3'}},
+        {'message': {'resultContent': 'third', 'resultContentTruncated': False,
+                     'resultRowCount': 1, 'resultContentBytes': 5}},
+    ]
+
+    def _tokens_sent(self, mock):
+        return [(c.kwargs.get('params') or {}).get('startingToken')
+                for c in mock.get_execution_results.call_args_list]
+
+    def test_auto_paginate_concatenates_every_page(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = list(self.PAGES)
+            result = cli_runner.invoke(
+                cli, ['execution', 'details', 'results', 'e1', '--auto-paginate', '--json-output'])
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data['resultContent'] == 'first-second-third'
+            assert data['resultRowCount'] == 4
+            assert data['resultContentBytes'] == 18
+            assert data['resultContentTruncated'] is True
+            assert data['pageCount'] == 3
+            assert 'NextToken' not in data
+            assert self._tokens_sent(mocks['api_client']) == [None, 'tok-2', 'tok-3']
+
+    def test_output_file_auto_paginates_by_default(self, cli_runner, generic_command_mocks,
+                                                   tmp_path):
+        out = tmp_path / "result.txt"
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = list(self.PAGES)
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1', '-o', str(out)])
+            assert result.exit_code == 0, result.output
+            assert out.read_text() == 'first-second-third'
+            assert 'in 3 page(s)' in result.output
+
+    def test_output_file_with_no_auto_paginate_writes_one_page(self, cli_runner,
+                                                               generic_command_mocks, tmp_path):
+        out = tmp_path / "result.txt"
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = list(self.PAGES)
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1', '-o', str(out),
+                                             '--no-auto-paginate'])
+            assert result.exit_code == 0, result.output
+            assert out.read_text() == 'first-'
+            assert 'tok-2' in result.output
+
+    def test_one_page_json_carries_next_token(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = list(self.PAGES)
+            result = cli_runner.invoke(
+                cli, ['execution', 'details', 'results', 'e1', '--json-output'])
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data['resultContent'] == 'first-'
+            assert data['NextToken'] == 'tok-2'
+            assert mocks['api_client'].get_execution_results.call_count == 1
+
+    def test_starting_token_reads_that_page(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = list(self.PAGES[1:])
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1',
+                                             '--starting-token', 'tok-2'])
+            assert result.exit_code == 0, result.output
+            assert 'second-' in result.output
+            assert 'More results remain' in result.output
+            assert self._tokens_sent(mocks['api_client']) == ['tok-2']
+
+    def test_auto_paginate_from_a_starting_token_reads_to_the_end(self, cli_runner,
+                                                                 generic_command_mocks):
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = list(self.PAGES[1:])
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1',
+                                             '--starting-token', 'tok-2', '--auto-paginate',
+                                             '--json-output'])
+            assert result.exit_code == 0, result.output
+            assert json.loads(result.output)['resultContent'] == 'second-third'
+            assert self._tokens_sent(mocks['api_client']) == ['tok-2', 'tok-3']
+
+    def test_auto_paginate_stops_at_the_page_cap_and_says_where(self, cli_runner,
+                                                                generic_command_mocks):
+        endless = {'message': {'resultContent': 'x', 'resultContentTruncated': False,
+                               'resultRowCount': 1, 'resultContentBytes': 1, 'NextToken': 'again'}}
+        with generic_command_mocks('execution') as mocks, \
+                patch('vamscli.commands.execution.MAX_EXECUTION_AUTO_PAGINATE_PAGES', 3):
+            mocks['api_client'].get_execution_results.return_value = endless
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1',
+                                             '--auto-paginate', '--json-output'])
+            assert result.exit_code == 0, result.output
+            data = json.loads(result.output)
+            assert data['pageCount'] == 3
+            assert data['NextToken'] == 'again'
+            assert 'Stopped after 3 pages' in data['note']

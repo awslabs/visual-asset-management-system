@@ -109,23 +109,32 @@ export async function getExecutionDetailsFiles(
     });
 }
 
-/** The full concatenated result text of a run, with its truncation flag and counts. */
+/**
+ * One page of a run's concatenated result text, with its truncation flag and counts. `NextToken` is
+ * present while more result rows remain.
+ */
 export interface ExecutionResults {
     resultContent: string;
     resultContentTruncated: boolean;
     resultRowCount: number;
     resultContentBytes: number;
+    NextToken?: string;
 }
 
 /**
- * An execution's FULL concatenated result text (output-only; no collection). The whole result unless
- * `resultContentTruncated` is true, in which case it was cut server-side at a 5 MiB payload-safety
- * budget. An empty/legacy run returns the empty shape (resultContent "", counts zero), never an error.
+ * One page of an execution's concatenated result text (output-only; no collection). The service
+ * returns as many result rows as fit its 5 MiB response budget and a `NextToken` while more remain;
+ * pass it back as `startingToken`. `resultContentTruncated` means a row was stored cut or one row
+ * alone exceeded the budget. An empty/legacy run returns the empty shape, never an error.
  */
 export async function getExecutionResults(
-    executionId: string
+    executionId: string,
+    params?: Record<string, string>
 ): Promise<[boolean, ExecutionResults | string]> {
-    return toTuple(() => apiClient.get(`workflows/executions/${executionId}/details/results`));
+    return toTuple(() => {
+        const opts = params ? { queryStringParameters: params } : {};
+        return apiClient.get(`workflows/executions/${executionId}/details/results`, opts);
+    });
 }
 
 export async function getExecutionLogs(

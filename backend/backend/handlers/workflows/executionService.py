@@ -50,6 +50,7 @@ from models.common import (
 from models.executions import (
     DetailMetadataPageRequestModel,
     DetailFilesPageRequestModel,
+    ExecutionResultsPageRequestModel,
     DETAIL_FILE_COLLECTION_INPUT,
     DETAIL_FILE_COLLECTION_OUTPUT,
     ListExecutionsRequestModel,
@@ -3766,21 +3767,99 @@ def handle_details_files_request(event):
 
 
 # ---------------------------------------------------------------------------
-# Full result text read (/details/results). Output-only; no collection param.
+# Paged result text read (/details/results). Output-only; no collection param.
 # ---------------------------------------------------------------------------
 
+# Token binding for the results read: the files token's machinery, under its own collection name, so a
+# files token cannot be replayed here (or a results token there) and serve the wrong rows.
+DETAIL_RESULTS_TOKEN_COLLECTION = "results"
+_OUTPUT_RESULT_SORT_KEY = "relativeFilePath"
 
-def get_execution_results(event, execution_id):
-    """Return the FULL concatenated result text of a run (404 if the execution is unknown).
 
-    Concatenates the output-results rows across the run's pipeline executions in the SAME stable step
-    order the metadata/files reads use, then across each step's rows in sort-key order, appending until
-    the text's size AS SENT (_text_wire_bytes: after the body's JSON escaping and the proxy's second
-    escaping) would exceed EXECUTION_RESULT_RESPONSE_MAX_BYTES — a payload-safety cut that keeps the
-    response under the Lambda-proxy limit, NOT a UX preview. resultContentTruncated is
-    set when the cut fires OR when any consumed row was itself stored truncated. A legacy/empty run
-    returns the empty shape, never an error. S3 keys are never surfaced (the row's internal s3Key is
-    dropped by _scrub_output_result's shape; only resultsContent is read here).
+def page_execution_results(execution_id, token=""):
+    """One page of a run's result text: as many output-results rows as fit the response budget.
+
+    Rows are walked in the SAME stable step order the metadata/files reads use, then in sort-key order
+    within a step, and their resultsContent is concatenated in that order. A row is added while the
+    page's text AS SENT (_text_wire_bytes: after the body's JSON escaping and the proxy's second
+    escaping) stays within EXECUTION_RESULT_RESPONSE_MAX_BYTES; the first row that does not fit ends the
+    page and NextToken resumes AT it, so concatenating every page yields the whole result. The budget
+    is payload safety (the Lambda-proxy limit), not a UX preview.
+
+    A single row larger than the whole budget cannot be deferred, so it is cut to the longest prefix
+    that fits and the page is flagged resultContentTruncated. Rows are bounded at write time, so only a
+    corrupt or oversized row reaches that path. The flag is also set when a row on the page was stored
+    already truncated. A legacy/empty run returns the empty shape. The row's internal s3Key is never
+    surfaced. Raises VAMSGeneralErrorResponse for an unusable token (the handler maps it to a 400)."""
+    steps = _detail_metadata_step_order(execution_id)
+    step_index, last_evaluated_key = 0, None
+    if token:
+        resumed = _decode_detail_files_token(token, steps, DETAIL_RESULTS_TOKEN_COLLECTION, "")
+        if resumed is None:
+            raise VAMSGeneralErrorResponse("startingToken is invalid.")
+        step_index, last_evaluated_key = resumed
+
+    results_table = dynamodb.Table(pipeline_execution_output_results_table)
+    budget = er.EXECUTION_RESULT_RESPONSE_MAX_BYTES
+    parts = []
+    used_wire_bytes = 0
+    row_count = 0
+    truncated = False
+    next_token = None
+
+    while step_index < len(steps) and next_token is None:
+        pexec_id, _pipeline_id = steps[step_index]
+        query_kwargs = {'KeyConditionExpression': Key('pipelineExecutionId').eq(pexec_id)}
+        if last_evaluated_key is not None:
+            query_kwargs['ExclusiveStartKey'] = last_evaluated_key
+        resp = results_table.query(**query_kwargs)
+        # Continuation is decided on the key's PRESENCE, never its value (Rule 14).
+        step_has_more = 'LastEvaluatedKey' in resp
+        resume_after = last_evaluated_key
+
+        for row in resp.get('Items', []):
+            content = _scrub_output_result(row).get('resultsContent', '') or ''
+            content_wire_bytes = _text_wire_bytes(content)
+            if used_wire_bytes + content_wire_bytes > budget:
+                if parts:
+                    next_token = _encode_detail_files_token(
+                        step_index, resume_after, DETAIL_RESULTS_TOKEN_COLLECTION, "")
+                    break
+                # Alone over the budget: deferring it would stall the walk, so it is cut and consumed.
+                content = _cut_text_to_wire_budget(content, budget)
+                content_wire_bytes = _text_wire_bytes(content)
+                truncated = True
+            parts.append(content)
+            used_wire_bytes += content_wire_bytes
+            row_count += 1
+            if row.get('resultsContentTruncated'):
+                truncated = True
+            resume_after = _detail_files_resume_key(
+                row, 'pipelineExecutionId', pexec_id, _OUTPUT_RESULT_SORT_KEY)
+        if next_token is not None:
+            break
+
+        if step_has_more:
+            last_evaluated_key = resp['LastEvaluatedKey']
+            continue
+        step_index += 1
+        last_evaluated_key = None
+
+    result_content = "".join(parts)
+    result = {
+        "resultContent": result_content,
+        "resultContentTruncated": truncated,
+        "resultRowCount": row_count,
+        "resultContentBytes": len(result_content.encode('utf-8')),
+    }
+    if next_token is not None:
+        result["NextToken"] = next_token
+    return result
+
+
+def get_execution_results(event, execution_id, query_params=None):
+    """Return one page of a run's result text (404 if the execution is unknown). See
+    page_execution_results for the page shape; NextToken is absent on the last page.
 
     Authorization is the SAME Tier-2 rule the details view enforces, evaluated for GET."""
     main_item = get_execution_main_row(execution_id)
@@ -3794,60 +3873,16 @@ def get_execution_results(event, execution_id):
         logger.info(f"Details results access not authorized for execution {execution_id}: {reason}")
         return authorization_error()
 
-    results_table = dynamodb.Table(pipeline_execution_output_results_table)
-    # Stable step order so the concatenation is deterministic for the same run, matching the files /
-    # metadata reads.
-    steps = _detail_metadata_step_order(execution_id)
-    budget = er.EXECUTION_RESULT_RESPONSE_MAX_BYTES
-    parts = []
-    used_wire_bytes = 0
-    row_count = 0
-    truncated = False
-    for pexec_id, _pipeline_id in steps:
-        if truncated:
-            break
-        query_kwargs = {'KeyConditionExpression': Key('pipelineExecutionId').eq(pexec_id)}
-        while True:
-            resp = results_table.query(**query_kwargs)
-            for row in resp.get('Items', []):
-                scrubbed = _scrub_output_result(row)
-                content = scrubbed.get('resultsContent', '') or ''
-                content_wire_bytes = _text_wire_bytes(content)
-                # A row whose addition would cross the payload budget cuts the result here: append the
-                # portion that still fits so the response fills the budget, then stop and flag.
-                if used_wire_bytes + content_wire_bytes > budget:
-                    head = _cut_text_to_wire_budget(content, budget - used_wire_bytes)
-                    if head:
-                        parts.append(head)
-                        used_wire_bytes += _text_wire_bytes(head)
-                        row_count += 1
-                    truncated = True
-                    break
-                parts.append(content)
-                used_wire_bytes += content_wire_bytes
-                row_count += 1
-                # A row stored already-truncated means the full text was never captured whole, so the
-                # concatenation cannot be complete either.
-                if row.get('resultsContentTruncated'):
-                    truncated = True
-            if truncated or 'LastEvaluatedKey' not in resp:
-                break
-            query_kwargs['ExclusiveStartKey'] = resp['LastEvaluatedKey']
-
-    result_content = "".join(parts)
-    body = {
-        "resultContent": result_content,
-        "resultContentTruncated": truncated,
-        "resultRowCount": row_count,
-        "resultContentBytes": len(result_content.encode('utf-8')),
-    }
-    return success(body={'message': body})
+    request = parse(dict(query_params or {}), model=ExecutionResultsPageRequestModel)
+    result = page_execution_results(execution_id, request.resolved_starting_token())
+    return success(body={'message': result})
 
 
 def handle_details_results_request(event):
-    """Validate the executionId path param, enforce API authorization, return the full result text.
-    Mirrors handle_details_metadata_request (no query parameters — results has no collection)."""
+    """Validate the executionId path param, enforce API authorization, return one page of the result
+    text. Mirrors handle_details_metadata_request (no collection; startingToken/NextToken only)."""
     pathParams = event.get('pathParameters', {}) or {}
+    queryParameters = event.get('queryStringParameters', {}) or {}
     execution_id = pathParams.get('executionId', '')
     if not execution_id:
         return validation_error(body={'message': 'Missing path parameter (executionId) in API call'}, event=event)
@@ -3864,7 +3899,7 @@ def handle_details_results_request(event):
         return authorization_error()
 
     logger.info(f"Getting execution results {execution_id}")
-    return get_execution_results(event, execution_id)
+    return get_execution_results(event, execution_id, queryParameters)
 
 
 def _reconcile_main_status(execution_id, main_item):
@@ -6136,7 +6171,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     GET /workflows/executions/{executionId}/details -> full execution detail/traceability.
     GET /workflows/executions/{executionId}/details/metadata -> one page of one metadata collection.
     GET /workflows/executions/{executionId}/details/files -> one page of one file collection (input|output).
-    GET /workflows/executions/{executionId}/details/results -> the full concatenated result text.
+    GET /workflows/executions/{executionId}/details/results -> one page of the concatenated result text.
     GET /workflows/executions/{executionId}/logs    -> execution logs (truncated | full).
     POST /workflows/executions/{executionId}/rerun  -> re-run (new execution from stored records).
     DELETE /workflows/executions/{executionId}       -> abort a running execution (or ?groupId= group).

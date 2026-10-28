@@ -4802,14 +4802,14 @@ class APIClient(CustomAPIClientMixin):
 
     def get_execution_results(self, execution_id: str,
                               params: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Get an execution's FULL concatenated result text.
+        """Get one page of an execution's concatenated result text.
         GET /workflows/executions/{executionId}/details/results.
 
-        Output-only; no collection parameter. Returns {resultContent, resultContentTruncated,
-        resultRowCount, resultContentBytes}. The whole result is returned unless resultContentTruncated
-        is true, in which case it was cut server-side at a 5 MiB payload-safety budget (read the
-        remainder from the details output-results section). An empty/legacy run returns the empty
-        shape (resultContent '', counts zero), never an error."""
+        Output-only; no collection parameter. Returns one page: {resultContent, resultContentTruncated,
+        resultRowCount, resultContentBytes} for the rows that fit the service's 5 MiB response budget,
+        plus NextToken while more remain (pass it back as params['startingToken']). Concatenating every
+        page's resultContent yields the whole result. An empty/legacy run returns the empty shape
+        (resultContent '', counts zero, no NextToken), never an error."""
         try:
             endpoint = API_WORKFLOW_EXECUTION_DETAILS_RESULTS.format(executionId=execution_id)
             return self._pwe_request('GET', endpoint, params=params or {})

@@ -4,7 +4,6 @@
  */
 
 import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
 import Dialog from "../components/Dialog";
 import { useExecutionResults } from "../api/queries";
 import { btnSecondary } from "../components/controlStyles";
@@ -25,21 +24,21 @@ function formatBytes(bytes: number): string {
 }
 
 /**
- * The lazy-loaded Result surface: a scrollable, selectable, copyable view of a run's FULL result
- * text. The query is enabled only while the modal is open, so opening a Result badge is what pays for
- * the full-text read — a row that merely carries the badge costs nothing until clicked.
+ * The lazy-loaded Result surface: a scrollable, selectable, copyable view of a run's result text. The
+ * query is enabled only while the modal is open, so opening a Result badge is what pays for the read
+ * — a row that merely carries the badge costs nothing until clicked.
  *
- * When the result was cut server-side at the 5 MiB payload budget, a banner says so and offers a link
- * to the execution's details output-results section for the remainder.
+ * The service pages the result by its 5 MiB response budget; "Load more" appends the next page, so
+ * the whole result is reachable here. A banner marks a result a row of which was itself cut.
  */
 const ExecutionResultSurface: React.FC<ExecutionResultSurfaceProps> = ({
     executionId,
     open,
     onOpenChange,
 }) => {
-    const navigate = useNavigate();
     const [copied, setCopied] = useState(false);
-    const { data, isLoading, isError } = useExecutionResults(executionId, open);
+    const { data, isLoading, isError, hasNextPage, isFetchingNextPage, fetchNextPage } =
+        useExecutionResults(executionId, open);
 
     const content = data?.resultContent ?? "";
     const truncated = Boolean(data?.resultContentTruncated);
@@ -83,6 +82,7 @@ const ExecutionResultSurface: React.FC<ExecutionResultSurfaceProps> = ({
                     <div className="flex items-center justify-between gap-3 text-sm text-text-secondary">
                         <span data-testid="result-surface-caption">
                             {rowCount} row{rowCount === 1 ? "" : "s"} · {formatBytes(byteLen)}
+                            {hasNextPage ? " loaded" : ""}
                         </span>
                         <button
                             type="button"
@@ -101,19 +101,8 @@ const ExecutionResultSurface: React.FC<ExecutionResultSurfaceProps> = ({
                             role="status"
                             data-testid="result-surface-truncation"
                         >
-                            This result was truncated at the 5&nbsp;MiB display limit.{" "}
-                            <button
-                                type="button"
-                                className="underline"
-                                onClick={() => {
-                                    onOpenChange(false);
-                                    navigate(`/executions/${executionId}`);
-                                }}
-                                data-testid="result-surface-view-full"
-                            >
-                                View full results
-                            </button>{" "}
-                            in the execution details.
+                            Part of this result was cut: a result row was stored truncated or
+                            exceeded the 5&nbsp;MiB response limit. The cut text is not retrievable.
                         </div>
                     )}
 
@@ -134,6 +123,23 @@ const ExecutionResultSurface: React.FC<ExecutionResultSurfaceProps> = ({
                             data-testid="result-surface-empty"
                         >
                             This execution produced no result content.
+                        </div>
+                    )}
+
+                    {hasNextPage && (
+                        <div className="flex items-center gap-3 text-sm">
+                            <button
+                                type="button"
+                                className={btnSecondary}
+                                onClick={() => fetchNextPage()}
+                                disabled={isFetchingNextPage}
+                                data-testid="result-surface-load-more"
+                            >
+                                {isFetchingNextPage ? "Loading…" : "Load more"}
+                            </button>
+                            <span className="text-text-secondary" aria-live="polite">
+                                More result text remains.
+                            </span>
                         </div>
                     )}
                 </div>

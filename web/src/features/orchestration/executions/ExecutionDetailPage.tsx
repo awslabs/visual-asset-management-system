@@ -312,9 +312,9 @@ const FilesSection: React.FC<{
 
 /**
  * The output RESULTS section. The details view embeds a bounded `outputs.results`; when it is flagged
- * truncated this re-reads the FULL concatenated result text through `GET .../details/results` (a
- * single read, not paged) so the reader sees the whole result rather than the detail view's subset.
- * A result that still exceeds the 5 MiB server budget is itself flagged, and that is surfaced.
+ * truncated this re-reads the result text through `GET .../details/results`, which pages by the 5 MiB
+ * response budget, so the reader sees the whole result ("Load more" appends the next page) rather
+ * than the detail view's subset. A row that was itself cut is flagged.
  */
 const ResultsSection: React.FC<{
     executionId: string;
@@ -323,7 +323,8 @@ const ResultsSection: React.FC<{
     canPage: boolean;
 }> = ({ executionId, inlineResults, truncated, canPage }) => {
     const escalated = truncated && canPage;
-    const { data, isLoading, isError, error } = useExecutionResults(executionId, escalated);
+    const { data, isLoading, isError, error, hasNextPage, isFetchingNextPage, fetchNextPage } =
+        useExecutionResults(executionId, escalated);
 
     const hasInline = inlineResults && inlineResults.length > 0;
     const serverContent = data?.resultContent ?? "";
@@ -347,8 +348,8 @@ const ResultsSection: React.FC<{
                 <>
                     {serverTruncated && (
                         <p className="text-sm text-yellow-700 dark:text-yellow-400 mb-2">
-                            This result was truncated at the 5&nbsp;MiB display limit; the text
-                            below is the portion within that budget.
+                            Part of this result was cut: a result row was stored truncated or
+                            exceeded the 5&nbsp;MiB response limit. The cut text is not retrievable.
                         </p>
                     )}
                     {serverContent ? (
@@ -359,6 +360,20 @@ const ResultsSection: React.FC<{
                         <p className="text-text-secondary">
                             This execution produced no result content.
                         </p>
+                    )}
+                    {hasNextPage && (
+                        <div className="mt-3 flex items-center gap-3 text-sm">
+                            <button
+                                type="button"
+                                onClick={() => fetchNextPage()}
+                                disabled={isFetchingNextPage}
+                                className="px-3 py-1.5 border border-border-input rounded text-text-primary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
+                                data-testid="results-section-load-more"
+                            >
+                                {isFetchingNextPage ? "Loading…" : "Load more"}
+                            </button>
+                            <span className="text-text-secondary">More result text remains</span>
+                        </div>
                     )}
                 </>
             ) : hasInline ? (

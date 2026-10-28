@@ -4,6 +4,7 @@ Tools reference the module-global CLIENT, so we patch it with a MagicMock.
 No live VAMS deployment or vamscli profile is required.
 """
 
+import dataclasses
 from unittest.mock import MagicMock
 
 import pytest
@@ -1718,8 +1719,62 @@ def test_get_execution_results_unwraps_the_message_envelope(mock_client):
                     "resultRowCount": 1, "resultContentBytes": 5}}
     result = server.get_execution_results("e1")
     assert result == {"resultContent": "hello", "resultContentTruncated": False,
-                      "resultRowCount": 1, "resultContentBytes": 5}
-    mock_client.api.get_execution_results.assert_called_once_with("e1")
+                      "resultRowCount": 1, "resultContentBytes": 5, "pageCount": 1}
+    mock_client.api.get_execution_results.assert_called_once_with("e1", params={})
+
+
+def _result_page(content, token=None, truncated=False):
+    page = {"resultContent": content, "resultContentTruncated": truncated,
+            "resultRowCount": 1, "resultContentBytes": len(content.encode("utf-8"))}
+    if token:
+        page["NextToken"] = token
+    return {"message": page}
+
+
+def test_get_execution_results_follows_pages_to_the_end(mock_client):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page("a", "t2"), _result_page("b", "t3", truncated=True), _result_page("c")]
+    result = server.get_execution_results("e1")
+    assert result["resultContent"] == "abc"
+    assert result["resultRowCount"] == 3
+    assert result["resultContentTruncated"] is True
+    assert result["pageCount"] == 3
+    assert "NextToken" not in result and "note" not in result
+    sent = [c.kwargs["params"] for c in mock_client.api.get_execution_results.call_args_list]
+    assert sent == [{}, {"startingToken": "t2"}, {"startingToken": "t3"}]
+
+
+def test_get_execution_results_stops_at_the_size_budget_and_says_so(mock_client, monkeypatch):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    monkeypatch.setattr(server, "EXECUTION_RESULT_MAX_BYTES", 4)
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page("aaa", "t2"), _result_page("bbb", "t3"), _result_page("ccc")]
+    result = server.get_execution_results("e1")
+    assert result["resultContent"] == "aaabbb"
+    assert result["NextToken"] == "t3"
+    assert "5 MiB result budget" in result["note"]
+    assert mock_client.api.get_execution_results.call_count == 2
+
+
+def test_get_execution_results_stops_at_max_pages_and_says_so(mock_client, monkeypatch):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    monkeypatch.setattr(server, "CONFIG", dataclasses.replace(server.CONFIG, max_pages=2))
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page("a", "t2"), _result_page("b", "t3"), _result_page("c")]
+    result = server.get_execution_results("e1")
+    assert result["resultContent"] == "ab"
+    assert result["NextToken"] == "t3"
+    assert "VAMS_MAX_PAGES=2" in result["note"]
+
+
+def test_get_execution_results_resumes_from_a_starting_token(mock_client):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.api.get_execution_results.side_effect = [_result_page("c")]
+    result = server.get_execution_results("e1", starting_token="t3")
+    assert result["resultContent"] == "c"
+    mock_client.api.get_execution_results.assert_called_once_with(
+        "e1", params={"startingToken": "t3"})
 
 
 def test_get_execution_results_empty_shape(mock_client):

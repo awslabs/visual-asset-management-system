@@ -450,6 +450,72 @@ describe("useExecutionDetailMetadata", () => {
 });
 
 /**
+ * The paged result-text read. Pages load on request; the hook hands back their concatenation so a
+ * reader sees one growing text, and the token round-trips verbatim.
+ */
+describe("useExecutionResults", () => {
+    const wrapper = (qc: QueryClient) => {
+        const Wrapper = ({ children }: any) => (
+            <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+        );
+        Wrapper.displayName = "QueryWrapper";
+        return Wrapper;
+    };
+    const client = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    beforeEach(() => jest.clearAllMocks());
+
+    it("issues no request until the caller enables it", () => {
+        const { useExecutionResults } = require("./queries");
+        renderHook(() => useExecutionResults("e1", false), { wrapper: wrapper(client()) });
+        expect(executionService.getExecutionResults).not.toHaveBeenCalled();
+    });
+
+    it("concatenates the loaded pages and resumes from NextToken", async () => {
+        const { useExecutionResults } = require("./queries");
+        (executionService.getExecutionResults as jest.Mock)
+            .mockResolvedValueOnce([
+                true,
+                {
+                    resultContent: "first-",
+                    resultContentTruncated: false,
+                    resultRowCount: 2,
+                    resultContentBytes: 6,
+                    NextToken: "tok-2",
+                },
+            ])
+            .mockResolvedValueOnce([
+                true,
+                {
+                    resultContent: "second",
+                    resultContentTruncated: true,
+                    resultRowCount: 1,
+                    resultContentBytes: 6,
+                },
+            ]);
+        const { result } = renderHook(() => useExecutionResults("e1", true), {
+            wrapper: wrapper(client()),
+        });
+        await waitFor(() => expect(result.current.data?.resultContent).toBe("first-"));
+        expect(result.current.hasNextPage).toBe(true);
+        expect(executionService.getExecutionResults).toHaveBeenCalledWith("e1", undefined);
+
+        await result.current.fetchNextPage();
+        await waitFor(() => expect(result.current.data?.resultContent).toBe("first-second"));
+        expect(executionService.getExecutionResults).toHaveBeenLastCalledWith("e1", {
+            startingToken: "tok-2",
+        });
+        expect(result.current.data).toEqual({
+            resultContent: "first-second",
+            resultContentTruncated: true,
+            resultRowCount: 3,
+            resultContentBytes: 12,
+        });
+        expect(result.current.hasNextPage).toBe(false);
+    });
+});
+
+/**
  * The details read has two request shapes — with and without sub-executions — that return different
  * payloads. They are cached separately, under the plain execution key as a prefix, so the QuickView
  * (no flag) and the detail page (flag) neither answer each other's read nor escape an invalidation.

@@ -230,25 +230,31 @@ alongside the `--collection` and `--pipeline-id` it was issued with, and auto-pa
 
 ## execution details results
 
-Print an execution's full result text — the concatenated result files its pipelines produced — followed
-by a caption with the row count and byte size. A run that produced no result prints
-`(no result content)` and reports 0 rows.
+Print an execution's result text — the concatenated result files its pipelines produced — followed by
+a caption with the row count and byte size. A run that produced no result prints `(no result content)`
+and reports 0 rows.
 
 ```bash
 vamscli execution details results my-execution-id
 vamscli execution details results my-execution-id -o result.txt
-vamscli execution details results my-execution-id --json-output
+vamscli execution details results my-execution-id --auto-paginate --json-output
+vamscli execution details results my-execution-id --starting-token <token>
 ```
 
-| Option          | Description                                                                 |
-| --------------- | --------------------------------------------------------------------------- |
-| `-o, --output`  | Write the result text to this file; the caption still prints the byte count |
-| `--json-output` | Output the raw JSON response                                                |
+| Option                                 | Description                                                               |
+| -------------------------------------- | ------------------------------------------------------------------------- |
+| `-o, --output`                         | Write the result text to this file; the caption still prints the size     |
+| `--auto-paginate / --no-auto-paginate` | Read every page and concatenate them (default: on with `-o`, off without) |
+| `--starting-token`                     | Read from this page (`NextToken` of a previous call)                      |
+| `--json-output`                        | Output the raw JSON response                                              |
 
-The service returns the whole result unless it exceeds 5 MiB, in which case the text is cut at that
-size and the caption is marked `TRUNCATED` (`resultContentTruncated: true` under `--json-output`). The
-remainder is in the execution's output results. `-o` writes the returned text in both output modes;
-with `--json-output` the JSON response is still printed.
+The service returns the result a page at a time, each page holding as many result rows as fit its
+5 MiB response limit, with a `NextToken` while more remain. Without `--auto-paginate` one page is
+printed and its token is shown (and carried in `--json-output`) for `--starting-token`; with it every
+page is read and concatenated, stopping after 200 pages and reporting the token to resume from.
+`TRUNCATED` in the caption (`resultContentTruncated: true` under `--json-output`) means a result row
+was stored cut or a single row exceeded the response limit; that text is not retrievable. `-o` writes
+the returned text in both output modes; with `--json-output` the JSON response is still printed.
 
 ---
 

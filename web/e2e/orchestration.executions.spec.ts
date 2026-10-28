@@ -151,6 +151,54 @@ test.describe("Executions board", () => {
         await expect(page.getByRole("dialog")).toHaveCount(0);
     });
 
+    test("a paged result loads its next page from the Result modal", async ({ page }) => {
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
+        const badge = page.getByTestId("output-type-badge-result").first();
+        test.skip((await badge.count()) === 0, "No execution with a Result on the first page");
+
+        // A sandbox result rarely spans two 5 MiB pages, so the first page is served with an injected
+        // NextToken and the continuation answered here; the modal's paging is what is under test.
+        const resultRoute = /\/workflows\/executions\/[^/?]+\/details\/results/;
+        const injected = "e2e-next-page";
+        const tokensSeen: string[] = [];
+        await page.route(resultRoute, async (route) => {
+            const token = new URL(route.request().url()).searchParams.get("startingToken") || "";
+            tokensSeen.push(token);
+            if (token === injected) {
+                await route.fulfill({
+                    json: {
+                        message: {
+                            resultContent: "E2E-SECOND-PAGE",
+                            resultContentTruncated: false,
+                            resultRowCount: 1,
+                            resultContentBytes: 15,
+                        },
+                    },
+                });
+                return;
+            }
+            const response = await route.fetch();
+            const body = await response.json();
+            const target = body && typeof body.message === "object" ? body.message : body;
+            target.NextToken = injected;
+            await route.fulfill({ response, json: body });
+        });
+
+        await badge.click();
+        const dialog = page.getByRole("dialog");
+        const loadMore = dialog.getByTestId("result-surface-load-more");
+        await expect(loadMore).toBeVisible({ timeout: 30_000 });
+        await loadMore.click();
+        await expect(dialog.getByTestId("result-surface-content")).toContainText(
+            "E2E-SECOND-PAGE",
+            { timeout: 20_000 }
+        );
+        await expect(loadMore).toHaveCount(0);
+        expect(tokensSeen).toEqual(["", injected]);
+        await page.keyboard.press("Escape");
+    });
+
     test("clicking a row opens the quick-view drawer", async ({ page }) => {
         const total = await expectTableRendered(page);
         test.skip(total === 0, "No executions in this environment");

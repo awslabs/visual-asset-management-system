@@ -7,7 +7,7 @@ files across multiple assets, so these are keyed on the executionId, not an asse
     execution details       full detail / traceability view (no subcommand)
     execution details metadata   one metadata collection of the detail view, a page at a time
     execution details files      one file collection (input / output) of the detail view, a page at a time
-    execution details results    the full concatenated result text of the run
+    execution details results    the concatenated result text of the run, a page at a time
     execution logs          truncated stored log, or full live CloudWatch search
     execution abort         abort one execution, or an entire group via --group-id
     execution rerun         reconstruct + relaunch from stored records
@@ -348,7 +348,7 @@ def details(ctx: click.Context, include_sub_executions: bool, json_output: bool)
     part of it in full:
       metadata  one metadata collection (input / inputDatabase / output), a page at a time
       files     one file collection (input / output), a page at a time
-      results   the full concatenated result text
+      results   the concatenated result text, a page at a time (--auto-paginate for all of it)
 
     Workflow version is the published workflow state machine version the run started on: latest while
     the workflow still runs that version, superseded once its state machine has been redeployed
@@ -829,37 +829,86 @@ def details_files(ctx: click.Context, execution_id: str, collection: str,
 @details.command('results')
 @click.argument('execution_id')
 @click.option('--output', '-o', 'output_file',
-              help='Write the full result text to this file instead of stdout (for large results)')
+              help='Write the result text to this file instead of stdout (for large results); '
+                   'auto-paginates unless --no-auto-paginate is given')
+@click.option('--starting-token', help='Token for pagination (resume at the next page)')
+@click.option('--auto-paginate/--no-auto-paginate', default=None,
+              help='Follow NextToken and concatenate every page (default: on with --output, '
+                   'off otherwise)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def details_results(ctx: click.Context, execution_id: str, output_file: Optional[str],
+                    starting_token: Optional[str], auto_paginate: Optional[bool],
                     json_output: bool):
-    """Read an execution's FULL concatenated result text.
+    """Read an execution's concatenated result text, a page at a time.
 
-    Returns the whole result unless it exceeded the server's 5 MiB payload-safety budget, in which
-    case resultContentTruncated is true and the text was cut server-side (read the remainder from the
-    details output-results section). --output/-o writes the full returned bytes to a file, which is
-    the way to capture a large result without it scrolling past the terminal. An empty/legacy run
-    prints nothing and reports zero rows.
+    The service returns as many result rows (in step order, concatenated) as fit its 5 MiB response
+    budget and a NextToken while more remain. --auto-paginate follows NextToken and concatenates
+    every page into one result; it is the default with --output/-o, which writes the text to a file
+    instead of the terminal. Without it one page is returned and its NextToken is printed (and carried
+    in --json-output) for --starting-token. --starting-token with --auto-paginate continues from that
+    page to the end.
+
+    resultContentTruncated is true when a result row was stored cut at write time or a single row
+    exceeded the response budget and was cut; the cut text is not retrievable here. An empty/legacy
+    run prints nothing and reports zero rows.
 
     Examples:
         vamscli execution details results my-execution-id
         vamscli execution details results my-execution-id -o result.txt
-        vamscli execution details results my-execution-id --json-output
+        vamscli execution details results my-execution-id --auto-paginate --json-output
+        vamscli execution details results my-execution-id --starting-token <token>
     """
     api_client = _api(ctx)
-    output_status(f"Retrieving results for execution '{execution_id}'...", json_output)
+    if auto_paginate is None:
+        auto_paginate = bool(output_file) and not starting_token
+
+    def _page(token: Optional[str]) -> Dict[str, Any]:
+        params = {'startingToken': token} if token else {}
+        page = _message(api_client.get_execution_results(execution_id, params=params))
+        return page if isinstance(page, dict) else {}
+
+    output_status(f"Retrieving results for execution '{execution_id}'"
+                  f"{' (auto-paginating)' if auto_paginate else ''}...", json_output)
     try:
-        result = _message(api_client.get_execution_results(execution_id))
-        content = result.get('resultContent', '') if isinstance(result, dict) else ''
-        truncated = result.get('resultContentTruncated', False) if isinstance(result, dict) else False
-        row_count = result.get('resultRowCount', 0) if isinstance(result, dict) else 0
-        byte_len = result.get('resultContentBytes', 0) if isinstance(result, dict) else 0
+        if auto_paginate:
+            parts = []
+            truncated = False
+            row_count = byte_len = page_count = 0
+            next_token = starting_token
+            while True:
+                page_count += 1
+                page = _page(next_token)
+                parts.append(page.get('resultContent', '') or '')
+                truncated = truncated or bool(page.get('resultContentTruncated'))
+                row_count += page.get('resultRowCount', 0) or 0
+                byte_len += page.get('resultContentBytes', 0) or 0
+                next_token = page.get('NextToken')
+                if not json_output and next_token:
+                    output_status(f"Fetched {row_count} row(s) (page {page_count})...", False)
+                if not next_token or page_count >= MAX_EXECUTION_AUTO_PAGINATE_PAGES:
+                    break
+            result = {'resultContent': ''.join(parts), 'resultContentTruncated': truncated,
+                      'resultRowCount': row_count, 'resultContentBytes': byte_len,
+                      'autoPaginated': True, 'pageCount': page_count}
+            if next_token:
+                result['NextToken'] = next_token
+                result['note'] = (
+                    f"Stopped after {page_count} pages. More may be available — resume with "
+                    f"--starting-token {next_token}")
+        else:
+            result = _page(starting_token)
+
+        content = result.get('resultContent', '') or ''
+        truncated = bool(result.get('resultContentTruncated'))
+        row_count = result.get('resultRowCount', 0) or 0
+        byte_len = result.get('resultContentBytes', 0) or 0
+        next_token = result.get('NextToken')
 
         if output_file:
-            # Write the FULL returned bytes to disk in BOTH output modes; stdout still carries the
-            # caption (CLI mode) or the JSON result (--json-output), so the file never replaces it.
+            # Write the returned text to disk in BOTH output modes; stdout still carries the caption
+            # (CLI mode) or the JSON result (--json-output), so the file never replaces it.
             try:
                 with open(output_file, 'w', encoding='utf-8') as fh:
                     fh.write(content)
@@ -875,10 +924,17 @@ def details_results(ctx: click.Context, execution_id: str, output_file: Optional
             else:
                 out.append(content if content else "(no result content)")
             caption = f"\nResult: {row_count} row(s), {byte_len} byte(s)"
+            if result.get('autoPaginated'):
+                caption += f" in {result.get('pageCount', 0)} page(s)"
             if truncated:
-                caption += (" — TRUNCATED at the 5 MiB payload budget; read the remainder from the "
-                            "details output-results section or use --output to capture what is here")
+                caption += (" — TRUNCATED: a result row was stored cut or exceeded the 5 MiB response "
+                            "budget; the cut text is not retrievable")
             out.append(caption)
+            if result.get('note'):
+                out.append(result['note'])
+            elif next_token:
+                out.append(f"More results remain. Next token: {next_token} (use --starting-token, "
+                           f"or --auto-paginate to read them all)")
             return '\n'.join(out)
 
         output_result(result, json_output, cli_formatter=_fmt)
@@ -888,8 +944,11 @@ def details_results(ctx: click.Context, execution_id: str, output_file: Optional
                      helpful_message="Use 'vamscli execution list' to see available executions.")
         raise click.ClickException(str(e))
     except InvalidExecutionDataError as e:
-        output_error(e, json_output, error_type="Invalid Results Request")
+        output_error(e, json_output, error_type="Invalid Results Request",
+                     helpful_message="A pagination token is only valid for the results of the "
+                                     "execution it was issued for.")
         raise click.ClickException(str(e))
+
 
 
 @execution.command('logs')

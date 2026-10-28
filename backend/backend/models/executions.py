@@ -739,17 +739,30 @@ class DetailFilesPageResponseModel(BaseModel, extra='ignore'):
     NextToken: Optional[str] = None
 
 
-class ExecutionResultsResponseModel(BaseModel, extra='ignore'):
-    """The /details/results response: the FULL concatenated result text of a run plus accounting.
+class ExecutionResultsPageRequestModel(BaseModel, extra='ignore'):
+    """Query parameters of the paged /details/results read: the opaque base64 continuation under either
+    accepted name (startingToken / NextToken), matching the files and metadata reads."""
+    startingToken: Optional[str] = Field(None, max_length=4096)
+    NextToken: Optional[str] = Field(None, max_length=4096)
 
-    resultContent is the whole result unless resultContentTruncated is True, in which case it was cut
-    server-side at EXECUTION_RESULT_RESPONSE_MAX_BYTES (payload safety) and the remainder is read via
-    the details output-results section or the CLI's --output FILE. A legacy/empty run returns the
-    empty shape (resultContent "", flags/counts zero), never an error."""
+    def resolved_starting_token(self):
+        """The supplied continuation token under either accepted name ("" when none)."""
+        return (self.startingToken or self.NextToken or "").strip()
+
+
+class ExecutionResultsResponseModel(BaseModel, extra='ignore'):
+    """One page of the /details/results response: the run's result rows that fit the response budget,
+    concatenated in step then sort-key order, plus accounting for THIS page.
+
+    NextToken is present while rows remain; concatenating resultContent across every page yields the
+    whole result. resultContentTruncated is True when a row on this page was stored truncated or a
+    single row larger than the budget was cut. A legacy/empty run returns the empty shape (resultContent
+    "", flags/counts zero, no NextToken), never an error."""
     resultContent: Optional[str] = ""
     resultContentTruncated: Optional[bool] = False
     resultRowCount: Optional[int] = 0
     resultContentBytes: Optional[int] = 0
+    NextToken: Optional[str] = None
 
 
 class PermanentDeleteRequestModel(BaseModel, extra='ignore'):

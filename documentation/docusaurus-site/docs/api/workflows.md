@@ -1948,8 +1948,8 @@ This route enforces the rule [Get execution details](#get-execution-details) enf
 
 ## Get execution results
 
-Returns the **full concatenated result text** an execution produced — output-only, no collection — for
-a pipeline that produces a textual result (an LLM-style response) rather than asset files.
+Returns an execution's **concatenated result text**, a page at a time — output-only, no collection —
+for a pipeline that produces a textual result (an LLM-style response) rather than asset files.
 
 ```
 GET /workflows/executions/{executionId}/details/results
@@ -1961,26 +1961,36 @@ GET /workflows/executions/{executionId}/details/results
 | ------------- | ------ | -------- | -------------------- |
 | `executionId` | string | Yes      | Execution identifier |
 
+### Query parameters
+
+| Parameter       | Type   | Required | Description                                                  |
+| --------------- | ------ | -------- | ------------------------------------------------------------ |
+| `startingToken` | string | No       | `NextToken` from the previous page (`NextToken` is an alias) |
+
 ### Response
 
 ```json
 {
     "message": {
-        "resultContent": "The full concatenated result text…",
+        "resultContent": "The result text of the rows on this page…",
         "resultContentTruncated": false,
         "resultRowCount": 2,
-        "resultContentBytes": 1480
+        "resultContentBytes": 1480,
+        "NextToken": "eyJzdGVwSW5kZXgiOiAx…"
     }
 }
 ```
 
-The whole result is returned unless `resultContentTruncated` is `true`, in which case it was cut
-server-side at a 5 MiB payload-safety budget — under the AWS Lambda synchronous-response limit, so an
-oversized multi-row result is flagged rather than overflowing the proxy limit. Read the remainder from
-the detail view's output-results section. An empty or legacy run (one whose configuration record
-predates result capture) returns the empty shape (`resultContent` `""`, counts `0`), never an error.
-Internal S3 keys are never surfaced. A run's `outputTypes` includes `"Result"` exactly when there is
-result content to read here.
+Result rows are walked across the run's steps in a stable order and their text concatenated. A page
+carries as many rows as fit a 5 MiB budget measured on the response as sent — after JSON escaping, so
+a CJK character or a quote costs several bytes — under the AWS Lambda synchronous-response limit.
+`NextToken` is present while rows remain; pass it back as `startingToken`, and concatenate
+`resultContent` across every page for the whole result. `resultContentTruncated` is `true` when a row
+on the page was stored truncated or a single row larger than the budget was cut; that text is not
+retrievable. An empty or legacy run (one whose configuration record predates result capture) returns
+the empty shape (`resultContent` `""`, counts `0`, no `NextToken`), never an error. Internal S3 keys
+are never surfaced. A run's `outputTypes` includes `"Result"` exactly when there is result content to
+read here.
 
 :::note[Same authorization as the detail view]
 This route enforces the rule [Get execution details](#get-execution-details) enforces, evaluated for
@@ -1989,12 +1999,12 @@ This route enforces the rule [Get execution details](#get-execution-details) enf
 
 ### Error responses
 
-| Status | Description                      |
-| ------ | -------------------------------- |
-| `400`  | Invalid or missing `executionId` |
-| `403`  | Not authorized                   |
-| `404`  | Execution not found              |
-| `500`  | Internal server error            |
+| Status | Description                                            |
+| ------ | ------------------------------------------------------ |
+| `400`  | Invalid or missing `executionId`, or an unusable token |
+| `403`  | Not authorized                                         |
+| `404`  | Execution not found                                    |
+| `500`  | Internal server error                                  |
 
 ---
 

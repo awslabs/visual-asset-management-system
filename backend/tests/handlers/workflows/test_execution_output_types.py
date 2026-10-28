@@ -443,22 +443,40 @@ def _result_row(pexec, rel="/r.txt", content="hello", truncated=False):
 
 
 class FakeResultsTable:
-    def __init__(self, rows_by_pexec):
+    """Serves each partition's rows in stored order, honoring ExclusiveStartKey on relativeFilePath
+    and splitting a partition into `query_page` rows per call so DynamoDB-side paging is exercised."""
+
+    def __init__(self, rows_by_pexec, query_page=None):
         self.rows_by_pexec = rows_by_pexec
+        self.query_page = query_page
 
     def query(self, **kwargs):
         cond = kwargs["KeyConditionExpression"]
         pexec = [v for v in getattr(cond, "_values", ()) if isinstance(v, str)][-1]
-        return {"Items": list(self.rows_by_pexec.get(pexec, []))}
+        rows = list(self.rows_by_pexec.get(pexec, []))
+        start = 0
+        exclusive = kwargs.get("ExclusiveStartKey")
+        if exclusive:
+            for index, row in enumerate(rows):
+                if row["relativeFilePath"] == exclusive.get("relativeFilePath"):
+                    start = index + 1
+                    break
+        limit = self.query_page or len(rows) or 1
+        page = rows[start:start + limit]
+        resp = {"Items": page}
+        if start + limit < len(rows):
+            resp["LastEvaluatedKey"] = {"pipelineExecutionId": pexec,
+                                        "relativeFilePath": page[-1]["relativeFilePath"]}
+        return resp
 
 
-def _run_results(rows_by_pexec, steps, config_row=None):
+def _run_results(rows_by_pexec, steps, config_row=None, cursor=None, query_page=None):
     event = {
         "requestContext": {"http": {"method": "GET",
                                     "path": f"/workflows/executions/{EXEC_ID}/details/results"},
                            "authorizer": {}},
         "pathParameters": {"executionId": EXEC_ID},
-        "queryStringParameters": {},
+        "queryStringParameters": {"startingToken": cursor} if cursor else {},
     }
     main = {"workflowExecutionId": EXEC_ID, "workflowId": "wf", "workflowDatabaseId": "db"}
     with patch(f"{MOD}.request_to_claims", return_value={"tokens": ["u1"]}), \
@@ -468,9 +486,23 @@ def _run_results(rows_by_pexec, steps, config_row=None):
          patch(f"{MOD}.get_execution_input_assets", return_value=[]), \
          patch(f"{MOD}.get_pipeline_execution_rows", return_value=steps), \
          patch(f"{MOD}.dynamodb") as ddb:
-        ddb.Table.return_value = FakeResultsTable(rows_by_pexec)
+        ddb.Table.return_value = FakeResultsTable(rows_by_pexec, query_page)
         resp = le.lambda_handler(event, MagicMock())
     return resp
+
+
+def _walk_results(rows_by_pexec, steps, query_page=None):
+    """Follow NextToken through every page; returns the page bodies in order."""
+    pages, cursor = [], None
+    while True:
+        resp = _run_results(rows_by_pexec, steps, cursor=cursor, query_page=query_page)
+        assert resp["statusCode"] == 200
+        body = json.loads(resp["body"])["message"]
+        pages.append(body)
+        cursor = body.get("NextToken")
+        if not cursor:
+            return pages
+        assert len(pages) < 100, "paging did not terminate"
 
 
 @pytest.mark.unit
@@ -509,17 +541,17 @@ class TestResultsHandler:
         body = json.loads(_run_results(rows, _steps("pA"))["body"])["message"]
         assert body["resultContentTruncated"] is True
 
-    def test_the_payload_budget_cut_fires_and_stays_under_the_limit(self):
-        # Build a multi-row result larger than the 5 MiB budget; the response must be cut server-side,
-        # flagged, and stay at (not over) the budget.
+    def test_rows_past_the_budget_move_to_the_next_page_rather_than_being_cut(self):
+        # Three rows of half the budget: the first two fill page 1 exactly, the third is page 2. Nothing
+        # is dropped and nothing is flagged truncated.
         budget = er.EXECUTION_RESULT_RESPONSE_MAX_BYTES
-        big = "x" * (budget // 2)  # three such rows = ~1.5x the budget
+        big = "x" * (budget // 2)
         rows = {"pe-pA": [_result_row("pe-pA", rel=f"/r{i}.txt", content=big) for i in range(3)]}
-        body = json.loads(_run_results(rows, _steps("pA"))["body"])["message"]
-        assert body["resultContentTruncated"] is True
-        assert body["resultContentBytes"] <= budget
-        # The whole JSON response stays under the 6 MB Lambda-proxy ceiling (the point of the cut).
-        assert len(json.dumps(body).encode("utf-8")) < 6 * 1024 * 1024
+        pages = _walk_results(rows, _steps("pA"))
+        assert [p["resultRowCount"] for p in pages] == [2, 1]
+        assert "".join(p["resultContent"] for p in pages) == big * 3
+        assert not any(p["resultContentTruncated"] for p in pages)
+        assert "NextToken" not in pages[-1]
 
     # The budget is counted as SENT: ensure_ascii turns a CJK character into a 6-byte \uXXXX that the
     # proxy envelope escapes again, and a quote or backslash doubles twice. Each of these is below or
@@ -587,3 +619,68 @@ class TestResultsHandler:
              patch(f"{MOD}.get_execution_main_row", return_value=main):
             resp = le.lambda_handler(event, MagicMock())
         assert resp["statusCode"] == 403
+
+
+@pytest.mark.unit
+class TestResultsPaging:
+    """Token paging of /details/results under a small patched budget (bytes as sent)."""
+
+    BUDGET = 100
+
+    def _walk(self, rows, steps, query_page=None):
+        with patch.object(le.er, "EXECUTION_RESULT_RESPONSE_MAX_BYTES", self.BUDGET):
+            return _walk_results(rows, steps, query_page=query_page)
+
+    def test_two_pages_across_steps_concatenate_to_the_whole_result(self):
+        rows = {"pe-pA": [_result_row("pe-pA", rel=f"/a{i}", content="A" * 30) for i in range(3)],
+                "pe-pB": [_result_row("pe-pB", rel=f"/b{i}", content="B" * 30) for i in range(2)]}
+        pages = self._walk(rows, _steps("pA", "pB"))
+        assert len(pages) == 2
+        assert [p["resultRowCount"] for p in pages] == [3, 2]
+        assert "".join(p["resultContent"] for p in pages) == "A" * 90 + "B" * 60
+        assert "NextToken" in pages[0] and "NextToken" not in pages[1]
+
+    @pytest.mark.parametrize("query_page", [1, 2, None])
+    def test_paging_survives_dynamodb_side_pages(self, query_page):
+        rows = {"pe-pA": [_result_row("pe-pA", rel=f"/a{i}", content=f"{i:02d}" * 20)
+                          for i in range(7)]}
+        pages = self._walk(rows, _steps("pA"), query_page=query_page)
+        assert "".join(p["resultContent"] for p in pages) == "".join(f"{i:02d}" * 20
+                                                                   for i in range(7))
+        assert sum(p["resultRowCount"] for p in pages) == 7
+
+    def test_rows_that_fill_the_budget_exactly_are_one_page(self):
+        rows = {"pe-pA": [_result_row("pe-pA", rel=f"/a{i}", content="x" * 50) for i in range(2)]}
+        pages = self._walk(rows, _steps("pA"))
+        assert len(pages) == 1 and pages[0]["resultRowCount"] == 2
+        assert "NextToken" not in pages[0]
+
+    def test_one_byte_over_the_budget_is_a_second_page(self):
+        rows = {"pe-pA": [_result_row("pe-pA", rel="/a0", content="x" * 50),
+                          _result_row("pe-pA", rel="/a1", content="x" * 51)]}
+        pages = self._walk(rows, _steps("pA"))
+        assert [p["resultRowCount"] for p in pages] == [1, 1]
+        assert not any(p["resultContentTruncated"] for p in pages)
+
+    def test_a_single_row_over_the_budget_is_cut_and_the_walk_continues(self):
+        rows = {"pe-pA": [_result_row("pe-pA", rel="/a0", content="small"),
+                          _result_row("pe-pA", rel="/a1", content="y" * 500),
+                          _result_row("pe-pA", rel="/a2", content="tail")]}
+        pages = self._walk(rows, _steps("pA"))
+        assert [p["resultContent"] for p in pages] == ["small", "y" * self.BUDGET, "tail"]
+        assert [p["resultContentTruncated"] for p in pages] == [False, True, False]
+
+    def test_the_budget_counts_sent_bytes_for_wide_characters(self):
+        # 14 CJK characters cost 98 bytes as sent, so a second such row cannot share the page.
+        rows = {"pe-pA": [_result_row("pe-pA", rel=f"/a{i}", content="漢" * 14) for i in range(2)]}
+        pages = self._walk(rows, _steps("pA"))
+        assert [p["resultRowCount"] for p in pages] == [1, 1]
+
+    def test_a_files_cursor_is_refused(self):
+        cursor = le._encode_detail_files_token(0, None, le.DETAIL_FILE_COLLECTION_OUTPUT, "")
+        resp = _run_results({"pe-pA": [_result_row("pe-pA")]}, _steps("pA"), cursor=cursor)
+        assert resp["statusCode"] == 400
+
+    def test_a_malformed_cursor_is_a_400(self):
+        resp = _run_results({"pe-pA": [_result_row("pe-pA")]}, _steps("pA"), cursor="not-base64!!")
+        assert resp["statusCode"] == 400

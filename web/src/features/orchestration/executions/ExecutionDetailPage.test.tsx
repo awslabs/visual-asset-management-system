@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -827,6 +827,38 @@ describe("ExecutionDetailPage", () => {
             </QueryClientProvider>
         );
     };
+
+    it("re-reads truncated results through the paged route and loads the next page on request", async () => {
+        const fetchNextPage = jest.fn();
+        renderEscalated(
+            {
+                outputs: { results: [{ resultsContent: "inline subset" }] },
+                truncatedCollections: ["outputs.results"],
+            } as any,
+            {},
+            () => true,
+            {},
+            {
+                data: {
+                    resultContent: "page one text",
+                    resultContentTruncated: false,
+                    resultRowCount: 1,
+                    resultContentBytes: 13,
+                },
+                isLoading: false,
+                isError: false,
+                error: null,
+                hasNextPage: true,
+                isFetchingNextPage: false,
+                fetchNextPage,
+            }
+        );
+        await userEvent.click(await screen.findByRole("tab", { name: /Outputs/i }));
+        expect(await screen.findByText("page one text")).toBeInTheDocument();
+        expect(screen.queryByText("inline subset")).not.toBeInTheDocument();
+        fireEvent.click(screen.getByTestId("results-section-load-more"));
+        expect(fetchNextPage).toHaveBeenCalledTimes(1);
+    });
 
     /** Metadata rows in the paged route's shape, one map entry each. */
     const pagedMetadataRows = (count: number, offset = 0) =>

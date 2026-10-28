@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
     useQuery,
     useInfiniteQuery,
@@ -768,17 +768,48 @@ export function useExecutionDetailFiles(
 }
 
 /**
- * An execution's full concatenated result text, fetched lazily. Disabled until a caller opens the
- * result surface (enabled), so the heavy full-text read is paid only on demand — not for every row
- * that carries a Result badge.
+ * An execution's concatenated result text, fetched lazily and a page at a time. Disabled until a
+ * caller opens a result view (enabled), so the read is paid only on demand — not for every row that
+ * carries a Result badge. `data` is the loaded pages combined (content concatenated, counts summed,
+ * truncated if any page was); `fetchNextPage` loads the next page while `hasNextPage` is true. Pages
+ * are loaded on request rather than automatically: each can carry up to 5 MiB of text.
  */
 export function useExecutionResults(executionId: string, enabled: boolean) {
-    return useQuery({
+    const query = useInfiniteQuery({
         queryKey: qk.executionResults(executionId),
-        queryFn: async () =>
-            callService<ExecutionResults>(() => executionService.getExecutionResults(executionId)),
+        queryFn: async ({ pageParam }: { pageParam?: string }) =>
+            callService<ExecutionResults>(() =>
+                executionService.getExecutionResults(
+                    executionId,
+                    pageParam ? { startingToken: pageParam } : undefined
+                )
+            ),
+        getNextPageParam: (lastPage: ExecutionResults) => lastPage.NextToken,
+        initialPageParam: undefined as string | undefined,
         enabled: enabled && !!executionId,
     });
+    const pages = query.data?.pages;
+    const data = useMemo<ExecutionResults | undefined>(() => {
+        if (!pages) return undefined;
+        return {
+            resultContent: pages.map((page) => page.resultContent ?? "").join(""),
+            resultContentTruncated: pages.some((page) => Boolean(page.resultContentTruncated)),
+            resultRowCount: pages.reduce((sum, page) => sum + (page.resultRowCount ?? 0), 0),
+            resultContentBytes: pages.reduce(
+                (sum, page) => sum + (page.resultContentBytes ?? 0),
+                0
+            ),
+        };
+    }, [pages]);
+    return {
+        data,
+        isLoading: query.isLoading,
+        isError: query.isError,
+        error: query.error,
+        hasNextPage: Boolean(query.hasNextPage),
+        isFetchingNextPage: query.isFetchingNextPage,
+        fetchNextPage: query.fetchNextPage,
+    };
 }
 
 export function useExecuteWorkflow() {

@@ -209,7 +209,10 @@ describe("executions service", () => {
                 },
             });
             const r = await getExecutionResults("e1");
-            expect(apiClient.get).toHaveBeenCalledWith("workflows/executions/e1/details/results");
+            expect(apiClient.get).toHaveBeenCalledWith(
+                "workflows/executions/e1/details/results",
+                {}
+            );
             expect(r).toEqual([
                 true,
                 {
@@ -219,6 +222,17 @@ describe("executions service", () => {
                     resultContentBytes: 5,
                 },
             ]);
+        });
+
+        it("passes the continuation token as startingToken", async () => {
+            (apiClient.get as jest.Mock).mockResolvedValue({
+                message: { resultContent: "next", NextToken: "t3" },
+            });
+            const r = await getExecutionResults("e1", { startingToken: "t2" });
+            expect(apiClient.get).toHaveBeenCalledWith("workflows/executions/e1/details/results", {
+                queryStringParameters: { startingToken: "t2" },
+            });
+            expect(r).toEqual([true, { resultContent: "next", NextToken: "t3" }]);
         });
     });
 

@@ -77,7 +77,7 @@ describe("ExecutionOutputTypeBadges", () => {
         expect(useExecutionResults).toHaveBeenLastCalledWith("e1", true);
     });
 
-    it("shows the truncation banner and a View full results link when truncated", async () => {
+    it("shows the truncation banner without a link to another view", async () => {
         useExecutionResults.mockReturnValue({
             data: {
                 resultContent: "partial",
@@ -90,8 +90,50 @@ describe("ExecutionOutputTypeBadges", () => {
         });
         renderBadges(["Result"]);
         fireEvent.click(screen.getByTestId("output-type-badge-result"));
-        expect(await screen.findByTestId("result-surface-truncation")).toBeInTheDocument();
-        expect(screen.getByTestId("result-surface-view-full")).toBeInTheDocument();
+        expect(await screen.findByTestId("result-surface-truncation")).toHaveTextContent(
+            "not retrievable"
+        );
+        expect(screen.queryByText(/View full results/)).not.toBeInTheDocument();
+    });
+
+    it("offers Load more while pages remain and fetches the next page", async () => {
+        const fetchNextPage = jest.fn();
+        useExecutionResults.mockReturnValue({
+            data: {
+                resultContent: "first page",
+                resultContentTruncated: false,
+                resultRowCount: 2,
+                resultContentBytes: 10,
+            },
+            isLoading: false,
+            isError: false,
+            hasNextPage: true,
+            isFetchingNextPage: false,
+            fetchNextPage,
+        });
+        renderBadges(["Result"]);
+        fireEvent.click(screen.getByTestId("output-type-badge-result"));
+        expect(await screen.findByTestId("result-surface-caption")).toHaveTextContent("loaded");
+        fireEvent.click(screen.getByTestId("result-surface-load-more"));
+        expect(fetchNextPage).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows no Load more once every page is loaded", async () => {
+        useExecutionResults.mockReturnValue({
+            data: {
+                resultContent: "all of it",
+                resultContentTruncated: false,
+                resultRowCount: 1,
+                resultContentBytes: 9,
+            },
+            isLoading: false,
+            isError: false,
+            hasNextPage: false,
+        });
+        renderBadges(["Result"]);
+        fireEvent.click(screen.getByTestId("output-type-badge-result"));
+        await screen.findByTestId("result-surface-content");
+        expect(screen.queryByTestId("result-surface-load-more")).not.toBeInTheDocument();
     });
 
     it("shows a spinner while the result is loading", async () => {
