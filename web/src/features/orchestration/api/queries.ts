@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
     useQuery,
     useInfiniteQuery,
@@ -771,8 +771,11 @@ export function useExecutionDetailFiles(
  * An execution's concatenated result text, fetched lazily and a page at a time. Disabled until a
  * caller opens a result view (enabled), so the read is paid only on demand — not for every row that
  * carries a Result badge. `data` is the loaded pages combined (content concatenated, counts summed,
- * truncated if any page was); `fetchNextPage` loads the next page while `hasNextPage` is true. Pages
- * are loaded on request rather than automatically: each can carry up to 5 MiB of text.
+ * truncated if any page was); `pageContents` is each loaded page's text in order, for views that
+ * append a page instead of re-rendering the whole text. `fetchNextPage` loads the next page while
+ * `hasNextPage` is true. Pages are loaded on request rather than automatically: each can carry up to
+ * 5 MiB of text. `readFullText` returns the whole result — the loaded pages plus every remaining page,
+ * fetched without adding them to the view — for a download that never has to be painted.
  */
 export function useExecutionResults(executionId: string, enabled: boolean) {
     const query = useInfiniteQuery({
@@ -801,8 +804,34 @@ export function useExecutionResults(executionId: string, enabled: boolean) {
             ),
         };
     }, [pages]);
+    const pageContents = useMemo<string[]>(
+        () => (pages ?? []).map((page) => page.resultContent ?? ""),
+        [pages]
+    );
+    const readFullText = useCallback(async (): Promise<string> => {
+        const parts = (pages ?? []).map((page) => page.resultContent ?? "");
+        let token = pages && pages.length ? pages[pages.length - 1].NextToken : undefined;
+        if (!pages) {
+            const first = await callService<ExecutionResults>(() =>
+                executionService.getExecutionResults(executionId)
+            );
+            parts.push(first.resultContent ?? "");
+            token = first.NextToken;
+        }
+        while (token) {
+            const startingToken: string = token;
+            const page = await callService<ExecutionResults>(() =>
+                executionService.getExecutionResults(executionId, { startingToken })
+            );
+            parts.push(page.resultContent ?? "");
+            token = page.NextToken;
+        }
+        return parts.join("");
+    }, [executionId, pages]);
     return {
         data,
+        pageContents,
+        readFullText,
         isLoading: query.isLoading,
         isError: query.isError,
         error: query.error,

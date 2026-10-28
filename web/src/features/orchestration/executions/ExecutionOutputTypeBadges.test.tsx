@@ -28,6 +28,7 @@ describe("ExecutionOutputTypeBadges", () => {
         jest.clearAllMocks();
         useExecutionResults.mockReturnValue({
             data: undefined,
+            pageContents: [],
             isLoading: false,
             isError: false,
         });
@@ -65,6 +66,7 @@ describe("ExecutionOutputTypeBadges", () => {
                 resultRowCount: 1,
                 resultContentBytes: 20,
             },
+            pageContents: ["the full result text"],
             isLoading: false,
             isError: false,
         });
@@ -85,6 +87,7 @@ describe("ExecutionOutputTypeBadges", () => {
                 resultRowCount: 3,
                 resultContentBytes: 5 * 1024 * 1024,
             },
+            pageContents: ["partial"],
             isLoading: false,
             isError: false,
         });
@@ -105,6 +108,7 @@ describe("ExecutionOutputTypeBadges", () => {
                 resultRowCount: 2,
                 resultContentBytes: 10,
             },
+            pageContents: ["first page"],
             isLoading: false,
             isError: false,
             hasNextPage: true,
@@ -126,6 +130,7 @@ describe("ExecutionOutputTypeBadges", () => {
                 resultRowCount: 1,
                 resultContentBytes: 9,
             },
+            pageContents: ["all of it"],
             isLoading: false,
             isError: false,
             hasNextPage: false,
@@ -136,9 +141,79 @@ describe("ExecutionOutputTypeBadges", () => {
         expect(screen.queryByTestId("result-surface-load-more")).not.toBeInTheDocument();
     });
 
+    it("Download saves the full result as a text file without rendering it", async () => {
+        const readFullText = jest.fn().mockResolvedValue("first page and the rest");
+        const blobs: Blob[] = [];
+        const createObjectURL = jest.fn((blob: Blob) => {
+            blobs.push(blob);
+            return "blob:result";
+        });
+        const revokeObjectURL = jest.fn();
+        (URL as any).createObjectURL = createObjectURL;
+        (URL as any).revokeObjectURL = revokeObjectURL;
+        const clicks: HTMLAnchorElement[] = [];
+        const clickSpy = jest
+            .spyOn(HTMLAnchorElement.prototype, "click")
+            .mockImplementation(function (this: HTMLAnchorElement) {
+                clicks.push(this);
+            });
+        useExecutionResults.mockReturnValue({
+            data: {
+                resultContent: "first page",
+                resultContentTruncated: false,
+                resultRowCount: 2,
+                resultContentBytes: 10,
+            },
+            pageContents: ["first page"],
+            readFullText,
+            isLoading: false,
+            isError: false,
+            hasNextPage: true,
+            isFetchingNextPage: false,
+            fetchNextPage: jest.fn(),
+        });
+        renderBadges(["Result"]);
+        fireEvent.click(screen.getByTestId("output-type-badge-result"));
+        fireEvent.click(await screen.findByTestId("result-surface-download"));
+        await waitFor(() => expect(clicks).toHaveLength(1));
+        expect(readFullText).toHaveBeenCalledTimes(1);
+        expect(clicks[0].download).toBe("execution-e1-result.txt");
+        expect(blobs[0].type).toBe("text/plain;charset=utf-8");
+        // jsdom's Blob has no text(); read it the way a browser without it would.
+        const blobText = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result));
+            reader.readAsText(blobs[0]);
+        });
+        expect(blobText).toBe("first page and the rest");
+        // The downloaded remainder is not painted into the dialog.
+        expect(screen.getByTestId("result-surface-content")).toHaveTextContent(/^first page$/);
+        clickSpy.mockRestore();
+    });
+
+    it("reports a failed download", async () => {
+        useExecutionResults.mockReturnValue({
+            data: {
+                resultContent: "x",
+                resultContentTruncated: false,
+                resultRowCount: 1,
+                resultContentBytes: 1,
+            },
+            pageContents: ["x"],
+            readFullText: jest.fn().mockRejectedValue(new Error("boom")),
+            isLoading: false,
+            isError: false,
+        });
+        renderBadges(["Result"]);
+        fireEvent.click(screen.getByTestId("output-type-badge-result"));
+        fireEvent.click(await screen.findByTestId("result-surface-download"));
+        expect(await screen.findByText("The download failed.")).toBeInTheDocument();
+    });
+
     it("shows a spinner while the result is loading", async () => {
         useExecutionResults.mockReturnValue({
             data: undefined,
+            pageContents: [],
             isLoading: true,
             isError: false,
         });
@@ -158,6 +233,7 @@ describe("ExecutionOutputTypeBadges", () => {
                     resultRowCount: 1,
                     resultContentBytes: 4,
                 },
+                pageContents: ["text"],
                 isLoading: false,
                 isError: false,
             });

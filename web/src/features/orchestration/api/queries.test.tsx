@@ -513,6 +513,49 @@ describe("useExecutionResults", () => {
         });
         expect(result.current.hasNextPage).toBe(false);
     });
+    it("exposes each page's text and reads the full result for a download without caching it", async () => {
+        const { useExecutionResults } = require("./queries");
+        (executionService.getExecutionResults as jest.Mock)
+            .mockResolvedValueOnce([
+                true,
+                { resultContent: "p1-", resultRowCount: 1, resultContentBytes: 3, NextToken: "t2" },
+            ])
+            .mockResolvedValueOnce([
+                true,
+                { resultContent: "p2-", resultRowCount: 1, resultContentBytes: 3, NextToken: "t3" },
+            ])
+            .mockResolvedValueOnce([
+                true,
+                { resultContent: "p3", resultRowCount: 1, resultContentBytes: 2 },
+            ]);
+        const { result } = renderHook(() => useExecutionResults("e1", true), {
+            wrapper: wrapper(client()),
+        });
+        await waitFor(() => expect(result.current.pageContents).toEqual(["p1-"]));
+
+        await expect(result.current.readFullText()).resolves.toBe("p1-p2-p3");
+        expect(executionService.getExecutionResults).toHaveBeenNthCalledWith(2, "e1", {
+            startingToken: "t2",
+        });
+        expect(executionService.getExecutionResults).toHaveBeenNthCalledWith(3, "e1", {
+            startingToken: "t3",
+        });
+        // The downloaded pages are not added to the view.
+        expect(result.current.pageContents).toEqual(["p1-"]);
+        expect(result.current.hasNextPage).toBe(true);
+    });
+
+    it("rejects the full read when a remaining page fails", async () => {
+        const { useExecutionResults } = require("./queries");
+        (executionService.getExecutionResults as jest.Mock)
+            .mockResolvedValueOnce([true, { resultContent: "p1", NextToken: "t2" }])
+            .mockResolvedValueOnce([false, "denied"]);
+        const { result } = renderHook(() => useExecutionResults("e1", true), {
+            wrapper: wrapper(client()),
+        });
+        await waitFor(() => expect(result.current.pageContents).toEqual(["p1"]));
+        await expect(result.current.readFullText()).rejects.toThrow("denied");
+    });
 });
 
 /**

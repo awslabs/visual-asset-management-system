@@ -69,6 +69,7 @@ describe("ExecutionDetailPage", () => {
         useExecutionDetailFiles.mockReturnValue(IDLE_PAGED_METADATA);
         useExecutionResults.mockReturnValue({
             data: undefined,
+            pageContents: [],
             isLoading: false,
             isError: false,
             error: null,
@@ -816,7 +817,13 @@ describe("ExecutionDetailPage", () => {
                 byFileCollection[collection] || IDLE_PAGED_METADATA
         );
         useExecutionResults.mockReturnValue(
-            resultsPaged || { data: undefined, isLoading: false, isError: false, error: null }
+            resultsPaged || {
+                data: undefined,
+                pageContents: [],
+                isLoading: false,
+                isError: false,
+                error: null,
+            }
         );
         useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(canRoute) });
         return render(
@@ -845,6 +852,8 @@ describe("ExecutionDetailPage", () => {
                     resultRowCount: 1,
                     resultContentBytes: 13,
                 },
+                pageContents: ["page one text"],
+                readFullText: jest.fn(),
                 isLoading: false,
                 isError: false,
                 error: null,
@@ -858,6 +867,8 @@ describe("ExecutionDetailPage", () => {
         expect(screen.queryByText("inline subset")).not.toBeInTheDocument();
         fireEvent.click(screen.getByTestId("results-section-load-more"));
         expect(fetchNextPage).toHaveBeenCalledTimes(1);
+        // The full result can be saved without painting it.
+        expect(screen.getByTestId("results-section-download")).toHaveTextContent("Download");
     });
 
     /** Metadata rows in the paged route's shape, one map entry each. */

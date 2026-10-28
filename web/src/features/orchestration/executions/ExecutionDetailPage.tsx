@@ -22,6 +22,8 @@ import InfoTooltip from "../components/InfoTooltip";
 import { OUTPUTS_SCOPE_HELP } from "./outputsHelp";
 import ExecutionLogViewer from "./ExecutionLogViewer";
 import SubProcessesSection from "./SubProcessesSection";
+import ResultText from "./ResultText";
+import { ResultDownloadButton } from "./ResultDownloadButton";
 import type { ExecutionStatus } from "../types";
 import { type ColumnDef } from "@tanstack/react-table";
 import { PREVIEW_FILE_PATTERN } from "../../../common/constants/fileFormats";
@@ -313,8 +315,9 @@ const FilesSection: React.FC<{
 /**
  * The output RESULTS section. The details view embeds a bounded `outputs.results`; when it is flagged
  * truncated this re-reads the result text through `GET .../details/results`, which pages by the 5 MiB
- * response budget, so the reader sees the whole result ("Load more" appends the next page) rather
- * than the detail view's subset. A row that was itself cut is flagged.
+ * response budget, so the reader sees the whole result ("Load more" appends the next page as new
+ * elements, never re-rendering text already shown) rather than the detail view's subset; "Download"
+ * saves the full result as a `.txt` file without rendering it. A row that was itself cut is flagged.
  */
 const ResultsSection: React.FC<{
     executionId: string;
@@ -323,11 +326,20 @@ const ResultsSection: React.FC<{
     canPage: boolean;
 }> = ({ executionId, inlineResults, truncated, canPage }) => {
     const escalated = truncated && canPage;
-    const { data, isLoading, isError, error, hasNextPage, isFetchingNextPage, fetchNextPage } =
-        useExecutionResults(executionId, escalated);
+    const {
+        data,
+        pageContents,
+        readFullText,
+        isLoading,
+        isError,
+        error,
+        hasNextPage,
+        isFetchingNextPage,
+        fetchNextPage,
+    } = useExecutionResults(executionId, escalated);
 
     const hasInline = inlineResults && inlineResults.length > 0;
-    const serverContent = data?.resultContent ?? "";
+    const hasServerContent = pageContents.some((page) => page.length > 0);
     const serverTruncated = Boolean(data?.resultContentTruncated);
 
     return (
@@ -352,10 +364,22 @@ const ResultsSection: React.FC<{
                             exceeded the 5&nbsp;MiB response limit. The cut text is not retrievable.
                         </p>
                     )}
-                    {serverContent ? (
-                        <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-words rounded border border-border-default bg-surface-secondary p-3 font-mono text-xs text-text-primary">
-                            {serverContent}
-                        </pre>
+                    {hasServerContent ? (
+                        <>
+                            <div className="mb-2 flex items-center justify-end gap-2">
+                                <ResultDownloadButton
+                                    executionId={executionId}
+                                    readFullText={readFullText}
+                                    className="orch-outline px-3 py-1.5 text-sm border border-border-input rounded text-text-primary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
+                                    testId="results-section-download"
+                                />
+                            </div>
+                            <ResultText
+                                pages={pageContents}
+                                className="max-h-[50vh] overflow-auto rounded border border-border-default bg-surface-secondary p-3 font-mono text-xs text-text-primary"
+                                testId="results-section-content"
+                            />
+                        </>
                     ) : (
                         <p className="text-text-secondary">
                             This execution produced no result content.

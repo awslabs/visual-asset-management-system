@@ -7,6 +7,8 @@ import React, { useState } from "react";
 import Dialog from "../components/Dialog";
 import { useExecutionResults } from "../api/queries";
 import { btnSecondary } from "../components/controlStyles";
+import ResultText from "./ResultText";
+import { ResultDownloadButton } from "./ResultDownloadButton";
 
 interface ExecutionResultSurfaceProps {
     executionId: string;
@@ -30,8 +32,10 @@ function formatBytes(bytes: number): string {
  * query is enabled only while the modal is open, so opening a Result badge is what pays for the read
  * — a row that merely carries the badge costs nothing until clicked.
  *
- * The service pages the result by its 5 MiB response budget; "Load more" appends the next page, so
- * the whole result is reachable here. A banner marks a result a row of which was itself cut.
+ * The service pages the result by its 5 MiB response budget; "Load more" appends the next page as
+ * new elements (text already shown is never re-rendered), so the whole result is reachable here.
+ * "Download" saves the full result as a `.txt` file without painting it, for results too large to
+ * read on the page. A banner marks a result a row of which was itself cut.
  */
 const ExecutionResultSurface: React.FC<ExecutionResultSurfaceProps> = ({
     executionId,
@@ -40,17 +44,26 @@ const ExecutionResultSurface: React.FC<ExecutionResultSurfaceProps> = ({
     returnFocusRef,
 }) => {
     const [copied, setCopied] = useState(false);
-    const { data, isLoading, isError, hasNextPage, isFetchingNextPage, fetchNextPage } =
-        useExecutionResults(executionId, open);
+    const {
+        data,
+        pageContents,
+        readFullText,
+        isLoading,
+        isError,
+        hasNextPage,
+        isFetchingNextPage,
+        fetchNextPage,
+    } = useExecutionResults(executionId, open);
 
-    const content = data?.resultContent ?? "";
+    const hasContent = pageContents.some((page) => page.length > 0);
     const truncated = Boolean(data?.resultContentTruncated);
     const rowCount = data?.resultRowCount ?? 0;
     const byteLen = data?.resultContentBytes ?? 0;
 
     const onCopy = async () => {
         try {
-            await navigator.clipboard.writeText(content);
+            // Join on demand: the copied text is the loaded pages, built only when asked for.
+            await navigator.clipboard.writeText(pageContents.join(""));
             setCopied(true);
             window.setTimeout(() => setCopied(false), 2000);
         } catch {
@@ -81,7 +94,7 @@ const ExecutionResultSurface: React.FC<ExecutionResultSurfaceProps> = ({
             )}
 
             {isError && (
-                <div className="py-8 text-text-error" role="alert">
+                <div className="py-8 text-vams-error" role="alert">
                     The result could not be loaded.
                 </div>
             )}
@@ -93,15 +106,25 @@ const ExecutionResultSurface: React.FC<ExecutionResultSurfaceProps> = ({
                             {rowCount} row{rowCount === 1 ? "" : "s"} · {formatBytes(byteLen)}
                             {hasNextPage ? " loaded" : ""}
                         </span>
-                        <button
-                            type="button"
-                            className={btnSecondary}
-                            onClick={onCopy}
-                            disabled={!content}
-                            data-testid="result-surface-copy"
-                        >
-                            {copied ? "Copied" : "Copy"}
-                        </button>
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                className={btnSecondary}
+                                onClick={onCopy}
+                                disabled={!hasContent}
+                                data-testid="result-surface-copy"
+                            >
+                                {copied ? "Copied" : "Copy"}
+                            </button>
+                            {hasContent && (
+                                <ResultDownloadButton
+                                    executionId={executionId}
+                                    readFullText={readFullText}
+                                    className={btnSecondary}
+                                    testId="result-surface-download"
+                                />
+                            )}
+                        </div>
                     </div>
 
                     {truncated && (
@@ -115,17 +138,15 @@ const ExecutionResultSurface: React.FC<ExecutionResultSurfaceProps> = ({
                         </div>
                     )}
 
-                    {content ? (
-                        <pre
+                    {hasContent ? (
+                        <ResultText
+                            pages={pageContents}
                             // Monospace, pre-wrapped, scrollable, and selectable — a result is arbitrary
-                            // text, so it must not reflow or clip. The fixed max height keeps the modal
-                            // bounded; the body scrolls within it.
-                            className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded border border-border-default bg-surface-secondary p-3 font-mono text-xs text-text-primary"
-                            tabIndex={0}
-                            data-testid="result-surface-content"
-                        >
-                            {content}
-                        </pre>
+                            // text, so it must not clip. The fixed max height keeps the modal bounded;
+                            // the body scrolls within it.
+                            className="max-h-[60vh] overflow-auto rounded border border-border-default bg-surface-secondary p-3 font-mono text-xs text-text-primary"
+                            testId="result-surface-content"
+                        />
                     ) : (
                         <div
                             className="py-6 text-text-secondary"

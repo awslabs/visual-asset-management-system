@@ -208,6 +208,125 @@ test.describe("Executions board", () => {
         await page.keyboard.press("Escape");
     });
 
+    test("Download saves the whole paged result as a text file without rendering it", async ({
+        page,
+    }) => {
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
+        const badge = page.getByTestId("output-type-badge-result").first();
+        test.skip((await badge.count()) === 0, "No execution with a Result on the first page");
+
+        // Serve the result as two injected pages so Download must follow NextToken past what the
+        // modal has loaded; the second page is never painted.
+        const resultRoute = /\/workflows\/executions\/[^/?]+\/details\/results/;
+        const injected = "e2e-download-next";
+        await page.route(resultRoute, async (route) => {
+            const token = new URL(route.request().url()).searchParams.get("startingToken") || "";
+            const message =
+                token === injected
+                    ? {
+                          resultContent: "E2E-DOWNLOAD-TAIL",
+                          resultContentTruncated: false,
+                          resultRowCount: 1,
+                          resultContentBytes: 17,
+                      }
+                    : {
+                          resultContent: "E2E-DOWNLOAD-HEAD|",
+                          resultContentTruncated: false,
+                          resultRowCount: 1,
+                          resultContentBytes: 18,
+                          NextToken: injected,
+                      };
+            await route.fulfill({ json: { message } });
+        });
+
+        const errors = collectPageErrors(page);
+        await badge.click();
+        const dialog = page.getByRole("dialog");
+        await expect(dialog.getByTestId("result-surface-content")).toContainText(
+            "E2E-DOWNLOAD-HEAD",
+            { timeout: 20_000 }
+        );
+        const downloadPromise = page.waitForEvent("download", { timeout: 30_000 });
+        await dialog.getByTestId("result-surface-download").click();
+        const download = await downloadPromise;
+        expect(download.suggestedFilename()).toMatch(/^execution-.+-result\.txt$/);
+        const stream = await download.createReadStream();
+        const parts: Buffer[] = [];
+        for await (const part of stream) parts.push(part as Buffer);
+        expect(Buffer.concat(parts).toString("utf-8")).toBe("E2E-DOWNLOAD-HEAD|E2E-DOWNLOAD-TAIL");
+        await expect(dialog.getByTestId("result-surface-content")).not.toContainText(
+            "E2E-DOWNLOAD-TAIL"
+        );
+        // The modal still pages normally afterwards.
+        await expect(dialog.getByTestId("result-surface-load-more")).toBeVisible();
+        await page.keyboard.press("Escape");
+        await expect(badge).toBeFocused();
+        expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+    });
+
+    test("a large unbroken non-ASCII result renders and pages quickly", async ({ page }) => {
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
+        const badge = page.getByTestId("output-type-badge-result").first();
+        test.skip((await badge.count()) === 0, "No execution with a Result on the first page");
+
+        // The D13 shape: ~4.4 MiB of CJK text with no line breaks, in three pages. Served here so
+        // the timing measures the browser, not the network.
+        const pageChars = 500_000; // 3 bytes each in UTF-8, ~1.43 MiB per page
+        const resultRoute = /\/workflows\/executions\/[^/?]+\/details\/results/;
+        await page.route(resultRoute, async (route) => {
+            const token = new URL(route.request().url()).searchParams.get("startingToken") || "";
+            const index = token ? Number(token.replace("e2e-cjk-", "")) : 0;
+            const next = index < 2 ? `e2e-cjk-${index + 1}` : undefined;
+            await route.fulfill({
+                json: {
+                    message: {
+                        resultContent: String.fromCharCode(0x6f22 + index).repeat(pageChars),
+                        resultContentTruncated: false,
+                        resultRowCount: 4,
+                        resultContentBytes: pageChars * 3,
+                        ...(next ? { NextToken: next } : {}),
+                    },
+                },
+            });
+        });
+
+        const errors = collectPageErrors(page);
+        const dialog = page.getByRole("dialog");
+        const content = dialog.getByTestId("result-surface-content");
+        const loadMore = dialog.getByTestId("result-surface-load-more");
+
+        let started = Date.now();
+        await badge.click();
+        await expect(content).toBeVisible({ timeout: 3_000 });
+        const firstPageMs = Date.now() - started;
+
+        const loadMoreMs: number[] = [];
+        for (let i = 0; i < 2; i += 1) {
+            const before = await content.getByTestId("result-text-chunk").count();
+            started = Date.now();
+            await loadMore.click();
+            await expect
+                .poll(() => content.getByTestId("result-text-chunk").count(), { timeout: 3_000 })
+                .toBeGreaterThan(before);
+            loadMoreMs.push(Date.now() - started);
+        }
+        await expect(loadMore).toHaveCount(0);
+        // The tab stays responsive: a script round-trip answers promptly once the pages are in.
+        started = Date.now();
+        await page.evaluate(() => 1);
+        expect(Date.now() - started).toBeLessThan(1_000);
+        console.log(
+            `D13 timing: first page ${firstPageMs} ms, load more ${loadMoreMs.join(", ")} ms`
+        );
+        expect(firstPageMs).toBeLessThan(3_000);
+        loadMoreMs.forEach((ms) => expect(ms).toBeLessThan(3_000));
+        await page.keyboard.press("Escape");
+        await expect(badge).toBeFocused();
+        expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
+    });
+
     test("clicking a row opens the quick-view drawer", async ({ page }) => {
         const total = await expectTableRendered(page);
         test.skip(total === 0, "No executions in this environment");

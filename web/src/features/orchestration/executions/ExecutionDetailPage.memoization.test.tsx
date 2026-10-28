@@ -119,6 +119,7 @@ describe("ExecutionDetailPage table inputs", () => {
         useExecutionDetailFiles.mockReturnValue(IDLE);
         useExecutionResults.mockReturnValue({
             data: undefined,
+            pageContents: [],
             isLoading: false,
             isError: false,
             error: null,
