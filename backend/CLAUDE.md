@@ -509,6 +509,8 @@ Handlers compare against this exact string, so a mismatched variant silently fai
 
 Defined in `common/constants.py`. Request: `(sub, obj, act)`; policy line: `(sub, obj_rule, act, eft)`; role mapping: `g = _, _`; effect: `some(allow) && !some(deny)`; matcher: `g(r.sub, p.sub) && eval(p.obj_rule) && r.act == p.act`.
 
+Each criterion value is written into its line's `obj_rule` as source escapes, one `\xNN` / `\uNNNN` / `\UNNNNNNNN` per character (`CasbinEnforcerService._escape_rule_value`), never as plain text: Casbin's policy reader splits lines on commas outside brackets, and pycasbin rewrites `p.` / `r.` and `&&` / `||` / `!` throughout the rule text, string literals included, before compiling it. Only the object-type check every line opens with, `regexMatch(r.obj.object__type, '^<type>\Z')`, carries a registered type name as plain text (`_object_type_rule`). `tests/handlers/authz/test_constraint_value_as_written.py` and `test_constraint_value_escape_parity.py` hold this.
+
 ### Constraint Fields (`PERMISSION_CONSTRAINT_FIELDS`)
 
 Fields that can be referenced in ABAC policy rules: `databaseId`, `assetName`, `assetType`, `tags`, `tagName`, `tagTypeName`, `roleName`, `userId`, `pipelineId`, `pipelineExecutionType`, `workflowId`, `category`, `name`, `metadataSchemaName`, `metadataSchemaEntityType`, `object__type`, `route__path`.
