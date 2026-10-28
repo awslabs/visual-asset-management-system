@@ -529,6 +529,7 @@ Archiving an asset keeps its compliance record, evaluation history, quarantine, 
 -   **Single records.** The state, evaluation history and audit trail of an archived asset, and its cascades, answer `403` to a role refused on the stored id. Releasing it from quarantine, granting or revoking an exception, evaluating it, approving or rejecting its cascades, and removing its schema override are refused the same way.
 -   **Listings and counts.** The database overview, its counts, the quarantine listing, the audit log, the cascade listing and a database's asset overrides leave out the archived assets the role may not see, as the asset list leaves them out.
 -   **Templates.** `database-admin.json` names both ids on its compliance constraints, as on its asset constraint, so the role reads and acts on archived assets' compliance records. `database-user.json`, `compliance-admin.json` and `compliance-readonly.json` name the database id only: their roles see the compliance records of live assets only. `compliance-global-admin.json` matches every database id (`contains .*`), the archived form included.
+-   **Evaluation.** Archived assets are not evaluated: the automatic trigger, **Evaluate All** and schema sweeps skip them and leave their records as they are. A sweep counts them in `skipped` and `skippedArchived`.
 
 Deciding this takes no extra read for a role allowed on both ids or refused on the database. Otherwise a single record costs one read of the asset's archived key, and a listing one read of the database's archived asset ids, whatever the page size.
 

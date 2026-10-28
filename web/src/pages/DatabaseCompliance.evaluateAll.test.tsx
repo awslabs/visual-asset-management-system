@@ -140,4 +140,17 @@ describe("DatabaseCompliance Evaluate All", () => {
             })
         ).toMatch(/200 assets; 4 newly registered.*; 35 not reached yet/);
     });
+
+    it("says how many archived assets were not evaluated", () => {
+        expect(
+            evaluateAllMessage({
+                message: "Evaluation triggered for 3 assets",
+                databaseId: "db1",
+                assetsTriggered: [],
+                assetsRemaining: 0,
+                skipped: 2,
+                skippedArchived: 2,
+            })
+        ).toBe("Evaluation triggered for 3 assets; 2 archived, not evaluated.");
+    });
 });

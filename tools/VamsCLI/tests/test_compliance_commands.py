@@ -977,6 +977,19 @@ class TestComplianceEvaluationCommands:
             assert 'Skipped (not authorized to evaluate): 3' in result.output
             assert 'Remaining (not evaluated yet): 12' in result.output
 
+    def test_sweep_reports_the_archived_assets_it_skipped_apart(self, cli_runner,
+                                                              generic_command_mocks):
+        # `skipped` totals both reasons; each is printed on its own line.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].evaluate_database_compliance.return_value = {
+                'message': 'Evaluation triggered for 1 assets', 'databaseId': 'my-database',
+                'assetsTriggered': [{'databaseId': 'my-database', 'assetId': 'a1'}],
+                'skipped': 2, 'skippedArchived': 2, 'assetsRemaining': 0}
+            result = cli_runner.invoke(cli, ['compliance', 'sweep', '-d', 'my-database'])
+            assert result.exit_code == 0
+            assert 'Skipped (archived, not evaluated): 2' in result.output
+            assert 'not authorized' not in result.output
+
     def test_sweep_json_output(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].sweep_compliance_schema.return_value = {'assetsTriggered': [], 'skipped': 2}

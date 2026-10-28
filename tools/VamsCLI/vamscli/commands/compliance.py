@@ -938,7 +938,13 @@ def sweep(ctx: click.Context, schema_name: Optional[str], database_id: Optional[
                          for t in triggered)
             if r.get('superseded'):
                 lines.append(f"  Superseded (a newer evaluation had started): {r['superseded']}")
-            if r.get('skipped'):
+            if 'skippedArchived' in r or 'skippedNotAuthorized' in r:
+                if r.get('skippedNotAuthorized'):
+                    lines.append(f"  Skipped (not authorized to evaluate): {r['skippedNotAuthorized']}")
+                if r.get('skippedArchived'):
+                    lines.append(f"  Skipped (archived, not evaluated): {r['skippedArchived']}")
+            elif r.get('skipped'):
+                # A server that does not break the count down skips for authorization only.
                 lines.append(f"  Skipped (not authorized to evaluate): {r['skipped']}")
             if r.get('registered'):
                 lines.append(f"  Registered under the database binding: {r['registered']}")
@@ -965,7 +971,8 @@ def _follow_sweep(call, starting_token: Optional[str], follow: bool,
                   json_output: bool) -> Dict[str, Any]:
     """Call a sweep route, following its NextToken until the sweep is done (no token), and merge
     the calls into one result: every call's `assetsTriggered`, the summed `superseded`,
-    `registered` and `removedOrphans`, the last call's `skipped`, `withoutSchema` and `assetsRemaining` (each call counts
+    `registered` and `removedOrphans`, the last call's `skipped`, `skippedNotAuthorized`, `skippedArchived`,
+    `withoutSchema` and `assetsRemaining` (each call counts
     those across the whole sweep), and `calls`. Stops early, keeping the last `NextToken`, when
     `follow` is off or a call evaluated nothing (no progress: continue later with the token)."""
     result = call(starting_token)

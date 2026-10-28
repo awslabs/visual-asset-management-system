@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """A sweep removes, rather than evaluates, the compliance record of an asset that no longer
-exists (D70).
+exists (D70), and skips an archived asset.
 
 A sweep walks compliance records, not assets. A record left behind by a permanent delete (a
 failed record removal, or a delete the trigger never saw) used to get a fresh evaluation — a
@@ -10,7 +10,9 @@ failed record removal, or a delete the trigger never saw) used to get a fresh ev
 database evaluation and the schema sweep check the asset first: a record whose asset has no row
 in the database or its archive is removed the way the asset's permanent deletion removes it (the
 record with its state and quarantine, one `asset_deleted` audit entry) and counted under
-`removedOrphans`; an archived asset keeps its record and is evaluated as before.
+`removedOrphans`. An archived asset keeps its record and is not evaluated (its row cannot be
+read, so an evaluation could only record an error): it is counted in `skipped` and
+`skippedArchived`, as the automatic trigger skips it too.
 """
 
 import json
@@ -102,10 +104,18 @@ class TestASweepRemovesTheRecordsOfDeletedAssets:
         evaluations = Evaluations(tables)
         body = _call(evaluations, event)
         evaluated = {asset_id for _, asset_id in evaluations.calls}
-        assert evaluated == set(LIVE) | {ARCHIVED}
+        assert evaluated == set(LIVE)
         assert {entry["assetId"] for entry in body["assetsTriggered"]} == evaluated
         assert body["removedOrphans"] == 2
+        assert body["skippedArchived"] == 1
+        assert body["skipped"] == 1
         assert body["assetsRemaining"] == 0
+        # The archived asset's record is left exactly as it was: no evaluation claimed it.
+        archived_row = tables["complianceAssetStateStorage"].get_item(
+            Key={"databaseId": DB, "assetId": ARCHIVED}, ConsistentRead=True)["Item"]
+        assert archived_row["lastEvaluatedAt"] == "2026-10-01T00:00:00+00:00"
+        assert archived_row["complianceState"] == "compliant"
+        assert "lastEvaluationStatus" not in archived_row
         # The records of the deleted assets are gone (the quarantined one's quarantine with it);
         # the archived asset keeps its record.
         assert _records(tables) == set(LIVE) | {ARCHIVED}

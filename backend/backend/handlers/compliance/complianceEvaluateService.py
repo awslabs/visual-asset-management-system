@@ -35,7 +35,7 @@ from common.apiRoutes import (
 from common.compliance import evaluationEngine as engine
 from common.compliance import listing
 from common.compliance.archivedAssets import (
-    ArchivedAssets, withheld_state_counts,
+    ArchivedAssets, asset_is_archived, withheld_state_counts,
 )
 from common.dynamodb import query_all_items
 from common.validators import validate
@@ -301,7 +301,9 @@ def run_evaluation_for_asset(database_id, asset_id, schema_name, actor):
 def sweep_schema(event, schema_name, starting_token=None):
     """Evaluate the assets whose state row is bound to `schema_name` (SchemaNameIndex GSI) and whose
     database the caller may evaluate; the rest are counted as `skipped` (and in
-    `skippedNotAuthorized`, the reason they were skipped) and never listed. The caller needs read
+    `skippedNotAuthorized`, the reason they were skipped) and never listed. An archived asset is
+    not evaluated either (its row sits in the archive and cannot be read): it is counted in
+    `skipped` and `skippedArchived`, and its compliance record is left as it is. The caller needs read
     access to the schema in its scope: a database's compliance administrator may sweep a GLOBAL
     schema, and the sweep then reaches the assets of the databases that administrator may evaluate
     only. Every evaluation runs as the caller, never with the system identity.
@@ -354,6 +356,7 @@ def sweep_schema(event, schema_name, starting_token=None):
 
     triggered = []
     skipped = 0
+    skipped_archived = 0
     superseded = 0
     removed_orphans = 0
     beyond_cap = 0
@@ -376,8 +379,12 @@ def sweep_schema(event, schema_name, starting_token=None):
         if budget_spent:
             beyond_budget += 1
             continue
-        if _asset_gone_and_record_removed(database_id, asset["assetId"]):
+        target = _sweep_target(database_id, asset["assetId"])
+        if target == SWEEP_TARGET_REMOVED:
             removed_orphans += 1
+            continue
+        if target == SWEEP_TARGET_ARCHIVED:
+            skipped_archived += 1
             continue
         result = run_evaluation_for_asset(database_id, asset["assetId"], schema_name, actor)
         entry = {
@@ -394,7 +401,8 @@ def sweep_schema(event, schema_name, starting_token=None):
     remaining = beyond_cap + beyond_budget
     logger.info(f"Sweep of schema {schema_name}: {registered} registered under a database binding")
     logger.info(f"Sweep of schema {schema_name}: {len(triggered)} triggered ({superseded} "
-                f"superseded by a newer evaluation), {skipped} skipped, {remaining} remaining "
+                f"superseded by a newer evaluation), {skipped} skipped as not authorized, "
+                f"{skipped_archived} skipped as archived, {remaining} remaining "
                 f"({beyond_cap} beyond the cap, {beyond_budget} beyond the time budget), "
                 f"{evaluated_earlier} evaluated earlier in this sweep, {removed_orphans} records of deleted "
                 f"assets removed")
@@ -403,8 +411,9 @@ def sweep_schema(event, schema_name, starting_token=None):
         "schemaName": schema_name,
         "assetsTriggered": triggered,
         "assetsRemaining": remaining,
-        "skipped": skipped,
+        "skipped": skipped + skipped_archived,
         "skippedNotAuthorized": skipped,
+        "skippedArchived": skipped_archived,
         "superseded": superseded,
         "removedOrphans": removed_orphans,
     }
@@ -421,7 +430,8 @@ def evaluate_database(event, database_id, starting_token=None):
     evaluated, a `NextToken` while assets remain that the next call passes back as `startingToken`
     to evaluate only the assets not evaluated since the evaluation started, and `assetsRemaining`
     the tracked assets still to evaluate after this call (`_sweep_candidates`). A record whose
-    asset no longer exists is removed rather than evaluated, as in a sweep (`removedOrphans`).
+    asset no longer exists is removed rather than evaluated, as in a sweep (`removedOrphans`), and
+    an archived asset is skipped with its record left as it is (`skipped`, `skippedArchived`).
 
     A database binding governs every asset of the database, so an asset of a bound database that
     has no compliance record yet is registered under the binding first (`registered`). A tracked
@@ -459,6 +469,7 @@ def evaluate_database(event, database_id, starting_token=None):
     triggered = []
     superseded = 0
     removed_orphans = 0
+    skipped_archived = 0
     without_schema = 0
     beyond_cap = 0
     beyond_budget = 0
@@ -478,8 +489,12 @@ def evaluate_database(event, database_id, starting_token=None):
         if budget_spent:
             beyond_budget += 1
             continue
-        if _asset_gone_and_record_removed(database_id, row["assetId"]):
+        target = _sweep_target(database_id, row["assetId"])
+        if target == SWEEP_TARGET_REMOVED:
             removed_orphans += 1
+            continue
+        if target == SWEEP_TARGET_ARCHIVED:
+            skipped_archived += 1
             continue
         result = run_evaluation_for_asset(database_id, row["assetId"], schema_name, actor)
         entry = {
@@ -499,7 +514,8 @@ def evaluate_database(event, database_id, starting_token=None):
                 f"triggered ({superseded} superseded), {without_schema} without a schema, "
                 f"{remaining} remaining ({beyond_cap} beyond the cap, {beyond_budget} beyond the "
                 f"time budget), {evaluated_earlier} evaluated earlier in this evaluation, "
-                f"{removed_orphans} records of deleted assets removed")
+                f"{removed_orphans} records of deleted assets removed, {skipped_archived} archived "
+                f"assets skipped")
     body = {
         "message": f"Evaluation triggered for {len(triggered)} assets",
         "databaseId": database_id,
@@ -508,6 +524,8 @@ def evaluate_database(event, database_id, starting_token=None):
         "superseded": superseded,
         "registered": registered,
         "withoutSchema": without_schema,
+        "skipped": skipped_archived,
+        "skippedArchived": skipped_archived,
         "removedOrphans": removed_orphans,
     }
     if remaining:
@@ -515,15 +533,26 @@ def evaluate_database(event, database_id, starting_token=None):
     return success(body=body)
 
 
-def _asset_gone_and_record_removed(database_id, asset_id):
-    """Whether a sweep reached the compliance record of an asset that no longer exists, and so
-    removed it rather than evaluate it (the evaluation would record a verdict for an asset that is
-    gone and keep the record counted in the overview). One read of the asset row decides the usual
-    case; a missing row is confirmed against the archive and the record is removed as the asset's
-    permanent deletion removes it (`remove_record_if_asset_gone`)."""
+# What a sweep finds when it reaches a compliance record (`_sweep_target`).
+SWEEP_TARGET_LIVE = "live"
+SWEEP_TARGET_ARCHIVED = "archived"
+SWEEP_TARGET_REMOVED = "removed"
+
+
+def _sweep_target(database_id, asset_id):
+    """What a sweep does with the compliance record of an asset: evaluate it (`live`), skip it
+    (`archived`: the asset's row sits in the archive, so it cannot be read; its record is left as
+    it is, as an archive leaves it, and the automatic trigger skips it too), or nothing more
+    because the asset is gone and its record was removed (`removed`). One read of the live row
+    decides the usual case; only a missing row is looked up in the archive."""
     if store.get_asset_item(database_id, asset_id):
-        return False
-    return remove_record_if_asset_gone(database_id, asset_id)
+        return SWEEP_TARGET_LIVE
+    if asset_is_archived(asset_table, database_id, asset_id):
+        return SWEEP_TARGET_ARCHIVED
+    if remove_record_if_asset_gone(database_id, asset_id):
+        return SWEEP_TARGET_REMOVED
+    # The row came back between the reads (an unarchive): evaluate it.
+    return SWEEP_TARGET_LIVE
 
 
 def _database_rows(database_id):

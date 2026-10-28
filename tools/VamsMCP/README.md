@@ -476,7 +476,8 @@ deletes the compliance record of every asset that inherited the binding
 changing the asset's binding; its response carries `schemaVersion`,
 `exceptionApplied` and `hasRuleErrors`, and when every rule errored the asset's
 state is left unchanged with `lastEvaluationStatus` `error`. `sweep_compliance_schema` returns `assetsTriggered` plus
-`skipped` (bound assets the caller may not evaluate, counted but never listed) and
+`skipped` (bound assets not evaluated: `skippedNotAuthorized` those the caller may not
+evaluate, counted but never listed, and `skippedArchived` archived assets) and
 `assetsRemaining` (still to evaluate); while assets remain the response carries
 `NextToken`, and calling again with it as `starting_token` continues the sweep until no
 token is returned. `evaluate_database_compliance` evaluates

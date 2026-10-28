@@ -669,6 +669,9 @@ export interface EvaluateDatabaseResponse {
     superseded?: number;
     registered?: number;
     withoutSchema?: number;
+    /** Archived assets: not evaluated, their records left as they are (`skippedArchived`). */
+    skipped?: number;
+    skippedArchived?: number;
     /** Present while assets remain: pass it back as `startingToken` to continue the evaluation. */
     NextToken?: string;
 }

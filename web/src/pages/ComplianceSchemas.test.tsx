@@ -239,6 +239,28 @@ describe("ComplianceSchemas sweep message", () => {
             `Sweep of schema "std": 1 ${Synonyms.asset} evaluated.`
         );
     });
+
+    it("reports the archived assets apart from those the caller may not evaluate", () => {
+        // `skipped` totals both reasons; each is named on its own.
+        expect(
+            sweepMessage("std", {
+                assetsTriggered: [{}],
+                skipped: 3,
+                skippedNotAuthorized: 1,
+                skippedArchived: 2,
+            })
+        ).toBe(
+            `Sweep of schema "std": 1 ${Synonyms.asset} evaluated; 1 skipped (in a ${Synonyms.database} you may not evaluate); 2 archived, not evaluated.`
+        );
+        expect(
+            sweepMessage("std", {
+                assetsTriggered: [{}],
+                skipped: 2,
+                skippedNotAuthorized: 0,
+                skippedArchived: 2,
+            })
+        ).toBe(`Sweep of schema "std": 1 ${Synonyms.asset} evaluated; 2 archived, not evaluated.`);
+    });
 });
 
 describe("ComplianceSchemas rule-name errors", () => {

@@ -420,7 +420,8 @@ const DEFAULT_TEMPLATE_BODY = JSON.stringify(SCHEMA_TEMPLATES[DEFAULT_TEMPLATE_K
 
 /**
  * The flash a sweep raises: how many assets it evaluated, how many it skipped (assets in databases
- * the caller may not evaluate) and how many it did not reach (run it again for those).
+ * the caller may not evaluate, and archived assets) and how many it did not reach (run it again for
+ * those).
  */
 export const sweepMessage = (schemaName: string, result: any): string => {
     const evaluated = Array.isArray(result?.assetsTriggered) ? result.assetsTriggered.length : 0;
@@ -429,8 +430,15 @@ export const sweepMessage = (schemaName: string, result: any): string => {
             evaluated === 1 ? Synonyms.asset : Synonyms.assets
         } evaluated`,
     ];
-    if (result?.skipped) {
-        parts.push(`${result.skipped} skipped (in a ${Synonyms.database} you may not evaluate)`);
+    // `skipped` totals both reasons; an older service reports authorization only, as `skipped`.
+    const notAuthorized =
+        result?.skippedNotAuthorized ??
+        (result?.skippedArchived === undefined ? result?.skipped : 0);
+    if (notAuthorized) {
+        parts.push(`${notAuthorized} skipped (in a ${Synonyms.database} you may not evaluate)`);
+    }
+    if (result?.skippedArchived) {
+        parts.push(`${result.skippedArchived} archived, not evaluated`);
     }
     if (result?.assetsRemaining) {
         parts.push(`${result.assetsRemaining} not reached yet; run the sweep again`);

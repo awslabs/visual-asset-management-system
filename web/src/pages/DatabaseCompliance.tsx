@@ -118,6 +118,9 @@ export const evaluateAllMessage = (result: EvaluateDatabaseResponse): string => 
     if (result.registered) {
         parts.push(`${result.registered} newly registered under the ${Synonyms.database} schema`);
     }
+    if (result.skippedArchived) {
+        parts.push(`${result.skippedArchived} archived, not evaluated`);
+    }
     if (result.assetsRemaining) {
         parts.push(`${result.assetsRemaining} not reached yet; choose Evaluate All again`);
     }

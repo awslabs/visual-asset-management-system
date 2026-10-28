@@ -2634,9 +2634,10 @@ if CONFIG.enable_writes:
         `assetsTriggered` (databaseId, assetId pairs), `skipped`, `superseded`,
         `assetsRemaining` and, while assets remain, `NextToken`.
 
-        `skipped` counts the bound assets the caller is not authorized to evaluate — they are
-        counted, never listed, so a sweep by a narrowly scoped caller can trigger nothing and still
-        succeed. `superseded` counts the listed assets whose evaluation did not run because a newer
+        `skipped` counts the bound assets not evaluated: `skippedNotAuthorized` those the caller
+        is not authorized to evaluate — counted, never listed, so a sweep by a narrowly scoped
+        caller can trigger nothing and still succeed — and `skippedArchived` the archived assets,
+        whose records are left as they are. `superseded` counts the listed assets whose evaluation did not run because a newer
         evaluation of the same asset had already started (such an entry carries verdict
         `superseded` and `superseded: true`); that is not a failure, and the asset's state is the
         newer evaluation's. Assets awaiting evaluation are evaluated first. One call evaluates a
@@ -2663,7 +2664,8 @@ if CONFIG.enable_writes:
         This is the web overview's Evaluate All, scoped to the database; sweep_compliance_schema()
         instead evaluates every database bound to one schema. In a bound database, assets that
         have no compliance record yet are registered under the binding first (`registered`);
-        `withoutSchema` counts tracked assets whose record names no schema (not evaluated).
+        `withoutSchema` counts tracked assets whose record names no schema (not evaluated), and
+        `skipped` / `skippedArchived` the archived assets (not evaluated; records left as they are).
         Assets awaiting evaluation are evaluated first. One call evaluates a bounded number of
         assets: `assetsRemaining` counts those still to evaluate, and while it is above 0 call
         again with the response's `NextToken` as `starting_token` until no token is returned. Each

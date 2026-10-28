@@ -17029,6 +17029,12 @@ components:
                 withoutSchema:
                     type: integer
                     description: "Tracked assets whose compliance record names no schema; not evaluated."
+                skipped:
+                    type: integer
+                    description: "Tracked assets not evaluated because they are archived (the same count as `skippedArchived`)."
+                skippedArchived:
+                    type: integer
+                    description: "Archived assets: not evaluated, and their compliance records are left as they are."
                 removedOrphans:
                     type: integer
                     description: "Compliance records of assets that no longer exist, removed (with an `asset_deleted` audit entry) instead of evaluated."
@@ -17080,10 +17086,13 @@ components:
                     description: "Present while assets remain: send it as `startingToken` to continue this sweep."
                 skipped:
                     type: integer
-                    description: "Bound assets the caller is not authorized to evaluate; counted, never listed."
+                    description: "Bound assets not evaluated: the sum of `skippedNotAuthorized` and `skippedArchived`."
                 skippedNotAuthorized:
                     type: integer
-                    description: "Bound assets skipped because the caller may not evaluate their database (the same count as `skipped`); none is evaluated with the system identity."
+                    description: "Bound assets skipped because the caller may not evaluate their database; counted, never listed, and none is evaluated with the system identity."
+                skippedArchived:
+                    type: integer
+                    description: "Bound assets skipped because they are archived; their compliance records are left as they are."
                 superseded:
                     type: integer
                     description: "Listed assets whose evaluation did not run because a newer evaluation of the asset had already started."
