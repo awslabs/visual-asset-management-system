@@ -51,6 +51,17 @@ except Exception as e:
 # Utility Functions
 #######################
 
+# uploadFile statuses returned to the ingest-asset caller as they are (status, headers such as
+# Retry-After, and body); every other non-200 from uploadFile is reported as a 400
+PASS_THROUGH_UPLOAD_STATUSES = (403, 404, 429)
+
+class UploadResponsePassThrough(Exception):
+    """An uploadFile response that lambda_handler returns to the caller unchanged."""
+
+    def __init__(self, response):
+        super().__init__(f"uploadFile returned status {response.get('statusCode')}")
+        self.response = response
+
 def verify_database_exists(database_id):
     """Check if a database exists"""
     table = dynamodb.Table(db_table_name)
@@ -170,6 +181,8 @@ def initialize_ingest(request_model: IngestAssetInitializeRequestModel, claims_a
     file_upload_response = invoke_lambda(file_upload_lambda, initialize_upload_payload)
     
     # Check response
+    if file_upload_response['statusCode'] in PASS_THROUGH_UPLOAD_STATUSES:
+        raise UploadResponsePassThrough(file_upload_response)
     if file_upload_response['statusCode'] != 200:
         response_body = json.loads(file_upload_response.get("body", "{}"))
         error_message = response_body.get('message', "Unknown error initializing upload")
@@ -257,6 +270,8 @@ def complete_ingest(request_model: IngestAssetCompleteRequestModel, claims_and_r
     file_upload_response = invoke_lambda(file_upload_lambda, complete_upload_payload)
     
     # Check response
+    if file_upload_response['statusCode'] in PASS_THROUGH_UPLOAD_STATUSES:
+        raise UploadResponsePassThrough(file_upload_response)
     if file_upload_response['statusCode'] != 200:
         response_body = json.loads(file_upload_response.get("body", "{}"))
         error_message = response_body.get('message', "Unknown error completing upload")
@@ -344,6 +359,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         
         return success(body=response.dict())
             
+    except UploadResponsePassThrough as p:
+        logger.warning(f"Returning the upload response unchanged: {p}")
+        return p.response
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
         return validation_error(body={'message': validation_error_message(v)}, event=event)

@@ -14,42 +14,26 @@ dynamodb_client = boto3.client('dynamodb', config=retry_config)
 
 
 def update_asset_count(db_database, asset_database, queryParams, databaseId):
-    # Set default values for pagination parameters if not provided
-    max_items = int(queryParams.get('maxItems', 1000))
-    page_size = int(queryParams.get('pageSize', 100))
-    
-    paginator = dynamodb_client.get_paginator('query')
-    condition = {
-        "databaseId": {
-            'AttributeValueList': [ {"S": databaseId} ],
-            'ComparisonOperator': 'EQ'
-        }
-    }
-    pageIterator = paginator.paginate(
-        TableName=asset_database,
-        KeyConditions=condition,
-        ScanIndexForward=False,
-        PaginationConfig={
-            'MaxItems': max_items,
-            'PageSize': page_size, 
-        #    'StartingToken': queryParams['startingToken']
-        }
-    ).build_full_result()
-
-    count = pageIterator['Count']
-    while 'NextToken' in pageIterator:
-        nextToken = pageIterator['NextToken']
-        pageIterator = paginator.paginate(
-            TableName=asset_database,
-            KeyConditions=condition,
-            ScanIndexForward=False,
-            PaginationConfig={
-                'MaxItems': max_items,
-                'PageSize': page_size, 
-                'StartingToken': nextToken
+    # Count the database's live assets with Select='COUNT', which reads no item attributes back,
+    # following LastEvaluatedKey until the partition is exhausted (each page reads up to 1 MB).
+    # queryParams is accepted for existing callers and not used.
+    query_kwargs = {
+        'TableName': asset_database,
+        'KeyConditions': {
+            "databaseId": {
+                'AttributeValueList': [{"S": databaseId}],
+                'ComparisonOperator': 'EQ'
             }
-        ).build_full_result()
-        count += pageIterator['Count']
+        },
+        'Select': 'COUNT',
+    }
+    count = 0
+    while True:
+        response = dynamodb_client.query(**query_kwargs)
+        count += response.get('Count', 0)
+        if 'LastEvaluatedKey' not in response:
+            break
+        query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
 
     # Only assetCount is written, so a database edit committed while counting is not reverted, and
     # only while the record exists, so a deleted database is not recreated as a live record.

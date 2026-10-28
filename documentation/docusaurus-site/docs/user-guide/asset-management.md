@@ -128,7 +128,9 @@ When viewing a historical version, all file operations (upload, move, copy, rena
 
 ### Creating a New Version
 
-New versions are created automatically when changes are made to the asset's files. You can also create versions explicitly:
+Uploading or changing files never creates an asset version. A version is recorded when the asset is created (version 0), when a user runs **Create Version** from the web interface, the API, or the CLI, and when a user reverts to an earlier version. Files uploaded since the last version show as not included in the current asset version until a version is created. See [Files and Versions](../concepts/files-and-versions.md) for how asset versions relate to Amazon S3 file versions.
+
+To create a version:
 
 1. Select the **Versions** tab.
 2. Use the **Create Version** action to create a new version snapshot of the current asset state.
