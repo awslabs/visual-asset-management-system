@@ -20,6 +20,7 @@ finds out whether an asset is archived and picks the id to hand the engine.
 - Otherwise the asset's archived status decides which of the two answers applies: one
   strongly-consistent GetItem of the archived key for a single record, or, in a listing, one Query
   of the database's archived partition (keys only), cached for the request, whatever the page size.
+  Once a listing has those ids, the stored id is asked only of the rows they name.
 """
 
 from typing import Callable, Dict, FrozenSet, Hashable, Optional, Tuple
@@ -119,11 +120,21 @@ class ArchivedAssets:
         archived, `database_id` otherwise. `decide` makes the caller's `enforce()` call(s) on the
         compliance object with the given database id. `cache_key` names an object that depends on
         nothing but the database, so its stored-id answer is reused for every row of that database;
-        `listing` reads the archived ids of the whole database once instead of one key per row."""
+        `listing` reads the archived ids of the whole database once instead of one key per row.
+
+        The answer is `decide(database_id)` and, for an archived asset, `decide` of the stored id
+        too. Once a listing has read the database's archived ids, a row whose asset is not among
+        them is therefore answered on the live id alone, and the stored id is not asked again: for
+        an object that names more than the database (a cascade's id), that question would be put,
+        and refused, once per row, and every refused check writes an authorization audit entry."""
         if not decide(database_id):
             return False
         if not names_an_asset(database_id, asset_id):
             return True
+        if listing and database_id in self._archived_ids:
+            if asset_id not in self._archived_ids[database_id]:
+                return True
+            return self._stored_decision(database_id, decide, cache_key)
         if self._stored_decision(database_id, decide, cache_key):
             return True
         return not self.is_archived(database_id, asset_id, listing)

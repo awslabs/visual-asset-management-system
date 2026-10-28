@@ -20,6 +20,7 @@ from backend.tests.handlers.compliance._harness import (
 from common.compliance import archivedAssets
 from common.compliance import listing
 from common.compliance.archivedAssets import ArchivedAssets
+from handlers.compliance import complianceCascadeService as cascade_svc
 from handlers.compliance import complianceEvaluateService as evaluate_svc
 
 ARCHIVED_DB = f"{DB}#deleted"
@@ -98,6 +99,92 @@ class TestDecide:
         assert asked == [database_id]
         table.get_item.assert_not_called()
         table.query.assert_not_called()
+
+    def test_a_listing_asks_the_stored_id_again_only_for_its_archived_rows(self):
+        """Without a `cache_key` (an object that names more than the database, such as a cascade),
+        a listing that has read a database's archived ids does not ask the stored id of a row whose
+        asset is not among them: the answer is the live one whatever the stored id says. Every
+        refused check writes an authorization audit entry, so asking it per row cost a role refused
+        on the stored id one log write per row."""
+        table = live_only_asset_table(archived={"a", "b"})
+        decide, asked = self._decide({DB})
+        archived = ArchivedAssets(table)
+        rows = [f"x{i}" for i in range(10)] + ["a"] + [f"y{i}" for i in range(10)] + ["b"]
+        verdicts = {asset_id: archived.decide(DB, asset_id, decide, listing=True)
+                    for asset_id in rows}
+        assert {asset_id for asset_id, allowed in verdicts.items() if not allowed} == {"a", "b"}
+        # The first row's stored id, before the archive was read, then each archived row's.
+        assert asked.count(ARCHIVED_DB) == 3
+        assert asked.count(DB) == len(rows)
+        assert table.query.call_count == 1
+
+    def test_a_listing_allowed_on_both_ids_still_reads_no_archive(self):
+        table = live_only_asset_table(archived={"a"})
+        decide, asked = self._decide({DB, ARCHIVED_DB})
+        archived = ArchivedAssets(table)
+        assert all(archived.decide(DB, asset_id, decide, listing=True)
+                   for asset_id in ("x1", "a", "x2"))
+        assert asked == [DB, ARCHIVED_DB] * 3
+        table.query.assert_not_called()
+        table.get_item.assert_not_called()
+
+
+def _cascade_listing(stored_id_allowed, archived_parents=("p03", "p11"), rows=20):
+    """The pending cascade listing of DB, `rows` cascades whose parents are `p00`.., for a caller
+    allowed on the live id and, per `stored_id_allowed`, on the archived id. Returns (response,
+    refused Tier-2 checks, asset table)."""
+    items = [{"cascadeId": f"c{i:02d}", "state": "pending_approval",
+              "createdAt": f"2026-10-28T00:{i:02d}:00+00:00",
+              "triggeredByDatabaseId": DB, "triggeredByAssetId": f"p{i:02d}"}
+             for i in range(rows)]
+    cascade_table = MagicMock(name="cascade_table")
+    cascade_table.query.return_value = {"Items": [dict(item) for item in items]}
+    refused = []
+
+    def enforce(obj, act):
+        allowed = (obj["databaseId"] == DB
+                   or (stored_id_allowed and obj["databaseId"] == ARCHIVED_DB))
+        if not allowed:
+            refused.append((obj.get("object__type"), obj["databaseId"], act))
+        return allowed
+    instance = MagicMock(name="CasbinEnforcer")
+    instance.enforceAPI.return_value = True
+    instance.enforce.side_effect = enforce
+    asset_table = live_only_asset_table(archived=set(archived_parents))
+    with patch.object(cascade_svc, "request_to_claims", claims_for(USER)), \
+            patch.object(cascade_svc, "CasbinEnforcer", return_value=instance), \
+            patch.object(cascade_svc, "cascade_table", cascade_table), \
+            patch.object(cascade_svc.store, "asset_table", asset_table):
+        response = cascade_svc.lambda_handler(
+            rest_event("GET", "/compliance/cascades", query_params={"databaseId": DB}),
+            MagicMock())
+    return response, refused, asset_table
+
+
+@pytest.mark.unit
+class TestTheCascadeListingRead:
+
+    def test_a_role_refused_on_the_archived_id_is_refused_once_plus_once_per_archived_row(self):
+        response, refused, asset_table = _cascade_listing(False)
+        assert response["statusCode"] == 200
+        cascades = body_of(response)["cascades"]
+        assert [row["assetId"] for row in cascades] == [
+            f"p{i:02d}" for i in range(20) if i not in (3, 11)]
+        assert all(row["permissions"] == {"approve": True} for row in cascades)
+        # One refused check for the first row, before the archive was read, and one for each
+        # withheld row; none for the `approve` flags of the rows listed.
+        assert len(refused) == 3
+        assert asset_table.query.call_count == 1
+        asset_table.get_item.assert_not_called()
+
+    def test_a_role_allowed_on_both_ids_lists_everything_and_reads_no_archive(self):
+        response, refused, asset_table = _cascade_listing(True)
+        cascades = body_of(response)["cascades"]
+        assert len(cascades) == 20
+        assert all(row["permissions"] == {"approve": True} for row in cascades)
+        assert refused == []
+        asset_table.query.assert_not_called()
+        asset_table.get_item.assert_not_called()
 
 
 def _overview(stored_id_allowed, archived=(), page_size=3):

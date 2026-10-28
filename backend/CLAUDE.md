@@ -52,7 +52,8 @@ backend/
 │   │   │                                           #   ArchivedAssets.decide() checks the stored id
 │   │   │                                           #   `<db>#deleted` with the shared engine and reads
 │   │   │                                           #   the archived partition only when it is refused
-│   │   │                                           #   (one keys-only Query per database per listing);
+│   │   │                                           #   (one keys-only Query per database per listing;
+│   │   │                                           #   once read, only archived rows ask the stored id);
 │   │   │                                           #   withheld() / withheld_state_counts() for the
 │   │   │                                           #   overview's rows and counts
 │   │   ├── compliance/evaluationEngine.py          # Pure vams-rules-v1 rule logic (no AWS access):
