@@ -91,12 +91,14 @@ from .common.edhSessionState import (
     EXPIRES_AT_FIELD,
     ACTIVITY_FIELD,
     ACTIVITY_STARTING,
-    CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED, CONNECTION_UNAVAILABLE_REASON_FIELD, DISPLAY_SESSION_ENDED_MESSAGE,
+    CONNECTION_CHECKED_AT_FIELD, CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED, CONNECTION_UNAVAILABLE_REASON_FIELD,
+    DISPLAY_SESSION_ENDED_MESSAGE,
     LAST_ERROR_LEASE_EXPIRED,
     LAST_ERROR_RESERVATION_FULL,
     START_IN_PROGRESS_SECONDS, STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED,
     STOP_REQUESTED_FIELD, WORKER_ACTION_START, WORKER_PAYLOAD_KEYS,
-    capacity_reservation_fallback_reason, capacity_reservation_named, connection_unavailable_reason,
+    capacity_reservation_fallback_reason, capacity_reservation_named, connection_check_applies,
+    connection_checks_due, connection_unavailable_reason,
     credential_claim_stamp, deleted_row_expiry,
     edh_failure_attributes, edh_failure_read_due,
     launch_image_snapshot, observed_row_attributes, orphaned_last_error, session_row_live, start_accepted_cleared,
@@ -383,9 +385,11 @@ def _row_for_identifier(identifier):
     return None
 
 
-def _row_write(row, attributes):
-    """The update_item arguments that SET ``attributes`` (plus updatedAt, added to them) on the row."""
-    attributes['updatedAt'] = _utc_now()
+def _row_write(row, attributes, touch=True):
+    """The update_item arguments that SET ``attributes`` (plus updatedAt, added to them unless ``touch`` is off)
+    on the row."""
+    if touch:
+        attributes['updatedAt'] = _utc_now()
     keys = list(attributes)
     return {
         'Key': {'bootstrapId': row['bootstrapId']},
@@ -416,10 +420,11 @@ def _stored_row(row):
     return edh_session_table.get_item(Key={'bootstrapId': row['bootstrapId']}, ConsistentRead=True).get('Item')
 
 
-def _update_live_row(row, **attributes):
+def _update_live_row(row, *, touch=True, **attributes):
     """Persist ``attributes`` as _update_row does, provided the row still exists and is not DELETED, and
-    answer whether they landed. A row deleted since it was read is terminal and is not written over."""
-    write = _row_write(row, attributes)
+    answer whether they landed. A row deleted since it was read is terminal and is not written over. With
+    ``touch`` off the row's updatedAt is left as it is."""
+    write = _row_write(row, attributes, touch)
     names = write['ExpressionAttributeNames']
     # The state the write sets, if it sets one, is named once: the condition reads it under the same name.
     state = next((placeholder for placeholder, key in names.items() if key == 'state'), '#state')
@@ -681,13 +686,15 @@ def _desktop_for_row(row, desktops):
     return None
 
 
-def _observe_desktop(row, desktop):
-    """Persist what EDH's desktop record changes on the row, then bind the session secret to the
-    instance the row now holds when it is not yet bound to it. A failed binding is logged and left
-    to the reconciler. A row deleted since it was read keeps what its deletion wrote, and nothing is
+def _observe_desktop(row, desktop, **stamps):
+    """Persist what EDH's desktop record changes on the row, with ``stamps`` (the read's own time stamps) in the
+    same write, then bind the session secret to the instance the row now holds when it is not yet bound to it. A
+    write of stamps alone leaves the row's updatedAt, which marks a change of the row. A failed binding is logged
+    and left to the reconciler. A row deleted since it was read keeps what its deletion wrote, and nothing is
     bound for it."""
     changed = observed_row_attributes(row, desktop)
-    if changed and not _update_live_row(row, **changed):
+    written = {**changed, **stamps}
+    if written and not _update_live_row(row, touch=bool(changed), **written):
         logger.info(f"Bootstrap {row['bootstrapId']} was deleted since it was read; EDH's view is not merged")
         return
     if row.get('secretName') and row.get('instanceId') and row.get('secretBoundInstanceId') != row['instanceId']:
@@ -774,6 +781,39 @@ def _desktop_after_lost_answer(event, client, row, edh_uid, operation, lost):
     return desktop
 
 
+def _check_display_session(event, client, row, edh_uid, operation):
+    """Check, for a row stored ACTIVE with a session id whose merged ``edhState`` is running
+    (``connection_check_applies``), whether its desktop's display session can still be connected to: the read
+    Connect makes, EDH's per-user listing narrowed to the one session, merged onto the row as Connect merges it, so
+    ``connection_verdict`` records or clears ``connectionUnavailableReason``, with ``connectionCheckedAt`` in the
+    same write. The token-free state read carries no link and cannot see a DCV session that ended while the desktop
+    kept running. EDH issues a connection token on this read; the link is never returned, logged or stored. A
+    listing with no record of the desktop leaves the row as the state read left it (a vanished desktop is the
+    sweep's); a read that fails is logged by the error's type and leaves it too, and the request goes on."""
+    if not connection_check_applies(row):
+        return
+    try:
+        desktop = _call_edh(event, client, "get_desktop_connection", operation, edh_uid, edh_uid, row['sessionId'])
+    except (EdhError, ValueError) as err:
+        logger.warning("EDH's listing of a running desktop's connection was not read; the state read's view stands",
+                       extra={"operation": operation, "bootstrapId": row['bootstrapId'],
+                              "sessionId": row.get('sessionId'), "error": type(err).__name__})
+        return
+    desktop = _desktop_for_row(row, [desktop] if isinstance(desktop, dict) else [])
+    if desktop is None:
+        return
+    _observe_desktop(row, desktop, **{CONNECTION_CHECKED_AT_FIELD: _utc_now()})
+
+
+def _check_display_sessions(event, client, rows, desktops, edh_uid):
+    """Check the display session (``_check_display_session``) of the listed rows EDH's state read answered that
+    are due a check (``connection_checks_due``): at most ``CONNECTION_CHECKS_PER_LIST``, the longest unchecked
+    first, so the list's latency stays bounded while its refresh visits every running desktop in turn."""
+    answered = [row for row in rows if _desktop_for_row(row, desktops) is not None]
+    for row in connection_checks_due(answered):
+        _check_display_session(event, client, row, edh_uid, "workstationList")
+
+
 def _listed_state(desktop):
     """The VAMS state EDH's record of a desktop maps to; None without a record or for a state outside the
     shared mapping."""
@@ -792,6 +832,7 @@ def list_workstations(event):
         unanswered = set()
         desktops = _desktop_states(event, client, rows, edh_uid, "workstationList", unanswered)
         _merge_edh_state(rows, desktops)
+        _check_display_sessions(event, client, rows, desktops, edh_uid)
         _record_failed_launches(event, rows, unanswered)
         _capture_launch_failures(event, client, rows, edh_uid)
     enforcer = _enforcer() if len(claims_and_roles["tokens"]) > 0 else None
@@ -1237,6 +1278,8 @@ def get_workstation(event, path):
     unanswered = set()
     desktops = _desktop_states(event, client, [row], edh_uid, "workstationGet", unanswered)
     _merge_edh_state([row], desktops)
+    if _desktop_for_row(row, desktops) is not None:
+        _check_display_session(event, client, row, edh_uid, "workstationGet")
     _record_failed_launches(event, [row], unanswered)
     _capture_launch_failures(event, client, [row], edh_uid)
     return success(body=_record(row))
@@ -1684,7 +1727,8 @@ def connect_workstation(event, path):
     listing renders for that one desktop while it is running; EDH issues its connection token on this
     call. A row in any other stored state is not ready and EDH is not asked; a desktop EDH reports running with a
     link that signs no user in, the fallback EDH lists when the DCV broker holds no session for it, is refused
-    ``DISPLAY_SESSION_ENDED`` and the row records it. The URL is a credential and
+    ``DISPLAY_SESSION_ENDED`` and the row records it. The read stamps ``connectionCheckedAt``, as the list and get
+    routes' check of the display session does (``_check_display_session``). The URL is a credential and
     appears in the response body only. A caller that authenticated with an API key, a desktop's own
     temporary session key included, is refused: the URL is a credential for the desktop."""
     if claims_and_roles.get('authMethod') == AUTH_METHOD_API_KEY:
@@ -1706,7 +1750,7 @@ def connect_workstation(event, path):
         if row.get('connectionAvailable'):
             _update_row(row, connectionAvailable=False)
         return _not_ready_response(event)
-    _observe_desktop(row, desktop)
+    _observe_desktop(row, desktop, **{CONNECTION_CHECKED_AT_FIELD: _utc_now()})
     # _update_row mirrors its writes onto the row, so the row's connectionAvailable is now
     # observed_row_attributes' verdict: EDH reports the desktop running with a link that signs a user in.
     connection_string = desktop.get(EDH_FIELD_CONNECTION_STRING)

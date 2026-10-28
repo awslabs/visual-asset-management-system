@@ -8,8 +8,9 @@ codes an ORPHANED row keeps in ``lastError`` and the lease-expiry code a STOPPED
 expiry a DELETED row leaves the table by, the form a start's stamp and a credential claim are written
 in and the windows they hold for, when a row's desktop may still be running on a key of its bootstrap,
 the launch worker's payload keys and attempt ceiling, and the EDH schedule VAMS gives every desktop. It
-says whether a running desktop's connection link signs a user in, and why one that does not cannot be
-connected to; it also reads the reason EDH recorded for a failed launch out of the desktop's recent events, says which
+says whether a running desktop's connection link signs a user in, why one that does not cannot be
+connected to, and when the list route checks a running desktop's display session again; it also reads the
+reason EDH recorded for a failed launch out of the desktop's recent events, says which
 ``lastError`` that reason implies, and when a row is due a read for one; it says when a start EDH accepted has
 stalled, and it names the image a workstation runs: what a launch stores on its row, and the record's image fields
 resolved from the recipe builds. A pure module: no AWS client, no environment read.
@@ -134,6 +135,13 @@ DISPLAY_SESSION_ENDED_MESSAGE = ("The workstation is running but its remote disp
 # and a standard virtual desktop) or the user name (the high-scale layout and a standard console desktop). EDH's
 # fallback link, and its link for a desktop the broker has not registered, carry neither.
 EDH_CONNECTION_QUERY_FIELDS = ("authToken", "username")
+# When the list, get or connect route last read EDH's per-user listing of an ACTIVE running desktop for its link
+# (``connectionCheckedAt``, never on the record): the get route reads it every time, the list route only for a row
+# whose stamp is absent or ``CONNECTION_CHECK_INTERVAL_SECONDS`` old, oldest first, at most
+# ``CONNECTION_CHECKS_PER_LIST`` per request, so the state read's silence on the display session is not the last word.
+CONNECTION_CHECKED_AT_FIELD = "connectionCheckedAt"
+CONNECTION_CHECK_INTERVAL_SECONDS = 300
+CONNECTION_CHECKS_PER_LIST = 2
 # The AWS error codes, parsed from the reason EDH recorded for a failed launch, that turn a generic
 # LAUNCH_ERROR on an ORPHANED row into CAPACITY_UNAVAILABLE or QUOTA_EXCEEDED; any other code leaves it.
 CAPACITY_ERROR_CODES = frozenset({
@@ -405,6 +413,51 @@ def connection_unavailable_reason(row) -> Optional[str]:
             and str(row.get('edhState') or '').lower() == EDH_SESSION_STATE_RUNNING):
         return reason
     return None
+
+
+def connection_check_applies(row) -> bool:
+    """True for a row stored ACTIVE with a session id whose ``edhState`` is running: one whose display session the
+    list and get routes check through EDH's per-user listing."""
+    return (row.get('state') == STATE_ACTIVE and bool(row.get('sessionId'))
+            and str(row.get('edhState') or '').lower() == EDH_SESSION_STATE_RUNNING)
+
+
+def _connection_checked_at(row) -> Optional[datetime]:
+    """The row's ``connectionCheckedAt`` as an instant, one without an offset read as UTC; None when it is absent,
+    blank or unreadable."""
+    stamp = row.get(CONNECTION_CHECKED_AT_FIELD)
+    if not isinstance(stamp, str) or not stamp:
+        return None
+    try:
+        checked_at = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    return checked_at if checked_at.tzinfo is not None else checked_at.replace(tzinfo=timezone.utc)
+
+
+def connection_check_due(row, now=None) -> bool:
+    """True when the check applies to the row (``connection_check_applies``) and its last one is not inside
+    ``CONNECTION_CHECK_INTERVAL_SECONDS`` at ``now`` (the current instant when not given). A stamp written up to one
+    interval after ``now`` holds the check off too; an absent, blank, unreadable or further-ahead stamp holds nothing.
+    """
+    if not connection_check_applies(row):
+        return False
+    checked_at = _connection_checked_at(row)
+    if checked_at is None:
+        return True
+    now = now or datetime.now(timezone.utc)
+    window = timedelta(seconds=CONNECTION_CHECK_INTERVAL_SECONDS)
+    return not -window <= now - checked_at < window
+
+
+def connection_checks_due(rows, now=None):
+    """The rows one list request checks: those ``connection_check_due`` at ``now``, the longest unchecked first (a
+    row without a readable stamp ahead of every stamped one), at most ``CONNECTION_CHECKS_PER_LIST``."""
+    now = now or datetime.now(timezone.utc)
+    never = datetime.min.replace(tzinfo=timezone.utc)
+    due = [row for row in rows if connection_check_due(row, now)]
+    due.sort(key=lambda row: _connection_checked_at(row) or never)
+    return due[:CONNECTION_CHECKS_PER_LIST]
 
 
 def observed_row_attributes(row, desktop):

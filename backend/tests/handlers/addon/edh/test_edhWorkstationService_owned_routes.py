@@ -164,7 +164,8 @@ class TestOwnership:
 
         assert response["statusCode"] == 200
         assert fakes.edh.calls_to("get_desktop_states") == [(edh_uid_for(USER), [SESSION_OWN])]
-        assert fakes.edh.calls_to("get_desktop_connection") == []
+        # The display-session check of a running desktop (D21) reads its one session too.
+        assert fakes.edh.calls_to("get_desktop_connection") == [(edh_uid_for(USER), SESSION_OWN)]
 
     def test_an_unknown_session_is_not_found_without_an_audit_record(self, monkeypatch):
         fakes = install_service_fakes(monkeypatch)

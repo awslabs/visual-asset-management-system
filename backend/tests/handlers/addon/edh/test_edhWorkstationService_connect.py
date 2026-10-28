@@ -101,7 +101,8 @@ class TestConnect:
         )
 
     def test_a_row_already_connectable_is_not_rewritten(self, monkeypatch):
-        """Control: a row that already records what EDH reports is answered without a write."""
+        """Control: a row that already records what EDH reports is answered with its check stamp written alone
+        (D21), neither its observed attributes nor its updatedAt rewritten."""
         fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_connection=_desktop()))
         fakes.table.query.return_value = {"Items": [own_row()]}
 
@@ -109,7 +110,9 @@ class TestConnect:
 
         assert response["statusCode"] == 200
         assert response_body(response)["connectionUrl"] == CONNECTION_URL
-        fakes.table.update_item.assert_not_called()
+        (write,) = fakes.table.update_item.call_args_list
+        assert set(write.kwargs["ExpressionAttributeNames"].values()) == {"connectionCheckedAt", "state"}
+        assert CONNECTION_URL not in json.dumps(write.kwargs, default=str)
 
     def test_a_desktop_absent_from_the_active_list_is_not_ready(self, monkeypatch):
         another = {**_desktop(session_id="another"), EDH_FIELD_INSTANCE_ID: "i-0another0000000"}
