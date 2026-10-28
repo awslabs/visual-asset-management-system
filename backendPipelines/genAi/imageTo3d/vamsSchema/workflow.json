@@ -1,0 +1,44 @@
+{
+    "workflowName": "Image to 3D",
+    "category": "3D Reconstruction",
+    "description": "Generate a 3D mesh from one or more photographs of a subject -- or refine an existing mesh against them with the Blender agent -- with optional automated print-readiness cleanup producing a watertight STL.",
+    "systemConfig": {
+        "inputFileArity": "multi",
+        "assetScope": {
+            "crossAssetAllowed": false,
+            "singleAssetOnly": true,
+            "wholeAssetAllowed": false,
+            "folderAllowed": false
+        },
+        "metadataInputs": {
+            "assetMetadata": false,
+            "fileMetadata": false,
+            "fileAttributes": false,
+            "databaseMetadata": false
+        },
+        "inputFileFilters": {
+            "allow": ["*.png", "*.jpg", "*.jpeg", "*.glb", "*.gltf", "*.obj", "*.stl", "*.ply"],
+            "exclude": []
+        },
+        "concurrencyRestriction": "none",
+        "outputTarget": {
+            "locationType": "asset",
+            "allowOverride": false
+        },
+        "allowWorkflowTriggerChaining": false,
+        "defaultOutputFileBaseExecutionPathExtension": "/{{jobStartDate}}-{{jobStartTimestampUnix}}-{{executionId}}/"
+    },
+    "triggers": [
+        {
+            "triggerType": "fileUpload",
+            "inputFileFilters": {
+                "allow": ["*.png", "*.jpg", "*.jpeg"],
+                "exclude": []
+            },
+            "defaultTemplateIds": {
+                "GLOBAL:genai-image-to-3d": "image-to-3d-stable3dgen"
+            },
+            "enabled": false
+        }
+    ]
+}

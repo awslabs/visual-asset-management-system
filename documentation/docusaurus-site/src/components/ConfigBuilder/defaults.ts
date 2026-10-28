@@ -137,6 +137,39 @@ const COSMOS3_DEFAULT = {
     },
 };
 
+const IMAGE_TO_3D_DEFAULT = {
+    enabled: false,
+    huggingFaceToken: "",
+    useCodeBuild: true,
+    autoRegisterWithVAMS: true,
+    autoTriggerOnFileExtensionsUpload: "",
+    instanceTypes: [
+        "g6e.xlarge",
+        "g6e.2xlarge",
+        "g6e.4xlarge",
+        "g6.2xlarge",
+        "g6.4xlarge",
+        "g6.8xlarge",
+        "g5.2xlarge",
+        "g5.4xlarge",
+        "g5.8xlarge",
+    ],
+    maxVCpus: 48,
+    models: {
+        sam3d: { enabled: false },
+        stable3dgen: { enabled: true },
+        trellis2: { enabled: false },
+        triposr: { enabled: false },
+        step1x3d: { enabled: false },
+        hunyuan3d: { enabled: false },
+        blenderagent: {
+            enabled: false,
+            bedrockModelId: "global.openai.gpt-6-astra",
+            useStabilityImageEditing: true,
+        },
+    },
+};
+
 const COMMERCIAL: ConfigShape = {
     name: "vams",
     env: {
@@ -328,6 +361,7 @@ const COMMERCIAL: ConfigShape = {
             useNvidiaCosmos: cloneConfig(COSMOS_DEFAULT),
             useNvidiaCosmos3: cloneConfig(COSMOS3_DEFAULT),
             useNvidiaGr00t: cloneConfig(GR00T_DEFAULT),
+            useImageTo3d: cloneConfig(IMAGE_TO_3D_DEFAULT),
         },
         addons: {
             useGarnetFramework: {
@@ -360,6 +394,7 @@ const COMMERCIAL: ConfigShape = {
                 useOidc: false,
                 useUserPasswordAuthFlow: false,
                 credTokenTimeoutSeconds: 3600,
+                retainLegacyGroupsAttribute: false,
             },
             useExternalOAuthIdp: {
                 enabled: false,
@@ -437,15 +472,22 @@ function buildGovCloud(): ConfigShape {
     // The same reason: one model id serves this pipeline's text and vision calls, and the commercial
     // default is a "global." inference profile.
     cfg.app.pipelines.useGenAiVideoSopBom.bedrockModelId = "";
+    // Left empty for the same reason as the labeling model id: the "global." inference profile exists only
+    // in the commercial partition.
+    cfg.app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId = "";
+    // The Stability AI image-editing models run only through their us. inference profiles, which exist
+    // only in the commercial partition.
+    cfg.app.pipelines.useImageTo3d.models.blenderagent.useStabilityImageEditing = false;
     return cfg;
 }
 
 const GOVCLOUD: ConfigShape = buildGovCloud();
 
 /**
- * The EU Sovereign Cloud preset is the GovCloud preset with 4 further
+ * The EU Sovereign Cloud preset is the GovCloud preset with 5 further
  * differences: the fixed `eusc-de-east-1` region, FIPS off, an `aws-eusc`
- * partition certificate ARN, and `amazonaws.eu` ECR image URIs.
+ * partition certificate ARN, `amazonaws.eu` ECR image URIs, and the Image to 3D
+ * images built locally rather than by AWS CodeBuild.
  */
 function buildEuSovereign(): ConfigShape {
     const cfg = cloneConfig(GOVCLOUD);
@@ -458,6 +500,8 @@ function buildEuSovereign(): ConfigShape {
     cfg.app.pipelines.useRapidPipeline.useEcs.ecrContainerImageURI = euEcr;
     cfg.app.pipelines.useRapidPipeline.useEks.ecrContainerImageURI = euEcr;
     cfg.app.pipelines.useModelOps.ecrContainerImageURI = euEcr;
+    // The in-account CodeBuild container build is supported in the aws and aws-us-gov partitions.
+    cfg.app.pipelines.useImageTo3d.useCodeBuild = false;
     return cfg;
 }
 

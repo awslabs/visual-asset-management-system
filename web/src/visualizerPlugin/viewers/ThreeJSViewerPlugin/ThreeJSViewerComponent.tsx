@@ -12,7 +12,7 @@ import { MouseControls } from "./MouseControls";
 import ThreeJSPanel from "./ThreeJSPanel";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import { MaterialLibraryItem } from "./ThreeJSMaterialLibrary";
-import { loadFile } from "./utils/fileLoaders";
+import { isCadSupportError, loadFile } from "./utils/fileLoaders";
 import { preloadGLTFDependencies, cleanupBlobUrls } from "./utils/gltfDependencyLoader";
 import { applySceneEnvironment, applySceneLighting, SceneEnvironment } from "./utils/sceneLighting";
 
@@ -321,6 +321,10 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         // the abandoned first load carry on writing into the live scene. The closure gives each run
         // its own flag, so the abandoned one stops and the live one proceeds.
         let cancelled = false;
+        // The renderer is created before any file loads, while viewerInstanceRef is set only once
+        // the scene is ready, so this run's renderer is held here: cleanup releases it after a
+        // load that failed or was cancelled too.
+        let runRenderer: any = null;
 
         const loadAssets = async () => {
             try {
@@ -349,6 +353,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 );
                 camera.position.set(5, 5, 5);
                 const renderer = new THREE.WebGLRenderer({ antialias: true });
+                runRenderer = renderer;
                 renderer.setSize(
                     containerRef.current!.clientWidth,
                     containerRef.current!.clientHeight
@@ -541,13 +546,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 // If no files loaded, show the actual error message
                 if (loadedGroups.length === 0) {
                     // Check if any error is CAD/WASM-related (SharedArrayBuffer, OCCT, etc.)
-                    const cadError = errors.find(
-                        (err) =>
-                            err.error.includes("CAD Format Support Not Available") ||
-                            err.error.includes("CAD format support not enabled") ||
-                            err.error.includes("OCCT library") ||
-                            err.error.includes("SharedArrayBuffer")
-                    );
+                    const cadError = errors.find((err) => isCadSupportError(err.error));
 
                     if (cadError) {
                         // Show CAD/WASM error prominently
@@ -782,23 +781,29 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 controls?.dispose();
 
-                if (renderer?.domElement?.parentNode) {
-                    renderer.domElement.parentNode.removeChild(renderer.domElement);
-                }
-
-                // Before the renderer: the environment is a render target that belongs to this
-                // renderer's context, so releasing it afterwards releases nothing.
-                sceneEnvironmentRef.current?.dispose();
-                sceneEnvironmentRef.current = null;
-
-                renderer?.dispose();
-
                 // Cleanup blob URLs
                 if (blobUrls && blobUrls.length > 0) {
                     cleanupBlobUrls(blobUrls);
                     console.log(`Cleaned up ${blobUrls.length} blob URLs`);
                 }
             }
+            viewerInstanceRef.current = null;
+
+            if (runRenderer?.domElement?.parentNode) {
+                runRenderer.domElement.parentNode.removeChild(runRenderer.domElement);
+            }
+
+            // Before the renderer: the environment is a render target that belongs to this
+            // renderer's context, so releasing it afterwards releases nothing.
+            sceneEnvironmentRef.current?.dispose();
+            sceneEnvironmentRef.current = null;
+
+            runRenderer?.dispose();
+            // dispose() frees the renderer's GPU resources but keeps the WebGL context until the
+            // canvas is garbage collected, and the browser caps live contexts per page. Called after
+            // dispose(), which has already removed the renderer's own context-lost listener.
+            runRenderer?.forceContextLoss?.();
+            runRenderer = null;
 
             // Clear global THREE.js reference to prevent contamination
             delete (window as any).THREE;
@@ -1297,9 +1302,20 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
     };
 
     if (error) {
+        // Keyed apart from the viewer root below so React does not reuse the scene container for
+        // this panel: the renderer's canvas is appended to that container outside React, and a
+        // reused node would keep it above the message.
         return (
             <div
-                style={{ position: "relative", height: "100%", backgroundColor: "#f5f5f5" }}
+                key="threejs-viewer-error"
+                style={{
+                    position: "relative",
+                    height: "100%",
+                    backgroundColor: "#f5f5f5",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                }}
                 id="threejs-viewer-root"
             >
                 <div
@@ -1308,20 +1324,25 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                         fontSize: "1.4em",
                         lineHeight: "1.5",
                         maxWidth: "800px",
-                        position: "absolute",
-                        top: "50%",
-                        left: "50%",
-                        transform: "translate(-50%, -50%)",
+                        maxHeight: "100%",
+                        overflowY: "auto",
+                        boxSizing: "border-box",
                         textAlign: "center",
+                        whiteSpace: "pre-line",
                         padding: "20px",
                     }}
                 >
                     {error}
-                    <br />
-                    <br />
-                    <span style={{ fontSize: ".9em", color: "#d13212" }}>
-                        Please ensure the file is a supported 3D format
-                    </span>
+                    {/* A CAD setup message is about the deployment or browser, not the file. */}
+                    {!isCadSupportError(error) && (
+                        <>
+                            <br />
+                            <br />
+                            <span style={{ fontSize: ".9em", color: "#d13212" }}>
+                                Please ensure the file is a supported 3D format
+                            </span>
+                        </>
+                    )}
                 </div>
             </div>
         );
@@ -1329,6 +1350,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
     return (
         <div
+            key="threejs-viewer"
             style={{ position: "relative", height: "100%", width: "100%" }}
             id="threejs-viewer-root"
         >

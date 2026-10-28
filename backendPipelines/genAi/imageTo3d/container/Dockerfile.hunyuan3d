@@ -1,0 +1,166 @@
+# VAMS Image to 3D Pipeline Container -- Tencent Hunyuan3D-2
+# Upstream: https://github.com/Tencent-Hunyuan/Hunyuan3D-2
+# Weights: https://huggingface.co/tencent/Hunyuan3D-2
+
+# LICENSING: the code and weights are under the Tencent Hunyuan 3D 2.0 Community License Agreement, which
+# permits commercial use but only inside a Territory defined as the world EXCLUDING the European Union, the
+# United Kingdom and South Korea, and requires a separate licence from Tencent above one million monthly
+# active users. getConfig() refuses to enable this model in a region outside the Territory. Unlike its two
+# textured peers this image pulls NO nvdiffrast: the texture stage ships its own rasteriser, so nothing here
+# carries the NVIDIA Source Code License's research-or-evaluation-only restriction.
+
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# The upstream repo is pinned to a reviewed commit so the image is reproducible. An empty value clones the
+# default branch, which makes the build non-reproducible. This commit is the one the adapter's driver was
+# written against: from_pretrained takes (repo, subfolder, variant, use_safetensors, device), the shape
+# pipeline's __call__ has no seed parameter and takes a generator, and the paint pipeline is called as
+# (mesh, image=...).
+ARG HUNYUAN3D_COMMIT="f8db63096c8282cb27354314d896feba5ba6ff8a"
+# The GPL-3.0 mesh-repair rungs (pymeshfix, pymeshlab) complete the repair ladder. A run selects which
+# rungs it walks through the template's REPAIR_BACKENDS setting.
+ARG ENABLE_GPL_MESH_REPAIR=true
+
+# Install system dependencies. The GL/EGL libraries back the texture stage's own rasteriser; cmake and
+# ninja build the two CUDA/C++ extensions it ships.
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    curl \
+    git \
+    git-lfs \
+    libegl1 \
+    xvfb \
+    libgl1 \
+    libopengl0 \
+    libglu1-mesa \
+    libgles2 \
+    libglib2.0-0 \
+    ninja-build \
+    python3 \
+    python3-dev \
+    python3-venv \
+    unzip \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git lfs install
+
+# Install AWS CLI v2
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+    unzip awscliv2.zip && \
+    ./aws/install && \
+    rm -rf aws awscliv2.zip
+
+# Ubuntu 24.04 marks its system python as externally managed, so the pipeline and the upstream repo share
+# one virtualenv that fronts PATH.
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+ENV VIRTUAL_ENV=/opt/venv
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# CUDA 12.8 torch stack. The texture stage's extensions compile against this torch, so it comes first.
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu128 \
+    torch torchvision
+
+# Shared pipeline dependencies
+COPY requirements.txt /opt/ml/code/requirements.txt
+RUN pip install --no-cache-dir -r /opt/ml/code/requirements.txt
+
+RUN git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git /opt/hunyuan3d && \
+    if [ -n "$HUNYUAN3D_COMMIT" ]; then \
+        git -C /opt/hunyuan3d checkout "$HUNYUAN3D_COMMIT"; \
+    else \
+        echo "WARNING: HUNYUAN3D_COMMIT is unset; this image tracks the default branch and is not reproducible"; \
+    fi
+WORKDIR /opt/hunyuan3d
+
+# Every GPU family the pipeline can schedule onto has to be in this list, or an extension compiles for the
+# wrong architecture and fails at runtime with "no kernel image is available for execution on the device".
+# Ampere (8.6) covers g5 / A10G, Ada (8.9) covers g6 / L4 and g6e / L40S, and Hopper (9.0) covers H100.
+ENV TORCH_CUDA_ARCH_LIST="8.6;8.9;9.0"
+# nvcc parallelism, capped as the peers that also compile from source cap it: an uncapped job count
+# exhausts the CodeBuild container's memory and the compile is killed rather than failing.
+ENV MAX_JOBS=2
+
+# The upstream manifest declares NO versions at all -- every line is a bare package name, including torch
+# and torchvision -- so installing it as written replaces the CUDA 12.8 torch above with whatever the
+# default PyPI index resolves to, and every extension compiled below then links against a torch the runtime
+# does not have. Four names are therefore filtered out, each for its own reason:
+#
+#   torch, torchvision   already installed from the CUDA 12.8 index; an unpinned reinstall downgrades them
+#   pymeshlab            GPL-3.0, and this pipeline gates the GPL repair rungs behind
+#                        ENABLE_GPL_MESH_REPAIR below -- letting the manifest pull it unconditionally would
+#                        put a GPL dependency in an image built with the flag off
+#   gradio, fastapi,     the manifest's own "Demo only" section; the adapter drives the model through a
+#   uvicorn              script and never serves an app
+#
+# The filter is asserted rather than assumed: a rename upstream would silently stop excluding a package,
+# so the torch build tag is re-checked after the install.
+RUN set -eux; \
+    grep -vE '^(torch|torchvision|pymeshlab|gradio|fastapi|uvicorn)\s*$' requirements.txt > /tmp/req.txt; \
+    pip install --no-cache-dir -r /tmp/req.txt; \
+    rm -f /tmp/req.txt; \
+    python -c "import torch; assert '+cu' in torch.__version__, torch.__version__; print('torch', torch.__version__)"
+
+# The paint stage's diffusion pipeline lives in the repo at hy3dgen/texgen/hunyuanpaint rather than in
+# diffusers, and current diffusers refuses to execute a custom pipeline without trust_remote_code=True.
+# Upstream's call does not pass it and offers no way to pass it from outside, so it is set at the call
+# site. The patch fails the build if the pinned revision has moved the call, rather than shipping a
+# texture stage that dies on a GPU instance.
+COPY patches/hunyuan3d_trust_remote_code.py /opt/ml/code/patches/hunyuan3d_trust_remote_code.py
+RUN python /opt/ml/code/patches/hunyuan3d_trust_remote_code.py \
+        /opt/hunyuan3d/hy3dgen/texgen/utils/multiview_utils.py
+
+# The texture stage rasterises UVs and bakes views back onto the mesh through two extensions the repo
+# carries itself. Not conditional: both directories exist at the pinned commit, and a build that skipped
+# them silently would push an image whose texture stage fails at run time on a GPU instance. If a later
+# commit moves them, the build fails here naming the path, which is where that belongs.
+RUN set -eux; \
+    pip install --no-cache-dir --no-build-isolation \
+        /opt/hunyuan3d/hy3dgen/texgen/custom_rasterizer; \
+    pip install --no-cache-dir --no-build-isolation \
+        /opt/hunyuan3d/hy3dgen/texgen/differentiable_renderer
+
+# GPL-3.0 mesh-repair rungs, installed only when the operator opts in
+RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
+        echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
+        pip install --no-cache-dir pymeshfix pymeshlab; \
+    else \
+        echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
+    fi
+
+# The upstream packages are imported by the adapter's driver script, which runs with the repo root as its
+# working directory; adding it to PYTHONPATH keeps the imports working from anywhere.
+ENV PYTHONPATH="/opt/hunyuan3d:${PYTHONPATH}"
+
+# A model repo's own requirements are installed after the shared ones and can pull a shared dependency
+# backwards -- reasserting the shared constraint here restores the version the pipeline's own code is
+# written against.
+COPY requirements.txt /opt/ml/code/requirements.txt
+RUN pip install --no-cache-dir -r /opt/ml/code/requirements.txt && python -c "import trimesh, manifold3d; print('trimesh', trimesh.__version__)"
+
+# rembg resolves its segmentation weights under U2NET_HOME and downloads them on first use, defaulting to a
+# home directory nothing carries between jobs. Pointing the variable at a baked-in copy removes the
+# download entirely -- for this pipeline's own segmentation stage and for upstream's BackgroundRemover,
+# which the driver reaches for when an image arrives without an alpha channel.
+ENV U2NET_HOME=/opt/rembg
+RUN mkdir -p /opt/rembg && \
+    curl -fsSL -o /opt/rembg/u2net.onnx \
+    https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx && \
+    python -c "import os; p='/opt/rembg/u2net.onnx'; size=os.path.getsize(p); \
+assert size > 150_000_000, f'the u2net weights are only {size} bytes'; print('u2net', size, 'bytes')"
+
+# VAMS container code
+COPY __init__.py __main__.py model_manager.py preprocess.py framing.py generate.py benchmark.py meshcleanup.py printfeatures.py texturing.py export.py agent_broker.py config.json entrypoint.sh /opt/ml/code/
+COPY models /opt/ml/code/models
+COPY vams_utils /opt/ml/code/vams_utils
+# Strip CRLF line endings from entrypoint.sh in case the source was bundled from a Windows working tree;
+# otherwise the shebang becomes `/bin/bash\r` and the kernel returns ENOENT on exec.
+RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh
+
+WORKDIR /opt/ml/code
+ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]
