@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Only connect and Windows sign-in may read EDH's per-user desktop list for a desktop that can run, which
-issues a connection token per desktop it renders; every other workstation and catalog route reads desktop
-state through the token-free session-state route or not at all. The one other read of the per-user list is
-the launch-failure read (in-dev D8), which the list and get routes and the session sweep make for an
-ORPHANED row's own session only -- a desktop that never ran has no DCV session, so EDH issues no token for
-it -- and no other handler module names the per-user route or either wrapper.
+issues a connection token per desktop it renders, save the get and list routes' check of a running desktop's
+display session (in-dev D21, ``_check_display_session``), which reads it for an ACTIVE row EDH's state read
+reports running, that row's own session only, and never returns, logs or stores the link. Every other workstation
+and catalog route reads desktop state through the token-free session-state route or not at all. The one other
+read of the per-user list is the launch-failure read (in-dev D8), which the list and get routes and the session
+sweep make for an ORPHANED row's own session only -- a desktop that never ran has no DCV session, so EDH issues no
+token for it -- and no other handler module names the per-user route or either wrapper.
 
 Every workstation and catalog route is driven through ``lambda_handler`` with the setups the route suites
 already use, and its EDH calls are read from the scripted client. The audit maps, the client module and
@@ -76,6 +78,11 @@ from backend.tests.handlers.addon.edh.test_edhWorkstationService_session_lifecyc
 
 # The two routes that read EDH's per-user list, each for its one session.
 CONNECTION_ROUTES = {(API_EDH_WORKSTATION_CONNECT.path, GET), (API_EDH_WORKSTATION_WINDOWS_SIGN_IN.path, GET)}
+# The scenarios whose route checks the display session of the caller's running ACTIVE row (D21): each reads the
+# per-user list for that row's own session, once.
+CHECK_SCENARIOS = {"list_mixed_rows", "get_with_session"}
+# The functions of the service allowed to call the connection wrapper.
+CONNECTION_CALLERS = ("connect_workstation", "windows_sign_in", "_check_display_session")
 # The bootstrap of a launch EDH has not listed yet, beside the caller's own session row.
 BOOTSTRAP_CREATING = "5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a"
 # The EDH handler modules, the client among them, and the per-user route as the client sends it.
@@ -305,17 +312,19 @@ class TestTokenReads:
         assert not CONNECTION_ROUTES & scenario_routes
 
     @pytest.mark.parametrize("scenario", sorted(SCENARIOS))
-    def test_a_route_that_is_not_a_connection_route_never_reads_the_per_user_list(self, monkeypatch, scenario):
+    def test_a_route_that_is_not_a_connection_route_reads_the_per_user_list_only_to_check_its_own_session(
+            self, monkeypatch, scenario):
         _path, _method, build, status, _reads_state = SCENARIOS[scenario]
 
         response, fakes = build(monkeypatch)
 
         assert response["statusCode"] == status
-        assert fakes.edh.calls_to(CONNECTION_WRAPPER) == []
+        checks = [(edh_uid_for(USER), SESSION_OWN)] if scenario in CHECK_SCENARIOS else []
+        assert fakes.edh.calls_to(CONNECTION_WRAPPER) == checks
         list_wrappers = {wrapper for wrapper, audit in service.EDH_AUDIT_ROUTES.items()
                          if audit[1] == EDH_ROUTE_DESKTOPS_LIST}
-        assert list_wrappers
-        assert all(fakes.edh.calls_to(wrapper) == [] for wrapper in list_wrappers)
+        assert CONNECTION_WRAPPER in list_wrappers and len(list_wrappers) > 1
+        assert all(fakes.edh.calls_to(wrapper) == [] for wrapper in list_wrappers - {CONNECTION_WRAPPER})
 
     @pytest.mark.parametrize("scenario", sorted(SCENARIOS))
     def test_the_scenarios_reach_edh(self, monkeypatch, scenario):
@@ -393,11 +402,11 @@ class TestTokenReads:
         assert {name for name, _node in loads} == {"edhWorkstationService.py"}
         assert any(id(node) in _node_ids(value) for _name, node in loads)
 
-    def test_only_connect_and_sign_in_call_the_connection_wrapper(self):
+    def test_only_connect_sign_in_and_the_display_session_check_call_the_connection_wrapper(self):
         trees = _handler_trees()
         tree = _service_tree(trees)
         key, _value = _audit_routes_entry(tree, CONNECTION_WRAPPER)
-        allowed = {id(key)} | _function_body_ids(tree, "connect_workstation", "windows_sign_in")
+        allowed = {id(key)} | _function_body_ids(tree, *CONNECTION_CALLERS)
         stray = [(name, node.lineno) for name, node in _connection_wrapper_names(trees)
                  if name != "edhWorkstationService.py" or id(node) not in allowed]
         assert stray == []
@@ -432,19 +441,20 @@ class TestTokenReads:
 
         assert response["statusCode"] == 200
         assert fakes.edh.calls_to(FAILURE_WRAPPER) == [(edh_uid_for(USER), SESSION_OWN)]
-        assert fakes.edh.calls_to(CONNECTION_WRAPPER) == []
+        # The display-session check (D21) reads the running row's own session, never the orphaned one's.
+        assert fakes.edh.calls_to(CONNECTION_WRAPPER) == [(edh_uid_for(USER), SESSION_OTHER)]
 
-    def test_the_wrapper_walk_finds_the_audit_key_and_the_two_calls(self):
-        """Control for the walk above: the audit key, and one call in each of connect and sign-in."""
+    def test_the_wrapper_walk_finds_the_audit_key_and_the_three_calls(self):
+        """Control for the walk above: the audit key, and one call in each of connect, sign-in and the check."""
         trees = _handler_trees()
         tree = _service_tree(trees)
         key, _value = _audit_routes_entry(tree, CONNECTION_WRAPPER)
         found = _connection_wrapper_names(trees)
-        assert len(found) == 3
+        assert len(found) == 4
         assert {name for name, _node in found} == {"edhWorkstationService.py"}
         ids = {id(node) for _name, node in found}
         assert id(key) in ids
-        for function in ("connect_workstation", "windows_sign_in"):
+        for function in CONNECTION_CALLERS:
             assert len(ids & _function_body_ids(tree, function)) == 1, function
 
     def test_no_user_route_writes_a_session_id_from_a_state_read(self, monkeypatch):

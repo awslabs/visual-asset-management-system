@@ -7,7 +7,8 @@ EDH lists such a desktop running with its fallback link (entry point and broker 
 and Windows sign-in answer 409 ``DISPLAY_SESSION_ENDED`` with the sentence that says what to do instead of
 handing the dead link out, record the reason on the row and leave it ACTIVE; the record returns the reason
 until a connectable link, or a state other than running, clears it. The token-free state read the get and list
-routes make cannot see the session, so it keeps the reason while EDH still reports the desktop running.
+routes make cannot see the session, so it keeps the reason while EDH still reports the desktop running; their own
+check of the display session (D21, ``test_edhWorkstationService_connection_check.py``) reads the link.
 """
 
 import json
@@ -94,14 +95,14 @@ class TestConnectToAnEndedDisplaySession:
         assert "state" not in written
         assert FALLBACK_URL not in json.dumps(written)
 
-    def test_a_second_connect_is_refused_the_same_way_without_a_write(self, monkeypatch):
+    def test_a_second_connect_is_refused_the_same_way_writing_only_its_check_stamp(self, monkeypatch):
         fakes = _installed(monkeypatch, _ended_row(), get_desktop_connection=_desktop(FALLBACK_URL))
 
         response = _call(fakes, "connect")
 
         assert response["statusCode"] == 409
         assert response_body(response)["code"] == "DISPLAY_SESSION_ENDED"
-        fakes.table.update_item.assert_not_called()
+        assert set(_written(fakes)) == {"connectionCheckedAt"}
 
     def test_a_good_link_again_connects_and_clears_the_reason(self, monkeypatch):
         fakes = _installed(monkeypatch, _ended_row(), get_desktop_connection=_desktop(GOOD_URL))
@@ -134,7 +135,9 @@ class TestTheRecordReturnsTheReason:
         body = response_body(response)
         assert (body["state"], body["connectionAvailable"], body["connectionUnavailableReason"], body["activity"]) == (
             "ACTIVE", False, "DISPLAY_SESSION_ENDED", None)
-        fakes.table.update_item.assert_not_called()
+        # The state read changes nothing; the display-session check (D21), whose listing has no record here,
+        # writes its stamp alone.
+        assert set(_written(fakes)) == {"connectionCheckedAt"}
 
     def test_the_list_returns_the_reason(self, monkeypatch):
         fakes = _installed(monkeypatch, _ended_row(), get_desktop_states=[state_record(SESSION_OWN)])
