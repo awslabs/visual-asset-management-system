@@ -184,6 +184,15 @@ kms:CreateGrant
 
 :::
 
+:::warning[Turning the key on for an existing deployment]
+Setting `app.useKmsCmkEncryption.enabled` to `true` on an existing deployment changes the encryption of every Amazon DynamoDB table, Amazon S3 bucket, Amazon SQS queue, and Amazon SNS topic in one stack update, and a rollback of that update changes them all back at once. Amazon DynamoDB limits the rate of table control-plane requests per account and Region, so apply this change while no other deployment is running in the same account and Region. Even in an otherwise idle account, many of the table updates are throttled; AWS CloudFormation retries them, so the update takes longer but completes. If a rollback stops in `UPDATE_ROLLBACK_FAILED` with `The rate of control plane requests made by this account is too high`, wait until the account is idle and continue the rollback:
+
+```bash
+aws cloudformation continue-update-rollback --stack-name <CORE_STACK_NAME> --region <REGION>
+```
+
+:::
+
 ### GovCloud (`app.govCloud`)
 
 :::info[Implemented by]

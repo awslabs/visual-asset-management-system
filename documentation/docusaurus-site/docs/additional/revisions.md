@@ -81,6 +81,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **CLI `--confirm` works in scripts** — Destructive commands that require `--confirm` (asset, database, role, constraint, role user and Cognito user deletion, and sync deletions) ask their additional confirmation question only in an interactive terminal, so in a script, pipe or CI job `--confirm` alone proceeds instead of the command cancelling and deleting nothing. (issue #809)
 -   **Three.js CAD formats name the setting they need** — A STEP, IGES or BREP file that the Three.js Viewer cannot open because `app.webUi.allowUnsafeEvalFeatures` is not set shows a message naming that setting instead of the browser's Content Security Policy violation text, and the viewer's OCCT setup steps list the setting. The error panel shows the whole message with its paragraph breaks, without the "supported 3D format" hint. (issue #832)
 -   **Constraint values match as written** — Permission constraint criteria values that contain `p.`, `r.`, `!`, `&&` or `||` match as written, for every operator.
+-   **Turning on the customer managed key for an existing deployment** — The default role, constraint, user and metadata schema seeds wait for the policy that grants their role the new AWS KMS key, so the update completes instead of failing with `kms:Decrypt` access denied and rolling back the core stack. (issue #841)
 
 **Other changes:**
 

@@ -573,7 +573,7 @@ const secret = new secretsmanager.Secret(this, "MySecret", {
 });
 ```
 
-Three traps, each of which passes `cdk synth` and fails later:
+Four traps, each of which passes `cdk synth` and fails later:
 
 1. **`AWS::EFS::FileSystem` `KmsKeyId` requires REPLACEMENT.** Adding or changing it on an existing file system makes
    AWS CloudFormation create an empty replacement and delete the original, which VAMS declares
@@ -587,10 +587,17 @@ Three traps, each of which passes `cdk synth` and fails later:
    CloudTrail log group is the case in the tree and stays on the AWS-managed key, along with the VPC flow
    log group (its stack precedes storage) and the provisioned OpenSearch domain log groups (created by the
    service, not VAMS).
+4. **A policy attached to a role from outside it does not order a custom resource that runs as the role.** The
+   provider function depends only on the role and its default policy (where `addToRolePolicy` grants land), so a
+   separate `iam.Policy` attached with `role.attachInlinePolicy()` is created in parallel, and on the update that
+   turns the CMK on the custom resource fails with `kms:Decrypt` access denied. Keep a reference to the policy and
+   call `node.addDependency(policy)` on each custom resource (or the construct holding them), as the auth-defaults
+   and metadata-schema seeds do.
 
 Verify before deploying: a cycle is invisible to `cdk synth` and appears only at changeset creation. Synth
 and confirm the storage nested stack takes no parameter fed from another nested stack's output. Regression
-coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`.
+coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`, and `infra/test/security/customResourceKmsGrantOrdering.test.ts`
+for the order of custom resources and their roles' KMS policies.
 
 ### **Dependency Management Standards**
 
