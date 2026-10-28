@@ -2267,6 +2267,36 @@ def _wire_bytes(value):
         return 0
 
 
+# What an empty string occupies on the wire: its two quotes, escaped once more by the body's own
+# serialization. Subtracted so a text's measure is the bytes its characters add inside a string value.
+_EMPTY_STRING_WIRE_BYTES = len(json.dumps(json.dumps("")).encode("utf-8"))
+
+
+def _text_wire_bytes(text):
+    """Bytes `text` adds to the response as it is SENT, in _wire_bytes units, when it is (part of) a
+    string value: a CJK character costs 7 (`\\\\uXXXX`), a quote or backslash 4, plain ASCII 1."""
+    return max(0, _wire_bytes(text or "") - _EMPTY_STRING_WIRE_BYTES)
+
+
+def _cut_text_to_wire_budget(text, budget):
+    """The longest prefix of `text` whose _text_wire_bytes fits `budget` ("" when nothing fits).
+
+    Binary search over the character count: the per-character wire cost ranges from 1 to 14 bytes, so
+    no byte offset maps to a character offset directly. Slicing a str never splits a code point."""
+    if budget <= 0 or not text:
+        return ""
+    if _text_wire_bytes(text) <= budget:
+        return text
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if _text_wire_bytes(text[:middle]) <= budget:
+            low = middle
+        else:
+            high = middle - 1
+    return text[:low]
+
+
 def _rows_serialized_bytes(rows):
     """Wire size of a collection's rows (see _wire_bytes). Measured on the same shape the response
     returns, so the budget arithmetic reflects what the caller actually receives."""
@@ -3745,8 +3775,9 @@ def get_execution_results(event, execution_id):
 
     Concatenates the output-results rows across the run's pipeline executions in the SAME stable step
     order the metadata/files reads use, then across each step's rows in sort-key order, appending until
-    the running byte length would exceed EXECUTION_RESULT_RESPONSE_MAX_BYTES — a payload-safety cut
-    that keeps the response under the Lambda-proxy limit, NOT a UX preview. resultContentTruncated is
+    the text's size AS SENT (_text_wire_bytes: after the body's JSON escaping and the proxy's second
+    escaping) would exceed EXECUTION_RESULT_RESPONSE_MAX_BYTES — a payload-safety cut that keeps the
+    response under the Lambda-proxy limit, NOT a UX preview. resultContentTruncated is
     set when the cut fires OR when any consumed row was itself stored truncated. A legacy/empty run
     returns the empty shape, never an error. S3 keys are never surfaced (the row's internal s3Key is
     dropped by _scrub_output_result's shape; only resultsContent is read here).
@@ -3767,8 +3798,9 @@ def get_execution_results(event, execution_id):
     # Stable step order so the concatenation is deterministic for the same run, matching the files /
     # metadata reads.
     steps = _detail_metadata_step_order(execution_id)
+    budget = er.EXECUTION_RESULT_RESPONSE_MAX_BYTES
     parts = []
-    total_bytes = 0
+    used_wire_bytes = 0
     row_count = 0
     truncated = False
     for pexec_id, _pipeline_id in steps:
@@ -3780,20 +3812,19 @@ def get_execution_results(event, execution_id):
             for row in resp.get('Items', []):
                 scrubbed = _scrub_output_result(row)
                 content = scrubbed.get('resultsContent', '') or ''
-                encoded = content.encode('utf-8')
+                content_wire_bytes = _text_wire_bytes(content)
                 # A row whose addition would cross the payload budget cuts the result here: append the
                 # portion that still fits so the response fills the budget, then stop and flag.
-                if total_bytes + len(encoded) > er.EXECUTION_RESULT_RESPONSE_MAX_BYTES:
-                    remaining = er.EXECUTION_RESULT_RESPONSE_MAX_BYTES - total_bytes
-                    if remaining > 0:
-                        # Decode errors='ignore' drops a multi-byte character split at the boundary.
-                        parts.append(encoded[:remaining].decode('utf-8', errors='ignore'))
-                        total_bytes += remaining
+                if used_wire_bytes + content_wire_bytes > budget:
+                    head = _cut_text_to_wire_budget(content, budget - used_wire_bytes)
+                    if head:
+                        parts.append(head)
+                        used_wire_bytes += _text_wire_bytes(head)
                         row_count += 1
                     truncated = True
                     break
                 parts.append(content)
-                total_bytes += len(encoded)
+                used_wire_bytes += content_wire_bytes
                 row_count += 1
                 # A row stored already-truncated means the full text was never captured whole, so the
                 # concatenation cannot be complete either.

@@ -44,8 +44,9 @@ METADATA_SCHEMA_VERSION_GROUPED = 2
 ALL_EXECUTIONS_LIST_PARTITION = "execution"
 
 # Payload-safety budget for the /details/results endpoint, which returns the FULL concatenated
-# result text of a run. The AWS Lambda-proxy synchronous response limit is 6 MB; 5 MiB leaves
-# headroom for the JSON envelope so an oversized multi-row result is cut server-side and flagged
+# result text of a run, counted in bytes AS SENT (after JSON escaping, where one CJK character costs
+# 7 bytes and a quote 4), not raw UTF-8. The AWS Lambda-proxy synchronous response limit is 6 MB; 5 MiB
+# leaves headroom for the JSON envelope so an oversized multi-row result is cut server-side and flagged
 # rather than overflowing the proxy limit as an opaque 502. This is NOT a UX preview cap — a normal
 # result is returned whole; the cut only guards the pathological many/large-row case.
 EXECUTION_RESULT_RESPONSE_MAX_BYTES = 5 * 1024 * 1024

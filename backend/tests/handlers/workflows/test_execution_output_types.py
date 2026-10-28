@@ -521,6 +521,42 @@ class TestResultsHandler:
         # The whole JSON response stays under the 6 MB Lambda-proxy ceiling (the point of the cut).
         assert len(json.dumps(body).encode("utf-8")) < 6 * 1024 * 1024
 
+    # The budget is counted as SENT: ensure_ascii turns a CJK character into a 6-byte \uXXXX that the
+    # proxy envelope escapes again, and a quote or backslash doubles twice. Each of these is below or
+    # near 5 MiB raw but well over the 6 MB Lambda-proxy limit once encoded.
+    @pytest.mark.parametrize("label, content", [
+        ("non-ascii 4.4 MiB", "漢" * (int(4.4 * 1024 * 1024) // 3)),
+        ("quote/backslash 4.4 MiB",
+         ('{"k":"v\\\\"}\n' * (int(4.4 * 1024 * 1024) // 12 + 1))[:int(4.4 * 1024 * 1024)]),
+        ("plain ascii 5.9 MB", "x" * 5_900_000),
+    ], ids=["non-ascii", "quote-backslash", "plain-ascii"])
+    def test_an_encoding_heavy_result_is_cut_on_its_sent_size(self, label, content):
+        rows = {"pe-pA": [_result_row("pe-pA", content=content)]}
+        resp = _run_results(rows, _steps("pA"))
+        assert resp["statusCode"] == 200, label
+        # What Lambda returns to the proxy is the whole response object, body string included.
+        assert len(json.dumps(resp).encode("utf-8")) < 6_000_000, label
+        body = json.loads(resp["body"])["message"]
+        assert body["resultContentTruncated"] is True
+        assert body["resultContent"] and content.startswith(body["resultContent"])
+        assert le._text_wire_bytes(body["resultContent"]) <= er.EXECUTION_RESULT_RESPONSE_MAX_BYTES
+
+    def test_a_non_ascii_result_inside_the_sent_budget_is_returned_whole(self):
+        content = "結果" * 100_000  # 600 KB raw, ~1.4 MB as sent
+        body = json.loads(_run_results({"pe-pA": [_result_row("pe-pA", content=content)]},
+                                       _steps("pA"))["body"])["message"]
+        assert body["resultContent"] == content
+        assert body["resultContentTruncated"] is False
+        assert body["resultContentBytes"] == len(content.encode("utf-8"))
+
+    def test_the_cut_never_overshoots_the_budget_at_a_wide_character(self):
+        # A budget boundary that lands inside a 7-byte \uXXXX keeps the prefix strictly within it.
+        text = "a" + "漢" * 10
+        cut = le._cut_text_to_wire_budget(text, 1 + 7 * 3 + 3)
+        assert cut == "a" + "漢" * 3
+        assert le._cut_text_to_wire_budget(text, 0) == ""
+        assert le._cut_text_to_wire_budget("abc", 100) == "abc"
+
     def test_unknown_execution_is_404(self):
         event = {
             "requestContext": {"http": {"method": "GET",
