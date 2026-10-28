@@ -2085,24 +2085,33 @@ class DualIndexResponseProcessor:
             if source.get("str_databaseid", "").endswith("#deleted"):
                 return False
             
-            # Build document for Casbin check
+            # Build document for Casbin check. Each hit is decided on the databaseId of the asset
+            # record it stands for, as stored: an archived asset is stored under
+            # '{databaseId}#deleted', which CasbinEnforcer decides on both the stored id and the
+            # database id, the same as the asset listings. Search documents carry the database id
+            # without the suffix, so the stored form is rebuilt here.
             if self._is_file_hit(hit):
-                # A file hit is checked as its parent asset: assetName, tags and assetType
-                # come from the asset row, databaseId from the hit. No parent row, no access.
+                # A file hit is checked as its parent asset: assetName, tags, assetType and the
+                # stored databaseId come from the asset row, so a file of an archived asset is
+                # decided on the archived record and any file of a live asset on the live one, as
+                # the asset's file listing decides it. No parent row, no access.
                 parent_key = self._parent_asset_key(hit)
                 parent = self._parent_assets.get(parent_key) if parent_key else None
                 if not parent:
                     return False
                 hit_document = {
-                    "databaseId": source.get("str_databaseid", ""),
+                    "databaseId": parent.get("databaseId", ""),
                     "assetName": parent.get("assetName", ""),
                     "tags": parent.get("tags", []),
                     "assetType": parent.get("assetType", ""),
                     "object__type": "asset"
                 }
             else:
+                database_id = source.get("str_databaseid", "")
+                if source.get("bool_archived"):
+                    database_id = f"{database_id}#deleted"
                 hit_document = {
-                    "databaseId": source.get("str_databaseid", ""),
+                    "databaseId": database_id,
                     "assetName": source.get("str_assetname", ""),
                     "tags": source.get("list_tags", []),
                     "assetType": source.get("str_assettype", ""),

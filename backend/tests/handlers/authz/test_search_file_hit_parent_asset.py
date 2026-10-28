@@ -256,6 +256,23 @@ class TestSearchFileHitParentAsset:
 
         returned = _run(search_module, monkeypatch, ALLOW_GLB_TYPE, table, hits)
 
+        # The hit is decided on the archived row's stored databaseId, which an allow naming only
+        # the database id does not cover.
+        assert returned == []
+        assert table.batch_keys[1] == [{"databaseId": f"{DATABASE_ID}#deleted", "assetId": "glb-asset"}]
+
+        # An allow covering both the stored id and the database id returns it.
+        allow_glb_both_forms = [
+            _constraint("allow-db", [_crit("databaseId", "equals", DATABASE_ID)], object_type="database"),
+            _constraint(
+                "allow-glb",
+                [_crit("databaseId", "starts_with", DATABASE_ID), _crit("assetType", "equals", ".glb")],
+            ),
+        ]
+        table = _AssetTable([_asset_row("glb-asset", ".glb", database_id=f"{DATABASE_ID}#deleted")])
+
+        returned = _run(search_module, monkeypatch, allow_glb_both_forms, table, hits)
+
         assert returned == ["glb-asset/model.bin"]
         assert table.batch_keys[1] == [{"databaseId": f"{DATABASE_ID}#deleted", "assetId": "glb-asset"}]
 
