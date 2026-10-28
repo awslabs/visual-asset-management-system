@@ -33,6 +33,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 LOGGER_COPIES = (
     "backendPipelines/3dRecon/splatToolbox/lambda/customLogging/logger.py",
     "backendPipelines/conversion/coordinateTransform/lambda/customLogging/logger.py",
+    "backendPipelines/genAi/imageTo3d/lambda/customLogging/logger.py",
     "backendPipelines/genAi/nvidia/cosmos/3/lambda/customLogging/logger.py",
     "backendPipelines/genAi/nvidia/cosmos/predict/lambda/customLogging/logger.py",
     "backendPipelines/genAi/nvidia/cosmos/reason/lambda/customLogging/logger.py",

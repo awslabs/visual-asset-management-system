@@ -631,7 +631,30 @@ aws opensearch delete-domain \
     --domain-name <DOMAIN_NAME>
 ```
 
-## Step 11: Clean up VPC resources
+## Step 11: Delete the AWS CodeArtifact domain
+
+The Image to 3D pipeline creates a CodeArtifact domain and a `pypi-store` repository so that its
+container builds pull Python packages through a cache rather than depending on the public package CDN.
+Both are removed with the stack. The domain carries an **explicit name**
+(`<CONFIG_NAME>-<BASE_STACK_NAME>-imageto3d`), so an orphan left by a failed teardown blocks a redeploy
+using the same configuration name.
+
+```bash
+# List VAMS CodeArtifact domains
+aws codeartifact list-domains     --query "domains[?contains(name, '<CONFIG_NAME>')].name" --output table
+
+# A domain must be empty of repositories before it can be deleted
+aws codeartifact delete-repository     --domain <DOMAIN_NAME> --repository pypi-store
+
+aws codeartifact delete-domain --domain <DOMAIN_NAME>
+```
+
+:::note[Cached packages are not customer data]
+The repository holds copies of public PyPI packages only. Deleting it loses nothing but build speed --
+the next build repopulates the cache from upstream.
+:::
+
+## Step 12: Clean up VPC resources
 
 If VAMS was deployed with a VPC (`app.useGlobalVpc.enabled: true`) and the VPC was created by VAMS (not imported), verify VPC endpoints and the VPC itself are deleted.
 

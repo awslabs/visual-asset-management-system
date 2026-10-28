@@ -19,6 +19,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as cdk from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as events from "aws-cdk-lib/aws-events";
 import * as kms from "aws-cdk-lib/aws-kms";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -34,6 +35,7 @@ import { CosmosPredictConstruct } from "../../lib/nestedStacks/pipelines/genAi/n
 import { CosmosReasonConstruct } from "../../lib/nestedStacks/pipelines/genAi/nvidia/cosmos/constructs/cosmosReason-construct";
 import { CosmosTransferConstruct } from "../../lib/nestedStacks/pipelines/genAi/nvidia/cosmos/constructs/cosmosTransfer-construct";
 import { Gr00tFinetuneConstruct } from "../../lib/nestedStacks/pipelines/genAi/nvidia/gr00t/constructs/gr00tFinetune-construct";
+import { ImageTo3dConstruct } from "../../lib/nestedStacks/pipelines/genAi/imageTo3d/constructs/imageTo3d-construct";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import { newTestApp } from "../support/testApp";
 
@@ -254,6 +256,34 @@ describe.each([
             c.app.pipelines.useNvidiaGr00t.huggingFaceToken = HF_TOKEN;
             c.app.pipelines.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.enabled = true;
             c.app.pipelines.useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.autoRegisterWithVAMS = false;
+        },
+    ],
+    [
+        "ImageTo3d",
+        (h: Harness) =>
+            new ImageTo3dConstruct(h.stack, "ImageTo3dPipeline", {
+                config: h.config,
+                storageResources: h.storage,
+                vpc: h.vpc,
+                pipelineSubnets: h.subnets,
+                pipelineSecurityGroups: h.securityGroups,
+                lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+                importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+                modelCacheBucket: h.modelCacheBucket,
+                efsFileSystem: h.efsFileSystem,
+                efsSecurityGroup: h.efsSecurityGroup,
+                codeBuildImages: {
+                    stable3dgen: {
+                        repository: new ecr.Repository(h.stack, "ImageTo3dStable3dgenRepo"),
+                        imageUri: "123456789012.dkr.ecr.us-east-1.amazonaws.com/stable3dgen:latest",
+                        codeBuildProjectName: "imageto3d-stable3dgen",
+                    },
+                },
+            }),
+        (c: Config.Config) => {
+            c.app.pipelines.useImageTo3d.enabled = true;
+            c.app.pipelines.useImageTo3d.huggingFaceToken = HF_TOKEN;
+            c.app.pipelines.useImageTo3d.autoRegisterWithVAMS = false;
         },
     ],
 ])("%s GPU pipeline", (name, build, mutate) => {

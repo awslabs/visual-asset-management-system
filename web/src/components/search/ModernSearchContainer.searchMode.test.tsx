@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import ModernSearchContainer from "./ModernSearchContainer";
@@ -266,12 +266,22 @@ describe("ModernSearchContainer search modes", () => {
         await waitFor(() => expect(searchAssets).toHaveBeenCalledTimes(1));
         const input = screen.getByPlaceholderText("Search by keywords...");
         await userEvent.type(input, "red truck");
-        // Switching arms the auto-refresh for "red truck"; an immediate submit must not be doubled.
-        await userEvent.click(screen.getByTestId("nlp"));
-        await userEvent.click(screen.getByRole("button", { name: "Search" }));
-        await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
-        await new Promise((resolve) => setTimeout(resolve, 900));
-        expect(searchNlp).toHaveBeenCalledTimes(1);
+        // Typing arms nothing; from here the clock is frozen, so the submit lands inside the 500 ms
+        // window however long the two clicks take on a loaded host.
+        jest.useFakeTimers();
+        try {
+            const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+            // Switching arms the auto-refresh for "red truck"; an immediate submit must not be doubled.
+            await user.click(screen.getByTestId("nlp"));
+            await user.click(screen.getByRole("button", { name: "Search" }));
+            await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
+            await act(async () => {
+                jest.advanceTimersByTime(900);
+            });
+            expect(searchNlp).toHaveBeenCalledTimes(1);
+        } finally {
+            jest.useRealTimers();
+        }
         expect((searchNlp as jest.Mock).mock.calls[0][0].query).toBe("red truck");
     });
 

@@ -23,6 +23,7 @@ import { IsaacLabTrainingBuilderNestedStack } from "./simulation/isaacLabTrainin
 import { Preview3dThumbnailBuilderNestedStack } from "./preview/3dThumbnail/preview3dThumbnailBuilder-nestedStack";
 import { CosmosBuilderNestedStack } from "./genAi/nvidia/cosmos/cosmosBuilder-nestedStack";
 import { Gr00tBuilderNestedStack } from "./genAi/nvidia/gr00t/gr00tBuilder-nestedStack";
+import { ImageTo3dBuilderNestedStack } from "./genAi/imageTo3d/imageTo3dBuilder-nestedStack";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as Config from "../../../config/config";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -253,6 +254,30 @@ export class PipelineBuilderNestedStack extends NestedStack {
                     gr00tBuilderNestedStack.pipelineGr00tFinetuneVamsLambdaFunctionName
                 );
             }
+        }
+
+        if (props.config.app.pipelines.useImageTo3d?.enabled) {
+            const imageTo3dBuilderNestedStack = new ImageTo3dBuilderNestedStack(
+                this,
+                "ImageTo3dBuilderNestedStack",
+                {
+                    ...props,
+                    config: props.config,
+                    storageResources: props.storageResources,
+                    vpc: props.vpc,
+                    //GPU compute needs NAT egress for model weight downloads
+                    pipelineSubnets: pipelineNetwork.privateSubnets.pipeline,
+                    pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
+                }
+            );
+
+            //Add function name to array for stack output
+            this.pipelineVamsLambdaFunctionNames.push(
+                imageTo3dBuilderNestedStack.pipelineVamsLambdaFunctionName
+            );
         }
 
         if (props.config.app.pipelines.useSystemGenAiMetadata.enabled) {

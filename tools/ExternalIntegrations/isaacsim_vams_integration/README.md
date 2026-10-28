@@ -24,7 +24,7 @@ An [Omniverse Kit](https://docs.omniverse.nvidia.com/kit/docs/kit-manual/latest/
 -   **Stage Import**: Download a USD file and open it as a new Isaac Sim stage (via UI button or scripting API)
 -   **Reference Import**: Download a USD file and add it as a reference to the current stage: from the UI at a prim of its own under `/World`, named after the file, and from the scripting API at the prim path given. The reference brings in the file's default prim, or its one root prim when it has none; a file with neither is refused and leaves the stage as it was
 -   **URDF Import**: Download a URDF file and import it into the current stage using Isaac Sim's URDF importer (requires `isaacsim.asset.importer.urdf`), under the prim the stage's default prim names, or at the stage root when it names none. The stage's default prim is left as it was
--   **MJCF Import**: Download a MJCF/MuJoCo XML file and import it into the current stage using Isaac Sim's MJCF importer (requires `isaacsim.asset.importer.mjcf`), at a prim of its own under `/World`, named after the file. A file that is not well-formed XML is refused before the importer runs, an import that brings in nothing from the file is removed again, and the stage's default prim is left as it was
+-   **MJCF Import**: Download a MJCF/MuJoCo XML file and import it into the current stage using Isaac Sim's MJCF importer (requires `isaacsim.asset.importer.mjcf`), at a prim of its own under `/World`, named after the file. A file that is not well-formed XML, or that declares a document type (`<!DOCTYPE ...>`, which MJCF does not use), is refused before the importer runs, an import that brings in nothing from the file is removed again, and the stage's default prim is left as it was
 -   **General Download**: Download any other file to `~/vams_downloads`, keeping its path within the asset
 
 A `.usd`, `.usda` or `.usdc` layer, a URDF file and a MJCF file name other files of the asset by relative path (sublayers, references, textures, meshes), so opening or importing one downloads the whole asset, laid out as it is in VAMS, into a new private temporary directory. The status line reports how many of the asset's other files did not download, and a requested file that did not download with the reason the download gave, for example `Reference error: /robot.usd did not download: <error>`. A `.usdz` package carries its dependencies and is downloaded alone.
@@ -240,7 +240,7 @@ Once enabled, the extension opens a **VAMS Connector** window with:
 4.  **Files** - Lists files in the selected asset; select a file to show the actions for its type:
     -   **USD files** (`.usd`, `.usda`, `.usdc`, `.usdz`): **Open Stage (replace entire scene)** downloads the file and opens it as a new stage. **Add USD Reference (add to current scene)** adds it as a reference under `/World/<name>`, the file name without its extension and with each character other than a letter, digit or underscore replaced by `_`, or under `<name>_1`, `<name>_2`, ... when that prim exists, so each add gets a prim of its own; the status line names the prim used. The reference brings in the file's default prim, or its one root prim when it has none, counting the root prims of the layers it sublayers; a file with neither is refused, the stage is left as it was, and the status line gives the reason (`Reference error: <file> has no default prim (<n> root prims), so a reference would bring in nothing. Open it with Open Stage, or set a default prim on the file.`)
     -   **URDF files** (`.urdf`): **Import URDF (add to current scene)** downloads the robot description and imports it into the current stage, under the prim the stage's default prim names, or at the stage root when it names none, and under `<name>_0` when `<name>` is taken there; the stage's default prim is left as it was, and the status line names the prim used (`Imported URDF as <prim>`) or reads `URDF import failed`
-    -   **MJCF files** (`.mjcf`, `.xml`): **Import MJCF (add to current scene)** downloads the MuJoCo model and imports it into the current stage under `/World/<name>`, with `<name>` made from the file name as for a USD reference, or under `<name>_1`, `<name>_2`, ... when that prim exists; the stage's default prim is left as it was, and the status line names the prim used (`Imported MJCF <file> as <prim>`). A file that is not well-formed XML is refused before the importer runs (`MJCF error: <file> is not well-formed XML: <parser message>`), and an import that brings in nothing from the file is removed again, together with a `/World` it created, and the status line reads `MJCF import failed: <file>`
+    -   **MJCF files** (`.mjcf`, `.xml`): **Import MJCF (add to current scene)** downloads the MuJoCo model and imports it into the current stage under `/World/<name>`, with `<name>` made from the file name as for a USD reference, or under `<name>_1`, `<name>_2`, ... when that prim exists; the stage's default prim is left as it was, and the status line names the prim used (`Imported MJCF <file> as <prim>`). A file that is not well-formed XML is refused before the importer runs (`MJCF error: <file> is not well-formed XML: <parser message>`), as is a file that declares a document type, which MJCF does not use (`MJCF error: <file> is refused: it declares a document type at line <n>, ...`), and an import that brings in nothing from the file is removed again, together with a `/World` it created, and the status line reads `MJCF import failed: <file>`
     -   **Any file**: **Download Only (save to disk)** saves it to `~/vams_downloads`, under its path within the asset
 5.  **Workflows** - Lists the enabled workflows of `GLOBAL` and the selected database, and the asset's execution history, where each execution's input file is shown by its path within the asset and a value too long for its column is shortened, with the workflow ID and the file's full key in tooltips. Choosing a workflow opens its Execute view: **Run on Entire Asset** where the workflow takes a whole asset, **Run** for each file the workflow and its first pipeline accept, and a template choice for a pipeline that requires one (see [Workflow Execution](#workflow-execution))
 
@@ -374,7 +374,8 @@ prim_path = connector.download_and_import_urdf(
 )
 
 # Import a MJCF/MuJoCo model into the current stage, under /World; returns the prim path, or None,
-# with the reason logged, for a file that did not download, is not well-formed XML or imports nothing
+# with the reason logged, for a file that did not download, is not well-formed XML, declares a
+# document type or imports nothing
 prim_path = connector.download_and_import_mjcf(
     "my-db", "my-asset", "/ant.xml",
     fix_base=True, import_inertia_tensor=True,
@@ -382,7 +383,7 @@ prim_path = connector.download_and_import_mjcf(
 
 # Import a URDF or MJCF file already on disk; both return the prim path, or None. import_mjcf_file
 # raises MalformedXmlError (a VamsCliError, imported from vams.connector.isaacsim.connector) for a
-# file that is not well-formed XML
+# file that is not well-formed XML or declares a document type
 prim_path = connector.import_urdf_file("/tmp/robot/robot.urdf", fix_base=True)
 prim_path = connector.import_mjcf_file("/tmp/ant/ant.xml")
 ```
@@ -474,6 +475,7 @@ UI button handlers are deferred via `omni.kit.app`'s update event stream to avoi
 | **Viewport empty after load**       | Add a light (Create > Light > Dome Light) and press F to frame the camera                                                                                                                                              |
 | **URDF/MJCF import fails**          | Ensure `isaacsim.asset.importer.urdf` or `isaacsim.asset.importer.mjcf` is enabled in Isaac Sim                                                                                                                        |
 | **"is not well-formed XML" status** | The MJCF file cannot be parsed as XML, so the importer did not run and the stage is unchanged. Correct the file at the line and column the parser message gives, and upload it again                                   |
+| **"is refused" status**             | The MJCF file declares a document type (`<!DOCTYPE ...>`), which MJCF does not use, so the importer did not run and the stage is unchanged. Remove the declaration and upload the file again                           |
 | **"MJCF import failed" status**     | The MJCF importer brought in nothing from the file, for example from an `.xml` file that is not a MuJoCo model, and the prim the import created was removed again. Isaac Sim's log carries the importer's own messages |
 | **UI freezes on button click**      | This should not happen with the deferred execution pattern; if it does, file an issue                                                                                                                                  |
 

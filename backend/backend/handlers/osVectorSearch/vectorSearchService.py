@@ -238,7 +238,11 @@ def _load_asset_rows(collapsed: List[Dict[str, Any]], include_archived: bool) ->
 
 def _authorize(collapsed: List[Dict[str, Any]], rows: Dict[Tuple[str, str], Dict[str, Any]], claims_and_roles) -> List[Dict[str, Any]]:
     """Casbin per hit on the asset object; a hit is kept only when enforce() passes, so an empty token
-    list yields an empty answer."""
+    list yields an empty answer.
+
+    Each hit is decided on its asset row as stored: an archived asset's row carries
+    ``{databaseId}#deleted``, which ``enforce()`` decides on both the stored id and the database id,
+    as the asset listings and keyword search do. A file of a live asset is decided on the live row."""
     if len(claims_and_roles.get("tokens", [])) == 0:
         return []
     enforcer = CasbinEnforcer(claims_and_roles)
@@ -249,7 +253,7 @@ def _authorize(collapsed: List[Dict[str, Any]], rows: Dict[Tuple[str, str], Dict
         if row is None:
             continue
         asset_object = {
-            "databaseId": item["databaseId"],
+            "databaseId": row.get("databaseId") or item["databaseId"],
             "assetName": row.get("assetName", ""),
             "tags": row.get("tags", []),
             "assetType": row.get("assetType", ""),

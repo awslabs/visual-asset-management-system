@@ -614,6 +614,29 @@ Deployed when `app.pipelines.useSystemGenAiMetadata.enabled` and `app.pipelines.
 
 Amazon Bedrock requires a guardrail name and rejects a duplicate in the same account and Region, so the guardrail is an explicitly named resource: if a teardown fails and leaves it behind, delete it before redeploying the same configuration into the same account and Region (see [Uninstall the solution](../deployment/uninstall.md#step-1-destroy-the-cdk-stack)). The name is hashed from the core stack name and account, so two deployments with different `app.baseStackName` values coexist. Models, inference profiles, and an operator-owned guardrail referenced through `guardrailIdentifier` are not stack resources.
 
+## AWS CodeArtifact
+
+Deployed with the Image to 3D pipeline, which builds one container image per enabled model. Each build
+installs its Python dependencies from source, so a build is only as reliable as the public package index
+is reachable from the build subnet. Fetching through a pull-through cache makes a rebuild reproducible.
+
+| Resource       | Name                                             | Removal on teardown | Custom name        |
+| -------------- | ------------------------------------------------ | ------------------- | ------------------ |
+| **Domain**     | `<config.name>-<baseStackName>-imageto3d`        | Deleted with stack  | Yes -- can collide |
+| **Repository** | `pypi-store` (external connection `public:pypi`) | Deleted with stack  | Yes -- can collide |
+
+The domain name includes `baseStackName` because CodeArtifact domain names are unique per account and
+Region: without it, two VAMS deployments in one account would contend for the same domain. An orphan
+left by a failed teardown blocks a redeploy under the same configuration name, so
+[Uninstall the solution](../deployment/uninstall.md) covers removing it. The repository holds copies of
+public packages only -- deleting it costs build time, not data.
+
+The CodeBuild role is granted `codeartifact:GetAuthorizationToken` on the domain,
+`GetRepositoryEndpoint` and `ReadFromRepository` on the repository and its packages, and
+`sts:GetServiceBearerToken` restricted to `codeartifact.amazonaws.com`. Each build mints a short-lived
+token and passes it to `docker build` as a BuildKit secret, so no credential is written into an image
+layer.
+
 ## Amazon Elastic Container Registry
 
 Deployed for each pipeline configured with `useCodeBuild: true`. AWS CodeBuild builds the pipeline's

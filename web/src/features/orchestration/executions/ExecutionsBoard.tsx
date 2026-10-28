@@ -11,6 +11,7 @@ import StatusBadge from "../components/StatusBadge";
 import Dialog from "../components/Dialog";
 import ExecutionRowActions from "./ExecutionRowActions";
 import ExecutionQuickView from "./ExecutionQuickView";
+import ExecutionOutputTypeBadges from "./ExecutionOutputTypeBadges";
 import ExecuteWorkflowButton from "./ExecuteWorkflowButton";
 import { control, btnSecondary } from "../components/controlStyles";
 import RefreshButton from "../components/RefreshButton";
@@ -494,6 +495,21 @@ const ExecutionsBoard: React.FC<ExecutionsBoardProps> = ({ scope }) => {
                             </div>
                         )}
                     </div>
+                ),
+            },
+            {
+                // Output Types on BOTH scopes: the backend threads outputTypes onto the global list
+                // (free, from the config row it already reads) AND the per-asset list (via a
+                // per-request config-row memo), so unlike the output-target columns below this one is
+                // not gated to the global scope. File/Metadata render as static badges; Result opens
+                // the lazy full-result surface.
+                id: "outputTypes",
+                header: "Output Types",
+                cell: ({ row }) => (
+                    <ExecutionOutputTypeBadges
+                        executionId={row.original.workflowExecutionId}
+                        outputTypes={row.original.outputTypes}
+                    />
                 ),
             },
             // Output-target columns, global scope only. The per-asset list is built by joining the

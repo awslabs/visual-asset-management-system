@@ -37,6 +37,84 @@ Without `__init__.py` and `customLogging/logger.py`, Lambda will fail at import 
 
 Pipelines are conditionally created in `pipelineBuilder-nestedStack.ts` based on config flags.
 
+## Instance User Data on a Batch Compute Environment
+
+Every GPU pipeline here builds its instance start-up script as a TypeScript template string carrying CDK
+tokens — an EFS file system id, a bucket name, the region. Three rules make that script actually run, and
+each failure is silent: the deploy succeeds, the job succeeds, and only the run time is wrong. All three
+were live in six pipelines at once, and it took a serial-console read to find the second.
+Test: `infra/test/launchTemplateUserDataTokens.test.ts`.
+
+1.  **Encode with `cdk.Fn.base64(userData)`, never `Buffer.from(userData).toString("base64")`.**
+    Encoding in the synth process freezes every token as its DEBUG TEXT, because a base64 blob is opaque
+    to the resolver that runs afterwards. The deployed template then reads
+    `mount -t efs -o tls ${Token[TOKEN.6935]}:/ /mnt/efs/...`. Bash parses `${Token[...]}` as an array
+    subscript and reports `syntax error: invalid arithmetic operator`, which **aborts the whole
+    `scripts-user` module** — so every later line in the script is skipped too. `Fn::Base64` encodes
+    after resolution.
+
+2.  **Pin the compute environment to `launchTemplate.attrLatestVersionNumber`, never `"$Latest"`.**
+    Batch does not read the launch template when an instance launches: it MERGES it with its own
+    bootstrap into a Batch-managed copy (`Batch-lt-<hash>`) when the compute environment is created or
+    updated. `"$Latest"` is a constant string, so a new template version is not a change to the compute
+    environment — CloudFormation updates nothing and Batch goes on handing instances the stale merge.
+    A correct fix to the script can therefore deploy, verify clean in the launch template, and reach no
+    instance at all. Confirm a change landed by decoding the user data of the template the INSTANCE
+    booted (`aws:ec2launchtemplate:id` on the instance), not the one the compute environment names.
+
+             **Do not name a `serviceRole` on the environment.** Omitting it uses the Batch service-linked role
+             (`AWSServiceRoleForBatch`), which Batch creates on demand for a managed environment, and which is
+             what makes the pin above _deliverable_: Batch permits `launchTemplate`, `instanceTypes`, `subnets`,
+             `securityGroupIds`, `ec2Configuration`, `instanceRole` and several more to be updated **"only for
+             ... Compute Environment having a Batch Service Linked Role"**. With a named role the only delivery
+             path is replacement, which fails outright on an environment carrying an explicit
+             `computeEnvironmentName`, re-points job queues, and leaves `INVALID` environments behind.
+             CloudFormation names three conditions for an in-place infrastructure update, and all three are
+             required: no `ServiceRole`, `BEST_FIT_PROGRESSIVE` (or another progressive strategy), and
+             `replaceComputeEnvironment: false`. AWS also maintains the service-linked role's permissions as
+             Batch gains features, which a hand-rolled role does not track.
+
+             **An existing environment cannot be migrated to the service-linked role — only replaced.** Batch
+             rejects the attempt outright: `A CE using a user-provided role cannot be updated to use Batch
+
+        Service Linked Role`. Removing `ServiceRole`from the template does not migrate one either; it is a
+
+    silent no-op, because CloudFormation then sends`UpdateComputeEnvironment`with no`serviceRole`and
+    Batch reads that as "no change". Measured after deploying exactly that: CloudFormation recorded no
+    `ServiceRole` while all seven GPU environments still reported their named role. So omitting the
+    property is correct and worth doing — every NEW environment gets the service-linked role, and an
+    existing one adopts it the next time it is replaced for any other reason — but it changes nothing
+    about a running fleet on its own.
+
+             **`replaceComputeEnvironment: false` ships in the same release, and is only safe because the
+
+    environment's CONSTRUCT ID changed with it.\*\* That property is the third condition, and it forbids
+    replacement -- which is the one thing an environment still naming a service role needs, since it can
+    be neither updated in place nor migrated. Shipping the property alone fails a v2.5 upgrade (measured:
+    it rolled back nine pipeline stacks, twice). Changing the construct id makes the upgrade a CREATE of
+    the new environment and a DELETE of the old, which is not an update, so the property has no say in it:
+    the new environment is born on the service-linked role with in-place updates already enabled. One
+    `cdk deploy`, no sequencing, no operator flags. CloudFormation still deletes the old environment
+    before the service role it depended on, because the old template declared that dependency.
+
+    Do not, therefore, express this migration as a property change on the existing resource. And do not
+    rename the ids back: `infra/test/launchTemplateUserDataTokens.test.ts` asserts the three conditions
+    together and that no `OnDemandComputeEnv` id returns.
+
+3.  **Write every command on one line.** A trailing backslash inside a template literal is a JavaScript
+    line continuation: JavaScript removes the backslash and the newline before the string exists, so the
+    shell never sees a continuation. Lines usually collapse into a valid one-liner, which is why this
+    hides; a continuation written `\n` instead becomes a real newline with no backslash and splits the
+    command.
+
+Give the script its own evidence, because an instance is gone by the time a slow run is noticed:
+`mountpoint -q` rather than an assumed mount, a marker file inside the mount, and the log copied to a
+bucket. The channel that outlives everything and depends on nothing further is the **serial console** —
+`ec2:GetConsoleOutput` needs no agent, no CLI on the image, and no egress, and it is what carried the
+diagnosis here. Have the container check too: a host bind mount looks identical to an empty local
+directory from inside a job, so compare the mount's **filesystem type** (`nfs`/`nfs4` vs `xfs`) rather
+than looking for files.
+
 **CRITICAL — VPC Builder Updates:** A pipeline whose compute is an AWS Batch, ECS, or Fargate job must be added to condition blocks in `lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in.** Decide that first, by looking at what `pipelineBuilder-nestedStack.ts` passes as the pipeline's `pipelineSubnets`: `pipelineNetwork.isolatedSubnets.pipeline` or `pipelineNetwork.privateSubnets.pipeline`. Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments. A Lambda-only pipeline appears in no block: it has no container image to pull and no compute environment to place, and its functions join the VPC only under `useGlobalVpc.useForAllLambdas`. When a pipeline offers a container branch behind a sub-flag, key the block condition — and the `vpcRequiringFeatures` entry in `config.ts` — on **`enabled && <sub-flag>`**, never on the pipeline's `enabled` alone, or the pipeline forces a VPC on every deployment that enables it.
 
 | Block                                                                                                                                                                       | Isolated-subnet pipeline                   | Private-subnet pipeline                    |
@@ -55,7 +133,7 @@ Which flags belong where is read from the source, and the two lists below are as
 
 Isolated-subnet flags (block 2 only): `useConversionCoordinateTransform`, `useGenAiVideoSopBom`, `usePreview3dThumbnail`, `usePreviewPcPotreeViewer`, `useSystemGenAiMetadata.useFargateRenderer`.
 
-Private-subnet flags (all three blocks): `useModelOps`, `useNvidiaCosmos`, `useNvidiaCosmos3`, `useNvidiaGr00t`, `useRapidPipeline.useEcs`, `useRapidPipeline.useEks`, `useSplatToolbox`.
+Private-subnet flags (all three blocks): `useImageTo3d`, `useModelOps`, `useNvidiaCosmos`, `useNvidiaCosmos3`, `useNvidiaGr00t`, `useRapidPipeline.useEcs`, `useRapidPipeline.useEks`, `useSplatToolbox`.
 
 `useIsaacLabTraining` places its compute in private subnets (blocks 1 and 2) but takes the ECS endpoint through `needsEcsIsolated`, so it appears in neither list. `useConversion3dBasic` and `useSystemGenAiMetadata.enabled` are Lambda-only and appear in no block; the SYSTEM GenAI metadata pipeline's Amazon Bedrock Runtime endpoint is keyed on `useForAllLambdas` and `vectorSearch.enabled`, not on the renderer sub-flag. A container that calls a service with no interface endpoint yet also gets a service-endpoint gate beside the Bedrock Runtime `if` (block 4): the Bedrock Runtime endpoint is created when `bedrockFromAllLambdas` (`useForAllLambdas` with the SYSTEM GenAI metadata pipeline or vector search), `bedrockFromSearch` (vector search with the search Lambdas in the VPC) or `bedrockRuntimeFromContainer` (`useGenAiVideoSopBom.enabled`) holds, and the Transcribe endpoint when `bedrockRuntimeFromContainer` holds. Regression coverage: `infra/test/pipelines/coordinateTransformVpcPlacement.test.ts` asserts both directions — no NAT for an isolated-subnet pipeline, NAT present for a private-subnet one — and `infra/test/pipelines/videoSopBomVpcPlacement.test.ts` asserts that block 4's container gate creates `.transcribe` and `.bedrock-runtime` without `useForAllLambdas`. `infra/test/security/vpcEndpointsAndAuthGrants.test.ts` asserts each flag's block membership from its `privateSubnetBatchFlags` / `isolatedSubnetBatchFlags` lists — add a new pipeline's flag to the matching list.
 
@@ -95,6 +173,7 @@ Each pipeline step reads the S3 paths below from its manifest, which `vamsExecut
 | `outputS3AssetFilesPath`               | Asset     | File-level outputs: new files, file previews (`.previewFile.X`). Versioned. |
 | `outputS3AssetPreviewPath`             | Asset     | Asset-level previews only (whole-asset representative image). Versioned.    |
 | `outputS3AssetMetadataPath`            | Asset     | Metadata output. Versioned.                                                 |
+| `outputS3AssetResultsPath`             | Asset     | Reports read onto the EXECUTION record, not stored as asset files.          |
 | `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary | Temporary working files or special non-versioned viewer data only.          |
 
 **Key distinction:** `outputS3AssetFilesPath` is for file-level outputs, including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is only for asset-level preview images representing the asset as a whole. Most pipelines producing file previews should write to `outputS3AssetFilesPath`.

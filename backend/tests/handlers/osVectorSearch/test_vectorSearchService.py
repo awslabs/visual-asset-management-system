@@ -176,6 +176,43 @@ class TestAuthorization:
         assert body["hits"]["hits"][0]["_source"]["str_assetname"] == "gone"
         assert svc.dynamodb.batch_get_item.call_count <= 2
 
+    def _archived_partition_rows(self, svc):
+        def batch_get_item(RequestItems):
+            keys = RequestItems[svc.asset_storage_table_name]["Keys"]
+            found = [
+                {"databaseId": k["databaseId"], "assetId": k["assetId"], "assetName": "n", "assetType": "x", "tags": []}
+                for k in keys if k["databaseId"] == "db1#deleted"
+            ]
+            return {"Responses": {svc.asset_storage_table_name: found}}
+
+        svc.dynamodb.batch_get_item = MagicMock(side_effect=batch_get_item)
+
+    def test_an_archived_hit_is_decided_on_the_stored_record(self, svc):
+        # The archived row lives under db1#deleted; enforce() must see that stored id, as the asset
+        # listings and keyword search hand it, not the live id carried by the vector item.
+        self._archived_partition_rows(svc)
+        seen = []
+        svc.enforcer.enforce.side_effect = lambda obj, action: seen.append(obj["databaseId"]) or True
+        status, body = call(svc, FakeStore([item(isArchived="true")]), {"query": "tractor", "includeArchived": True})
+        assert status == 200 and len(body["hits"]["hits"]) == 1
+        assert seen == ["db1#deleted"]
+
+    def test_an_archived_hit_is_dropped_when_the_stored_record_is_denied(self, svc):
+        # A role denying the archived partition (a "contains #deleted" deny) must not see the hit.
+        self._archived_partition_rows(svc)
+        svc.enforcer.enforce.side_effect = lambda obj, action: not obj["databaseId"].endswith("#deleted")
+        status, body = call(svc, FakeStore([item(isArchived="true")]), {"query": "tractor", "includeArchived": True})
+        assert status == 200
+        assert body["hits"]["hits"] == [] and body["hits"]["total"]["value"] == 0
+
+    def test_a_live_hit_is_decided_on_the_live_record(self, svc):
+        rows(svc, ("db1", "a1"))
+        seen = []
+        svc.enforcer.enforce.side_effect = lambda obj, action: seen.append(obj["databaseId"]) or True
+        status, body = call(svc, FakeStore([item(asset="a1")]), {"query": "tractor"})
+        assert status == 200 and len(body["hits"]["hits"]) == 1
+        assert seen == ["db1"]
+
     def test_include_archived_scopes_to_the_live_databases_the_caller_may_read(self, svc, monkeypatch):
         """Through the REAL ``DatabaseAccessManager`` over a database table holding two live rows and one
         ``#deleted`` row, with Casbin granting the database ``db1`` only: ``includeArchived`` still scans

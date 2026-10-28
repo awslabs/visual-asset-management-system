@@ -321,6 +321,10 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
         // the abandoned first load carry on writing into the live scene. The closure gives each run
         // its own flag, so the abandoned one stops and the live one proceeds.
         let cancelled = false;
+        // The renderer is created before any file loads, while viewerInstanceRef is set only once
+        // the scene is ready, so this run's renderer is held here: cleanup releases it after a
+        // load that failed or was cancelled too.
+        let runRenderer: any = null;
 
         const loadAssets = async () => {
             try {
@@ -349,6 +353,7 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 );
                 camera.position.set(5, 5, 5);
                 const renderer = new THREE.WebGLRenderer({ antialias: true });
+                runRenderer = renderer;
                 renderer.setSize(
                     containerRef.current!.clientWidth,
                     containerRef.current!.clientHeight
@@ -776,23 +781,29 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 controls?.dispose();
 
-                if (renderer?.domElement?.parentNode) {
-                    renderer.domElement.parentNode.removeChild(renderer.domElement);
-                }
-
-                // Before the renderer: the environment is a render target that belongs to this
-                // renderer's context, so releasing it afterwards releases nothing.
-                sceneEnvironmentRef.current?.dispose();
-                sceneEnvironmentRef.current = null;
-
-                renderer?.dispose();
-
                 // Cleanup blob URLs
                 if (blobUrls && blobUrls.length > 0) {
                     cleanupBlobUrls(blobUrls);
                     console.log(`Cleaned up ${blobUrls.length} blob URLs`);
                 }
             }
+            viewerInstanceRef.current = null;
+
+            if (runRenderer?.domElement?.parentNode) {
+                runRenderer.domElement.parentNode.removeChild(runRenderer.domElement);
+            }
+
+            // Before the renderer: the environment is a render target that belongs to this
+            // renderer's context, so releasing it afterwards releases nothing.
+            sceneEnvironmentRef.current?.dispose();
+            sceneEnvironmentRef.current = null;
+
+            runRenderer?.dispose();
+            // dispose() frees the renderer's GPU resources but keeps the WebGL context until the
+            // canvas is garbage collected, and the browser caps live contexts per page. Called after
+            // dispose(), which has already removed the renderer's own context-lost listener.
+            runRenderer?.forceContextLoss?.();
+            runRenderer = null;
 
             // Clear global THREE.js reference to prevent contamination
             delete (window as any).THREE;

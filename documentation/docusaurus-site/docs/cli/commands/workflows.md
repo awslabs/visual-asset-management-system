@@ -306,6 +306,10 @@ vamscli workflow list-executions -d my-db -a my-asset -w my-workflow --auto-pagi
 The listing covers executions in both directions: those that read the asset as an input **and** those
 that wrote to it as their output target, merged newest-first.
 
+Each item carries `outputTypes` under `--json-output`, the kinds of output the run produced (`File`,
+`Metadata`, `Result`); it is `[]` for a run that produced none or was recorded before the field
+existed.
+
 The two workflow filters are matched independently and AND-ed, so either narrows the list on its own.
 A workflow ID is unique across every database, so the workflow ID alone names the workflow; the
 workflow-database filter narrows the list further. A value that is not the workflow's own database

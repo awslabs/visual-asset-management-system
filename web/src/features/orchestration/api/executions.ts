@@ -82,6 +82,61 @@ export async function getExecutionDetailsMetadata(
     });
 }
 
+/** The file collections the paged detail-files route serves (no inputDatabase — metadata-only split). */
+export type DetailFileCollection = "input" | "output";
+
+/** One page of one detail file collection. NextToken is absent on the last page. */
+export interface DetailFilePage {
+    Items: any[];
+    collection: string;
+    NextToken?: string;
+}
+
+/**
+ * One page of one of an execution's FILE collections.
+ *
+ * Rows carry the same scrubbed shape the details view returns; output rows also carry the producing
+ * pipelineId. `collection` selects which one: `input` (workflow-level input files) or `output`
+ * (per-pipeline output files). `pipelineId` narrows the output collection to one step.
+ */
+export async function getExecutionDetailsFiles(
+    executionId: string,
+    params?: Record<string, string>
+): Promise<[boolean, DetailFilePage | string]> {
+    return toTuple(() => {
+        const opts = params ? { queryStringParameters: params } : {};
+        return apiClient.get(`workflows/executions/${executionId}/details/files`, opts);
+    });
+}
+
+/**
+ * One page of a run's concatenated result text, with its truncation flag and counts. `NextToken` is
+ * present while more result rows remain.
+ */
+export interface ExecutionResults {
+    resultContent: string;
+    resultContentTruncated: boolean;
+    resultRowCount: number;
+    resultContentBytes: number;
+    NextToken?: string;
+}
+
+/**
+ * One page of an execution's concatenated result text (output-only; no collection). The service
+ * returns as many result rows as fit its 5 MiB response budget and a `NextToken` while more remain;
+ * pass it back as `startingToken`. `resultContentTruncated` means a row was stored cut or one row
+ * alone exceeded the budget. An empty/legacy run returns the empty shape, never an error.
+ */
+export async function getExecutionResults(
+    executionId: string,
+    params?: Record<string, string>
+): Promise<[boolean, ExecutionResults | string]> {
+    return toTuple(() => {
+        const opts = params ? { queryStringParameters: params } : {};
+        return apiClient.get(`workflows/executions/${executionId}/details/results`, opts);
+    });
+}
+
 export async function getExecutionLogs(
     executionId: string,
     params?: Record<string, string>

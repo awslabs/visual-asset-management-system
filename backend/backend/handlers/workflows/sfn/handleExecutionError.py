@@ -64,6 +64,13 @@ try:
     workflow_execution_database_v2 = get_table_name(ResourceKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE_V2)
     pipeline_executions_table = get_table_name(ResourceKeys.PIPELINE_EXECUTIONS_STORAGE_TABLE)
     pipeline_execution_logs_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_LOGS_STORAGE_TABLE)
+    # Output tables read ONLY to derive the failed run's outputTypes (one bounded existence query per
+    # table per pipeline execution). Keyed by pipelineExecutionId (PK), so the query carries no
+    # FilterExpression and a Limit=1 hit is a conclusive existence answer.
+    pipeline_execution_output_files_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_FILES_STORAGE_TABLE)
+    pipeline_execution_output_metadata_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_METADATA_STORAGE_TABLE)
+    pipeline_execution_output_results_table = get_table_name(ResourceKeys.PIPELINE_EXECUTION_OUTPUT_RESULTS_STORAGE_TABLE)
+    workflow_execution_configuration_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE)
     # Read to resolve a DeadlineCloud pipeline's farm and queue, which live on the pipeline
     # DEFINITION rather than on any execution row.
     pipeline_table = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE_V2)
@@ -163,6 +170,45 @@ def get_pipeline_definition(pipeline_database_id, pipeline_id):
     return resp.get('Item', {}) or {}
 
 
+def _pipeline_has_output_rows(table_name, pipeline_execution_id):
+    """Whether any row exists for a pipeline execution in one output table. A conclusive existence
+    check: the output tables are keyed by pipelineExecutionId (PK), so this is a plain key query with
+    no FilterExpression, where a single returned item is definitive (Rule 14)."""
+    if not pipeline_execution_id:
+        return False
+    table = dynamodb.Table(table_name)
+    resp = table.query(
+        KeyConditionExpression=Key('pipelineExecutionId').eq(pipeline_execution_id), Limit=1)
+    return bool(resp.get('Items'))
+
+
+def _derive_failure_output_types(pipeline_rows):
+    """The outputTypes subset a failed run produced, from whatever output rows exist at failure.
+
+    A failed run commonly produced nothing, but some pipelines write partial outputs before the step
+    that failed, so the real value is derived through the SAME shared helper the success path uses
+    rather than defaulting to []. Each pipeline execution is queried only for the output kinds not yet
+    found on an earlier one, and the walk ends once all three are found, so the reads are bounded by
+    three existence queries per pipeline execution."""
+    has_file = has_metadata = has_result = False
+    for prow in pipeline_rows or []:
+        pexec_id = prow.get('pipelineExecutionId', '')
+        if not pexec_id:
+            continue
+        if not has_file and _pipeline_has_output_rows(
+                pipeline_execution_output_files_table, pexec_id):
+            has_file = True
+        if not has_metadata and _pipeline_has_output_rows(
+                pipeline_execution_output_metadata_table, pexec_id):
+            has_metadata = True
+        if not has_result and _pipeline_has_output_rows(
+                pipeline_execution_output_results_table, pexec_id):
+            has_result = True
+        if has_file and has_metadata and has_result:
+            break
+    return er.derive_output_types(has_file, has_metadata, has_result)
+
+
 def reconcile_failed_execution(body, error_info):
     """Stop the in-flight pipelines' registered sub-processes, mark the execution + in-flight pipeline
     rows FAILED with stop times, and capture the error message + full execution log. Best-effort per
@@ -239,7 +285,17 @@ def reconcile_failed_execution(body, error_info):
     except Exception as e:
         logger.exception(f"Error finalizing main execution row (continuing): {e}")
 
-    # 4) Release the concurrency locks the run held (a no-op under the `none` restriction).
+    # 4) Record the failed run's output types on its configuration row (UPDATE; created at launch),
+    #    derived through the shared helper from whatever output rows exist at failure. Best-effort and
+    #    isolated so a config-row write failure never fails the reconciliation; a missing write leaves
+    #    the launch-time [] in place, which every reader treats as "no output types".
+    try:
+        output_types = _derive_failure_output_types(pipeline_rows)
+        er.update_execution_output_types(
+            dynamodb, workflow_execution_configuration_table, execution_id, output_types)
+    except Exception as e:
+        logger.exception(f"Error recording failed-execution output types (continuing): {e}")
+    # 5) Release the concurrency locks the run held (a no-op under the `none` restriction).
     #    Best-effort like every step here; an unreleased row expires through the table's TTL.
     el.release_locks_for_execution(
         dynamodb, locks_table_name=workflow_execution_locks_table, workflow_table_name=workflow_table,

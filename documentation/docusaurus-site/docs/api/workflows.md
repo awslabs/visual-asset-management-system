@@ -1112,13 +1112,18 @@ The applied lower bound is echoed back as `filterStartDate`.
                 "databaseId": "my-database",
                 "assetId": "building-01",
                 "executionError": "",
-                "executionLog": ""
+                "executionLog": "",
+                "outputTypes": ["File"]
             }
         ],
         "filterStartDate": "2025-12-15T10:30:00Z"
     }
 }
 ```
+
+Each row carries `outputTypes`, the subset of `["File", "Metadata", "Result"]` the run produced — the
+same field the global list reports, read from the execution's configuration record. It is `[]` for a
+run that produced none and for a run recorded before the field existed.
 
 One request lists the asset's most recent executions across both directions. `pageSize` is honoured and is capped at 200, because each listed execution costs a record read and a permission check — ask for fewer and you get fewer; ask for more and you get 200. `NextToken` is present when that cap was reached with older executions still available — page with `startingToken` until the token is absent. A run that only wrote into the asset carries no input file, so its `inputAssetFileKey` is empty.
 
@@ -1182,7 +1187,8 @@ GET /workflows/executions
                 "executionGroupId": "",
                 "outputLocationType": "asset",
                 "outputAssetId": "x1a2b3c4-d5e6-7890",
-                "outputDatabaseId": "my-database"
+                "outputDatabaseId": "my-database",
+                "outputTypes": ["File", "Metadata"]
             }
         ],
         "filterStartDate": "2025-12-15T10:30:00Z",
@@ -1196,6 +1202,14 @@ execution that writes no files), and `outputAssetId` / `outputDatabaseId` naming
 are empty strings for a results-only run. They are read from the execution's configuration record,
 which the endpoint loads at most once per listed row and shares with the output-asset visibility check,
 so reporting them costs no extra lookup.
+
+Each row also carries `outputTypes`, the subset of `["File", "Metadata", "Result"]` the run produced
+(in File → Metadata → Result order), read from that same configuration record. It is `[]` for a run
+that produced none and for a legacy run whose configuration record predates the attribute (there is no
+migration). No output content appears on the list — read a run's files with
+[Page execution detail files](#page-execution-detail-files), its result text with
+[Get execution results](#get-execution-results), and its metadata with
+[Page execution detail metadata](#page-execution-detail-metadata).
 
 :::note[A short page is a stated bound, not an absence of matches]
 Both the equality filters and the per-execution visibility check drop rows after a query's limit is spent, so the endpoint walks its query — repeating from its own continuation — until the page is full or the index is exhausted. A walk spanning several queries can return slightly more rows than `pageSize`.
@@ -1803,7 +1817,9 @@ Three collections are addressable, matching the detail view's three metadata sec
 | `inputDatabase` | `inputDatabaseMetadata` | Each metadata-source database's own metadata. |
 | `output`        | `outputs.metadata`      | The metadata each step wrote.                 |
 
-The detail view's `inputFiles`, `outputs.files`, and `outputs.results` collections have no paged equivalent.
+The detail view's `inputFiles` and `outputs.files` collections are paged by
+[Page execution detail files](#page-execution-detail-files), and `outputs.results` is read in full by
+[Get execution results](#get-execution-results).
 
 ### Path parameters
 
@@ -1865,6 +1881,150 @@ This route enforces the rule [Get execution details](#get-execution-details) enf
 | `403`  | Not authorized (API, workflow, an input-file asset, a metadata-source asset, the output asset, or a captured metadata-source database) |
 | `404`  | Execution not found                                                                                                                    |
 | `500`  | Internal server error                                                                                                                  |
+
+---
+
+## Page execution detail files
+
+Reads one of an execution's **file** collections a page at a time, so a file collection the detail
+view reported truncated (`inputFiles` or `outputs.files`) can be walked in full. Rows carry the same
+scrubbed shape the detail view returns; output rows also carry the producing `pipelineId`. No S3
+bucket or key is returned.
+
+```
+GET /workflows/executions/{executionId}/details/files
+```
+
+Two collections are addressable (there is no `inputDatabase` — that split is metadata-only):
+
+| `collection` | Detail-view section | Rows                                                 |
+| ------------ | ------------------- | ---------------------------------------------------- |
+| `input`      | `inputFiles`        | The workflow-level input files (a single partition). |
+| `output`     | `outputs.files`     | The per-pipeline output files (walked across steps). |
+
+### Path parameters
+
+| Parameter     | Type   | Required | Description          |
+| ------------- | ------ | -------- | -------------------- |
+| `executionId` | string | Yes      | Execution identifier |
+
+### Query parameters
+
+| Parameter       | Type   | Required | Default | Description                                                                                                                 |
+| --------------- | ------ | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `collection`    | string | No       | `input` | `input` or `output`. An omitted or empty value reads `input`; any other value (including `inputDatabase`) returns `400`.    |
+| `pageSize`      | number | No       | `100`   | Rows requested per page. Clamped to a maximum of 500. Below 1 returns `400`.                                                |
+| `startingToken` | string | No       | --      | Continuation token from a previous page's `NextToken`.                                                                      |
+| `NextToken`     | string | No       | --      | Accepted as a synonym for `startingToken`. `startingToken` wins on both.                                                    |
+| `pipelineId`    | string | No       | --      | Narrow the `output` collection to the steps running this pipeline. Does not apply to input files (they are workflow-level). |
+
+### Response
+
+```json
+{
+    "message": {
+        "collection": "output",
+        "Items": [
+            {
+                "relativeFilePath": "/converted/building.glb",
+                "fileType": "file",
+                "fileSize": 184320,
+                "contentType": "model/gltf-binary",
+                "s3VersionId": "AbC123…",
+                "pipelineId": "3d-conversion-pipeline"
+            }
+        ],
+        "NextToken": "eyJzdGVwSW5kZXgiOiAwLCAi…"
+    }
+}
+```
+
+An `input` row instead carries `databaseId`, `assetId`, `inputAssetFileKey`, and `versionId` (the
+concrete S3 version read at launch). `NextToken` is absent on the last page. A page carries at most the
+requested row count and at most 4 MB of serialized rows, whichever comes first, and nothing is dropped
+by either bound — a page ends at the first row it could not carry and the token resumes there.
+
+:::warning[Send a token back with the request that produced it]
+A token names a position in one collection's walk under one `pipelineId` filter. Repeat the
+`collection` and `pipelineId` of the request the token came from on every follow-up request; a token
+replayed against a different `collection` or filter returns `400`.
+:::
+
+:::note[Same authorization as the detail view]
+This route enforces the rule [Get execution details](#get-execution-details) enforces, evaluated for
+`GET`.
+:::
+
+### Error responses
+
+| Status | Description                                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid or missing `executionId`, an unknown `collection`, an invalid `pipelineId` or `pageSize`, or an unusable token |
+| `403`  | Not authorized                                                                                                         |
+| `404`  | Execution not found                                                                                                    |
+| `500`  | Internal server error                                                                                                  |
+
+---
+
+## Get execution results
+
+Returns an execution's **concatenated result text**, a page at a time — output-only, no collection —
+for a pipeline that produces a textual result (an LLM-style response) rather than asset files.
+
+```
+GET /workflows/executions/{executionId}/details/results
+```
+
+### Path parameters
+
+| Parameter     | Type   | Required | Description          |
+| ------------- | ------ | -------- | -------------------- |
+| `executionId` | string | Yes      | Execution identifier |
+
+### Query parameters
+
+| Parameter       | Type   | Required | Description                                                  |
+| --------------- | ------ | -------- | ------------------------------------------------------------ |
+| `startingToken` | string | No       | `NextToken` from the previous page (`NextToken` is an alias) |
+
+### Response
+
+```json
+{
+    "message": {
+        "resultContent": "The result text of the rows on this page…",
+        "resultContentTruncated": false,
+        "resultRowCount": 2,
+        "resultContentBytes": 1480,
+        "NextToken": "eyJzdGVwSW5kZXgiOiAx…"
+    }
+}
+```
+
+Result rows are walked across the run's steps in a stable order and their text concatenated. A page
+carries as many rows as fit a 5 MiB budget measured on the response as sent — after JSON escaping, so
+a CJK character or a quote costs several bytes — under the AWS Lambda synchronous-response limit.
+`NextToken` is present while rows remain; pass it back as `startingToken`, and concatenate
+`resultContent` across every page for the whole result. `resultContentTruncated` is `true` when a row
+on the page was stored truncated or a single row larger than the budget was cut; that text is not
+retrievable. An empty or legacy run (one whose configuration record predates result capture) returns
+the empty shape (`resultContent` `""`, counts `0`, no `NextToken`), never an error. Internal S3 keys
+are never surfaced. A run's `outputTypes` includes `"Result"` exactly when there is result content to
+read here.
+
+:::note[Same authorization as the detail view]
+This route enforces the rule [Get execution details](#get-execution-details) enforces, evaluated for
+`GET`.
+:::
+
+### Error responses
+
+| Status | Description                                            |
+| ------ | ------------------------------------------------------ |
+| `400`  | Invalid or missing `executionId`, or an unusable token |
+| `403`  | Not authorized                                         |
+| `404`  | Execution not found                                    |
+| `500`  | Internal server error                                  |
 
 ---
 

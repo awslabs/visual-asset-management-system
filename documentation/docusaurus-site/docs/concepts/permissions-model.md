@@ -230,6 +230,8 @@ Archiving an asset and deleting a database keep the record, stored under the id 
 -   A rule written against the stored id matches archived records. For example, a deny with `databaseId contains #deleted` hides every archived record from the role.
 -   A `starts_with` or `contains` criterion that matches both forms (such as `databaseId contains .*` in the `global-readonly` template) reaches archived records without naming the suffix.
 
+Search results follow the same rule: an archived asset, and a file of an archived asset, are checked on the archived record, and a file of a live asset, archived or not, is checked on the live asset, as in the asset's file listing.
+
 ## Common role patterns
 
 For detailed constraint tables, JSON examples, and design rationale for common roles (Database Admin, Database User, Database Read-Only, Global Read-Only, and Deny by Tag), see [Developer Guide: Permissions](../developer/permissions.md).
