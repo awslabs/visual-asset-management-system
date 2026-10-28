@@ -16,10 +16,19 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.tests.handlers.compliance._harness import (
-    ASSET, CASCADE_ID, DB, USER, body_of, claims_for, enforcer, put_items, rest_event,
-    update_values,
+    ASSET, CASCADE_ID, DB, USER, body_of, claims_for, enforcer, live_only_asset_table, put_items,
+    rest_event, stored_id_checks, update_values,
 )
 from handlers.compliance import complianceCascadeService as svc
+from handlers.compliance import complianceEvaluationStore as store
+
+
+@pytest.fixture(autouse=True)
+def _no_archived_assets():
+    """No parent asset of these tests is archived: the archived-asset reads find none (the
+    archived case is `test_complianceArchivedAssetAccess.py`)."""
+    with patch.object(store, "asset_table", live_only_asset_table()):
+        yield
 
 MOD = "handlers.compliance.complianceCascadeService"
 STORE = "handlers.compliance.complianceEvaluationStore"
@@ -246,15 +255,18 @@ class TestAuthorization:
     def test_create_enforces_the_cascade_object_and_the_request_database(self):
         _, mocks = _run(rest_event("POST", LIST_PATH, body=CREATE_NOW_BODY))
         calls = [c.args for c in mocks["enforcer"].enforce.call_args_list]
-        # The two checks, then the caller's reach: an evaluation POST per database.
-        assert len(calls) == 3
-        assert calls[2] == (EVALUATION_OBJECT, "POST")
+        # The two checks on the live id and on the parent's stored id, then the caller's reach: an
+        # evaluation POST per database.
+        assert len(calls) == 5
+        assert calls[4] == (EVALUATION_OBJECT, "POST")
         cascade_object, cascade_action = calls[0]
         assert cascade_object["object__type"] == "complianceCascade"
         assert cascade_object["cascadeId"] == _invoked_cascade_id(mocks["invoke"])
         assert cascade_object["databaseId"] == DB
         assert cascade_action == "POST"
         assert calls[1] == (EVALUATION_OBJECT, "POST")
+        assert calls[2] == (dict(cascade_object, databaseId=f"{DB}#deleted"), "POST")
+        assert calls[3] == stored_id_checks(EVALUATION_OBJECT, "POST")[1]
 
     @pytest.mark.parametrize("method,path,body,action", [
         ("POST", APPROVE_PATH, {}, "POST"), ("POST", REJECT_PATH, {}, "POST"),
@@ -276,12 +288,18 @@ class TestAuthorization:
 
     def test_the_listing_enforces_the_cascade_object_and_the_trigger_database(self):
         _, mocks = _run(rest_event("GET", LIST_PATH), pending_rows=[PENDING])
-        # The two read checks, then the row's `permissions.approve` (POST on both objects).
+        # The two read checks, then the row's `permissions.approve` (POST on both objects), each
+        # on the live id and on the parent's stored id.
+        archived = {"databaseId": f"{DB}#deleted"}
         assert [c.args for c in mocks["enforcer"].enforce.call_args_list] == [
             (CASCADE_OBJECT, "GET"),
             (EVALUATION_OBJECT, "GET"),
+            (dict(CASCADE_OBJECT, **archived), "GET"),
+            (dict(EVALUATION_OBJECT, **archived), "GET"),
             (CASCADE_OBJECT, "POST"),
             (EVALUATION_OBJECT, "POST"),
+            (dict(CASCADE_OBJECT, **archived), "POST"),
+            (dict(EVALUATION_OBJECT, **archived), "POST"),
         ]
 
     @pytest.mark.parametrize("cascade,evaluation", [(True, False), (False, True)],

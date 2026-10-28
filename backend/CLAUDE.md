@@ -48,6 +48,13 @@ backend/
 │   │   │                                           #   fill, ≤200 rows, token = last row's index key),
 │   │   │                                           #   count_items() (Select=COUNT), name attributes,
 │   │   │                                           #   asset_text_filter() (no key attr in a filter)
+│   │   ├── compliance/archivedAssets.py            # Archived-asset rule for compliance records:
+│   │   │                                           #   ArchivedAssets.decide() checks the stored id
+│   │   │                                           #   `<db>#deleted` with the shared engine and reads
+│   │   │                                           #   the archived partition only when it is refused
+│   │   │                                           #   (one keys-only Query per database per listing);
+│   │   │                                           #   withheld() / withheld_state_counts() for the
+│   │   │                                           #   overview's rows and counts
 │   │   ├── compliance/evaluationEngine.py          # Pure vams-rules-v1 rule logic (no AWS access):
 │   │   │                                           #   rule parsing/inheritance, the six rule types
 │   │   │                                           #   (pipeline, metadata, relationship, fileStructure,

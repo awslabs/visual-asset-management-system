@@ -225,6 +225,34 @@ def enforcer_for_object_types(*allowed_object_types):
     return instance
 
 
+ARCHIVED_SUFFIX = "#deleted"
+
+
+def live_only_asset_table(live_item=None, archived=()):
+    """An asset-table stand-in for the services' archived-asset reads (`common.compliance.
+    archivedAssets`): a `get_item` of a live key answers `live_item` (None: no row), of an archived
+    key `<databaseId>#deleted` a row only for an asset id in `archived`, and a `query` of an archived
+    partition the `archived` ids. With the defaults no asset is archived."""
+    table = MagicMock(name="asset_table")
+
+    def get_item(Key, **_kwargs):
+        if Key["databaseId"].endswith(ARCHIVED_SUFFIX):
+            return {"Item": {"assetId": Key["assetId"]}} if Key["assetId"] in archived else {}
+        return {"Item": dict(live_item)} if live_item is not None else {}
+
+    table.get_item.side_effect = get_item
+    table.query.side_effect = lambda **_kwargs: {"Items": [{"assetId": a} for a in archived]}
+    return table
+
+
+def stored_id_checks(live_object, action):
+    """The two Tier-2 checks an asset-scoped compliance check makes when the live one passes: the
+    object with the live database id, then with the stored id `<databaseId>#deleted`
+    (`ArchivedAssets.decide`)."""
+    archived_object = dict(live_object, databaseId=f"{live_object['databaseId']}{ARCHIVED_SUFFIX}")
+    return [(live_object, action), (archived_object, action)]
+
+
 def encode_token(value):
     """A pagination token as the handlers emit one: Base64 of the JSON value."""
     return base64.b64encode(json.dumps(value).encode("utf-8")).decode("utf-8")

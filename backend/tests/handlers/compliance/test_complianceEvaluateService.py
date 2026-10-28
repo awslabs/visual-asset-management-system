@@ -15,7 +15,7 @@ from boto3.dynamodb.conditions import ConditionExpressionBuilder
 
 from backend.tests.handlers.compliance._harness import (
     ASSET, DB, SCHEMA, USER, body_of, claims_for, decode_token, encode_token, enforcer, rest_event,
-    schema_row,
+    schema_row, stored_id_checks,
 )
 from handlers.compliance import complianceEvaluateService as svc
 from handlers.compliance import complianceEvaluationStore as store
@@ -258,8 +258,10 @@ class TestAuthorization:
                 patch(f"{STORE}.run_evaluation", return_value=EVALUATION_RESULT), \
                 patch(f"{MOD}.check_and_trigger_cascade"):
             svc.lambda_handler(rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={}), MagicMock())
-        instance.enforce.assert_called_once_with(
+        # The live object, then the asset's stored id: both pass, so the archive is not read.
+        live_check, stored_check = stored_id_checks(
             {"object__type": "complianceEvaluation", "databaseId": DB, "complianceState": ""}, "POST")
+        assert [c.args for c in instance.enforce.call_args_list] == [live_check, stored_check]
 
     def test_sweep_checks_read_access_to_the_schema_in_its_scope(self):
         instance = enforcer()
@@ -310,9 +312,10 @@ class TestAuthorization:
                 patch(f"{STORE}.get_compliance_record",
                       return_value={"complianceState": "quarantined"}):
             svc.lambda_handler(rest_event("GET", STATE_ASSET_PATH, ASSET_PARAMS), MagicMock())
-        instance.enforce.assert_called_once_with(
+        live_check, stored_check = stored_id_checks(
             {"object__type": "complianceEvaluation", "databaseId": DB,
              "complianceState": "quarantined"}, "GET")
+        assert [c.args for c in instance.enforce.call_args_list] == [live_check, stored_check]
 
 
 @pytest.mark.unit

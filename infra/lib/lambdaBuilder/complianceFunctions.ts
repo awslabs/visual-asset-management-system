@@ -399,6 +399,9 @@ export function buildComplianceAuditServiceFunction(
         environment: {},
     });
     storageResources.dynamo.complianceAuditStorageTable.grantReadData(fun);
+    // The entries of an archived asset are listed only for a caller allowed on its stored database
+    // id, so the service reads whether an asset is archived (its key under `<databaseId>#deleted`).
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

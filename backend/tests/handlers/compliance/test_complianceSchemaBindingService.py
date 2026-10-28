@@ -275,6 +275,9 @@ class TestAuthorization:
             (dict(DATABASE_ROW, object__type="database"), "GET"),
             ({"object__type": "complianceSchema", "complianceSchemaName": SCHEMA,
               "databaseId": "GLOBAL"}, "GET"),
+            # Whether the overrides of archived assets are listed: the same database check on the
+            # database's archived id.
+            (dict(DATABASE_ROW, databaseId=f"{DB}#deleted", object__type="database"), "GET"),
         ]
 
     @pytest.mark.parametrize("method,path,params,body", ASSET_PATHS)

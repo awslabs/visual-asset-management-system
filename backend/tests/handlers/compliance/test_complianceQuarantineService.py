@@ -17,7 +17,8 @@ from moto import mock_aws
 
 from backend.tests.handlers.compliance._harness import (
     ASSET, COMPLIANCE_ASSET_STATE_TABLE_DEFINITION, DB, SCHEMA, USER, body_of, claims_for,
-    decode_token, encode_token, enforcer, rest_event, schema_row,
+    decode_token, encode_token, enforcer, live_only_asset_table, rest_event, schema_row,
+    stored_id_checks,
 )
 from common.compliance import listing
 from handlers.compliance import complianceQuarantineService as svc
@@ -63,8 +64,9 @@ def _run(event, tokens=(USER,), api=True, obj=True, compliance_record=None, quar
         if last_evaluated_key is not None:
             page["LastEvaluatedKey"] = last_evaluated_key
         state_table.query.return_value = page
-    asset_table = MagicMock(name="asset_table")
-    asset_table.get_item.return_value = {"Item": {"assetName": "Turbine"}}
+    # Live rows only: no asset of these tests is archived (that case is
+    # test_complianceArchivedAssetAccess.py).
+    asset_table = live_only_asset_table(live_item={"assetName": "Turbine"})
     casbin = casbin if casbin is not None else enforcer(api=api, obj=obj)
     with patch(f"{MOD}.request_to_claims", claims_for(*tokens)), \
             patch(f"{MOD}.CasbinEnforcer", return_value=casbin), \
@@ -215,9 +217,9 @@ class TestAuthorization:
         assert [r["assetId"] for r in body_of(response)["quarantinedAssets"]] == ["mine"]
         assert "hidden-db" not in response["body"]
         assert "theirs" not in response["body"]
-        assert casbin.enforce.call_args_list[1].args == (
-            {"object__type": "complianceEvaluation", "databaseId": "hidden-db",
-             "complianceState": "quarantined"}, "GET")
+        assert ({"object__type": "complianceEvaluation", "databaseId": "hidden-db",
+                 "complianceState": "quarantined"}, "GET") in [
+            c.args for c in casbin.enforce.call_args_list]
 
     def test_a_fully_filtered_page_still_carries_the_token(self):
         """The Casbin filter applies to the page after the read, so a page the caller may see
@@ -234,19 +236,22 @@ class TestAuthorization:
         instance = enforcer()
         with patch(f"{MOD}.request_to_claims", claims_for(USER)), \
                 patch(f"{MOD}.CasbinEnforcer", return_value=instance), \
+                patch(f"{MOD}.asset_table", live_only_asset_table()), \
                 patch(f"{STORE}.get_compliance_record", return_value=QUARANTINED), \
                 patch(f"{STORE}.update_asset_state"), patch(f"{STORE}.write_audit"):
             svc.lambda_handler(rest_event("POST", RELEASE_PATH, ASSET_PARAMS, body={}), MagicMock())
-        instance.enforce.assert_called_once_with(
+        live_check, stored_check = stored_id_checks(
             {"object__type": "complianceEvaluation", "databaseId": DB,
              "complianceState": "quarantined"}, "POST")
+        assert [c.args for c in instance.enforce.call_args_list] == [live_check, stored_check]
 
     def test_revoke_checks_an_exception_evaluation_object_for_the_database_with_delete(self):
         _, mocks = _run(rest_event("DELETE", EXCEPTION_PATH, ASSET_PARAMS), compliance_record=EXCEPTED,
                         evaluation=_evaluation("compliant"))
-        mocks["casbin"].enforce.assert_called_once_with(
+        live_check, stored_check = stored_id_checks(
             {"object__type": "complianceEvaluation", "databaseId": DB,
              "complianceState": "exception"}, "DELETE")
+        assert [c.args for c in mocks["casbin"].enforce.call_args_list] == [live_check, stored_check]
 
 
 @pytest.mark.unit

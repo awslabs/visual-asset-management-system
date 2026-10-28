@@ -25,8 +25,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.tests.handlers.compliance._harness import (
-    ASSET, CASCADE_ID, DB, RULES_SCHEMA_BODY, USER, body_of, claims_for, rest_event, schema_row,
-    update_values,
+    ASSET, CASCADE_ID, DB, RULES_SCHEMA_BODY, USER, body_of, claims_for, live_only_asset_table,
+    rest_event, schema_row, update_values,
 )
 from backend.tests.handlers.compliance.test_complianceCascadeExecutor import Graph, _run_executor
 from handlers.compliance import complianceCascadeService as cascade_svc
@@ -34,10 +34,22 @@ from handlers.compliance import complianceQuarantineService as quarantine_svc
 from handlers.compliance import complianceSchemaBindingService as binding_svc
 from handlers.compliance import complianceSchemaService as schema_svc
 from handlers.compliance import complianceEvaluateService as evaluate_svc
+from handlers.compliance import complianceEvaluationStore as compliance_store
 
 STORE = "handlers.compliance.complianceEvaluationStore"
 OTHER_DB = "db2"
 ALL = "*"
+
+
+@pytest.fixture(autouse=True)
+def _no_archived_assets():
+    """No asset of these tests is archived: every service's archived-asset reads find none (the
+    archived case is `test_complianceArchivedAssetAccess.py`)."""
+    with patch.object(compliance_store, "asset_table", live_only_asset_table()), \
+            patch.object(quarantine_svc, "asset_table", live_only_asset_table()), \
+            patch.object(binding_svc, "asset_table", live_only_asset_table()), \
+            patch.object(evaluate_svc, "asset_table", live_only_asset_table()):
+        yield
 
 
 def scoped_enforcer(rules):
@@ -257,7 +269,7 @@ class TestBindingAGlobalSchema:
                 patch(f"{mod}.schema_table", schema_table), \
                 patch(f"{mod}.database_table", database_table), \
                 patch(f"{mod}.asset_state_table", state_table), \
-                patch(f"{mod}.asset_table", MagicMock()), \
+                patch(f"{mod}.asset_table", live_only_asset_table()), \
                 patch(f"{STORE}.update_asset_state"), patch(f"{STORE}.write_audit"):
             response = binding_svc.lambda_handler(
                 rest_event("PUT", f"/compliance/bind/{DB}", {"databaseId": DB},

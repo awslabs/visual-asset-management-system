@@ -16,12 +16,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.tests.handlers.compliance._harness import (
-    ASSET, CASCADE_ID, RULES_SCHEMA_BODY, body_of, claims_for, real_constants, rest_event,
-    schema_row, update_values,
+    ASSET, CASCADE_ID, RULES_SCHEMA_BODY, body_of, claims_for, live_only_asset_table,
+    real_constants, rest_event, schema_row, update_values,
 )
 from handlers.compliance import (
-    complianceCascadeService, complianceEvaluateService, complianceQuarantineService,
-    complianceSchemaService,
+    complianceCascadeService, complianceEvaluateService, complianceEvaluationStore,
+    complianceQuarantineService, complianceSchemaService,
 )
 from backend.tests.handlers.auth.test_permission_templates_compliance_binding import (  # noqa: F401,E402
     DB_A, DB_B, USER_ID, roles_enforcer,
@@ -38,6 +38,16 @@ def _real_permission_constants():
     `common.constants` is in place and the enforcer would build the roles against it."""
     with real_constants("backend.backend.handlers.authz",
                         "backend.backend.handlers.auth.authConstraintsTemplateService"):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _no_archived_assets():
+    """No asset of these tests is archived: the archived-asset reads find none (the archived case,
+    over every shipped template, is `test_complianceArchivedAssetAccess.py`)."""
+    with patch.object(complianceEvaluationStore, "asset_table", live_only_asset_table()), \
+            patch.object(complianceQuarantineService, "asset_table", live_only_asset_table()), \
+            patch.object(complianceEvaluateService, "asset_table", live_only_asset_table()):
         yield
 
 

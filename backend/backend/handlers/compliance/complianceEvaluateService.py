@@ -34,6 +34,9 @@ from common.apiRoutes import (
 )
 from common.compliance import evaluationEngine as engine
 from common.compliance import listing
+from common.compliance.archivedAssets import (
+    ArchivedAssets, withheld_state_counts,
+)
 from common.dynamodb import query_all_items
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -204,6 +207,16 @@ def _enforce_evaluation(database_id, action, compliance_state=""):
     }, action)
 
 
+def _enforce_asset_evaluation(database_id, asset_id, action, compliance_state=""):
+    """Tier-2 check on the compliance evaluation object of one asset, with the database id the
+    asset is stored under: `<databaseId>#deleted` for an archived asset, so the engine's
+    archived-record rule applies to its compliance record as it applies to the asset itself
+    (`ArchivedAssets.decide`)."""
+    return ArchivedAssets(asset_table).decide(
+        database_id, asset_id,
+        lambda stored_id: _enforce_evaluation(stored_id, action, compliance_state))
+
+
 def _enforce_schema(schema_name, database_id, action):
     """Tier-2 check on a compliance schema object in its scope (`databaseId`: a database id or
     GLOBAL). Fails closed on an empty token list."""
@@ -235,7 +248,7 @@ def evaluate_asset(event, database_id, asset_id, request: EvaluateAssetRequestMo
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforce_evaluation(database_id, "POST"):
+    if not _enforce_asset_evaluation(database_id, asset_id, "POST"):
         return authorization_error()
 
     if not store.get_asset_item(database_id, asset_id):
@@ -603,7 +616,7 @@ def get_evaluations(event, database_id, asset_id, query_params):
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforce_evaluation(database_id, "GET"):
+    if not _enforce_asset_evaluation(database_id, asset_id, "GET"):
         return authorization_error()
 
     try:
@@ -642,7 +655,8 @@ def get_compliance_state(event, database_id, asset_id):
     item = store.get_compliance_record(database_id, asset_id)
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforce_evaluation(database_id, "GET", (item or {}).get("complianceState", "")):
+    if not _enforce_asset_evaluation(database_id, asset_id, "GET",
+                                     (item or {}).get("complianceState", "")):
         return authorization_error()
 
     if not item:
@@ -665,13 +679,14 @@ OVERVIEW_SCHEMA_SOURCES = ("database", "asset")
 OVERVIEW_SORTS = ("assetId", "name")
 
 
-def overview_summary(database_id):
+def overview_summary(database_id, withheld=frozenset()):
     """`(summary, totalAssets, reads)`: per-state counts and the evaluation-error overlay of a
     database, without reading the rows. Each state is one `Select=COUNT` query on the
     ComplianceStateIndex partition of that state narrowed to the database (its sort key), so the
     reads grow with the database's index entries, never with the item sizes, and no row is
     returned; the overlay is one COUNT over the database's partition filtered on
-    `lastEvaluationStatus`. Exact at the time of the read."""
+    `lastEvaluationStatus`. Exact at the time of the read. The records of the `withheld` (archived)
+    assets are read by key and left out of every count."""
     summary = {}
     reads = 0
     for state in OVERVIEW_STATES:
@@ -687,8 +702,26 @@ def overview_summary(database_id):
         "FilterExpression": Attr("lastEvaluationStatus").eq(engine.EVALUATION_STATUS_ERROR),
     })
     reads += spent
+    if withheld:
+        withheld_counts, withheld_errors = withheld_state_counts(
+            asset_state_table, database_id, withheld, OVERVIEW_STATES,
+            engine.EVALUATION_STATUS_ERROR)
+        for state in OVERVIEW_STATES:
+            summary[state] = max(0, summary[state] - withheld_counts[state])
+        errors = max(0, errors - withheld_errors)
+        reads += -(-len(withheld) // 100)
     summary[OVERVIEW_ERROR_BUCKET] = errors
     return summary, sum(summary[state] for state in OVERVIEW_STATES), reads
+
+
+def _without(withheld, accept=None):
+    """An `accept` for `listing.query_page` that drops the rows of the `withheld` asset ids and
+    otherwise applies `accept`."""
+    def accept_row(row):
+        if row.get("assetId") in withheld:
+            return False
+        return accept is None or accept(row)
+    return accept_row
 
 
 def _overview_filters(event, query_params):
@@ -803,6 +836,17 @@ def get_database_compliance_overview(event, database_id, query_params):
     name_index = filters["sort"] == "name" and not filters["state"]
     name_sort_unavailable = False
     kwargs, keys, filtered, accept = _overview_query(database_id, filters)
+    # An archived asset keeps its record under the live database id. A caller refused the
+    # database's archived id (`<databaseId>#deleted`) does not see the records of its archived
+    # assets, in the rows or in the counts, as the asset listing does not show them.
+    withheld = ArchivedAssets(asset_table).withheld(
+        database_id, lambda stored_id: _enforce_evaluation(stored_id, "GET"))
+    read_limit = None
+    if withheld:
+        accept = _without(withheld, accept)
+        if not filtered:
+            # At most len(withheld) rows are dropped, so a page plus that many fills in one read.
+            read_limit = min(page_size + len(withheld), listing.FILTERED_READ_LIMIT)
     start_key = None
     if query_params.get("startingToken"):
         start_key = listing.decode_token(query_params["startingToken"], keys)
@@ -818,7 +862,7 @@ def get_database_compliance_overview(event, database_id, query_params):
         try:
             rows, next_key, _ = listing.query_page(asset_state_table, kwargs, page_size, keys,
                                                    start_key=start_key, filtered=filtered,
-                                                   accept=accept)
+                                                   accept=accept, read_limit=read_limit)
         except ClientError as error:
             if not (name_index and _index_backfilling(error)):
                 raise
@@ -829,9 +873,11 @@ def get_database_compliance_overview(event, database_id, query_params):
                 start_key = {name: start_key[name] for name in listing.BASE_STATE_KEYS}
     if name_sort_unavailable:
         kwargs, keys, filtered, accept = _overview_query(database_id, dict(filters, sort="assetId"))
+        if withheld:
+            accept = _without(withheld, accept)
         rows, next_key, _ = listing.query_page(asset_state_table, kwargs, page_size, keys,
                                                start_key=start_key, filtered=filtered,
-                                               accept=accept)
+                                               accept=accept, read_limit=read_limit)
     if filters["state"] and filters["sort"] == "name":
         rows.sort(key=lambda row: row.get("assetNameSort") or row.get("assetId", ""))
     for row in rows:
@@ -839,7 +885,7 @@ def get_database_compliance_overview(event, database_id, query_params):
         row.pop("assetNameSort", None)
         row.pop("assetSearchText", None)
 
-    summary, total, _ = overview_summary(database_id)
+    summary, total, _ = overview_summary(database_id, withheld)
     body = {
         "databaseId": database_id,
         "totalAssets": total,

@@ -42,6 +42,7 @@ from common.apiRoutes import (
     API_COMPLIANCE_CASCADES,
 )
 from common.compliance import listing
+from common.compliance.archivedAssets import ArchivedAssets, is_asset_database
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
@@ -202,8 +203,10 @@ def _evaluable_database_ids():
     it runs without the caller's identity, so the caller's reach is fixed when the caller acts and
     a descendant is never evaluated with the system identity instead."""
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
+    # A soft-deleted database (`<databaseId>#deleted`) holds no compliance records to evaluate.
     return [database_id for database_id in store.all_database_ids()
-            if casbin_enforcer.enforce(_evaluation_object(database_id), "POST")]
+            if is_asset_database(database_id)
+            and casbin_enforcer.enforce(_evaluation_object(database_id), "POST")]
 
 
 def _read_authorized_cascade(event, cascade_id, cascade_action, evaluation_action, not_found_message):
@@ -211,14 +214,21 @@ def _read_authorized_cascade(event, cascade_id, cascade_action, evaluation_actio
     cascade object and the evaluation object of its parent's database. Otherwise (None, response):
     403, or `not_found_message` for a cascade that does not exist and a caller who may act on
     cascades in general (an absent cascade is checked with no database, which a role scoped to
-    databases does not match, so such a caller is refused rather than told it is absent)."""
+    databases does not match, so such a caller is refused rather than told it is absent). For a
+    cascade whose parent asset is archived, both checks use the parent's stored database id
+    (`<databaseId>#deleted`), as the asset routes decide the archived asset itself."""
     cascade = cascade_table.get_item(Key={"cascadeId": cascade_id}).get("Item")
     database_id = (cascade or {}).get("triggeredByDatabaseId", "")
     if not _enforce_cascade(cascade_id, database_id, cascade_action):
         return None, authorization_error()
     if not cascade:
         return None, general_error(body={"message": not_found_message}, event=event)
-    if not _enforce_evaluation(database_id, evaluation_action):
+    # The live cascade check passed above; the stored id of an archived parent is checked anew.
+    if not ArchivedAssets(store.asset_table).decide(
+            database_id, cascade.get("triggeredByAssetId", ""),
+            lambda stored_id: ((stored_id == database_id
+                                or _enforce_cascade(cascade_id, stored_id, cascade_action))
+                               and _enforce_evaluation(stored_id, evaluation_action))):
         return None, authorization_error()
     return cascade, None
 
@@ -299,9 +309,10 @@ def create_cascade(event, request: CreateCascadeRequestModel):
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
     cascade_id = str(uuid.uuid4())
-    if not _enforce_cascade(cascade_id, request.databaseId, "POST"):
-        return authorization_error()
-    if not _enforce_evaluation(request.databaseId, "POST"):
+    if not ArchivedAssets(store.asset_table).decide(
+            request.databaseId, request.assetId,
+            lambda stored_id: (_enforce_cascade(cascade_id, stored_id, "POST")
+                               and _enforce_evaluation(stored_id, "POST"))):
         return authorization_error()
 
     asset_item = store.get_asset_item(request.databaseId, request.assetId)
@@ -564,6 +575,9 @@ def list_pending_cascades(event):
         query_kwargs["FilterExpression"] = expression
 
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
+    # A cascade of an archived parent asset is listed only for a caller allowed on the parent's
+    # stored database id; the archived ids are read once per database, and only when that decides.
+    archived = ArchivedAssets(store.asset_table)
 
     def listable(item):
         # A cascade past its approval timeout is aborted here and leaves the queue, whoever reads
@@ -572,30 +586,39 @@ def list_pending_cascades(event):
             store.expire_timed_out_cascade(cascade_table, item)
             return False
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
-        return bool(casbin_enforcer) and casbin_enforcer.enforce(
-            _cascade_object(item.get("cascadeId"), item.get("triggeredByDatabaseId", "")),
-            "GET") and casbin_enforcer.enforce(
-            _evaluation_object(item.get("triggeredByDatabaseId", "")), "GET")
+        return bool(casbin_enforcer) and archived.decide(
+            item.get("triggeredByDatabaseId", ""), item.get("triggeredByAssetId", ""),
+            lambda stored_id: casbin_enforcer.enforce(
+                _cascade_object(item.get("cascadeId"), stored_id), "GET")
+            and casbin_enforcer.enforce(_evaluation_object(stored_id), "GET"),
+            listing=True)
 
     rows, next_key, _ = listing.query_page(
         cascade_table, query_kwargs, page_size, CASCADE_STATE_INDEX_KEYS, start_key=start_key,
         filtered=bool(conditions), accept=listable)
     body = {"cascades": [dict(_cascade_row(item),
-                              permissions=_cascade_permissions(casbin_enforcer, item))
+                              permissions=_cascade_permissions(casbin_enforcer, item, archived))
                          for item in rows]}
     if next_key:
         body["NextToken"] = listing.encode_token(next_key)
     return success(body=body)
 
 
-def _cascade_permissions(casbin_enforcer, item):
+def _cascade_permissions(casbin_enforcer, item, archived=None):
     """The caller's allowed actions on one cascade, computed server-side: `approve` (approve or
-    reject) needs POST on the cascade object and on the evaluation object of its parent's database,
-    and applies to a cascade still pending approval only."""
-    database_id = item.get("triggeredByDatabaseId", "")
-    approve = (item.get("state") == CASCADE_STATE_PENDING_APPROVAL
-               and casbin_enforcer.enforce(_cascade_object(item.get("cascadeId"), database_id), "POST")
-               and casbin_enforcer.enforce(_evaluation_object(database_id), "POST"))
+    reject) needs POST on the cascade object and on the evaluation object of its parent's database
+    (the parent's stored id when it is archived), and applies to a cascade still pending approval
+    only. `archived` is the request's `ArchivedAssets`, reused across a listing's rows."""
+    if item.get("state") != CASCADE_STATE_PENDING_APPROVAL:
+        return {"approve": False}
+    listing_rows = archived is not None
+    archived = archived or ArchivedAssets(store.asset_table)
+    approve = archived.decide(
+        item.get("triggeredByDatabaseId", ""), item.get("triggeredByAssetId", ""),
+        lambda stored_id: casbin_enforcer.enforce(
+            _cascade_object(item.get("cascadeId"), stored_id), "POST")
+        and casbin_enforcer.enforce(_evaluation_object(stored_id), "POST"),
+        listing=listing_rows)
     return {"approve": bool(approve)}
 
 

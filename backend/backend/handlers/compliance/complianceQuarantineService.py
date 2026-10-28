@@ -34,6 +34,7 @@ from common.apiRoutes import (
 )
 from common.compliance import evaluationEngine as engine
 from common.compliance import listing
+from common.compliance.archivedAssets import ArchivedAssets
 from common.validators import validate
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
@@ -185,6 +186,15 @@ def _enforce(database_id, action, compliance_state=engine.STATE_QUARANTINED):
         _evaluation_object(database_id, compliance_state), action)
 
 
+def _enforce_asset(database_id, asset_id, action, compliance_state=engine.STATE_QUARANTINED):
+    """`_enforce` with the database id the asset is stored under: `<databaseId>#deleted` for an
+    archived asset, so the engine's archived-record rule applies to its quarantine and exception
+    as it applies to the asset itself (`ArchivedAssets.decide`)."""
+    return ArchivedAssets(asset_table).decide(
+        database_id, asset_id,
+        lambda stored_id: _enforce(stored_id, action, compliance_state))
+
+
 def _validate_database_and_asset(database_id, asset_id):
     return validate({
         "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True},
@@ -257,29 +267,41 @@ def list_quarantined(event, query_params):
         query_kwargs["FilterExpression"], text_accept = listing.asset_text_filter(text)
 
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
+    # An archived asset is listed only for a caller allowed on its stored database id; its
+    # archived status is read once per database, and only when that decides anything.
+    archived = ArchivedAssets(asset_table)
 
     def may_get(item):
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
         if text_accept is not None and not text_accept(item):
             return False
-        return bool(casbin_enforcer) and casbin_enforcer.enforce(
-            _evaluation_object(item.get("databaseId"), engine.STATE_QUARANTINED), "GET")
+        return bool(casbin_enforcer) and archived.decide(
+            item.get("databaseId"), item.get("assetId"),
+            lambda stored_id: casbin_enforcer.enforce(
+                _evaluation_object(stored_id, engine.STATE_QUARANTINED), "GET"),
+            cache_key="GET", listing=True)
 
     rows, next_key, _ = listing.query_page(
         asset_state_table, query_kwargs, page_size, listing.COMPLIANCE_STATE_INDEX_KEYS,
         start_key=start_key, filtered=bool(text), accept=may_get)
     may_act = {}
+
+    def may_post(stored_id):
+        # The answer depends on the database id alone, so each id is checked once per request.
+        if stored_id not in may_act:
+            may_act[stored_id] = bool(casbin_enforcer.enforce(
+                _evaluation_object(stored_id, engine.STATE_QUARANTINED), "POST"))
+        return may_act[stored_id]
+
     for row in rows:
         row.setdefault("assetName", "")
         row.pop("assetNameSort", None)
         row.pop("assetSearchText", None)
         # The caller's allowed actions on the row, computed server-side: releasing and granting an
-        # exception are both a POST on the quarantined evaluation object of the row's database.
-        database_id = row.get("databaseId")
-        if database_id not in may_act:
-            may_act[database_id] = bool(casbin_enforcer.enforce(
-                _evaluation_object(database_id, engine.STATE_QUARANTINED), "POST"))
-        row["permissions"] = {"release": may_act[database_id], "exception": may_act[database_id]}
+        # exception are both a POST on the quarantined evaluation object of the row's database
+        # (its stored id, for an archived asset).
+        act = archived.decide(row.get("databaseId"), row.get("assetId"), may_post, listing=True)
+        row["permissions"] = {"release": act, "exception": act}
     result = {"quarantinedAssets": rows}
     if next_key:
         result["NextToken"] = listing.encode_token(next_key)
@@ -293,7 +315,7 @@ def release_quarantine(event, database_id, asset_id, request: ReleaseQuarantineR
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforce(database_id, "POST"):
+    if not _enforce_asset(database_id, asset_id, "POST"):
         return authorization_error()
 
     item = store.get_compliance_record(database_id, asset_id)
@@ -334,7 +356,7 @@ def grant_exception(event, database_id, asset_id, request: GrantExceptionRequest
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforce(database_id, "POST"):
+    if not _enforce_asset(database_id, asset_id, "POST"):
         return authorization_error()
 
     item = store.get_compliance_record(database_id, asset_id)
@@ -390,7 +412,7 @@ def revoke_exception(event, database_id, asset_id):
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforce(database_id, "DELETE", compliance_state=engine.STATE_EXCEPTION):
+    if not _enforce_asset(database_id, asset_id, "DELETE", compliance_state=engine.STATE_EXCEPTION):
         return authorization_error()
 
     item = store.get_compliance_record(database_id, asset_id)

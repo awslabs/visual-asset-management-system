@@ -522,6 +522,16 @@ Binding or unbinding a schema is authorized on the database's `complianceBinding
 
 Listings return only the items the caller may `GET`. The built-in admin role is seeded with an allow-all constraint on each of the four object types.
 
+### Archived assets
+
+Archiving an asset keeps its compliance record, evaluation history, quarantine, exception, schema override, cascades and audit entries under the database's id. A read or an action on any of them is decided the way the asset routes decide the archived asset itself: the compliance object is checked with the id the asset is stored under, `<databaseId>#deleted`, so it is allowed only when the role passes on both forms of the id (see [Permissions Model: Archived records](permissions-model.md#archived-records)).
+
+-   **Single records.** The state, evaluation history and audit trail of an archived asset, and its cascades, answer `403` to a role refused on the stored id. Releasing it from quarantine, granting or revoking an exception, evaluating it, approving or rejecting its cascades, and removing its schema override are refused the same way.
+-   **Listings and counts.** The database overview, its counts, the quarantine listing, the audit log, the cascade listing and a database's asset overrides leave out the archived assets the role may not see, as the asset list leaves them out.
+-   **Templates.** `database-admin.json` names both ids on its compliance constraints, as on its asset constraint, so the role reads and acts on archived assets' compliance records. `database-user.json`, `compliance-admin.json` and `compliance-readonly.json` name the database id only: their roles see the compliance records of live assets only. `compliance-global-admin.json` matches every database id (`contains .*`), the archived form included.
+
+Deciding this takes no extra read for a role allowed on both ids or refused on the database. Otherwise a single record costs one read of the asset's archived key, and a listing one read of the database's archived asset ids, whatever the page size.
+
 Permission templates in `documentation/permissionsTemplates/` set up non-admin roles: `compliance-admin.json` (management of a `DATABASE_ID`'s schemas, `GET` on `GLOBAL` schemas, schema binding, evaluation and quarantine actions, and approval of the database's cascades, the web and API routes, `GET` on the database list route by exact path, and `GET` on that database and its assets, which binding a schema requires), `compliance-readonly.json` (`GET` on the database's and `GLOBAL` schemas, and on the cascades, evaluations, database entity and assets of a `DATABASE_ID`) and `compliance-global-admin.json` (management of `GLOBAL` schemas and read access to every database's compliance, without binding, evaluation or any asset or database write). `database-admin.json` includes the Compliance Admin grants for its database and `database-user.json` the Compliance Readonly grants. Constraint criteria narrow access further — for example `databaseId equals my-database` on a `complianceEvaluation` constraint, `complianceSchemaName equals my-schema` on a `complianceSchema` constraint, or `complianceState equals quarantined` to grant only the quarantine operations. See [Compliance (User Guide) — Permissions](../user-guide/compliance.md#permissions).
 
 ## Amazon DynamoDB tables

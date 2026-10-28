@@ -9,6 +9,8 @@
 Audit table (PK entryId; GSI AssetIndex on databaseId:assetId/timestamp; GSI EventTypeIndex on
 eventType/timestamp; GSI AuditByDateGSI on the constant allListPartition/timestamp). Every listing
 is one newest-first query on the index that serves it and pages externally with a Base64 NextToken.
+The entries of an archived asset are decided with its stored database id, `<databaseId>#deleted`
+(`ArchivedAssets`), so they follow the engine's archived-record rule as the asset does.
 """
 
 import base64
@@ -22,6 +24,7 @@ from botocore.config import Config
 
 from common.apiRoutes import API_COMPLIANCE_AUDIT, API_COMPLIANCE_AUDIT_ASSET
 from common.compliance import listing
+from common.compliance.archivedAssets import ArchivedAssets
 from common.compliance.auditRecord import AUDIT_LIST_PARTITION
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
@@ -59,11 +62,14 @@ DATE_INDEX_KEY_ATTRIBUTES = ("entryId", "allListPartition", "timestamp")
 
 try:
     audit_table_name = get_table_name(ResourceKeys.COMPLIANCE_AUDIT_STORAGE_TABLE)
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
 except Exception as e:
     logger.exception("Failed loading resource names")
     raise e
 
 audit_table = dynamodb.Table(audit_table_name)
+# Read for the archived status of an asset whose entries a caller may not see (keys only).
+asset_table = dynamodb.Table(asset_table_name)
 
 
 #######################
@@ -226,7 +232,8 @@ def get_asset_audit(event, database_id, asset_id, params):
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforce(database_id, "GET"):
+    if not ArchivedAssets(asset_table).decide(
+            database_id, asset_id, lambda stored_id: _enforce(stored_id, "GET")):
         return authorization_error()
 
     page_size, exclusive_start_key, error = _page_arguments(event, params, ASSET_INDEX_KEY_ATTRIBUTES)
@@ -365,11 +372,16 @@ def query_audit(event, params):
         query_kwargs["FilterExpression"] = expression
 
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
+    # The entries of an archived asset are listed only for a caller allowed on its stored database
+    # id; its archived status is read once per database, and only when that decides anything.
+    archived = ArchivedAssets(asset_table)
 
     def may_get(item):
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
-        return bool(casbin_enforcer) and casbin_enforcer.enforce(
-            _evaluation_object(item.get("databaseId")), "GET")
+        return bool(casbin_enforcer) and archived.decide(
+            item.get("databaseId"), item.get("assetId"),
+            lambda stored_id: casbin_enforcer.enforce(_evaluation_object(stored_id), "GET"),
+            cache_key="GET", listing=True)
 
     entries, next_key, _ = listing.query_page(
         audit_table, query_kwargs, page_size, keys, start_key=start_key,

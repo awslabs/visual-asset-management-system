@@ -239,6 +239,7 @@ Archiving an asset and deleting a database keep the record, stored under the id 
 -   An allow written only as `databaseId equals building-scans` does not reach archived records. To grant them, the constraint must also name the stored id, for example with `criteriaOr`: `databaseId equals building-scans` OR `databaseId equals building-scans#deleted`. The `database-admin` template does this; the `database-user` and `database-readonly` templates do not, so their roles neither see nor act on archived records.
 -   A rule written against the stored id matches archived records. For example, a deny with `databaseId contains #deleted` hides every archived record from the role.
 -   A `starts_with` or `contains` criterion that matches both forms (such as `databaseId contains .*` in the `global-readonly` template) reaches archived records without naming the suffix.
+-   The compliance records of an archived asset (its state, evaluations, quarantine, cascades and audit entries) are decided on the asset's stored id as well, on the compliance object types. The `database-admin` template names both ids on its compliance constraints too; see [Compliance: Archived assets](compliance.md#archived-assets).
 
 ## Common role patterns
 

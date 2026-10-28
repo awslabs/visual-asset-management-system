@@ -13,11 +13,19 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.tests.handlers.compliance._harness import (
-    ASSET, DB, USER, body_of, claims_for, enforcer, rest_event,
+    ASSET, DB, USER, body_of, claims_for, enforcer, live_only_asset_table, rest_event,
 )
 from backend.tests.pagingStub import Pager
 from common.compliance import listing
 from handlers.compliance import complianceAuditService as svc
+
+
+@pytest.fixture(autouse=True)
+def _no_archived_assets():
+    """No asset of these tests is archived: the archived-asset reads find none (the archived case
+    is `test_complianceArchivedAssetAccess.py`)."""
+    with patch.object(svc, "asset_table", live_only_asset_table()):
+        yield
 
 MOD = "handlers.compliance.complianceAuditService"
 

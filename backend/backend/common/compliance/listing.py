@@ -112,8 +112,9 @@ def decode_token(token: str, key_attributes: Iterable[str]) -> Optional[Dict[str
 def query_page(table, query_kwargs: Dict[str, Any], max_items: int, key_attributes: Iterable[str],
                start_key: Optional[Dict[str, Any]] = None, filtered: bool = False,
                accept: Optional[Callable[[Dict[str, Any]], bool]] = None,
-               read_budget: int = DEFAULT_READ_BUDGET) -> Tuple[List[Dict[str, Any]],
-                                                                Optional[Dict[str, Any]], int]:
+               read_budget: int = DEFAULT_READ_BUDGET,
+               read_limit: Optional[int] = None) -> Tuple[List[Dict[str, Any]],
+                                                          Optional[Dict[str, Any]], int]:
     """`(items, next_key, reads)`: up to `max_items` items of the query that pass `accept`, the key
     to resume after the last one (None when the query is exhausted), and the queries spent.
 
@@ -122,7 +123,9 @@ def query_page(table, query_kwargs: Dict[str, Any], max_items: int, key_attribut
     across reads until it is full, the query is exhausted, or `read_budget` reads were spent. A page
     cut short by the budget still returns a token, so the client reads on with the same filter. The
     token of a full page names the last item returned (its `key_attributes`), not the read's
-    LastEvaluatedKey, so no matching item between the two is skipped."""
+    LastEvaluatedKey, so no matching item between the two is skipped. `read_limit` replaces the
+    per-read item count for an `accept` that drops a known, small number of items (a page plus
+    that number fills in one read)."""
     key_attributes = tuple(key_attributes)
     narrowing = filtered or accept is not None
     items: List[Dict[str, Any]] = []
@@ -130,7 +133,10 @@ def query_page(table, query_kwargs: Dict[str, Any], max_items: int, key_attribut
     last_key = start_key
     while True:
         kwargs = dict(query_kwargs)
-        kwargs["Limit"] = max(max_items, FILTERED_READ_LIMIT) if narrowing else max_items
+        if read_limit is not None:
+            kwargs["Limit"] = read_limit
+        else:
+            kwargs["Limit"] = max(max_items, FILTERED_READ_LIMIT) if narrowing else max_items
         if last_key:
             kwargs["ExclusiveStartKey"] = last_key
         response = table.query(**kwargs)

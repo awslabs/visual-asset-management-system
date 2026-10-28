@@ -776,9 +776,9 @@ describe("compliance Lambda table grants cover the tables the handlers reach", (
     });
 
     test("a fabricated need is reported as a gap", () => {
-        // Negative control: the comparison must be able to fail. The audit service reads one table,
-        // so a need for a table it is not granted, and a write on the table it only reads, are both
-        // absent from its role.
+        // Negative control: the comparison must be able to fail. The audit service only reads its
+        // tables, so a need for a table it is not granted, and a write on the table it only reads,
+        // are both absent from its role.
         const audit = lambdaFor("complianceAuditService");
         const granted = resolver.grantedTables(audit);
         const fabricated: Needs = new Map(deriveNeeds(audit.handlerModule));

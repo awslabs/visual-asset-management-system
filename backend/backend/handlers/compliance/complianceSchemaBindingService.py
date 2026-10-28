@@ -42,6 +42,7 @@ from botocore.config import Config
 from common.apiRoutes import API_COMPLIANCE_BIND_ASSET, API_COMPLIANCE_BIND_DATABASE
 from common.compliance import evaluationEngine as engine
 from common.compliance import listing
+from common.compliance.archivedAssets import ArchivedAssets, archived_database_id
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
@@ -259,6 +260,21 @@ def _enforce_asset(asset_item, database_id, asset_id, action):
     return CasbinEnforcer(claims_and_roles).enforce(asset, action)
 
 
+def _asset_as_stored(database_id, asset_id):
+    """`(asset row, database id it is stored under)`, looked up as the asset routes look up an
+    archived asset: the live row, else the archived row under `<databaseId>#deleted`, else
+    `(None, database_id)`. The binding and asset checks of an override then use that id, so the
+    engine's archived-record rule applies to an archived asset's override as to the asset."""
+    item = store.get_asset_item(database_id, asset_id)
+    if item:
+        return item, database_id
+    archived_id = archived_database_id(database_id)
+    item = store.get_asset_item(archived_id, asset_id)
+    if item:
+        return item, archived_id
+    return None, database_id
+
+
 def _validate_database(database_id):
     return validate({
         "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True},
@@ -453,21 +469,23 @@ def bind_schema_to_asset(event, database_id, asset_id, request: BindSchemaReques
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    # The asset is read by (database_id, asset_id), so the path's database is the asset's database.
-    if not _enforce_binding(database_id, "PUT"):
+    # The asset is read by (database_id, asset_id), so the path's database is the asset's database;
+    # an archived asset is decided with the id it is stored under.
+    asset_item, stored_id = _asset_as_stored(database_id, asset_id)
+    if not _enforce_binding(stored_id, "PUT"):
         return authorization_error()
     schema_row = _latest_schema_row(request.schemaName)
     if not _enforce_schema_read(request.schemaName, database_id, schema_row):
         return authorization_error()
-    asset_item = store.get_asset_item(database_id, asset_id)
-    if not _enforce_asset(asset_item, database_id, asset_id, "GET"):
+    if not _enforce_asset(asset_item, stored_id, asset_id, "GET"):
         return authorization_error()
 
     refused = _schema_bindable(event, request.schemaName, database_id, schema_row)
     if refused is not None:
         return refused
 
-    if not asset_item:
+    # An archived asset cannot be evaluated, so it takes no new binding.
+    if not asset_item or stored_id != database_id:
         return general_error(body={"message": "Asset not found"}, event=event)
 
     now = datetime.now(timezone.utc).isoformat()
@@ -510,11 +528,12 @@ def unbind_schema_from_asset(event, database_id, asset_id):
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    # The asset is read by (database_id, asset_id), so the path's database is the asset's database.
-    if not _enforce_binding(database_id, "DELETE"):
+    # The asset is read by (database_id, asset_id), so the path's database is the asset's database;
+    # an archived asset is decided with the id it is stored under.
+    asset_item, stored_id = _asset_as_stored(database_id, asset_id)
+    if not _enforce_binding(stored_id, "DELETE"):
         return authorization_error()
-    asset_item = store.get_asset_item(database_id, asset_id)
-    if not _enforce_asset(asset_item, database_id, asset_id, "GET"):
+    if not _enforce_asset(asset_item, stored_id, asset_id, "GET"):
         return authorization_error()
     existing = store.get_compliance_record(database_id, asset_id)
     current_schema = (existing or {}).get("schemaName", "")
@@ -587,8 +606,16 @@ def get_bindings(event, database_id, query_params):
     if error:
         return error
 
+    # The override of an archived asset is listed only for a caller who passes the listing's own
+    # database check on the stored id (`<databaseId>#deleted`) as well: the listing's check, made
+    # the way the engine decides an archived record.
+    withheld = ArchivedAssets(asset_table).withheld(
+        database_id, lambda stored_id: _enforce_database(
+            dict(db_item, databaseId=stored_id), stored_id, "GET"))
     asset_overrides = []
     for item in _database_asset_state_rows(database_id):
+        if item.get("assetId") in withheld:
+            continue
         if item.get("schemaSource") == SCHEMA_SOURCE_ASSET:
             asset_overrides.append({
                 "assetId": item["assetId"],
