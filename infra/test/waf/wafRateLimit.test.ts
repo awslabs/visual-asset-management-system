@@ -49,10 +49,11 @@ const getRule = (template: Template, name: string): any =>
 
 /**
  * The policy that ships with the deployment. `getConfig()` reads this exact file into
- * `config.wafPolicyJSON` and `bin/infra.ts` hands the same object to BOTH CfWafStack
- * instances — the REGIONAL ACL (REST API stage always, plus the ALB when `useAlb`) and the
- * CLOUDFRONT ACL (the distribution, when `useCloudFront`). Driving the tests from the file
- * rather than a hand-written copy is what makes them cover the shipped configuration.
+ * `config.wafPolicyJSON` and `buildWafStacks` (lib/cf-waf-stack.ts) hands the same object to
+ * BOTH CfWafStack instances — the REGIONAL ACL (REST API stage always, plus the ALB when
+ * `useAlb`) and the CLOUDFRONT ACL (the distribution, when `useCloudFront`). Driving the tests
+ * from the file rather than a hand-written copy is what makes them cover the shipped
+ * configuration.
  */
 const shippedPolicy: WafPolicyConfig = JSON.parse(
     readFileSync(join(__dirname, "..", "..", "config", "policy", "wafPolicyConfig.json"), {

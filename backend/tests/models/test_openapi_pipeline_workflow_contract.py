@@ -142,6 +142,25 @@ class TestOpenApiResponseEnvelopeContract:
         assert json.loads(response["body"]) == {"message": {"pipelineId": "p1"}}
 
 
+UPDATE_SCHEMAS = [
+    ("models.pipelines", "UpdatePipelineRequestModel", "updatePipelineRequest"),
+    ("models.workflows", "UpdateWorkflowRequestModel", "updateWorkflowRequest"),
+]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("module_name,model_name,schema_name", UPDATE_SCHEMAS)
+def test_every_update_model_field_is_in_the_update_schema(spec, module_name, model_name, schema_name):
+    """A field the update model accepts but the spec omits is one a generated client cannot send."""
+    import importlib
+
+    model = getattr(importlib.import_module(module_name), model_name)
+    documented = set(spec["components"]["schemas"][schema_name]["properties"])
+    # Control: the comparison is against real field lists, not two empty sets.
+    assert model.__fields__ and documented
+    assert set(model.__fields__) - documented == set()
+
+
 @pytest.mark.unit
 def test_spec_component_references_all_resolve(spec):
     import re

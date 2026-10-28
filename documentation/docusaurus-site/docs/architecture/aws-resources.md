@@ -61,7 +61,7 @@ Executions are workflow-keyed; asset and database linkage lives in the workflow/
 | AssetFileVersionHistoryStorageTable   | `databaseId:assetId:filePath`       | `versionId`                 | `DatabaseIdAssetIdIndex` (PK: databaseId:assetId, SK: versionId), `WorkflowExecutionIdIndex` (PK: changeWorkflowExecutionId, SK: databaseId:assetId:filePath; sparse)                                     | Per-version file change provenance     |
 | AssetHistoryStorageTable              | `databaseId:assetId`                | `historyRecordId`           | --                                                                                                                                                                                                        | Permanent asset lifecycle history      |
 | SyncTrackingOutboundStorageTable      | `objectId`                          | `syncRecordId`              | `DatabaseIdIndex` (PK: databaseId, SK: syncRecordId), `DatabaseSystemIndex` (PK: databaseId:systemType:systemUniqueId, SK: syncRecordId), `SystemIndex` (PK: systemType:systemUniqueId, SK: syncRecordId) | Outbound external-system sync records  |
-| AssetUploadsStorageTable              | `uploadId`                          | `assetId`                   | `AssetIdGSI` (PK: assetId), `DatabaseIdGSI` (PK: databaseId), `UserIdGSI` (PK: UserId, SK: createdAt)                                                                                                     | In-progress upload tracking            |
+| AssetUploadsStorageTable              | `uploadId`                          | `assetId`                   | `AssetIdGSI` (PK: assetId), `DatabaseIdGSI` (PK: databaseId), `UserIdGSI` (PK: UserId, SK: createdAt)                                                                                                     | In-progress uploads; TTL `expiresAt`   |
 
 ### Metadata and Attribute Tables
 
@@ -581,6 +581,29 @@ Deployed conditionally for each enabled pipeline:
 | **Security Groups**     | Pipeline-specific security groups within VPC               |
 
 Every AWS Fargate job definition carries an explicit name: each construct chooses its own prefix (`CoordinateTransformJob_<config.name>_<baseStackName>`, `Preview3dThumbnailJob<config.name>_<baseStackName>`, `PcPotreeViewerJob_PDAL<config.name>_<baseStackName>` and `PcPotreeViewerJob_Potree<config.name>_<baseStackName>`, the constant `Metadata3dLabelingJob_BlenderRenderer`, and `VideoSopBomJob_<config.name>_<baseStackName>` for Video SOP/BOM Extraction) and the shared construct appends a 10-character hash. AWS Batch keeps a job definition as a versioned family under that name, so a revision left behind by a failed teardown does not block a redeploy; the stack deregisters its own revisions on deletion. The Video SOP/BOM Extraction job definition sets its own size (4 vCPU, 16 GiB, 100 GiB ephemeral storage) and sends container logs to its KMS-encrypted `/aws/vendedlogs/Pipelines/VideoSopBom<hash>` group instead of the AWS Batch default `aws/batch/job` group.
+
+## AWS CodeArtifact
+
+Deployed with the Image to 3D pipeline, which builds one container image per enabled model. Each build
+installs its Python dependencies from source, so a build is only as reliable as the public package index
+is reachable from the build subnet. Fetching through a pull-through cache makes a rebuild reproducible.
+
+| Resource       | Name                                             | Removal on teardown | Custom name        |
+| -------------- | ------------------------------------------------ | ------------------- | ------------------ |
+| **Domain**     | `<config.name>-<baseStackName>-imageto3d`        | Deleted with stack  | Yes -- can collide |
+| **Repository** | `pypi-store` (external connection `public:pypi`) | Deleted with stack  | Yes -- can collide |
+
+The domain name includes `baseStackName` because CodeArtifact domain names are unique per account and
+Region: without it, two VAMS deployments in one account would contend for the same domain. An orphan
+left by a failed teardown blocks a redeploy under the same configuration name, so
+[Uninstall the solution](../deployment/uninstall.md) covers removing it. The repository holds copies of
+public packages only -- deleting it costs build time, not data.
+
+The CodeBuild role is granted `codeartifact:GetAuthorizationToken` on the domain,
+`GetRepositoryEndpoint` and `ReadFromRepository` on the repository and its packages, and
+`sts:GetServiceBearerToken` restricted to `codeartifact.amazonaws.com`. Each build mints a short-lived
+token and passes it to `docker build` as a BuildKit secret, so no credential is written into an image
+layer.
 
 ## Amazon Elastic Container Registry
 

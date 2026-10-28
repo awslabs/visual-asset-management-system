@@ -36,9 +36,6 @@ This software includes third party software subject to the following copyrights:
 | Package                             | Version       | License                 |
 | :---------------------------------- | :------------ | :---------------------- |
 | @aws-amplify/ui-react               | ^6.15.2       | Apache-2.0              |
-| @aws-sdk/client-s3                  | ^3.700.0      | Apache-2.0              |
-| @aws-sdk/lib-storage                | ^3.700.0      | Apache-2.0              |
-| @aws-sdk/s3-request-presigner       | ^3.700.0      | Apache-2.0              |
 | @badgateway/oauth2-client           | 2.4.2         | MIT                     |
 | @cloudscape-design/collection-hooks | ^1.0.19       | Apache-2.0              |
 | @cloudscape-design/components       | ^3.0.196      | Apache-2.0              |
@@ -47,7 +44,6 @@ This software includes third party software subject to the following copyrights:
 | @dnd-kit/core                       | ^6.3.1        | MIT                     |
 | @dnd-kit/sortable                   | ^10.0.0       | MIT                     |
 | @dnd-kit/utilities                  | ^3.2.2        | MIT                     |
-| @hookform/resolvers                 | ^3.9.0        | MIT                     |
 | @mapbox/mapbox-gl-draw              | ^1.4.1        | ISC                     |
 | @maplibre/maplibre-gl-geocoder      | ^1.5.0        | ISC                     |
 | @monaco-editor/react                | ^4.6.0        | MIT                     |
@@ -62,10 +58,7 @@ This software includes third party software subject to the following copyrights:
 | @rjsf/validator-ajv8                | ^5.21.2       | Apache-2.0              |
 | @tanstack/react-query               | ^5.59.0       | MIT                     |
 | @tanstack/react-table               | ^8.20.5       | MIT                     |
-| @turf/bbox                          | ^6.5.0        | MIT                     |
-| @turf/turf                          | ^6.5.0        | MIT                     |
 | @types/mapbox\_\_mapbox-gl-draw     | ^1.4.0        | MIT                     |
-| @types/styled-components            | ^5.1.21       | MIT                     |
 | @types/three                        | ^0.180.0      | MIT                     |
 | @types/wicg-file-system-access      | 2020.9.6      | MIT                     |
 | arraybuffer-to-buffer               | ^0.0.7        | MIT                     |
@@ -76,13 +69,10 @@ This software includes third party software subject to the following copyrights:
 | dompurify                           | ^3.4.17       | (MPL-2.0 OR Apache-2.0) |
 | fast-xml-parser                     | ^5.9.0        | MIT                     |
 | fcs                                 | ^0.1.2        | MIT                     |
-| file-system-access                  | 1.0.4         | MIT                     |
-| geojson                             | ^0.5.0        | MIT                     |
 | jodit                               | 4.13.10       | MIT                     |
 | jodit-react                         | ^5.3.21       | MIT                     |
 | localforage                         | ^1.10.0       | Apache-2.0              |
 | maplibre-gl                         | ^6.9.0        | BSD-3-Clause            |
-| moment                              | ^2.29.4       | MIT                     |
 | papaparse                           | ^5.4.1        | MIT                     |
 | postcss                             | ^8.4.47       | MIT                     |
 | prop-types                          | ^15.8.1       | MIT                     |
@@ -90,7 +80,6 @@ This software includes third party software subject to the following copyrights:
 | react-data-grid                     | 7.0.0-beta.16 | MIT                     |
 | react-diff-viewer-continued         | 4.4.0         | MIT                     |
 | react-dom                           | ^18.3.1       | MIT                     |
-| react-error-boundary                | ^4.0.9        | MIT                     |
 | react-hook-form                     | ^7.53.0       | MIT                     |
 | react-loading-icons                 | ^1.1.0        | MIT                     |
 | react-map-gl                        | ^8.1.3        | MIT                     |
@@ -102,12 +91,10 @@ This software includes third party software subject to the following copyrights:
 | reactflow                           | ^11.11.4      | MIT                     |
 | sanitize-html                       | ^2.11.0       | MIT                     |
 | semver                              | ^7.5.2        | ISC                     |
-| styled-components                   | ^5.3.3        | MIT                     |
 | tailwindcss                         | ^3.4.14       | MIT                     |
 | tough-cookie                        | ^4.1.3        | BSD-3-Clause            |
 | typescript                          | ^5.0.0        | Apache-2.0              |
 | vite                                | ^8.1.6        | MIT                     |
-| web-vitals                          | ^1.1.2        | Apache-2.0              |
 | zod                                 | ^3.23.8       | MIT                     |
 
 `jodit` is not declared directly — it arrives with `jodit-react` and the version shown is the one resolved in the lockfile. `fast-xml-parser` is carried transitively and pinned by the `overrides` block in `web/package.json`.
@@ -501,6 +488,105 @@ Applications using NVIDIA Cosmos models must include the attribution: **"Built o
 **HuggingFace Model Access**
 
 All six models listed above are gated on HuggingFace and require explicit license acceptance and access request before download. The Meta Llama-Guard-3-8B model requires separate acceptance of the Meta Llama 3 Community License.
+
+### Image to 3D Pipeline
+
+| Name                        | Version       | License                                                                      | Purpose                                                                            |
+| :-------------------------- | :------------ | :--------------------------------------------------------------------------- | :--------------------------------------------------------------------------------- |
+| Meta SAM 3D Objects         | latest        | Meta SAM License                                                             | Single-image to 3D mesh generation (commercial use permitted with obligations)     |
+| MoGe (`Ruicheng/moge-vitl`) | latest        | MIT                                                                          | Monocular depth and point-map estimation feeding SAM 3D Objects                    |
+| Stable-X Stable3DGen        | latest        | MIT                                                                          | Single-image to 3D geometry generation via normal bridging, default model          |
+| Stable-X StableNormal       | latest        | Apache-2.0                                                                   | Normal-map prediction feeding Stable3DGen                                          |
+| BiRefNet                    | latest        | MIT                                                                          | Background removal used by Stable3DGen when an image carries no alpha channel      |
+| Meta Segment Anything (SAM) | latest        | Apache-2.0                                                                   | Prompted background removal, when `BACKGROUND_REMOVAL` selects `sam`               |
+| Microsoft TRELLIS.2 (4B)    | 2.0           | MIT                                                                          | Single-image to 3D mesh generation (disabled by default)                           |
+| VAST-AI TripoSR             | latest        | MIT                                                                          | Fast single-image to 3D mesh generation                                            |
+| StepFun Step1X-3D           | cb5ac94       | Apache-2.0                                                                   | Single-image to 3D mesh generation with patent grant                               |
+| Tencent Hunyuan3D-2         | f8db630       | Tencent Hunyuan 3D 2.0 Community License Agreement -- **territorial**        | Single-image to 3D textured mesh generation (disabled by default)                  |
+| Blender                     | 4.5.13        | GPL-2.0-or-later                                                             | Headless 3D tool driven by the Blender agent (`blenderagent` image only)           |
+| OpenAI Codex CLI            | rust-v0.153.4 | Apache-2.0                                                                   | The coding agent that drives Blender (`blenderagent` image only)                   |
+| LiteLLM                     | 1.100.0       | MIT                                                                          | Loopback bridge from the Responses API to Amazon Bedrock Converse (`blenderagent`) |
+| MoGe-2                      | 0744441       | MIT; weights `Ruicheng/moge-2-vitl-normal` MIT; vendored DINOv2 Apache-2.0   | Depth estimate the scripted refit reads relief from (`blenderagent` image only)    |
+| utils3d                     | 3fab839       | MIT                                                                          | Geometry utilities MoGe-2 imports (`blenderagent` image only)                      |
+| PyTorch                     | 2.7.1         | BSD-3-Clause                                                                 | The runtime MoGe-2 runs on (`blenderagent` image only)                             |
+| NVlabs nvdiffrast           | v0.4.0        | NVIDIA Source Code License (1-Way Commercial) -- **non-commercial use only** | Differentiable rasterization, required by both the TRELLIS.2 and Step1X-3D images  |
+| trimesh                     | latest        | MIT                                                                          | Mesh I/O, hole filling, normal and winding repair, decimation                      |
+| networkx                    | latest        | BSD-3-Clause                                                                 | Graph traversal behind trimesh's hole filling                                      |
+| fast-simplification         | latest        | MIT                                                                          | Quadric decimation backend behind trimesh's face-budget reduction                  |
+| manifold3d                  | latest        | Apache-2.0                                                                   | Manifold and watertightness repair pass                                            |
+| rembg                       | latest        | MIT                                                                          | Background removal preprocessing                                                   |
+| xatlas                      | latest        | MIT                                                                          | UV atlas generation for texture export                                             |
+| onnxruntime-gpu             | latest        | MIT                                                                          | GPU inference runtime for background removal models                                |
+| numpy                       | latest        | BSD-3-Clause                                                                 | Numerical computing                                                                |
+| scipy                       | latest        | BSD-3-Clause                                                                 | Scientific computing (used by trimesh)                                             |
+| Pillow                      | latest        | HPND                                                                         | Image loading and validation                                                       |
+| boto3                       | latest        | Apache-2.0                                                                   | AWS SDK for Python                                                                 |
+| pymeshfix                   | latest        | GPL-3.0                                                                      | Mesh repair backend, selectable through the `REPAIR_BACKENDS` pipeline setting     |
+| PyMeshLab                   | latest        | GPL-3.0                                                                      | Mesh repair backend, selectable through the `REPAIR_BACKENDS` pipeline setting     |
+
+**HuggingFace Pre-Approval Is a License Gate**
+
+Several components are **gated** on HuggingFace: the account behind the deployment's access token must
+accept the license and, for the manually reviewed repositories, request access and wait for the publisher
+to approve it. Until that approval lands, the download is refused — a pending request behaves exactly like
+a denied one.
+
+| Component           | Gate                              | Needed when                                                                    |
+| :------------------ | :-------------------------------- | :----------------------------------------------------------------------------- |
+| Meta SAM 3D Objects | Manually reviewed access request  | `sam3d` is enabled                                                             |
+| Meta DINOv3 encoder | Manually reviewed access request  | `trellis2` is enabled                                                          |
+| BRIA RMBG-2.0       | Granted on accepting BRIA's terms | `BACKGROUND_REMOVAL` selects `rmbg2`, or `TRELLIS2_PREPROCESS_IMAGE` is `true` |
+
+Stable3DGen, TripoSR, Step1X-3D and Hunyuan3D-2 need no approval, and Stable3DGen's own dependencies (StableNormal,
+BiRefNet) are ungated — which is part of why it is the default model. The prompted background-removal
+backend uses `facebook/sam-vit-huge`, which is Apache-2.0 and **ungated**; that is why it and not SAM 3,
+whose weights carry the same manually reviewed access request as the SAM 3D Objects repository.
+
+**A model's own license says nothing about what its dependencies require.** TRELLIS.2 is the case that
+matters: its code and weights are MIT and ungated, yet it conditions on Meta's gated DINOv3 encoder, so a
+token that downloads `microsoft/TRELLIS.2-4B` without complaint is still refused for the encoder. Request
+DINOv3 access alongside the SAM 3D Objects repository whenever `trellis2` is enabled.
+
+Approval is worth obtaining before deploying, because the failure surfaces only during the model download
+— after AWS Batch has provisioned a GPU instance and pulled the container image, so a missing approval is
+paid for in GPU time.
+
+**GPL-Licensed Mesh Repair Backends**
+
+`pymeshfix` and `PyMeshLab` are licensed under GPL-3.0 and are installed in every Image to 3D container image, so those images are subject to GPL-3.0 terms whichever backends a run selects through the `REPAIR_BACKENDS` pipeline setting. The default repair ladder walks only the permissively licensed `trimesh` (MIT) and `manifold3d` (Apache-2.0) rungs, but that does not change the license terms attaching to the images. GPL-3.0 is a strong copyleft license; review its terms with your legal team before deploying the Image to 3D pipeline, particularly if you redistribute the resulting container images.
+
+**Container Base Image**
+
+The Image to 3D pipeline containers use the NVIDIA CUDA 12.8.1 base image with cuDNN (`nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04`), which is subject to the [NVIDIA Deep Learning Container License](https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license). One image is built per enabled model, each adding that model's upstream repository and dependencies on top of the shared base.
+
+**Attribution Requirement**
+
+Meta SAM 3D Objects is covered by the Meta SAM License (last updated 19 November 2025), which requires that redistribution of the model, its weights, or a derivative be made under the same license terms with a copy of the agreement supplied alongside, and which carries trade-control obligations including a prohibition on ITAR-controlled, military, nuclear, espionage and weapons end uses. Its only acknowledgement duty applies to research publications; it requires no product attribution and grants no trademark rights. StepFun Step1X-3D, under Apache-2.0, requires that modified files be marked as changed and that the license and any `NOTICE` file be carried forward in redistributions. Microsoft TRELLIS.2, VAST-AI TripoSR, Stable-X Stable3DGen and BiRefNet, under MIT, require the copyright notice and license text to be retained. Stable-X StableNormal, under Apache-2.0, carries the same marking and notice obligations as Step1X-3D. Unlike TRELLIS.2, Stable3DGen depends on no NVIDIA-licensed rendering or voxelization component, so enabling it raises no NVIDIA redistribution question. Step1X-3D, however, does: its upstream requirements list `nvdiffrast` as a git dependency, so an image built for it carries nvdiffrast's terms alongside Apache-2.0. Those terms are the NVIDIA Source Code License (1-Way Commercial), whose Use Limitation reads "The Work and any derivative works thereof only may be used or intended for use non-commercially", with "non-commercially" defined as "for research or evaluation purposes only and not for any direct or indirect monetary gain". The carve-out permitting commercial use is NVIDIA's own. A deployment that charges for output produced through the TRELLIS.2 or Step1X-3D images, or that uses them in a revenue-generating service, is outside that limitation regardless of the models' own permissive licenses -- so both are research and evaluation paths until the dependency is removed or separately licensed. This is not visible in either model's own license: Step1X-3D's was found when its first image build failed compiling nvdiffrast, and the dependency set of every image should be audited for other NVIDIA-licensed components on the same basis. Stable3DGen carries none, which is what makes it the only model here usable commercially as built.
+
+Tencent Hunyuan3D-2 is licensed differently again, and the difference is territorial rather than
+field-of-use. The Tencent Hunyuan 3D 2.0 Community License Agreement grants a royalty-free licence "for any
+purpose and in any field of use" -- so it permits commercial use -- but only within a Territory defined as
+"the worldwide territory, excluding the territory of the European Union, United Kingdom and South Korea",
+and it states that "any such use outside the Territory is unlicensed and unauthorized". Two further terms
+bind a deployment rather than a build: a deployment whose products or services exceed **one million monthly
+active users** must request a separate licence from Tencent, which Tencent may grant at its sole
+discretion; and outputs may not be used to improve any AI model other than Hunyuan3D-2 itself or a
+derivative of it. Redistribution requires carrying a copy of the agreement, marking modified files as
+changed, and including the notice "Tencent Hunyuan 3D 2.0 is licensed under the Tencent Hunyuan 3D 2.0
+Community License Agreement, Copyright © 2025 Tencent. All Rights Reserved. The trademark rights of
+'Tencent Hunyuan' are owned by Tencent or its affiliate." The agreement is governed by the laws of the Hong
+Kong Special Administrative Region. Because the territorial and monthly-active-user limits are properties
+of a deployment, `getConfig()` refuses to enable the model in an AWS Region inside the excluded territory,
+which catches the unambiguous case only -- a deployment in a permitted Region can still serve excluded
+users. Note also that the upstream source files carry an older "Tencent Hunyuan Non-Commercial License
+Agreement" header which the repository's own `LICENSE` file supersedes; review both before relying on
+either.
+
+The Blender agent image (`blenderagent`) installs **Blender** under GPL-2.0-or-later as a tool the agent runs in a separate process; the models the agent writes are its own output, not derivatives of Blender, so the GPL attaches to redistributing that image rather than to the meshes -- the same position as the GPL-3.0 repair rungs. **OpenAI Codex CLI** (Apache-2.0) is pinned to one release and used without an OpenAI account or key; the foundation model is reached only through Amazon Bedrock, under Amazon Bedrock's terms for the model the deployment configures, on the deployment's own IAM role. **LiteLLM** (MIT) runs inside the container on loopback. The scripted refit's depth model, **MoGe-2**, is MIT in code and weights (`Ruicheng/moge-2-vitl-normal`), with a vendored DINOv2 under Apache-2.0, and runs on **PyTorch** (BSD-3-Clause) and **utils3d** (MIT); it is ungated. Retain the Codex, LiteLLM, MoGe-2, utils3d and PyTorch notices in redistributions.
+
+**HuggingFace Model Access**
+
+The model weights for each enabled model are downloaded from HuggingFace using the configured access token. Accept each model's license on HuggingFace before deployment.
 
 ---
 

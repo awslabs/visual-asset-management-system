@@ -65,11 +65,11 @@ vamscli file upload --json-input @upload-config.json --json-output
 ```
 
 :::note[Upload Limits]
-Files are split into parts and grouped into upload sequences. Each sequence is limited to 50 files, 200 total parts, and 3 GB; an individual file is limited to 200 parts with a 5 GB maximum part size. VamsCLI creates additional sequences automatically, so the total number of files is unbounded (for example, 200 files become 4 sequences of 50). The backend rate-limits upload initialization to 20 sequences per user per minute, which VamsCLI handles with exponential backoff. Files are chunked at 150 MB for files under 15 GB and at 1 GB for larger files. Zero-byte files are supported and created at completion.
+Files are split into parts and grouped into upload sequences. Each sequence is limited to 50 files, 1,000 total parts, and 3 GB; an individual file is limited to 1,000 parts with a 5 GB maximum part size. VamsCLI creates additional sequences automatically, so the total number of files is unbounded (for example, 200 files become 4 sequences of 50). The backend rate-limits upload initialization to 20 sequences per user per minute, which VamsCLI handles with exponential backoff. Files are chunked at 150 MB for files under 15 GB and at 1 GB for larger files. Zero-byte files are supported and created at completion.
 :::
 
 :::warning[Per-File Part Limit]
-Only individual-file constraint violations stop an upload. A file requiring more than 200 parts is rejected; compress very large files before uploading.
+Only individual-file constraint violations stop an upload. A file requiring more than 1,000 parts (about 1,000 GB at 1 GB parts) is rejected; compress very large files before uploading.
 :::
 
 :::tip[File Extension Restrictions]
