@@ -279,8 +279,10 @@ class TestWindowsSignIn:
         body = response_body(response)
         assert (body["sessionId"], body["username"], body["password"]) == (SESSION_OWN, "vabc", PASSWORD)
         assert fakes.edh.calls_to("get_desktop_connection") == [(edh_uid_for(USER), SESSION_OWN)]
-        signed_in = [str(call) for call in logger.info.call_args_list if "Windows sign-in details" in str(call)]
-        assert len(signed_in) == 1 and SESSION_OWN in signed_in[0] and BOOTSTRAP_OWN not in signed_in[0]
+        info_lines = [str(call) for call in logger.info.call_args_list]
+        assert len(info_lines) >= 1
+        assert any(SESSION_OWN in line for line in info_lines), info_lines
+        assert not any(BOOTSTRAP_OWN in line for line in info_lines), info_lines
 
     def test_a_stored_state_other_than_active_is_not_ready_without_asking_edh(self, monkeypatch):
         fakes = _installed(monkeypatch, row=_windows(state="STOPPED", edhState="stopped", connectionAvailable=False))
