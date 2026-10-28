@@ -316,13 +316,13 @@ Pipelines that require internet access (for example, AWS Marketplace integration
 
 The VAMS workflow generates several Amazon S3 paths that are passed to each pipeline step. Using the correct path for each output type is critical for the workflow's process-output step to function correctly.
 
-| Path variable                          | Bucket                                 | Purpose                                                                                    | Versioned               |
-| -------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------ | ----------------------- |
-| `outputS3AssetFilesPath`               | Asset bucket                           | File-level outputs: new files, file previews (`.previewFile.X`)                            | Yes                     |
-| `outputS3AssetPreviewPath`             | Asset bucket                           | Asset-level preview images only (whole-asset representative image)                         | Yes                     |
-| `outputS3AssetMetadataPath`            | Asset bucket                           | Metadata files produced by the pipeline                                                    | Yes                     |
-| `outputS3AssetResultsPath`             | Workflow execution bucket (run prefix) | Structured result documents recorded on the execution; `execution.status.json` is reserved | n/a (execution records) |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket                       | Temporary working files or special non-versioned viewer data                               | No                      |
+| Path variable                          | Bucket                    | Purpose                                                                                    | Versioned |
+| -------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------ | --------- |
+| `outputS3AssetFilesPath`               | Asset bucket              | File-level outputs: new files, file previews (`.previewFile.X`)                            | Yes       |
+| `outputS3AssetPreviewPath`             | Asset bucket              | Asset-level preview images only (whole-asset representative image)                         | Yes       |
+| `outputS3AssetMetadataPath`            | Asset bucket              | Metadata files produced by the pipeline                                                    | Yes       |
+| `outputS3AssetResultsPath`             | Asset bucket (run prefix) | Structured result documents recorded on the execution; `execution.status.json` is reserved | n/a       |
+| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket          | Temporary working files or special non-versioned viewer data                               | No        |
 
 :::note[Key distinction]
 `outputS3AssetFilesPath` is for file-level outputs including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is only for asset-level preview images that represent the entire asset. Most pipelines producing file previews should write to `outputS3AssetFilesPath`.
@@ -333,7 +333,7 @@ The VAMS workflow generates several Amazon S3 paths that are passed to each pipe
 -   **`outputS3AssetFilesPath`** -- Use for all standard pipeline outputs: converted files, generated thumbnails (`.previewFile.X`), and any new files that should be tracked as part of the asset.
 -   **`outputS3AssetPreviewPath`** -- Use only for a single representative preview image of the entire asset. Do not use for file-level previews.
 -   **`outputS3AssetMetadataPath`** -- Use for metadata JSON files (for example, `asset.metadata.json`) that the process-output step reads to update asset metadata in VAMS.
--   **`outputS3AssetResultsPath`** -- Use for structured documents that describe the run rather than the asset (a summary, a report, the reserved `execution.status.json`). Each object is recorded as a results row on the execution and nothing under it is written to the asset. See [Writing outputs](#writing-outputs).
+-   **`outputS3AssetResultsPath`** -- Use for structured documents that describe the run rather than the asset (a summary, a report, the reserved `execution.status.json`). Each object is recorded as one of the execution's output results (a file over about 380 KB is truncated) and nothing under it is written to the asset. See [Writing outputs](#writing-outputs).
 -   **`inputOutputS3AssetAuxiliaryFilesPath`** -- Use for temporary files during processing or for special non-versioned data that the frontend reads directly (for example, Potree octree viewer files).
 
 ## Preserving relative paths in output

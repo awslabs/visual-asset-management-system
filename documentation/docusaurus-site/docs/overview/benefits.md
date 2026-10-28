@@ -57,6 +57,7 @@ VAMS provides a configurable pipeline and workflow system that automates common 
 -   **3D Preview Thumbnails** -- Generate animated GIF or static image previews from 3D mesh, point cloud, CAD, USD, and Gaussian splat files via headless rendering
 -   **GenAI Metadata Generation** -- Analyze every viewer-supported file with Amazon Bedrock: extract geometric and media attributes, write typed and descriptive file metadata, and embed each file version for natural-language search
 -   **Video SOP/BOM Extraction** -- Transcribe narrated teardown videos with Amazon Transcribe and derive a step-by-step procedure, a bill of materials, a lab summary, and verification key frames with Amazon Bedrock
+-   **GenAI CAD STEP Agent** -- Create or modify a CAD STEP file from a natural-language instruction with a Strands agent that writes, runs and checks CadQuery scripts
 -   **NVIDIA Isaac Lab Training** -- Run reinforcement learning training and evaluation workloads
 -   **RapidPipeline and VNTANA ModelOps** -- Licensed pipeline integrations for advanced spatial data optimization
 
@@ -105,7 +106,7 @@ VAMS is built from the ground up for deployment across AWS partitions and region
 
 -   Deploy to any AWS commercial region with Amazon CloudFront distribution
 -   Deploy to AWS GovCloud (US) regions with Application Load Balancer distribution, where Amazon API Gateway is FIPS-compliant by default and `useFips` adds the AWS KMS FIPS interface VPC endpoint
--   Deploy in air-gapped or VPC-isolated environments with VPC endpoints for all required AWS services. The GenAI and simulation pipelines are the exception: NVIDIA Cosmos, NVIDIA GR00T, and NVIDIA Isaac Lab download models or Omniverse content from third-party servers at runtime, so those pipelines need outbound internet access. See each pipeline's page under [Pipelines](../pipelines/overview.md) before enabling one on an isolated network.
+-   Deploy in air-gapped or VPC-isolated environments with VPC endpoints for all required AWS services. The GenAI and simulation pipelines are the exception: NVIDIA Cosmos, NVIDIA GR00T, and NVIDIA Isaac Lab download models or Omniverse content from third-party servers at runtime, and the GenAI CAD STEP agent's container has internet access for its research tools (public network mode on its `agentcore` runtime, NAT egress on `fargate`), so those pipelines need outbound internet access. See each pipeline's page under [Pipelines](../pipelines/overview.md) before enabling one on an isolated network.
 
 -   Import existing VPCs and subnets for integration with organizational network architectures
 -   Multiple VAMS deployments in the same account using unique stack names and regions

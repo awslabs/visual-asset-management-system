@@ -37,6 +37,8 @@ PIPELINES = (
      "coordinateTransform-construct.ts"),
     ("videoSopBom", "backendPipelines/genAi/videoSopBom",
      "infra/lib/nestedStacks/pipelines/genAi/videoSopBom/constructs/videoSopBom-construct.ts"),
+    ("cadStepAgent", "backendPipelines/genAi/cadStepAgent",
+     "infra/lib/nestedStacks/pipelines/genAi/cadStepAgent/constructs/cadStepAgent-construct.ts"),
     ("modelOps", "backendPipelines/multi/modelOps",
      "infra/lib/nestedStacks/pipelines/multi/modelOps/constructs/modelOps-construct.ts"),
     ("rapidPipeline", "backendPipelines/multi/rapidPipeline",

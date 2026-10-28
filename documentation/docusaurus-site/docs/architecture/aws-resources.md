@@ -363,7 +363,10 @@ Each enabled pipeline's Step Functions state machine logs to `/aws/vendedlogs/VA
 | `/aws/vendedlogs/Pipelines/PcPotreeViewerPDAL<hash>`        | PDAL point cloud conversion (AWS Fargate)   | `usePreviewPcPotreeViewer`                         | DESTROY        | Yes         |
 | `/aws/vendedlogs/Pipelines/PcPotreeViewerPotree<hash>`      | Potree octree conversion (AWS Fargate)      | `usePreviewPcPotreeViewer`                         | DESTROY        | Yes         |
 | `/aws/vendedlogs/Pipelines/VideoSopBom<hash>`               | Video SOP/BOM Extraction (AWS Fargate)      | `useGenAiVideoSopBom`                              | DESTROY        | Yes         |
+| `/aws/vendedlogs/Pipelines/CadStepAgent<hash>`              | GenAI CAD STEP agent (AWS Fargate)          | `useGenAiCadStepAgent` with `runtime: "fargate"`   | DESTROY        | Yes         |
 | `/aws/vendedlogs/Pipelines/<containerName>`                 | RapidPipeline, ModelOps containers          | `useRapidPipeline`, `useModelOps`                  | DESTROY        | Yes         |
+
+On its `agentcore` runtime the GenAI CAD STEP agent's container logs to `/aws/bedrock-agentcore/runtimes/<runtime id>-DEFAULT`. Amazon Bedrock AgentCore creates that group, so it is not in the stack: the retention aspect does not reach it, it uses the service's default encryption rather than the VAMS key, and it remains after the stack is deleted. The runtime id begins with the runtime name (`vams_cad_step_agent_<hash>`) and changes whenever the runtime is replaced, so one deployment can accumulate several such groups.
 
 A pipeline configured with `useCodeBuild: true` also has one build log group per AWS CodeBuild project,
 `/aws/codebuild/<project name>`. The projects set no logging configuration, so AWS CodeBuild creates the group
@@ -601,7 +604,7 @@ Deployed conditionally for each enabled pipeline:
 | **Job Definition**      | Container definitions with pipeline-specific configuration |
 | **Security Groups**     | Pipeline-specific security groups within VPC               |
 
-Every AWS Fargate job definition carries an explicit name: each construct chooses its own prefix (`CoordinateTransformJob_<config.name>_<baseStackName>`, `Preview3dThumbnailJob<config.name>_<baseStackName>`, `PcPotreeViewerJob_PDAL<config.name>_<baseStackName>` and `PcPotreeViewerJob_Potree<config.name>_<baseStackName>`, `SystemGenAiMetadataRenderJob<config.name>_<baseStackName>` for the SYSTEM GenAI metadata renderer, and `VideoSopBomJob_<config.name>_<baseStackName>` for Video SOP/BOM Extraction) and the shared construct appends a 10-character hash. AWS Batch keeps a job definition as a versioned family under that name, so a revision left behind by a failed teardown does not block a redeploy; the stack deregisters its own revisions on deletion. The Video SOP/BOM Extraction job definition sets its own size (4 vCPU, 16 GiB, 100 GiB ephemeral storage) and sends container logs to its KMS-encrypted `/aws/vendedlogs/Pipelines/VideoSopBom<hash>` group instead of the AWS Batch default `aws/batch/job` group.
+Every AWS Fargate job definition carries an explicit name: each construct chooses its own prefix (`CoordinateTransformJob_<config.name>_<baseStackName>`, `Preview3dThumbnailJob<config.name>_<baseStackName>`, `PcPotreeViewerJob_PDAL<config.name>_<baseStackName>` and `PcPotreeViewerJob_Potree<config.name>_<baseStackName>`, `SystemGenAiMetadataRenderJob<config.name>_<baseStackName>` for the SYSTEM GenAI metadata renderer, `VideoSopBomJob_<config.name>_<baseStackName>` for Video SOP/BOM Extraction, and `CadStepAgentJob_<config.name>_<baseStackName>` for the GenAI CAD STEP agent on its `fargate` runtime) and the shared construct appends a 10-character hash. AWS Batch keeps a job definition as a versioned family under that name, so a revision left behind by a failed teardown does not block a redeploy; the stack deregisters its own revisions on deletion. The Video SOP/BOM Extraction job definition sets its own size (4 vCPU, 16 GiB, 100 GiB ephemeral storage) and sends container logs to its KMS-encrypted `/aws/vendedlogs/Pipelines/VideoSopBom<hash>` group instead of the AWS Batch default `aws/batch/job` group.
 
 ## Amazon Bedrock
 
@@ -641,34 +644,39 @@ layer.
 
 Deployed for each pipeline configured with `useCodeBuild: true`. AWS CodeBuild builds the pipeline's
 container image from the source in the repository and pushes it to a private Amazon ECR repository, which
-the pipeline's AWS Batch job definition then references. Pipelines that do not set `useCodeBuild` build
+the pipeline's AWS Batch job definition then references (for the GenAI CAD STEP agent on its `agentcore`
+runtime, the Amazon Bedrock AgentCore Runtime instead). Pipelines that do not set `useCodeBuild` build
 their image locally at synthesis time and use the CDK asset repository instead.
 
-| Resource              | Configuration                                                                                                                                                                                                              |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Repository**        | One per CodeBuild-built pipeline, image scanning on push, last 10 images retained                                                                                                                                          |
-| **CodeBuild project** | One per repository, privileged mode for container builds; a one-hour timeout for Coordinate Transform and a three-hour timeout for Splat Toolbox, NVIDIA Cosmos (including Cosmos 3), NVIDIA GR00T, and Isaac Lab training |
-| **Image tag**         | The first 32 hexadecimal characters of the source asset hash, so the tag is content-addressed                                                                                                                              |
-| **Encryption**        | The VAMS KMS key when `useKmsCmkEncryption.enabled` is `true`, Amazon ECR's default AES-256 otherwise                                                                                                                      |
-| **Build log group**   | `/aws/codebuild/<project name>`, created by AWS CodeBuild and left behind on teardown (see Pipeline Log Groups above)                                                                                                      |
+| Resource              | Configuration                                                                                                                                                                                                                                                                     |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Repository**        | One per CodeBuild-built pipeline, image scanning on push, last 10 images retained                                                                                                                                                                                                 |
+| **CodeBuild project** | One per repository, privileged mode for container builds; a one-hour timeout for Coordinate Transform, Video SOP/BOM Extraction and the GenAI CAD STEP agent and a three-hour timeout for Splat Toolbox, NVIDIA Cosmos (including Cosmos 3), NVIDIA GR00T, and Isaac Lab training |
+| **Image tag**         | The first 32 hexadecimal characters of the source asset hash, so the tag is content-addressed                                                                                                                                                                                     |
+| **Encryption**        | The VAMS KMS key when `useKmsCmkEncryption.enabled` is `true`, Amazon ECR's default AES-256 otherwise                                                                                                                                                                             |
+| **Build log group**   | `/aws/codebuild/<project name>`, created by AWS CodeBuild and left behind on teardown (see Pipeline Log Groups above)                                                                                                                                                             |
 
 All repositories use the `DESTROY` removal policy with `emptyOnDelete`, so both the repository and its
 images are removed when the stack is destroyed cleanly.
 
-Most repositories are auto-named by AWS CloudFormation and therefore cannot collide on a redeploy. Two
-repositories are the exception and carry explicit names: **Coordinate Transform**
-(`{config.name}-{app.baseStackName}-coordtransform`) and **Video SOP/BOM Extraction**
-(`{config.name}-{app.baseStackName}-videosopbom`), each with `-kms` appended when
-`useKmsCmkEncryption.enabled` is `true`. Both are redeploy-collision relevant: delete any
-orphaned repository of either name left by a failed teardown before redeploying with the same configuration
-name and account.
+Most repositories are auto-named by AWS CloudFormation and therefore cannot collide on a redeploy. Three
+carry an explicit name and are redeploy-collision relevant. Each name carries `-kms` when
+`useKmsCmkEncryption.enabled` is `true`:
 
-:::note[Why two repositories are explicitly named]
+| Pipeline                 | Repository name, CMK off                           | Repository name, CMK on                                |
+| ------------------------ | -------------------------------------------------- | ------------------------------------------------------ |
+| Coordinate Transform     | `{config.name}-{app.baseStackName}-coordtransform` | `{config.name}-{app.baseStackName}-coordtransform-kms` |
+| Video SOP/BOM Extraction | `{config.name}-{app.baseStackName}-videosopbom`    | `{config.name}-{app.baseStackName}-videosopbom-kms`    |
+| GenAI CAD STEP agent     | `{config.name}-{app.baseStackName}-cadstepagent`   | `{config.name}-{app.baseStackName}-cadstepagent-kms`   |
+
+Delete any orphaned repository of these names left by a failed teardown before redeploying with the same
+configuration name and account.
+
+:::note[Why these repositories are explicitly named]
 Amazon ECS and AWS Batch cap a container image reference at 255 characters across the whole
 `{account}.dkr.ecr.{region}.amazonaws.com/{repository}:{tag}` string. An auto-generated repository
-name is derived from the nested-stack path, and the Coordinate Transform and Video SOP/BOM Extraction
-pipelines' paths are deep enough that the resulting reference exceeds the cap — AWS Batch then rejects every
-job at submission. Because the
+name is derived from the nested-stack path, and these three pipelines' paths are deep enough that the
+resulting reference exceeds the cap — AWS Batch then rejects every job at submission. Because the
 job never starts, no container log or exit code is produced; the reason appears only in the job's
 `statusReason`. An explicit short name keeps the reference well inside the limit without shortening the
 content-addressed tag.
@@ -677,17 +685,21 @@ content-addressed tag.
 :::note[The repositories follow their encryption]
 Amazon ECR cannot change a repository's encryption after the repository is created, so turning
 `useKmsCmkEncryption.enabled` on or off replaces every CodeBuild repository. An auto-named repository gets
-a new generated name, and the Coordinate Transform repository changes between its two names, because AWS
+a new generated name, and the three explicitly named repositories change between their two names, because AWS
 CloudFormation cannot replace an explicitly named resource under the same name. The deployment creates each
-new repository, points the AWS Batch job definitions at it, starts a build of the image into it, and deletes
-the old repository with its images. The deployment does not wait for these builds, so a job submitted before
-its pipeline's build finishes fails to pull the image.
+new repository, points the AWS Batch job definitions (and the GenAI CAD STEP agent's Amazon Bedrock
+AgentCore Runtime) at it, starts a build of the image into it, and deletes the old repository with its
+images. The deployment does not wait for these builds, so a job submitted before its pipeline's build
+finishes fails to pull the image. The GenAI CAD STEP agent is the exception: its deployment waits for its
+build, and its runtime or job definition moves to the new repository only once the image is there.
 
 Changing to a different key while the CMK stays on (for example, setting `optionalExternalCmkArn` on a
-deployment that uses the VAMS-generated key) also replaces the repositories, but the Coordinate Transform
-repository keeps its name, so that update fails. Deploy once with
+deployment that uses the VAMS-generated key) also replaces the repositories, but the three explicitly named
+repositories keep their names, so that update fails. Deploy once with
 `useConversionCoordinateTransform.useCodeBuild` set to `false`, which builds the image with local Docker for
-that deployment and removes the repository, then set it back to `true` and deploy again.
+that deployment and removes the repository, then set it back to `true` and deploy again. Do the same with `useGenAiVideoSopBom.useCodeBuild` for Video SOP/BOM Extraction. For the GenAI CAD
+STEP agent, do the same with `useGenAiCadStepAgent.useCodeBuild` on its `fargate` runtime; its `agentcore`
+runtime requires CodeBuild, so deploy once with `useGenAiCadStepAgent.enabled` set to `false` instead.
 
 The principal that creates or deletes a KMS-encrypted Amazon ECR repository needs `kms:CreateGrant`,
 `kms:DescribeKey` and `kms:RetireGrant` on the key in its IAM policy. For VAMS that principal is the AWS
@@ -696,10 +708,26 @@ role (`app.iamRoleConfig.useCustomBootstrapRoles`, or `npx cdk bootstrap --cloud
 must allow them on the key; with `useCliCredentialsSynthesizer` set in `infra/config/policy/iamRoleConfig.json`,
 the deploying credentials must. An external key's policy must keep the statement that lets IAM policies in the
 account authorize use of the key. Amazon ECR encrypts and decrypts image layers through the grants it creates
-on the key, so the CodeBuild projects and the AWS Batch jobs get no permission on it. A custom execution role
-also needs read access to the API origin verification secret on a CloudFront deployment; see
+on the key, so the CodeBuild projects, the AWS Batch jobs and the Amazon Bedrock AgentCore Runtime need no
+permission on it to push or pull an image. A custom execution role also needs read access to the API origin
+verification secret on a CloudFront deployment; see
 [Rotation of the API origin verification secret](#rotation-of-the-api-origin-verification-secret).
 :::
+
+## Amazon Bedrock AgentCore and Amazon Bedrock Guardrails
+
+Deployed for the GenAI CAD STEP agent pipeline (`useGenAiCadStepAgent`):
+
+| Resource                                          | Created When                                          | Name                         | Removal on teardown    |
+| ------------------------------------------------- | ----------------------------------------------------- | ---------------------------- | ---------------------- |
+| Amazon Bedrock AgentCore Runtime                  | `runtime: "agentcore"` (the default)                  | `vams_cad_step_agent_<hash>` | Deleted with the stack |
+| Amazon Bedrock guardrail and its numbered version | `bedrockGuardrail.guardrailId` is empty (the default) | `vams-cad-step-agent-<hash>` | Deleted with the stack |
+
+Both names are deterministic, derived from the core stack name and account, so each is
+redeploy-collision relevant: delete an orphaned runtime or guardrail of the same name left by a failed
+teardown before redeploying with the same configuration. The guardrail is encrypted with the VAMS key when
+`useKmsCmkEncryption.enabled` is `true`. The runtime's log group is created by the service; see
+[Pipeline Log Groups](#pipeline-log-groups-per-enabled-pipeline).
 
 ## AWS CloudTrail
 

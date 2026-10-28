@@ -233,13 +233,13 @@ graph TD
 
 Each pipeline step in a workflow receives designated Amazon S3 output paths from the workflow state machine:
 
-| Path Variable                          | Target Bucket                          | Purpose                                                                                        |
-| -------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `outputS3AssetFilesPath`               | Asset bucket                           | File-level outputs including `.previewFile.*` thumbnails (versioned)                           |
-| `outputS3AssetPreviewPath`             | Asset bucket                           | Asset-level preview images only (versioned)                                                    |
-| `outputS3AssetMetadataPath`            | Asset bucket                           | Metadata and attribute files produced by the pipeline (versioned)                              |
-| `outputS3AssetResultsPath`             | Workflow execution bucket (run prefix) | Results recorded on the execution; `execution.status.json` reports a pipeline-decided `FAILED` |
-| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket                       | Temporary working files or non-versioned viewer data                                           |
+| Path Variable                          | Target Bucket             | Purpose                                                              |
+| -------------------------------------- | ------------------------- | -------------------------------------------------------------------- |
+| `outputS3AssetFilesPath`               | Asset bucket              | File-level outputs including `.previewFile.*` thumbnails (versioned) |
+| `outputS3AssetPreviewPath`             | Asset bucket              | Asset-level preview images only (versioned)                          |
+| `outputS3AssetMetadataPath`            | Asset bucket              | Metadata and attribute files produced by the pipeline (versioned)    |
+| `outputS3AssetResultsPath`             | Asset bucket (run prefix) | n/a                                                                  |
+| `inputOutputS3AssetAuxiliaryFilesPath` | Auxiliary bucket          | Temporary working files or non-versioned viewer data                 |
 
 ### Available Pipelines
 
@@ -252,6 +252,7 @@ Each pipeline step in a workflow receives designated Amazon S3 output paths from
 | Point Cloud Potree Viewer                 | AWS Batch (Fargate)                                         | Generate Potree octree data for point cloud visualization                                                |
 | Gaussian Splatting (Splat Toolbox)        | AWS Batch (GPU)                                             | Generate Gaussian splat reconstructions                                                                  |
 | Video SOP/BOM Extraction                  | AWS Batch (Fargate)                                         | Teardown-video transcription and SOP/BOM extraction using Amazon Transcribe and Amazon Bedrock           |
+| GenAI CAD STEP Agent                      | Amazon Bedrock AgentCore Runtime or AWS Batch (Fargate)     | Create or modify a CAD STEP file from a natural-language instruction with a Strands agent                |
 | NVIDIA Cosmos Predict / Reason / Transfer | AWS Batch (GPU)                                             | World-model video generation, video reasoning, and control-signal video transfer                         |
 | NVIDIA Cosmos 3                           | AWS Batch (GPU)                                             | Omnimodal world-model generation                                                                         |
 | NVIDIA Gr00t Fine-Tuning                  | AWS Batch (GPU)                                             | Fine-tune the GR00T embodied AI model                                                                    |

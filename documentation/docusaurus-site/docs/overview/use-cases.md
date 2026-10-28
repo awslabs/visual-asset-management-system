@@ -18,6 +18,7 @@ VAMS centralizes manufacturing visual assets in Amazon S3 with metadata-rich org
 
 -   Three.js viewer with CAD format support (STEP, IGES, BREP via WebAssembly)
 -   SYSTEM GenAI metadata pipeline for automated attribute extraction and metadata generation
+-   GenAI CAD STEP agent pipeline for creating or modifying a STEP part from a natural-language instruction, with a report of what it could not verify
 -   Asset versioning with alias naming for engineering revision tracking
 -   Metadata schemas for standardized part number and BOM (Bill of Materials) tracking
 -   Fine-grained access control to separate product lines and restrict access by team

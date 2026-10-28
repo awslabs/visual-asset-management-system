@@ -364,12 +364,15 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled ||
+                (props.config.app.pipelines.useGenAiCadStepAgent?.enabled &&
+                    props.config.app.pipelines.useGenAiCadStepAgent.runtime === "fargate") ||
                 props.config.app.pipelines.useImageTo3d?.enabled
             ) {
                 // Only pipelines whose compute is placed in PRIVATE subnets belong here. A pipeline
                 // running in isolated subnets reaches AWS through the interface endpoints created
                 // below, so listing it would add public subnets and one NAT gateway per Availability
-                // Zone that nothing routes through.
+                // Zone that nothing routes through. The CAD STEP agent counts only on its Fargate
+                // runtime: on AgentCore the agent container runs outside the VPC entirely.
                 subnetConfigurations.push(subnetPublicConfig);
                 subnetConfigurations.push(subnetPrivateConfig);
             }
@@ -703,6 +706,8 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled ||
+                (props.config.app.pipelines.useGenAiCadStepAgent?.enabled &&
+                    props.config.app.pipelines.useGenAiCadStepAgent.runtime === "fargate") ||
                 props.config.app.pipelines.useImageTo3d?.enabled
             ) {
                 // Create VPC endpoint for Batch
@@ -747,6 +752,24 @@ export class VPCBuilderNestedStack extends NestedStack {
                         securityGroups: [vpceSecurityGroup],
                     });
                 }
+            }
+
+            // Amazon Bedrock AgentCore data plane. The GenAI CAD STEP agent's invoke Lambda calls
+            // InvokeAgentRuntime from the isolated subnets when every Lambda is in the VPC; the agent
+            // itself runs on AgentCore outside the VPC, so only the `agentcore` runtime needs it.
+            // Commercial partition only: getConfig() rejects the `agentcore` runtime elsewhere.
+            if (
+                props.config.app.useGlobalVpc.useForAllLambdas &&
+                props.config.app.pipelines.useGenAiCadStepAgent?.enabled &&
+                props.config.app.pipelines.useGenAiCadStepAgent.runtime === "agentcore"
+            ) {
+                new ec2.InterfaceVpcEndpoint(this, "BedrockAgentCoreEndpoint", {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: new ec2.InterfaceVpcEndpointAwsService("bedrock-agentcore"),
+                    subnets: { subnets: this.isolatedSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                });
             }
 
             // Amazon Bedrock Runtime endpoint. A VPC allows one private-DNS endpoint per service, so its
@@ -804,6 +827,8 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled ||
+                (props.config.app.pipelines.useGenAiCadStepAgent?.enabled &&
+                    props.config.app.pipelines.useGenAiCadStepAgent.runtime === "fargate") ||
                 props.config.app.pipelines.useImageTo3d?.enabled;
             const needsEcsIsolated = props.config.app.pipelines.useIsaacLabTraining?.enabled;
 

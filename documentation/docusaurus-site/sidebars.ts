@@ -137,6 +137,7 @@ const sidebars: SidebarsConfig = {
                         "pipelines/potree-viewer",
                         "pipelines/3d-conversion",
                         "pipelines/coordinate-transform",
+                        "pipelines/genai-cad-step-agent",
                         "pipelines/gaussian-splatting",
                         "pipelines/video-sop-bom",
                         "pipelines/nvidia-isaac-lab",
