@@ -1294,6 +1294,22 @@ class TestTheIsaacSim6Importers:
         assert [os.path.basename(fields["mjcf_path"]) for _kind, fields in importers6] == ["mj.xml"]
         assert os.listdir(tmp_path / "download") == ["mj.mjcf"]
 
+    @pytest.mark.parametrize("name", ["mj.xml", "mj.mjcf"])
+    @pytest.mark.parametrize("text, problem", [(BROKEN_MJ, MalformedXmlError.NOT_WELL_FORMED)] + [
+        (text, MalformedXmlError.REFUSED) for text, _line in DOCTYPE_MJ.values()],
+        ids=["not-well-formed"] + [f"doctype-{kind}" for kind in DOCTYPE_MJ])
+    def test_an_mjcf_the_check_refuses_is_refused_before_the_6x_importer_runs(
+            self, tmp_path, world, importers6, name, text, problem):
+        """The 6.x path takes the same XML check as the 5.1 path, ahead of the importer and of the
+        .xml copy a .mjcf file is imported from."""
+        with pytest.raises(MalformedXmlError) as excinfo:
+            _import_file("mjcf", _local(tmp_path, name, text))
+        assert excinfo.value.problem == problem
+        assert (list(importers6), importers6.commands) == ([], [])
+        assert (world.prims, world.references, world.layer.defaultPrim) == ({"/World"}, [], "World")
+        assert os.listdir(tmp_path / "download") == [name]
+        assert os.listdir(tmp_path / "tmp") == []
+
     @pytest.mark.parametrize("kind, name, text", SOURCES)
     def test_the_default_options_log_no_warning(self, tmp_path, world, importers6, caplog, kind,
                                                 name, text):
