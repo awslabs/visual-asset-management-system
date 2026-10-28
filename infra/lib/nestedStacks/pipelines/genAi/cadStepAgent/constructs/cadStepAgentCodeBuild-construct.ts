@@ -22,6 +22,23 @@ import { codeBuildTriggerCode } from "../../../constructs/codeBuildTrigger";
 /** The Docker platform the image is built for; decided by the runtime that will run it. */
 export type CadStepAgentImagePlatform = "linux/arm64" | "linux/amd64";
 
+/**
+ * Paths left out of the container source asset. The image tag is derived from the asset hash, so local
+ * tool output (test caches, bytecode, virtualenvs) is excluded to keep the tag of unchanged sources stable.
+ */
+export const CAD_STEP_AGENT_SOURCE_EXCLUDE = [
+    "__pycache__",
+    "*.pyc",
+    "*.egg-info",
+    ".git",
+    ".env",
+    ".venv",
+    "node_modules",
+    "tests",
+    ".pytest_cache",
+    ".ruff_cache",
+];
+
 /** The pipeline's Lambda sources; the image-build wait handler lives beside the pipeline Lambdas. */
 const LAMBDA_CODE_PATH = path.join(
     __dirname,
@@ -114,7 +131,7 @@ export class CadStepAgentCodeBuildConstruct extends Construct {
                 "cadStepAgent",
                 "container"
             ),
-            exclude: [".git", "*.pyc", "__pycache__", ".venv", "node_modules", ".env", "tests"],
+            exclude: CAD_STEP_AGENT_SOURCE_EXCLUDE,
         });
 
         // Content-addressed image tag, supplied to the build and consumed by the runtime from this
