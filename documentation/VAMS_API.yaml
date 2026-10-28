@@ -8260,6 +8260,184 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
+    /workflows/executions/{executionId}/details/files:
+        get:
+            summary: "Read one of an execution's file collections a page at a time."
+            description: >-
+                Returns one page of ONE of the execution's file collections, with a continuation
+                token, so a file collection the details view reported truncated (inputFiles or
+                outputs.files) can be walked in full. Rows carry the same scrubbed shape the details
+                view returns; output rows also carry the producing pipelineId. No S3 bucket/key is
+                returned.
+
+
+                Two collections are addressable: 'input' is the workflow-level input files (a single
+                partition), and 'output' is the per-pipeline output files (walked across the run's
+                steps in a stable order). There is no 'inputDatabase' collection - that split is
+                metadata-only. pipelineId narrows the 'output' collection to one step; it does not
+                apply to input files. A token is only valid alongside the collection and pipelineId it
+                was issued with, and a mismatch is rejected with 400 rather than serving the wrong
+                rows. Nothing is dropped by a page bound: a page ends at the first row it could not
+                carry and the token resumes there. NextToken is absent on the last page.
+
+
+                A page carries at most 500 rows and at most 4,194,304 bytes (4 MB) of rows, whichever
+                comes first; pageSize above the maximum is served at the maximum. Authorization is the
+                same rule the details view enforces, evaluated for GET.
+            parameters:
+              - in: path
+                name: executionId
+                required: true
+                schema:
+                    $ref: '#/components/schemas/execution_id_regex'
+                description: Identifier of the execution.
+              - in: query
+                name: collection
+                required: false
+                schema:
+                    type: string
+                    enum: [input, output]
+                    default: input
+                description: "Which file collection to page. Omitted or empty reads 'input'; any other value (including inputDatabase) is rejected with 400."
+              - in: query
+                name: pageSize
+                required: false
+                schema:
+                    type: integer
+                    minimum: 1
+                    maximum: 500
+                    default: 100
+                description: "Rows requested per page. A value above the maximum is served at the maximum; a value below 1 is rejected with 400."
+              - in: query
+                name: startingToken
+                required: false
+                allowEmptyValue: true
+                schema:
+                    type: string
+                    maxLength: 4096
+                description: "Continuation token from a previous page's NextToken. A token that cannot be used against this execution is rejected with 400 rather than restarting at the first page."
+              - in: query
+                name: NextToken
+                required: false
+                allowEmptyValue: true
+                schema:
+                    type: string
+                    maxLength: 4096
+                description: "Alias of startingToken. startingToken takes precedence when both are sent."
+              - in: query
+                name: pipelineId
+                required: false
+                schema:
+                    type: string
+                    pattern: ^[-_a-zA-Z0-9]{3,63}$
+                description: "Narrow the 'output' collection to the rows of the steps running this pipeline. A token issued with this filter is only valid alongside the same filter."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/executionDetailFilePage'
+                "400":
+                    description: Invalid or missing executionId, an unknown collection, an invalid pipelineId or pageSize, or a continuation token that cannot be used.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized (API, workflow, one of the input-file assets, a metadata-source asset, or a captured database).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Execution not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+    /workflows/executions/{executionId}/details/results:
+        get:
+            summary: "Read an execution's concatenated result text, a page at a time."
+            description: >-
+                Returns the result text an execution produced (output-only; no collection parameter),
+                for a pipeline that produces a textual result rather than asset files. Result rows are
+                walked across the run's steps in a stable order and their text concatenated; a page
+                carries as many rows as fit a 5 MiB budget measured on the response as sent (after
+                JSON escaping, so a CJK character or a quote costs several bytes), under the AWS Lambda
+                synchronous-response limit. NextToken is present while rows remain, and concatenating
+                resultContent across every page yields the whole result. A single row larger than the
+                budget is cut and flagged resultContentTruncated (rows are bounded when written, so
+                only an oversized or corrupt row reaches this). An empty or legacy run returns the
+                empty shape (resultContent '', counts zero, no NextToken), never an error. Internal S3
+                keys are never surfaced. Authorization is the same rule the details view enforces,
+                evaluated for GET.
+            parameters:
+              - in: path
+                name: executionId
+                required: true
+                schema:
+                    $ref: '#/components/schemas/execution_id_regex'
+                description: Identifier of the execution.
+              - in: query
+                name: startingToken
+                required: false
+                allowEmptyValue: true
+                schema:
+                    type: string
+                    maxLength: 4096
+                description: "Continuation token from a previous page's NextToken. A token that cannot be used against this execution's results (including a details/files token) is rejected with 400 rather than restarting at the first page."
+              - in: query
+                name: NextToken
+                required: false
+                allowEmptyValue: true
+                schema:
+                    type: string
+                    maxLength: 4096
+                description: "Alias of startingToken. startingToken takes precedence when both are sent."
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: '#/components/schemas/executionResults'
+                "400":
+                    description: Invalid or missing executionId.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: Not authorized (API, workflow, one of the input-file assets, a metadata-source asset, or a captured database).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: Execution not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
     /workflows/executions/{executionId}/logs:
         get:
             summary: "Get execution logs (truncated stored text, or full live search)."
@@ -10127,6 +10305,17 @@ components:
                 outputDatabaseId:
                     type: string
                     description: "Empty for a results-only execution that writes no files."
+                outputTypes:
+                    type: array
+                    items:
+                        type: string
+                        enum: [File, Metadata, Result]
+                    description: >-
+                        The output kinds the run produced, a subset of ["File","Metadata","Result"] in
+                        File->Metadata->Result order, derived at completion (and at failure from
+                        whatever output rows exist). Empty for a run that produced none and for a
+                        legacy run whose configuration row predates the attribute (no migration). No
+                        output content appears on the list; read it with the detail routes.
         executionDetailMetadataRow:
             type: object
             description: >-
@@ -10187,6 +10376,91 @@ components:
             required:
                 - Items
                 - collection
+        executionDetailFileRow:
+            type: object
+            description: >-
+                One file row of an execution, in the same scrubbed shape the details view returns.
+                An input row ('input') is a workflow-level input file; an output row ('output') is a
+                per-pipeline output file and carries the producing pipelineId. No S3 bucket/key is
+                returned.
+            properties:
+                databaseId:
+                    type: string
+                    description: "Input rows only: the input file's asset database."
+                assetId:
+                    type: string
+                    description: "Input rows only: the input file's asset."
+                inputAssetFileKey:
+                    type: string
+                    description: "Input rows only: the asset-relative input file key."
+                versionId:
+                    type: string
+                    description: "Input rows only: the concrete S3 version read at launch (empty for folder/whole-asset selections)."
+                relativeFilePath:
+                    type: string
+                    description: "Output rows only: the asset-relative output file path."
+                fileType:
+                    type: string
+                    description: "Output rows only: 'file' or 'preview'."
+                fileSize:
+                    type: integer
+                    description: "Output rows only: size in bytes, when known."
+                contentType:
+                    type: string
+                    description: "Output rows only, when known."
+                s3VersionId:
+                    type: string
+                    description: "Output rows only, when known."
+                pipelineId:
+                    type: string
+                    description: "Output rows only: the pipeline whose step produced the file."
+        executionDetailFilePage:
+            type: object
+            description: "One page of one of an execution's file collections."
+            properties:
+                Items:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/executionDetailFileRow"
+                collection:
+                    type: string
+                    enum: [input, output]
+                    description: "The collection this page was read from, echoed back so a client rendering several collections can attribute the page."
+                NextToken:
+                    type: string
+                    nullable: true
+                    description: "Continuation token for the next page. Absent on the last page, so its presence is what tells a client there is more."
+            required:
+                - Items
+                - collection
+        executionResults:
+            type: object
+            description: >-
+                One page of an execution's concatenated result text: the result rows that fit the 5
+                MiB response budget, in step then sort-key order. NextToken is present while rows
+                remain. An empty/legacy run returns the empty shape (resultContent '', counts zero).
+            properties:
+                resultContent:
+                    type: string
+                    description: "This page's rows' result text, concatenated in a stable order. Concatenating every page yields the whole result."
+                resultContentTruncated:
+                    type: boolean
+                    description: "True when a row on this page was stored truncated, or a single row larger than the budget was cut. The cut text is not retrievable."
+                resultRowCount:
+                    type: integer
+                    description: "Number of result rows on this page."
+                resultContentBytes:
+                    type: integer
+                    description: "UTF-8 byte length of this page's resultContent."
+                NextToken:
+                    type: string
+                    nullable: true
+                    description: "Continuation token for the next page. Absent on the last page, so its presence is what tells a client there is more."
+            required:
+                - resultContent
+                - resultContentTruncated
+                - resultRowCount
+                - resultContentBytes
         eventName:
             $ref: "#/components/schemas/object_name_pattern_regex"
         filename_pattern:

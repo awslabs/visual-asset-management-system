@@ -302,6 +302,16 @@ export class ApiBuilder2NestedStack extends NestedStack {
             registry: registry,
         });
         attachFunctionToApi(this, executionServiceFunction, {
+            routePath: "/workflows/executions/{executionId}/details/files",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, executionServiceFunction, {
+            routePath: "/workflows/executions/{executionId}/details/results",
+            method: apigateway.HttpMethod.GET,
+            registry: registry,
+        });
+        attachFunctionToApi(this, executionServiceFunction, {
             routePath: "/workflows/executions/{executionId}/logs",
             method: apigateway.HttpMethod.GET,
             registry: registry,
