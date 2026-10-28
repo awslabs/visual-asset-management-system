@@ -235,6 +235,7 @@ Each pipeline step in a workflow receives designated Amazon S3 output paths from
 | RapidPipeline (ECS)                | AWS Batch (Fargate)                                     | RapidPipeline integration via Amazon ECS                                                       |
 | RapidPipeline (EKS)                | Amazon EKS                                              | RapidPipeline integration via Amazon EKS                                                       |
 | Isaac Lab Training                 | AWS Batch (GPU)                                         | NVIDIA Isaac Lab simulation training                                                           |
+| Image to 3D                        | AWS Batch (GPU)                                         | Generate a 3D mesh from a single photograph with a selectable open-weight model                |
 
 ## Configuration Flow
 

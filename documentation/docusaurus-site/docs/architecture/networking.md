@@ -201,7 +201,9 @@ Private and public subnets are created when any of the following are enabled:
 -   Splat Toolbox pipeline
 -   Isaac Lab Training pipeline
 -   NVIDIA Cosmos pipeline (Predict, Reason, or Transfer)
+-   NVIDIA Cosmos 3 pipeline
 -   NVIDIA Gr00t pipeline
+-   Image to 3D pipeline
 -   GenAI CAD STEP agent pipeline on its `fargate` runtime (the `agentcore` runtime runs outside the VPC)
 
 ### Availability Zone Configuration
