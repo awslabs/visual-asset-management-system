@@ -556,6 +556,39 @@ describe("useExecutionResults", () => {
         await waitFor(() => expect(result.current.pageContents).toEqual(["p1"]));
         await expect(result.current.readFullText()).rejects.toThrow("denied");
     });
+
+    it("rejects the full read when a page repeats a token", async () => {
+        const { useExecutionResults } = require("./queries");
+        (executionService.getExecutionResults as jest.Mock)
+            .mockResolvedValueOnce([true, { resultContent: "p1", NextToken: "t2" }])
+            .mockResolvedValueOnce([true, { resultContent: "p2", NextToken: "t2" }]);
+        const { result } = renderHook(() => useExecutionResults("e1", true), {
+            wrapper: wrapper(client()),
+        });
+        await waitFor(() => expect(result.current.pageContents).toEqual(["p1"]));
+        await expect(result.current.readFullText()).rejects.toThrow("already returned");
+        expect(executionService.getExecutionResults).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects the full read after the page bound", async () => {
+        const { useExecutionResults, RESULT_READ_MAX_PAGES } = require("./queries");
+        let n = 0;
+        (executionService.getExecutionResults as jest.Mock).mockImplementation(async () => {
+            n += 1;
+            return [true, { resultContent: "x", NextToken: `t${n + 1}` }];
+        });
+        const { result } = renderHook(() => useExecutionResults("e1", true), {
+            wrapper: wrapper(client()),
+        });
+        await waitFor(() => expect(result.current.pageContents).toEqual(["x"]));
+        await expect(result.current.readFullText()).rejects.toThrow(
+            `exceeded ${RESULT_READ_MAX_PAGES} pages`
+        );
+        // The first (loaded) page plus the bounded remaining pages.
+        expect(executionService.getExecutionResults).toHaveBeenCalledTimes(
+            RESULT_READ_MAX_PAGES + 1
+        );
+    });
 });
 
 /**

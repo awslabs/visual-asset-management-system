@@ -767,6 +767,9 @@ export function useExecutionDetailFiles(
     });
 }
 
+/** Most remaining result pages `readFullText` requests before rejecting (matches the CLI bound). */
+export const RESULT_READ_MAX_PAGES = 200;
+
 /**
  * An execution's concatenated result text, fetched lazily and a page at a time. Disabled until a
  * caller opens a result view (enabled), so the read is paid only on demand — not for every row that
@@ -818,11 +821,21 @@ export function useExecutionResults(executionId: string, enabled: boolean) {
             parts.push(first.resultContent ?? "");
             token = first.NextToken;
         }
+        const requested = new Set<string>();
+        let fetched = 0;
         while (token) {
             const startingToken: string = token;
+            if (requested.has(startingToken)) {
+                throw new Error("Result read returned a page token it had already returned");
+            }
+            requested.add(startingToken);
+            if (fetched >= RESULT_READ_MAX_PAGES) {
+                throw new Error(`Result read exceeded ${RESULT_READ_MAX_PAGES} pages`);
+            }
             const page = await callService<ExecutionResults>(() =>
                 executionService.getExecutionResults(executionId, { startingToken })
             );
+            fetched += 1;
             parts.push(page.resultContent ?? "");
             token = page.NextToken;
         }
