@@ -64,8 +64,10 @@ def _items(response):
 
 
 def _update_values(fakes):
-    """The attribute values of the update the merge wrote."""
-    return [value for placeholder, value in fakes.table.update_item.call_args[1]["ExpressionAttributeValues"].items()
+    """The attribute values of the update the merge wrote: the first, since a display-session check (D21) that
+    follows it writes its own stamp."""
+    merge_write = fakes.table.update_item.call_args_list[0]
+    return [value for placeholder, value in merge_write[1]["ExpressionAttributeValues"].items()
             if placeholder.startswith(":v")]
 
 
@@ -127,14 +129,16 @@ class TestWorkstationList:
         assert {"running", True} <= set(_update_values(fakes))
 
     def test_a_row_that_matches_edh_is_not_rewritten(self, monkeypatch):
-        """Control: only what differs from the stored row is written, so an unchanged row costs no write."""
+        """Control: only what differs from the stored row is written, so an unchanged row costs no write of its
+        observed attributes; the one write is the display-session check's stamp (D21), alone."""
         fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_states=[_desktop(SESSION_OWN)]))
         fakes.table.query.return_value = {"Items": [own_row()]}
 
         response = fakes.module.lambda_handler(make_event("GET", WORKSTATIONS_PATH), {})
 
         assert response["statusCode"] == 200
-        fakes.table.update_item.assert_not_called()
+        (write,) = fakes.table.update_item.call_args_list
+        assert set(write.kwargs["ExpressionAttributeNames"].values()) == {"connectionCheckedAt", "state"}
 
     def test_a_row_absent_from_edh_keeps_its_stored_state(self, monkeypatch):
         fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_states=[_desktop("someone-elses")]))

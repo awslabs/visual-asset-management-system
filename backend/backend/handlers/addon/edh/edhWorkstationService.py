@@ -781,15 +781,25 @@ def _desktop_after_lost_answer(event, client, row, edh_uid, operation, lost):
     return desktop
 
 
+def _stamp_connection_check(row, operation):
+    """Write ``connectionCheckedAt`` alone onto a row whose display-session check found nothing to merge (the read
+    failed, or EDH's listing has no record of the desktop), leaving its updatedAt; a row deleted since it was read is
+    not written."""
+    if not _update_live_row(row, touch=False, **{CONNECTION_CHECKED_AT_FIELD: _utc_now()}):
+        logger.info("A display-session check found the row deleted since it was read; its stamp is not written",
+                    extra={"operation": operation, "bootstrapId": row['bootstrapId']})
+
+
 def _check_display_session(event, client, row, edh_uid, operation):
     """Check, for a row stored ACTIVE with a session id whose merged ``edhState`` is running
     (``connection_check_applies``), whether its desktop's display session can still be connected to: the read
     Connect makes, EDH's per-user listing narrowed to the one session, merged onto the row as Connect merges it, so
     ``connection_verdict`` records or clears ``connectionUnavailableReason``, with ``connectionCheckedAt`` in the
     same write. The token-free state read carries no link and cannot see a DCV session that ended while the desktop
-    kept running. EDH issues a connection token on this read; the link is never returned, logged or stored. A
-    listing with no record of the desktop leaves the row as the state read left it (a vanished desktop is the
-    sweep's); a read that fails is logged by the error's type and leaves it too, and the request goes on."""
+    kept running. EDH issues a connection token on this read; the link is never returned, logged or stored. Every
+    attempt writes the stamp: a listing with no record of the desktop, or a read that fails (logged by the error's
+    type), writes it alone and leaves the rest of the row as the state read left it (a vanished desktop is the
+    sweep's), so a desktop whose check keeps failing waits out the interval like any other; the request goes on."""
     if not connection_check_applies(row):
         return
     try:
@@ -798,9 +808,11 @@ def _check_display_session(event, client, row, edh_uid, operation):
         logger.warning("EDH's listing of a running desktop's connection was not read; the state read's view stands",
                        extra={"operation": operation, "bootstrapId": row['bootstrapId'],
                               "sessionId": row.get('sessionId'), "error": type(err).__name__})
+        _stamp_connection_check(row, operation)
         return
     desktop = _desktop_for_row(row, [desktop] if isinstance(desktop, dict) else [])
     if desktop is None:
+        _stamp_connection_check(row, operation)
         return
     _observe_desktop(row, desktop, **{CONNECTION_CHECKED_AT_FIELD: _utc_now()})
 
@@ -1777,9 +1789,9 @@ def _windows_username(desktop, edh_uid):
 def windows_sign_in(event, path):
     """The Windows sign-in of the caller's ACTIVE Windows desktop: the account its connection string names
     and the password EDH generated for it, or no password for a directory (``DOMAIN\\user``) account. The
-    route answers only what connect would connect to. The password is a credential and appears in the
-    response body only. A caller that authenticated with an API key, a desktop's own temporary session
-    key included, is refused, as connect refuses it."""
+    route answers only what connect would connect to, and stamps ``connectionCheckedAt`` as connect does. The
+    password is a credential and appears in the response body only. A caller that authenticated with an API key, a
+    desktop's own temporary session key included, is refused, as connect refuses it."""
     if claims_and_roles.get('authMethod') == AUTH_METHOD_API_KEY:
         return authorization_error(
             body={'message': 'Workstation Windows sign-in is not available to API key sessions'}, event=event)
@@ -1801,7 +1813,7 @@ def windows_sign_in(event, path):
         if row.get('connectionAvailable'):
             _update_row(row, connectionAvailable=False)
         return _not_ready_response(event)
-    _observe_desktop(row, desktop)
+    _observe_desktop(row, desktop, **{CONNECTION_CHECKED_AT_FIELD: _utc_now()})
     connection_string = desktop.get(EDH_FIELD_CONNECTION_STRING)
     if not row.get('connectionAvailable') or not isinstance(connection_string, str) or not connection_string:
         return _not_connectable_response(event, row)

@@ -135,7 +135,9 @@ class TestTheRecordReturnsTheReason:
         body = response_body(response)
         assert (body["state"], body["connectionAvailable"], body["connectionUnavailableReason"], body["activity"]) == (
             "ACTIVE", False, "DISPLAY_SESSION_ENDED", None)
-        fakes.table.update_item.assert_not_called()
+        # The state read changes nothing; the display-session check (D21), whose listing has no record here,
+        # writes its stamp alone.
+        assert set(_written(fakes)) == {"connectionCheckedAt"}
 
     def test_the_list_returns_the_reason(self, monkeypatch):
         fakes = _installed(monkeypatch, _ended_row(), get_desktop_states=[state_record(SESSION_OWN)])

@@ -10,8 +10,10 @@ now also makes the read Connect makes, EDH's per-user listing narrowed to the on
 session id that EDH's state read reports running; the list route makes it for such rows whose last check
 (``connectionCheckedAt``) is absent or five minutes old, oldest first, at most two per request. The verdict is
 D20's ``connection_verdict``; the check's stamp is written with it. The link carries a DCV token EDH issues on this
-read and is never returned, logged or stored. A read that fails, or that lists no record of the desktop, leaves
-the row as the state read left it. A check that changes nothing else writes its stamp alone and leaves
+read and is never returned, logged or stored. Every attempt writes the stamp: a read that fails, or that lists no
+record of the desktop, writes it alone and leaves the rest of the row as the state read left it, so a desktop whose
+check keeps failing waits out the interval and cannot take a list slot on every refresh. Connect and Windows sign-in
+make the same read and write the stamp too. A check that changes nothing else writes its stamp alone and leaves
 ``updatedAt``, which the session sweep reads to defer a row a request has just written.
 """
 
@@ -19,6 +21,7 @@ import json
 from unittest.mock import MagicMock
 
 import pytest
+from botocore.exceptions import ClientError
 
 from backend.backend.handlers.addon.edh.common.edhClient import EdhUnavailableError
 from backend.backend.handlers.addon.edh.common.edhIdentity import edh_uid_for
@@ -60,7 +63,8 @@ def _desktop(session_id=SESSION_OWN, connection_string=GOOD_URL, state="running"
 
 
 class _PerSessionEdh(FakeEdhClient):
-    """A scripted client whose per-user listing answers each session id from ``links`` (a missing id: no record)."""
+    """A scripted client whose per-user listing answers each session id from ``links``: a link renders the desktop
+    with it, an exception is raised, and a missing id has no record."""
 
     def __init__(self, links, **results):
         super().__init__(**results)
@@ -69,6 +73,8 @@ class _PerSessionEdh(FakeEdhClient):
     def get_desktop_connection(self, edh_uid, session_id):
         self.calls.append(("get_desktop_connection", (edh_uid, session_id)))
         link = self.links.get(session_id)
+        if isinstance(link, Exception):
+            raise link
         return None if link is None else _desktop(session_id, link)
 
 
@@ -104,6 +110,13 @@ def _writes(fakes):
 
 def _written(fakes):
     return {name: value for _key, written in _writes(fakes) for name, value in written.items()}
+
+
+def _assert_stamp_alone(fakes):
+    """The handler made one write, the check stamp alone, conditioned on the row being live, updatedAt untouched."""
+    (call,) = fakes.table.update_item.call_args_list
+    assert [set(written) for _key, written in _writes(fakes)] == [{STAMP}]
+    assert "attribute_exists(bootstrapId)" in call.kwargs["ConditionExpression"]
 
 
 def _checked_sessions(fakes):
@@ -199,7 +212,7 @@ class TestGetChecksTheDisplaySession:
         body = response_body(response)
         assert (body["state"], body["connectionAvailable"], body["connectionUnavailableReason"]) == (
             "ACTIVE", True, None)
-        fakes.table.update_item.assert_not_called()
+        _assert_stamp_alone(fakes)
         (warning,) = fakes.logger.warning.call_args_list
         assert warning.kwargs["extra"]["error"] == "EdhUnavailableError"
         assert warning.kwargs["extra"]["sessionId"] == SESSION_OWN
@@ -212,18 +225,32 @@ class TestGetChecksTheDisplaySession:
         response = _get(fakes)
 
         assert response["statusCode"] == 200
-        fakes.table.update_item.assert_not_called()
+        _assert_stamp_alone(fakes)
         assert fakes.logger.warning.call_args.kwargs["extra"]["error"] == "ValueError"
 
-    def test_no_record_in_the_listing_leaves_the_row_unchanged(self, monkeypatch):
+    def test_no_record_in_the_listing_stamps_the_check_alone(self, monkeypatch):
         fakes = _installed(monkeypatch, [own_row()], FakeEdhClient(
             get_desktop_states=[state_record(SESSION_OWN)], get_desktop_connection=None))
 
         response = _get(fakes)
 
         assert _checked_sessions(fakes) == [SESSION_OWN]
-        assert response_body(response)["connectionAvailable"] is True
-        fakes.table.update_item.assert_not_called()
+        body = response_body(response)
+        assert (body["state"], body["connectionAvailable"], body["connectionUnavailableReason"]) == (
+            "ACTIVE", True, None)
+        _assert_stamp_alone(fakes)
+
+    def test_a_row_deleted_since_it_was_read_gets_no_stamp_and_the_get_answers(self, monkeypatch):
+        fakes = _installed(monkeypatch, [own_row()], FakeEdhClient(
+            get_desktop_states=[state_record(SESSION_OWN)], get_desktop_connection=EdhUnavailableError("timeout")))
+        fakes.table.update_item.side_effect = ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
+
+        response = _get(fakes)
+
+        assert response["statusCode"] == 200
+        assert fakes.table.update_item.call_count == 1
+        assert STAMP not in response_body(response)
 
     @pytest.mark.parametrize("row, edh_state", [
         (own_row(state="STOPPED", edhState="stopped", connectionAvailable=False), "stopped"),
@@ -331,8 +358,34 @@ class TestListChecksDueDisplaySessions:
 
         assert response["statusCode"] == 200
         assert response_body(response)["Items"][0]["connectionAvailable"] is True
-        fakes.table.update_item.assert_not_called()
+        _assert_stamp_alone(fakes)
         assert fakes.logger.warning.call_args.kwargs["extra"]["operation"] == "workstationList"
+
+    def test_rows_whose_check_keeps_failing_wait_out_the_interval_while_a_third_gets_its_turn(self, monkeypatch):
+        # Two rows ahead in the queue whose check fails (EDH errors on one, lists no record of the other), and a
+        # third due row behind them. The handler mirrors each write onto the row dicts the table serves, so the
+        # second request reads the stamps the first wrote.
+        rows = [self._row("b-erroring", SESSION_OWN),
+                self._row("b-unlisted", SESSION_B, connectionCheckedAt=_ago(900)),
+                self._row("b-waiting", SESSION_C, connectionCheckedAt=_ago(600))]
+        fakes = _installed(monkeypatch, rows, _PerSessionEdh(
+            {SESSION_OWN: EdhUnavailableError("timeout"), SESSION_C: FALLBACK_URL},
+            get_desktop_states=[state_record(session) for session in (SESSION_OWN, SESSION_B, SESSION_C)]))
+
+        first = _list(fakes)
+        second = _list(fakes)
+
+        assert (first["statusCode"], second["statusCode"]) == (200, 200)
+        assert _checked_sessions(fakes) == [SESSION_OWN, SESSION_B, SESSION_C]
+        failing = [written for key, written in _writes(fakes) if key in ("b-erroring", "b-unlisted")]
+        assert [set(written) for written in failing] == [{STAMP}, {STAMP}]
+        items = {item["bootstrapId"]: item for item in response_body(second)["Items"]}
+        assert items["b-waiting"]["connectionUnavailableReason"] == "DISPLAY_SESSION_ENDED"
+        assert (items["b-erroring"]["connectionAvailable"], items["b-unlisted"]["connectionAvailable"]) == (True, True)
+
+        _list(fakes)
+
+        assert _checked_sessions(fakes) == [SESSION_OWN, SESSION_B, SESSION_C]
 
     def test_the_check_is_audited_as_the_list(self, monkeypatch):
         fakes = _installed(monkeypatch, [own_row()], FakeEdhClient(
@@ -367,6 +420,39 @@ class TestConnectStampsTheCheck:
         response = fakes.module.lambda_handler(event, {})
 
         assert response["statusCode"] == 409
+        (write,) = [written for _key, written in _writes(fakes)]
+        assert write["connectionUnavailableReason"] == "DISPLAY_SESSION_ENDED"
+        assert STAMP in write and "updatedAt" in write
+
+
+@pytest.mark.unit
+class TestWindowsSignInStampsTheCheck:
+    def _sign_in(self, fakes):
+        event = make_event("GET", workstation_path(SESSION_OWN, "windows-sign-in"),
+                           path_params={"sessionId": SESSION_OWN})
+        return fakes.module.lambda_handler(event, {})
+
+    def test_sign_in_writes_the_stamp_alone_when_nothing_else_changed(self, monkeypatch):
+        fakes = _installed(monkeypatch, [own_row(osFamily="windows")], FakeEdhClient(
+            get_desktop_connection=_desktop()))
+
+        response = self._sign_in(fakes)
+
+        assert response["statusCode"] == 200
+        assert response_body(response)["password"] == PASSWORD
+        assert [set(written) for _key, written in _writes(fakes)] == [{STAMP}]
+        written = json.dumps(_writes(fakes), default=str)
+        assert GOOD_URL not in written and PASSWORD not in written
+        assert PASSWORD not in str(fakes.logger.mock_calls)
+
+    def test_a_refused_sign_in_writes_the_stamp_with_the_reason(self, monkeypatch):
+        fakes = _installed(monkeypatch, [own_row(osFamily="windows")], FakeEdhClient(
+            get_desktop_connection=_desktop(connection_string=FALLBACK_URL)))
+
+        response = self._sign_in(fakes)
+
+        assert response["statusCode"] == 409
+        assert response_body(response)["code"] == "DISPLAY_SESSION_ENDED"
         (write,) = [written for _key, written in _writes(fakes)]
         assert write["connectionUnavailableReason"] == "DISPLAY_SESSION_ENDED"
         assert STAMP in write and "updatedAt" in write
