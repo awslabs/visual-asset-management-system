@@ -63,7 +63,7 @@ These commands are gated on the `EDH_WORKSTATIONS` feature switch; `edh containe
 
 **Cause:**
 
-The user commands act only on workstations you own. A session that belongs to another user is reported as not found rather than forbidden. A launch that has not received a session id yet has no `sessionId` to look up — address it by its `bootstrapId`, which `edh workstation list` shows with a trailing `*`. A `bootstrapId` addresses the launch only until EDH assigns it a session id, so a `bootstrapId` that worked while the launch was `CREATING` and now answers not found means the launch has a `sessionId`; use that value from the list.
+The user commands act only on workstations you own. A session that belongs to another user is reported as not found rather than forbidden. A launch that has not received a session id yet has no `sessionId` to look up — address it by its `bootstrapId`, which `edh workstation list` shows with a trailing `*`. The `bootstrapId` keeps addressing the workstation after EDH assigns its session id, so a `bootstrapId` that answers not found belongs to no workstation of yours: it was mistyped, the workstation belongs to another user, or the workstation was deleted and its record has since expired.
 
 **Resolution:**
 
@@ -88,7 +88,7 @@ The launch runs asynchronously. Until VAMS reads the created desktop back from E
 
 **Resolution:**
 
-1. Watch the launch in the list, selecting it by its `bootstrapId`, until it reports `ACTIVE` and a session id, then address it by that `sessionId`:
+1. Watch the launch by its `bootstrapId`, which keeps addressing it once it has a session id, until it reports `ACTIVE` and a session id; any workstation command then accepts either value:
 
     ```bash
     vamscli edh workstation list --json-output | jq '.Items[] | select(.bootstrapId == "<BOOTSTRAP_ID>") | {state, sessionId, lastError, edhFailure}'

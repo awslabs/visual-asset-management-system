@@ -126,7 +126,7 @@ The routes under `/addon/edh/workstations` return this object, directly for a si
 
 | Field                               | Type    | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ----------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bootstrapId`                       | string  | Client-generated UUID that keyed the launch; the idempotency key, and the identifier of a record that has no session id.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `bootstrapId`                       | string  | Client-generated UUID that keyed the launch; the idempotency key, and an identifier of the record for its whole life, before and after it has a session id.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `sessionId`                         | string  | EDH session id; `null` while the record is `CREATING` and on an `ORPHANED` launch that never received one.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `userId`                            | string  | VAMS user who owns the session.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `edhUid`                            | string  | The EDH uid the session was created under.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -165,7 +165,7 @@ Every field is present on every record; `sessionId`, `edhState`, `lastError`, `e
 
 #### Identifiers
 
-The `sessionId` path parameter of every `/addon/edh/workstations/{sessionId}` route, and of the administrative stop and deactivate routes, is the EDH session id or — for a launch that has not received one — the record's `bootstrapId`. A malformed value answers `400` before any lookup: on a `/addon/edh/workstations/{sessionId}` route, one that does not match `^[-_a-zA-Z0-9]{3,63}$` (`sessionId is invalid. Must follow the regexp ^[-_a-zA-Z0-9]{3,63}$`); on the administrative routes, one that is not 1–128 letters, digits, `.`, `_` or `-` (`sessionId is invalid`).
+The `sessionId` path parameter of every `/addon/edh/workstations/{sessionId}` route, and of the administrative stop and deactivate routes, is the EDH session id or the record's `bootstrapId`, which addresses the record before and after EDH assigns its session id; the session id is looked up first. Once the record has a session id, the route sends EDH and answers with that session id, whichever value the path named. A malformed value answers `400` before any lookup: on a `/addon/edh/workstations/{sessionId}` route, one that does not match `^[-_a-zA-Z0-9]{3,63}$` (`sessionId is invalid. Must follow the regexp ^[-_a-zA-Z0-9]{3,63}$`); on the administrative routes, one that is not 1–128 letters, digits, `.`, `_` or `-` (`sessionId is invalid`).
 
 ### GET `/addon/edh/workstations`
 
@@ -235,9 +235,9 @@ Returns one workstation record; for a record with a session id, merged with the 
 
 #### Path parameters
 
-| Parameter   | Type   | Description                                                   |
-| ----------- | ------ | ------------------------------------------------------------- |
-| `sessionId` | string | EDH session id, or the `bootstrapId` of a launch without one. |
+| Parameter   | Type   | Description                                    |
+| ----------- | ------ | ---------------------------------------------- |
+| `sessionId` | string | EDH session id, or the record's `bootstrapId`. |
 
 #### Responses
 
@@ -258,9 +258,9 @@ Deletes the desktop in EDH (a desktop EDH already removed is tolerated), marks t
 
 #### Path parameters
 
-| Parameter   | Type   | Description                                                   |
-| ----------- | ------ | ------------------------------------------------------------- |
-| `sessionId` | string | EDH session id, or the `bootstrapId` of a launch without one. |
+| Parameter   | Type   | Description                                    |
+| ----------- | ------ | ---------------------------------------------- |
+| `sessionId` | string | EDH session id, or the record's `bootstrapId`. |
 
 #### Responses
 
@@ -283,9 +283,9 @@ Stops the desktop and marks the record `STOPPED`; with session bootstrap enabled
 
 #### Path parameters
 
-| Parameter   | Type   | Description                                                   |
-| ----------- | ------ | ------------------------------------------------------------- |
-| `sessionId` | string | EDH session id, or the `bootstrapId` of a launch without one. |
+| Parameter   | Type   | Description                                    |
+| ----------- | ------ | ---------------------------------------------- |
+| `sessionId` | string | EDH session id, or the record's `bootstrapId`. |
 
 #### Responses
 
@@ -319,9 +319,9 @@ A refused start takes the new key back, never deletes, terminates or orphans the
 
 #### Path parameters
 
-| Parameter   | Type   | Description                                                   |
-| ----------- | ------ | ------------------------------------------------------------- |
-| `sessionId` | string | EDH session id, or the `bootstrapId` of a launch without one. |
+| Parameter   | Type   | Description                                    |
+| ----------- | ------ | ---------------------------------------------- |
+| `sessionId` | string | EDH session id, or the record's `bootstrapId`. |
 
 #### Responses
 
@@ -346,9 +346,9 @@ Returns the Amazon DCV connection URL of an `ACTIVE` workstation — the connect
 
 #### Path parameters
 
-| Parameter   | Type   | Description                                                   |
-| ----------- | ------ | ------------------------------------------------------------- |
-| `sessionId` | string | EDH session id, or the `bootstrapId` of a launch without one. |
+| Parameter   | Type   | Description                                    |
+| ----------- | ------ | ---------------------------------------------- |
+| `sessionId` | string | EDH session id, or the record's `bootstrapId`. |
 
 #### Responses
 
@@ -370,9 +370,9 @@ Returns the Windows sign-in of an `ACTIVE` Windows workstation: the user name an
 
 #### Path parameters
 
-| Parameter   | Type   | Description                                                   |
-| ----------- | ------ | ------------------------------------------------------------- |
-| `sessionId` | string | EDH session id, or the `bootstrapId` of a launch without one. |
+| Parameter   | Type   | Description                                    |
+| ----------- | ------ | ---------------------------------------------- |
+| `sessionId` | string | EDH session id, or the record's `bootstrapId`. |
 
 #### Responses
 
@@ -394,9 +394,9 @@ Resets the lease to the policy's current `leaseHours` counted from the renewal, 
 
 #### Path parameters
 
-| Parameter   | Type   | Description                                                   |
-| ----------- | ------ | ------------------------------------------------------------- |
-| `sessionId` | string | EDH session id, or the `bootstrapId` of a launch without one. |
+| Parameter   | Type   | Description                                    |
+| ----------- | ------ | ---------------------------------------------- |
+| `sessionId` | string | EDH session id, or the record's `bootstrapId`. |
 
 #### Responses
 
@@ -651,9 +651,9 @@ Stops any session, regardless of owner; the stop is sent to EDH as the session's
 
 #### Path parameters
 
-| Parameter   | Type   | Description                                                   |
-| ----------- | ------ | ------------------------------------------------------------- |
-| `sessionId` | string | EDH session id, or the `bootstrapId` of a launch without one. |
+| Parameter   | Type   | Description                                    |
+| ----------- | ------ | ---------------------------------------------- |
+| `sessionId` | string | EDH session id, or the record's `bootstrapId`. |
 
 #### Responses
 
@@ -675,9 +675,9 @@ Deletes any session in EDH, regardless of owner, acting as the service actor, an
 
 #### Path parameters
 
-| Parameter   | Type   | Description                                                   |
-| ----------- | ------ | ------------------------------------------------------------- |
-| `sessionId` | string | EDH session id, or the `bootstrapId` of a launch without one. |
+| Parameter   | Type   | Description                                    |
+| ----------- | ------ | ---------------------------------------------- |
+| `sessionId` | string | EDH session id, or the record's `bootstrapId`. |
 
 #### Responses
 
