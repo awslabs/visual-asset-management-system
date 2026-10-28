@@ -196,7 +196,9 @@ asymmetry other callers rely on):
     handler answers a mismatch with a 400. `paginate()` passes only `pageSize`
     and `startingToken`, so merge the filters into the params inside the
     `fetch_page` callable rather than sending them on the first request alone.
-    (`get_execution_results` is a single full read, not paged.)
+    (`get_execution_results` pages by `startingToken` alone — no filters — and
+    checks its 5 MiB budget, counted as sent, before adding each page, so one
+    answer never exceeds it; it returns `NextToken` + `note` when it stops.)
 
 8. **Never let a bounded response read as a complete one.** A VAMS handler can
    answer successfully while withholding rows, and it reports that out of band: a

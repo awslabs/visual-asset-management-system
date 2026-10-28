@@ -5,6 +5,7 @@ No live VAMS deployment or vamscli profile is required.
 """
 
 import dataclasses
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -1751,10 +1752,82 @@ def test_get_execution_results_stops_at_the_size_budget_and_says_so(mock_client,
     mock_client.api.get_execution_results.side_effect = [
         _result_page("aaa", "t2"), _result_page("bbb", "t3"), _result_page("ccc")]
     result = server.get_execution_results("e1")
-    assert result["resultContent"] == "aaabbb"
-    assert result["NextToken"] == "t3"
+    # The budget is checked before a page is added: "bbb" would carry the answer to 6 > 4, so it is
+    # left for the next call, which resumes from the token that fetched it.
+    assert result["resultContent"] == "aaa"
+    assert result["NextToken"] == "t2"
+    assert result["pageCount"] == 1
     assert "5 MiB result budget" in result["note"]
     assert mock_client.api.get_execution_results.call_count == 2
+
+
+def test_get_execution_results_counts_escaped_bytes(mock_client, monkeypatch):
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    # Quotes cost their escape: '""' is 4 bytes sent, so two such pages pass a 6-byte budget raw
+    # (2 + 2) but not as sent (4 + 4).
+    monkeypatch.setattr(server, "EXECUTION_RESULT_MAX_BYTES", 6)
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page('""', "t2"), _result_page('""')]
+    result = server.get_execution_results("e1")
+    assert result["resultContent"] == '""'
+    assert result["NextToken"] == "t2"
+
+
+def _sent(text):
+    """The tool answer's text as sent (UTF-8 inside a JSON string value), the measure under test."""
+    return len(json.dumps(text, ensure_ascii=False).encode("utf-8")) - 2
+
+
+def test_get_execution_results_large_ascii_result_stays_within_budget(mock_client):
+    # R1's shape: ~5.9 MB of plain ASCII the service serves as a full 5 MiB page plus the rest. The
+    # previous check-after-append returned both pages (~2x the budget) in one answer.
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    first = "x" * (server.EXECUTION_RESULT_MAX_BYTES - 64)
+    second = "y" * (6_062_048 - len(first))
+    mock_client.api.get_execution_results.side_effect = [
+        _result_page(first, "t2"), _result_page(second)]
+    result = server.get_execution_results("e1")
+    assert _sent(result["resultContent"]) <= server.EXECUTION_RESULT_MAX_BYTES
+    assert result["resultContent"] == first
+    assert result["NextToken"] == "t2"
+    # The rest arrives on the resume call, also within budget, and the two answers rebuild the whole.
+    mock_client.api.get_execution_results.side_effect = [_result_page(second)]
+    rest = server.get_execution_results("e1", starting_token=result["NextToken"])
+    assert _sent(rest["resultContent"]) <= server.EXECUTION_RESULT_MAX_BYTES
+    assert "NextToken" not in rest
+    assert len((result["resultContent"] + rest["resultContent"]).encode("utf-8")) == 6_062_048
+
+
+def test_get_execution_results_large_cjk_result_stays_within_budget(mock_client):
+    # R3's shape: 4.4 MiB of CJK text with no line breaks, which the service pages by its own
+    # (doubly escaped) budget into three pages. Counted as sent, each answer stays within 5 MiB, and
+    # following NextToken rebuilds the whole text.
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    total_chars = (44 * 1024 * 1024 // 10) // 3  # 3 UTF-8 bytes per character
+    per_page = server.EXECUTION_RESULT_MAX_BYTES // 7  # the service's 7 wire bytes per character
+    text = "\u6f22" * total_chars
+    pages = [text[i:i + per_page] for i in range(0, total_chars, per_page)]
+    assert len(pages) == 3
+
+    def serve(start=None):
+        index = int(start[1:]) if start else 0
+        mock_client.api.get_execution_results.side_effect = [
+            _result_page(pages[i], f"t{i + 1}" if i + 1 < len(pages) else None)
+            for i in range(index, len(pages))]
+
+    serve()
+    gathered = []
+    token = None
+    while True:
+        result = server.get_execution_results("e1", starting_token=token)
+        assert _sent(result["resultContent"]) <= server.EXECUTION_RESULT_MAX_BYTES
+        gathered.append(result["resultContent"])
+        token = result.get("NextToken")
+        if not token:
+            break
+        assert "5 MiB result budget" in result["note"]
+        serve(token)
+    assert "".join(gathered) == text
 
 
 def test_get_execution_results_stops_at_max_pages_and_says_so(mock_client, monkeypatch):

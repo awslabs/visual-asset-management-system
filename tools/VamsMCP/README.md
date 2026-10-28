@@ -186,8 +186,9 @@ a metadata collection in `truncatedCollections`.
 `output`, no `inputDatabase`) — use it when `truncatedCollections` names
 `inputFiles` or `outputs.files`. `get_execution_results` returns a run's
 concatenated result TEXT (output-only, no collection). The API pages the result
-by a 5 MiB response budget; the tool follows those pages until it has gathered
-5 MiB of text or reached `VAMS_MAX_PAGES`, and when it stops early it returns a
+by a 5 MiB response budget; the tool follows those pages while the next one still
+fits a 5 MiB answer (counted as sent) and `VAMS_MAX_PAGES` allows, so one answer
+never carries more than 5 MiB of text, and when it stops early it returns a
 `NextToken` and a `note` — pass the token back as `starting_token` for the rest.
 `resultContentTruncated` means a row was itself cut (not retrievable). It returns
 the empty shape for a run that produced no result. Each listed/detailed execution also

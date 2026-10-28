@@ -8,6 +8,7 @@ destructive tools additionally require VAMS_ENABLE_DESTRUCTIVE=true.
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import sys
 import uuid
@@ -70,7 +71,8 @@ WORKFLOW_EXECUTIONS_MAX_PAGE_SIZE = 50
 # The paged execution-detail metadata endpoint clamps a larger page size to this.
 EXECUTION_DETAIL_METADATA_MAX_PAGE_SIZE = 500
 # The text get_execution_results gathers before it hands back a NextToken: the service's own per-page
-# response budget, so one tool answer is never larger than one API page could be.
+# response budget, so one tool answer is never larger than one API page could be. Measured on the
+# text as SENT (see _result_text_sent_bytes), checked before a page is added.
 EXECUTION_RESULT_MAX_BYTES = 5 * 1024 * 1024
 
 # find_and_summarize issues one paginated version request PER HIT, so its hit count is the fan-out
@@ -1311,6 +1313,14 @@ def page_execution_detail_files(
     return result
 
 
+def _result_text_sent_bytes(text: str) -> int:
+    """Bytes `text` occupies in the tool answer as sent: UTF-8 inside a JSON string value, so a quote,
+    backslash or control character counts its escape and a CJK character its three UTF-8 bytes. The
+    same as-sent rule the service applies to its own page budget; the raw `resultContentBytes` a page
+    reports is not used, since it under-counts escaped text."""
+    return len(json.dumps(text or "", ensure_ascii=False).encode("utf-8")) - 2
+
+
 @mcp.tool()
 @tool_result
 def get_execution_results(execution_id: str,
@@ -1320,10 +1330,11 @@ def get_execution_results(execution_id: str,
     This is the tool for "what did the run output / return", for a pipeline that produces a textual
     result (an LLM-style response) rather than asset files. It returns {resultContent,
     resultContentTruncated, resultRowCount, resultContentBytes, pageCount}. The service pages the
-    result by its 5 MiB response budget; this tool follows those pages until the text it has gathered
-    reaches that same 5 MiB budget or the VAMS_MAX_PAGES work bound. When it stops early it returns
-    `NextToken` and a `note`; pass `NextToken` back as `starting_token` to read the rest. Without a
-    `NextToken`, `resultContent` is the whole result.
+    result by its 5 MiB response budget; this tool follows those pages while the next one still fits
+    that same 5 MiB budget (counted as sent, JSON-escaped UTF-8) and the VAMS_MAX_PAGES work bound, so
+    `resultContent` never exceeds 5 MiB. When it stops early it returns `NextToken` and a `note`; pass
+    `NextToken` back as `starting_token` to read the rest. Without a `NextToken`, `resultContent` is the
+    whole result.
 
     `resultContentTruncated` is true only when a result row was stored cut at write time or one row
     alone exceeded the response budget; that cut text is not retrievable. An execution that produced
@@ -1333,19 +1344,28 @@ def get_execution_results(execution_id: str,
     """
     parts = []
     truncated = False
-    row_count = byte_count = pages = 0
+    row_count = byte_count = pages = sent_bytes = 0
     next_token = starting_token
+    over_budget = False
     while True:
         params = {"startingToken": next_token} if next_token else {}
         page = CLIENT.unwrap_message(CLIENT.api.get_execution_results(execution_id, params=params))
+        content = page.get("resultContent", "") or ""
+        page_sent = _result_text_sent_bytes(content)
+        # Check BEFORE adding: a page that would carry the answer past the budget is left for the next
+        # call, which resumes from the token that fetched it. The first page is always kept — the
+        # service already bounds one page by this budget — so a call always makes progress.
+        if pages and sent_bytes + page_sent > EXECUTION_RESULT_MAX_BYTES:
+            over_budget = True
+            break
         pages += 1
-        parts.append(page.get("resultContent", "") or "")
+        parts.append(content)
+        sent_bytes += page_sent
         truncated = truncated or bool(page.get("resultContentTruncated"))
         row_count += page.get("resultRowCount", 0) or 0
         byte_count += page.get("resultContentBytes", 0) or 0
         next_token = page.get("NextToken")
-        if (not next_token or byte_count >= EXECUTION_RESULT_MAX_BYTES
-                or pages >= CONFIG.max_pages):
+        if not next_token or pages >= CONFIG.max_pages:
             break
     result: Dict[str, Any] = {
         "resultContent": "".join(parts),
@@ -1356,7 +1376,7 @@ def get_execution_results(execution_id: str,
     }
     if next_token:
         result["NextToken"] = next_token
-        bound = ("the 5 MiB result budget" if byte_count >= EXECUTION_RESULT_MAX_BYTES
+        bound = ("the 5 MiB result budget" if over_budget
                  else f"the max_pages work bound on this server (VAMS_MAX_PAGES={CONFIG.max_pages})")
         result["note"] = (f"stopped after {pages} page(s) at {bound}; more result text remains — "
                           f"pass NextToken as starting_token to continue")
