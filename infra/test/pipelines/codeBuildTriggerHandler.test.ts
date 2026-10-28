@@ -46,6 +46,7 @@ describe("CodeBuild build triggers", () => {
             "coordinateTransformCodeBuild-construct.ts",
             "cosmosCodeBuild-construct.ts",
             "gr00tCodeBuild-construct.ts",
+            "imageTo3dCodeBuild-construct.ts",
             "isaacLabCodeBuild-construct.ts",
             "splatToolboxCodeBuild-construct.ts",
             "videoSopBomCodeBuild-construct.ts",

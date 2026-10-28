@@ -68,7 +68,7 @@ export const jobDefinitionRefOf = (value: any): string | undefined => {
 export const declaredStageNames = (pythonFile: string): string[] => {
     const source = fs.readFileSync(pythonFile, "utf-8");
     // `[ \t]*` rather than `\s*`: under the `m` flag `\s` would also cross a line break.
-    return Array.from(source.matchAll(/^[A-Z_]*STATE_NAME = "([^"]+)"[ \t]*(?:#.*)?$/gm)).map(
+    return Array.from(source.matchAll(/^[A-Z0-9_]*STATE_NAME = "([^"]+)"[ \t]*(?:#.*)?$/gm)).map(
         (m) => m[1]
     );
 };
