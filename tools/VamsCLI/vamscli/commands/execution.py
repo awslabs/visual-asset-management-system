@@ -857,11 +857,16 @@ def details_results(ctx: click.Context, execution_id: str, output_file: Optional
         row_count = result.get('resultRowCount', 0) if isinstance(result, dict) else 0
         byte_len = result.get('resultContentBytes', 0) if isinstance(result, dict) else 0
 
-        if output_file and not json_output:
-            # Write the FULL returned bytes to disk; the caption still goes to stdout so the user
-            # sees the row/byte counts and any truncation note.
-            with open(output_file, 'w', encoding='utf-8') as fh:
-                fh.write(content)
+        if output_file:
+            # Write the FULL returned bytes to disk in BOTH output modes; stdout still carries the
+            # caption (CLI mode) or the JSON result (--json-output), so the file never replaces it.
+            try:
+                with open(output_file, 'w', encoding='utf-8') as fh:
+                    fh.write(content)
+            except OSError as e:
+                output_error(e, json_output, error_type="Results File Write Failed",
+                             helpful_message="Check that the --output path is writable.")
+                raise click.ClickException(f"Could not write results to {output_file}: {e}")
 
         def _fmt(_r):
             out = []

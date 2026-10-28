@@ -1502,3 +1502,39 @@ class TestExecutionDetailsResults:
             assert result.exit_code == 0, result.output
             data = json.loads(result.output)
             assert data['resultContent'] == 'x'
+
+    def test_results_output_file_with_json_output_writes_file_and_pure_json(
+            self, cli_runner, generic_command_mocks, tmp_path):
+        """-o is honoured under --json-output too: the file is written AND stdout stays pure JSON."""
+        out = tmp_path / "result.txt"
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.return_value = {
+                'message': {'resultContent': 'json mode content', 'resultContentTruncated': False,
+                            'resultRowCount': 1, 'resultContentBytes': 17}}
+            result = cli_runner.invoke(
+                cli, ['execution', 'details', 'results', 'e1', '-o', str(out), '--json-output'])
+            assert result.exit_code == 0, result.output
+            assert out.read_text() == 'json mode content'
+            data = json.loads(result.stdout)
+            assert data['resultContent'] == 'json mode content'
+
+    @pytest.mark.parametrize("json_flag", [[], ['--json-output']])
+    def test_results_output_file_write_failure_is_a_clean_error(
+            self, cli_runner, generic_command_mocks, tmp_path, json_flag):
+        """An unwritable --output path fails with a stated error and a non-zero exit, not a traceback."""
+        bad = tmp_path / "missing-dir" / "result.txt"
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.return_value = {
+                'message': {'resultContent': 'x', 'resultContentTruncated': False,
+                            'resultRowCount': 1, 'resultContentBytes': 1}}
+            result = cli_runner.invoke(
+                cli, ['execution', 'details', 'results', 'e1', '-o', str(bad)] + json_flag)
+            assert result.exit_code != 0
+            assert not isinstance(result.exception, OSError), result.exception
+            if json_flag:
+                # JSON mode: stdout is a single JSON error object (output_error's JSON contract).
+                err = json.loads(result.stdout)
+                assert err.get('error')
+            else:
+                assert 'Could not write results' in result.output
+            assert not bad.exists()
