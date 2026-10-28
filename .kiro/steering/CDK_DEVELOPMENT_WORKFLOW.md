@@ -632,7 +632,7 @@ const secret = new secretsmanager.Secret(this, "MySecret", {
 });
 ```
 
-Three traps, each of which passes `cdk synth` and fails later:
+Four traps, each of which passes `cdk synth` and fails later:
 
 1. **`AWS::EFS::FileSystem` `KmsKeyId` requires REPLACEMENT.** Adding or changing it on an existing file system makes
    AWS CloudFormation create an empty replacement and delete the original, which VAMS declares
@@ -646,11 +646,18 @@ Three traps, each of which passes `cdk synth` and fails later:
    CloudTrail log group is the case in the tree and stays on the AWS-managed key, along with the VPC flow
    log group (its stack precedes storage) and the provisioned OpenSearch domain log groups (created by the
    service, not VAMS).
+4. **A policy attached to a role from outside it does not order a custom resource that runs as the role.** The
+   provider function depends only on the role and its default policy (where `addToRolePolicy` grants land), so a
+   separate `iam.Policy` attached with `role.attachInlinePolicy()` is created in parallel, and on the update that
+   turns the CMK on the custom resource fails with `kms:Decrypt` access denied. Keep a reference to the policy and
+   call `node.addDependency(policy)` on each custom resource (or the construct holding them), as the auth-defaults
+   and metadata-schema seeds do.
 
 Verify before deploying: a cycle is invisible to `cdk synth` and appears only at changeset creation. Synth
 and confirm the storage nested stack takes no parameter fed from another nested stack's output. Regression
-coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`, and `infra/test/pipelines/codeBuildEcrEncryption.test.ts`
-for the CodeBuild repositories and their CMK flip.
+coverage: `infra/test/security/inPlaceUpdateSafety.test.ts`, `infra/test/pipelines/codeBuildEcrEncryption.test.ts`
+for the CodeBuild repositories and their CMK flip, and `infra/test/security/customResourceKmsGrantOrdering.test.ts`
+for the order of custom resources and their roles' KMS policies.
 
 A Lambda's DynamoDB grants follow the tables its handler (and the shared modules it imports) resolves through `ResourceKeys`; `infra/test/security/complianceLambdaTableGrants.test.ts` derives those needs from the compliance handler source and asserts the synthesized role policy covers each table (read, plus the single-item write actions the module's calls use, so the compliance trigger's change stamp is held to `UpdateItem` on the asset table), so a missing grant fails the suite instead of surfacing as an `AccessDeniedException` 500 in production. The three compliance Lambdas that run evaluations (`complianceEvaluateService`, `complianceTrigger`, `complianceCascadeExecutor`) share `grantEvaluationEngineReads` in `complianceFunctions.ts`: read on the asset, asset-links, asset-file-metadata, file-attribute, asset-links-metadata, asset-file-versions, metadata-schema, workflow, pipeline, pipeline-template and asset-buckets tables, plus every asset bucket. The metadata service and the two asset-link Lambdas (`createAssetLink`, `assetLinksService`) hold `dynamodb:UpdateItem` alone on the asset table (`table.grant(fun, "dynamodb:UpdateItem")`, not `grantWriteData`) for the change stamp a metadata write or link change records on the asset row; `infra/test/security/handlerGrantScopingWave.test.ts` pins that no other write action reaches the asset table from them.
 
