@@ -83,6 +83,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Constraint values match as written** — Permission constraint criteria values that contain `p.`, `r.`, `!`, `&&` or `||` match as written, for every operator.
 -   **Turning on the customer managed key for an existing deployment** — The default role, constraint, user and metadata schema seeds wait for the policy that grants their role the new AWS KMS key, so the update completes instead of failing with `kms:Decrypt` access denied and rolling back the core stack. (issue #841)
 -   **Denied database updates answer `403`** — `PUT /database/{databaseId}` answers `403` when the caller may call the route but is not permitted to update that database, instead of `400`, so clients report a permission refusal rather than an invalid request; nothing is written in either case. (issue #785)
+-   **Archived search results authorized like the listings** — Search results that include archived assets and files are authorized the same way as the asset and file listings: an archived asset, and a file of an archived asset, on the archived record.
 
 **Other changes:**
 
