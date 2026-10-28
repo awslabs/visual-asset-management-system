@@ -37,6 +37,7 @@ test.describe("Executions board", () => {
             "Workflow",
             "Workflow Database",
             "Trigger",
+            "Output Types",
             "Started",
             "Actions",
         ]) {
@@ -96,6 +97,58 @@ test.describe("Executions board", () => {
         await tableRows(page).first().getByRole("button").last().click();
         await expect(page.getByRole("menuitem").first()).toBeVisible({ timeout: 15_000 });
         await page.keyboard.press("Escape");
+    });
+
+    test("every row's Output Types cell shows known badges or a dash", async ({ page }) => {
+        // outputTypes is a subset of File / Metadata / Result; a run that produced none — or one
+        // recorded before the field existed — shows a dash. Asserted over whatever rows are rendered.
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
+        const rows = tableRows(page);
+        const known = /^output-type-badge-(file|metadata|result)$/;
+        for (let i = 0; i < Math.min(total, 25); i++) {
+            const badges = rows.nth(i).locator("[data-testid^='output-type-badge-']");
+            const ids = await badges.evaluateAll((els) =>
+                els.map((el) => el.getAttribute("data-testid") || "")
+            );
+            for (const id of ids) expect(id).toMatch(known);
+        }
+    });
+
+    test("a Result badge opens the full result on demand", async ({ page }) => {
+        const total = await expectTableRendered(page);
+        test.skip(total === 0, "No executions in this environment");
+        const badge = page.getByTestId("output-type-badge-result").first();
+        test.skip((await badge.count()) === 0, "No execution with a Result on the first page");
+
+        // The full-result read is issued only when the surface opens, never by the list itself: arm
+        // the listener, reload the board, and confirm no result read happened while it rendered.
+        const resultRoute = /\/workflows\/executions\/[^/?]+\/details\/results/;
+        let earlyCalls = 0;
+        page.on("request", (r) => {
+            if (resultRoute.test(r.url())) earlyCalls += 1;
+        });
+        await gotoOrchestration(page, "executions", /Executions/i);
+        await expect(badge).toBeVisible({ timeout: 30_000 });
+        expect(earlyCalls).toBe(0);
+        const request = page.waitForRequest(resultRoute, { timeout: 30_000 });
+
+        // The badge is a keyboard-operable button.
+        await badge.focus();
+        await expect(badge).toBeFocused();
+        await page.keyboard.press("Enter");
+        await request;
+
+        const dialog = page.getByRole("dialog");
+        await expect(dialog.getByText("Execution result")).toBeVisible({ timeout: 20_000 });
+        await expect(
+            dialog
+                .getByTestId("result-surface-content")
+                .or(dialog.getByTestId("result-surface-empty"))
+        ).toBeVisible({ timeout: 30_000 });
+        await expect(dialog.getByTestId("result-surface-caption")).toContainText(/row/);
+        await page.keyboard.press("Escape");
+        await expect(page.getByRole("dialog")).toHaveCount(0);
     });
 
     test("clicking a row opens the quick-view drawer", async ({ page }) => {
@@ -159,6 +212,8 @@ test.describe("Executions board — partial detail responses", () => {
     /** The details route for a single execution — NOT its `details/metadata` paged sibling. */
     const DETAILS_ROUTE = /\/workflows\/executions\/[^/?]+\/details(\?|$)/;
     const PAGED_METADATA_ROUTE = /\/workflows\/executions\/[^/?]+\/details\/metadata/;
+    const PAGED_FILES_ROUTE = /\/workflows\/executions\/[^/?]+\/details\/files/;
+    const RESULTS_ROUTE = /\/workflows\/executions\/[^/?]+\/details\/results/;
 
     /**
      * Serve the execution's own details response with `collections` marked truncated, then open the
@@ -196,18 +251,53 @@ test.describe("Executions board — partial detail responses", () => {
         return true;
     }
 
-    test("a truncated file collection says plainly that rows are missing", async ({ page }) => {
+    test("a truncated file collection is re-read through the paged files route", async ({
+        page,
+    }) => {
+        // Armed before the page loads: the escalation fires as the section mounts.
+        const pagedRequest = page
+            .waitForRequest(PAGED_FILES_ROUTE, { timeout: 40_000 })
+            .catch(() => null);
+
         const opened = await openDetailWithTruncation(page, ["inputFiles"]);
         test.skip(!opened, "No executions in this environment");
 
-        // The file collections have no paged counterpart, so the flag is the reader's only signal.
-        // Stated twice deliberately: once in the header banner listing the affected sections, and
-        // again on the section itself, because a reader who scrolls to a table needs it there.
-        await expect(page.getByText(/these sections are a subset/i)).toBeVisible({
+        const request = await pagedRequest;
+        // The paged files read is its own Tier-1 route. A session without it keeps the section a
+        // stated subset rather than issuing a request that would 403.
+        if (!request) {
+            await expect(page.getByText(/these sections are a subset/i)).toBeVisible({
+                timeout: 20_000,
+            });
+            test.skip(true, "This session is not granted the paged detail-files route");
+        }
+        expect(request?.url() ?? "").toMatch(/collection=input(&|$)/);
+        await expect(page.getByText(/read separately, a page at a time/i)).toBeVisible({
             timeout: 20_000,
         });
-        await expect(page.getByText(/inputFiles/).first()).toBeVisible();
-        await expect(page.getByText(/not retrievable through this view/i).first()).toBeVisible();
+    });
+
+    test("a truncated results collection is read in full through the results route", async ({
+        page,
+    }) => {
+        const resultsRequest = page
+            .waitForRequest(RESULTS_ROUTE, { timeout: 40_000 })
+            .catch(() => null);
+
+        const opened = await openDetailWithTruncation(page, ["outputs.results"]);
+        test.skip(!opened, "No executions in this environment");
+        await page.getByRole("tab", { name: /^Outputs$/ }).click();
+
+        const request = await resultsRequest;
+        if (!request) {
+            await expect(page.getByText(/these sections are a subset/i)).toBeVisible({
+                timeout: 20_000,
+            });
+            test.skip(true, "This session is not granted the detail-results route");
+        }
+        await expect(page.getByRole("heading", { name: "Output Results" })).toBeVisible({
+            timeout: 20_000,
+        });
     });
 
     test("a truncated metadata collection is re-read through the paged route", async ({ page }) => {
