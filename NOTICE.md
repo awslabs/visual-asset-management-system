@@ -320,6 +320,32 @@ Copyright (c) 2020, Thomas Montaigu, thomas.montaigu@laposte.net
 All rights reserved.
 ```
 
+### GenAI CAD STEP Agent Pipeline
+
+**GenAI CAD STEP Agent Pipeline Dependencies**
+
+| Name              | Version | License                      | Notes                                                                  |
+| :---------------- | :------ | :--------------------------- | :--------------------------------------------------------------------- |
+| strands-agents    | 1.57.0  | Apache-2.0                   | Agent framework (Amazon Bedrock and OpenAI model providers)            |
+| openai            | 2.x     | Apache-2.0                   | OpenAI Python SDK, installed by the `strands-agents[openai]` extra     |
+| bedrock-agentcore | 1.23.1  | Apache-2.0                   | Amazon Bedrock AgentCore Runtime application SDK                       |
+| cadquery          | 2.8.0   | Apache-2.0                   | Parametric CAD modelling; STEP import and export                       |
+| cadquery-ocp      | 8.x     | LGPL-2.1 with OCCT exception | Open CASCADE Technology bindings bundled by CadQuery (dynamic linking) |
+| ddgs              | 9.16.0  | MIT                          | Web search for the agent's research tool                               |
+| httpx             | 0.28.1  | BSD-3-Clause                 | Bounded page fetch for the agent's research tool                       |
+| boto3             | 1.43.x  | Apache-2.0                   | AWS SDK for Python                                                     |
+
+**Open CASCADE Technology License Notice**
+
+Open CASCADE Technology (OCCT), reached through the `cadquery-ocp` bindings, is licensed under the GNU Lesser General Public License version 2.1 with the Open CASCADE exception. It is used as an unmodified, dynamically linked library within the pipeline container image, the usage the LGPL permits without extending its terms to the application code.
+
+**GenAI CAD STEP Agent Pipeline Evaluation Fixtures (test data under `backendPipelines/genAi/cadStepAgent/evaluation/`, not shipped in the container image)**
+
+| Name                                                                                                                                                                          | Version                   | License                                                     | Notes                                                                                                                                                                                                                                                                                 |
+| :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------ | :---------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [Adafruit_CAD_Parts](https://github.com/adafruit/Adafruit_CAD_Parts)                                                                                                          | branch `main`             | MIT, © 2016 Adafruit Industries                             | Fixtures X1, X4 and X6, and the golden `fm6-x4-largest-body.step` derived from X4. The license text is kept beside them as `fixtures/LICENSE-adafruit-MIT.txt`                                                                                                                        |
+| [NIST MBE PMI Validation and Conformance Testing STEP files](https://www.nist.gov/ctl/smart-connected-systems-division/smart-connected-manufacturing-systems-group/mbe-pmi-0) | `NIST-PMI-STEP-Files.zip` | Public domain (work of the U.S. Government, 17 U.S.C. §105) | Fixtures X2, X3 and X5, and the goldens `fm1-x2-four-corner-holes.stp`, `fm4-x3-centre-hole.stp`, `fm8-x7-edge-hole.stp` and `fm9-x9-solid-only.stp` derived from NIST files. `fixtures/PROVENANCE.md` and `goldens/GOLDENS.md` record each file's source, license and SHA-256 digest |
+
 ### Video SOP/BOM Extraction Pipeline
 
 **Video SOP/BOM Extraction Pipeline Dependencies**

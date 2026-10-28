@@ -292,9 +292,10 @@ export function buildExecutionServiceFunction(
             // trailing '*' is a prefix). IAM resource matching is CASE-SENSITIVE, which is why the
             // defaults list BOTH '/aws/vendedlogs/VAMSStateMachine-*' and
             // '/aws/vendedlogs/VAMSstateMachine-*' (pipeline state machines), the pipeline container
-            // group '/aws/vendedlogs/Pipelines/*' (the ECS pipelines and the six Fargate Batch
+            // group '/aws/vendedlogs/Pipelines/*' (the ECS pipelines and the seven Fargate Batch
             // pipelines: coordinate transform, Blender renderer, 3D thumbnail, PDAL, Potree, video
-            // SOP/BOM extraction), AWS Batch's default container group
+            // SOP/BOM extraction, and the GenAI CAD STEP agent on its `fargate` runtime), AWS Batch's
+            // default container group
             // '/aws/batch/job' and SageMaker's '/aws/sagemaker/TrainingJobs'. getConfig() rejects
             // '*', '/' and anything outside '/aws/', so the grant can never widen to the whole
             // vended-log namespace. Each entry is suffixed with ':*' for stream-level reads.
@@ -459,6 +460,11 @@ export function buildProcessWorkflowExecutionOutputFunction(
     storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionLogsStorageTable.grantReadWriteData(fun);
+    // Records the run's outputTypes on the configuration row created at launch: a single UpdateItem.
+    storageResources.dynamo.workflowExecutionConfigurationStorageTable.grant(
+        fun,
+        "dynamodb:UpdateItem"
+    );
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -573,6 +579,15 @@ export function buildHandleExecutionErrorFunction(
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionLogsStorageTable.grantReadWriteData(fun);
+    // A failed run's outputTypes are derived from whatever output rows exist at failure (one
+    // existence query per output table) and recorded on the launch-time configuration row.
+    storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.grantReadData(fun);
+    storageResources.dynamo.workflowExecutionConfigurationStorageTable.grant(
+        fun,
+        "dynamodb:UpdateItem"
+    );
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,

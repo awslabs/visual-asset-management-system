@@ -99,7 +99,7 @@ infra/
                                            # securitygroup-gateway-pipeline, vamsSchemaRegistration
         conversion/{3dBasic,meshCadMetadataExtraction,coordinateTransform}/
         preview/{pcPotreeViewer,3dThumbnail}/
-        3dRecon/splatToolbox/  genAi/{imageTo3d,metadata3dLabeling,videoSopBom,nvidia/{cosmos,gr00t}}/
+        3dRecon/splatToolbox/  genAi/{cadStepAgent,imageTo3d,metadata3dLabeling,videoSopBom,nvidia/{cosmos,gr00t}}/
         multi/{modelOps,rapidPipeline,rapidPipelineEKS}/  simulation/isaacLabTraining/
       featureEnabled/custom-featureEnabled-config-nestedStack.ts
       locationService/location-service-nestedStack.ts    # Amazon Location Service (commercial only)
@@ -329,8 +329,8 @@ The two API builder stacks stay split, and consolidating them would remove headr
 | Limit                                     | Value                   | Scope            | Current (commercial template)                                  |
 | ----------------------------------------- | ----------------------- | ---------------- | -------------------------------------------------------------- |
 | CloudFormation resources per template     | 500, not adjustable     | Per nested stack | `apiBuilder` 108, `apiBuilder2` 73                             |
-| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.48 MB, `apiBuilder2` ~0.30 MB                  |
-| API Gateway resources per REST API        | 300 default, adjustable | Per REST API     | 122 path-tree nodes (100 OpenAPI paths) across **both** stacks |
+| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.48 MB, `apiBuilder2` ~0.31 MB                  |
+| API Gateway resources per REST API        | 300 default, adjustable | Per REST API     | 124 path-tree nodes (102 OpenAPI paths) across **both** stacks |
 
 Two consequences worth holding onto:
 
@@ -415,7 +415,8 @@ server-side encryption without it. Inside the storage nested stack, spread `dyna
 
 An `ecr.Repository`'s encryption is immutable, so changing it replaces the repository, and AWS CloudFormation
 cannot replace an explicitly named resource under the same name. An explicit `repositoryName` must therefore
-change with the encryption, as `coordinateTransformCodeBuild-construct.ts` does with its `-kms` suffix. A
+change with the encryption, as `coordinateTransformCodeBuild-construct.ts`, `videoSopBomCodeBuild-construct.ts` and
+`cadStepAgentCodeBuild-construct.ts` do with their `-kms` suffix. A
 CodeBuild build trigger that does not wait for the image carries the repository URI as a property, so the
 replacement re-fires the build into the new repository. Import the key by ARN, as for secrets (trap 2);
 Amazon ECR creates its own grants on the key, so the build and pull roles need no key permission.
@@ -793,7 +794,7 @@ Four things to know before writing one:
 The harness resets `s3AssetBucketRecords` between synths: it is a module-level mutable array with no reset, so a second synth in the same process otherwise fails with `There is already a Construct with name 'bucketSyncCreated--<previous stack name>--...'` (finding `S17-TEST-002`). Any new module-level registry must be reset there too.
 
 **Enabling `useSplatToolbox` in a T1 synth requires `useCodeBuild: true`.** Splat is the only one of the
-sixteen pipeline Dockerfiles that is **not in the repository** (recompute as
+twenty-four pipeline Dockerfiles that is **not in the repository** (recompute as
 `git ls-files backendPipelines | grep -c Dockerfile` tracked files plus the one gitignored splat file) —
 `backendPipelines/3dRecon/splatToolbox/container/.gitignore` ignores `Dockerfile` under "Pipeline Source
 Download Ignore", because it arrives from an upstream sync. With `useCodeBuild` false,
