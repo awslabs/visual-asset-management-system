@@ -149,6 +149,15 @@ test.describe("Executions board", () => {
         await expect(dialog.getByTestId("result-surface-caption")).toContainText(/row/);
         await page.keyboard.press("Escape");
         await expect(page.getByRole("dialog")).toHaveCount(0);
+        // Closing returns focus to the badge that opened the surface, not the page body.
+        await expect(badge).toBeFocused();
+
+        // The same holds for the close button.
+        await page.keyboard.press("Enter");
+        await expect(dialog.getByText("Execution result")).toBeVisible({ timeout: 20_000 });
+        await dialog.getByRole("button", { name: "Close dialog" }).click();
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+        await expect(badge).toBeFocused();
     });
 
     test("a paged result loads its next page from the Result modal", async ({ page }) => {

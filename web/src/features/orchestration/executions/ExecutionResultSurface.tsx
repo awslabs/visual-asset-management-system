@@ -12,6 +12,8 @@ interface ExecutionResultSurfaceProps {
     executionId: string;
     open: boolean;
     onOpenChange: (open: boolean) => void;
+    /** The control that opened the surface; focus returns to it on close. */
+    returnFocusRef?: React.RefObject<HTMLElement>;
 }
 
 /** Human-readable byte count, so the caption reads "1.4 MB" rather than "1468006 bytes". */
@@ -35,6 +37,7 @@ const ExecutionResultSurface: React.FC<ExecutionResultSurfaceProps> = ({
     executionId,
     open,
     onOpenChange,
+    returnFocusRef,
 }) => {
     const [copied, setCopied] = useState(false);
     const { data, isLoading, isError, hasNextPage, isFetchingNextPage, fetchNextPage } =
@@ -57,7 +60,13 @@ const ExecutionResultSurface: React.FC<ExecutionResultSurfaceProps> = ({
     };
 
     return (
-        <Dialog open={open} onOpenChange={onOpenChange} title="Execution result" size="lg">
+        <Dialog
+            open={open}
+            onOpenChange={onOpenChange}
+            title="Execution result"
+            size="lg"
+            returnFocusRef={returnFocusRef}
+        >
             {isLoading && (
                 <div
                     className="flex items-center gap-2 py-8 text-text-secondary"

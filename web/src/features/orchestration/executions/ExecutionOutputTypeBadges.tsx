@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import ExecutionResultSurface from "./ExecutionResultSurface";
 
 interface ExecutionOutputTypeBadgesProps {
@@ -33,6 +33,7 @@ const ExecutionOutputTypeBadges: React.FC<ExecutionOutputTypeBadgesProps> = ({
     outputTypes,
 }) => {
     const [resultOpen, setResultOpen] = useState(false);
+    const resultBadgeRef = useRef<HTMLButtonElement>(null);
     const types = outputTypes ?? [];
 
     if (types.length === 0) {
@@ -49,6 +50,7 @@ const ExecutionOutputTypeBadges: React.FC<ExecutionOutputTypeBadgesProps> = ({
                     return (
                         <button
                             key={type}
+                            ref={resultBadgeRef}
                             type="button"
                             className={`${BADGE_BASE} ${style} cursor-pointer underline-offset-2 hover:underline focus:outline-none focus:ring-2 focus:ring-blue-500`}
                             onClick={(e) => {
@@ -78,6 +80,7 @@ const ExecutionOutputTypeBadges: React.FC<ExecutionOutputTypeBadgesProps> = ({
                         executionId={executionId}
                         open={resultOpen}
                         onOpenChange={setResultOpen}
+                        returnFocusRef={resultBadgeRef}
                     />
                 </div>
             )}

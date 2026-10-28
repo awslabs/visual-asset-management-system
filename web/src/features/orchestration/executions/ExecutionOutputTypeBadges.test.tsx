@@ -146,4 +146,48 @@ describe("ExecutionOutputTypeBadges", () => {
         fireEvent.click(screen.getByTestId("output-type-badge-result"));
         expect(await screen.findByTestId("result-surface-loading")).toBeInTheDocument();
     });
+
+    // The surface is a controlled dialog with no Radix Trigger, so focus would otherwise land on
+    // the body when it closes and a keyboard user loses their place in the table.
+    describe("focus return on close", () => {
+        const openFromBadge = async () => {
+            useExecutionResults.mockReturnValue({
+                data: {
+                    resultContent: "text",
+                    resultContentTruncated: false,
+                    resultRowCount: 1,
+                    resultContentBytes: 4,
+                },
+                isLoading: false,
+                isError: false,
+            });
+            renderBadges(["File", "Result"]);
+            const badge = screen.getByTestId("output-type-badge-result");
+            badge.focus();
+            fireEvent.click(badge);
+            await screen.findByTestId("result-surface-content");
+            return badge;
+        };
+
+        it("returns focus to the Result badge on Escape", async () => {
+            const badge = await openFromBadge();
+            fireEvent.keyDown(document.activeElement || document.body, {
+                key: "Escape",
+                code: "Escape",
+            });
+            await waitFor(() =>
+                expect(screen.queryByTestId("result-surface-content")).not.toBeInTheDocument()
+            );
+            expect(badge).toHaveFocus();
+        });
+
+        it("returns focus to the Result badge when the close button is used", async () => {
+            const badge = await openFromBadge();
+            fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
+            await waitFor(() =>
+                expect(screen.queryByTestId("result-surface-content")).not.toBeInTheDocument()
+            );
+            expect(badge).toHaveFocus();
+        });
+    });
 });
