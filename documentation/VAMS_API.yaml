@@ -1713,19 +1713,13 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/updateDatabaseResponse"
                 "400":
-                    description: Invalid parameters or bucket ID not found.
+                    description: Validation error, no updatable field supplied, or database or bucket not found.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to update database.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/error'
-                "404":
-                    description: Database not found.
+                    description: Not authorized to update database. Nothing is written.
                     content:
                         application/json:
                             schema:
