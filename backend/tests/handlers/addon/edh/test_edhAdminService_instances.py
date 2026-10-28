@@ -404,6 +404,38 @@ class TestStopAndDeactivate:
         assert response["statusCode"] == 409
         assert fakes.edh.calls_to("stop_desktop") == []
 
+    @pytest.mark.parametrize("action, wrapper, uid, state", [
+        ("stop", "stop_desktop", "vowner1", "STOPPED"),
+        ("deactivate", "delete_desktop", ec.EDH_SERVICE_ACTOR_UID, "DELETED"),
+    ])
+    def test_the_bootstrap_id_of_a_row_with_a_session_sends_edh_the_session_id(
+            self, monkeypatch, action, wrapper, uid, state):
+        # The bootstrap id keeps addressing the row once EDH has assigned its session id (in-dev D22).
+        fakes = install_admin_fakes(monkeypatch, edh=_client(), rows=_rows())
+
+        response = fakes.module.lambda_handler(
+            make_event("POST", instance_path("b-1", action), path_params={"sessionId": "b-1"}), {})
+
+        assert response["statusCode"] == 200
+        assert fakes.edh.calls_to(wrapper) == [(uid, "s-1")]
+        assert "b-1" not in str(fakes.edh.calls)
+        assert fakes.table.update_item.call_args.kwargs["Key"] == {"bootstrapId": "b-1"}
+        assert _state_written(fakes) == state
+        body = response_body(response)
+        assert (body["sessionId"], body["bootstrapId"], body["state"]) == ("s-1", "b-1", state)
+
+    def test_the_session_index_wins_over_a_bootstrap_id_of_the_same_value(self, monkeypatch):
+        """An identifier that is one row's session id and another row's bootstrap id addresses the first."""
+        rows = _rows() + [session_row(bootstrapId="s-1", sessionId="s-7", userId="carl", edhUid="vowner7")]
+        fakes = install_admin_fakes(monkeypatch, edh=_client(), rows=rows)
+
+        response = fakes.module.lambda_handler(
+            make_event("POST", instance_path("s-1", "stop"), path_params={"sessionId": "s-1"}), {})
+
+        assert response["statusCode"] == 200
+        assert fakes.edh.calls_to("stop_desktop") == [("vowner1", "s-1")]
+        assert fakes.table.update_item.call_args.kwargs["Key"] == {"bootstrapId": "b-1"}
+
     def test_an_unknown_session_is_404(self, monkeypatch):
         fakes = install_admin_fakes(monkeypatch, edh=_client(), rows=_rows())
 

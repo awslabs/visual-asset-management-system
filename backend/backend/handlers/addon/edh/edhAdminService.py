@@ -315,8 +315,9 @@ def _query_to_exhaustion(**query_kwargs):
 
 
 def _row_for_identifier(identifier):
-    """The session row a {sessionId} route addresses: by EDH session id, or -- for a launch that never
-    received one -- by its bootstrap id. A row that has a session id is reachable by it alone. The row is
+    """The session row a {sessionId} route addresses: by EDH session id first, else by its bootstrap id,
+    which addresses the row for its whole life -- before EDH assigns the session id and after it. An action
+    sends EDH the session id of the row it found, never the bootstrap id it was addressed by. The row is
     read consistently from the table, since the index lags the writes a concurrent start or launch makes
     and an action takes back the credential the row holds."""
     rows = _query_to_exhaustion(
@@ -326,10 +327,7 @@ def _row_for_identifier(identifier):
     if rows:
         return edh_session_table.get_item(Key={'bootstrapId': rows[0]['bootstrapId']},
                                           ConsistentRead=True).get('Item')
-    row = edh_session_table.get_item(Key={'bootstrapId': identifier}, ConsistentRead=True).get('Item')
-    if row and not row.get('sessionId'):
-        return row
-    return None
+    return edh_session_table.get_item(Key={'bootstrapId': identifier}, ConsistentRead=True).get('Item')
 
 
 def _row_write(row, attributes):
@@ -964,9 +962,10 @@ def list_stale_instances(event):
 
 def act_on_instance(event, action):
     """Stop (EDH stop under the owner, row STOPPED) or deactivate (EDH delete under the service
-    actor, row DELETED) one session, addressed by its EDH session id or -- for a launch that never
-    received one -- by its bootstrap id, and take its session credential back: the key is revoked and
-    the secret neutralised at once, the container removed with a deactivated desktop."""
+    actor, row DELETED) one session, addressed by its EDH session id or by its bootstrap id, before
+    or after EDH assigned the session id; EDH is sent the session's own id either way. The session
+    credential is taken back: the key is revoked and the secret neutralised at once, the container
+    removed with a deactivated desktop."""
     identifier = _path_id(event, 'sessionId')
     if identifier is None:
         return validation_error(body={'message': "sessionId is invalid"}, event=event)

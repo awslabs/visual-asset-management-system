@@ -507,7 +507,7 @@ def format_launch_accepted(result: Dict[str, Any]) -> str:
         format_workstation(result),
         "",
         "  The launch runs asynchronously. The session id is assigned once EDH has created the",
-        "  desktop; until then the bootstrap id identifies this workstation:",
+        "  desktop; the bootstrap id keeps identifying this workstation either way:",
         f"    vamscli edh workstation get {bootstrap_id}",
         "  A launch EDH refuses ends in state ORPHANED with the reason under Last Error, and the AWS",
         "  error EDH reported, when VAMS captured one, under EDH failure.",
@@ -629,10 +629,11 @@ def create(ctx: click.Context, image_id: str, instance_type: str, name: str, roo
     """Launch a new EDH workstation.
 
     The launch is accepted asynchronously (HTTP 202) and runs in the background: the returned record
-    is CREATING with no session id yet. Follow the launch in `edh workstation list`, selecting the
-    row by its bootstrap id, until it reports ACTIVE and a session id; `edh workstation get
-    BOOTSTRAP_ID` answers only until the session id exists. A launch EDH refuses ends ORPHANED with
-    the reason in lastError. --os-family is the chosen image's family as `edh catalog images` lists it.
+    is CREATING with no session id yet. Follow the launch with `edh workstation get BOOTSTRAP_ID`,
+    or in `edh workstation list` by its bootstrap id, until it reports ACTIVE and a session id; the
+    bootstrap id keeps answering after the session id exists. A launch EDH refuses ends ORPHANED
+    with the reason in lastError. --os-family is the chosen image's family as `edh catalog images`
+    lists it.
     With --capacity-reservation-id the launch goes into that reservation; when it is full, a
     reservation that falls back launches on-demand and one that does not is refused (409,
     RESERVATION_FULL); one your role may see but not launch into (LAUNCH `view only` in `edh catalog
@@ -693,8 +694,9 @@ def create(ctx: click.Context, image_id: str, instance_type: str, name: str, roo
 def workstation_get(ctx: click.Context, session_id: str, json_output: bool):
     """Show one of your workstations by SESSION_ID.
 
-    SESSION_ID is the workstation's session id, or the bootstrap id of a launch that has not
-    received one. A workstation that belongs to another user is reported as not found. A launch that
+    SESSION_ID is the workstation's session id or its bootstrap id, which identifies it before and
+    after EDH assigns the session id. A workstation that belongs to another user is reported as not
+    found. A launch that
     ended ORPHANED shows its reason under Last Error and, when VAMS captured the failure from EDH
     (the record's edhFailure), the AWS error code and operation, or the desktop setup checkpoint,
     under EDH failure. Activity is `starting` or `stopping` while the workstation is between states
@@ -740,8 +742,8 @@ def workstation_get(ctx: click.Context, session_id: str, json_output: bool):
 @requires_setup_and_auth
 @requires_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
 def start(ctx: click.Context, session_id: str, wait: bool, json_output: bool):
-    """Start one of your stopped workstations. SESSION_ID may be the bootstrap id of a launch that has
-    no session id yet; such a launch cannot be started and is refused (HTTP 409).
+    """Start one of your stopped workstations. SESSION_ID may be the workstation's bootstrap id; a
+    launch that has no session id yet cannot be started and is refused (HTTP 409).
 
     The start is accepted (HTTP 202) and runs in the background: the returned record carries activity
     `starting`, and `edh workstation get` or `list` shows STARTING until the workstation is ACTIVE. A
@@ -1623,8 +1625,9 @@ def instances_stop(ctx: click.Context, session_id: str, json_output: bool):
 @requires_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
 def instances_deactivate(ctx: click.Context, session_id: str, confirm: bool, json_output: bool):
     """Force-deactivate any user's workstation session by SESSION_ID. Irreversible; --confirm is
-    required. A session EDH no longer lists is marked DELETED without an EDH call. A launch that never
-    received a session id is addressed by its bootstrap id.
+    required. A session EDH no longer lists is marked DELETED without an EDH call. SESSION_ID may
+    be the session's bootstrap id, before or after EDH assigned the session id, and is how a launch
+    that never received one is addressed.
 
     Examples:
         vamscli edh admin instances deactivate SESSION_ID --confirm

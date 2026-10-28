@@ -9444,7 +9444,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
             - name: sessionId
               in: path
               required: true
-              description: "EDH session id, or the bootstrapId of a launch that has not received one."
+              description: "EDH session id, or the record's bootstrapId, before or after it has a session id."
               schema:
                   type: string
         get:
@@ -9531,7 +9531,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
             - name: sessionId
               in: path
               required: true
-              description: "EDH session id, or the bootstrapId of a launch that has not received one."
+              description: "EDH session id, or the record's bootstrapId, before or after it has a session id."
               schema:
                   type: string
         post:
@@ -9582,7 +9582,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
             - name: sessionId
               in: path
               required: true
-              description: "EDH session id, or the bootstrapId of a launch that has not received one."
+              description: "EDH session id, or the record's bootstrapId, before or after it has a session id."
               schema:
                   type: string
         post:
@@ -9639,7 +9639,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
             - name: sessionId
               in: path
               required: true
-              description: "EDH session id, or the bootstrapId of a launch that has not received one."
+              description: "EDH session id, or the record's bootstrapId, before or after it has a session id."
               schema:
                   type: string
         get:
@@ -9690,7 +9690,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
             - name: sessionId
               in: path
               required: true
-              description: "EDH session id, or the bootstrapId of a launch that has not received one."
+              description: "EDH session id, or the record's bootstrapId, before or after it has a session id."
               schema:
                   type: string
         get:
@@ -9741,7 +9741,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
             - name: sessionId
               in: path
               required: true
-              description: "EDH session id, or the bootstrapId of a launch that has not received one."
+              description: "EDH session id, or the record's bootstrapId, before or after it has a session id."
               schema:
                   type: string
         post:
@@ -10165,7 +10165,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
             - name: sessionId
               in: path
               required: true
-              description: "EDH session id, or the bootstrapId of a launch that has not received one."
+              description: "EDH session id, or the record's bootstrapId, before or after it has a session id."
               schema:
                   type: string
         post:
@@ -10216,7 +10216,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
             - name: sessionId
               in: path
               required: true
-              description: "EDH session id, or the bootstrapId of a launch that has not received one."
+              description: "EDH session id, or the record's bootstrapId, before or after it has a session id."
               schema:
                   type: string
         post:

@@ -8,8 +8,8 @@ EDH mutation was NOT attempted and the row was NOT updated; each is paired with 
 on the caller's own session, because "refused" alone is satisfied by a handler that refuses everyone.
 Modelled on test_apiKeyService_user_scope.py.
 
-The path identifier is the EDH session id or, for a launch that never received one, the row's
-bootstrap id; a session-less row has nothing in EDH to act on, so those cases assert no EDH client
+The path identifier is the EDH session id or the row's bootstrap id, which addresses the row before and after
+EDH assigns the session id; a session-less row has nothing in EDH to act on, so those cases assert no EDH client
 was constructed at all.
 """
 
@@ -318,17 +318,6 @@ class TestSessionLessLaunches:
         assert (body["state"], body["sessionId"]) == ("CREATING", None)
         fakes.client_factory.assert_not_called()
 
-    def test_the_bootstrap_id_fallback_never_resolves_a_row_that_has_a_session(self, monkeypatch):
-        fakes = install_service_fakes(monkeypatch)
-        fakes.table.get_item.return_value = {"Item": own_row()}
-
-        response = _call(fakes, "get", BOOTSTRAP_OWN)
-
-        assert response["statusCode"] == 404
-        assert response_body(response)["message"] == "Workstation not found"
-        assert fakes.edh.calls == []
-        fakes.log_authorization.assert_not_called()
-
     def test_another_users_session_less_launch_is_not_found(self, monkeypatch):
         fakes = install_service_fakes(monkeypatch)
         row = other_row(state="CREATING", edhState=None, connectionAvailable=False)
@@ -341,3 +330,127 @@ class TestSessionLessLaunches:
         assert response_body(response)["message"] == "Workstation not found"
         fakes.log_authorization.assert_called_once()
         assert fakes.edh.calls == []
+
+
+def _addressed_by_bootstrap_id(fakes, row):
+    """Script the table as a {sessionId} route addressed by ``row``'s bootstrap id finds it: the session index
+    holds no row of that id, and the consistent read by bootstrap id answers ``row``."""
+    fakes.table.query.return_value = {"Items": []}
+    fakes.table.get_item.return_value = {"Item": row}
+
+
+@pytest.mark.unit
+class TestBootstrapIdAfterTheSessionId:
+    """The bootstrap id keeps addressing the row once EDH has assigned its session id (in-dev D22): the route
+    answers the row, and whatever reaches EDH, the response or a log carries the row's session id, never the
+    bootstrap id from the path. Ownership and Tier-2 apply as they do by session id."""
+
+    def test_get_answers_the_row_with_its_session_id(self, monkeypatch):
+        fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_states=[state_record(SESSION_OWN)]))
+        _addressed_by_bootstrap_id(fakes, own_row())
+
+        response = _call(fakes, "get", BOOTSTRAP_OWN)
+
+        assert response["statusCode"] == 200
+        body = response_body(response)
+        assert (body["bootstrapId"], body["sessionId"], body["state"]) == (BOOTSTRAP_OWN, SESSION_OWN, "ACTIVE")
+        assert fakes.edh.calls_to("get_desktop_states") == [(edh_uid_for(USER), [SESSION_OWN])]
+        assert BOOTSTRAP_OWN not in str(fakes.edh.calls)
+        # The session index is asked first, then the row is read consistently by its key.
+        query_kwargs = fakes.table.query.call_args[1]
+        assert _key_condition(query_kwargs["KeyConditionExpression"]) == ("sessionId", "=", BOOTSTRAP_OWN)
+        assert fakes.table.get_item.call_args_list[0][1] == {"Key": {"bootstrapId": BOOTSTRAP_OWN},
+                                                             "ConsistentRead": True}
+        fakes.log_authorization.assert_not_called()
+
+    @pytest.mark.parametrize("action", ["stop", "delete"])
+    def test_a_mutation_sends_edh_the_session_id(self, monkeypatch, action):
+        fakes = install_service_fakes(monkeypatch)
+        _addressed_by_bootstrap_id(fakes, own_row())
+        _, _, wrapper, state = ACTIONS[action]
+
+        response = _call(fakes, action, BOOTSTRAP_OWN)
+
+        assert response["statusCode"] == 200
+        assert fakes.edh.calls_to(wrapper) == [(edh_uid_for(USER), SESSION_OWN)]
+        assert BOOTSTRAP_OWN not in str(fakes.edh.calls)
+        body = response_body(response)
+        assert (body["sessionId"], body["state"]) == (SESSION_OWN, state)
+        assert fakes.table.update_item.call_args[1]["Key"] == {"bootstrapId": BOOTSTRAP_OWN}
+
+    def test_start_reads_edh_by_the_session_id_and_answers_it(self, monkeypatch):
+        fakes = install_service_fakes(
+            monkeypatch, edh=FakeEdhClient(get_desktop_states=[state_record(SESSION_OWN, "stopped")]))
+        _addressed_by_bootstrap_id(fakes, own_row(state="STOPPED", edhState="stopped", connectionAvailable=False))
+
+        response = _call(fakes, "start", BOOTSTRAP_OWN)
+
+        assert response["statusCode"] == 202
+        assert fakes.edh.calls_to("get_desktop_states") == [(edh_uid_for(USER), [SESSION_OWN])]
+        assert BOOTSTRAP_OWN not in str(fakes.edh.calls)
+        body = response_body(response)
+        assert (body["sessionId"], body["state"], body["activity"]) == (SESSION_OWN, "STOPPED", "starting")
+        fakes.lambda_client.invoke.assert_called_once()
+
+    def test_renew_answers_and_audits_the_session_id(self, monkeypatch):
+        fakes = install_service_fakes(monkeypatch)
+        monkeypatch.setattr(service, "read_lease_policy", lambda: {
+            "enabled": True, "leaseHours": 8, "forced": False, "graceHours": 24,
+            "updatedAt": None, "updatedBy": None})
+        _addressed_by_bootstrap_id(fakes, own_row(state="STOPPED", edhState="stopped", connectionAvailable=False,
+                                                  leaseExpiresAt=_minutes_ago(30), leaseStoppedAt=_minutes_ago(30)))
+        event = make_event("POST", workstation_path(BOOTSTRAP_OWN, "renew"), path_params={"sessionId": BOOTSTRAP_OWN})
+
+        response = fakes.module.lambda_handler(event, {})
+
+        assert response["statusCode"] == 200
+        assert response_body(response)["sessionId"] == SESSION_OWN
+        (renew,) = [call.args[2] for call in fakes.log_actions.call_args_list if call.args[1] == "edhWorkstationRenew"]
+        assert (renew["sessionId"], renew["bootstrapId"]) == (SESSION_OWN, BOOTSTRAP_OWN)
+        assert fakes.edh.calls == []
+
+    @pytest.mark.parametrize("action", sorted(ACTIONS))
+    def test_another_users_row_is_not_found_and_audited_with_its_session_id(self, monkeypatch, action):
+        fakes = install_service_fakes(monkeypatch)
+        _addressed_by_bootstrap_id(fakes, other_row())
+        method, _, _, _ = ACTIONS[action]
+
+        response = _call(fakes, action, BOOTSTRAP_OTHER)
+
+        assert response["statusCode"] == 404
+        assert response_body(response)["message"] == "Workstation not found"
+        assert fakes.edh.calls == []
+        fakes.client_factory.assert_not_called()
+        fakes.table.update_item.assert_not_called()
+        fakes.enforcer.enforce.assert_not_called()
+        fakes.log_authorization.assert_called_once()
+        _claims, authorized, custom_data = fakes.log_authorization.call_args.args
+        assert authorized is False
+        assert custom_data == {"action": method, "obj": {"object__type": "edhWorkstation", "sessionId": SESSION_OTHER}}
+
+    def test_a_denied_verdict_is_403_without_edh(self, monkeypatch):
+        fakes = install_service_fakes(monkeypatch, enforce=lambda obj, act: False)
+        _addressed_by_bootstrap_id(fakes, own_row())
+
+        response = _call(fakes, "stop", BOOTSTRAP_OWN)
+
+        assert response["statusCode"] == 403
+        assert fakes.edh.calls == []
+        fakes.table.update_item.assert_not_called()
+
+    def test_the_session_index_wins_over_a_bootstrap_id_of_the_same_value(self, monkeypatch):
+        """An identifier that is one row's session id and another row's bootstrap id addresses the first."""
+        shared = "4b3a2c1d-0e9f-4a8b-9c7d-6e5f4a3b2c1d"
+        by_session = own_row(sessionId=shared)
+        fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_states=[state_record(shared)]))
+        fakes.table.query.return_value = {"Items": [by_session]}
+        fakes.table.get_item.return_value = {"Item": other_row(bootstrapId=shared)}
+
+        response = _call(fakes, "get", shared)
+
+        assert response["statusCode"] == 200
+        body = response_body(response)
+        assert (body["bootstrapId"], body["sessionId"]) == (BOOTSTRAP_OWN, shared)
+        assert fakes.table.get_item.call_args_list[0][1] == {"Key": {"bootstrapId": BOOTSTRAP_OWN},
+                                                             "ConsistentRead": True}
+        fakes.log_authorization.assert_not_called()

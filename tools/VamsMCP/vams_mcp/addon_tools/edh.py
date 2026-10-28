@@ -91,9 +91,9 @@ def register(
         for a baseline image, an unknown recipe or version, or a recipe with no AVAILABLE build), each
         null when not known; a workstation keeps the image it was launched from, so launch a new
         workstation to use a newer build. Every session tool takes `session_id` as the row's
-        `sessionId`, or its `bootstrapId` while the row has no session id. Follow a launch here,
-        selecting the row by its `bootstrapId`, which stays on the row after EDH assigns the
-        `sessionId`. Another user's
+        `sessionId` or its `bootstrapId`, which addresses the row at any time, before and after EDH
+        assigns the `sessionId`; follow a launch here or with get_edh_workstation by its
+        `bootstrapId`. Another user's
         workstations are never included, so an empty list says nothing about whether they exist.
         Reading it makes EDH issue no connection token; `connectionAvailable` is true while EDH reports
         the desktop running. Not paginated: the list is complete."""
@@ -104,9 +104,9 @@ def register(
     @tool_result
     def get_edh_workstation(session_id: str) -> Dict[str, Any]:
         """Get one of the authenticated user's EDH workstations by `session_id` — the row's `sessionId`,
-        or its `bootstrapId` for a launch that has not received one (state CREATING or ORPHANED). A
-        `bootstrapId` is accepted only while the row has no `sessionId`: once EDH assigns one, the
-        `bootstrapId` is reported as not found, so follow a launch with list_edh_workstations. A
+        or its `bootstrapId`, which addresses the row at any time: while a launch has no `sessionId`
+        (state CREATING or ORPHANED) and after EDH assigns one, when the record answers with the
+        `sessionId`, so a launch can be followed here by its `bootstrapId`. A
         workstation owned by another user is reported as not found, not as forbidden. The record carries
         the fields of a list_edh_workstations row, `activity` (`starting`, `stopping` or null),
         `lastError`, `startFailure` (why the last start left a STOPPED row stopped, or when a start
@@ -398,11 +398,11 @@ def register(
             session key for the desktop). The record names the image the launch uses in the image
             fields `imageName`, `recipeId`, `recipeDisplayName`, `recipeVersion`,
             `latestRecipeVersion` and `imageLatest`, as a list_edh_workstations row does. The launch
-            itself runs asynchronously — poll
-            list_edh_workstations and select the row by the returned `bootstrapId` until it reports
-            ACTIVE and a `sessionId`; get_edh_workstation accepts the `bootstrapId` only while the row
-            has no `sessionId`, and reports it not found once EDH assigns one. A launch EDH refuses ends
-            ORPHANED with the reason in `lastError`, never as an error from this call.
+            itself runs asynchronously — poll get_edh_workstation with the returned `bootstrapId`,
+            or list_edh_workstations selecting the row by it, until it reports ACTIVE and a
+            `sessionId`; the `bootstrapId` addresses the row at any time, not only while it has no
+            `sessionId`. A launch EDH refuses ends ORPHANED with the reason in `lastError`, never as
+            an error from this call.
 
             `image_id` and `os_family` (`linux` or `windows`, the row's `osFamily`) come from the chosen
             row of list_edh_catalog_images, `instance_type` from list_edh_catalog_instance_types (a type
@@ -910,7 +910,8 @@ def register(
             """ADMIN: force-deactivate ANY user's EDH workstation session — the desktop is terminated.
             Irreversible, and it acts on another user's compute; stop_edh_admin_instance is the
             reversible form. Confirm with the user before calling it. `session_id` may be the
-            `bootstrapId` of a launch that never received a session id: a session EDH no longer lists
+            session's `bootstrapId`, before or after EDH assigned the session id, and is how a
+            launch that never received one is addressed: a session EDH no longer lists
             (or an ORPHANED launch) is marked DELETED without an EDH call, and a CREATING launch
             younger than 15 minutes is refused (409, returned as the error). An `EdhOutcomeUnknownError`
             error means EDH did not confirm the deactivation; call list_edh_admin_instances before

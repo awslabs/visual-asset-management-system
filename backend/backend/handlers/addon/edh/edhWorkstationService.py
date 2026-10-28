@@ -368,10 +368,11 @@ def _rows_for_user(user_id):
 
 
 def _row_for_identifier(identifier):
-    """The session row a {sessionId} route addresses: by EDH session id, or -- for a launch that never
-    received one -- by the bootstrap id itself. A row that has a session id is reachable by it alone. The
-    row is read consistently from the table, since the index lags the writes a concurrent start or launch
-    makes and a stop or delete takes back the credential the row holds."""
+    """The session row a {sessionId} route addresses: by EDH session id first, else by the bootstrap id,
+    which addresses the row for its whole life -- before EDH assigns the session id and after it. A caller
+    acts on the row's own session id once it has one (``_owned_and_authorized``), never on the bootstrap id
+    it was addressed by. The row is read consistently from the table, since the index lags the writes a
+    concurrent start or launch makes and a stop or delete takes back the credential the row holds."""
     rows = _query_to_exhaustion(
         IndexName=SESSION_UUID_INDEX,
         KeyConditionExpression=Key('sessionId').eq(identifier),
@@ -379,10 +380,7 @@ def _row_for_identifier(identifier):
     if rows:
         return edh_session_table.get_item(Key={'bootstrapId': rows[0]['bootstrapId']},
                                           ConsistentRead=True).get('Item')
-    row = edh_session_table.get_item(Key={'bootstrapId': identifier}, ConsistentRead=True).get('Item')
-    if row and not row.get('sessionId'):
-        return row
-    return None
+    return edh_session_table.get_item(Key={'bootstrapId': identifier}, ConsistentRead=True).get('Item')
 
 
 def _row_write(row, attributes, touch=True):
@@ -1143,10 +1141,12 @@ def _session_id_or_error(event, path):
 
 
 def _owned_row_or_error(event, session_id, method):
-    """The caller's row for ``session_id``, or the non-disclosing not-found response.
+    """The caller's row for ``session_id``, the path identifier (a session id or a bootstrap id), or the
+    non-disclosing not-found response.
 
     A row owned by someone else is answered exactly like a missing one and is written to the
-    authorization audit stream; a missing row is not a refusal and is not audited.
+    authorization audit stream under the row's session id, as it is when addressed by it, or the path
+    identifier for a row without one; a missing row is not a refusal and is not audited.
     """
     row = _row_for_identifier(session_id)
     if row is None:
@@ -1154,7 +1154,7 @@ def _owned_row_or_error(event, session_id, method):
     if row.get('userId') != _requesting_user_id():
         log_authorization(claims_and_roles, False, {
             "action": method,
-            "obj": {"object__type": WORKSTATION_OBJECT_TYPE, "sessionId": session_id},
+            "obj": {"object__type": WORKSTATION_OBJECT_TYPE, "sessionId": row.get('sessionId') or session_id},
         })
         return None, general_error(status_code=404, body={'message': 'Workstation not found'}, event=event)
     return row, None
@@ -1168,7 +1168,12 @@ def _row_authorized(row, method):
 
 
 def _owned_and_authorized(event, path, method):
-    """(session_id, row, None) for the caller's own, authorized row; otherwise (None, None, response)."""
+    """(session_id, row, None) for the caller's own, authorized row; otherwise (None, None, response).
+
+    ``session_id`` is the row's own EDH session id once it has one, whichever identifier the path named,
+    so what reaches EDH, the response and the log never carries a bootstrap id where a session id belongs;
+    for a row without one it is the path identifier, its bootstrap id, and such a row never reaches EDH.
+    """
     session_id, error = _session_id_or_error(event, path)
     if error is not None:
         return None, None, error
@@ -1177,7 +1182,7 @@ def _owned_and_authorized(event, path, method):
         return None, None, error
     if not _row_authorized(row, method):
         return None, None, authorization_error(event=event)
-    return session_id, row, None
+    return row.get('sessionId') or session_id, row, None
 
 
 def _no_session_response(event):

@@ -530,9 +530,10 @@ every launch is on-demand, which is also the answer when EC2 could not be read.
 way, without `launchAllowed`, with `state` `notFound` for one EC2 no longer knows
 and `unknown` when the read failed, and with `edhSubnetAvailable` false for one in
 an Availability Zone with no EDH private subnet, which the user catalog leaves out.
-A row's `session_id` is its `sessionId`, or its `bootstrapId` while a launch has no
-session id yet (`create_edh_workstation` answers 202 with `sessionId` null and
-`state` CREATING; `lastError` names why a launch ended ORPHANED).
+A row's `session_id` is its `sessionId` or its `bootstrapId`, which addresses the
+row at any time, before and after EDH assigns the session id (`create_edh_workstation`
+answers 202 with `sessionId` null and `state` CREATING; `lastError` names why a launch
+ended ORPHANED).
 A row also carries `edhFailure`, the launch failure VAMS captured from EDH's own
 record of a desktop that never ran: `event` (`placement_failed` or
 `session-failed`), `errorCode` and `operation` (the AWS error code and operation
@@ -638,10 +639,10 @@ the lease policy: only the arguments you pass are changed.
 `create_edh_workstation` returns the record with `state` CREATING and `sessionId`
 null (HTTP 202), plus `sessionBootstrap` (`provisioned`, `skipped`, `unavailable`
 or `disabled`, the outcome of placing a session key for the desktop). The launch
-runs asynchronously — poll `list_edh_workstations` and select the row by its
-`bootstrapId` until it reports ACTIVE and a `sessionId`, because
-`get_edh_workstation` accepts a `bootstrapId` only while the row has no
-`sessionId` and reports it not found once EDH assigns one; read `lastError` on a
+runs asynchronously — poll `get_edh_workstation` with its `bootstrapId`, or
+`list_edh_workstations` selecting the row by it, until it reports ACTIVE and a
+`sessionId`; the `bootstrapId` keeps addressing the row after EDH assigns the
+`sessionId`. Read `lastError` on a
 row that ended ORPHANED. A repeat with the same `bootstrap_id` by the same user
 returns the stored record (HTTP 200) and launches nothing, while one that another
 user's launch holds is refused (409).

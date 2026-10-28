@@ -285,8 +285,8 @@ class EdhAPIClientMixin:
         endpoint. A workstation owned by another user is reported as not found.
 
         Args:
-            session_id: EDH session ID of the workstation, or the bootstrapId of a launch that has
-                not received one
+            session_id: EDH session ID of the workstation, or its bootstrapId, before or after EDH
+                assigns the session ID
 
         Returns:
             API response data: the workstation record
@@ -319,8 +319,8 @@ class EdhAPIClientMixin:
         Start a stopped workstation using the /addon/edh/workstations/{sessionId}/start POST endpoint.
 
         Args:
-            session_id: EDH session ID of the workstation, or the bootstrapId of a launch that has
-                not received one
+            session_id: EDH session ID of the workstation, or its bootstrapId, before or after EDH
+                assigns the session ID
 
         Returns:
             API response data (HTTP 202): the workstation record as accepted -- still STOPPED, with
@@ -366,8 +366,8 @@ class EdhAPIClientMixin:
         Stop a running workstation using the /addon/edh/workstations/{sessionId}/stop POST endpoint.
 
         Args:
-            session_id: EDH session ID of the workstation, or the bootstrapId of a launch that has
-                not received one
+            session_id: EDH session ID of the workstation, or its bootstrapId, before or after EDH
+                assigns the session ID
 
         Returns:
             API response data: the updated workstation record
@@ -403,8 +403,8 @@ class EdhAPIClientMixin:
         Delete a workstation using the /addon/edh/workstations/{sessionId} DELETE endpoint.
 
         Args:
-            session_id: EDH session ID of the workstation, or the bootstrapId of a launch that has
-                not received one
+            session_id: EDH session ID of the workstation, or its bootstrapId, before or after EDH
+                assigns the session ID
 
         Returns:
             API response data: the updated workstation record
@@ -443,8 +443,8 @@ class EdhAPIClientMixin:
         endpoint. The connectionUrl carries a session credential.
 
         Args:
-            session_id: EDH session ID of the workstation, or the bootstrapId of a launch that has
-                not received one
+            session_id: EDH session ID of the workstation, or its bootstrapId, before or after EDH
+                assigns the session ID
 
         Returns:
             API response data: {"sessionId": ..., "connectionUrl": ..., "osFamily": ...}
@@ -951,8 +951,8 @@ class EdhAPIClientMixin:
         /addon/edh/admin/instances/{sessionId}/deactivate POST endpoint.
 
         Args:
-            session_id: EDH session ID of the workstation, or the bootstrapId of a launch that has
-                not received one
+            session_id: EDH session ID of the workstation, or its bootstrapId, before or after EDH
+                assigns the session ID
 
         Returns:
             API response data: the updated session as the handler reports it

@@ -265,6 +265,23 @@ class TestWindowsSignIn:
         assert response_body(response)["message"] == "Workstation has no EDH session"
         fakes.client_factory.assert_not_called()
 
+    def test_a_bootstrap_id_signs_in_to_the_desktop_of_its_session(self, monkeypatch):
+        """The bootstrap id keeps addressing the row once it has a session id (in-dev D22); EDH is read, the
+        response answers and the log names the session id."""
+        fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_connection=_desktop()))
+        fakes.table.get_item.return_value = {"Item": _windows()}
+        logger = MagicMock()
+        monkeypatch.setattr(service, "logger", logger)
+
+        response = _sign_in(fakes, BOOTSTRAP_OWN)
+
+        assert response["statusCode"] == 200
+        body = response_body(response)
+        assert (body["sessionId"], body["username"], body["password"]) == (SESSION_OWN, "vabc", PASSWORD)
+        assert fakes.edh.calls_to("get_desktop_connection") == [(edh_uid_for(USER), SESSION_OWN)]
+        signed_in = [str(call) for call in logger.info.call_args_list if "Windows sign-in details" in str(call)]
+        assert len(signed_in) == 1 and SESSION_OWN in signed_in[0] and BOOTSTRAP_OWN not in signed_in[0]
+
     def test_a_stored_state_other_than_active_is_not_ready_without_asking_edh(self, monkeypatch):
         fakes = _installed(monkeypatch, row=_windows(state="STOPPED", edhState="stopped", connectionAvailable=False))
 

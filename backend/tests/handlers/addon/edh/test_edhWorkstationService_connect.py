@@ -177,6 +177,19 @@ class TestConnect:
         fakes.client_factory.assert_not_called()
         fakes.table.update_item.assert_not_called()
 
+    def test_a_bootstrap_id_connects_to_the_desktop_of_its_session(self, monkeypatch):
+        """The bootstrap id keeps addressing the row once it has a session id (in-dev D22); EDH is read, and the
+        response answers, by the session id."""
+        fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_connection=_desktop()))
+        fakes.table.get_item.return_value = {"Item": own_row()}
+
+        response = _connect(fakes, BOOTSTRAP_OWN)
+
+        assert response["statusCode"] == 200
+        assert response_body(response) == {
+            "sessionId": SESSION_OWN, "connectionUrl": CONNECTION_URL, "osFamily": "linux"}
+        assert fakes.edh.calls_to("get_desktop_connection") == [(edh_uid_for(USER), SESSION_OWN)]
+
     def test_a_stored_state_other_than_active_is_not_ready_without_asking_edh(self, monkeypatch):
         fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_connection=_desktop()))
         fakes.table.query.return_value = {"Items": [

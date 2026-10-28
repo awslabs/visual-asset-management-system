@@ -414,6 +414,11 @@ class TestWorkstationCreate:
             assert 'not assigned yet' in result.output
             assert 'asynchronously' in result.output
             assert 'vamscli edh workstation get b-new' in result.output
+            # The bootstrap id keeps addressing the workstation after EDH assigns its session id
+            # (in-dev D22).
+            assert 'The session id is assigned once EDH has created the' in result.output
+            assert 'the bootstrap id keeps identifying this workstation' in result.output
+            assert 'until then' not in result.output
 
     def test_create_passes_lease_hours_when_given(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('addon.edh') as mocks:
