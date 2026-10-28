@@ -35,7 +35,7 @@ from common.apiRoutes import (
 from common.compliance import evaluationEngine as engine
 from common.compliance import listing
 from common.compliance.archivedAssets import (
-    ArchivedAssets, asset_is_archived, withheld_state_counts,
+    ArchivedAssets, withheld_state_counts,
 )
 from common.dynamodb import query_all_items
 from common.validators import validate
@@ -44,7 +44,8 @@ from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from handlers.compliance import complianceEvaluationStore as store
 from handlers.compliance.complianceTrigger import (
-    check_and_trigger_cascade, remove_record_if_asset_gone,
+    EVALUATION_TARGET_ARCHIVED, EVALUATION_TARGET_REMOVED, automatic_evaluation_target,
+    check_and_trigger_cascade,
 )
 from models.common import (
     APIGatewayProxyResponseV2,
@@ -379,11 +380,11 @@ def sweep_schema(event, schema_name, starting_token=None):
         if budget_spent:
             beyond_budget += 1
             continue
-        target = _sweep_target(database_id, asset["assetId"])
-        if target == SWEEP_TARGET_REMOVED:
+        target = automatic_evaluation_target(database_id, asset["assetId"], detected_by="sweep")
+        if target == EVALUATION_TARGET_REMOVED:
             removed_orphans += 1
             continue
-        if target == SWEEP_TARGET_ARCHIVED:
+        if target == EVALUATION_TARGET_ARCHIVED:
             skipped_archived += 1
             continue
         result = run_evaluation_for_asset(database_id, asset["assetId"], schema_name, actor)
@@ -489,11 +490,11 @@ def evaluate_database(event, database_id, starting_token=None):
         if budget_spent:
             beyond_budget += 1
             continue
-        target = _sweep_target(database_id, row["assetId"])
-        if target == SWEEP_TARGET_REMOVED:
+        target = automatic_evaluation_target(database_id, row["assetId"], detected_by="sweep")
+        if target == EVALUATION_TARGET_REMOVED:
             removed_orphans += 1
             continue
-        if target == SWEEP_TARGET_ARCHIVED:
+        if target == EVALUATION_TARGET_ARCHIVED:
             skipped_archived += 1
             continue
         result = run_evaluation_for_asset(database_id, row["assetId"], schema_name, actor)
@@ -531,28 +532,6 @@ def evaluate_database(event, database_id, starting_token=None):
     if remaining:
         body["NextToken"] = _sweep_token(sweep_started_at)
     return success(body=body)
-
-
-# What a sweep finds when it reaches a compliance record (`_sweep_target`).
-SWEEP_TARGET_LIVE = "live"
-SWEEP_TARGET_ARCHIVED = "archived"
-SWEEP_TARGET_REMOVED = "removed"
-
-
-def _sweep_target(database_id, asset_id):
-    """What a sweep does with the compliance record of an asset: evaluate it (`live`), skip it
-    (`archived`: the asset's row sits in the archive, so it cannot be read; its record is left as
-    it is, as an archive leaves it, and the automatic trigger skips it too), or nothing more
-    because the asset is gone and its record was removed (`removed`). One read of the live row
-    decides the usual case; only a missing row is looked up in the archive."""
-    if store.get_asset_item(database_id, asset_id):
-        return SWEEP_TARGET_LIVE
-    if asset_is_archived(asset_table, database_id, asset_id):
-        return SWEEP_TARGET_ARCHIVED
-    if remove_record_if_asset_gone(database_id, asset_id):
-        return SWEEP_TARGET_REMOVED
-    # The row came back between the reads (an unarchive): evaluate it.
-    return SWEEP_TARGET_LIVE
 
 
 def _database_rows(database_id):

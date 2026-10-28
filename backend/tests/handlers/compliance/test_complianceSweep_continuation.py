@@ -34,6 +34,7 @@ from backend.tests.handlers.compliance._harness import (
 )
 from handlers.compliance import complianceEvaluateService as evaluate_svc
 from handlers.compliance import complianceEvaluationStore as store
+from handlers.compliance import complianceTrigger as trigger
 
 SCHEMA = "sweep-schema"
 DB_A = "sweep-a"
@@ -45,7 +46,7 @@ LONG_AGO = "2026-10-01T00:00:00+00:00"
 def tables():
     with mock_aws():
         resource = boto3.resource("dynamodb", region_name="us-east-1")
-        patches, doubles = _cdkTables.table_doubles(resource, (store, evaluate_svc))
+        patches, doubles = _cdkTables.table_doubles(resource, (store, evaluate_svc, trigger))
         for active in patches:
             active.start()
         try:

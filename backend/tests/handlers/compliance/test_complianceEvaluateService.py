@@ -22,6 +22,7 @@ from handlers.compliance import complianceEvaluationStore as store
 
 MOD = "handlers.compliance.complianceEvaluateService"
 STORE = "handlers.compliance.complianceEvaluationStore"
+TRIGGER = "handlers.compliance.complianceTrigger"
 
 EVALUATE_PATH = f"/compliance/evaluate/{DB}/{ASSET}"
 SWEEP_PATH = f"/compliance/sweep/{SCHEMA}"
@@ -117,6 +118,7 @@ def _run(event, tokens=(USER,), api=True, obj=True, asset_exists=True, complianc
             patch(f"{MOD}.asset_table", asset_table), \
             patch(f"{STORE}.get_asset_item",
                   return_value={"assetId": ASSET} if asset_exists else None), \
+            patch(f"{TRIGGER}.asset_row_exists", return_value=asset_exists), \
             patch(f"{STORE}.get_compliance_record", return_value=compliance_record), \
             patch(f"{STORE}.load_schema_item", return_value=schema_item), \
             patch(f"{STORE}.run_evaluation",
@@ -523,7 +525,7 @@ class TestSweep:
                 patch(f"{MOD}.asset_state_table", state_table), \
                 patch(f"{STORE}.load_schema_item", return_value=schema_row()), \
                 patch(f"{STORE}.run_evaluation", return_value=EVALUATION_RESULT) as run, \
-                patch(f"{STORE}.get_asset_item", return_value={"databaseId": "db", "assetId": "present"}), \
+                patch(f"{TRIGGER}.asset_row_exists", return_value=True), \
                 patch(f"{MOD}.check_and_trigger_cascade"):
             response = svc.lambda_handler(
                 rest_event("POST", SWEEP_PATH, SCHEMA_PARAMS, body={}), MagicMock())

@@ -17,6 +17,7 @@ from handlers.compliance import complianceEvaluateService as svc
 
 MOD = "handlers.compliance.complianceEvaluateService"
 STORE = "handlers.compliance.complianceEvaluationStore"
+TRIGGER = "handlers.compliance.complianceTrigger"
 PATH = f"/compliance/evaluate/{DB}"
 PARAMS = {"databaseId": DB}
 RESULT = {"evaluationId": "eval-1", "verdict": "compliant"}
@@ -43,7 +44,7 @@ def _run(rows, database_item=None, casbin=None, registered=0, result=RESULT, clo
         patch(f"{STORE}.register_unrecorded_assets", return_value=registered),
         patch(f"{STORE}.run_evaluation", return_value=result),
         # Every asset exists: a sweep evaluates it rather than removing its record.
-        patch(f"{STORE}.get_asset_item", return_value={"databaseId": "db", "assetId": "present"}),
+        patch(f"{TRIGGER}.asset_row_exists", return_value=True),
         patch(f"{MOD}.check_and_trigger_cascade"),
     ]
     if clock is not None:

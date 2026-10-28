@@ -73,7 +73,13 @@ object key; wrapped here, one line at runtime:
 
     Compliance coverage asset=<assetId> path=<stream|file|direct> stamp=<attribute|none>
     stampAt=<instant|none> eventTime=<instant|none> lastEvaluationId=<id|none>
-    lastEvaluatedAt=<instant|none> outcome=<covered|evaluating|deferred>
+    lastEvaluatedAt=<instant|none> outcome=<covered|evaluating|deferred|archived|removed>
+
+Whether an asset is archived is decided when its evaluation would start, from the asset table read
+strongly consistent (`automatic_evaluation_target`, which Evaluate All and the schema sweeps use
+too), not from the message that queued it: an asset unarchived and archived again before its
+evaluation runs is skipped (`outcome=archived`) and nothing is written, and an asset gone from the
+table has its record removed (`outcome=removed`) as its permanent delete removes it.
 
 A cascade awaiting approval is opened once per trigger asset: while one is pending for the asset,
 a further evaluation does not open another.
@@ -101,6 +107,7 @@ from common.assetProvenance import (
 )
 from common.compliance import evaluationEngine as engine
 from common.compliance import listing
+from common.compliance.archivedAssets import asset_is_archived
 from models.compliance import EvaluationVerdict
 from common.dynamodb import query_all_items
 from common.indexerEvents import s3_records_from_indexer_message
@@ -629,6 +636,36 @@ def remove_record_if_asset_gone(database_id, asset_id, detected_by="sweep"):
     return True
 
 
+# What an automatic evaluation finds when it is about to start (`automatic_evaluation_target`).
+EVALUATION_TARGET_LIVE = "live"
+EVALUATION_TARGET_ARCHIVED = "archived"
+EVALUATION_TARGET_REMOVED = "removed"
+
+
+def automatic_evaluation_target(database_id, asset_id, detected_by=None):
+    """What an automatic evaluation (this trigger's, Evaluate All's or a schema sweep's) does with
+    an asset it is about to start on: evaluate it (`live`); skip it (`archived`: its row sits in
+    the archive, so an evaluation could only record an error; its compliance record is left as it
+    is, as an archive leaves it); or nothing more, because the asset is gone and its record was
+    removed as its permanent delete removes it (`removed`; `detected_by` names the remover on the
+    audit entry).
+
+    Decided from the asset table as it stands when the evaluation would start, never from the
+    event or the record that reported the asset, and read strongly consistent: an asset unarchived
+    and archived again before its queued evaluation runs is seen archived. One read of the live row
+    decides the usual case; only a missing row is looked up in the archive. An evaluation requested
+    on demand does not come here: it is decided on the asset's stored id and then refused as "Asset
+    not found" (`complianceEvaluateService.evaluate_asset`)."""
+    if asset_row_exists(database_id, asset_id):
+        return EVALUATION_TARGET_LIVE
+    if asset_is_archived(asset_table, database_id, asset_id):
+        return EVALUATION_TARGET_ARCHIVED
+    if remove_record_if_asset_gone(database_id, asset_id, detected_by=detected_by):
+        return EVALUATION_TARGET_REMOVED
+    # The row came back between the reads (an unarchive): evaluate it.
+    return EVALUATION_TARGET_LIVE
+
+
 def _delete_record_of_deleted_asset(live, asset_id, detected_by=None):
     """Delete the compliance record of a permanently deleted asset and audit it once; returns
     whether there was a record to delete."""
@@ -1095,18 +1132,25 @@ def _evaluation_target(database_id, asset_id, batch=None):
 
 def _evaluate_if_uncovered(database_id, asset_id, target, change_time=None, completion_time=None,
                            path=COVERAGE_PATH_DIRECT, stamp_attribute=None, batch=None):
-    """Run the evaluation unless the asset's last evaluation already covers the change, logging the
-    decision in one INFO line (`coverage_log_line`). The asset is recorded as evaluated in the batch
-    before the evaluation runs, so a failed evaluation is retried through its own queue record
-    rather than a second time in this batch."""
+    """Run the evaluation unless the asset's last evaluation already covers the change, or the asset
+    is archived or gone by now (`automatic_evaluation_target`, read only for a change that is not
+    covered), logging the decision in one INFO line (`coverage_log_line`). The asset is recorded as
+    evaluated in the batch before the evaluation runs, so a failed evaluation is retried through its
+    own queue record rather than a second time in this batch."""
     compliance_record, schema_name = target
     covered = change_covered_by_last_evaluation(compliance_record, change_time, completion_time)
+    presence = EVALUATION_TARGET_LIVE
+    if not covered:
+        presence = automatic_evaluation_target(database_id, asset_id)
     logger.info(coverage_log_line(asset_id, path, stamp_attribute, completion_time, change_time,
-                                  compliance_record, covered))
-    if covered:
+                                  compliance_record, covered,
+                                  outcome=None if presence == EVALUATION_TARGET_LIVE else presence))
+    if covered or presence == EVALUATION_TARGET_ARCHIVED:
         return
     if batch is not None:
         batch.evaluated.add((database_id, asset_id))
+    if presence == EVALUATION_TARGET_REMOVED:
+        return
     trigger_evaluation(database_id, asset_id, schema_name)
 
 
@@ -1118,7 +1162,9 @@ def coverage_log_line(asset_id, path, stamp_attribute, completion_time, change_t
     judged across the skew margin like an `eventTime`), the last evaluation it was compared with, and
     the outcome (`covered`, `evaluating`, or `deferred` for an upload's object that waits for its
     completion stamp, `upload_object_awaits_its_completion`, or for its completion to settle,
-    `upload_object_awaits_its_settling_completion`). An absent value reads `none`."""
+    `upload_object_awaits_its_settling_completion`, or `archived` / `removed` for an uncovered change
+    of an asset that is archived or gone when its evaluation would start,
+    `automatic_evaluation_target`). An absent value reads `none`."""
     def _instant(value):
         return value.isoformat() if value is not None else "none"
 

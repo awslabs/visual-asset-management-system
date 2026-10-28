@@ -29,6 +29,7 @@ from backend.tests.handlers.auth.test_permission_templates_compliance_binding im
 
 GLOBAL = "GLOBAL"
 STORE = "handlers.compliance.complianceEvaluationStore"
+TRIGGER = "handlers.compliance.complianceTrigger"
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -145,7 +146,7 @@ class TestTheServicesWithTheRealEnforcer:
                 patch(f"{STORE}.load_schema_item",
                       return_value=schema_row("global-1", database_id=GLOBAL)), \
                 patch(f"{STORE}.databases_bound_to_schema", return_value=[]), \
-                patch(f"{STORE}.get_asset_item", return_value={"databaseId": "db", "assetId": "present"}), \
+                patch(f"{TRIGGER}.asset_row_exists", return_value=True), \
                 patch(f"{svc.__name__}.run_evaluation_for_asset",
                       return_value={"evaluationId": "e", "verdict": "compliant"}) as run:
             response = svc.lambda_handler(

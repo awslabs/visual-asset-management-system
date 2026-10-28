@@ -122,7 +122,9 @@ backend/
 │   │   │                                           #   complianceAuditService. Event-driven: complianceTrigger
 │   │   │                                           #   (own SQS queue on the asset + file indexer topics;
 │   │   │                                           #   stamps metadata/link changes, evaluates, removes a
-│   │   │                                           #   deleted asset's record), complianceWorkflowCallback (EventBridge
+│   │   │                                           #   deleted asset's record; automatic_evaluation_target()
+│   │   │                                           #   decides live/archived/removed for the trigger and
+│   │   │                                           #   the sweeps), complianceWorkflowCallback (EventBridge
 │   │   │                                           #   workflow.execution.completed), complianceCascadeExecutor
 │   │   │                                           #   (async invoke from complianceCascadeService, event {"cascadeId"}).
 │   │   │                                           #   Shared modules (not Lambdas): complianceEvaluationStore (all

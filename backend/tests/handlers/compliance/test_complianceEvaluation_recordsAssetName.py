@@ -27,6 +27,7 @@ from backend.tests.handlers.compliance._harness import (
 from common.compliance import listing
 from handlers.compliance import complianceEvaluateService as evaluate_svc
 from handlers.compliance import complianceEvaluationStore as store
+from handlers.compliance import complianceTrigger as trigger
 
 DB = "db-names"
 SCHEMA = "names-schema"
@@ -49,7 +50,7 @@ ATTRIBUTE_RULE_BODY = {
 def tables():
     with mock_aws():
         resource = boto3.resource("dynamodb", region_name="us-east-1")
-        patches, doubles = _cdkTables.table_doubles(resource, (store, evaluate_svc))
+        patches, doubles = _cdkTables.table_doubles(resource, (store, evaluate_svc, trigger))
         # The root harness mocks `common.dynamodb`; the store unpacks the real helper's result.
         patches.append(patch.object(store, "to_update_expr", REAL_TO_UPDATE_EXPR))
         for active in patches:
