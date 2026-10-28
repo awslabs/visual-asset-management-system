@@ -110,8 +110,19 @@ class TestRelativeSubdir:
         assert naming.relative_subdir_of("xabc/assetA/sub/dir/file.stp", "assetA") == "sub/dir/"
         assert naming.relative_subdir_of("xabc/assetA/file.stp", "assetA") == ""
 
-    def test_asset_id_not_in_key_yields_root(self):
-        assert naming.relative_subdir_of("xabc/other/file.stp", "assetA") == ""
+    def test_a_chained_step_input_keeps_its_folder_within_the_asset(self):
+        # A later workflow step is handed the prior step's output key, which carries no asset id.
+        prior = "pipelines/genai-cad-step-agent/CadStepAgent_job/output/E1/files/"
+        assert naming.relative_subdir_of(prior + "sub/dir/part.step", "assetA") == "sub/dir/"
+        assert naming.relative_subdir_of(prior + "part.step", "assetA") == ""
+
+    def test_a_key_of_neither_shape_is_refused(self):
+        # Writing at the asset root would look like success; the run is refused instead.
+        for key in ("xabc/other/file.stp", "pipelines/p/job/output/E1/files", ""):
+            with pytest.raises(naming.OutputNameError):
+                naming.relative_subdir_of(key, "assetA")
+        with pytest.raises(naming.OutputNameError):
+            naming.relative_subdir_of("xabc/assetA/file.stp", "")
 
 
 @pytest.mark.unit

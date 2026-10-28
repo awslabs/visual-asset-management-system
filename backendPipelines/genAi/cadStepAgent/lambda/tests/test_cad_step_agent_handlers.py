@@ -307,6 +307,24 @@ class TestConstructPipeline:
         assert resp["externalSfnTaskToken"] == _TOKEN
         assert resp["orchestrationEventPrefix"] == "vams.test.execution.E1.pipeline.P1"
 
+    def test_a_chained_modify_run_writes_beside_the_prior_steps_file(self):
+        # As a later workflow step, the input is the prior step's output, whose key has no asset id.
+        mod = _load("constructPipeline.py")
+        event = _construct_event()
+        event["inputS3AssetFilePath"] = "s3://abkt/pipelines/other/Job_1/output/E0/files/sub/dir/part.stp"
+        resp, send_failure, exc = self._run(mod, event, _config())
+        assert exc is None and send_failure.call_count == 0
+        definition = json.loads(resp["definition"][0])
+        assert definition["outputFiles"]["relativeSubdir"] == "sub/dir/"
+        assert definition["outputFiles"]["fileName"] == "part.stp"
+
+    def test_an_input_outside_the_asset_and_any_pipeline_output_is_refused(self):
+        mod = _load("constructPipeline.py")
+        event = _construct_event()
+        event["inputS3AssetFilePath"] = "s3://abkt/elsewhere/sub/part.stp"
+        resp, send_failure, exc = self._run(mod, event, _config())
+        assert isinstance(exc, ValueError) and send_failure.call_count == 1
+
     def test_an_event_without_a_results_folder_builds_an_empty_results_block(self):
         mod = _load("constructPipeline.py")
         event = _construct_event()

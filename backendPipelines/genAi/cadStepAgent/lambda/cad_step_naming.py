@@ -128,10 +128,19 @@ def resolve_output_filename(mode, input_file_name="", output_filename="", output
 
 
 def relative_subdir_of(input_key, asset_id):
-    """The asset-relative directory ('sub/dir/' or '') of an input S3 key, sliced at the threaded
-    assetId segment. '' when the asset id is not a segment of the key."""
+    """The asset-relative directory ('sub/dir/' or '') of an input S3 key.
+
+    An asset key is sliced at the threaded assetId segment. A chained workflow step's input is the
+    prior step's output, `pipelines/{pipelineId}/{jobName}/output/{executionId}/files/{relative}/{name}`,
+    which carries no assetId: its directory within the asset is the segments between that `files`
+    marker and the file name. A key of neither shape raises OutputNameError, so the run is refused
+    before any compute instead of writing its output at the asset root."""
     parts = [p for p in str(input_key or "").split("/") if p]
     if asset_id and asset_id in parts:
         inner = parts[parts.index(asset_id) + 1:-1]
         return "/".join(inner) + "/" if inner else ""
-    return ""
+    for i in range(len(parts) - 3):
+        if parts[i] == "output" and parts[i + 2] == "files":
+            inner = parts[i + 3:-1]
+            return "/".join(inner) + "/" if inner else ""
+    raise OutputNameError("The input file's folder within its asset cannot be determined from its key")
