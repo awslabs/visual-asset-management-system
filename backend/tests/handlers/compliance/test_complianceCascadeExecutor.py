@@ -20,6 +20,7 @@ from handlers.compliance import complianceEvaluationStore as store
 
 EXECUTOR = "handlers.compliance.complianceCascadeExecutor"
 STORE = "handlers.compliance.complianceEvaluationStore"
+TRIGGER = "handlers.compliance.complianceTrigger"
 
 PENDING = {"cascadeId": CASCADE_ID, "state": "pending_approval",
            "triggeredByDatabaseId": DB, "triggeredByAssetId": ASSET}
@@ -61,6 +62,8 @@ def _patched(graph, cascade_item, schema_for=None, evaluation=None, cascade_tabl
               side_effect=lambda db, asset: {"schemaName": schema_for(asset)}),
         patch(f"{STORE}.run_evaluation", side_effect=evaluation),
         patch(f"{STORE}.write_audit"),
+        # Every descendant is live: the executor evaluates it rather than skipping it as archived.
+        patch(f"{TRIGGER}.asset_row_exists", return_value=True),
     ]
     return cascade_table, patches
 

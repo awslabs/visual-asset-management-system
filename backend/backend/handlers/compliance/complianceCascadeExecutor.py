@@ -22,6 +22,9 @@ from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
 from customLogging.logger import safeLogger
 from handlers.compliance import complianceEvaluationStore as store
+from handlers.compliance.complianceTrigger import (
+    EVALUATION_TARGET_ARCHIVED, EVALUATION_TARGET_REMOVED, automatic_evaluation_target,
+)
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
@@ -36,6 +39,8 @@ EXECUTION_FAILED_ABORT_REASON = "Cascade execution failed"
 
 NODE_STATE_PENDING = "pending"
 NODE_STATE_EVALUATING = "evaluating"
+# A node that is not evaluated: it has no bound schema, or it no longer exists (its compliance
+# record is then removed, as its permanent delete removes it).
 NODE_STATE_SKIPPED = "skipped"
 # A node whose evaluation did not run because a newer evaluation of the same asset had already
 # started (the run_evaluation result carries `superseded: true`): like `skipped`, the node is
@@ -45,6 +50,11 @@ NODE_STATE_ERROR = "error"
 # A descendant in a database the caller who started the cascade (approver, or creator of a cascade
 # without approval) may not evaluate: it is not evaluated, with that caller's reach or any other.
 NODE_STATE_SKIPPED_NOT_AUTHORIZED = "skipped_not_authorized"
+# A descendant that is archived when the executor reaches it (archiving keeps an asset's links, so
+# the cascade still discovers it): it is not evaluated, and nothing is written to its compliance
+# record or history (`complianceTrigger.automatic_evaluation_target`, as the trigger and the
+# sweeps decide it).
+NODE_STATE_SKIPPED_ARCHIVED = "skipped_archived"
 
 # Bound on the descendants one cascade evaluates; a DAG larger than this is truncated and the
 # omission recorded on the cascade row, so a runaway graph cannot exhaust the Lambda timeout.
@@ -271,12 +281,25 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
         nodes[node_key] = NODE_STATE_EVALUATING
         _write_nodes(cascade_id, nodes)
         try:
-            evaluation = store.run_evaluation(
-                node["databaseId"], node["assetId"], schema_name, "cascade")
-            node_state = _node_state_for(evaluation)
-            nodes[node_key] = node_state
-            results.append({"node": node_key, "status": node_state,
-                            "evaluationId": evaluation.get("evaluationId")})
+            # Decided now, not when the cascade started: a descendant archived, or deleted, since
+            # discovery (or since approval) is not evaluated.
+            presence = automatic_evaluation_target(node["databaseId"], node["assetId"])
+            if presence == EVALUATION_TARGET_ARCHIVED:
+                logger.info(f"Cascade {cascade_id}: {node_key} is archived; not evaluated")
+                nodes[node_key] = NODE_STATE_SKIPPED_ARCHIVED
+                results.append({"node": node_key, "status": NODE_STATE_SKIPPED_ARCHIVED})
+            elif presence == EVALUATION_TARGET_REMOVED:
+                logger.info(f"Cascade {cascade_id}: {node_key} no longer exists; its record was "
+                            "removed")
+                nodes[node_key] = NODE_STATE_SKIPPED
+                results.append({"node": node_key, "status": NODE_STATE_SKIPPED})
+            else:
+                evaluation = store.run_evaluation(
+                    node["databaseId"], node["assetId"], schema_name, "cascade")
+                node_state = _node_state_for(evaluation)
+                nodes[node_key] = node_state
+                results.append({"node": node_key, "status": node_state,
+                                "evaluationId": evaluation.get("evaluationId")})
         except Exception as e:
             logger.exception(f"Cascade evaluation failed for {node_key}: {e}")
             nodes[node_key] = NODE_STATE_ERROR

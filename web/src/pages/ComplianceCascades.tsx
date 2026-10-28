@@ -59,7 +59,7 @@ export const CASCADE_POLL_ATTEMPTS = 20;
 
 /**
  * Node states that mean the node has not been evaluated yet. Every other state is final, including
- * `skipped` and `superseded`, which are not failures.
+ * `skipped`, `skipped_not_authorized`, `skipped_archived` and `superseded`, which are not failures.
  */
 const NODE_STATES_IN_FLIGHT = new Set<CascadeNodeState>(["pending", "evaluating"]);
 

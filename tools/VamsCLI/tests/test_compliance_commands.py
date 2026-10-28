@@ -1556,6 +1556,18 @@ class TestComplianceCascadeCommands:
             assert 'Rotor (db1:b): compliant' in result.output
             assert '(db2:c): skipped_not_authorized' in result.output
 
+    def test_get_lists_an_archived_node_by_name_and_state(self, cli_runner, generic_command_mocks):
+        record = dict(
+            CASCADE_RECORD, state='completed',
+            nodes=json.dumps({'db1:b': 'compliant', 'db1:c': 'skipped_archived'}),
+            nodeNames=json.dumps({'db1:b': 'Rotor', 'db1:c': 'Old Blade'}),
+            executionOrder=json.dumps(['db1:b', 'db1:c']))
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_cascade.return_value = record
+            result = cli_runner.invoke(cli, ['compliance', 'cascade', 'get', '-c', 'casc-1'])
+            assert result.exit_code == 0
+            assert 'Old Blade (db1:c): skipped_archived' in result.output
+
     def test_get_without_nodes_lists_none(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].get_compliance_cascade.return_value = dict(CASCADE_RECORD, nodes='{}')

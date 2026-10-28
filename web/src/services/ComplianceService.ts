@@ -407,15 +407,18 @@ export type CascadeState = "pending_approval" | "executing" | "completed" | "abo
 
 /**
  * State of one node of a cascade. `pending` and `evaluating` are in flight; every other value is
- * final: the verdict the node's evaluation produced, `skipped` (no bound schema), `superseded` (a
- * newer evaluation of the asset had already started, so this one did not run; not a failure) or
- * `error`.
+ * final: the verdict the node's evaluation produced, `skipped` (no bound schema, or the asset no
+ * longer exists), `skipped_not_authorized` (in a database the caller who started the cascade may
+ * not evaluate), `skipped_archived` (archived when the cascade reached it; not evaluated),
+ * `superseded` (a newer evaluation of the asset had already started, so this one did not run; not
+ * a failure) or `error`.
  */
 export type CascadeNodeState =
     | "pending"
     | "evaluating"
     | "skipped"
     | "skipped_not_authorized"
+    | "skipped_archived"
     | "superseded"
     | ComplianceEvaluationVerdict;
 

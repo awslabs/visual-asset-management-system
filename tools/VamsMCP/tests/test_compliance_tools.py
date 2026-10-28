@@ -712,6 +712,14 @@ def test_sweep_and_cascade_docstrings_say_a_superseded_asset_is_not_a_failure():
     assert "not a failure" in cascade
 
 
+def test_cascade_docstring_names_the_archived_node_state():
+    """An agent reading a cascade must recognise a node skipped as archived, not report it as an
+    evaluation error."""
+    cascade = _docstring_of("get_compliance_cascade")
+    assert "`skipped_archived`" in cascade
+    assert "archived when the cascade reached it" in cascade
+
+
 def test_delete_compliance_schema_docstring_names_the_bound_refusal_and_irreversibility():
     docstring = _docstring_of("delete_compliance_schema")
     assert "Irreversible" in docstring

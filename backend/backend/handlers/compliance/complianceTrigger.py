@@ -643,10 +643,10 @@ EVALUATION_TARGET_REMOVED = "removed"
 
 
 def automatic_evaluation_target(database_id, asset_id, detected_by=None):
-    """What an automatic evaluation (this trigger's, Evaluate All's or a schema sweep's) does with
-    an asset it is about to start on: evaluate it (`live`); skip it (`archived`: its row sits in
-    the archive, so an evaluation could only record an error; its compliance record is left as it
-    is, as an archive leaves it); or nothing more, because the asset is gone and its record was
+    """What an automatic evaluation (this trigger's, Evaluate All's, a schema sweep's or a cascade's)
+    does with an asset it is about to start on: evaluate it (`live`); skip it (`archived`: its row
+    sits in the archive, so an evaluation could only record an error; its compliance record is left
+    as it is, as an archive leaves it); or nothing more, because the asset is gone and its record was
     removed as its permanent delete removes it (`removed`; `detected_by` names the remover on the
     audit entry).
 

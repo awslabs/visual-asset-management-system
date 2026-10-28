@@ -1827,8 +1827,10 @@ def get_compliance_cascade(cascade_id: str) -> Dict[str, Any]:
     approvalReason or rejectedBy / rejectionReason with completedAt.
 
     A node's state is `pending`, `evaluating`, the verdict its evaluation produced, `skipped` (no
-    bound schema), `skipped_not_authorized` (a node in a database the caller who started the
-    cascade may not evaluate; it is neither evaluated nor named), `superseded` (a newer
+    bound schema, or the asset no longer exists), `skipped_not_authorized` (a node in a database
+    the caller who started the cascade may not evaluate; it is neither evaluated nor named),
+    `skipped_archived` (the asset was archived when the cascade reached it; it is not evaluated
+    and its compliance record is left as it is; not a failure), `superseded` (a newer
     evaluation of that asset had already started, so this one did not run; not a failure) or
     `error`.
 
