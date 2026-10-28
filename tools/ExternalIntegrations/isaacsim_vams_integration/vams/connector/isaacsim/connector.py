@@ -29,7 +29,7 @@ import tempfile
 import urllib.parse
 import urllib.request
 from typing import Dict, FrozenSet, List, NamedTuple, Optional, Any, Tuple
-from xml.etree import ElementTree
+from xml.parsers import expat
 
 from .vams_cli_service import (
     VamsCliService,
@@ -68,12 +68,40 @@ class UnreferenceableLayerError(VamsCliError):
 
 
 class MalformedXmlError(VamsCliError):
-    """Raised when a file an importer would read is not well-formed XML; ``reason`` is the XML
-    parser's message."""
+    """Raised when a file an importer would read is not well-formed XML, or is refused because it
+    declares a document type. ``problem`` says which of the two, and ``reason`` is the XML parser's
+    message, or where the declaration is."""
 
-    def __init__(self, file_name: str, reason: str):
-        super().__init__(f"{file_name} is not well-formed XML: {reason}")
+    NOT_WELL_FORMED = "is not well-formed XML"
+    REFUSED = "is refused"
+
+    def __init__(self, file_name: str, reason: str, problem: str = NOT_WELL_FORMED):
+        super().__init__(f"{file_name} {problem}: {reason}")
+        self.problem = problem
         self.reason = reason
+
+
+def _check_mjcf_xml(local_file: str) -> None:
+    """Raises ``MalformedXmlError`` unless ``local_file`` is well-formed XML with no document type
+    declaration. MJCF does not use one, and one can declare entities, so the parse stops at the
+    declaration, before anything in it is read; parameter entities are never parsed either."""
+    file_name = os.path.basename(local_file)
+    parser = expat.ParserCreate()
+    parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
+
+    def _refuse_document_type(_name, _system_id, _public_id, _has_internal_subset):
+        raise MalformedXmlError(
+            file_name,
+            f"it declares a document type at line {parser.CurrentLineNumber}, which MJCF does not "
+            "use and which can declare entities",
+            MalformedXmlError.REFUSED)
+
+    parser.StartDoctypeDeclHandler = _refuse_document_type
+    try:
+        with open(local_file, "rb") as f:
+            parser.ParseFile(f)
+    except expat.ExpatError as e:
+        raise MalformedXmlError(file_name, str(e)) from e
 
 
 # What MJCFCreateAsset leaves at its prim path for a file it imports nothing from: these, empty.
@@ -1015,9 +1043,9 @@ class IsaacVAMSConnector:
         Import a local MJCF file into the current Isaac Sim stage, under ``/World`` at a prim named
         after the file: ``<name>``, or the first of ``<name>_1``, ``<name>_2``, ... that is free.
 
-        A file that is not well-formed XML is refused before the importer runs. An import that
-        brings in nothing from the file is removed again, with the ``/World`` it created for it.
-        The stage's defaultPrim is left as it was.
+        A file that is not well-formed XML, or that declares a document type, is refused before
+        the importer runs. An import that brings in nothing from the file is removed again, with
+        the ``/World`` it created for it. The stage's defaultPrim is left as it was.
 
         Args:
             local_file: Local path of the ``.mjcf`` or ``.xml`` file.
@@ -1029,17 +1057,15 @@ class IsaacVAMSConnector:
             The prim path of the imported model, or None if the import brought in nothing.
 
         Raises:
-            MalformedXmlError: If the file is not well-formed XML; the stage is not touched.
+            MalformedXmlError: If the file is not well-formed XML, or declares a document type;
+                the stage is not touched.
             VamsCliError: If there is no active USD stage.
         """
         import omni.kit.commands
         import omni.usd
         from isaacsim.asset.importer.mjcf import _mjcf
 
-        try:
-            ElementTree.parse(local_file)
-        except ElementTree.ParseError as e:
-            raise MalformedXmlError(os.path.basename(local_file), str(e)) from e
+        _check_mjcf_xml(local_file)
         stage = omni.usd.get_context().get_stage()
         if stage is None:
             raise VamsCliError("No active USD stage in Isaac Sim")
