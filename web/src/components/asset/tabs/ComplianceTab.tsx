@@ -41,6 +41,7 @@ import {
     schemaSourceLabel,
 } from "../../compliance/complianceStateBadge";
 import Synonyms from "../../../synonyms";
+import { useLatestRequest } from "../../compliance/listingFilters";
 
 interface ComplianceTabProps {
     databaseId: string;
@@ -94,12 +95,18 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
     const [currentPageIndex, setCurrentPageIndex] = useState(1);
     const [loadedPages, setLoadedPages] = useState(1);
 
+    // Each load is dropped when a later one has begun (another asset, another page, a reload
+    // after an action), so the state and history shown are always the latest request's.
+    const beginStateLoad = useLatestRequest();
+    const beginHistoryLoad = useLatestRequest();
     const loadEvaluationsPage = useCallback(
         async (pageNumber: number, startingToken: string | undefined) => {
+            const isCurrent = beginHistoryLoad();
             const [evalSuccess, evalResult] = await fetchEvaluationHistory(databaseId, assetId, {
                 maxItems: COMPLIANCE_LISTING_PAGE_SIZE,
                 startingToken,
             });
+            if (!isCurrent()) return;
             if (evalSuccess && typeof evalResult !== "string") {
                 setEvaluations(evalResult.evaluations);
                 setLoadedPages((prev) => Math.max(prev, pageNumber + 1));
@@ -113,16 +120,18 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                 setHasMore(false);
             }
         },
-        [databaseId, assetId]
+        [beginHistoryLoad, databaseId, assetId]
     );
 
     // Reads the current state and restarts the history walk from its first page.
     const loadComplianceData = useCallback(async () => {
+        const isCurrent = beginStateLoad();
         setLoading(true);
         setError(null);
 
         try {
             const [stateSuccess, stateResult] = await fetchComplianceState(databaseId, assetId);
+            if (!isCurrent()) return;
             if (stateSuccess && typeof stateResult !== "string") {
                 setComplianceState(stateResult);
             }
@@ -133,11 +142,15 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
             setHasMore(false);
             await loadEvaluationsPage(0, undefined);
         } catch (err: any) {
-            setError(err?.message || "Failed to load compliance data");
+            if (isCurrent()) {
+                setError(err?.message || "Failed to load compliance data");
+            }
         } finally {
-            setLoading(false);
+            if (isCurrent()) {
+                setLoading(false);
+            }
         }
-    }, [databaseId, assetId, loadEvaluationsPage]);
+    }, [beginStateLoad, databaseId, assetId, loadEvaluationsPage]);
 
     useEffect(() => {
         if (isActive && canViewCompliance && databaseId && assetId) {

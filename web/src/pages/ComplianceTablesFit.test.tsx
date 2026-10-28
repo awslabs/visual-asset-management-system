@@ -150,7 +150,7 @@ describe("the compliance tables fit the page at 1280 px", () => {
         expect(renderCell("createdAt", cascade).textContent).toContain("by reviewer");
     });
 
-    it("Audit Log: the columns wrap, identifiers break only at _ and camelCase", async () => {
+    it("Audit Log: the columns wrap, identifiers break only at _, camelCase and an actor's @ and .", async () => {
         render(<ComplianceAuditLog />);
         await waitFor(() => expect(mockTableProps.length).toBeGreaterThan(0));
         expect(lastTable().wrapLines).toBe(true);
@@ -182,5 +182,12 @@ describe("the compliance tables fit the page at 1280 px", () => {
         // exception|Schema|Version and non_|compliant.
         expect(details.querySelectorAll("wbr")).toHaveLength(3);
         expect(details.querySelector("[style*='overflow-wrap']")).toBeNull();
+        // An e-mail-style actor breaks after its @ and . (db-admin@|example.|com), so the
+        // column does not take the width of the whole address.
+        const actor = renderCell("actor", { actor: "db-admin@example.com" });
+        expect(actor.textContent).toBe("db-admin@example.com");
+        expect(actor.querySelectorAll("wbr")).toHaveLength(2);
+        expect(actor.querySelector("[style*='overflow-wrap']")).toBeNull();
+        expect(renderCell("actor", {}).textContent).toBe("-");
     });
 });

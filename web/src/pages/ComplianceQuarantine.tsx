@@ -33,6 +33,7 @@ import {
 import {
     DatabaseFilter,
     TextFilterInput,
+    useLatestRequest,
     useUrlFilters,
 } from "../components/compliance/listingFilters";
 
@@ -79,8 +80,12 @@ const ComplianceQuarantine: React.FC = () => {
     const [currentPageIndex, setCurrentPageIndex] = useState(1);
     const [loadedPages, setLoadedPages] = useState(1);
 
+    // A load is dropped when a later one has begun (other filters, another page), so the rows
+    // shown are always the latest request's.
+    const beginLoad = useLatestRequest();
     const loadPage = useCallback(
         async (pageNumber: number, startingToken: string | undefined) => {
+            const isCurrent = beginLoad();
             setLoading(true);
             setError(null);
             setSelectedItems([]);
@@ -88,6 +93,7 @@ const ComplianceQuarantine: React.FC = () => {
                 { maxItems: COMPLIANCE_LISTING_PAGE_SIZE, startingToken },
                 { databaseId: filters.databaseId, text: filters.text }
             );
+            if (!isCurrent()) return;
             if (success && typeof result !== "string") {
                 setItems(result.quarantinedAssets);
                 setLoadedPages((prev) => Math.max(prev, pageNumber + 1));
@@ -104,7 +110,7 @@ const ComplianceQuarantine: React.FC = () => {
             }
             setLoading(false);
         },
-        [filters.databaseId, filters.text]
+        [beginLoad, filters.databaseId, filters.text]
     );
 
     // A reload (or a filter change) restarts the walk: tokens held from a previous listing

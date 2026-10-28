@@ -128,7 +128,11 @@ web/
                               #   version and rule results, opened from the database overview);
                               #   RevokeExceptionModal.tsx (the revoke confirmation shared by the asset tab
                               #   and the database overview); rowActions.ts (ROW_ACTIONS_STICKY_COLUMNS: the
-                              #   compliance tables pin their inline-link Actions column last and wrap the rest)
+                              #   compliance tables pin their inline-link Actions column last and wrap the rest);
+                              #   listingFilters.tsx (URL-backed filters, debounce, DatabaseFilter, and
+                              #   useLatestRequest: every compliance page/dialog load drops a response that
+                              #   arrives after a later load began); BreakableIdentifier.tsx (<wbr> at `_` and
+                              #   camelCase; `userId` also after `@` and `.`, for the audit Actor column)
       filemanager/            # Asset file manager (Cloudscape)
                                 #   EnhancedFileManager.tsx lazy-loads the orchestration execution
                                 #   quick view for a file's "View execution" provenance link.

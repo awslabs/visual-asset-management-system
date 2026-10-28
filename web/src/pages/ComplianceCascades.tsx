@@ -28,6 +28,7 @@ import {
 import {
     DatabaseFilter,
     TextFilterInput,
+    useLatestRequest,
     useUrlFilters,
 } from "../components/compliance/listingFilters";
 import ReasonModal from "../components/compliance/ReasonModal";
@@ -137,8 +138,12 @@ const ComplianceCascades: React.FC = () => {
         };
     }, []);
 
+    // A load is dropped when a later one has begun (other filters, another page), so the rows
+    // shown are always the latest request's.
+    const beginLoad = useLatestRequest();
     const loadPage = useCallback(
         async (pageNumber: number, startingToken: string | undefined) => {
+            const isCurrent = beginLoad();
             setLoading(true);
             setError(null);
             const [success, result] = await fetchCascades({
@@ -148,6 +153,7 @@ const ComplianceCascades: React.FC = () => {
                 databaseId: filters.databaseId,
                 text: filters.text,
             });
+            if (!isCurrent()) return;
             if (success && typeof result !== "string") {
                 // An array is the shape of the listing before it was paged.
                 const page: PagedCascades = Array.isArray(result)
@@ -167,7 +173,7 @@ const ComplianceCascades: React.FC = () => {
             }
             setLoading(false);
         },
-        [stateFilter, filters.databaseId, filters.text]
+        [beginLoad, stateFilter, filters.databaseId, filters.text]
     );
 
     // A reload or a filter change restarts the walk: a token is issued for its filters.

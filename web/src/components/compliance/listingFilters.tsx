@@ -9,7 +9,7 @@
  * database filter.
  */
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import Input from "@cloudscape-design/components/input";
 import Select from "@cloudscape-design/components/select";
 import Synonyms from "../../synonyms";
@@ -94,6 +94,27 @@ export const useUrlFilters = <K extends string>(
         };
     }, [keys]);
     return [values, update];
+};
+
+/**
+ * A guard for a page's loads. `begin()` marks the start of a load and returns `isCurrent`, which
+ * stays true until a later load begins or the component unmounts. A load whose `isCurrent()` is
+ * false when its response arrives sets no state, so a slow answer to an earlier request (another
+ * database, other filters, another page) never replaces the answer to the latest one.
+ */
+export const useLatestRequest = (): (() => () => boolean) => {
+    const latest = useRef(0);
+    useEffect(() => {
+        const sequence = latest;
+        return () => {
+            sequence.current += 1;
+        };
+    }, []);
+    return useCallback(() => {
+        latest.current += 1;
+        const id = latest.current;
+        return () => latest.current === id;
+    }, []);
 };
 
 /** `value`, once it has stopped changing for `delayMs`. */

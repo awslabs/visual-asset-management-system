@@ -48,7 +48,11 @@ import {
     VAMS_PAGE_PADDING,
 } from "../components/compliance/rowActions";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
-import { TextFilterInput, useUrlFilters } from "../components/compliance/listingFilters";
+import {
+    TextFilterInput,
+    useLatestRequest,
+    useUrlFilters,
+} from "../components/compliance/listingFilters";
 import ComplianceAssetCell from "../components/compliance/ComplianceAssetCell";
 
 /** The overview's server-side filters and sort, kept in the URL. */
@@ -146,8 +150,23 @@ const SUMMARY_TILES: {
     { state: "unknown", label: "Unknown" },
 ];
 
+/**
+ * The database a database compliance overview URL (`#/databases/<id>/compliance`) names, or null
+ * for any other URL. Moving to another database's overview changes the URL first: the filters
+ * follow it at once, the route's `databaseId` a render later.
+ */
+export const overviewRouteDatabaseId = (): string | null => {
+    const match = /^#\/databases\/([^/?]+)\/compliance\/?(\?|$)/.exec(window.location.hash || "");
+    return match ? decodeURIComponent(match[1]) : null;
+};
+
 const DatabaseCompliancePage: React.FC = () => {
     const { databaseId } = useParams();
+    // Each load is dropped when a later one has begun (another database, other filters, another
+    // page), so the rows and counts shown are always the latest request's.
+    const beginOverviewLoad = useLatestRequest();
+    const beginBindingLoad = useLatestRequest();
+    const beginSchemasLoad = useLatestRequest();
     const [overview, setOverview] = useState<DatabaseComplianceOverview | null>(null);
     const [databaseSchema, setDatabaseSchema] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
@@ -195,6 +214,12 @@ const DatabaseCompliancePage: React.FC = () => {
     const loadPage = useCallback(
         async (pageNumber: number, startingToken: string | undefined) => {
             if (!databaseId) return;
+            const isCurrent = beginOverviewLoad();
+            // The URL already names another database: the filters followed it before the route's
+            // `databaseId` did, and the load for that database follows. Nothing is requested for
+            // this one.
+            const routeDatabaseId = overviewRouteDatabaseId();
+            if (routeDatabaseId !== null && routeDatabaseId !== databaseId) return;
             setLoading(true);
             setError(null);
             setLoadFailed(false);
@@ -211,6 +236,7 @@ const DatabaseCompliancePage: React.FC = () => {
                         sort: filters.sort,
                     }
                 );
+                if (!isCurrent()) return;
                 if (overviewSuccess && typeof overviewResult !== "string") {
                     setOverview(overviewResult);
                     setLoadedPages((prev) => Math.max(prev, pageNumber + 1));
@@ -233,13 +259,17 @@ const DatabaseCompliancePage: React.FC = () => {
                     setHasMore(false);
                 }
             } catch (err: any) {
+                if (!isCurrent()) return;
                 setLoadFailed(true);
                 setError(err?.message || "Failed to load compliance data");
             } finally {
-                setLoading(false);
+                if (isCurrent()) {
+                    setLoading(false);
+                }
             }
         },
         [
+            beginOverviewLoad,
             databaseId,
             filters.state,
             filters.schemaName,
@@ -262,13 +292,17 @@ const DatabaseCompliancePage: React.FC = () => {
 
     const loadBinding = useCallback(async () => {
         if (!databaseId) return;
+        const isCurrent = beginBindingLoad();
+        const routeDatabaseId = overviewRouteDatabaseId();
+        if (routeDatabaseId !== null && routeDatabaseId !== databaseId) return;
         const [bindingSuccess, bindingResult] = await getDatabaseBindings(databaseId);
+        if (!isCurrent()) return;
         if (bindingSuccess && typeof bindingResult !== "string") {
             const bound = bindingResult.databaseSchema || null;
             setDatabaseSchema(bound);
             setSelectedSchema(bound ? { label: bound, value: bound } : null);
         }
-    }, [databaseId]);
+    }, [beginBindingLoad, databaseId]);
 
     // A reload restarts the walk from the first page and re-reads the binding.
     const loadData = useCallback(async () => {
@@ -288,11 +322,14 @@ const DatabaseCompliancePage: React.FC = () => {
         }
     }, [databaseId, loadBinding]);
 
+    // The schemas this database may bind, re-read for each database the page shows.
     useEffect(() => {
-        if (!canBind) return;
+        if (!canBind || !databaseId) return;
         const loadSchemas = async () => {
+            const isCurrent = beginSchemasLoad();
             setLoadingSchemas(true);
             const [success, result] = await fetchComplianceSchemas(databaseId);
+            if (!isCurrent()) return;
             if (success && Array.isArray(result)) {
                 setSchemaOptions(
                     bindableSchemas(result).map((s) => ({
@@ -307,7 +344,7 @@ const DatabaseCompliancePage: React.FC = () => {
             setLoadingSchemas(false);
         };
         loadSchemas();
-    }, [canBind]);
+    }, [beginSchemasLoad, canBind, databaseId]);
 
     // Binds the selected schema, or replaces the bound one, then re-reads the binding and the
     // overview.

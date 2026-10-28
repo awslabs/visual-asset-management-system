@@ -21,6 +21,7 @@ import {
 import Synonyms from "../../synonyms";
 import { StatusLabel } from "./complianceStateBadge";
 import BreakableIdentifier from "./BreakableIdentifier";
+import { useLatestRequest } from "./listingFilters";
 
 const VERDICTS: Record<string, { type: string; label: string }> = {
     compliant: { type: "success", label: "Compliant" },
@@ -104,14 +105,19 @@ const EvaluationHistoryModal: React.FC<EvaluationHistoryModalProps> = ({
     const [currentPageIndex, setCurrentPageIndex] = useState(1);
     const [loadedPages, setLoadedPages] = useState(1);
 
+    // A load is dropped when a later one has begun (another asset, another page), so the history
+    // shown is always the latest request's.
+    const beginLoad = useLatestRequest();
     const loadPage = useCallback(
         async (pageNumber: number, startingToken: string | undefined) => {
+            const isCurrent = beginLoad();
             setLoading(true);
             setError(null);
             const [success, result] = await fetchEvaluationHistory(databaseId, assetId, {
                 maxItems: COMPLIANCE_LISTING_PAGE_SIZE,
                 startingToken,
             });
+            if (!isCurrent()) return;
             if (success && typeof result !== "string") {
                 setEvaluations(result.evaluations);
                 setLoadedPages((prev) => Math.max(prev, pageNumber + 1));
@@ -128,7 +134,7 @@ const EvaluationHistoryModal: React.FC<EvaluationHistoryModalProps> = ({
             }
             setLoading(false);
         },
-        [databaseId, assetId]
+        [beginLoad, databaseId, assetId]
     );
 
     useEffect(() => {

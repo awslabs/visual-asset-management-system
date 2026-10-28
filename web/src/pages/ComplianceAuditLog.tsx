@@ -20,6 +20,7 @@ import Input from "@cloudscape-design/components/input";
 import {
     DatabaseFilter,
     TextFilterInput,
+    useLatestRequest,
     useUrlFilters,
 } from "../components/compliance/listingFilters";
 import Link from "@cloudscape-design/components/link";
@@ -140,8 +141,12 @@ const ComplianceAuditLog: React.FC = () => {
     const [currentPageIndex, setCurrentPageIndex] = useState(1);
     const [loadedPages, setLoadedPages] = useState(1);
 
+    // A load is dropped when a later one has begun (other filters, another page), so the rows
+    // shown are always the latest request's.
+    const beginLoad = useLatestRequest();
     const loadPage = useCallback(
         async (pageNumber: number, startingToken: string | undefined) => {
+            const isCurrent = beginLoad();
             setLoading(true);
             setError(null);
             const [success, result] = await fetchAuditLog({
@@ -154,6 +159,7 @@ const ComplianceAuditLog: React.FC = () => {
                 ...(filters.from ? { startDate: dayBound(filters.from, false) } : {}),
                 ...(filters.to ? { endDate: dayBound(filters.to, true) } : {}),
             });
+            if (!isCurrent()) return;
             if (success && typeof result !== "string") {
                 setItems(result.entries);
                 setLoadedPages((prev) => Math.max(prev, pageNumber + 1));
@@ -171,6 +177,7 @@ const ComplianceAuditLog: React.FC = () => {
             setLoading(false);
         },
         [
+            beginLoad,
             filters.eventType,
             filters.databaseId,
             filters.assetId,
@@ -380,7 +387,11 @@ const ComplianceAuditLog: React.FC = () => {
                         {
                             id: "actor",
                             header: "Actor",
-                            cell: (item) => item.actor || "-",
+                            // A user id is often an e-mail address with no break opportunity of
+                            // its own; it wraps after its `@` and `.` so the column stays narrow
+                            // enough for the table to fit the page at 1280 px.
+                            cell: (item) =>
+                                item.actor ? <BreakableIdentifier text={item.actor} userId /> : "-",
                             sortingField: "actor",
                         },
                         {

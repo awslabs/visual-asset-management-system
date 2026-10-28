@@ -28,6 +28,23 @@ describe("identifierParts", () => {
     });
 });
 
+describe("identifierParts of a user id", () => {
+    it.each([
+        ["db-admin@example.com", ["db-admin@", "example.", "com"]],
+        ["first.last@corp.example.org", ["first.", "last@", "corp.", "example.", "org"]],
+        ["SYSTEM_USER", ["SYSTEM_", "USER"]],
+        ["local-admin", ["local-admin"]],
+        ["", []],
+    ])("%s", (text, parts) => {
+        expect(identifierParts(text, true)).toEqual(parts);
+    });
+
+    it("leaves a dot alone in other identifiers", () => {
+        expect(identifierParts("schemaVersion 1.2")).toEqual(["schema", "Version 1.2"]);
+        expect(identifierParts("a@b.c")).toEqual(["a@b.c"]);
+    });
+});
+
 describe("BreakableIdentifier", () => {
     it("renders the whole text with a break opportunity between its parts only", () => {
         const { container } = render(<BreakableIdentifier text="exceptionSchemaVersion" />);
@@ -43,5 +60,14 @@ describe("BreakableIdentifier", () => {
         const { container } = render(<BreakableIdentifier text="quarantined" />);
         expect(container.querySelectorAll("wbr")).toHaveLength(0);
         expect(container.textContent).toBe("quarantined");
+    });
+
+    it("breaks a user id after its @ and . only", () => {
+        const { container } = render(<BreakableIdentifier text="db-admin@example.com" userId />);
+        const span = container.querySelector("[data-identifier]") as HTMLElement;
+        expect(span.textContent).toBe("db-admin@example.com");
+        expect(span.querySelectorAll("wbr")).toHaveLength(2);
+        expect(span.style.overflowWrap).toBe("");
+        expect(span.style.wordBreak).toBe("");
     });
 });
