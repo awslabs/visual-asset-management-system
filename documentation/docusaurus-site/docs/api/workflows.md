@@ -1092,13 +1092,18 @@ The applied lower bound is echoed back as `filterStartDate`.
                 "databaseId": "my-database",
                 "assetId": "building-01",
                 "executionError": "",
-                "executionLog": ""
+                "executionLog": "",
+                "outputTypes": ["File"]
             }
         ],
         "filterStartDate": "2025-12-15T10:30:00Z"
     }
 }
 ```
+
+Each row carries `outputTypes`, the subset of `["File", "Metadata", "Result"]` the run produced — the
+same field the global list reports, read from the execution's configuration record. It is `[]` for a
+run that produced none and for a run recorded before the field existed.
 
 One request lists the asset's most recent executions across both directions. `pageSize` is honoured and is capped at 200, because each listed execution costs a record read and a permission check — ask for fewer and you get fewer; ask for more and you get 200. `NextToken` is present when that cap was reached with older executions still available — page with `startingToken` until the token is absent. A run that only wrote into the asset carries no input file, so its `inputAssetFileKey` is empty.
 

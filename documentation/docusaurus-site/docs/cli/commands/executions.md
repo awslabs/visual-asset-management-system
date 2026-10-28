@@ -38,6 +38,12 @@ bounds from every page it walked. A listing filtered to one workflow (`--workflo
 is not expected to fire there.
 :::
 
+Each execution reports the kinds of output it produced as `Output Types` (`File`, `Metadata`, `Result`,
+in that order; `outputTypes` under `--json-output`). The line is omitted for a run that produced none,
+and for a run recorded before output types were captured, which reports `outputTypes: []`. Read a
+run's files with [`execution details files`](#execution-details-files) and its result text with
+[`execution details results`](#execution-details-results).
+
 Each execution reports its output target — `Output Type` (`asset`, or `none` for a results-only run)
 and `Output Asset` as `databaseId:assetId`. Both lines are omitted for a results-only execution, which
 writes no files and therefore has no destination asset.
@@ -113,11 +119,22 @@ occurs.
 | `--json-output`            | Raw JSON response                                                      |
 
 To read the metadata rows themselves in the formatted output — or to read a collection this command
-reports as partial in full — use [`execution details-metadata`](#execution-details-metadata).
+reports as partial in full — use [`execution details metadata`](#execution-details-metadata). A
+partial file collection is read in full with [`execution details files`](#execution-details-files), and
+the run's full result text with [`execution details results`](#execution-details-results).
+
+`execution details` is a command group: with only an execution ID it prints the whole detail view
+described above, and its `metadata`, `files` and `results` subcommands each read one part of that view
+in full.
+
+:::warning[Renamed in 2.7.0]
+`vamscli execution details-metadata` is now `vamscli execution details metadata`, with the same
+options. The flat form is no longer accepted, so update any script that calls it.
+:::
 
 ---
 
-## execution details-metadata
+## execution details metadata
 
 Page one metadata collection of an execution's detail view. `execution details` bounds its metadata
 collections and reports each as a row count; this command reads a named collection a page at a time,
@@ -125,9 +142,9 @@ one row per line, until every row has been returned. Rows carry the same shape t
 plus the pipeline that produced or read them.
 
 ```bash
-vamscli execution details-metadata my-execution-id
-vamscli execution details-metadata my-execution-id --collection output --auto-paginate
-vamscli execution details-metadata my-execution-id --pipeline-id my-pipeline --page-size 500
+vamscli execution details metadata my-execution-id
+vamscli execution details metadata my-execution-id --collection output --auto-paginate
+vamscli execution details metadata my-execution-id --pipeline-id my-pipeline --page-size 500
 ```
 
 | Option             | Description                                                                       |
@@ -174,6 +191,64 @@ pass the same ones when resuming with `--starting-token`. `--auto-paginate` cann
 
 Auto-pagination stops at `--max-items`, or after 200 pages, whichever comes first. When it stops with
 rows still available it says so, and reports the token to resume from.
+
+---
+
+## execution details files
+
+Page one file collection of an execution's detail view. `execution details` bounds its file lists and
+marks a partial one; this command reads a named collection a page at a time until every row has been
+returned. Rows carry the same shape the details view returns; output rows also name the pipeline that
+produced them. No Amazon S3 bucket or key is returned.
+
+```bash
+vamscli execution details files my-execution-id
+vamscli execution details files my-execution-id --collection output --auto-paginate
+vamscli execution details files my-execution-id --collection output --pipeline-id my-pipeline
+```
+
+| Option             | Description                                                                       |
+| ------------------ | --------------------------------------------------------------------------------- |
+| `--collection`     | `input` (default) or `output` — case-sensitive                                    |
+| `--pipeline-id`    | Only output rows produced by this pipeline (one workflow step)                    |
+| `--page-size`      | Rows per page (max 500; a larger value is clamped with a warning)                 |
+| `--max-items`      | Maximum total rows to fetch — applies only with `--auto-paginate` (default 10000) |
+| `--starting-token` | Continuation token for manual pagination                                          |
+| `--auto-paginate`  | Fetch every page up to `--max-items`                                              |
+| `--json-output`    | Output the raw JSON response                                                      |
+
+`input` reads the workflow-level input files, each printed as `databaseId:assetId` and the
+asset-relative path with the S3 version the run read. `output` reads the files the pipelines wrote,
+each printed with its type, size and producing pipeline. There is no `inputDatabase` collection for
+files. `--pipeline-id` applies to the `output` collection only.
+
+Paging behaves as in [`execution details metadata`](#execution-details-metadata): a token is only valid
+alongside the `--collection` and `--pipeline-id` it was issued with, and auto-pagination stops at
+`--max-items` or after 200 pages, reporting the token to resume from.
+
+---
+
+## execution details results
+
+Print an execution's full result text — the concatenated result files its pipelines produced — followed
+by a caption with the row count and byte size. A run that produced no result prints
+`(no result content)` and reports 0 rows.
+
+```bash
+vamscli execution details results my-execution-id
+vamscli execution details results my-execution-id -o result.txt
+vamscli execution details results my-execution-id --json-output
+```
+
+| Option          | Description                                                                 |
+| --------------- | --------------------------------------------------------------------------- |
+| `-o, --output`  | Write the result text to this file; the caption still prints the byte count |
+| `--json-output` | Output the raw JSON response                                                |
+
+The service returns the whole result unless it exceeds 5 MiB, in which case the text is cut at that
+size and the caption is marked `TRUNCATED` (`resultContentTruncated: true` under `--json-output`). The
+remainder is in the execution's output results. `-o` writes the returned text in both output modes;
+with `--json-output` the JSON response is still printed.
 
 ---
 
