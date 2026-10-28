@@ -94,6 +94,8 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
                         pipelines.useNvidiaCosmos3.huggingFaceToken = "synth-only";
                     if (pipelines.useNvidiaGr00t)
                         pipelines.useNvidiaGr00t.huggingFaceToken = "synth-only";
+                    if (pipelines.useImageTo3d)
+                        pipelines.useImageTo3d.huggingFaceToken = "synth-only";
                     if (pipelines.useIsaacLabTraining)
                         pipelines.useIsaacLabTraining.acceptNvidiaEula = true;
                     // The restricted templates ship the Video SOP/BOM model id empty (the commercial
@@ -181,8 +183,8 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
          * image in it and creates an empty one. The build that should repopulate it runs from a custom
          * resource, and AWS CloudFormation invokes a custom resource's Update handler only when one of its
          * PROPERTIES changes — a rename changes neither the project name nor the source hash. MEASURED:
-         * after the rename the new repository held 0 images while the Batch job definition referenced
-         * `f0462fcacd8a838acf19eb56badf08a2`, the deploy exited 0, and the image had to be built by hand.
+         * after the rename the new repository held 0 images while the Batch job definition referenced an
+         * image tag in it, the deploy exited 0, and the image had to be built by hand.
          *
          * An auto-named repository is replaced only when its encryption changes, which
          * `codeBuildEcrEncryption.test.ts` covers, so this rule is about the explicitly named ones.

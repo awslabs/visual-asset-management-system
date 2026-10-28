@@ -1,0 +1,30 @@
+{
+    "pipelineName": "Image to 3D",
+    "category": "3D Reconstruction",
+    "description": "Generate a 3D mesh from one or more photos -- or refine an existing mesh -- with optional automated print-readiness cleanup producing a watertight STL. The model (Stable3DGen, SAM 3D Objects, TRELLIS.2, TripoSR, Step1X-3D, Hunyuan3D-2, or an agent driving Blender) is selected per execution via the template.",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "14400",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "wholeAsset": false
+        },
+        "metadataInputs": {
+            "assetMetadata": false,
+            "fileMetadata": false,
+            "fileAttributes": false,
+            "databaseMetadata": false
+        },
+        "requireTemplate": true,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": ["*.png", "*.jpg", "*.jpeg", "*.glb", "*.gltf", "*.obj", "*.stl", "*.ply"],
+            "exclude": []
+        }
+    }
+}

@@ -231,6 +231,7 @@ const CODEBUILD_PIPELINES = [
     "useNvidiaCosmos3",
     "useNvidiaGr00t",
     "useGenAiVideoSopBom",
+    "useImageTo3d",
 ];
 
 const warningsFrom = (run: () => unknown): string[] => {
