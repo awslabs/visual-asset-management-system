@@ -160,7 +160,7 @@ class TestCallSitesDeclareTheRightRule:
         rules = self._rules_for("handlers/workflows/executionService.py", "executionId")
         assert rules, "expected executionId validate() sites in executionService.py"
         assert set(rules) == {"GUID"}, f"executionId must be validated as a GUID everywhere; got {rules}"
-        assert len(rules) == 6, f"expected 6 executionId sites, found {len(rules)} — audit the new one"
+        assert len(rules) == 8, f"expected 8 executionId sites, found {len(rules)} — audit the new one"
 
     @pytest.mark.parametrize("path", [
         "handlers/comments/addComment.py",

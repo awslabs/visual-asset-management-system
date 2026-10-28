@@ -151,6 +151,8 @@ const sidebars: SidebarsConfig = {
                         "pipelines/nvidia-cosmos-transfer",
                         "pipelines/nvidia-cosmos-3",
                         "pipelines/nvidia-gr00t-finetune",
+                        "pipelines/image-to-3d",
+                        "pipelines/image-to-3d-options",
                         "pipelines/rapidpipeline",
                         "pipelines/model-ops",
                         "pipelines/custom-pipelines",

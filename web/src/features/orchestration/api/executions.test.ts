@@ -19,6 +19,8 @@ import {
     listExecutionsForAsset,
     getExecutionDetails,
     getExecutionDetailsMetadata,
+    getExecutionDetailsFiles,
+    getExecutionResults,
     getExecutionLogs,
     abortExecution,
     rerunExecution,
@@ -158,6 +160,79 @@ describe("executions service", () => {
                 "workflows/executions/e1/details/metadata",
                 {}
             );
+        });
+    });
+
+    describe("getExecutionDetailsFiles", () => {
+        it("hits workflows/executions/{id}/details/files and unwraps the page", async () => {
+            (apiClient.get as jest.Mock).mockResolvedValue({
+                message: { Items: [{ relativeFilePath: "/o.glb" }], collection: "output" },
+            });
+            const r = await getExecutionDetailsFiles("e1", {
+                collection: "output",
+                pageSize: "200",
+            });
+            expect(apiClient.get).toHaveBeenCalledWith("workflows/executions/e1/details/files", {
+                queryStringParameters: { collection: "output", pageSize: "200" },
+            });
+            expect(r).toEqual([
+                true,
+                { Items: [{ relativeFilePath: "/o.glb" }], collection: "output" },
+            ]);
+        });
+
+        it("carries the continuation token through verbatim", async () => {
+            (apiClient.get as jest.Mock).mockResolvedValue({
+                message: { Items: [], collection: "input" },
+            });
+            await getExecutionDetailsFiles("e1", {
+                collection: "input",
+                startingToken: "eyJzdGVwSW5kZXgiOiAwfQ==",
+            });
+            expect(apiClient.get).toHaveBeenCalledWith("workflows/executions/e1/details/files", {
+                queryStringParameters: {
+                    collection: "input",
+                    startingToken: "eyJzdGVwSW5kZXgiOiAwfQ==",
+                },
+            });
+        });
+    });
+
+    describe("getExecutionResults", () => {
+        it("hits workflows/executions/{id}/details/results and unwraps the result", async () => {
+            (apiClient.get as jest.Mock).mockResolvedValue({
+                message: {
+                    resultContent: "hello",
+                    resultContentTruncated: false,
+                    resultRowCount: 1,
+                    resultContentBytes: 5,
+                },
+            });
+            const r = await getExecutionResults("e1");
+            expect(apiClient.get).toHaveBeenCalledWith(
+                "workflows/executions/e1/details/results",
+                {}
+            );
+            expect(r).toEqual([
+                true,
+                {
+                    resultContent: "hello",
+                    resultContentTruncated: false,
+                    resultRowCount: 1,
+                    resultContentBytes: 5,
+                },
+            ]);
+        });
+
+        it("passes the continuation token as startingToken", async () => {
+            (apiClient.get as jest.Mock).mockResolvedValue({
+                message: { resultContent: "next", NextToken: "t3" },
+            });
+            const r = await getExecutionResults("e1", { startingToken: "t2" });
+            expect(apiClient.get).toHaveBeenCalledWith("workflows/executions/e1/details/results", {
+                queryStringParameters: { startingToken: "t2" },
+            });
+            expect(r).toEqual([true, { resultContent: "next", NextToken: "t3" }]);
         });
     });
 

@@ -363,7 +363,8 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useIsaacLabTraining.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
-                props.config.app.pipelines.useNvidiaGr00t.enabled
+                props.config.app.pipelines.useNvidiaGr00t.enabled ||
+                props.config.app.pipelines.useImageTo3d?.enabled
             ) {
                 // Only pipelines whose compute is placed in PRIVATE subnets belong here. A pipeline
                 // running in isolated subnets reaches AWS through the interface endpoints created
@@ -700,7 +701,8 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useIsaacLabTraining?.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
-                props.config.app.pipelines.useNvidiaGr00t.enabled
+                props.config.app.pipelines.useNvidiaGr00t.enabled ||
+                props.config.app.pipelines.useImageTo3d?.enabled
             ) {
                 // Create VPC endpoint for Batch
                 new ec2.InterfaceVpcEndpoint(this, "BatchEndpoint", {
@@ -733,7 +735,8 @@ export class VPCBuilderNestedStack extends NestedStack {
                 if (
                     props.config.app.pipelines.useNvidiaCosmos.enabled ||
                     props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
-                    props.config.app.pipelines.useNvidiaGr00t.enabled
+                    props.config.app.pipelines.useNvidiaGr00t.enabled ||
+                    props.config.app.pipelines.useImageTo3d?.enabled
                 ) {
                     new ec2.InterfaceVpcEndpoint(this, "EFSEndpoint", {
                         vpc: this.vpc,
@@ -809,7 +812,8 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useSplatToolbox.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
-                props.config.app.pipelines.useNvidiaGr00t.enabled;
+                props.config.app.pipelines.useNvidiaGr00t.enabled ||
+                props.config.app.pipelines.useImageTo3d?.enabled;
             const needsEcsIsolated = props.config.app.pipelines.useIsaacLabTraining?.enabled;
 
             if (needsEcsPrivate || needsEcsIsolated) {

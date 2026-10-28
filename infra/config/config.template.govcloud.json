@@ -301,6 +301,50 @@
                         "maxVCpus": 192
                     }
                 }
+            },
+            "useImageTo3d": {
+                "enabled": false,
+                "huggingFaceToken": "",
+                "useCodeBuild": true,
+                "autoRegisterWithVAMS": true,
+                "autoTriggerOnFileExtensionsUpload": "",
+                "instanceTypes": [
+                    "g6e.xlarge",
+                    "g6e.2xlarge",
+                    "g6e.4xlarge",
+                    "g6.2xlarge",
+                    "g6.4xlarge",
+                    "g6.8xlarge",
+                    "g5.2xlarge",
+                    "g5.4xlarge",
+                    "g5.8xlarge"
+                ],
+                "maxVCpus": 48,
+                "models": {
+                    "sam3d": {
+                        "enabled": false
+                    },
+                    "stable3dgen": {
+                        "enabled": true
+                    },
+                    "trellis2": {
+                        "enabled": false
+                    },
+                    "triposr": {
+                        "enabled": false
+                    },
+                    "step1x3d": {
+                        "enabled": false
+                    },
+                    "hunyuan3d": {
+                        "enabled": false
+                    },
+                    "blenderagent": {
+                        "enabled": false,
+                        "bedrockModelId": "",
+                        "useStabilityImageEditing": false
+                    }
+                }
             }
         },
         "addons": {
@@ -380,7 +424,8 @@
                 "useSaml": false,
                 "useOidc": false,
                 "useUserPasswordAuthFlow": false,
-                "credTokenTimeoutSeconds": 3600
+                "credTokenTimeoutSeconds": 3600,
+                "retainLegacyGroupsAttribute": false
             },
             "useExternalOAuthIdp": {
                 "enabled": false,

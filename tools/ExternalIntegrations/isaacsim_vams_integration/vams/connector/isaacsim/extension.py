@@ -1080,7 +1080,7 @@ class VamsConnectorExtension(omni.ext.IExt):
             self._set_status(f"{outcome}{self._unresolved_note(missing)}")
         except MalformedXmlError as e:
             self._set_status(self._failure_status("MJCF error",
-                                                  f"{file_key} is not well-formed XML: {e.reason}"))
+                                                  f"{file_key} {e.problem}: {e.reason}"))
         except Exception as e:
             self._set_status(self._failure_status("MJCF error", e))
 

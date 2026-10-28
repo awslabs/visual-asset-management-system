@@ -101,7 +101,7 @@ infra/
                                            # securitygroup-gateway-pipeline, vamsSchemaRegistration
         conversion/{3dBasic,meshCadMetadataExtraction,coordinateTransform}/
         preview/{pcPotreeViewer,3dThumbnail}/
-        3dRecon/splatToolbox/  genAi/{metadata3dLabeling,videoSopBom,nvidia/{cosmos,gr00t}}/
+        3dRecon/splatToolbox/  genAi/{imageTo3d,metadata3dLabeling,videoSopBom,nvidia/{cosmos,gr00t}}/
         multi/{modelOps,rapidPipeline,rapidPipelineEKS}/  simulation/isaacLabTraining/
       featureEnabled/custom-featureEnabled-config-nestedStack.ts
       locationService/location-service-nestedStack.ts    # Amazon Location Service (commercial only)
@@ -129,7 +129,8 @@ infra/
                                  # producer-declared *_STATE_NAME is a key of the ASL States
                                  # (3dThumbnail, pcPotreeViewer, metadata3dLabeling, coordinateTransform)
     pipelines/batchLogRegistrationEnvGpu.test.ts  # Same for splatToolbox, cosmos x4 (the COSMOS_BATCH_STATE_NAME
-                                 # env value is the joined name), gr00t, isaacLabTraining
+                                 # env value is the joined name), gr00t, isaacLabTraining,
+                                 # imageTo3d (one job definition per enabled model)
     pipelines/containerLogRegistrationEnvEcs.test.ts  # Same for rapidPipeline, modelOps
                                  # (/aws/vendedlogs/Pipelines/* container group)
     pipelines/ecsTimeoutHeadroom.test.ts  # RapidPipeline (ECS) timeout chain: Lambda steps + Fargate task
@@ -242,9 +243,9 @@ Every module-level constant in `config.ts`, and in each add-on configuration mod
 -   `app.openSearch`: useServerless (enabled, nextGen, allowPublic, enableStandbyReplicas, min/maxIndexingOcu, min/maxSearchOcu, deployDeferredIndexSchema), useProvisioned, reindexOnCdkDeploy
 -   `app.useAlb`: enabled, usePublicSubnet, domainHost, certificateArn
 -   `app.useCloudFront`: enabled, customDomain (domainHost, certificateArn, optionalHostedZoneId)
--   `app.pipelines`: deadlineCloudExecutionTypeEnabled, externalPipelineBridges (`[{accountId, roleArnPattern, invokeTargets?}]` — one `events:PutEvents` statement per entry on the orchestration bus resource policy, granted to the bridge account root under an `aws:PrincipalArn` condition on the pattern, plus the exact `invokeTargets` ARNs on the shared workflow role; validated by `validateExternalPipelineBridges()`), executionLogReadPrefixes (`string[]` of `/aws/<service>/...` log-group names, trailing `*` = prefix, used verbatim as the executionService log-read resources; default `DEFAULT_EXECUTION_LOG_READ_PREFIXES`; validated by `validateExecutionLogReadPrefixes()`, which rejects `*`, `/` and anything outside `/aws/`), useConversion3dBasic, useConversionCadMeshMetadataExtraction, useConversionCoordinateTransform, usePreviewPcPotreeViewer, useSplatToolbox, useGenAiMetadata3dLabeling, useGenAiVideoSopBom (bedrockModelId, limits.maxVideoFiles, limits.maxTotalDurationMinutes), useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining, usePreview3dThumbnail, useNvidiaCosmos, useNvidiaCosmos3, useNvidiaGr00t — recompute from the `pipelines: {` block of `ConfigPublic` in `config/config.ts` rather than extending this list
+-   `app.pipelines`: deadlineCloudExecutionTypeEnabled, externalPipelineBridges (`[{accountId, roleArnPattern, invokeTargets?}]` — one `events:PutEvents` statement per entry on the orchestration bus resource policy, granted to the bridge account root under an `aws:PrincipalArn` condition on the pattern, plus the exact `invokeTargets` ARNs on the shared workflow role; validated by `validateExternalPipelineBridges()`), executionLogReadPrefixes (`string[]` of `/aws/<service>/...` log-group names, trailing `*` = prefix, used verbatim as the executionService log-read resources; default `DEFAULT_EXECUTION_LOG_READ_PREFIXES`; validated by `validateExecutionLogReadPrefixes()`, which rejects `*`, `/` and anything outside `/aws/`), useConversion3dBasic, useConversionCadMeshMetadataExtraction, useConversionCoordinateTransform, usePreviewPcPotreeViewer, useSplatToolbox, useGenAiMetadata3dLabeling, useGenAiVideoSopBom (bedrockModelId, limits.maxVideoFiles, limits.maxTotalDurationMinutes), useImageTo3d, useRapidPipeline (useEcs, useEks), useModelOps, useIsaacLabTraining, usePreview3dThumbnail, useNvidiaCosmos, useNvidiaCosmos3, useNvidiaGr00t — recompute from the `pipelines: {` block of `ConfigPublic` in `config/config.ts` rather than extending this list
 -   `app.addons`: useGarnetFramework, usePhysnaSync, useEdhWorkstations. An add-on whose block lives in the add-on config lane declares its interface in its module under `config/addon/`, joined into `ConfigPublic.app.addons` through `ConfigAddonLane` (`config/addon/addonConfig.ts`); `getConfig()` calls the lane's defaults, CodeBuild-partition warning, VPC-requiring-features and validation functions, and the add-on's own `CLAUDE.md` lists its fields
--   `app.authProvider`: useCognito (enabled, useSaml, useOidc, useUserPasswordAuthFlow, credTokenTimeoutSeconds — `useSaml`/`useOidc` are mutually exclusive, commercial-partition only, and are ignored (resolved to `false`) when `enabled` is false); useExternalOAuthIdp (enabled, idpDisplayName, endpoints); authorizerOptions (allowedIpRanges, defaultUserRoleName — a role granted to an authenticated user with no role assignments, empty disables it). Provider details for Cognito federation live outside `config.json` in `config/saml-config.ts` and `config/oidc-config.ts`.
+-   `app.authProvider`: useCognito (enabled, useSaml, useOidc, useUserPasswordAuthFlow, credTokenTimeoutSeconds — `useSaml`/`useOidc` are mutually exclusive, commercial-partition only, and are ignored (resolved to `false`) when `enabled` is false; retainLegacyGroupsAttribute — whether the user pool declares `custom:groups`, which an existing pool must keep (CloudFormation refuses any schema-attribute change) and Cognito rejects on a new pool; absent resolves to `true` with a warning, the templates set `false`, the tracked `config.json` leaves it unset); useExternalOAuthIdp (enabled, idpDisplayName, endpoints); authorizerOptions (allowedIpRanges, defaultUserRoleName — a role granted to an authenticated user with no role assignments, empty disables it). Provider details for Cognito federation live outside `config.json` in `config/saml-config.ts` and `config/oidc-config.ts`.
 -   `app.api`: apiType (fixed `"APIGATEWAY_REST"`); apiGatewayRest (globalRateLimit default 50, globalBurstLimit default 100, endpointType `"REGIONAL"`/`"PRIVATE"`, optionalExternalPrivateApigVPCEId for PRIVATE, apiGatewayTimeoutTime default 29 / max 300 — integration timeout in seconds, applied as `timeoutInMillis` on every route integration in `buildOpenApiSpec.ts`; above 29 requires an approved account `L-E5AE38E3` quota increase; customDomain (enabled, domainHost, certificateArn, optionalHostedZoneId — off by default; Regional custom domain with base path `api`, read through `apiCustomDomainHost(config)`; validated: host + cert required, lowercase host, cert in `env.region`/`env.partition`, not `PRIVATE`, partition in `API_CUSTOM_DOMAIN_PARTITIONS`))
 -   `app.govCloud` (enabled, il6Compliant); `app.iamRoleConfig` (useCustomBootstrapRoles, useCustomVamsStackRoles — mappings in `config/policy/iamRoleConfig.json`); `app.webUi` (optionalBannerHtmlMessage, allowUnsafeEvalFeatures)
 -   `app.useWaf` (boolean): when true, the Web ACL rules load from `config/policy/wafPolicyConfig.json` — `managedRuleGroups` (block or count-only per `block`, plus optional per-rule `ruleActionOverrides`; the shipped policy counts ten Common Rule Set rules that match ordinary VAMS requests — `SizeRestrictions_BODY` (upload bodies up to the API Gateway REST 10 MB limit), `SizeRestrictions_QUERYSTRING` (SuperSplat viewer presigned-URL `?load=` over 2048 bytes), `SizeRestrictions_URIPATH` (encoded file keys over 1024 bytes on the stream routes), `RestrictedExtensions_URIPATH`/`_QUERYARGUMENTS` (`.log`/`.ini`/`.cfg`/`.conf` file names the backend upload blocklist admits), `GenericLFI_URIPATH`/`_QUERYARGUMENTS`/`_BODY` (encoded `../`; the backend rejects `..` segments itself), and `GenericRFI_QUERYARGUMENTS`/`_BODY` (a URL naming an IPv4 address in a metadata value or search string; the backend fetches no URL a request names) — see the "WAF rule policy" paragraph) and `rateBasedRules` (per-entry `limit` and `blockResponseCode` default 429; `aggregateKeyType`/`forwardedIPConfig` are accepted for compatibility but every rule is emitted with `IP`). `getConfig()` loads the file into `config.wafPolicyJSON` (undefined = legacy count-only Common Rule Set). Not part of `config.json`/ConfigPublic beyond the boolean, so it is outside ConfigBuilder + the config templates.
@@ -339,8 +340,8 @@ The two API builder stacks stay split, and consolidating them would remove headr
 | Limit                                     | Value                   | Scope            | Current (commercial template)                                  |
 | ----------------------------------------- | ----------------------- | ---------------- | -------------------------------------------------------------- |
 | CloudFormation resources per template     | 500, not adjustable     | Per nested stack | `apiBuilder` 108, `apiBuilder2` 73                             |
-| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.48 MB, `apiBuilder2` ~0.30 MB                  |
-| API Gateway resources per REST API        | 300 default, adjustable | Per REST API     | 122 path-tree nodes (100 OpenAPI paths) across **both** stacks |
+| CloudFormation template body in Amazon S3 | 1 MB, not adjustable    | Per nested stack | `apiBuilder` ~0.48 MB, `apiBuilder2` ~0.31 MB                  |
+| API Gateway resources per REST API        | 300 default, adjustable | Per REST API     | 124 path-tree nodes (102 OpenAPI paths) across **both** stacks |
 
 Two consequences worth holding onto:
 
@@ -430,7 +431,7 @@ CodeBuild build trigger that does not wait for the image carries the repository 
 replacement re-fires the build into the new repository. Import the key by ARN, as for secrets (trap 2);
 Amazon ECR creates its own grants on the key, so the build and pull roles need no key permission.
 
-Three traps, each of which passes `cdk synth` and fails later:
+Four traps, each of which passes `cdk synth` and fails later:
 
 1.  **`AWS::EFS::FileSystem` `KmsKeyId` requires REPLACEMENT.** Adding or changing it on a file system that
     already exists makes AWS CloudFormation create an empty replacement and delete the original. VAMS
@@ -458,6 +459,15 @@ Three traps, each of which passes `cdk synth` and fails later:
     resource referencing it makes the root stack and every nested stack in it circular. The AWS CloudTrail
     log group is the case in the tree today and stays on the AWS-managed key.
 
+4.  **A policy attached to a role from outside it does not order a custom resource that runs as the role.**
+    A custom resource reaches its role through its provider function, and the function depends only on the
+    role and the role's default policy, where `addToRolePolicy` grants land. A separate `iam.Policy`
+    attached with `role.attachInlinePolicy()` is created in parallel, so on the update that turns the CMK
+    on the custom resource runs before its key grant exists and fails with `kms:Decrypt` access denied.
+    Keep a reference to the policy and call `node.addDependency(policy)` on each custom resource, or on the
+    construct that holds them, as the auth-defaults and metadata-schema seeds do. `AwsCustomResource` adds
+    this dependency itself only for the policy it builds from its `policy` prop.
+
 Two further resources stay on their AWS-managed key by necessity: the VPC flow log group, because the VPC
 nested stack is created before the storage nested stack, and the provisioned OpenSearch domain's log groups,
 which Amazon OpenSearch Service creates from the domain's `logging` props rather than VAMS. The API origin
@@ -477,7 +487,9 @@ node -e "const t=require('/tmp/cyclecheck/<stack>.template.json');
 
 Regression coverage for all of the above: `test/security/inPlaceUpdateSafety.test.ts`, which asserts the CMK-on and
 CMK-off directions, the exemption list, and the nested-stack dependency direction;
-`test/pipelines/codeBuildEcrEncryption.test.ts` does the same for the CodeBuild repositories and their CMK flip.
+`test/pipelines/codeBuildEcrEncryption.test.ts` does the same for the CodeBuild repositories and their CMK flip;
+`test/security/customResourceKmsGrantOrdering.test.ts` checks that every custom resource whose role holds a
+KMS policy runs after it.
 
 **S3 TLS enforcement.** Every S3 bucket gets `requireTLSAndAdditionalPolicyAddToResourcePolicy(bucket, config)` — Deny policy for `s3:*` when `aws:SecureTransport=false`, plus optional additional policy from `config/policy/s3AdditionalBucketPolicyConfig.json`.
 
@@ -502,6 +514,8 @@ An add-on whose legitimate requests trip a managed rule contributes **scoped rul
 **Required when `config.app.govCloud.enabled = true`:** `useGlobalVpc.enabled` MUST be `true`; `useCloudFront.enabled` MUST be `false` (no CloudFront in GovCloud); `useLocationService.enabled` MUST be `false`.
 
 **Additional when `config.app.govCloud.il6Compliant = true`:** Cognito MUST be disabled (`useCognito.enabled = false`); WAF MUST be disabled (`useWaf = false`); KMS CMK encryption MUST be enabled (`useKmsCmkEncryption.enabled = true`).
+
+**Per-partition values that must not be inherited:** `app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId` has a default only in the commercial partition. Which Amazon Bedrock foundation models an account may invoke differs by partition **and** by account entitlement, and the configured string does double duty — it is the `modelId` passed to the Converse API _and_ the model named in the Lambda's `bedrock:InvokeModel` resource ARN — so a commercial default produces a GovCloud or EU Sovereign deployment that synthesizes and deploys cleanly then fails at first invoke. The GovCloud and EU Sovereign templates ship it blank and `getConfig()` requires it when the pipeline is enabled outside `aws`. Test: `infra/test/bedrockModelPartition.test.ts`. `app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId` follows the same rule more strictly: the commercial template carries `global.openai.gpt-6-astra`, the restricted templates ship it blank, `getConfig()` requires it whenever the agent is enabled in any partition, and a `global.`/`us.` inference-profile prefix is rejected outside `aws`. Its `useStabilityImageEditing` flag grants `us.` inference profiles, so `getConfig()` defaults it to the commercial partition's US Regions and rejects it elsewhere. Test: `infra/test/config/configPartitionValidation.test.ts`. The same reasoning applies to any future model-, endpoint- or entitlement-scoped identifier: default it only where it is known to exist, and require it elsewhere rather than guessing.
 
 **GovCloud-specific behavior:** `config.app.useFips` (on in the GovCloud template, not required) adds the AWS KMS FIPS interface endpoint in the VPC builder, and `Service().Endpoint` returns a `fipsHostname` only to a caller that does not pass `false` (every VAMS caller passes it except the `COGNITO_HOSTED_UI` reads, whose `aws`-only entry carries the standard `auth.{region}.amazoncognito.com` in both fields); `AwsSolutions-COG3` suppressed (AdvancedSecurityMode unavailable); EventSourceMapping tags removed via `addPropertyDeletionOverride` (some resources don't support tags in GovCloud); VPC endpoints conditional on feature flags; ALB deployment instead of CloudFront for static web hosting.
 

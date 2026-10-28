@@ -1,0 +1,265 @@
+# syntax=docker/dockerfile:1.7
+
+# VAMS Image to 3D Pipeline Container -- Meta SAM 3D Objects
+# Upstream: https://github.com/facebookresearch/sam-3d-objects
+# Weights: https://huggingface.co/facebook/sam-3d-objects (gated)
+# Licence: Meta SAM License. Commercial use is permitted, but redistribution of the model, its weights
+# or a derivative is only allowed under the same terms and with a copy of the agreement supplied, and
+# the licence carries trade-control obligations. The weights are therefore fetched at run time from the
+# gated repository rather than baked in, so this image is not itself a redistribution of them.
+#
+# This model is built on its OWN toolchain, which is not the one the other models in this pipeline
+# share. Upstream pins a conda environment (Python 3.11.0 plus the CUDA 12.1 toolchain and compilers)
+# and installs its Python dependencies on top with pip; reproducing that is what makes the build
+# work, so the environment file is used as published rather than approximated with pip alone.
+#
+# Its dependency set also reintroduces NVIDIA's kaolin, the component the Stable3DGen model was chosen
+# to avoid. Review kaolin's terms against the deployment before distributing an image built from this
+# file.
+
+FROM mambaorg/micromamba:1.5.8
+
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# The upstream repo is pinned to a reviewed commit so the image is reproducible. Override with
+# --build-arg to move the pin; a full 40-character commit id is required, since the rev-parse check
+# below rejects a branch or tag name (both of which move).
+ARG SAM3D_COMMIT=f91db411c50efee93d8db7aeb323885650f6f722
+ARG SAM3D_REPO_URL="https://github.com/facebookresearch/sam-3d-objects.git"
+# The GPL-3.0 mesh-repair rungs (pymeshfix, pymeshlab) complete the repair ladder. A run selects
+# which rungs it walks through the template's REPAIR_BACKENDS setting.
+ARG ENABLE_GPL_MESH_REPAIR=true
+
+# Resolve names over IPv4 only. This image is the only one in the pipeline on a Debian base rather than
+# an Ubuntu CUDA base, and its resolver hands back the PyPI CDN as IPv6 -- measured in the base image,
+# `getent hosts files.pythonhosted.org` returns 2a04:4e42:f000::223 and nothing else, while the A record
+# 167.82.48.223 is there for the asking. The build VPC has no IPv6 route, so pip spent its entire retry
+# budget on unreachable addresses and failed with "Max retries exceeded ... files.pythonhosted.org", and
+# intermittently "Name or service not known". Five builds died this way.
+#
+# RES_OPTIONS is set as environment rather than written into /etc/resolv.conf because the container
+# runtime regenerates that file at start, discarding anything baked into the image. A gai.conf precedence
+# rule is NOT sufficient on its own: it only reorders results when both families are returned, and here
+# only AAAA comes back, so there is nothing to reorder.
+#
+# `no-aaaa` requires glibc 2.36, which this base provides (Debian 12); on an older base it is ignored
+# silently, so check `ldd --version` before moving the base image. The step below prints the address the
+# CDN resolves to, which is the behaviour that matters and costs one lookup to confirm.
+ENV RES_OPTIONS=no-aaaa
+RUN echo 'precedence ::ffff:0:0/96  100' >> /etc/gai.conf && \
+    echo "resolving the PyPI CDN with RES_OPTIONS=no-aaaa:" && \
+    getent hosts files.pythonhosted.org | head -1
+
+# Give pip a longer retry budget than its default of 5 attempts. This is set as environment rather than
+# as flags because the failures came from pip's ISOLATED build-dependency subprocess, which builds its
+# own command line and inherits only the environment.
+ENV PIP_RETRIES=10
+ENV PIP_DEFAULT_TIMEOUT=60
+
+# System dependencies. The GL/EGL libraries back trimesh's rendering paths and pymeshlab's plugins;
+# git-lfs is needed for the upstream checkout.
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    git \
+    git-lfs \
+    libegl1 \
+    xvfb \
+    libgl1 \
+    libopengl0 \
+    libglu1-mesa \
+    libgles2 \
+    libglib2.0-0 \
+    unzip \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git lfs install
+
+# Install AWS CLI v2. The installer URL carries the version, so a rebuild installs the CLI this image
+# was built with rather than whatever is current. Override with --build-arg to move it.
+ARG AWS_CLI_VERSION=2.36.39
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" -o "awscliv2.zip" && \
+    unzip awscliv2.zip && \
+    ./aws/install && \
+    rm -rf aws awscliv2.zip
+
+# Clone the upstream repo first: its environment file is what defines the interpreter and toolchain
+# everything else installs into.
+RUN git clone "$SAM3D_REPO_URL" /opt/sam3d && \
+    cd /opt/sam3d && \
+    git checkout --detach ${SAM3D_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${SAM3D_COMMIT}" && \
+    git rev-parse HEAD > /opt/sam3d/VAMS_UPSTREAM_COMMIT
+WORKDIR /opt/sam3d
+
+# Upstream's published environment: Python 3.11.0, the CUDA 12.1 toolchain and the compilers the
+# source-built extensions need. Python 3.11 is not a free choice -- bpy 4.3.0, pinned in the base
+# requirements, publishes cp311 wheels only.
+RUN micromamba create -y -n sam3d-objects -f /opt/sam3d/environments/default.yml && \
+    micromamba clean --all --yes
+ENV MAMBA_ROOT_PREFIX=/opt/conda
+ENV CONDA_PREFIX=/opt/conda/envs/sam3d-objects
+ENV PATH="/opt/conda/envs/sam3d-objects/bin:$PATH"
+RUN python -c "import sys; print('python', sys.version)" && \
+    python -c "import sys; assert sys.version_info[:2] == (3, 11), sys.version"
+
+# The conda environment supplies the CUDA toolkit, but torch's extension builder finds its headers
+# through CUDA_HOME. Without it a source-built extension is compiled with no CUDA include path, and
+# fails on cuda_runtime_api.h -- or, worse, quietly produces a CPU-only build, which is the "compiled
+# without GPU support" fault upstream's setup notes warn about for pytorch3d. Set before any extension
+# is built so every one of them picks it up.
+#
+# conda-forge places the headers under targets/<arch>/include rather than directly in the prefix, so
+# the location is discovered rather than assumed and linked where CUDA_HOME expects it. The assertion
+# is what stops a missing header turning into a silent CPU-only image.
+ENV CUDA_HOME=/opt/conda/envs/sam3d-objects
+ENV CUDA_PATH=/opt/conda/envs/sam3d-objects
+RUN set -eux; \
+    header=$(find "$CUDA_HOME" -name cuda_runtime_api.h -print -quit); \
+    test -n "$header"; \
+    echo "cuda headers found at $header"; \
+    include_dir=$(dirname "$header"); \
+    mkdir -p "$CUDA_HOME/include"; \
+    if [ "$include_dir" != "$CUDA_HOME/include" ]; then \
+        cp -rsf "$include_dir"/. "$CUDA_HOME/include/"; \
+    fi; \
+    test -f "$CUDA_HOME/include/cuda_runtime_api.h"; \
+    nvcc --version | tail -2
+
+# Every GPU family the pipeline can schedule onto has to be in this list, or a source-built extension
+# compiles for the wrong architecture and fails at runtime with "no kernel image is available for
+# execution on the device". Ampere (8.6) covers g5 / A10G, Ada (8.9) covers g6 / L4 and g6e / L40S,
+# and Hopper (9.0) covers H100.
+ENV TORCH_CUDA_ARCH_LIST="8.6;8.9;9.0"
+# pytorch3d and gsplat are built from source here. Left unbounded, nvcc runs one job per core and the
+# build container is killed for exceeding memory -- the failure mode that stopped the TRELLIS.2 image.
+ENV MAX_JOBS=2
+
+# download.pytorch.org supplies the cu121 torch build. The general index is the CodeArtifact cache,
+# supplied through the mounted pip.conf, so PyPI itself is not listed here.
+#
+# pypi.ngc.nvidia.com is deliberately NOT included. It does not resolve from this build subnet, and pip
+# spends its whole retry budget on it for every package before moving on -- 60 retry cycles in one
+# observed build. Nothing here needs it: kaolin comes from the NVIDIA find-links page set below, and
+# every other package comes from the cache.
+ENV PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu121"
+
+# Base package and its pinned dependency set, as upstream installs it.
+#
+# Build isolation stays ON, which is upstream's own arrangement: the package declares a hatchling
+# metadata hook (requirements_txt) that pip installs into the isolated build environment. Disabling
+# isolation to work around a network fault broke metadata generation outright --
+# "UnknownPluginError: Unknown metadata hook: requirements_txt" -- because the hook was never
+# installed. With packages served from the CodeArtifact cache the workaround is unnecessary.
+#
+# The credential is mounted at /run/secrets/pipconf and pip is pointed at it with PIP_CONFIG_FILE,
+# rather than mounting it over /etc/pip.conf. One of upstream's own dependencies, nvidia-pyindex, EDITS
+# /etc/pip.conf from its setup.py, and a secret mount is read-only: mounting there failed its wheel
+# build with "[Errno 30] Read-only file system: '/etc/pip.conf'" and took the whole install down.
+# PIP_CONFIG_FILE is set per command instead of as an image ENV so nothing at run time looks for a file
+# that exists only during the build.
+RUN --mount=type=secret,id=pipconf,target=/run/secrets/pipconf export PIP_CONFIG_FILE=/run/secrets/pipconf; pip install --no-cache-dir -e '.[dev]' && \
+    python -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda); \
+assert torch.version.cuda and torch.version.cuda.startswith('12.1'), torch.version.cuda"
+
+# flash-attn is installed from its published wheel BEFORE the extra that requires it, so pip finds the
+# requirement already satisfied and never reaches the source compile. The wheel is selected against
+# the interpreter's own C++ ABI rather than assumed: torch's manylinux builds and its NGC builds differ
+# on that flag, and the wrong wheel imports cleanly and then fails on a symbol at run time.
+RUN --mount=type=secret,id=pipconf,target=/run/secrets/pipconf export PIP_CONFIG_FILE=/run/secrets/pipconf; set -eux; \
+    abi=$(python -c "import torch; print('TRUE' if torch._C._GLIBCXX_USE_CXX11_ABI else 'FALSE')"); \
+    url="https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.5cxx11abi${abi}-cp311-cp311-linux_x86_64.whl"; \
+    echo "installing flash-attn for cxx11abi=${abi}"; \
+    pip install --no-cache-dir "$url"; \
+    python -c "import flash_attn; print('flash_attn', flash_attn.__version__)"
+
+# pytorch3d, from the revision upstream pins. No wheel is published for Python 3.11 against this torch,
+# so this one compiles; MAX_JOBS above is what keeps it inside the build container's memory.
+#
+# torch is imported first in the check, and has to be: pytorch3d's compiled extension links against
+# libtorch and its own package does not import torch, so loading _C on its own fails with
+# "libc10.so: cannot open shared object file" even though the extension built correctly. Importing
+# torch dlopens libc10 into the process and the extension then resolves -- which is also the order
+# every caller uses, since the driver imports torch before anything else.
+RUN --mount=type=secret,id=pipconf,target=/run/secrets/pipconf export PIP_CONFIG_FILE=/run/secrets/pipconf; pip install --no-cache-dir -e '.[p3d]' && \
+    python -c "import torch; import pytorch3d; from pytorch3d import _C; \
+print('pytorch3d', pytorch3d.__version__, 'compiled extension loaded against torch', torch.__version__)"
+
+# The inference extra: kaolin (a published wheel from NVIDIA's index, no compile) and gsplat (built
+# from the pinned revision).
+ENV PIP_FIND_LINKS="https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html"
+RUN --mount=type=secret,id=pipconf,target=/run/secrets/pipconf export PIP_CONFIG_FILE=/run/secrets/pipconf; pip install --no-cache-dir -e '.[inference]' && \
+    python -c "import torch; import kaolin, gsplat; print('kaolin', kaolin.__version__)"
+
+# Upstream patches an unmerged hydra fix into the installed package. Its own script asserts the hydra
+# version before replacing the file, so a version bump fails here rather than at run time.
+RUN python /opt/sam3d/patching/hydra && \
+    python -c "import hydra; print('hydra', hydra.__version__, 'patched')"
+
+# GPL-3.0 mesh-repair rungs, installed only when the operator opts in
+RUN --mount=type=secret,id=pipconf,target=/run/secrets/pipconf export PIP_CONFIG_FILE=/run/secrets/pipconf; if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
+        echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
+        pip install --no-cache-dir pymeshfix pymeshlab; \
+    else \
+        echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
+    fi
+
+# The upstream package and its notebook inference module are imported by the adapter's driver, which
+# runs with the repo root as its working directory; adding it to PYTHONPATH keeps the imports working.
+ENV PYTHONPATH="/opt/sam3d:${PYTHONPATH}"
+
+# The shared requirements are installed after the upstream stack and can pull a shared dependency
+# backwards. Reasserting them restores the versions the pipeline's own code is written against, and the
+# checks below confirm the upstream stack survived it -- a resolver that replaced the cu121 torch here
+# would leave every CUDA extension above linked against a torch that is no longer installed.
+#
+# numpy needs restoring explicitly. The shared file requires it without a version, so the resolver is
+# free to move it, and pytorch3d and gsplat were COMPILED against whichever numpy was present when they
+# were built. Moving it across the 1.x/2.x boundary afterwards leaves the extension binaries expecting a
+# different dtype struct, which fails at import with "numpy.dtype size changed, may indicate binary
+# incompatibility" -- a run reached the GPU and spent 289 seconds before dying on it.
+COPY requirements.txt /opt/ml/code/requirements.txt
+RUN --mount=type=secret,id=pipconf,target=/run/secrets/pipconf export PIP_CONFIG_FILE=/run/secrets/pipconf; set -eux; \
+    built_numpy=$(python -c "import numpy; print(numpy.__version__)"); \
+    pip install --no-cache-dir -r /opt/ml/code/requirements.txt; \
+    final_numpy=$(python -c "import numpy; print(numpy.__version__)"); \
+    if [ "$built_numpy" != "$final_numpy" ]; then \
+        echo "the shared requirements moved numpy $built_numpy -> $final_numpy; restoring the version the CUDA extensions were compiled against"; \
+        pip install --no-cache-dir "numpy==$built_numpy"; \
+    fi; \
+    python -c "import torch, numpy, trimesh, manifold3d; \
+assert torch.version.cuda and torch.version.cuda.startswith('12.1'), torch.version.cuda; \
+print('trimesh', trimesh.__version__, 'torch', torch.__version__, 'numpy', numpy.__version__)"
+
+# Import the COMPILED extensions once the dependency set is final. Each is a binary linked against both
+# torch and numpy, so this is the step that catches an ABI break at build time rather than on a GPU
+# instance. torch is imported first because these extensions do not import it themselves.
+RUN python -c "import torch; import numpy; \
+from pytorch3d import _C as p3d_c; \
+import kaolin, gsplat; \
+print('extensions import against torch', torch.__version__, 'and numpy', numpy.__version__)"
+
+# rembg resolves its segmentation weights under U2NET_HOME and downloads them on first use,
+# defaulting to a home directory nothing carries between jobs -- which had the preprocessing stage
+# re-fetching 176 MB on every run and taking longer than the reconstruction itself. Pointing the
+# variable at a baked-in copy removes the download entirely.
+ENV U2NET_HOME=/opt/rembg
+RUN mkdir -p /opt/rembg && \
+    curl -fsSL -o /opt/rembg/u2net.onnx \
+    https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx && \
+    python -c "import os; p='/opt/rembg/u2net.onnx'; size=os.path.getsize(p); \
+assert size > 150_000_000, f'the u2net weights are only {size} bytes'; print('u2net', size, 'bytes')"
+
+# VAMS container code
+COPY __init__.py __main__.py model_manager.py preprocess.py framing.py generate.py benchmark.py meshcleanup.py printfeatures.py texturing.py export.py agent_broker.py config.json entrypoint.sh /opt/ml/code/
+COPY models /opt/ml/code/models
+COPY vams_utils /opt/ml/code/vams_utils
+# Strip CRLF line endings from entrypoint.sh in case the source was bundled from a Windows working
+# tree; otherwise the shebang becomes `/bin/bash\r` and the kernel returns ENOENT on exec.
+RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh
+
+WORKDIR /opt/ml/code
+ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]
