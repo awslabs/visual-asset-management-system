@@ -95,6 +95,7 @@ Every list VAMS aggregates is `core + add-on + custom`. The custom part is fork-
 | CDK resources                               | `infra/lib/nestedStacks/addon/addonBuilder-nestedStack.ts`                                | `infra/lib/nestedStacks/custom/customResources.ts` (built inside the `CustomBuilder` stack) |
 | Feature switches                            | `infra/common/addonAppFeatures.ts`, pushed by `AddonBuilderNestedStack.enabledFeatures`   | `infra/common/customAppFeatures.ts`, returned by `buildCustomResources()`                   |
 | CSP / default routes                        | `addon/addonCsp.ts`, `addon/addonDefaultRoutes.ts`                                        | CSP: the existing `infra/config/csp/cspAdditionalConfig.json`                               |
+| WAF rule exclusions                         | `addon/addonWafExclusions.ts`, passed by `buildWafStacks()` (`infra/lib/cf-waf-stack.ts`) | none; a fork edits `infra/config/policy/wafPolicyConfig.json`                               |
 | Fork settings                               | `app.addons.*` in `config.json`                                                           | `infra/config/custom/customConfig.json`, read with `loadCustomConfig()`                     |
 
 Custom routes go through `attachFunctionToApi` with the shared `RouteRegistry` (so they get the `VamsAuthorizer` scheme) and cannot be anonymous: `CustomBuilderNestedStack` fails synth on an `allowAnonymous` custom route and on an earlier route made anonymous, and `RouteRegistry` stores frozen descriptors. It also fails synth when `buildCustomResources()` returns a core `VAMS_APP_FEATURES` or add-on `ADDON_APP_FEATURES` value. `publishCustomResourceName()` (`custom/customStackHelpers.ts`) and `publishAddonResourceName()` (`addon/addonStackHelpers.ts`) fail synth on a key equal to a core key or one the other lane declares; the parameters hold names only, never a secret. The backend constants lanes are merged by `common/constants.py` at import and fail closed on a broken rule (names `^[A-Za-z][A-Za-z0-9]{1,63}$`, no reserved key, no field named as a Python keyword or an `EVALUATOR_RESERVED_ATTRIBUTES` name, no redefinition, fields that exist, samples `""`/`[]` with list-valued fields taking only `is_one_of` / `is_not_one_of`, append-only lower-case deny entries). Type and field names are compared ignoring letter case when checking for a repeat, so `Asset` repeats `asset` and `DatabaseId` repeats `databaseId`; authorization still matches a name exactly. An extension object type gets no seeded constraint, so even admin is denied on it until the fork adds one, and the `dynamodb-authdefaults-*` constructs are never extended for it. Naming conventions (`/custom/` routes, `custom/` keys, `CUSTOM_*` switches) are recommended, not enforced. `customConfigCommon/` is the separate place for overriding **existing** behaviour (authorizer MFA check, login profile).
@@ -606,6 +607,13 @@ un-quantified groups). The check runs on the **save** paths — `ConstraintCrite
 by variable substitution because that is what gets stored — and deliberately not on read, where
 `ConstraintResponseModel` uses the rule-free `ConstraintCriteriaResponseModel` so a constraint stored
 by an earlier release keeps reading back as stored.
+
+The policy builder writes each criterion value into its line's `obj_rule` as source escapes, one
+`\xNN` / `\uNNNN` / `\UNNNNNNNN` per character (`CasbinEnforcerService._escape_rule_value`), never as
+plain text: Casbin's policy reader splits lines on commas outside brackets, and pycasbin rewrites `p.` /
+`r.` and `&&` / `||` / `!` throughout the rule text, string literals included, before compiling it. Only
+the object-type check every line opens with, `regexMatch(r.obj.object__type, '^<type>\Z')`, carries a
+registered type name as plain text (`_object_type_rule`).
 
 #### **Example: Secure Model with Validator Integration**
 
