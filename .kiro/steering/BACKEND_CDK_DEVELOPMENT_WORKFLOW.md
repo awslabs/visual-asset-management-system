@@ -142,6 +142,7 @@ Workflow executions are workflow-keyed: the `executionId` is a VAMS GUID passed 
 -   [ ] **Test Authorization**: Test Casbin enforcement scenarios
 -   [ ] **Test Validation**: Test Pydantic model validation
 -   [ ] **Mock AWS Services**: Use proper mocking for DynamoDB, S3, SNS
+-   [ ] **Keep authorizer tests offline**: `tests/common/auth/` and `tests/handlers/auth/` take the CloudFront address-list refresh in `common/auth/clientIp.py` offline through an autouse fixture (`backend/tests/cloudFrontRangesStub.py`); use its `CLOUDFRONT_PEER_V4` / `CLOUDFRONT_PEER_V6` for a CloudFront peer instead of a hard-coded edge address; the snapshot is regenerated with `python backend/scripts/generateCloudFrontOriginFacingRanges.py` from the repo root (outside the Lambda asset tree), and `tests/common/auth/test_cloudFrontOriginFacingRanges.py` fails on a hand edit
 -   [ ] **Run All Tests**: Ensure `pytest` passes with coverage
 
 #### **Step 6: Frontend Integration**
@@ -527,6 +528,13 @@ by variable substitution because that is what gets stored — and deliberately n
 `ConstraintResponseModel` uses the rule-free `ConstraintCriteriaResponseModel` so a constraint stored
 by an earlier release keeps reading back as stored.
 
+The policy builder writes each criterion value into its line's `obj_rule` as source escapes, one
+`\xNN` / `\uNNNN` / `\UNNNNNNNN` per character (`CasbinEnforcerService._escape_rule_value`), never as
+plain text: Casbin's policy reader splits lines on commas outside brackets, and pycasbin rewrites `p.` /
+`r.` and `&&` / `||` / `!` throughout the rule text, string literals included, before compiling it. Only
+the object-type check every line opens with, `regexMatch(r.obj.object__type, '^<type>\Z')`, carries a
+registered type name as plain text (`_object_type_rule`).
+
 #### **Example: Secure Model with Validator Integration**
 
 ```python
@@ -889,6 +897,14 @@ def handle_get_request(event):
         logger.exception(f"Error handling GET request: {e}")
         return internal_error(event=event)
 ```
+
+**An archived record must pass on its stored id and on its database id.** Archiving an asset and deleting a
+database rewrite the record under the partition key `<databaseId>#deleted`; `CasbinEnforcerService.enforce`
+allows such a record only when both the stored `databaseId` and the id with the suffix removed pass. A deny on
+the database therefore covers its archived records, and an allow written only as `databaseId equals <id>` does
+not reach them; to grant archived records, a rule must also name `<databaseId>#deleted` (for example
+`criteriaOr`: `equals <id>` OR `equals <id>#deleted`). Pass the stored record to `enforce()` unchanged; do not
+strip or add the suffix in a handler for authorization.
 
 **Compiled matcher expressions are cached per user enforcer, never decisions.**
 `ExpressionCachingEnforcer` (`handlers/authz/__init__.py`, the `FastEnforcer` subclass that
@@ -2346,6 +2362,10 @@ optional_table = dynamodb.Table(optional_table_name) if optional_table_name else
 **`PRESIGNED_URL_TIMEOUT_SECONDS` is not global.** Only `infra/lib/lambdaBuilder/assetFunctions.ts` sets it, for the five asset handlers that mint presigned URLs (`downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, `uploadFile`, `assetExportService`), and all five index it (`os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]`) at module level. A handler built by any other lambda builder that copies that idiom raises `KeyError` during module import and returns `500` on every request from cold start — CDK synth, lint, and env-patching unit tests all pass. Add the variable to the handler's own builder before reading it.
 
 **Every path that hands out asset file content applies three controls on top of Casbin.** A presigned GET URL or a streamed body — in `downloadAsset`, `streamAsset`, `streamAuxiliaryPreviewAsset`, and `assetExportService` — is refused (or, for the export's per-asset entries, withheld) when the asset's `isDistributable` is false; is refused (export: withheld, the file stays in the listing) when `validateUnallowedFileExtensionAndContentType` rejects the file's key or the `ContentType` a `head_object` of the version about to be served reports, or when that head fails; and every URL or body actually issued is written to the file-download audit log (`log_file_download` / `log_file_download_bulk` / `log_file_download_streamed` in `customLogging/auditLogging.py`). A new download surface gets all three; `downloadAsset.py`'s `lambda_handler` is the reference call shape, and `assetExportService.py` `file_type_allowed_for_download` is the withhold-not-refuse form. A surface that checks many files in one request runs the heads through a bounded pool (`downloadAsset.py`'s bulk branch, `assetExportService.py` `mark_files_allowed_for_download`): serial per-file heads over an asset of thousands of files exceed the API Gateway integration timeout.
+
+**Every path that writes an object under a new name checks that name first.** Upload initialize and completion (`uploadFile.py`) and the move, rename and copy destination (`assetFiles.py` `move_file` / `copy_file`) call `validateUnallowedFileExtensionAndContentType` on the key before any S3 write. A new write path gets the same check.
+
+**A multipart file completed with no parts is cancelled.** `complete_upload` (`uploadFile.py`) aborts that file's multipart upload, stores nothing and reports the file with `success=False`; `sqsUploadFileLarge.py` `complete_multipart_upload_for_large_file` does the same and returns `False`. Only a file initialized as `zero-byte` completes with an empty `parts` list.
 
 ### **AWS Client Configuration Pattern**
 

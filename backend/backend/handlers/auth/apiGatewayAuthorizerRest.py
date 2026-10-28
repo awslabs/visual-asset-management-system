@@ -78,16 +78,20 @@ def _set_audit_client_ip(event) -> None:
     """Put the caller IP where the authorization audit writer reads it.
 
     The writer takes the caller IP from the v2-style ``requestContext.http.sourceIp``; a
-    REST authorizer event carries no ``requestContext.http`` block and holds the TCP peer
-    at ``requestContext.identity.sourceIp``, so the record would name no caller at all.
+    REST authorizer event carries no ``requestContext.http`` block and holds the address
+    API Gateway reports at ``requestContext.identity.sourceIp``, so the record would name no
+    caller at all.
     ``normalize_event`` injects the block from the REST shape, and the value is then the
     address ``resolve_client_ip`` resolved — the same address the IP allow-list decision
     was made on, so a denial reason and the IP it refers to always agree.
 
-    Trust follows resolve_client_ip exactly: forwarding headers count only on a CloudFront
-    deployment, where the record names the viewer rather than the edge; on ALB and direct
-    execute-api deployments every header is caller-controlled and the unforgeable TCP peer
-    is used. ``requestContext.identity.sourceIp`` is left untouched, so the immediate peer
+    Trust follows resolve_client_ip exactly: ``X-Forwarded-For`` counts only on a CloudFront
+    deployment and only for a request whose ``identity.sourceIp`` is a CloudFront origin-facing
+    address, where the record names the entry to the left of that address. Every other request
+    is recorded by ``identity.sourceIp``: on ALB and direct execute-api deployments, for a direct
+    call to a CloudFront deployment's endpoint, and for a request through the deployment's
+    distribution, whose ``identity.sourceIp`` API Gateway already sets to the viewer.
+    ``requestContext.identity.sourceIp`` is left untouched, so the address API Gateway reported
     stays visible in the event echo the audit entry carries.
 
     Best-effort: a failure here degrades the audit record rather than the authorization

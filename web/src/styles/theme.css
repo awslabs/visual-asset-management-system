@@ -69,6 +69,10 @@
     /* Scrollbar */
     --vams-scrollbar-track: #f9fafa;
     --vams-scrollbar-thumb: #d1d5db;
+
+    /* Deployment banner (same in both themes) */
+    --vams-banner-bg: #cc3a1a;
+    --vams-banner-text: #ffffff;
 }
 
 /*

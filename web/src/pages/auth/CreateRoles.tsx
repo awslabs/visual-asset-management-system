@@ -8,8 +8,12 @@ import {
     SpaceBetween,
     Input,
 } from "@cloudscape-design/components";
+import Alert from "@cloudscape-design/components/alert";
 import { useState } from "react";
 import { createRole, updateRole } from "../../services/APIService";
+
+/** Roles the deployment seeds. */
+const SEEDED_ROLE_NAMES = ["admin", "basicReadOnly"];
 
 interface RoleFields {
     source: string;
@@ -196,6 +200,13 @@ export default function CreateTagType({
         >
             <Form errorText={formError}>
                 <SpaceBetween direction="vertical" size="l">
+                    {initState && SEEDED_ROLE_NAMES.includes(initState.roleName) && (
+                        <Alert type="info" header="Default role">
+                            This role is created by the VAMS deployment. The next deployment
+                            rewrites it, undoing edits made here, and re-creates it if it was
+                            deleted. Put customizations on a separate role.
+                        </Alert>
+                    )}
                     <FormField
                         label="Name"
                         constraintText="Required. Enter Role Name"

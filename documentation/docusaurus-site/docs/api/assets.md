@@ -14,7 +14,7 @@ Surrounding whitespace is removed from a submitted `description` before the leng
 
 -   **Asset**: A logical container for one or more files within a database. Assets have metadata, tags, version history, and storage locations.
 -   **Database**: A logical grouping of assets. Each database has an associated S3 bucket for storage.
--   **Asset Version**: A point-in-time snapshot of an asset's files. Versions are created manually or when files are uploaded.
+-   **Asset Version**: A point-in-time snapshot of an asset's files. A version is recorded when the asset is created (version 0), by Create Version (web interface, API or CLI), and by a revert to an earlier version; uploading or changing files never creates one. See [Files and Versions](../concepts/files-and-versions.md).
 -   **Archive**: Soft-deletion of an asset. Archived assets can be unarchived. Permanent deletion removes all data.
 
 ---
@@ -89,11 +89,12 @@ Returns a paginated list of all assets across all databases that the user has pe
 
 **Request Parameters:**
 
-| Parameter       | Location | Type    | Required | Description                                           |
-| --------------- | -------- | ------- | -------- | ----------------------------------------------------- |
-| `maxItems`      | query    | integer | No       | Maximum number of assets to return. Default: `30000`. |
-| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `3000`.            |
-| `startingToken` | query    | string  | No       | Continuation token from a previous response.          |
+| Parameter       | Location | Type    | Required | Description                                                                                     |
+| --------------- | -------- | ------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `maxItems`      | query    | integer | No       | Maximum number of assets to return. Default: `30000`.                                           |
+| `pageSize`      | query    | integer | No       | Page size for pagination. Default: `3000`.                                                      |
+| `startingToken` | query    | string  | No       | Continuation token from a previous response.                                                    |
+| `showArchived`  | query    | boolean | No       | When `true`, returns archived (soft-deleted) assets as well as active assets. Default: `false`. |
 
 **Response:**
 
@@ -297,7 +298,9 @@ Repeat the asset fields from the initialize request, and add:
 | Status | Description                                                                                                                                                               |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid parameters, a `relativeKey` that does not begin with `{assetId}/`, duplicate keys, a database that does not exist, or a failure creating the asset or the upload. |
-| `403`  | Not authorized to write this asset.                                                                                                                                       |
+| `403`  | Not authorized to write this asset, or the upload step refused the request.                                                                                               |
+| `404`  | The upload step reported its target as not found.                                                                                                                         |
+| `429`  | Rate limit exceeded: more than 20 upload initializations by the user in one minute. The response carries a `Retry-After` header (seconds).                                |
 | `500`  | Internal server error.                                                                                                                                                    |
 
 ---

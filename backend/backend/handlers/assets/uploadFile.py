@@ -141,7 +141,8 @@ def calculate_num_parts(file_size=None, num_parts=None, max_part_size=MAX_PART_S
 
 def check_user_rate_limit(user_id: str) -> bool:
     """
-    Check if user has exceeded rate limit of 5 upload initializations per minute.
+    Check if user has exceeded rate limit of MAX_ALLOWED_UPLOAD_PERUSER_PERMINUTE upload
+    initializations per minute.
     Uses UserIdGSI with STRING type for both UserId and createdAt fields.
     
     Args:
@@ -1026,15 +1027,22 @@ def calculate_total_file_size_from_parts(bucket_name: str, key: str, upload_id: 
         Tuple of (total_size, success, error_message)
     """
     try:
-        list_parts_response = s3.list_parts(
-            Bucket=bucket_name,
-            Key=key,
-            UploadId=upload_id
-        )
+        # ListParts returns at most 1,000 parts per call, so page with PartNumberMarker
+        uploaded_parts = []
+        list_parts_kwargs = {
+            'Bucket': bucket_name,
+            'Key': key,
+            'UploadId': upload_id
+        }
+        while True:
+            list_parts_response = s3.list_parts(**list_parts_kwargs)
+            uploaded_parts.extend(list_parts_response.get('Parts', []))
+            if not list_parts_response.get('IsTruncated'):
+                break
+            list_parts_kwargs['PartNumberMarker'] = list_parts_response['NextPartNumberMarker']
         
         # Calculate total size from all uploaded parts
         total_file_size = 0
-        uploaded_parts = list_parts_response.get('Parts', [])
         
         # Verify all requested parts are uploaded and calculate size
         uploaded_part_numbers = {part['PartNumber'] for part in uploaded_parts}
@@ -1955,8 +1963,8 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 
             temp_s3_key = f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}"
             
-            # Every branch below creates an object under final_s3_key -- the zero-byte and abandoned
-            # branches write one directly, the multipart branch completes one -- so the name-level
+            # The branches below can create an object under final_s3_key -- the zero-byte branch
+            # writes one directly, the multipart branch completes one -- so the name-level
             # blocklist and preview-extension rules run here, before any of them, on the submitted
             # name. The multipart branch additionally re-checks the completed object's content type.
             name_check_error = None
@@ -2033,11 +2041,11 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     has_failures = True
                     continue
             
-            # Handle abandoned uploads (no parts provided) - create empty file
+            # Cancelled uploads (a multipart upload completed with no parts): abort the
+            # multipart upload and store nothing, so an existing object at the key is untouched
             if not file.parts or len(file.parts) == 0:
-                logger.info(f"No parts provided for file {file.relativeKey}, creating empty file")
+                logger.info(f"No parts provided for file {file.relativeKey}, cancelling its upload")
                 
-                # Abort the existing multipart upload
                 try:
                     s3.abort_multipart_upload(
                         Bucket=bucket_name,
@@ -2045,34 +2053,16 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                         UploadId=file.uploadIdS3
                     )
                 except Exception as abort_error:
-                    logger.warning(f"Error aborting multipart upload for abandoned file: {abort_error}")
+                    logger.warning(f"Error aborting multipart upload for cancelled file: {abort_error}")
                 
-                # Create empty file in temporary location
-                if create_zero_byte_file(bucket_name, temp_s3_key, uploadId, databaseId, assetId, user_id):
-                    file_detail = {
-                        'relativeKey': file.relativeKey,
-                        'temp_s3_key': temp_s3_key,
-                        'final_s3_key': final_s3_key,
-                        'uploadIdS3': file.uploadIdS3
-                    }
-                    
-                    successful_files.append(file_detail)
-                    file_results.append(FileCompletionResult(
-                        relativeKey=file.relativeKey,
-                        uploadIdS3=file.uploadIdS3,
-                        success=True,
-                        largeFileAsynchronousHandling=False
-                    ))
-                    continue
-                else:
-                    file_results.append(FileCompletionResult(
-                        relativeKey=file.relativeKey,
-                        uploadIdS3=file.uploadIdS3,
-                        success=False,
-                        error="Failed to create empty file for abandoned upload"
-                    ))
-                    has_failures = True
-                    continue
+                file_results.append(FileCompletionResult(
+                    relativeKey=file.relativeKey,
+                    uploadIdS3=file.uploadIdS3,
+                    success=False,
+                    error="Upload cancelled: no parts were provided; nothing was stored"
+                ))
+                has_failures = True
+                continue
             
             # Regular multipart upload - first check file size before completing
             actual_parts = sorted([p.PartNumber for p in file.parts])

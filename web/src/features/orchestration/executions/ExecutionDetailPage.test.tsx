@@ -1182,6 +1182,84 @@ describe("ExecutionDetailPage tab strip", () => {
 });
 
 /**
+ * The Outputs tab's "Open in file manager" link. Output rows store the asset-relative path without a
+ * leading slash, and the file manager's tree paths carry one.
+ */
+describe("ExecutionDetailPage output file links", () => {
+    let queryClient: QueryClient;
+
+    beforeEach(() => {
+        queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        jest.clearAllMocks();
+    });
+
+    it("links an output file to the file manager with the leading-slash path", async () => {
+        const { useExecutionDetails, useExecutionDetailMetadata } = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useExecutionDetailMetadata.mockReturnValue({
+            data: undefined,
+            isLoading: false,
+            isError: false,
+            error: null,
+            hasNextPage: false,
+            isFetchingNextPage: false,
+            fetchNextPage: jest.fn(),
+        });
+        useExecutionDetails.mockReturnValue({
+            data: {
+                workflowExecutionId: "e-out",
+                workflowId: "wf-1",
+                workflowDatabaseId: "db-1",
+                executionStatus: "SUCCEEDED",
+                inputFiles: [],
+                outputs: {
+                    files: [
+                        {
+                            databaseId: "db-1",
+                            assetId: "a1",
+                            pipelineId: "p1",
+                            relativeFilePath: "out/sub/model.glb",
+                        },
+                        {
+                            databaseId: "db-1",
+                            assetId: "a1",
+                            pipelineId: "p1",
+                            relativeFilePath: "/top.glb",
+                        },
+                    ],
+                    metadata: [],
+                    results: [],
+                },
+            },
+            isLoading: false,
+            error: null,
+        });
+        useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => true) });
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter initialEntries={["/executions/e-out?tab=outputs"]}>
+                    <ExecutionDetailPage executionId="e-out" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        const table = await screen.findByRole("table", { name: /output files/i });
+        const hrefs = within(table)
+            .getAllByRole("link", { name: "Open in file manager" })
+            .map((a) => a.getAttribute("href"));
+        expect(hrefs).toEqual(
+            expect.arrayContaining([
+                "/#/databases/db-1/assets/a1?filePath=%2Fout%2Fsub%2Fmodel.glb",
+                // A path that already carries the slash is not given a second one.
+                "/#/databases/db-1/assets/a1?filePath=%2Ftop.glb",
+            ])
+        );
+        expect(hrefs).toHaveLength(2);
+    });
+});
+
+/**
  * The Pipelines tab's Sub-processes section. Sub-executions are resolved only on request — this page
  * is the one view that renders them — and the server states every way the data can be incomplete,
  * each of which must be shown beside what it qualifies.

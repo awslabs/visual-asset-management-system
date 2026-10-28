@@ -374,7 +374,10 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                         <span>
                             v{item.Version}
                             {item.versionAlias && (
-                                <span style={{ color: "#5f6b7a" }}> ({item.versionAlias})</span>
+                                <span style={{ color: "var(--vams-text-secondary)" }}>
+                                    {" "}
+                                    ({item.versionAlias})
+                                </span>
                             )}
                         </span>
                         {item.isCurrent && <Badge color="blue">Current</Badge>}
@@ -385,7 +388,7 @@ export const AssetVersionList: React.FC<AssetVersionListProps> = ({
                                 style={{
                                     display: "inline-flex",
                                     alignItems: "center",
-                                    color: "#0972d3",
+                                    color: "var(--vams-color-info)",
                                 }}
                             >
                                 <svg

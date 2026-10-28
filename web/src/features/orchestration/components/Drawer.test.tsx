@@ -38,3 +38,17 @@ describe("Drawer", () => {
         await waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement));
     });
 });
+
+describe("Drawer close button", () => {
+    it("takes its colour from the theme text tokens", () => {
+        render(
+            <Drawer open onOpenChange={jest.fn()} title="T">
+                <p>body</p>
+            </Drawer>
+        );
+        const close = screen.getByRole("button", { name: "Close panel" });
+        expect(close.className).toContain("text-text-secondary");
+        expect(close.className).toContain("hover:text-text-primary");
+        expect(close.className).not.toMatch(/text-gray-/);
+    });
+});

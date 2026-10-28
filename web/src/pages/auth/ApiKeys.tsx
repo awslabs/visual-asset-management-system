@@ -40,6 +40,37 @@ import { usePageTitle } from "../../hooks/usePageTitle";
 
 export type ApiKeyManagementMode = "admin" | "user";
 
+export type ApiKeyStatus = "Active" | "Inactive" | "Expired";
+
+/**
+ * The status shown for an API key, matching how the authorizer treats it: Inactive when isActive is
+ * not "true"; otherwise Expired when expiresAt is set and in the past, else Active. A date-only or
+ * offset-less expiresAt is read as UTC, and a value that cannot be parsed counts as Expired.
+ */
+export function apiKeyStatus(
+    item: { isActive?: string; expiresAt?: string | null },
+    nowMs: number = Date.now()
+): ApiKeyStatus {
+    if (item.isActive !== "true") return "Inactive";
+    if (!item.expiresAt) return "Active";
+
+    let value = item.expiresAt.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        value += "T00:00:00Z";
+    } else if (/T/.test(value) && !/(Z|[+-]\d{2}:?\d{2})$/.test(value)) {
+        value += "Z";
+    }
+    const expiryMs = Date.parse(value);
+    if (Number.isNaN(expiryMs)) return "Expired";
+    return nowMs > expiryMs ? "Expired" : "Active";
+}
+
+const API_KEY_STATUS_INDICATOR: Record<ApiKeyStatus, "success" | "stopped" | "error"> = {
+    Active: "success",
+    Inactive: "stopped",
+    Expired: "error",
+};
+
 export default function ApiKeys() {
     usePageTitle("API Keys");
 
@@ -295,10 +326,10 @@ export default function ApiKeys() {
             id: "active",
             header: "Active",
             cell: (item: any) => {
-                const isActive = item.isActive === "true";
+                const status = apiKeyStatus(item);
                 return (
-                    <StatusIndicator type={isActive ? "success" : "stopped"}>
-                        {isActive ? "Active" : "Inactive"}
+                    <StatusIndicator type={API_KEY_STATUS_INDICATOR[status]}>
+                        {status}
                     </StatusIndicator>
                 );
             },

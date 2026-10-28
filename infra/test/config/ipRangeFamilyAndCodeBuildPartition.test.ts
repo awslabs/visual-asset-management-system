@@ -7,12 +7,13 @@
  * Two `getConfig()` rules that were missing.
  *
  * **IPv6 in the authorizer allow-list.** `authorizerOptions.allowedIpRanges` accepted only IPv4
- * dotted quads, so no IPv6 range was expressible — while the authorizer's `_strip_port` parses the
- * bracketed `[2001:db8::1]:50314` CloudFront viewer-address form and a unit test asserts it. The
- * matcher now compares with Python's `ipaddress`, so both families work; the validator has to admit
- * an IPv6 literal for a range to be configurable at all. Both endpoints of one entry must be the
- * same family: a mixed pair has no ordering, and the authorizer skips such an entry rather than
- * allowing it, so a throw here is what surfaces the mistake instead of silently narrowing access.
+ * dotted quads, so no IPv6 range was expressible — while the authorizer resolves IPv6 client
+ * addresses (an IPv6 viewer behind CloudFront arrives in `X-Forwarded-For`) and a unit test
+ * asserts it. The matcher now compares with Python's `ipaddress`, so both families work; the
+ * validator has to admit an IPv6 literal for a range to be configurable at all. Both endpoints of
+ * one entry must be the same family: a mixed pair has no ordering, and the authorizer skips such
+ * an entry rather than allowing it, so a throw here is what surfaces the mistake instead of
+ * silently narrowing access.
  *
  * **`useCodeBuild` outside the supported partitions.** Decision E-6 is "warn only" — inform rather
  * than prevent, because partition support changes and a hard guard would block legitimate

@@ -30,54 +30,64 @@ const readFcsFile = (
     remoteFileUrl: string,
     setColumns: (columns: Column[]) => void,
     setRows: (rows: Row[]) => void,
-    onFailure: (message: string) => void
+    onFailure: (message: string) => void,
+    onEventCount: (eventsRead: number, eventsTotal: number) => void
 ) => {
     const request = new XMLHttpRequest();
     request.open("GET", remoteFileUrl, true);
     request.responseType = "arraybuffer";
     request.onerror = () => onFailure("Unable to download this FCS file");
     request.onload = function () {
-        const buffer = arrayBufferToBuffer(request.response);
-        const fcs = new (FCS as any)({}, buffer);
-        if (fcs.dataAsStrings && Array.isArray(fcs.dataAsStrings) && fcs.text) {
-            const newRows: Row[] = [];
-            const newColumns: Column[] = [];
-            // Parsing, not sanitizing: each FCS row string is one bracketed list, so stripping the
-            // single leading '[' and trailing ']' is the intended transform, and nothing is
-            // rendered as HTML or executed from it.
-            // nosemgrep: javascript.lang.security.audit.incomplete-sanitization.incomplete-sanitization
-            const columnCount = fcs.dataAsStrings[0]
-                ?.replace("[", "")
-                .replace("]", "")
-                .split(",").length;
-
-            for (let i = 1; i <= columnCount; i++) {
-                const name = fcs.text["$P" + i + "N"] || " ";
-                newColumns.push({
-                    key: name,
-                    name: name,
-                });
-            }
-            for (let i = 0; i < columnCount; i++) {
-                // Parsing, not sanitizing: each FCS row string is one bracketed list, so stripping
-                // the single leading '[' and trailing ']' is the intended transform, and nothing is
+        try {
+            const buffer = arrayBufferToBuffer(request.response);
+            const fcs = new (FCS as any)({}, buffer);
+            if (fcs.dataAsStrings && Array.isArray(fcs.dataAsStrings) && fcs.text) {
+                const newRows: Row[] = [];
+                const newColumns: Column[] = [];
+                // Parsing, not sanitizing: each FCS row string is one bracketed list, so stripping the
+                // single leading '[' and trailing ']' is the intended transform, and nothing is
                 // rendered as HTML or executed from it.
                 // nosemgrep: javascript.lang.security.audit.incomplete-sanitization.incomplete-sanitization
-                const newRow = fcs.dataAsStrings[i]
-                    .replace("[", "")
+                const columnCount = fcs.dataAsStrings[0]
+                    ?.replace("[", "")
                     .replace("]", "")
-                    .split(",")
-                    .reduce((acc: Row, cur: string, j: number) => {
-                        acc[newColumns[j].key] = cur;
-                        return acc;
-                    }, {});
-                newRows.push(newRow);
+                    .split(",").length;
+
+                for (let i = 1; i <= columnCount; i++) {
+                    const name = fcs.text["$P" + i + "N"] || " ";
+                    newColumns.push({
+                        key: name,
+                        name: name,
+                    });
+                }
+                // One row per event; each event string holds one value per parameter (column).
+                for (let i = 0; i < fcs.dataAsStrings.length; i++) {
+                    // Parsing, not sanitizing: each FCS row string is one bracketed list, so stripping
+                    // the single leading '[' and trailing ']' is the intended transform, and nothing is
+                    // rendered as HTML or executed from it.
+                    // nosemgrep: javascript.lang.security.audit.incomplete-sanitization.incomplete-sanitization
+                    const newRow = fcs.dataAsStrings[i]
+                        .replace("[", "")
+                        .replace("]", "")
+                        .split(",")
+                        .reduce((acc: Row, cur: string, j: number) => {
+                            acc[newColumns[j].key] = cur;
+                            return acc;
+                        }, {});
+                    newRows.push(newRow);
+                }
+                setColumns(newColumns);
+                setRows(newRows);
+                // The fcs reader stops at its eventsToRead limit, so the file can hold more events.
+                const eventsTotal = Number(fcs.meta?.eventCount ?? fcs.text?.$TOT);
+                onEventCount(newRows.length, Number.isFinite(eventsTotal) ? eventsTotal : 0);
+            } else {
+                // No parsable columns: this is not an FCS file, or it is one this
+                // parser cannot read. Either way it never becomes a table.
+                onFailure("Unable to read this file as FCS data");
             }
-            setColumns(newColumns);
-            setRows(newRows);
-        } else {
-            // No parsable columns: this is not an FCS file, or it is one this
-            // parser cannot read. Either way it never becomes a table.
+        } catch (error) {
+            console.error("Error parsing FCS file:", error);
             onFailure("Unable to read this file as FCS data");
         }
     };
@@ -138,6 +148,17 @@ const ColumnarViewerComponent: React.FC<ViewerPluginProps> = ({
     const [columns, setColumns] = useState<Column[]>([]);
     const [rows, setRows] = useState<Row[]>([]);
     const [error, setError] = useState<string | null>(null);
+    const [eventCounts, setEventCounts] = useState<{ read: number; total: number } | null>(null);
+    // The grid follows the VAMS theme (the body class), not the OS colour scheme
+    const [isDark, setIsDark] = useState(() => document.body.classList.contains("awsui-dark-mode"));
+
+    useEffect(() => {
+        const observer = new MutationObserver(() => {
+            setIsDark(document.body.classList.contains("awsui-dark-mode"));
+        });
+        observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+        return () => observer.disconnect();
+    }, []);
 
     useEffect(() => {
         const loadAsset = async () => {
@@ -146,6 +167,7 @@ const ColumnarViewerComponent: React.FC<ViewerPluginProps> = ({
             try {
                 setLoaded(false);
                 setError(null);
+                setEventCounts(null);
 
                 console.log("ColumnarViewerComponent loading file:", {
                     assetId,
@@ -175,7 +197,13 @@ const ColumnarViewerComponent: React.FC<ViewerPluginProps> = ({
                         const extension = (extensionOfFilename(assetKey) || "").toLowerCase();
                         if (extension === FCS_EXTENSION) {
                             try {
-                                readFcsFile(response[1], setColumns, setRows, setError);
+                                readFcsFile(
+                                    response[1],
+                                    setColumns,
+                                    setRows,
+                                    setError,
+                                    (read, total) => setEventCounts({ read, total })
+                                );
                                 setLoaded(true);
                             } catch (error) {
                                 console.error("Error reading FCS file:", error);
@@ -234,7 +262,12 @@ const ColumnarViewerComponent: React.FC<ViewerPluginProps> = ({
 
     return (
         <div style={{ width: "100%", height: "100%", overflowX: "scroll" }}>
-            <DataGrid columns={columns} rows={rows} />
+            {eventCounts && eventCounts.total > eventCounts.read && (
+                <div data-testid="fcs-event-count">
+                    {`Showing ${eventCounts.read.toLocaleString()} of ${eventCounts.total.toLocaleString()} events`}
+                </div>
+            )}
+            <DataGrid className={isDark ? "rdg-dark" : "rdg-light"} columns={columns} rows={rows} />
         </div>
     );
 };

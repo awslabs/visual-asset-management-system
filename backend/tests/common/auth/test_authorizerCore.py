@@ -5,6 +5,7 @@ import json
 import pytest
 from unittest.mock import patch
 from backend.backend.common.auth import authorizerCore as core
+from backend.tests.cloudFrontRangesStub import CLOUDFRONT_PEER_V4
 
 
 def _evt(path="/database", source_ip="203.0.113.7", auth="Bearer good.jwt.token", headers=None):
@@ -34,9 +35,10 @@ class TestAuthenticateRequest:
         assert res["authorized"] is False
 
     def test_ip_check_uses_client_ip_when_fronted(self):
-        # sourceIp is the CloudFront hop (disallowed); real client (allowed) is in XFF.
-        evt = _evt(source_ip="130.176.0.1",
-                   headers={"X-Forwarded-For": "203.0.113.7, 130.176.0.1"},
+        # sourceIp is a CloudFront origin-facing address (disallowed); the client (allowed) is
+        # the XFF entry left of it.
+        evt = _evt(source_ip=CLOUDFRONT_PEER_V4,
+                   headers={"X-Forwarded-For": f"203.0.113.7, {CLOUDFRONT_PEER_V4}"},
                    auth=None)
         with patch.object(core, "ALLOWED_IP_RANGES", [["203.0.113.0", "203.0.113.255"]]), \
              patch.object(core, "IGNORED_PATHS", ["/database"]):

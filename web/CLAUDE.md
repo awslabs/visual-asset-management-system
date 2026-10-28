@@ -74,10 +74,11 @@ web/
       types.ts reservedTagKeys.ts
 
     FedAuth/Auth.tsx        # Dual-mode auth orchestrator (Cognito OR External OAuth2)
+    FedAuth/oauthSignInState.ts  # External OAuth: opaque state, same-origin return page, one-time values
     authenticator/          # Cognito Authenticator UI components (Header, Footer, SignIn*)
 
     services/               # API and data services (ONLY files that may import apiClient)
-      APIService.ts         # Main API service (~900+ lines, 40+ exports)
+      APIService.ts         # Main API service (~3,500 lines, 110+ exports)
       AssetUploadService.ts # S3 multipart upload logic
       AssetVersionService.ts  # updateAssetVersion, archiveAssetVersion, unarchiveAssetVersion
       FileOperationsService.ts
@@ -569,6 +570,8 @@ const header = await getDualAuthorizationHeader();
 -   Custom `TokenProvider` is used for external OAuth token integration
 -   `appCache` replaces Amplify Cache for runtime config storage
 -   Hub event names changed: `signIn` -> `signedIn`, `signOut` -> `signedOut`
+-   Every sign-out path awaits `revokeSession()` (`utils/sessionManager.ts`; Amplify `signOut()`, bounded at 5 s) BEFORE `clearStoredSession()` and `clearLocalStore()`. Amplify reads the stored tokens to revoke the refresh token, so clearing localStorage first skips the revocation.
+-   External OAuth sign-in (`FedAuth/oauthSignInState.ts`) sends an opaque random `state`, never the page URL: an IdP that returns `state` without percent-encoding would cut a URL at `#`. The page to return to is stored under `auth_return_to`, followed only when it is on `window.location.origin` (otherwise the app root), and `auth_state`, `auth_return_to` and `code_verifier` are removed once the callback succeeds or fails. The callback is refused unless its `state` equals the stored one.
 
 ### 5.4 User State
 
@@ -594,7 +597,7 @@ This codebase uses NO global state library. State is managed through:
 2. **Component-local useState/useReducer** for component state
 3. **localStorage** for persistence across sessions
 4. **appCache** (`src/services/appCache.ts`) for runtime config and preferences
-5. **URL params** via React Router v6 `useParams()`
+5. **URL params** via React Router v7 `useParams()`
 6. **TanStack Query** for server state in the orchestration module (`features/orchestration/`) — caching, background refetch, smart polling (`computeRefetchInterval` keeps polling active only while non-terminal executions are visible)
 
 ### 6.2 Context Pattern
@@ -919,8 +922,7 @@ setError(`${Synonyms.Asset} not found`);
 1. **Cloudscape component props** -- Use Cloudscape's built-in styling props first
 2. **SCSS** -- Global styles in `src/styles/`, uses 7-1 SCSS architecture
 3. **CSS Modules** -- Scoped styles (e.g., `loginbox.module.css`)
-4. **styled-components** -- Used in some components
-5. **Inline styles** -- Acceptable for simple one-off styles
+4. **Inline styles** -- Acceptable for simple one-off styles
 
 ### 10.2 SCSS Structure
 
@@ -1110,7 +1112,7 @@ npm install           # Install dependencies + runs postinstall (viewer installs
 npm run start         # Start dev server (port 3001)
 ```
 
-The dev server proxies API calls via Vite's proxy config. Set `DEV_API_ENDPOINT` in `config.ts` to point to a remote API or local backend.
+The dev server has no API proxy: `web/vite.config.ts` sets only port 3001 and the COOP/COEP headers. Set `DEV_API_ENDPOINT` in `src/config.ts` to point the dev server at a remote API or a local backend.
 
 ### 12.2 Build
 
@@ -1190,7 +1192,7 @@ const token = await getDualValidAccessToken();
 // CORRECT -- use Synonyms for customizable display names
 import Synonyms from "../../synonyms";
 <Header>{Synonyms.Assets}</Header>
-<p>Select a {Synonyms.Database}</p>
+<p>{`Select the ${Synonyms.database} to continue`}</p>
 ```
 
 See section 9.4 for the full Synonyms rules.
@@ -1216,8 +1218,7 @@ See section 9.4 for the full Synonyms rules.
 | `zod`                           | latest               | Schema validation                    |
 | `reactflow`                     | v11                  | DAG preview (replaced v9 EOL)        |
 | `@badgateway/oauth2-client`     | 2.4.2                | External OAuth2 PKCE flow            |
-| `react-router-dom`              | ^6.0.0               | Client-side routing                  |
-| `styled-components`             | ^5.3.3               | CSS-in-JS (legacy usage)             |
+| `react-router-dom`              | ^7.18.2              | Client-side routing                  |
 | `three`                         | (via customInstalls) | 3D rendering engine                  |
 | `maplibre-gl`                   | ^6.9.0               | Map rendering                        |
 | `react-pdf`                     | ^10.1.0              | PDF viewing                          |
@@ -1352,7 +1353,7 @@ Environment variables use the `VITE_*` prefix instead of `REACT_APP_*`. Access t
 
 ### 18.3 Proxy
 
-Vite's `server.proxy` in `vite.config.ts` configures the development proxy. API calls to `/api/*` are proxied to the backend.
+`vite.config.ts` defines no `server.proxy`. In local development the web app calls the API at `DEV_API_ENDPOINT` (`src/config.ts`) directly.
 
 ### 18.4 COI Service Worker
 

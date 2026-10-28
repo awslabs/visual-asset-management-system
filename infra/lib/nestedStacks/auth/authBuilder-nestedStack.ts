@@ -142,49 +142,45 @@ export class AuthBuilderNestedStack extends NestedStack {
         });
 
         // Add KMS permissions when KMS encryption is enabled, regardless of timing issues
+        let crAuthKmsPolicy: iam.Policy | undefined;
         if (props.config.app.useKmsCmkEncryption.enabled) {
             if (props.storageResources.encryption.kmsKey) {
                 // KMS key is available, add specific permissions
-                authDefaultCustomResourceRole.attachInlinePolicy(
-                    new iam.Policy(this, "CRAuthKmsPolicy", {
-                        statements: [
-                            kmsKeyPolicyStatementGenerator(
-                                props.storageResources.encryption.kmsKey
-                            ),
-                        ],
-                    })
-                );
+                crAuthKmsPolicy = new iam.Policy(this, "CRAuthKmsPolicy", {
+                    statements: [
+                        kmsKeyPolicyStatementGenerator(props.storageResources.encryption.kmsKey),
+                    ],
+                });
             } else {
                 // KMS key not yet available, add general KMS permissions for custom resources
-                authDefaultCustomResourceRole.attachInlinePolicy(
-                    new iam.Policy(this, "CRAuthKmsPolicy", {
-                        statements: [
-                            new iam.PolicyStatement({
-                                actions: [
-                                    "kms:Decrypt",
-                                    "kms:DescribeKey",
-                                    "kms:Encrypt",
-                                    "kms:GenerateDataKey*",
-                                    "kms:ReEncrypt*",
-                                    "kms:ListKeys",
-                                    "kms:CreateGrant",
-                                    "kms:ListAliases",
-                                ],
-                                effect: iam.Effect.ALLOW,
-                                resources: ["*"], // Will be constrained by KMS key policy
-                                conditions: {
-                                    StringEquals: {
-                                        "kms:ViaService": [
-                                            Service("DYNAMODB", false).Endpoint,
-                                            Service("S3", false).Endpoint,
-                                        ],
-                                    },
+                crAuthKmsPolicy = new iam.Policy(this, "CRAuthKmsPolicy", {
+                    statements: [
+                        new iam.PolicyStatement({
+                            actions: [
+                                "kms:Decrypt",
+                                "kms:DescribeKey",
+                                "kms:Encrypt",
+                                "kms:GenerateDataKey*",
+                                "kms:ReEncrypt*",
+                                "kms:ListKeys",
+                                "kms:CreateGrant",
+                                "kms:ListAliases",
+                            ],
+                            effect: iam.Effect.ALLOW,
+                            resources: ["*"], // Will be constrained by KMS key policy
+                            conditions: {
+                                StringEquals: {
+                                    "kms:ViaService": [
+                                        Service("DYNAMODB", false).Endpoint,
+                                        Service("S3", false).Endpoint,
+                                    ],
                                 },
-                            }),
-                        ],
-                    })
-                );
+                            },
+                        }),
+                    ],
+                });
             }
+            authDefaultCustomResourceRole.attachInlinePolicy(crAuthKmsPolicy);
         }
 
         //Deploy DynamoDB system user login profile
@@ -211,11 +207,15 @@ export class AuthBuilderNestedStack extends NestedStack {
             ),
         };
 
-        new AwsCustomResource(this, `userStorageTable_system_CustomResource`, {
-            onCreate: awsSdkCallUserSystemUser,
-            onUpdate: awsSdkCallUserSystemUser,
-            role: authDefaultCustomResourceRole,
-        });
+        const userSystemCustomResource = new AwsCustomResource(
+            this,
+            `userStorageTable_system_CustomResource`,
+            {
+                onCreate: awsSdkCallUserSystemUser,
+                onUpdate: awsSdkCallUserSystemUser,
+                role: authDefaultCustomResourceRole,
+            }
+        );
 
         //Deploy DynamoDB admin user login profile
         const awsSdkCallUserAdmin: AwsSdkCall = {
@@ -241,11 +241,15 @@ export class AuthBuilderNestedStack extends NestedStack {
             ),
         };
 
-        new AwsCustomResource(this, `userStorageTable_admin_CustomResource`, {
-            onCreate: awsSdkCallUserAdmin,
-            onUpdate: awsSdkCallUserAdmin,
-            role: authDefaultCustomResourceRole,
-        });
+        const userAdminCustomResource = new AwsCustomResource(
+            this,
+            `userStorageTable_admin_CustomResource`,
+            {
+                onCreate: awsSdkCallUserAdmin,
+                onUpdate: awsSdkCallUserAdmin,
+                role: authDefaultCustomResourceRole,
+            }
+        );
 
         //Deploy DynamoDB for roles/constraints defaults
         const dynamoDbAuthDefaultsAdmin = new DynamoDbAuthDefaultsAdminConstructStack(
@@ -289,6 +293,18 @@ export class AuthBuilderNestedStack extends NestedStack {
         //         storageResources: props.storageResources,
         //     }
         // );
+
+        // Custom resources that run as the custom resource role wait for its KMS grant
+        if (crAuthKmsPolicy) {
+            for (const seed of [
+                userSystemCustomResource,
+                userAdminCustomResource,
+                dynamoDbAuthDefaultsAdmin,
+                dynamoDbAuthDefaultsRO,
+            ]) {
+                seed.node.addDependency(crAuthKmsPolicy);
+            }
+        }
 
         //Nag Supressions
     }

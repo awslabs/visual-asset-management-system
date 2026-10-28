@@ -43,7 +43,7 @@ SAML federation uses the Amazon Cognito hosted UI, which is not available in AWS
 | `metadataContent`     | URL of your SAML metadata. Can also point to a local file if `metadataType` is changed to `cognito.UserPoolIdentityProviderSamlMetadataType.FILE`                                |
 | `attributeMapping`    | Maps SAML attributes back to VAMS (email, fullname)                                                                                                                              |
 
-3. Deploy or redeploy the CDK stack with `cdk deploy --all`.
+3. Deploy or redeploy the CDK stack with `npx cdk deploy --all` from the `infra/` directory.
 
 #### OIDC Federation
 
@@ -80,7 +80,7 @@ SAML and OIDC federation are mutually exclusive: configuration validation reject
 
     Configuration validation rejects the placeholder values the file ships with, so a deployment cannot silently register an identity provider that cannot complete a login.
 
-4. Deploy or redeploy the CDK stack with `cdk deploy --all`.
+4. Deploy or redeploy the CDK stack with `npx cdk deploy --all` from the `infra/` directory.
 
 Programmatic access for a federated user goes through a token override rather than username/password, because a federated identity has no password in the user pool. See [Setup and authentication](../cli/commands/setup-and-auth.md#auth-login).
 
@@ -530,6 +530,10 @@ Two headers are available only on the CloudFront path. `Cross-Origin-Embedder-Po
 
 The custom Lambda authorizer supports optional IP-based access control. When `authProvider.authorizerOptions.allowedIpRanges` is configured with one or more CIDR ranges, the authorizer validates the source IP of each request against the allowlist before proceeding with JWT validation.
 
+On an Amazon CloudFront deployment, the authorizer uses the client address Amazon API Gateway reports for the connection. For a request through the VAMS distribution that is the viewer's address: the CloudFront edge appears only as the last `X-Forwarded-For` entry, after the viewer's address and any entries the viewer sent itself, and is not used. The authorizer uses `X-Forwarded-For` only for a request that API Gateway reports with a CloudFront origin-facing address, and then uses the entry before that address; API Gateway reports requests through the VAMS distribution with the viewer's address, so this guard does not apply to them. Any other request, including one sent to the API Gateway endpoint directly, is evaluated by its connection address, and so are all requests on ALB and unfronted deployments. The `CloudFront-Viewer-Address` header is not read; the VAMS distribution does not forward it to the API origin.
+
+The origin-facing addresses are the `CLOUDFRONT_ORIGIN_FACING` prefixes of the [AWS IP address ranges](https://ip-ranges.amazonaws.com/ip-ranges.json): each release bundles a copy, and when the authorizer checks an address outside that copy, it refreshes the list from the published document and adds what it finds. On a CloudFront deployment it checks the address API Gateway reports only for a request whose `X-Forwarded-For` header ends with that address and has an IP address before it. API Gateway appends the connection address to an `X-Forwarded-For` header the caller sends, so only a request sent to the API Gateway endpoint directly with its own `X-Forwarded-For` header can start a refresh; requests through the VAMS distribution, requests without the header, and all requests on ALB and unfronted deployments never do. A successful refresh is reused for 6 hours. A failed attempt is retried after 15 minutes, and each further consecutive failure doubles that wait, up to 6 hours. Each attempt is a single request with a 1-second connect timeout and a 2-second read timeout. Where the document is unreachable, for example when the authorizer runs in a VPC without internet egress (`useGlobalVpc.useForAllLambdas`), the bundled copy is used alone, and the direct request that starts an attempt waits for the connect timeout once per address `ip-ranges.amazonaws.com` resolves to (about 4 seconds today). The authorizer logs a warning when a refresh fails (once per execution environment) or finds prefixes the bundled copy lacks.
+
 ## Presigned URL Network Restrictions
 
 VAMS supports optional network restrictions on Amazon S3 presigned URL access through bucket policies. When `app.assetBuckets.presignedUrlNetworkRestrictions` is configured with `allowedIpRanges` (IPv4/IPv6 CIDR blocks) or `allowedVpceIds` (Amazon S3 interface or gateway VPC endpoint IDs), these restrictions are enforced as bucket policy deny statements on the VAMS-created asset bucket and the auxiliary bucket. The restrictions apply only to presigned (query-string authenticated) requests, leaving backend operations and presigned URL lifetimes unchanged.
@@ -628,7 +632,7 @@ Each partition entry carries both a standard and a FIPS hostname, so `useFips` r
 
 ## Blocked File Types
 
-VAMS validates all uploaded files against blocked extension and MIME type lists to prevent malicious content. The comparison is case-insensitive on the file extension and on the media-type part of the reported content type (any parameter such as `; charset=binary` is ignored), so `.EXE` and `Application/X-Msdownload` are blocked exactly like their lower-case forms. The extension is everything from the last dot of the file name, read from the key's last non-empty path segment after any trailing dots and whitespace are removed, so `payload.exe.`, `payload.exe `, `.exe`, `..exe` and `payload.exe/` are blocked like `payload.exe`; dotfiles such as `.gitignore` are not affected, and a folder whose own name ends in a blocked extension (`builds.exe/`) cannot be downloaded as a prefix. Every colon-separated piece of the file name is checked against the list, because a Windows client writes whichever piece survives: a `:` opens an NTFS alternate data stream that is not part of the file written to disk, so `payload.exe::$DATA` and `payload.exe:evil` are blocked like `payload.exe`, and a browser that cannot write `:` substitutes it and keeps the rest of the name, so `a:b.exe` is blocked like `b.exe`. A file path that creates a new object (upload, move or copy destination) is also rejected when its final name ends in a dot or whitespace, because Windows drops that character when the file is written to disk, and an upload path is rejected when it ends in a slash, because a file is never a folder. A path that creates a new object (upload, create folder, move or copy destination) is rejected when it contains a `:` anywhere, because Windows forbids that character in a file or folder name.
+VAMS validates all uploaded files against blocked extension and MIME type lists to prevent malicious content, and checks the destination file name of a move, rename or copy against the blocked extension list. The comparison is case-insensitive on the file extension and on the media-type part of the reported content type (any parameter such as `; charset=binary` is ignored), so `.EXE` and `Application/X-Msdownload` are blocked exactly like their lower-case forms. The extension is everything from the last dot of the file name, read from the key's last non-empty path segment after any trailing dots and whitespace are removed, so `payload.exe.`, `payload.exe `, `.exe`, `..exe` and `payload.exe/` are blocked like `payload.exe`; dotfiles such as `.gitignore` are not affected, and a folder whose own name ends in a blocked extension (`builds.exe/`) cannot be downloaded as a prefix. Every colon-separated piece of the file name is checked against the list, because a Windows client writes whichever piece survives: a `:` opens an NTFS alternate data stream that is not part of the file written to disk, so `payload.exe::$DATA` and `payload.exe:evil` are blocked like `payload.exe`, and a browser that cannot write `:` substitutes it and keeps the rest of the name, so `a:b.exe` is blocked like `b.exe`. A file path that creates a new object (upload, move or copy destination) is also rejected when its final name ends in a dot or whitespace, because Windows drops that character when the file is written to disk, and an upload path is rejected when it ends in a slash, because a file is never a folder. A path that creates a new object (upload, create folder, move or copy destination) is rejected when it contains a `:` anywhere, because Windows forbids that character in a file or folder name.
 
 ### Blocked Extensions
 
@@ -638,7 +642,7 @@ VAMS validates all uploaded files against blocked extension and MIME type lists 
 
 `application/java-archive`, `application/x-msdownload`, `application/x-sh`, `application/javascript`, `application/x-powershell`, `application/vbscript`, and additional potentially dangerous MIME types.
 
-Upload completion applies the blocked-extension check to every object it creates, including zero-byte and abandoned uploads, before the object is written, and accepts only the files that were declared when the upload was initialized; an upload initialized before this check existed is completed without it until it expires, seven days after it was initialized, and an expired upload is refused.
+Upload completion applies the blocked-extension check to every object it creates, including zero-byte files, before the object is written, and accepts only the files that were declared when the upload was initialized; an upload initialized before this check existed is completed without it until it expires, seven days after it was initialized, and an expired upload is refused. A file completed with no parts is cancelled: its multipart upload is aborted and no object is created.
 
 ## Audit Logging
 
@@ -673,15 +677,15 @@ When `addStackCloudTrailLogs = true`, VAMS deploys an AWS CloudTrail trail that 
 
 All Amazon S3 buckets in VAMS are configured with:
 
-| Setting                 | Value                                              |
-| ----------------------- | -------------------------------------------------- |
-| Block Public Access     | `BLOCK_ALL`                                        |
-| Object Ownership        | `OBJECT_WRITER`                                    |
-| Versioning              | Enabled                                            |
-| Server Access Logging   | Enabled (to Access Logs bucket)                    |
-| TLS Enforcement         | Deny policy for non-secure transport               |
-| Lifecycle Rules         | Abort incomplete multipart uploads after 7-14 days |
-| Optional KMS Encryption | SSE-KMS with bucket key enabled                    |
+| Setting                 | Value                                                                                                                                                                                                                                                                                                                   |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Block Public Access     | `BLOCK_ALL`                                                                                                                                                                                                                                                                                                             |
+| Object Ownership        | `OBJECT_WRITER`                                                                                                                                                                                                                                                                                                         |
+| Versioning              | Enabled                                                                                                                                                                                                                                                                                                                 |
+| Server Access Logging   | Enabled (to Access Logs bucket)                                                                                                                                                                                                                                                                                         |
+| TLS Enforcement         | Deny policy for non-secure transport                                                                                                                                                                                                                                                                                    |
+| Lifecycle Rules         | Abort incomplete multipart uploads after 7 days on the VAMS-created asset bucket and after 14 days on the auxiliary bucket. VAMS adds no lifecycle rule to an external asset bucket; see [Step 6](../deployment/external-s3-setup.md#step-6-configure-lifecycle-rules-for-upload-staging) of the external bucket setup. |
+| Optional KMS Encryption | SSE-KMS with bucket key enabled                                                                                                                                                                                                                                                                                         |
 
 ### Additional Bucket Policies
 
