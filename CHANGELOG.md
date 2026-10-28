@@ -143,6 +143,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Backend** Permission constraint criteria values that contain `p.`, `r.`, `!`, `&&` or `||` match as written, for every operator.
 -   **CDK** Turning `app.useKmsCmkEncryption.enabled` on for an existing deployment completes: the default role, constraint, user and metadata schema seeds wait for the policy that grants their role the new AWS KMS key, instead of failing with `kms:Decrypt` access denied and rolling back the core stack. ([#841](https://github.com/awslabs/visual-asset-management-system/issues/841))
 -   **Backend** `PUT /database/{databaseId}` answers `403` when the caller may call the route but is not permitted to update that database, instead of `400` with "Access denied", so the web application and `vamscli` report a permission refusal rather than an invalid request. Nothing is written in either case. ([#785](https://github.com/awslabs/visual-asset-management-system/issues/785))
+-   **Backend** Search results that include archived assets and files are authorized the same way as the asset and file listings: an archived asset, and a file of an archived asset, on the archived record.
 
 ### Chores
 
