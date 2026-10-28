@@ -420,7 +420,7 @@ CodeBuild build trigger that does not wait for the image carries the repository 
 replacement re-fires the build into the new repository. Import the key by ARN, as for secrets (trap 2);
 Amazon ECR creates its own grants on the key, so the build and pull roles need no key permission.
 
-Three traps, each of which passes `cdk synth` and fails later:
+Four traps, each of which passes `cdk synth` and fails later:
 
 1.  **`AWS::EFS::FileSystem` `KmsKeyId` requires REPLACEMENT.** Adding or changing it on a file system that
     already exists makes AWS CloudFormation create an empty replacement and delete the original. VAMS
@@ -448,6 +448,15 @@ Three traps, each of which passes `cdk synth` and fails later:
     resource referencing it makes the root stack and every nested stack in it circular. The AWS CloudTrail
     log group is the case in the tree today and stays on the AWS-managed key.
 
+4.  **A policy attached to a role from outside it does not order a custom resource that runs as the role.**
+    A custom resource reaches its role through its provider function, and the function depends only on the
+    role and the role's default policy, where `addToRolePolicy` grants land. A separate `iam.Policy`
+    attached with `role.attachInlinePolicy()` is created in parallel, so on the update that turns the CMK
+    on the custom resource runs before its key grant exists and fails with `kms:Decrypt` access denied.
+    Keep a reference to the policy and call `node.addDependency(policy)` on each custom resource, or on the
+    construct that holds them, as the auth-defaults and metadata-schema seeds do. `AwsCustomResource` adds
+    this dependency itself only for the policy it builds from its `policy` prop.
+
 Two further resources stay on their AWS-managed key by necessity: the VPC flow log group, because the VPC
 nested stack is created before the storage nested stack, and the provisioned OpenSearch domain's log groups,
 which Amazon OpenSearch Service creates from the domain's `logging` props rather than VAMS. The API origin
@@ -467,7 +476,9 @@ node -e "const t=require('/tmp/cyclecheck/<stack>.template.json');
 
 Regression coverage for all of the above: `test/security/inPlaceUpdateSafety.test.ts`, which asserts the CMK-on and
 CMK-off directions, the exemption list, and the nested-stack dependency direction;
-`test/pipelines/codeBuildEcrEncryption.test.ts` does the same for the CodeBuild repositories and their CMK flip.
+`test/pipelines/codeBuildEcrEncryption.test.ts` does the same for the CodeBuild repositories and their CMK flip;
+`test/security/customResourceKmsGrantOrdering.test.ts` checks that every custom resource whose role holds a
+KMS policy runs after it.
 
 **S3 TLS enforcement.** Every S3 bucket gets `requireTLSAndAdditionalPolicyAddToResourcePolicy(bucket, config)` — Deny policy for `s3:*` when `aws:SecureTransport=false`, plus optional additional policy from `config/policy/s3AdditionalBucketPolicyConfig.json`.
 
