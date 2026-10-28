@@ -66,7 +66,7 @@ export const SECTIONS: Section[] = [
         id: "pipelines-gpu",
         label: "Pipelines — NVIDIA / GPU & third-party",
         description:
-            "GPU-backed pipelines: Cosmos, Gr00t, Isaac Lab, Gaussian Splatting, RapidPipeline, ModelOps.",
+            "GPU-backed pipelines: Cosmos, Gr00t, Image to 3D, Isaac Lab, Gaussian Splatting, RapidPipeline, ModelOps.",
         advanced: true,
         order: 8,
     },
@@ -165,6 +165,7 @@ function makeModelFields(
 const COSMOS = "app.pipelines.useNvidiaCosmos";
 const COSMOS3 = "app.pipelines.useNvidiaCosmos3";
 const GR00T = "app.pipelines.useNvidiaGr00t";
+const IMAGETO3D = "app.pipelines.useImageTo3d";
 
 const cosmosModelFields: FieldMeta[] = [
     ...makeModelFields(`${COSMOS}.modelsPredict.text2world2B_v2`, "Cosmos Text2World 2B", {
@@ -212,6 +213,60 @@ const cosmos3ModelFields: FieldMeta[] = [
         }
     ),
 ];
+
+/**
+ * Image to 3D selects a model per run rather than provisioning per-model
+ * compute, so each model contributes a single enable toggle. The licence note
+ * mirrors the model's upstream terms.
+ */
+function makeImageTo3dModelField(modelKey: string, label: string, licence: string): FieldMeta {
+    return {
+        path: `${IMAGETO3D}.models.${modelKey}.enabled`,
+        label: `Image to 3D — ${label}`,
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: `${licence}. At least one model must be enabled.`,
+    };
+}
+
+const imageTo3dModelFields: FieldMeta[] = [
+    makeImageTo3dModelField("sam3d", "Meta SAM 3D Objects", "Meta SAM License"),
+    makeImageTo3dModelField("stable3dgen", "Stable-X Stable3DGen / Hi3DGen (geometry only)", "MIT"),
+    makeImageTo3dModelField("trellis2", "Microsoft TRELLIS.2 (4B)", "MIT"),
+    makeImageTo3dModelField("triposr", "VAST-AI TripoSR", "MIT"),
+    makeImageTo3dModelField("step1x3d", "StepFun Step1X-3D", "Apache-2.0"),
+    makeImageTo3dModelField(
+        "hunyuan3d",
+        "Tencent Hunyuan3D-2",
+        "Tencent Hunyuan 3D 2.0 Community License Agreement — no licence in the European Union, the United Kingdom or South Korea, and a separate Tencent licence above one million monthly active users"
+    ),
+    makeImageTo3dModelField(
+        "blenderagent",
+        "Blender agent (Codex CLI on Amazon Bedrock)",
+        "Blender GPL-2.0-or-later as tooling, Codex CLI Apache-2.0, LiteLLM MIT; the foundation model terms are Amazon Bedrock's. Needs Bedrock model access in the deployment account"
+    ),
+];
+
+/** The Bedrock model the Blender agent reasons with; per-partition and per-account like the labeling model. */
+const imageTo3dAgentModelField: FieldMeta = {
+    path: `${IMAGETO3D}.models.blenderagent.bedrockModelId`,
+    label: "Image to 3D — Blender agent Bedrock model id",
+    input: "text",
+    section: "pipelines-gpu",
+    advanced: true,
+    help: "Foundation model id or inference-profile id the agent reasons with (needs image input). Required when the agent is enabled; the commercial preset carries global.openai.gpt-6-astra and the restricted-partition presets leave it empty.",
+};
+
+/** Whether the agent may edit texture images with the Stability AI models on Amazon Bedrock. */
+const imageTo3dAgentImageEditingField: FieldMeta = {
+    path: `${IMAGETO3D}.models.blenderagent.useStabilityImageEditing`,
+    label: "Image to 3D — Blender agent Stability AI image editing",
+    input: "boolean",
+    section: "pipelines-gpu",
+    advanced: true,
+    help: "Lets the agent inpaint and restyle texture views with the Stability AI image models on Amazon Bedrock, through their us. inference profiles. Commercial partition, US Regions only; off elsewhere, where the agent textures from the photographs alone.",
+};
 
 export const FIELDS: FieldMeta[] = [
     // ===== Deployment basics =====
@@ -748,6 +803,15 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
     },
     {
+        path: "app.authProvider.useCognito.retainLegacyGroupsAttribute",
+        label: "Retain legacy custom:groups user pool attribute",
+        input: "boolean",
+        section: "auth",
+        advanced: true,
+        help: "Keep true for an existing deployment, whose user pool already declares custom:groups (Amazon Cognito keeps a custom attribute for the life of the pool). Set false for a new deployment: Amazon Cognito rejects that attribute name when it creates a user pool. When the key is absent it resolves to true.",
+        visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
+    },
+    {
         path: "app.authProvider.useExternalOAuthIdp.enabled",
         label: "External OAuth IdP",
         input: "boolean",
@@ -1062,7 +1126,10 @@ export const FIELDS: FieldMeta[] = [
         input: "text",
         section: "pipelines-standard",
         advanced: true,
-        help: "Required when enabled (e.g. global.anthropic.claude-sonnet-4-5-20250929-v1:0).",
+        help:
+            "Required when enabled outside the commercial partition, where VAMS supplies no default: " +
+            "model availability differs by partition and account entitlement. Commercial defaults to " +
+            "global.anthropic.claude-sonnet-4-5-20250929-v1:0. Accepts a model id or an inference-profile ARN.",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled"),
     },
     {
@@ -1556,6 +1623,82 @@ export const FIELDS: FieldMeta[] = [
         ...f,
         visibleWhen: (c: ConfigShape) => !!getByPath(c, `${COSMOS3}.enabled`),
     })),
+
+    // Image to 3D shared settings + models
+    {
+        path: `${IMAGETO3D}.enabled`,
+        label: "Image to 3D",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Single-photo to 3D mesh with optional print-readiness cleanup. Requires VPC + GPU + internet.",
+    },
+    {
+        path: `${IMAGETO3D}.huggingFaceToken`,
+        label: "Image to 3D — HuggingFace token",
+        input: "text",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Required when Image to 3D is enabled. Stored in Secrets Manager at deploy.",
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    {
+        path: `${IMAGETO3D}.useCodeBuild`,
+        label: "Image to 3D — build with CodeBuild",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Build via AWS CodeBuild + ECR. Recommended for large GPU images.",
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    {
+        path: `${IMAGETO3D}.autoRegisterWithVAMS`,
+        label: "Image to 3D — auto-register with VAMS",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    {
+        path: `${IMAGETO3D}.autoTriggerOnFileExtensionsUpload`,
+        label: "Image to 3D — auto-trigger file extensions",
+        input: "text",
+        section: "pipelines-gpu",
+        advanced: true,
+        placeholder: ".png,.jpg,.jpeg",
+        help: "Any non-empty value enables the file-upload trigger; the workflow input filters select the matching files.",
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    {
+        path: `${IMAGETO3D}.instanceTypes`,
+        label: "Image to 3D — instance types",
+        input: "string-array",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Must be non-empty when Image to 3D is enabled (BEST_FIT_PROGRESSIVE order).",
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    {
+        path: `${IMAGETO3D}.maxVCpus`,
+        label: "Image to 3D — max vCPUs",
+        input: "number",
+        section: "pipelines-gpu",
+        advanced: true,
+        min: 1,
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
+    ...imageTo3dModelFields.map((f) => ({
+        ...f,
+        visibleWhen: (c: ConfigShape) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    })),
+    {
+        ...imageTo3dAgentModelField,
+        visibleWhen: (c: ConfigShape) => !!getByPath(c, `${IMAGETO3D}.models.blenderagent.enabled`),
+    },
+    {
+        ...imageTo3dAgentImageEditingField,
+        visibleWhen: (c: ConfigShape) => !!getByPath(c, `${IMAGETO3D}.models.blenderagent.enabled`),
+    },
 
     // ===== Add-ons =====
     {

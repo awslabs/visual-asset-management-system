@@ -608,6 +608,13 @@ by variable substitution because that is what gets stored — and deliberately n
 `ConstraintResponseModel` uses the rule-free `ConstraintCriteriaResponseModel` so a constraint stored
 by an earlier release keeps reading back as stored.
 
+The policy builder writes each criterion value into its line's `obj_rule` as source escapes, one
+`\xNN` / `\uNNNN` / `\UNNNNNNNN` per character (`CasbinEnforcerService._escape_rule_value`), never as
+plain text: Casbin's policy reader splits lines on commas outside brackets, and pycasbin rewrites `p.` /
+`r.` and `&&` / `||` / `!` throughout the rule text, string literals included, before compiling it. Only
+the object-type check every line opens with, `regexMatch(r.obj.object__type, '^<type>\Z')`, carries a
+registered type name as plain text (`_object_type_rule`).
+
 #### **Example: Secure Model with Validator Integration**
 
 ```python
