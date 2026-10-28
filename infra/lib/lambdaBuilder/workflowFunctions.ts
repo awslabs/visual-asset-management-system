@@ -459,6 +459,11 @@ export function buildProcessWorkflowExecutionOutputFunction(
     storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionLogsStorageTable.grantReadWriteData(fun);
+    // Records the run's outputTypes on the configuration row created at launch: a single UpdateItem.
+    storageResources.dynamo.workflowExecutionConfigurationStorageTable.grant(
+        fun,
+        "dynamodb:UpdateItem"
+    );
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -573,6 +578,15 @@ export function buildHandleExecutionErrorFunction(
     storageResources.dynamo.workflowExecutionsStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionLogsStorageTable.grantReadWriteData(fun);
+    // A failed run's outputTypes are derived from whatever output rows exist at failure (one
+    // existence query per output table) and recorded on the launch-time configuration row.
+    storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineExecutionOutputMetadataStorageTable.grantReadData(fun);
+    storageResources.dynamo.pipelineExecutionOutputResultsStorageTable.grantReadData(fun);
+    storageResources.dynamo.workflowExecutionConfigurationStorageTable.grant(
+        fun,
+        "dynamodb:UpdateItem"
+    );
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
