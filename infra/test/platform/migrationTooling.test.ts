@@ -69,7 +69,8 @@ function readMigrationFile(migration: ReleaseMigration, name: string): string {
  */
 function runWrapper(
     migration: ReleaseMigration,
-    stubExit: number
+    stubExit: number,
+    args: string[] = []
 ): { status: number; stdout: string } {
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vams-migration-wrapper-"));
     try {
@@ -96,7 +97,7 @@ function runWrapper(
         // The wrapper requires the config file to exist; its contents are never read by the stub.
         fs.writeFileSync(path.join(scratch, migration.configFile), "{}");
 
-        const result = spawnSync("bash", ["run_migration.sh"], {
+        const result = spawnSync("bash", ["run_migration.sh", ...args], {
             cwd: scratch,
             encoding: "utf8",
             env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH}` },
@@ -127,6 +128,36 @@ describe.each(MIGRATIONS)("$dir run_migration.sh exit-status propagation", (migr
         expect(script).toMatch(/PIPESTATUS\[0\]/);
         // `$?` immediately after the tee pipe is tee's status, never the migration's.
         expect(script).not.toMatch(/tee -a "\$LOG_FILE"\s*\n\s*\n?if \[ \$\? -eq 0 \]/);
+    });
+});
+
+describe(`${CURRENT.dir} run_migration.sh footer follows the run mode`, () => {
+    it("tells a dry run that nothing was launched and offers no command to watch it", () => {
+        const { status, stdout } = runWrapper(CURRENT, 0);
+        expect(status).toBe(0);
+        expect(stdout).toContain(CURRENT.successBanner);
+        expect(stdout).toContain("This was a dry run");
+        expect(stdout).not.toContain("Watch the vector backfill");
+    });
+
+    it("lists the follow-up steps after an executed run", () => {
+        const { status, stdout } = runWrapper(CURRENT, 0, ["--execute"]);
+        expect(status).toBe(0);
+        expect(stdout).toContain("Watch the vector backfill");
+        expect(stdout).not.toContain("This was a dry run");
+    });
+
+    it("keeps the PowerShell wrapper's footer on the same rule", () => {
+        const script = readMigrationFile(CURRENT, "run_migration.ps1");
+        const footer = script.slice(script.indexOf("Migration completed successfully."));
+        const dryRun = footer.indexOf("This was a dry run");
+        const watch = footer.indexOf("Watch the vector backfill");
+        expect(dryRun).toBeGreaterThan(-1);
+        expect(watch).toBeGreaterThan(-1);
+        // The watch command sits in the -Execute branch, the dry-run note in the other.
+        expect(footer).toMatch(
+            /if \(\$Execute\) \{[\s\S]*Watch the vector backfill[\s\S]*\} else \{[\s\S]*This was a dry run/
+        );
     });
 });
 

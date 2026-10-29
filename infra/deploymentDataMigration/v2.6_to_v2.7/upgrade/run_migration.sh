@@ -100,14 +100,19 @@ if [ "$MIGRATION_STATUS" -eq 0 ]; then
     echo ""
     echo "Migration completed successfully."
     echo ""
-    echo "Next steps:"
-    echo "  1. Read the system-pipeline retirement report above; abort what it lists as in flight and re-point"
-    echo "     the workflows it lists as referencing a retired pipeline"
-    echo "  2. Watch the vector backfill: vamscli execution list --workflow-database-id GLOBAL \\"
-    echo "       --workflow-id system-genai-metadata --trigger-type System-Reindex --status RUNNING"
-    echo "  3. Confirm the trigger cleanup took effect: re-run with --steps orphanedTriggers (without --execute)"
-    echo "     and check the summary reads 'Rows that would be deleted' = 0 with 'Trigger rows examined' > 0"
-    echo "     (the live workflows' triggers, e.g. the system workflow's own fileUpload trigger)"
+    if [ "$EXECUTE" -eq 1 ]; then
+        echo "Next steps:"
+        echo "  1. Read the system-pipeline retirement report above; abort what it lists as in flight and re-point"
+        echo "     the workflows it lists as referencing a retired pipeline"
+        echo "  2. Watch the vector backfill: vamscli execution list --workflow-database-id GLOBAL \\"
+        echo "       --workflow-id system-genai-metadata --trigger-type System-Reindex --status RUNNING"
+        echo "  3. Confirm the trigger cleanup took effect: re-run with --steps orphanedTriggers (without --execute)"
+        echo "     and check the summary reads 'Rows that would be deleted' = 0 with 'Trigger rows examined' > 0"
+        echo "     (the live workflows' triggers, e.g. the system workflow's own fileUpload trigger)"
+    else
+        echo "This was a dry run: no rows were deleted and no executions were launched."
+        echo "Review the summaries above, then re-run with --execute to apply them."
+    fi
 else
     echo "Migration failed. Check the logs for details."
     echo "Log file: $LOG_FILE"

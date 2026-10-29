@@ -92,14 +92,19 @@ try {
         Write-Host ""
         Write-Host "Migration completed successfully." -ForegroundColor Green
         Write-Host ""
-        Write-Host "Next steps:" -ForegroundColor Yellow
-        Write-Host "  1. Read the system-pipeline retirement report above; abort what it lists as in flight and re-point"
-        Write-Host "     the workflows it lists as referencing a retired pipeline"
-        Write-Host "  2. Watch the vector backfill: vamscli execution list --workflow-database-id GLOBAL"
-        Write-Host "       --workflow-id system-genai-metadata --trigger-type System-Reindex --status RUNNING"
-        Write-Host "  3. Confirm the trigger cleanup took effect: re-run with -Steps orphanedTriggers (without -Execute)"
-        Write-Host "     and check the summary reads 'Rows that would be deleted' = 0 with 'Trigger rows examined' > 0"
-        Write-Host "     (the live workflows' triggers, e.g. the system workflow's own fileUpload trigger)"
+        if ($Execute) {
+            Write-Host "Next steps:" -ForegroundColor Yellow
+            Write-Host "  1. Read the system-pipeline retirement report above; abort what it lists as in flight and re-point"
+            Write-Host "     the workflows it lists as referencing a retired pipeline"
+            Write-Host "  2. Watch the vector backfill: vamscli execution list --workflow-database-id GLOBAL"
+            Write-Host "       --workflow-id system-genai-metadata --trigger-type System-Reindex --status RUNNING"
+            Write-Host "  3. Confirm the trigger cleanup took effect: re-run with -Steps orphanedTriggers (without -Execute)"
+            Write-Host "     and check the summary reads 'Rows that would be deleted' = 0 with 'Trigger rows examined' > 0"
+            Write-Host "     (the live workflows' triggers, e.g. the system workflow's own fileUpload trigger)"
+        } else {
+            Write-Host "This was a dry run: no rows were deleted and no executions were launched." -ForegroundColor Yellow
+            Write-Host "Review the summaries above, then re-run with -Execute to apply them."
+        }
     } else {
         Write-Error "Migration failed. Check the logs for details."
         exit 1
