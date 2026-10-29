@@ -12,8 +12,9 @@ JWT). Every log string surfaced by the executions logs endpoint must pass throug
 
 The redaction is intentionally conservative: it targets labelled secrets (the same key names
 safeLogger redacts) plus a few unambiguous credential shapes (Bearer tokens, AWS access-key ids,
-JWTs). It never tries to guess at unlabelled high-entropy strings, so ordinary log content is left
-intact.
+JWTs), and the values of the request-context keys that describe an API client (source address, user
+agent, caller identity, API key id). It never tries to guess at unlabelled high-entropy strings, so
+ordinary log content is left intact.
 """
 
 import re
@@ -95,10 +96,55 @@ _AWS_KEY_ID = re.compile(r'\b(?:AKIA|ASIA|AIDA|AROA|ANPA|AIPA|ABIA|ACCA)[A-Z0-9]
 # JWT (three base64url segments; first two are JSON objects that start with `eyJ`).
 _JWT = re.compile(r'\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+')
 
+# Request-context keys that describe the client of an API call: the address and user agent it
+# connected from, its IAM or Amazon Cognito caller identity, and the VAMS API key it authenticated
+# with (`vams:apiKeyId` in the authorizer context). A workflow execution log can carry the request
+# context its execution was launched with. Each key is matched by its EXACT name, case-sensitively,
+# so a longer key that merely contains one (`bucketAccountId`, `sourceIpRange`) is left alone;
+# `apiKeyId` also matches behind a namespace prefix ending in `:`. Only a string value is masked, so
+# a `null` stays `null`.
+CLIENT_DETAIL_KEYS = [
+    "sourceIp",
+    "userAgent",
+    "userArn",
+    "cognitoIdentityId",
+    "cognitoAuthenticationProvider",
+    "principalOrgId",
+]
+
+_CLIENT_KEYS_ALT = (
+    "|".join(re.escape(k) for k in CLIENT_DETAIL_KEYS) + r'|(?:[^"\\\s]{1,128}:)?apiKeyId'
+)
+
+
+def _client_detail_pattern(level):
+    """The client-detail rule for JSON re-encoded `level` times (0 is plain JSON).
+
+    At escape level n a string delimiter is 2^n - 1 backslashes and a quote, a quote inside the
+    value is 2^(n+1) - 1 backslashes and a quote, and a literal backslash is 2^(n+1) backslashes.
+    Every count is fixed for the level, so the key must sit exactly between two delimiters, and the
+    value ends at its own closing delimiter even when it holds an escaped quote or a trailing
+    backslash. A value that runs to the end of the text (a stored log cut off inside it) is masked
+    to the end. Each token of the value matches in at most one way, so a long backslash run is
+    scanned once rather than backtracked over."""
+    unit = 2 ** (level + 1)
+    delim = r'\\{%d}"' % (2 ** level - 1)
+    backslashes = r'(?:\\{%d})*' % unit
+    value = (r'(?:[^"\\]|\\+(?![\\"])|' + backslashes + r'\\{%d}")*' % (unit - 1) + backslashes)
+    return re.compile(
+        r'(' + delim + r'(?:' + _CLIENT_KEYS_ALT + r')' + delim + r'\s*:\s*' + delim + r')'
+        + r'(' + value + r')(' + delim + r'|\Z)'
+    )
+
+
+# Plain JSON and three levels of re-encoding, the same depth the escaped-quote delimiter covers.
+_CLIENT_DETAIL_KV = [_client_detail_pattern(level) for level in range(4)]
+
 
 def redact_log_text(text):
-    """Redact sensitive credentials from a single free-text log string. Returns the text unchanged
-    when there is nothing to redact. Non-string input is returned as-is."""
+    """Redact sensitive credentials, and the request-context keys that describe an API client, from
+    a single free-text log string. Returns the text unchanged when there is nothing to redact.
+    Non-string input is returned as-is."""
     if not text or not isinstance(text, str):
         return text
     # Bearer runs before the bare key=value rule so `Authorization: Bearer <token>` redacts the
@@ -109,6 +155,8 @@ def redact_log_text(text):
     redacted = _BARE_KV.sub(lambda m: f"{m.group(1)}{REDACTED}", redacted)
     redacted = _AWS_KEY_ID.sub(REDACTED, redacted)
     redacted = _JWT.sub(REDACTED, redacted)
+    for pattern in _CLIENT_DETAIL_KV:
+        redacted = pattern.sub(lambda m: f"{m.group(1)}{REDACTED}{m.group(3)}", redacted)
     return redacted
 
 
