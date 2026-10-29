@@ -23,7 +23,9 @@ vector item:
   its run writes none); a delete marker archives them, a marker removal un-archives them, a permanent
   delete removes them. A new version whose `vams-changesource` is a restore (`fileUnarchive`,
   `assetUnarchive`) is the file's newest content copied forward, so its items stay the file's latest and
-  the file is searchable at once.
+  the file is searchable at once. A restore or marker removal of a file that has no item at all (it was
+  archived before vector search embedded it) sends one launch of the system workflow to its launch queue,
+  since no upload trigger fires for a restore.
 * Asset table stream records republished on the asset indexer SNS topic: an archive marks every item of
   the asset, a permanent delete removes them; metadata, attribute and link stream records are ignored.
 * The indexer's own `vector.indexer.continue` messages: an asset- or file-wide rule pages through its
@@ -39,6 +41,7 @@ partial-batch failures: only the records whose processing failed are redelivered
 import json
 import os
 import urllib.parse
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -95,6 +98,9 @@ RULE_DELETE_ASSET = 'deleteAsset'
 FILE_RULES = (RULE_SET_ARCHIVED_FOR_FILE, RULE_DELETE_FILE)
 # The function's own timeout, reported as the time left when no Lambda context supplies one.
 FULL_BUDGET_MS = 900_000
+# Run-id prefix of the launch a restored, never-embedded file gets; its execution group reads
+# `vec-unarchive-<id>-0` beside a reindex run's `vec-<runId>-<chunk>`.
+UNARCHIVE_EMBED_RUN_PREFIX = 'unarchive'
 ARCHIVED_PARTITION_SUFFIX = "#deleted"
 FILE_EXT_NONE = "none"
 # Stored excerpt of the embedded text; the embedded text itself may be longer.
@@ -131,6 +137,8 @@ try:
     # Embedding documents live in the auxiliary bucket only; an event naming any other bucket is dropped.
     aux_bucket_name = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
     vector_indexer_queue_url = os.environ["VECTOR_INDEXER_QUEUE_URL"]
+    # The system workflow's paced launch queue: a restored file with no item is embedded through it.
+    workflow_launch_queue_url = os.environ["WORKFLOW_LAUNCH_QUEUE_URL"]
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
@@ -598,6 +606,37 @@ def run_set_archived_for_file(pk: str, key_path: str, archived: bool, start_key:
     return Outcome(True, action, f"{pk}{key_path}: {action}={changed}{note}")
 
 
+def _launch_embedding(database_id: str, asset_id: str, file_path: str) -> str:
+    """Send one launch of the system GenAI workflow for a file's current version to the queue a reindex
+    enqueues onto; its consumer runs the workflow as the upload trigger would, paced by
+    `vectorSearch.indexingConcurrency`, and the run's embedding.ready event writes the item. Returns the
+    suffix the Outcome's detail records."""
+    run_id = f"{UNARCHIVE_EMBED_RUN_PREFIX}-{uuid.uuid4().hex[:12]}"
+    message = {'databaseId': database_id, 'assetId': asset_id, 'relativeFileKey': file_path,
+               'versionId': '', 'reindexRunId': run_id, 'chunk': 0}
+    sqs_client.send_message(QueueUrl=workflow_launch_queue_url, MessageBody=json.dumps(message))
+    logger.info(f"{database_id}:{asset_id}{file_path} was restored with no vector item, so its embedding "
+                f"is queued as {run_id}")
+    return f" embedQueued={run_id}"
+
+
+def run_unarchive_file(pk: str, key_path: str, database_id: str, asset_id: str, file_path: str,
+                       time_left: Callable[[], int]) -> Outcome:
+    """A restored file (an unarchive copy, or a delete marker removed): its items are flipped live and keep
+    their latest marks. A file with no item at all was never embedded (it was archived before vector search
+    indexed it) and no upload trigger fires for a restore, so its current version is queued for embedding
+    once. A file with items is not re-embedded; one that hands off has items by definition."""
+    changed, next_key = vector_store.set_archived_for_file(
+        pk, key_path, False, time_remaining_fn=time_left)
+    if next_key is not None:
+        note = _continue_later(RULE_SET_ARCHIVED_FOR_FILE, pk, next_key, key_path=key_path, archived=False)
+    elif changed == 0 and not vector_store.file_has_items(pk, key_path):
+        note = _launch_embedding(database_id, asset_id, file_path)
+    else:
+        note = ''
+    return Outcome(True, 'unarchived', f"{pk}{key_path}: unarchived={changed}{note}")
+
+
 def run_delete_file(pk: str, key_path: str, start_key: Optional[Dict[str, Any]],
                     time_left: Callable[[], int]) -> Outcome:
     deleted, next_key = vector_store.delete_file(
@@ -643,9 +682,10 @@ def handle_s3_record(record: Dict[str, Any], bucket_name_hint: Optional[str],
             # items of that content are the file's latest ones already, and no run will embed the copy,
             # so they keep their latest marks and only their archived marks are cleared: the file is
             # searchable the moment the flip lands, with exactly one latest item per segment as before.
+            # A file with no item at all is queued for embedding instead.
             logger.info(f"{pk}{key_path}: ObjectCreated by '{change_source}' restores stored content; "
                         "un-archiving the file's items without demoting them")
-            return run_set_archived_for_file(pk, key_path, False, None, time_left)
+            return run_unarchive_file(pk, key_path, database_id, asset_id, file_path, time_left)
         return run_object_created(pk, key_path, time_left)
     if event_name == 'ObjectRemoved:DeleteMarkerCreated':
         return run_set_archived_for_file(pk, key_path, True, None, time_left)
@@ -655,7 +695,7 @@ def handle_s3_record(record: Dict[str, Any], bucket_name_hint: Optional[str],
             return run_delete_file(pk, key_path, None, time_left)
         if not state.archived:
             # Marker removed (file or asset unarchive): live S3 state is authoritative for the flag.
-            return run_set_archived_for_file(pk, key_path, False, None, time_left)
+            return run_unarchive_file(pk, key_path, database_id, asset_id, file_path, time_left)
         return Outcome(True, 'ignore', 'a delete marker is still current')
     return Outcome(True, 'ignore', f"unhandled S3 event {event_name}")
 

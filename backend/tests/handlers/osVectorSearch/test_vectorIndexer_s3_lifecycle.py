@@ -121,7 +121,9 @@ class TestObjectRemoved:
         # The object is live again, so head_object succeeds; the ObjectRemoved event was the marker.
         outcome = indexer.handle_s3_record(_record("ObjectRemoved:Delete", version_id="m1"), "assets", "prefix-a/")
         assert outcome.action == "unarchived"
-        assert indexer.vector_store.calls == [("set_archived_for_file", "db1:a1", KEY_PATH, False)]
+        # The unseeded store holds no item of the file, so the restore also checks whether one exists.
+        assert indexer.vector_store.calls == [("set_archived_for_file", "db1:a1", KEY_PATH, False),
+                                              ("file_has_items", "db1:a1", KEY_PATH)]
 
     def test_permanent_delete_removes_the_file_items_when_nothing_remains(self, indexer):
         indexer.s3_client.head_object.side_effect = _not_found()

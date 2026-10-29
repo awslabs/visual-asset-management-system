@@ -560,6 +560,30 @@ class TestLatestFlips:
 
 
 @pytest.mark.unit
+class TestFileHasItems:
+    """One key-only read of the file's prefix, at most one item: whether any item of the file exists."""
+
+    def test_an_item_under_the_prefix_answers_true(self, vs):
+        fake = FakeDynamo()
+        fake.query_pager = Pager({"Items": [_key("v1#t0000083456")]}, name="file")
+        assert _store(vs, fake).file_has_items("db1:a1", "/m.glb") is True
+        (call,) = fake.query_pager.calls
+        assert call == {
+            "TableName": TABLE,
+            "KeyConditionExpression": "#pk = :pk AND begins_with(#sk, :prefix)",
+            "ExpressionAttributeNames": {"#pk": PK, "#sk": SK},
+            "ExpressionAttributeValues": {":pk": {"S": "db1:a1"}, ":prefix": {"S": "/m.glb#"}},
+            "ProjectionExpression": "#pk, #sk",
+            "Limit": 1,
+        }
+
+    def test_no_item_answers_false(self, vs):
+        fake = FakeDynamo()
+        fake.query_pager = Pager({"Items": []}, name="file")
+        assert _store(vs, fake).file_has_items("db1:a1", "/m.glb") is False
+
+
+@pytest.mark.unit
 class TestSetLatestForFileVersion:
     """The realignment a writer runs when its latest write raced a newer upload: the named version's
     items are flipped to latest, every other item of the file to not-latest, each conditionally."""

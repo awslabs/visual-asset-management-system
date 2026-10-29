@@ -194,6 +194,7 @@ class VectorStore(Protocol):
         time_remaining_fn: Optional[Callable[[], int]] = None, min_remaining_ms: int = 60_000,
     ) -> Tuple[int, Optional[dict]]: ...
     def set_latest_for_file_version(self, pk: str, key_path: str, version_id: str) -> int: ...
+    def file_has_items(self, pk: str, key_path: str) -> bool: ...
     def delete_file(
         self, pk: str, key_path: str, *, start_key: Optional[dict] = None,
         time_remaining_fn: Optional[Callable[[], int]] = None, min_remaining_ms: int = 60_000,
@@ -496,6 +497,13 @@ class DynamoDbVectorStore:
             return 0
         others = [image for image in items if image.get("versionId", {}).get("S") != version_id]
         return self._flip(current, "isLatest", "true") + self._flip(others, "isLatest", "false")
+
+    def file_has_items(self, pk: str, key_path: str) -> bool:
+        """Whether any item of the file exists, any version or segment: one keys-only read of at most one
+        item under the file's key-path prefix."""
+        kwargs = self._file_query(pk, key_path, _KEY_PROJECTION)
+        kwargs["Limit"] = 1
+        return bool(self._client.query(**kwargs).get("Items"))
 
     def set_archived_for_file(
         self, pk: str, key_path: str, archived: bool, *, start_key: Optional[dict] = None,

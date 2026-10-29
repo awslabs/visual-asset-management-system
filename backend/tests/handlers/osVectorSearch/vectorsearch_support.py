@@ -207,6 +207,10 @@ class FakeVectorStore:
         others = [seeded for seeded in file_items if seeded["versionId"] != version_id]
         return self._flip(current, "isLatest", True) + self._flip(others, "isLatest", False)
 
+    def file_has_items(self, pk, key_path):
+        self.calls.append(("file_has_items", pk, key_path))
+        return bool(self._file_items(pk, key_path))
+
     def delete_other_run_segments(self, pk, key_path, version_id, pipeline_execution_id):
         self.calls.append(("delete_other_run_segments", pk, key_path, version_id, pipeline_execution_id))
         prefix = f"{key_path}#{version_id}#"
