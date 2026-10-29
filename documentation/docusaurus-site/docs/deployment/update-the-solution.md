@@ -896,7 +896,7 @@ vamscli execution list --group-id vec-<runId>-0 --auto-paginate
 vamscli execution list --workflow-database-id GLOBAL --workflow-id system-genai-metadata --trigger-type System-Reindex --status RUNNING
 ```
 
-Reindex executions are stored with trigger type `System-Reindex`, so a chunk can be aborted with `vamscli execution abort <executionId> --group-id vec-<runId>-<chunk> --yes`. They stay in the executions list like any other run; removing them afterwards is an operator task (`vamscli execution permanent-delete`). Pass `--limit N` on a first run to enqueue only `N` files, and `--async` on very large deployments so the invoke returns immediately.
+Reindex executions are stored with trigger type `System-Reindex`, so a chunk can be aborted with `vamscli execution abort <executionId> --group-id vec-<runId>-<chunk> --yes`. They stay in the executions list like any other run; removing them afterwards is an operator task (`vamscli execution permanent-delete`). Pass `--limit N` on a first run to enqueue only `N` files, and `--async` on very large deployments so the invoke returns immediately. A dry run starts nothing, so its summary labels the counts `Would delete` and `Would enqueue` and prints no watch commands.
 
 `--clear-vectors` (reindexer operation `both`) deletes **every** stored vector before re-embedding, so natural-language search returns nothing until the executions complete. It is off by default and needed only for a rebuild from scratch or a model change.
 :::

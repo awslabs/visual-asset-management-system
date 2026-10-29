@@ -598,9 +598,12 @@ def describe_vector_backfill_result(result: Dict, function_name: str, clear_vect
     """Summarise the invoke outcome and print how to watch the backfill it started. The reindexer's
     ``reindexRunId`` is the run id: its executions carry ``executionGroupId = vec-{reindexRunId}-{chunk}``
     (chunks numbered from 0, one per 1,000 files), the value ``vamscli execution list --group-id``
-    filters on."""
+    filters on. A dry run deletes, enqueues and launches nothing: its counts are what a real run would
+    do, and it prints no watch commands."""
     run_id = None
     chunks = 0
+    deleted_label = 'Would delete' if dry_run else 'Deleted'
+    enqueued_label = 'Would enqueue' if dry_run else 'Enqueued'
     logger.info("=" * 80)
     logger.info("VECTOR BACKFILL SUMMARY")
     logger.info(f"  Operation:       "
@@ -621,14 +624,19 @@ def describe_vector_backfill_result(result: Dict, function_name: str, clear_vect
         run_id = body['reindexRunId']
         chunks = body['chunks']
         logger.info(f"  Reindex run id:  {run_id}")
-        logger.info(f"  Phase: {body['phase']}   Deleted: {body['deleted']}   "
-                    f"Enqueued: {body['enqueued']}   Chunks: {chunks}   "
+        logger.info(f"  Phase: {body['phase']}   {deleted_label}: {body['deleted']}   "
+                    f"{enqueued_label}: {body['enqueued']}   Chunks: {chunks}   "
                     f"Invocations: {body['invocations']}")
         if body['continued']:
             logger.info("  Continued:       the reindexer re-invoked itself to finish; the counts above "
                         "cover the invocations so far")
         if 'tableEmpty' in body:
             logger.info(f"  Table empty:     {body['tableEmpty']}")
+    if dry_run:
+        logger.info("  Dry run:         nothing was deleted, enqueued or launched, so there is no "
+                    "progress to watch")
+        logger.info("=" * 80)
+        return
     run_label = run_id or '<runId>'
     logger.info("  Watch progress:")
     if run_id is None:
