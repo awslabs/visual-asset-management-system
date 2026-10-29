@@ -770,7 +770,9 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
             {wizardStep === "execution" && (
                 <fieldset
                     disabled={isSystemWorkflow}
-                    className="m-0 p-0 border-0 min-w-0 space-y-4"
+                    className={`m-0 p-0 border-0 min-w-0 space-y-4${
+                        isSystemWorkflow ? " [&_:disabled]:opacity-50" : ""
+                    }`}
                 >
                     <WorkflowSystemConfigFields
                         inputFileArity={state.inputFileArity}
@@ -825,7 +827,9 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                 <div className="space-y-4">
                     <fieldset
                         disabled={isSystemWorkflow}
-                        className="m-0 p-0 border-0 min-w-0 space-y-4"
+                        className={`m-0 p-0 border-0 min-w-0 space-y-4${
+                            isSystemWorkflow ? " [&_:disabled]:opacity-50" : ""
+                        }`}
                     >
                         {state.specifiedPipelines.map((ref, idx) => {
                             if (!ref.pipelineId || !ref.pipelineDatabaseId) return null;

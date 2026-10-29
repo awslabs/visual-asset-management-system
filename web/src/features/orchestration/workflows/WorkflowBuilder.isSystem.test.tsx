@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -153,4 +153,50 @@ describe("WorkflowBuilder for a system workflow", () => {
         }
         expect(screen.getByLabelText("Enabled")).toBeEnabled();
     });
+
+    const lockedSteps = ["Execution", "Pipelines"];
+
+    const openStep = async (user: ReturnType<typeof userEvent.setup>, steps: number) => {
+        for (let i = 0; i < steps; i++) {
+            await user.click(screen.getByRole("button", { name: "Next" }));
+        }
+    };
+
+    it.each(lockedSteps.map((name, i) => [name, i + 1] as const))(
+        "greys the locked %s step's controls and keeps its help readable",
+        async (_name, steps) => {
+            const user = userEvent.setup();
+            const { container } = renderBuilder(systemWorkflow);
+            await waitFor(() => expect(screen.getByLabelText("Enabled")).toBeChecked());
+            await openStep(user, steps);
+            const fieldset = container.querySelector("fieldset") as HTMLFieldSetElement;
+            expect(fieldset).toBeDisabled();
+            expect(fieldset).toHaveClass("[&_:disabled]:opacity-50");
+            const help = within(fieldset).queryAllByRole("button", { name: /information|info/i });
+            for (const icon of help) {
+                expect(icon.matches(":disabled")).toBe(false);
+            }
+            if (help.length > 0) {
+                await user.hover(help[0]);
+                expect(await screen.findByRole("tooltip")).toBeInTheDocument();
+            }
+        }
+    );
+
+    it.each(lockedSteps.map((name, i) => [name, i + 1] as const))(
+        "leaves the %s step of an ordinary workflow at full strength",
+        async (_name, steps) => {
+            const user = userEvent.setup();
+            const { container } = renderBuilder({
+                ...systemWorkflow,
+                workflowId: "mine",
+                isSystem: false,
+            });
+            await waitFor(() => expect(screen.getByLabelText("Enabled")).toBeChecked());
+            await openStep(user, steps);
+            const fieldset = container.querySelector("fieldset") as HTMLFieldSetElement;
+            expect(fieldset).toBeEnabled();
+            expect(fieldset).not.toHaveClass("[&_:disabled]:opacity-50");
+        }
+    );
 });
