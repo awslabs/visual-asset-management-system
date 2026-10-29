@@ -386,16 +386,18 @@ class TestNewerVersionRace:
         # The sweep is still the v1 document's own: it clears other runs' v1 segments, not v2's.
         assert store.calls[2] == ("delete_other_run_segments", "db1:a1", "/models/part.glb", "v1", "pe-1")
 
-    def test_v1_indexed_after_v2_uploaded_but_before_v2_is_stored_demotes_itself(self, indexer):
-        # v2's item has not landed yet; the realignment demotes v1 and v2's own event later writes v2 latest
-        # with nothing left to demote.
+    def test_v1_indexed_after_v2_uploaded_but_before_v2_is_stored_stays_latest(self, indexer):
+        # v2's item has not landed yet, so the realignment has no item to promote and changes nothing: v1
+        # stays the file's latest item until v2's own write demotes it, and stays searchable if v2's run
+        # never writes one.
         store = FakeVectorStore()
         indexer.vector_store = store
         self._versions_in_order(indexer, "v1", "v2")
         outcome = indexer.handle_embedding_ready({**DETAIL, "versionId": "v1"})
         assert outcome.ok
         assert ("set_latest_for_file_version", "db1:a1", "/models/part.glb", "v2") in store.calls
-        assert {row["fileVersionKey"]: row["isLatest"] for row in store.seeded} == {"/models/part.glb#v1": False}
+        assert {row["fileVersionKey"]: row["isLatest"] for row in store.seeded} == {"/models/part.glb#v1": True}
+        assert "realigned=0" in outcome.detail
 
     def test_a_write_the_recheck_confirms_is_not_realigned(self, indexer):
         store = FakeVectorStore(seed=[seeded_item("db1:a1", "/models/part.glb#v1", "v1", is_latest=True)])

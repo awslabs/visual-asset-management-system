@@ -16,10 +16,11 @@ versions go through ``put_latest_item``: a plain ``PutItem`` when nothing needs 
 ``TransactWriteItems`` of at most DEMOTION_BATCH_ACTIONS actions -- the ``Put`` and the first 24
 conditional demotions together, the rest in batches of 25 -- sized to the write throughput of the one
 partition an asset's items share; until the last batch commits an older segmented version's remaining
-chunks read as latest beside the new version. ``set_latest_for_file_version`` walks a file and aligns
-every item's ``isLatest`` to one version, for the writer that finds its latest write raced a newer
-upload. The file-wide and asset-wide walks (the archive flips,
-the S3 ObjectCreated demotion, the deletes) page under a caller-supplied time budget and hand back the
+chunks read as latest beside the new version. It is the only write that demotes: a file's previous latest
+items stay latest until the new version's item is written. ``set_latest_for_file_version`` walks a file
+and aligns every item's ``isLatest`` to one version that has items, for the writer that finds its latest
+write raced a newer upload. The file-wide and asset-wide walks (the archive flips, the deletes) page under
+a caller-supplied time budget and hand back the
 cursor to resume from, so an item collection of any size is processed across invocations. The
 low-level client is used throughout because neither the vector operations nor the ``L``-of-``N``
 embedding attribute are modelled by the resource layer.
@@ -190,10 +191,6 @@ class VectorStore(Protocol):
     ) -> Tuple[int, Optional[dict]]: ...
     def set_archived_for_asset(
         self, pk: str, archived: bool, *, start_key: Optional[dict] = None,
-        time_remaining_fn: Optional[Callable[[], int]] = None, min_remaining_ms: int = 60_000,
-    ) -> Tuple[int, Optional[dict]]: ...
-    def set_not_latest_for_file_except(
-        self, pk: str, key_path: str, version_id: str, *, start_key: Optional[dict] = None,
         time_remaining_fn: Optional[Callable[[], int]] = None, min_remaining_ms: int = 60_000,
     ) -> Tuple[int, Optional[dict]]: ...
     def set_latest_for_file_version(self, pk: str, key_path: str, version_id: str) -> int: ...
@@ -486,34 +483,19 @@ class DynamoDbVectorStore:
         with ThreadPoolExecutor(max_workers=FLIP_WORKERS) as pool:
             return sum(pool.map(lambda image: self._flip_one(image, attribute, target), items))
 
-    def set_not_latest_for_file_except(
-        self, pk: str, key_path: str, version_id: str, *, start_key: Optional[dict] = None,
-        time_remaining_fn: Optional[Callable[[], int]] = None, min_remaining_ms: int = 60_000,
-    ) -> Tuple[int, Optional[dict]]:
-        def demote_other_versions(items: List[Dict[str, Any]]) -> int:
-            others = [image for image in items if image.get("versionId", {}).get("S") != version_id]
-            return self._flip(others, "isLatest", "false")
-
-        return self._paged(
-            self._file_query(pk, key_path, _FILE_ITEM_PROJECTION), demote_other_versions,
-            start_key=start_key, time_remaining_fn=time_remaining_fn, min_remaining_ms=min_remaining_ms,
-        )
-
     def set_latest_for_file_version(self, pk: str, key_path: str, version_id: str) -> int:
         """Make ``version_id`` the file's one latest version: its items are flipped to ``isLatest="true"``
         and every other item under the file's key path to ``"false"``, each conditionally on the value
-        read. Walks the whole file; returns the number of items changed. Used when a latest write turns
-        out to have raced a newer upload, so the marks a ``put_latest_item`` demoted are restored."""
-        def align(items: List[Dict[str, Any]]) -> int:
-            current = [image for image in items if image.get("versionId", {}).get("S") == version_id]
-            others = [image for image in items if image.get("versionId", {}).get("S") != version_id]
-            return self._flip(current, "isLatest", "true") + self._flip(others, "isLatest", "false")
-
-        changed, _ = self._paged(
-            self._file_query(pk, key_path, _FILE_ITEM_PROJECTION), align,
-            start_key=None, time_remaining_fn=None, min_remaining_ms=0,
-        )
-        return changed
+        read. Reads the whole file first; when no item of ``version_id`` exists yet nothing is flipped, so
+        the file keeps its current latest items until that version's own ``put_latest_item``. Returns the
+        number of items changed. Used when a latest write turns out to have raced a newer upload, so the
+        marks a ``put_latest_item`` demoted are restored."""
+        items = self._query(self._file_query(pk, key_path, _FILE_ITEM_PROJECTION))
+        current = [image for image in items if image.get("versionId", {}).get("S") == version_id]
+        if not current:
+            return 0
+        others = [image for image in items if image.get("versionId", {}).get("S") != version_id]
+        return self._flip(current, "isLatest", "true") + self._flip(others, "isLatest", "false")
 
     def set_archived_for_file(
         self, pk: str, key_path: str, archived: bool, *, start_key: Optional[dict] = None,

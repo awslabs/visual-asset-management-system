@@ -1,16 +1,16 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""S3 lifecycle records -> `isLatest` / `isArchived` flips and deletes.
+"""S3 lifecycle records -> `isArchived` flips and deletes.
 
-Created: every other item of the file becomes not-latest and the file is un-archived (a new live version
-is not archived by definition). DeleteMarkerCreated: archived. Delete with versions remaining and no
-current marker (a marker was removed): un-archived, unconditionally. Delete with nothing remaining: the
-file's items are removed, resolving the database through assetIdGSI + bucket when the asset row is gone.
-Folder markers, reserved segments and `.previewFile.*` siblings are ignored. Every rule reaches the store
-through the file's key-path prefix, so a segment item (`…#v1#t0000083456`) follows its whole-file item
-through each of the four transitions; the seeded fake shows which items a call reaches (flags as the bools
-`VectorItem` carries). The time-budget hand-off of these rules is covered in
+Created: the file is un-archived (a new live version is not archived by definition) and no latest mark
+changes; the new version's whole-file write is the one demotion. DeleteMarkerCreated: archived. Delete with
+versions remaining and no current marker (a marker was removed): un-archived, unconditionally. Delete with
+nothing remaining: the file's items are removed, resolving the database through assetIdGSI + bucket when
+the asset row is gone. Folder markers, reserved segments and `.previewFile.*` siblings are ignored. Every
+rule reaches the store through the file's key-path prefix, so a segment item (`…#v1#t0000083456`) follows
+its whole-file item through each transition; the seeded fake shows which items a call reaches (flags as the
+bools `VectorItem` carries). The time-budget hand-off of these rules is covered in
 `test_vectorIndexer_continuation.py`.
 """
 
@@ -54,24 +54,60 @@ def indexer():
 
 @pytest.mark.unit
 class TestObjectCreated:
-    def test_new_version_flips_other_items_and_unarchives_the_file(self, indexer):
+    def test_new_version_unarchives_the_file(self, indexer):
         outcome = indexer.handle_s3_record(_record("ObjectCreated:Copy", version_id="v2"), "assets", "prefix-a/")
         assert outcome.ok and outcome.action == "created"
-        assert indexer.vector_store.calls == [
-            ("set_not_latest_for_file_except", "db1:a1", KEY_PATH, "v2"),
-            ("set_archived_for_file", "db1:a1", KEY_PATH, False),
-        ]
+        assert indexer.vector_store.calls == [("set_archived_for_file", "db1:a1", KEY_PATH, False)]
 
     def test_url_encoded_key_is_decoded_before_resolution(self, indexer):
         indexer.handle_s3_record(_record("ObjectCreated:Put", key="prefix-a/a1/models/my+part%20x.glb"), "assets", "prefix-a/")
         indexer.s3_client.head_object.assert_called_once_with(Bucket="assets", Key="prefix-a/a1/models/my part x.glb")
         assert indexer.vector_store.calls[0][2] == "/models/my part x.glb"
 
-    def test_unversioned_bucket_uses_the_null_version_id(self, indexer):
-        record = _record("ObjectCreated:Put")
-        del record["s3"]["object"]["versionId"]
-        indexer.handle_s3_record(record, "assets", "prefix-a/")
-        assert indexer.vector_store.calls[0] == ("set_not_latest_for_file_except", "db1:a1", KEY_PATH, "null")
+
+def _whole_file_item(indexer, version_id):
+    """A latest whole-file VectorItem of the fixture's file, as an embedding.ready write builds it."""
+    return indexer.VectorItem(
+        databaseId="db1", assetId="a1", filePath=KEY_PATH, versionId=version_id, isLatest=True,
+        isArchived=False, fileClass="mesh", fileExt="glb", embeddingModelId=indexer.embedding_model_id,
+        embeddingDimensions=indexer.embedding_dimensions, embedding=[0.1] * indexer.embedding_dimensions,
+        sourceText="", sourceModalities=[], contentEtag="", bucketId="bucket-guid", fileSize=0,
+        contentType="", analysisModelId="", indexedAt="2026-10-29T00:00:00+00:00",
+        pipelineExecutionId="pe-2", workflowExecutionId="we-2")
+
+
+@pytest.mark.unit
+class TestNewVersionKeepsThePreviousLatestUntilItsItemIsWritten:
+    """A new version's ObjectCreated record changes no latest mark: the previous version's items stay
+    latest, so the file stays searchable while the new version is processed (and if its run writes no
+    item at all). The new version's whole-file write is the one demotion."""
+
+    def _seed(self, indexer):
+        store = FakeVectorStore(seed=[
+            seeded_item("db1:a1", f"{KEY_PATH}#v1", "v1", True, False),
+            seeded_item("db1:a1", f"{KEY_PATH}#v1#{SEGMENT_KEY}", "v1", True, False, segment_kind="videoTime"),
+        ])
+        indexer.vector_store = store
+        return store
+
+    @staticmethod
+    def _latest(store):
+        return sorted(item["fileVersionKey"] for item in store.seeded if item["isLatest"])
+
+    def test_the_previous_version_stays_latest_until_the_new_item_is_written(self, indexer):
+        store = self._seed(indexer)
+        outcome = indexer.handle_s3_record(_record("ObjectCreated:Put", version_id="v2"), "assets", "prefix-a/")
+        assert outcome.ok and outcome.action == "created"
+        assert self._latest(store) == [f"{KEY_PATH}#v1", f"{KEY_PATH}#v1#{SEGMENT_KEY}"], \
+            "the ObjectCreated record must not demote the previous version before the new item exists"
+
+        store.put_latest_item(_whole_file_item(indexer, "v2"))
+        assert self._latest(store) == [f"{KEY_PATH}#v2"]
+
+    def test_the_object_created_rule_only_unarchives(self, indexer):
+        self._seed(indexer)
+        indexer.handle_s3_record(_record("ObjectCreated:Put", version_id="v2"), "assets", "prefix-a/")
+        assert indexer.vector_store.calls == [("set_archived_for_file", "db1:a1", KEY_PATH, False)]
 
 
 @pytest.mark.unit
@@ -147,14 +183,15 @@ class TestSegmentItemsFollowTheirFile:
     def _by_key(store):
         return {item["fileVersionKey"]: item for item in store.seeded}
 
-    def test_a_new_version_demotes_the_segment_item_with_its_file(self, indexer):
-        store = self._seed(indexer)
+    def test_a_new_version_leaves_the_segment_item_latest_and_unarchives_it_with_its_file(self, indexer):
+        store = self._seed(indexer, is_archived=True)
         outcome = indexer.handle_s3_record(_record("ObjectCreated:Put", version_id="v2"), "assets", "prefix-a/")
         items = self._by_key(store)
-        assert items[f"{KEY_PATH}#v1"]["isLatest"] is False
-        assert items[f"{KEY_PATH}#v1#{SEGMENT_KEY}"]["isLatest"] is False
-        assert items["/models/other.glb#v1"]["isLatest"] is True
-        assert "notLatest=2" in outcome.detail
+        assert items[f"{KEY_PATH}#v1"]["isLatest"] is True
+        assert items[f"{KEY_PATH}#v1#{SEGMENT_KEY}"]["isLatest"] is True
+        assert items[f"{KEY_PATH}#v1#{SEGMENT_KEY}"]["isArchived"] is False
+        assert items["/models/other.glb#v1"]["isArchived"] is True
+        assert "unarchived=2" in outcome.detail
 
     def test_a_delete_marker_archives_the_segment_item_with_its_file(self, indexer):
         store = self._seed(indexer)

@@ -3,11 +3,11 @@
 
 """Asset- and file-wide rules hand off under the time budget and resume from a continuation message.
 
-Each of the five rules calls its store method with the invocation's remaining-time callable and, when the
+Each of the four rules calls its store method with the invocation's remaining-time callable and, when the
 store returns a `next_key`, sends ONE `vector.indexer.continue` message to the indexer's own queue naming
-the rule, the partition key, the key path / version / archived flag the rule needs, and the start key. A
+the rule, the partition key, the key path / archived flag the rule needs, and the start key. A
 continuation message resumes the named rule from that key and passes it to the store; a run that completes
-sends nothing. The `objectCreated` rule keeps its two steps in order across the hand-off. The fake store's
+sends nothing. A new version's un-archive step hands off as the file archive rule. The fake store's
 `hand_off` decides which method returns a key; the real paging belongs to the store's own tests.
 """
 
@@ -89,20 +89,11 @@ class TestHandOff:
         assert _sent(indexer) == {"detailType": CONTINUE, "rule": "setArchivedForFile", "pk": "db1:a1",
                                   "keyPath": KEY_PATH, "archived": True, "startKey": NEXT_KEY}
 
-    def test_a_new_version_hands_off_the_demotion_before_the_unarchive_step(self, indexer):
-        indexer.vector_store = FakeVectorStore(hand_off={"set_not_latest_for_file_except": NEXT_KEY})
-        outcome = indexer.handle_s3_record(_s3("ObjectCreated:Put"), "assets", "prefix-a/", _budget)
-        assert outcome.action == "created" and "continued" in outcome.detail
-        # The un-archive step is not run yet: the continuation finishes the demotion first, then runs it.
-        assert indexer.vector_store.names() == ["set_not_latest_for_file_except"]
-        assert _sent(indexer) == {"detailType": CONTINUE, "rule": "objectCreated", "pk": "db1:a1",
-                                  "keyPath": KEY_PATH, "versionId": "v2", "startKey": NEXT_KEY}
-
     def test_a_new_version_hands_off_the_unarchive_step_as_its_own_rule(self, indexer):
         indexer.vector_store = FakeVectorStore(hand_off={"set_archived_for_file": NEXT_KEY})
         outcome = indexer.handle_s3_record(_s3("ObjectCreated:Put"), "assets", "prefix-a/", _budget)
         assert outcome.action == "created" and "continued" in outcome.detail
-        assert indexer.vector_store.names() == ["set_not_latest_for_file_except", "set_archived_for_file"]
+        assert indexer.vector_store.names() == ["set_archived_for_file"]
         assert _sent(indexer) == {"detailType": CONTINUE, "rule": "setArchivedForFile", "pk": "db1:a1",
                                   "keyPath": KEY_PATH, "archived": False, "startKey": NEXT_KEY}
 
@@ -131,8 +122,6 @@ class TestHandOff:
 
 
 RESUMES = [
-    ({"rule": "objectCreated", "pk": "db1:a1", "keyPath": KEY_PATH, "versionId": "v2"},
-     "set_not_latest_for_file_except"),
     ({"rule": "setArchivedForFile", "pk": "db1:a1", "keyPath": KEY_PATH, "archived": True},
      "set_archived_for_file"),
     ({"rule": "deleteFile", "pk": "db1:a1", "keyPath": KEY_PATH}, "delete_file"),
@@ -155,19 +144,6 @@ class TestResume:
         indexer.s3_client.head_object.assert_not_called()
         indexer.asset_storage_table.get_item.assert_not_called()
 
-    def test_a_resumed_object_created_finishes_the_demotion_then_unarchives(self, indexer):
-        message = {"detailType": CONTINUE, "rule": "objectCreated", "pk": "db1:a1",
-                   "keyPath": KEY_PATH, "versionId": "v2", "startKey": START_KEY}
-        outcome = indexer.handle_continuation(message, _budget)
-        assert outcome.action == "created"
-        assert indexer.vector_store.calls == [
-            ("set_not_latest_for_file_except", "db1:a1", KEY_PATH, "v2"),
-            ("set_archived_for_file", "db1:a1", KEY_PATH, False),
-        ]
-        # The demotion resumes from the message's key; the un-archive step starts from its own first page.
-        assert [(method, key) for method, key, _ in indexer.vector_store.paging] == [
-            ("set_not_latest_for_file_except", START_KEY), ("set_archived_for_file", None)]
-
 
 @pytest.mark.unit
 class TestTimeBudget:
@@ -176,8 +152,7 @@ class TestTimeBudget:
         indexer.handle_s3_record(_s3("ObjectRemoved:DeleteMarkerCreated"), "assets", "prefix-a/", _budget)
         indexer.handle_stream_record(_stream(indexer, "INSERT", "db1#deleted"), _budget)
         assert [method for method, _, _ in indexer.vector_store.paging] == [
-            "set_not_latest_for_file_except", "set_archived_for_file", "set_archived_for_file",
-            "set_archived_for_asset"]
+            "set_archived_for_file", "set_archived_for_file", "set_archived_for_asset"]
         assert all(budget is _budget for _, _, budget in indexer.vector_store.paging)
 
 
@@ -193,12 +168,20 @@ class TestCompleteRuns:
         indexer.s3_client.head_object.side_effect = _not_found()
         outcome = indexer.handle_s3_record(_s3("ObjectRemoved:Delete"), "assets", "prefix-a/", _budget)
         assert outcome.action == "deleted"
-        assert len(indexer.vector_store.paging) == 6
+        assert len(indexer.vector_store.paging) == 5
         indexer.sqs_client.send_message.assert_not_called()
 
 
 @pytest.mark.unit
 class TestMalformedContinuations:
+    def test_an_object_created_continuation_names_no_rule_any_longer(self, indexer):
+        # A new version demotes nothing, so no rule hands off under that name.
+        outcome = indexer.handle_continuation(
+            {"detailType": CONTINUE, "rule": "objectCreated", "pk": "db1:a1", "keyPath": KEY_PATH,
+             "versionId": "v2", "startKey": START_KEY}, _budget)
+        assert outcome.ok and outcome.action == "drop"
+        assert indexer.vector_store.calls == []
+
     def test_a_message_without_a_start_key_is_dropped(self, indexer):
         outcome = indexer.handle_continuation({"detailType": CONTINUE, "rule": "deleteAsset", "pk": "db1:a1"}, _budget)
         assert outcome.ok and outcome.action == "drop"

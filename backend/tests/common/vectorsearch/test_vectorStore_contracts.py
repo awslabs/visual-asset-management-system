@@ -264,21 +264,27 @@ class TestPutLatestItemContract:
 
 @pytest.mark.unit
 class TestQueryAndUpdateContracts:
-    def test_set_not_latest_for_file_except(self, vs):
+    def test_set_latest_for_file_version(self, vs):
+        """The whole file is read, then the named version is promoted and every other item demoted."""
+        def latest_update(version, target, current):
+            return {"method": "update_item",
+                    "expected_params": {
+                        "TableName": TABLE, "Key": _key(version),
+                        "UpdateExpression": "SET isLatest = :target",
+                        "ConditionExpression": "isLatest = :current",
+                        "ExpressionAttributeValues": {":target": {"S": target}, ":current": {"S": current}},
+                    },
+                    "response": {}}
+
         calls = [
             {"method": "query", "expected_params": _file_query(FILE_PROJECTION),
-             "response": {"Items": [_image("v1"), _image("v2")]}},
-            {"method": "update_item",
-             "expected_params": {
-                 "TableName": TABLE, "Key": _key("v1"),
-                 "UpdateExpression": "SET isLatest = :target",
-                 "ConditionExpression": "isLatest = :current",
-                 "ExpressionAttributeValues": {":target": {"S": "false"}, ":current": {"S": "true"}},
-             },
-             "response": {}},
+             "response": {"Items": [_image("v1"), _image("v2", is_latest="false")]}},
+            latest_update("v2", "true", "false"),
+            latest_update("v1", "false", "true"),
         ]
         with stubbed_dynamodb(calls) as client:
-            assert vs.DynamoDbVectorStore(TABLE, INDEX, MODEL, 2, client).set_not_latest_for_file_except("db1:a1", "/m.glb", "v2") == (1, None)
+            store = vs.DynamoDbVectorStore(TABLE, INDEX, MODEL, 2, client)
+            assert store.set_latest_for_file_version("db1:a1", "/m.glb", "v2") == 2
 
     def test_paged_query_threads_the_cursor(self, vs):
         """Each page is processed before the next is read: query, update, query, update."""

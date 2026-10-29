@@ -548,57 +548,14 @@ class TestPutLatestItem:
 
 @pytest.mark.unit
 class TestLatestFlips:
-    def test_only_the_other_versions_are_flipped_and_the_walk_pages_to_exhaustion(self, vs):
-        fake = FakeDynamo()
-        fake.query_pager = Pager(
-            {"Items": [_image("v1"), _image("v2")], "LastEvaluatedKey": {SK: {"S": "/m.glb#v2"}}},
-            {"Items": [_image("v3", is_latest="false")]},
-            name="file versions",
-        )
-        changed, next_key = _store(vs, fake).set_not_latest_for_file_except("db1:a1", "/m.glb", "v2")
-        assert (changed, next_key) == (1, None)
-        fake.query_pager.assert_paged_to_exhaustion()
-        assert [u["Key"][SK]["S"] for u in fake.updates] == ["/m.glb#v1"]
-        assert fake.updates[0] == {
-            "TableName": TABLE,
-            "Key": {PK: {"S": "db1:a1"}, SK: {"S": "/m.glb#v1"}},
-            "UpdateExpression": "SET isLatest = :target",
-            "ConditionExpression": "isLatest = :current",
-            "ExpressionAttributeValues": {":target": {"S": "false"}, ":current": {"S": "true"}},
-        }
-
-    def test_query_groups_the_file_by_key_path_prefix(self, vs):
-        fake = FakeDynamo()
-        _store(vs, fake).set_not_latest_for_file_except("db1:a1", "/m.glb", "v2")
-        (call,) = fake.query_pager.calls
-        assert call == {
-            "TableName": TABLE,
-            "KeyConditionExpression": "#pk = :pk AND begins_with(#sk, :prefix)",
-            "ExpressionAttributeNames": {"#pk": PK, "#sk": SK},
-            "ExpressionAttributeValues": {":pk": {"S": "db1:a1"}, ":prefix": {"S": "/m.glb#"}},
-            "ProjectionExpression": "#pk, #sk, versionId, isLatest, isArchived",
-        }
-
-    def test_a_lost_condition_is_not_counted(self, vs):
-        fake = FakeDynamo()
-        fake.query_pager = Pager({"Items": [_image("v1"), _image("v2")]}, name="file versions")
-        fake.conditional_failures = {"/m.glb#v1"}
-        assert _store(vs, fake).set_not_latest_for_file_except("db1:a1", "/m.glb", "v2") == (0, None)
-        assert len(fake.updates) == 1
-
-    def test_other_client_errors_propagate(self, vs):
-        fake = FakeDynamo()
-        fake.query_pager = Pager({"Items": [_image("v1")]}, name="file versions")
-        fake.update_item = _raiser(_client_error("ProvisionedThroughputExceededException"))
-        with pytest.raises(ClientError):
-            _store(vs, fake).set_not_latest_for_file_except("db1:a1", "/m.glb", "v2")
-
-    def test_the_store_has_no_second_name_for_the_sibling_flip(self, vs):
-        """``set_not_latest_for_file_except`` is the one sibling-flip method and ``put_latest_item`` the
-        one put-and-flip; a ``mark_others_not_latest`` alias would let a caller pick a name the store
-        retired."""
-        assert not hasattr(vs.VectorStore, "mark_others_not_latest")
-        assert not hasattr(vs.DynamoDbVectorStore, "mark_others_not_latest")
+    def test_the_put_is_the_only_demotion_of_a_new_version(self, vs):
+        """``put_latest_item`` demotes a file's other versions in the same transaction as the new
+        version's write, so the store offers no separate sibling flip a new-version event could run
+        before that item exists (the file would read no latest item in between), and no
+        ``mark_others_not_latest`` alias of one."""
+        for name in ("set_not_latest_for_file_except", "mark_others_not_latest"):
+            assert not hasattr(vs.VectorStore, name)
+            assert not hasattr(vs.DynamoDbVectorStore, name)
         assert callable(vs.DynamoDbVectorStore.put_latest_item)
 
 
@@ -624,6 +581,19 @@ class TestSetLatestForFileVersion:
         assert flips == {("/m.glb#v1", "false"), ("/m.glb#v2", "true"), ("/m.glb#v2#t0000083456", "true")}
         assert all(u["ExpressionAttributeValues"][":current"]["S"] != u["ExpressionAttributeValues"][":target"]["S"]
                    for u in fake.updates)
+
+    def test_a_version_with_no_item_yet_changes_no_mark(self, vs):
+        # The named version's item has not been written: the file's current latest item stays latest
+        # until that version's own put_latest_item demotes it.
+        fake = FakeDynamo()
+        fake.query_pager = Pager(
+            {"Items": [_image("v1", is_latest="true")], "LastEvaluatedKey": {SK: {"S": "/m.glb#v1"}}},
+            {"Items": [{**_image("v1", is_latest="true"), SK: {"S": "/m.glb#v1#t0000083456"}}]},
+            name="file versions",
+        )
+        assert _store(vs, fake).set_latest_for_file_version("db1:a1", "/m.glb", "v2") == 0
+        fake.query_pager.assert_paged_to_exhaustion()
+        assert fake.updates == []
 
     def test_items_already_aligned_are_not_written(self, vs):
         fake = FakeDynamo()
@@ -686,12 +656,11 @@ class TestArchivedFlips:
         }
 
 
-# The five file-wide and asset-wide walks, each as (name, caller) so one test drives them all through
+# The four file-wide and asset-wide walks, each as (name, caller) so one test drives them all through
 # the same two-page script; the caller forwards the continuation keywords.
 _WALKS = [
     ("set_archived_for_file", lambda store, **kw: store.set_archived_for_file("db1:a1", "/m.glb", True, **kw)),
     ("set_archived_for_asset", lambda store, **kw: store.set_archived_for_asset("db1:a1", True, **kw)),
-    ("set_not_latest_for_file_except", lambda store, **kw: store.set_not_latest_for_file_except("db1:a1", "/m.glb", "v9", **kw)),
     ("delete_file", lambda store, **kw: store.delete_file("db1:a1", "/m.glb", **kw)),
     ("delete_asset", lambda store, **kw: store.delete_asset("db1:a1", **kw)),
 ]

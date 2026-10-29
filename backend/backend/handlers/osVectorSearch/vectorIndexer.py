@@ -13,14 +13,17 @@ vector item:
   `isArchived` against live S3 state and the asset row, write the item, delete the document. A document
   is either the file version's whole-file vector or one of its segment vectors (a video time window or a
   content chunk, keyed `{keyPath}#{versionId}#{segmentKey}`); a whole-file document also removes the
-  version's segment items left by an earlier run. After a latest whole-file write the key's S3 state is
-  read again: when a newer version landed in between, the file's latest marks are realigned to it.
+  version's segment items left by an earlier run. A latest whole-file write demotes the file's items of
+  other versions in the same transaction; it is the only rule that demotes. After it the key's S3 state is
+  read again: when a newer version landed in between and already has items, the file's latest marks are
+  realigned to it.
 * Bucket-sync S3 records republished on the file indexer SNS topic (the SQS -> SNS -> SQS -> SNS -> S3
-  envelope `fileIndexer.py` unwraps): a new version flips the file's other items to `isLatest="false"`, a
-  delete marker archives them, a marker removal un-archives them, a permanent delete removes them. A new
-  version whose `vams-changesource` is a restore (`fileUnarchive`, `assetUnarchive`) is the file's newest
-  content copied forward, so it only un-archives the file's items and demotes nothing: the items of the
-  copied content stay the file's latest and the file is searchable at once.
+  envelope `fileIndexer.py` unwraps): a new version un-archives the file's items and leaves their latest
+  marks alone, so the previous version stays searchable until the new version's item is written (and when
+  its run writes none); a delete marker archives them, a marker removal un-archives them, a permanent
+  delete removes them. A new version whose `vams-changesource` is a restore (`fileUnarchive`,
+  `assetUnarchive`) is the file's newest content copied forward, so its items stay the file's latest and
+  the file is searchable at once.
 * Asset table stream records republished on the asset indexer SNS topic: an archive marks every item of
   the asset, a permanent delete removes them; metadata, attribute and link stream records are ignored.
 * The indexer's own `vector.indexer.continue` messages: an asset- or file-wide rule pages through its
@@ -85,12 +88,11 @@ EMBEDDING_READY_DETAIL_TYPE = "vector.embedding.ready"
 # Body key and value of the indexer's own continuation message (a raw JSON body, never SNS-wrapped).
 CONTINUE_DETAIL_TYPE = "vector.indexer.continue"
 # The asset- and file-wide rules a continuation message names; each resumes one store method.
-RULE_OBJECT_CREATED = 'objectCreated'
 RULE_SET_ARCHIVED_FOR_FILE = 'setArchivedForFile'
 RULE_DELETE_FILE = 'deleteFile'
 RULE_SET_ARCHIVED_FOR_ASSET = 'setArchivedForAsset'
 RULE_DELETE_ASSET = 'deleteAsset'
-FILE_RULES = (RULE_OBJECT_CREATED, RULE_SET_ARCHIVED_FOR_FILE, RULE_DELETE_FILE)
+FILE_RULES = (RULE_SET_ARCHIVED_FOR_FILE, RULE_DELETE_FILE)
 # The function's own timeout, reported as the time left when no Lambda context supplies one.
 FULL_BUDGET_MS = 900_000
 ARCHIVED_PARTITION_SUFFIX = "#deleted"
@@ -172,14 +174,12 @@ def _time_left(context: Any) -> Callable[[], int]:
 
 
 def _continue_later(rule: str, pk: str, start_key: Dict[str, Any], key_path: Optional[str] = None,
-                    version_id: Optional[str] = None, archived: Optional[bool] = None) -> str:
+                    archived: Optional[bool] = None) -> str:
     """Re-enqueue the rest of an asset- or file-wide rule to this function's own queue, from the store's
     exclusive start key for the next page, and return the suffix the Outcome's detail records."""
     message: Dict[str, Any] = {'detailType': CONTINUE_DETAIL_TYPE, 'rule': rule, 'pk': pk}
     if key_path is not None:
         message['keyPath'] = key_path
-    if version_id is not None:
-        message['versionId'] = version_id
     if archived is not None:
         message['archived'] = archived
     message['startKey'] = start_key
@@ -441,10 +441,11 @@ def handle_embedding_ready(detail: Dict[str, Any]) -> Outcome:
         logger.warning(f"embedding.ready for {file_path}#{version_id} builds an item VectorItem refuses ({e}); dropping")
         return Outcome(True, 'drop', f"VectorItem rejected the document: {e}")
     # A latest whole-file document goes through the store's transactional write, which demotes the file's
-    # latest items of OTHER versions in batches of DEMOTION_BATCH_ACTIONS (the put rides in the first).
+    # latest items of OTHER versions in batches of DEMOTION_BATCH_ACTIONS (the put rides in the first); no
+    # other rule demotes, so the file's previous latest items stay searchable until this write lands.
     # Every other document is a plain put: a non-latest version has nothing to demote, and a segment
-    # document leaves the flip to the run's whole-file document (published first) and to the S3
-    # ObjectCreated rule, so a 1,000-chunk document costs 1,000 writes rather than 1,000 sibling reads.
+    # document leaves the flip to the run's whole-file document (published first), so a 1,000-chunk
+    # document costs 1,000 writes rather than 1,000 sibling reads.
     whole_file = segment['segmentKind'] == SEGMENT_KIND_NONE
     pk = f"{database_id}:{asset_id}"
     key_path = vector_file_key_path(file_path)
@@ -453,8 +454,10 @@ def handle_embedding_ready(detail: Dict[str, Any]) -> Outcome:
         flipped = vector_store.put_latest_item(item)
         # The put demoted the file's latest items of every other version, including those of a version
         # uploaded after the state read above (documents of concurrent runs are written in any order). The
-        # key is read again: when the current version has moved on, the file's latest marks are aligned to
-        # it -- this item and the rest read "false", the current version's items read "true".
+        # key is read again: when the current version has moved on and already has items, the file's
+        # latest marks are aligned to it -- this item and the rest read "false", the current version's
+        # items read "true". A current version with no item yet changes nothing: this item stays latest
+        # until that version's own write demotes it.
         after = resolve_key_state(bucket_name, object_key)
         if after.exists and after.current_version_id not in (None, version_id):
             realigned = vector_store.set_latest_for_file_version(pk, key_path, after.current_version_id)
@@ -571,21 +574,17 @@ def _resolve_file_identity(bucket_name: str, key: str, prefix: Optional[str]
     return (database_id, asset_id, file_path, change_source), None
 
 
-def run_object_created(pk: str, key_path: str, version_id: str, start_key: Optional[Dict[str, Any]],
-                       time_left: Callable[[], int]) -> Outcome:
-    """A new live version: every other version's items become not-latest, then the file is un-archived.
-    When the demotion hands off, the un-archive step waits for the continuation that finishes it."""
-    flipped, next_key = vector_store.set_not_latest_for_file_except(
-        pk, key_path, version_id, start_key=start_key, time_remaining_fn=time_left)
-    if next_key is not None:
-        note = _continue_later(RULE_OBJECT_CREATED, pk, next_key, key_path=key_path, version_id=version_id)
-        return Outcome(True, 'created', f"{pk}{key_path}: notLatest={flipped}{note}")
+def run_object_created(pk: str, key_path: str, time_left: Callable[[], int]) -> Outcome:
+    """A new live version: the file is un-archived and no latest mark changes. The previous version's
+    items stay latest until the new version's whole-file write demotes them in its own transaction, so
+    the file stays searchable while the new version is processed, and on its previous content when the
+    new version's run writes no item."""
     unarchived, next_key = vector_store.set_archived_for_file(
         pk, key_path, False, time_remaining_fn=time_left)
     note = ''
     if next_key is not None:
         note = _continue_later(RULE_SET_ARCHIVED_FOR_FILE, pk, next_key, key_path=key_path, archived=False)
-    return Outcome(True, 'created', f"{pk}{key_path}: notLatest={flipped} unarchived={unarchived}{note}")
+    return Outcome(True, 'created', f"{pk}{key_path}: unarchived={unarchived}{note}")
 
 
 def run_set_archived_for_file(pk: str, key_path: str, archived: bool, start_key: Optional[Dict[str, Any]],
@@ -647,8 +646,7 @@ def handle_s3_record(record: Dict[str, Any], bucket_name_hint: Optional[str],
             logger.info(f"{pk}{key_path}: ObjectCreated by '{change_source}' restores stored content; "
                         "un-archiving the file's items without demoting them")
             return run_set_archived_for_file(pk, key_path, False, None, time_left)
-        version_id = s3_info.get('object', {}).get('versionId') or 'null'
-        return run_object_created(pk, key_path, version_id, None, time_left)
+        return run_object_created(pk, key_path, time_left)
     if event_name == 'ObjectRemoved:DeleteMarkerCreated':
         return run_set_archived_for_file(pk, key_path, True, None, time_left)
     if event_name.startswith('ObjectRemoved'):
@@ -730,8 +728,6 @@ def handle_continuation(message: Dict[str, Any], time_left: Callable[[], int]) -
     if rule in FILE_RULES and not key_path:
         logger.warning(f"continuation for {rule!r} on {pk} carries no keyPath; dropping")
         return Outcome(True, 'drop', 'file continuation without keyPath')
-    if rule == RULE_OBJECT_CREATED:
-        return run_object_created(pk, key_path, str(message.get('versionId') or 'null'), start_key, time_left)
     if rule == RULE_SET_ARCHIVED_FOR_FILE:
         return run_set_archived_for_file(pk, key_path, bool(message.get('archived')), start_key, time_left)
     if rule == RULE_DELETE_FILE:

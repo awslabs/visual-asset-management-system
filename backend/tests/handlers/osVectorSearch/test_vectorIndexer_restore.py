@@ -4,12 +4,11 @@
 """An ObjectCreated record written by a restore un-archives the file's items without demoting them.
 
 A file unarchive is an S3 copy of the newest content version under a new version id, stamped
-`vams-changesource=fileUnarchive`. Treated as an ordinary new version, the ObjectCreated rule flips the
-file's items to `isLatest="false"` before any item exists for the copy -- and since no run embeds a
-restore, none ever will -- so the file vanishes from every search. The rule instead reads the source from
-the HEAD it already performs for the identity, and for a restore runs only the un-archive flip: the copied
-content's items keep their latest marks, the file's `isArchived` clears, and exactly one latest item per
-segment remains. Every other source keeps the demote-then-un-archive path.
+`vams-changesource=fileUnarchive`. No run embeds a restore, so no item will ever exist for the copy: the
+copied content's items must keep their latest marks. The rule reads the source from the HEAD it already
+performs for the identity, and for a restore runs only the un-archive flip: the file's `isArchived` clears
+and exactly one latest item per segment remains. Every other source is a new version, which un-archives the
+file and also leaves the latest marks to the new version's own whole-file write.
 """
 
 from unittest.mock import MagicMock
@@ -138,16 +137,14 @@ class TestRestoredVersion:
 @pytest.mark.unit
 class TestOtherSourcesKeepTheNewVersionRule:
     @pytest.mark.parametrize("source", NEW_VERSION_SOURCES)
-    def test_a_new_version_demotes_then_unarchives(self, indexer, source):
+    def test_a_new_version_unarchives_and_demotes_nothing(self, indexer, source):
         indexer.s3_client.head_object.return_value = _head(source)
         outcome = indexer.handle_s3_record(_created(), "assets", "prefix-a/")
 
         assert outcome.ok and outcome.action == "created"
-        assert indexer.vector_store.calls == [
-            ("set_not_latest_for_file_except", "db1:a1", KEY_PATH, RESTORED_VERSION),
-            ("set_archived_for_file", "db1:a1", KEY_PATH, False),
-        ]
+        assert indexer.vector_store.calls == [("set_archived_for_file", "db1:a1", KEY_PATH, False)]
         items = _by_key(indexer.vector_store)
-        assert items[f"{KEY_PATH}#{OLD_VERSION}"]["isLatest"] is False
-        assert items[f"{KEY_PATH}#{OLD_VERSION}#{SEGMENT_KEY}"]["isLatest"] is False
+        # The new version's own whole-file write demotes these; until then they stay searchable.
+        assert items[f"{KEY_PATH}#{OLD_VERSION}"]["isLatest"] is True
+        assert items[f"{KEY_PATH}#{OLD_VERSION}#{SEGMENT_KEY}"]["isLatest"] is True
         assert items[f"{KEY_PATH}#{OLD_VERSION}"]["isArchived"] is False

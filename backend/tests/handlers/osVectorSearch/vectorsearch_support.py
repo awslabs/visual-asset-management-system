@@ -125,7 +125,8 @@ class FakeVectorStore:
     changed, so a test can show WHICH items a call reaches (a segment item `…#v1#t0000083456` sits under
     its file's prefix) without asserting the store's expression text. Unseeded, the methods record the
     call and return 0. `put_latest_item` demotes the file's latest items of other versions as the store's
-    transaction does, and `set_latest_for_file_version` aligns the file's marks to one version.
+    transaction does, and `set_latest_for_file_version` aligns the file's marks to one version that has
+    items (none of that version: no change).
 
     The asset- and file-wide methods take the store's continuation keywords (`start_key`,
     `time_remaining_fn`, `min_remaining_ms`) and return `(count, next_key)`. `hand_off` maps a method name
@@ -201,6 +202,8 @@ class FakeVectorStore:
         self.calls.append(("set_latest_for_file_version", pk, key_path, version_id))
         file_items = self._file_items(pk, key_path)
         current = [seeded for seeded in file_items if seeded["versionId"] == version_id]
+        if not current:
+            return 0
         others = [seeded for seeded in file_items if seeded["versionId"] != version_id]
         return self._flip(current, "isLatest", True) + self._flip(others, "isLatest", False)
 
@@ -223,13 +226,6 @@ class FakeVectorStore:
         self.calls.append(("set_archived_for_asset", pk, archived))
         changed = self._flip(self._asset_items(pk), "isArchived", archived)
         return self._paged("set_archived_for_asset", changed, start_key, time_remaining_fn)
-
-    def set_not_latest_for_file_except(self, pk, key_path, version_id, *, start_key=None,
-                                       time_remaining_fn=None, min_remaining_ms=60_000):
-        self.calls.append(("set_not_latest_for_file_except", pk, key_path, version_id))
-        others = [item for item in self._file_items(pk, key_path) if item.get("versionId") != version_id]
-        changed = self._flip(others, "isLatest", False)
-        return self._paged("set_not_latest_for_file_except", changed, start_key, time_remaining_fn)
 
     def delete_file(self, pk, key_path, *, start_key=None, time_remaining_fn=None, min_remaining_ms=60_000):
         self.calls.append(("delete_file", pk, key_path))
