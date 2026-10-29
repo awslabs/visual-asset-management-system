@@ -95,8 +95,7 @@ def _reads(allowed, calls):
         for module in (evaluate_svc, quarantine_svc, cascade_svc, audit_svc):
             patches += [patch.object(module, "CasbinEnforcer", return_value=instance),
                         patch.object(module, "request_to_claims", claims_for(USER))]
-        patches += [patch.object(knownDatabase, "database_known", side_effect=known),
-                    patch.object(audit_svc, "database_known", side_effect=known)]
+        patches += [patch.object(knownDatabase, "database_known", side_effect=known)]
         for active in patches:
             active.start()
         try:
@@ -184,15 +183,13 @@ def test_a_listing_without_a_database_filter_reads_no_database(name):
         patches, _doubles = _cdkTables.table_doubles(resource, SERVICES)
         patches += [patch.object(service, "CasbinEnforcer", return_value=_stand_in({"*"})),
                     patch.object(service, "request_to_claims", claims_for(USER)),
-                    patch.object(store, "database_known", MagicMock()),
-                    patch.object(audit_svc, "database_known", MagicMock())]
+                    patch.object(knownDatabase, "database_known", MagicMock())]
         for active in patches:
             active.start()
         try:
             response = service.lambda_handler(rest_event("GET", path, None, query), MagicMock())
             assert response["statusCode"] == 200, response
-            store.database_known.assert_not_called()
-            audit_svc.database_known.assert_not_called()
+            knownDatabase.database_known.assert_not_called()
         finally:
             for active in reversed(patches):
                 active.stop()

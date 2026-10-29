@@ -23,10 +23,9 @@ from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
 
 from common.apiRoutes import API_COMPLIANCE_AUDIT, API_COMPLIANCE_AUDIT_ASSET
-from common.compliance import listing
+from common.compliance import knownDatabase, listing
 from common.compliance.archivedAssets import ArchivedAssets
 from common.compliance.auditRecord import AUDIT_LIST_PARTITION
-from common.compliance.knownDatabase import database_known, database_not_found
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -384,8 +383,8 @@ def query_audit(event, params):
     # database still names one, so its history stays readable.
     if (database_id and casbin_enforcer
             and casbin_enforcer.enforce(_evaluation_object(database_id), "GET")
-            and not database_known(database_table, database_id)):
-        return database_not_found(event)
+            and not knownDatabase.database_known(database_table, database_id)):
+        return knownDatabase.database_not_found(event)
     # The entries of an archived asset are listed only for a caller allowed on its stored database
     # id; its archived status is read once per database, and only when that decides anything.
     archived = ArchivedAssets(asset_table)
