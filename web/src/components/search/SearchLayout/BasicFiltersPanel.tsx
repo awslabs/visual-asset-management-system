@@ -4,17 +4,12 @@
  */
 
 import React, { useState, useEffect } from "react";
-import {
-    Container,
-    Header,
-    FormField,
-    Multiselect,
-    Toggle,
-    SpaceBetween,
-    ExpandableSection,
-    Box,
-    Input,
-} from "@cloudscape-design/components";
+import FormField from "@cloudscape-design/components/form-field";
+import Multiselect from "@cloudscape-design/components/multiselect";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import ExpandableSection from "@cloudscape-design/components/expandable-section";
+import Box from "@cloudscape-design/components/box";
+import Input from "@cloudscape-design/components/input";
 import { SearchFilters } from "../types";
 import { fetchAllDatabases, fetchTags } from "../../../services/APIService";
 import Synonyms from "../../../synonyms";
@@ -72,7 +67,9 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
         });
     }, []);
 
-    // Check if this is a non-filtered search (no query, no basic filters except rectype)
+    // Check if this is a non-filtered search (no query, no basic filters except rectype). The
+    // keyword and natural-language search options are not filters: they change how a query is
+    // matched, not which records are in scope, so the facets of such an answer are still complete.
     const isNonFilteredSearch = () => {
         const hasQuery = filters._rectype; // Always has rectype
         const filterKeys = Object.keys(filters).filter(
@@ -80,6 +77,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                 key !== "_rectype" &&
                 key !== "includeMetadataInKeywordSearch" &&
                 key !== "showResultExplanation" &&
+                key !== "includeSegments" &&
                 filters[key] !== null &&
                 filters[key] !== undefined
         );
@@ -287,6 +285,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                         placeholder={`All ${Synonyms.databases}`}
                         disabled={loading || databaseLocked}
                         filteringType="auto"
+                        filteringAriaLabel={`Filter ${Synonyms.databases}`}
                     />
                 </FormField>
 
@@ -318,6 +317,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                             placeholder="All types"
                             disabled={loading}
                             filteringType="auto"
+                            filteringAriaLabel={`Filter ${Synonyms.asset} types`}
                         />
                     </FormField>
                 )}
@@ -350,6 +350,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                             placeholder="All types"
                             disabled={loading}
                             filteringType="auto"
+                            filteringAriaLabel="Filter file types"
                         />
                     </FormField>
                 )}
@@ -378,6 +379,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                         placeholder="All tags"
                         disabled={loading}
                         filteringType="auto"
+                        filteringAriaLabel="Filter tags"
                     />
                 </FormField>
             </SpaceBetween>

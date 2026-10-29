@@ -50,7 +50,7 @@ tools/VamsCLI/
       comment.py             # Asset version comments (list, get, add, update, delete)
       subscription.py        # Asset event subscriptions (list, create, update, delete, unsubscribe, check)
       features.py            # Feature switch inspection
-      search.py              # Search (OpenSearch integration)
+      search.py              # Search (OpenSearch keyword commands + `search nlp` over POST /search/nlp, gated on VECTORSEARCH)
       sync.py                # Directory sync (sync file push/pull)
       pipeline.py            # Pipeline CRUD + template + tag-schema sub-groups
       workflow.py            # Workflow CRUD + trigger sub-group + asset-less execute + per-asset execution list
@@ -1102,6 +1102,7 @@ constant is a gate no command can name, and an extra one names a gate no deploym
 | `FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP`       | `"AUTHPROVIDER_EXTERNALOAUTHIDP"` | External OAuth IDP       |
 | `FEATURE_PHYSNA_ADDON` (`addon_constants.py`) | `"PHYSNA_ADDON"`                  | Physna add-on features   |
 | `FEATURE_DEADLINECLOUD_PIPELINES`             | `"DEADLINECLOUD_PIPELINES"`       | Deadline Cloud exec type |
+| `FEATURE_VECTORSEARCH`                        | `"VECTORSEARCH"`                  | `search nlp` available   |
 
 ---
 

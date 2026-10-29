@@ -28,7 +28,7 @@ os.environ.setdefault("OPENSEARCH_ENDPOINT_SSM_PARAM", "/test/endpoint")
 os.environ.setdefault("OPENSEARCH_TYPE", "provisioned")
 
 _INDEXING_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "backend", "handlers", "indexing"
+    os.path.dirname(__file__), "..", "..", "..", "backend", "handlers", "osSemanticSearch"
 )
 
 
@@ -99,13 +99,13 @@ ATTRIBUTE_ROWS = [
 @pytest.mark.unit
 class TestInternalMetadataKeysAreNotIndexed:
     def test_asset_metadata_holds_only_visible_keys(self):
-        m = _load_indexer("assetIndexer")
+        m = _load_indexer("osAssetIndexer")
         with patch.object(m, "asset_file_metadata_table", _OnePageTable(METADATA_ROWS)):
             metadata = m.get_asset_metadata("db1", "a1")
         assert metadata == {"visible": "z"}
 
     def test_file_metadata_and_attributes_hold_only_visible_keys(self):
-        m = _load_indexer("fileIndexer")
+        m = _load_indexer("osFileIndexer")
         with patch.object(m, "asset_file_metadata_table", _OnePageTable(METADATA_ROWS)), \
                 patch.object(m, "file_attribute_table", _OnePageTable(ATTRIBUTE_ROWS)):
             metadata, attributes = m.get_file_metadata("db1", "a1", "/part.stp")
@@ -113,7 +113,7 @@ class TestInternalMetadataKeysAreNotIndexed:
         assert attributes == {"visible": "z"}
 
     def test_lowercase_vams_prefix_is_an_ordinary_key(self):
-        m = _load_indexer("assetIndexer")
+        m = _load_indexer("osAssetIndexer")
         rows = [_metadata_row("vams_note", "kept")]
         with patch.object(m, "asset_file_metadata_table", _OnePageTable(rows)):
             assert m.get_asset_metadata("db1", "a1") == {"vams_note": "kept"}

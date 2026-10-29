@@ -251,6 +251,166 @@ Same format as [Advanced Search](#advanced-search).
 
 ---
 
+### NLP Search
+
+`POST /search/nlp`
+
+Searches by meaning. The query is embedded with the deployment's embedding model and matched against the vector embeddings of the latest, non-archived files in every database the caller may read. The route exists only when `app.vectorSearch.enabled` is set; it does not need OpenSearch.
+
+**Request Body:**
+
+```json
+{
+    "query": "drone footage of the harbour crane",
+    "entityTypes": ["file"],
+    "databaseIds": ["site-surveys"],
+    "includeArchived": false,
+    "includeSegments": true,
+    "fileClasses": [],
+    "fileExtensions": [],
+    "size": 25
+}
+```
+
+| Field                | Type          | Default    | Description                                                                                                                                                                                      |
+| -------------------- | ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `query`              | string        | --         | Natural-language query (1-1,000 characters). Required.                                                                                                                                           |
+| `entityTypes`        | array         | `["file"]` | Exactly one of `["file"]` or `["asset"]`. Asset mode keeps the highest-ranked file hit of each asset.                                                                                            |
+| `databaseIds`        | array[string] | `[]`       | Databases to search (at most 100), intersected with the caller's accessible databases. Empty searches every accessible database.                                                                 |
+| `includeArchived`    | boolean       | `false`    | Include archived files.                                                                                                                                                                          |
+| `includeSegments`    | boolean       | `true`     | Also match video time windows and text chunks. A file found through a segment reports it in `_vector.bestSegment`.                                                                               |
+| `fileClasses`        | array[string] | `[]`       | File classes to keep (`image`, `video`, `audio`, `document`, `text`, `data`, `tiles3d`, `mesh`, `usd`, `cad`, `pointcloud`, `splat`, `ifc`, `other`). One value is pushed into the index filter. |
+| `fileExtensions`     | array[string] | `[]`       | Extensions to keep, with or without the leading dot.                                                                                                                                             |
+| `size`               | integer       | `25`       | Hits returned (1-100). There is no pagination: `size` is the whole window.                                                                                                                       |
+| `filters`            | array         | --         | OpenSearch-only: `query_string` filter clauses as on [Advanced Search](#advanced-search).                                                                                                        |
+| `metadataQuery`      | string        | --         | OpenSearch-only: metadata search text as on Advanced Search.                                                                                                                                     |
+| `metadataSearchMode` | string        | --         | OpenSearch-only: `key`, `value`, or `both`.                                                                                                                                                      |
+| `geoSearch`          | object        | --         | OpenSearch-only: [geospatial filter](#geospatial-search).                                                                                                                                        |
+| `tags`               | array[string] | --         | OpenSearch-only: keep hits carrying any of these tags.                                                                                                                                           |
+| `enrich`             | boolean       | `true`     | When an OpenSearch mode is enabled, merge the file index document (metadata fields, preview key) into `_source`.                                                                                 |
+
+The OpenSearch-only fields are applied, and hits enriched, only when an OpenSearch mode is enabled. Without OpenSearch they are ignored and the response carries an `opensearch:fields_ignored` warning.
+
+File-type words in the query (`video`, `footage`, `point cloud`, `pdf`, `3D model`, ...) add a fixed bonus of 0.1 to the ranking value of hits of those file classes, so such a hit moves ahead of a hit of another class that scores less than 0.1 higher; the detected classes are reported in `nlp.classIntent`. The bonus changes the order only: `_score` and `_vector.distance` are the similarity without it. Words that describe content rather than a file type, such as `report` or `manual`, are not type words. This is a soft preference, not a filter; use `fileClasses` to filter.
+
+**Response:**
+
+The OpenSearch-style envelope of [Advanced Search](#advanced-search) with an `nlp` summary and a `warnings` list. Each hit's `_source` carries the same keys as a file hit of the OpenSearch file index; the vector-specific values are under `_vector`.
+
+```json
+{
+    "took": 412,
+    "timed_out": false,
+    "_shards": { "total": 1, "successful": 1, "skipped": 0, "failed": 0 },
+    "hits": {
+        "total": { "value": 3, "relation": "eq" },
+        "max_score": 0.81,
+        "hits": [
+            {
+                "_index": "vams-vectors",
+                "_id": "site-surveys#asset-123#videos/crane.mp4#3sL9kQ",
+                "_score": 0.81,
+                "_index_type": "file",
+                "_source": {
+                    "str_rectype": "file",
+                    "str_databaseid": "site-surveys",
+                    "str_assetid": "asset-123",
+                    "str_key": "videos/crane.mp4",
+                    "str_fileext": "mp4",
+                    "str_assetname": "Harbour crane survey",
+                    "str_assettype": "video",
+                    "list_tags": ["survey"],
+                    "bool_archived": false,
+                    "str_s3_version_id": "3sL9kQ",
+                    "num_filesize": 734003200
+                },
+                "_vector": {
+                    "distance": 0.19,
+                    "embeddingModelId": "amazon.titan-embed-text-v2:0",
+                    "sourceModalities": [
+                        "asset-metadata",
+                        "file-identity",
+                        "genai-metadata",
+                        "segment-frames"
+                    ],
+                    "indexedAt": "2026-09-13T10:22:41Z",
+                    "fileClass": "video",
+                    "segmentHits": 2,
+                    "bestSegment": {
+                        "segmentKey": "t0000083456",
+                        "segmentKind": "videoTime",
+                        "segmentLabel": "00:01:23",
+                        "segmentStartMs": 83456,
+                        "segmentEndMs": 88456
+                    }
+                }
+            }
+        ]
+    },
+    "aggregations": {
+        "str_fileext": {
+            "doc_count_error_upper_bound": 0,
+            "sum_other_doc_count": 0,
+            "buckets": [
+                { "key": "mp4", "doc_count": 2 },
+                { "key": "jpg", "doc_count": 1 }
+            ]
+        },
+        "str_databaseid": {
+            "doc_count_error_upper_bound": 0,
+            "sum_other_doc_count": 0,
+            "buckets": [{ "key": "site-surveys", "doc_count": 3 }]
+        },
+        "list_tags": {
+            "doc_count_error_upper_bound": 0,
+            "sum_other_doc_count": 0,
+            "buckets": [{ "key": "survey", "doc_count": 3 }]
+        }
+    },
+    "aggregationTotal": 3,
+    "nlp": {
+        "query": "drone footage of the harbour crane",
+        "embeddingModelId": "amazon.titan-embed-text-v2:0",
+        "databasesSearched": 1,
+        "candidatesEvaluated": 5,
+        "itemsCollapsed": 2,
+        "classIntent": ["video"],
+        "truncated": false
+    },
+    "warnings": []
+}
+```
+
+-   `_id` is `databaseId#assetId#filePath#versionId` for a file hit and `databaseId#assetId` for an asset hit. `_score` is `1 - distance`, clipped to `[0, 1]`.
+-   Segment items collapse to one hit per file version. `_vector.segmentHits` counts the file's segment items among the candidates; `_vector.bestSegment` names the winning segment when a segment matched better than the whole file, else it is `null`.
+-   `hits.total.value` and `aggregationTotal` count the authorized hits before the `size` cut. `hits.total.relation` is `gte` when a result window filled or the accessible database list was cut (`nlp.truncated` is `true`), else `eq`.
+-   `aggregations` carries terms buckets in the shape [Advanced Search](#advanced-search) returns, counted over the same authorized hits before the `size` cut, so the filter counts match `hits.total.value`. File mode returns `str_fileext` (the extension in lower case without the dot; a file without an extension is in no bucket), `str_databaseid`, and `list_tags`; asset mode returns `str_assettype`, `str_databaseid`, and `list_tags`, counting each asset once. Buckets are ordered by `doc_count`, then by `key`, at most 1,000 per aggregation, with the remainder summed in `sum_other_doc_count`. `aggregations` is `{}` when the answer holds no hits.
+-   `nlp.candidatesEvaluated` is the number of distinct vector items after the per-database results were merged; `nlp.itemsCollapsed` is how many of them folded into another hit of the same file.
+
+**Warnings:**
+
+| Code                           | Meaning                                                                                                              |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `truncated:window`             | A whole-file result window filled; more files may match than were evaluated. `relation` is `gte`.                    |
+| `truncated:targets`            | The caller can read more than 200 databases and only the first 200 were searched. `relation` is `gte`.               |
+| `databases:none_accessible`    | No searchable database is accessible to the caller; the answer is empty and the query was not embedded.              |
+| `opensearch:fields_ignored`    | OpenSearch-only fields were sent to a deployment without an OpenSearch mode; the message names them.                 |
+| `opensearch:enrichment_failed` | The OpenSearch constrain/enrich step failed; the hits are returned without it.                                       |
+| `segments:window_full`         | A segment result window filled while the whole-file windows did not; more segments may match. `relation` stays `eq`. |
+
+**Error Responses:**
+
+| Status | Description                                                                     |
+| ------ | ------------------------------------------------------------------------------- |
+| `400`  | Invalid search parameters, or the query could not be embedded.                  |
+| `403`  | Not authorized to access search.                                                |
+| `503`  | The vector index is being built (`"Vector index is being built"`); retry later. |
+| `500`  | Internal server error.                                                          |
+
+A query longer than 1,000 characters is refused with `400` and the message `The query is <length> characters; the limit is 1000.` A query that is empty or only whitespace is refused with `400` and the message `The query must not be blank.`, before the query is embedded. When the embedding model call fails, the response is `400` with the message `The query could not be prepared for search. Try again; if it keeps failing, contact your administrator.`; the cause is written to the function's log.
+
+---
+
 ### Get Index Mappings
 
 `GET /search`

@@ -13,6 +13,7 @@ import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../config/config";
 import { generateUniqueNameHash } from "../../helper/security";
+import { searchLambdasInVpc } from "../../helper/searchPlacement";
 
 export interface VPCBuilderNestedStackProps extends cdk.StackProps {
     config: Config.Config;
@@ -693,7 +694,8 @@ export class VPCBuilderNestedStack extends NestedStack {
             if (
                 props.config.app.pipelines.usePreviewPcPotreeViewer.enabled ||
                 props.config.app.pipelines.usePreview3dThumbnail.enabled ||
-                props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled ||
+                (props.config.app.pipelines.useSystemGenAiMetadata.enabled &&
+                    props.config.app.pipelines.useSystemGenAiMetadata.useFargateRenderer) ||
                 props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
                 props.config.app.pipelines.useGenAiVideoSopBom?.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
@@ -770,34 +772,24 @@ export class VPCBuilderNestedStack extends NestedStack {
                 });
             }
 
-            // Amazon Bedrock Runtime has two in-VPC callers: the GenAI metadata-labeling Lambda, which
-            // is in the VPC only when every Lambda is, and the video SOP/BOM Batch container, which
-            // always runs in the isolated subnets. Amazon Rekognition has only the Lambda caller. A VPC
-            // allows one private-DNS endpoint per service, so the two callers share the BedrockEndpoint
-            // construct and only its condition is the union.
-            const bedrockRuntimeFromLambda =
+            // Amazon Bedrock Runtime endpoint. A VPC allows one private-DNS endpoint per service, so its
+            // in-VPC callers share it and only its condition is the union: the SYSTEM GenAI analysis and
+            // embedding Lambdas, which call Bedrock from the isolated subnets when every Lambda runs in
+            // the VPC; the vector search Lambda, whenever the search stack's placement puts it in the
+            // VPC; and the video SOP/BOM Batch container, which always runs in the isolated subnets.
+            const bedrockFromAllLambdas =
                 props.config.app.useGlobalVpc.useForAllLambdas &&
-                props.config.app.pipelines.useGenAiMetadata3dLabeling.enabled;
+                (props.config.app.pipelines.useSystemGenAiMetadata.enabled ||
+                    props.config.app.vectorSearch.enabled);
+            const bedrockFromSearch =
+                props.config.app.vectorSearch.enabled && searchLambdasInVpc(props.config);
             const bedrockRuntimeFromContainer =
                 props.config.app.pipelines.useGenAiVideoSopBom?.enabled === true;
-
-            if (bedrockRuntimeFromLambda || bedrockRuntimeFromContainer) {
-                // Create VPC endpoint for Bedrock Runtime
+            if (bedrockFromAllLambdas || bedrockFromSearch || bedrockRuntimeFromContainer) {
                 new ec2.InterfaceVpcEndpoint(this, "BedrockEndpoint", {
                     vpc: this.vpc,
                     privateDnsEnabled: true,
                     service: ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME,
-                    subnets: { subnets: this.isolatedSubnets },
-                    securityGroups: [vpceSecurityGroup],
-                });
-            }
-
-            if (bedrockRuntimeFromLambda) {
-                // Create VPC endpoint for Rekognition
-                new ec2.InterfaceVpcEndpoint(this, "RekognitionEndpoint", {
-                    vpc: this.vpc,
-                    privateDnsEnabled: true,
-                    service: ec2.InterfaceVpcEndpointAwsService.REKOGNITION,
                     subnets: { subnets: this.isolatedSubnets },
                     securityGroups: [vpceSecurityGroup],
                 });

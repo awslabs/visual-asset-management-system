@@ -98,6 +98,8 @@ export function buildExecutionServiceFunction(
     storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionsStorageTable.grantReadWriteData(fun); // write to mark pipeline rows ABORTED + delete
     storageResources.dynamo.workflowExecutionConfigurationStorageTable.grantReadWriteData(fun);
+    // perInputFileVersion lock rows are released when an execution is aborted.
+    storageResources.dynamo.workflowExecutionLocksStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionInputFilesStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionInputMetadataStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadWriteData(fun);
@@ -379,6 +381,9 @@ export function buildExecuteWorkflowV2Function(
     storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionConfigurationStorageTable.grantReadWriteData(fun);
+    // perInputFileVersion locks: taken before the state machine starts, released when a launch fails
+    // after acquiring.
+    storageResources.dynamo.workflowExecutionLocksStorageTable.grantReadWriteData(fun);
     storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     metadataServiceFunction.grantInvoke(fun);
 
@@ -465,6 +470,11 @@ export function buildProcessWorkflowExecutionOutputFunction(
         fun,
         "dynamodb:UpdateItem"
     );
+    // Terminal lock release: the workflow row supplies the stored concurrencyRestriction and the
+    // input rows the file versions the run held.
+    storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadData(fun);
+    storageResources.dynamo.workflowExecutionLocksStorageTable.grantReadWriteData(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -588,6 +598,11 @@ export function buildHandleExecutionErrorFunction(
         fun,
         "dynamodb:UpdateItem"
     );
+    // Terminal lock release: the workflow row supplies the stored concurrencyRestriction and the
+    // input rows the file versions the run held.
+    storageResources.dynamo.workflowStorageTableV2.grantReadData(fun);
+    storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadData(fun);
+    storageResources.dynamo.workflowExecutionLocksStorageTable.grantReadWriteData(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,

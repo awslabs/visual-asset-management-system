@@ -4,16 +4,14 @@
  */
 
 import React, { useState, useEffect } from "react";
-import {
-    FormField,
-    Input,
-    Select,
-    Grid,
-    Button,
-    Toggle,
-    SpaceBetween,
-    Box,
-} from "@cloudscape-design/components";
+import FormField from "@cloudscape-design/components/form-field";
+import Input from "@cloudscape-design/components/input";
+import Select from "@cloudscape-design/components/select";
+import Grid from "@cloudscape-design/components/grid";
+import Button from "@cloudscape-design/components/button";
+import Toggle from "@cloudscape-design/components/toggle";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Box from "@cloudscape-design/components/box";
 import { SearchFilters } from "../types";
 import { fetchAllDatabases, fetchTags } from "../../../services/APIService";
 import Synonyms from "../../../synonyms";

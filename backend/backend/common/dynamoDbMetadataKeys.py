@@ -65,8 +65,8 @@ EXCLUDED_METADATA_RECORD_KEYS: FrozenSet[str] = frozenset(
 # from user-facing output:
 #
 # VAMS_INTERNAL_FIELD_PREFIX: uppercase ``VAMS_`` prefix. Excluded from the
-#   search index (asset metadata in handlers/indexing/assetIndexer.py, file
-#   metadata and file attributes in handlers/indexing/fileIndexer.py).
+#   search index (asset metadata in handlers/osSemanticSearch/osAssetIndexer.py, file
+#   metadata and file attributes in handlers/osSemanticSearch/osFileIndexer.py).
 # HIDDEN_FIELD_PREFIX: leading underscore. Excluded from the same search
 #   indexing and from asset export output. OpenSearch additionally reserves
 #   leading-underscore field names for system fields.

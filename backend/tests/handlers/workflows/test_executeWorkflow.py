@@ -218,7 +218,6 @@ class TestMetadataSources:
                 "metadataSourceDatabaseId": "db1"}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}._fetch_metadata",
                    return_value=[{"metadataKey": "PROMPT", "metadataValue": "on the asset"}]), \
              patch(f"{MOD}._fetch_database_metadata",
@@ -249,7 +248,6 @@ class TestMetadataSources:
         body = {"inputFiles": [], "metadataSourceAssets": [{"databaseId": "db1", "assetId": "a1"}]}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}._fetch_metadata", return_value=[]), \
              patch(f"{MOD}._input_exists_in_s3") as m_exists, \
              patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
@@ -291,7 +289,6 @@ class TestMetadataSources:
                                          {"databaseId": "db1", "assetId": "a2"}]}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}._fetch_metadata", return_value=[]), \
              patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb") as m_dynamo:
@@ -348,7 +345,6 @@ class TestMetadataSources:
                 "metadataSourceDatabaseId": "src-db"}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}._fetch_metadata", return_value=[]), \
              patch(f"{MOD}._fetch_database_metadata",
                    return_value=[{"metadataKey": "owner", "metadataValue": "eng"}]), \
@@ -393,7 +389,6 @@ class TestMetadataSources:
         body = {"inputFiles": [], "metadataSourceAssets": [{"databaseId": "db1", "assetId": "a1"}]}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}._fetch_metadata", return_value=[]), \
              patch(f"{MOD}._fetch_database_metadata",
                    return_value=[{"metadataKey": "owner", "metadataValue": "eng"}]) as m_db, \
@@ -433,7 +428,6 @@ class TestMetadataSources:
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["claims"], \
              patch(f"{MOD}.CasbinEnforcer", return_value=enforcer), \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}._fetch_metadata", return_value=[]), \
              patch(f"{MOD}._fetch_database_metadata", return_value=[]) as m_db, \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
@@ -461,7 +455,6 @@ class TestMetadataSources:
         pipe["systemConfig"]["metadataInputs"] = {"assetMetadata": True, "databaseMetadata": True}
         p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
         with p["get_workflow"], p["get_pipeline"], p["default_bucket"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb") as m_dynamo:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
@@ -486,7 +479,6 @@ class TestMetadataSources:
                 "metadataSourceDatabaseId": "src-db"}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}._fetch_metadata", return_value=[]), \
              patch(f"{MOD}._fetch_database_metadata", return_value=[]), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
@@ -506,7 +498,6 @@ class TestMetadataSources:
             "fileAttributes": False, "databaseMetadata": False}
         p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
         with p["get_workflow"], p["get_pipeline"], p["default_bucket"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb") as m_dynamo:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
@@ -666,7 +657,6 @@ class TestSourceDatabaseAuthorization:
              patch(f"{MOD}._get_asset",
                    side_effect=lambda d, a: dict(_ASSET, databaseId=d, assetId=a,
                                                  assetLocation={"Key": f"{a}/"})), \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}._fetch_database_metadata",
                    side_effect=lambda d, e: [{"metadataKey": "site", "metadataValue": d}]) as m_db, \
              patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
@@ -700,7 +690,6 @@ class TestSourceDatabaseAuthorization:
                 "metadataSourceDatabaseId": "unrelated-db"}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}._fetch_database_metadata", return_value=[]) as m_db, \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb") as m_dynamo:
@@ -950,7 +939,6 @@ class TestUnreadableSourceDatabase:
         body = {"inputFiles": [], "metadataSourceDatabaseId": "src-db"}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}._fetch_metadata", return_value=[]), \
              patch(f"{MOD}._fetch_database_metadata", return_value=None), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
@@ -1004,7 +992,6 @@ class TestGlobalIsNotAMetadataSourceDatabase:
              patch(f"{MOD}._get_asset",
                    side_effect=lambda d, a: dict(_ASSET, databaseId=d, assetId=a,
                                                  assetLocation={"Key": f"{a}/"})), \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}._fetch_metadata", return_value=[]), \
              patch(f"{MOD}._fetch_file_metadata", return_value=[]), \
              patch(f"{MOD}._fetch_database_metadata") as m_db, \
@@ -1082,13 +1069,6 @@ class TestMetadataServicePayloadIdentity:
              patch(f"{MOD}.logger") as m_logger:
             assert ewv2._fetch_database_metadata("db1", {"requestContext": {}}) == []
         assert not m_logger.warning.called
-
-
-@pytest.mark.unit
-class TestConcurrencyGuard:
-    def test_restriction_none_never_conflicts(self):
-        inputs = [{"databaseId": "db", "assetId": "a", "relativeFileKey": "/f"}]
-        assert ewv2._running_execution_exists("db", "wf", inputs, {}, "none") is False
 
 
 @pytest.mark.unit
@@ -1177,7 +1157,6 @@ class TestExecuteOrchestration:
         body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb") as m_dynamo:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
@@ -1200,7 +1179,6 @@ class TestExecuteOrchestration:
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["claims"], \
              patch(f"{MOD}.CasbinEnforcer", return_value=enforcer), \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb") as m_dynamo:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
@@ -1274,7 +1252,6 @@ class TestExecuteOrchestration:
                 "outputAssetId": "a1", "outputDatabaseId": "db1"}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, patch(f"{MOD}.dynamodb") as m_dynamo:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
             m_dynamo.Table.return_value = MagicMock()
@@ -1312,7 +1289,6 @@ class TestExecuteOrchestration:
                 "outputAssetId": "otherAsset", "outputDatabaseId": "db1"}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, patch(f"{MOD}.dynamodb") as m_dynamo:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
             m_dynamo.Table.return_value = MagicMock()
@@ -1331,7 +1307,6 @@ class TestExecuteOrchestration:
                 "outputAssetId": "a1", "outputDatabaseId": "db1"}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, patch(f"{MOD}.dynamodb") as m_dynamo:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
             m_dynamo.Table.return_value = MagicMock()
@@ -1351,7 +1326,6 @@ class TestExecuteOrchestration:
                 "outputAssetId": "a2", "outputDatabaseId": "db1"}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, patch(f"{MOD}.dynamodb") as m_dynamo:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
             m_dynamo.Table.return_value = MagicMock()
@@ -1372,7 +1346,6 @@ class TestExecuteOrchestration:
                 "outputDatabaseId": "otherDb"}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, patch(f"{MOD}.dynamodb") as m_dynamo:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
             m_dynamo.Table.return_value = MagicMock()
@@ -1391,7 +1364,6 @@ class TestExecuteOrchestration:
         body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, patch(f"{MOD}.dynamodb") as m_dynamo:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
             m_dynamo.Table.return_value = MagicMock()
@@ -1418,7 +1390,6 @@ class TestExecuteOrchestration:
         p = self._patches(workflow=wf, pipeline=pipe)
         with p["get_workflow"], p["get_pipeline"], p["default_bucket"], p["enforcer"], p["claims"], \
              patch(f"{MOD}._get_asset") as m_get_asset, \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, patch(f"{MOD}.dynamodb") as m_dynamo:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
             tables = {}
@@ -1503,7 +1474,6 @@ class TestExecuteOrchestration:
         body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb") as m_dynamo:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
@@ -1637,7 +1607,6 @@ class TestPerPipelineFilteredManifest:
         p = TestExecuteOrchestration()._patches(workflow=wf, pipeline=pipe)
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb") as m_dynamo:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
@@ -1648,6 +1617,18 @@ class TestPerPipelineFilteredManifest:
                          if c.kwargs.get("Key", "").endswith("pipeline1/manifest.json")]
         assert manifest_puts, "pipeline 1 manifest was not written"
         return json.loads(manifest_puts[0].kwargs["Body"].decode("utf-8"))
+
+    def test_manifest_entries_carry_the_assets_bucket_id(self):
+        # Each entry names its asset bucket twice: by NAME (`bucket`, what the pipeline reads S3 with)
+        # and by registration id (`bucketId`, what a consumer resolving the bucket row needs). The id
+        # is the asset row's -- the same value the bucket-name lookup was keyed on.
+        wf, pipe = self._multi_input_workflow()
+        body = {"inputFiles": [
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"},
+            {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/g.glb"}]}
+        manifest = self._launch_and_read_manifest(wf, pipe, body)
+        assert [f["bucketId"] for f in manifest["inputFiles"]] == [_ASSET["bucketId"]] * 2
+        assert {f["bucket"] for f in manifest["inputFiles"]} == {"asset-bucket"}
 
     def test_manifest_excludes_files_the_pipeline_filters_reject(self):
         # Workflow allows multiple files with no filters; the pipeline allows only *.glb. The manifest
@@ -1809,7 +1790,6 @@ class TestRenderOutputPathExtension:
              else TestExecuteOrchestration()._patches())
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb") as m_dynamo:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
@@ -1905,7 +1885,6 @@ class TestPersistFailureStopsExecution:
         body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb") as m_dynamo, \
              patch(f"{MOD}._persist_execution_records", side_effect=RuntimeError("throttled")):
@@ -2098,7 +2077,6 @@ class TestDuplicateInputFiles:
         body = {"inputFiles": [dict(entry), dict(entry)]}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c") as m_s3, patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb") as m_dynamo:
             m_sfn.start_execution.return_value = {"executionArn": "arn:exec"}
@@ -2150,7 +2128,6 @@ class TestMissingTemplateTagIsCallerError:
         body = {"inputFiles": [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"}]}
         with p["get_workflow"], p["get_pipeline"], p["get_asset"], p["default_bucket"], \
              p["asset_bucket"], p["exists"], p["enforcer"], p["claims"], \
-             patch(f"{MOD}._running_execution_exists", return_value=False), \
              patch(f"{MOD}.s3c"), patch(f"{MOD}.sfn_client") as m_sfn, \
              patch(f"{MOD}.dynamodb") as m_dynamo, \
              patch(f"{MOD}.tr.render_config",

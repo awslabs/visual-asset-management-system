@@ -3,8 +3,8 @@
 
 """
 Rendering logic for generating preview images from PyVista data.
-Uses PyVista with Xvfb for CPU-based headless offscreen rendering.
-Xvfb is started by the container entrypoint (see Dockerfile).
+Uses PyVista with Xvfb for CPU-based headless offscreen rendering. The X server is started by the
+Fargate container's entrypoint (see Dockerfile) or by ``analysis.display`` in the Lambda image.
 
 Camera framing uses percentile-based bounds (2nd-98th) instead of the full
 bounding box so that sparse scenes (e.g. single-position scans with distant
@@ -20,6 +20,12 @@ logger = get_logger()
 # Default rendering parameters
 DEFAULT_N_FRAMES = 36
 DEFAULT_RESOLUTION = (800, 600)
+
+# Still frames for image analysis: a few views at fixed angles, square, bounded by the number of
+# images one analysis request may carry.
+DEFAULT_STILL_VIEWS = 4
+MAX_STILL_VIEWS = 8
+DEFAULT_STILL_RESOLUTION = (768, 768)
 POINT_SIZE = 2.0
 
 # Background color for rendering. Mid-gray minimizes visible halos on
@@ -186,6 +192,58 @@ def generate_static_frame(
     plotter.close()
 
     return img
+
+
+def generate_still_frames(
+    pv_data: pv.PolyData,
+    n_views: int = DEFAULT_STILL_VIEWS,
+    resolution: tuple = DEFAULT_STILL_RESOLUTION,
+    use_full_bounds=None,
+    start_angle_deg: float = STILL_VIEW_DEG,
+) -> list:
+    """
+    Render ``n_views`` still frames at evenly spaced orbit angles starting at ``start_angle_deg``.
+    Returns RGB frames (no alpha) on the renderer's neutral background: these are analysis inputs
+    rather than thumbnails, so the depth-mask transparency step is not applied. ``n_views`` is
+    clamped to [1, MAX_STILL_VIEWS]; ``use_full_bounds`` None frames a mesh on its full bounds and a
+    point cloud on its percentile bounds.
+    """
+    n_views = max(1, min(int(n_views), MAX_STILL_VIEWS))
+    logger.info(f"Generating {n_views} still frames at {resolution}")
+
+    plotter = pv.Plotter(off_screen=True, window_size=resolution)
+    plotter.set_background(_BG_COLOR)
+    if is_point_cloud(pv_data):
+        _add_point_cloud(plotter, pv_data)
+    else:
+        _add_mesh(plotter, pv_data)
+
+    focal_point, radius, elevation = _compute_camera_framing(
+        pv_data, use_full_bounds=_resolve_full_bounds(pv_data, use_full_bounds), resolution=resolution
+    )
+    max_extent = float(np.max(np.linalg.norm(pv_data.points - focal_point, axis=1)))
+
+    frames = []
+    for i in range(n_views):
+        angle_rad = np.radians(start_angle_deg + i * (360.0 / n_views))
+        cam_x = focal_point[0] + radius * np.cos(angle_rad)
+        cam_z = focal_point[2] + radius * np.sin(angle_rad)
+        cam_y = focal_point[1] + elevation
+        cam_distance = float(np.linalg.norm(np.array([cam_x, cam_y, cam_z]) - focal_point))
+        plotter.camera.position = (cam_x, cam_y, cam_z)
+        plotter.camera.focal_point = tuple(focal_point)
+        plotter.camera.up = (0.0, 1.0, 0.0)
+        plotter.camera.clipping_range = (
+            max(cam_distance - max_extent * 1.1, cam_distance * 0.001),
+            cam_distance + max_extent * 1.5,
+        )
+        plotter.render()
+        img = plotter.screenshot(return_img=True)
+        frames.append(np.ascontiguousarray(np.asarray(img)[:, :, :3], dtype=np.uint8))
+
+    plotter.close()
+    logger.info(f"Generated {len(frames)} still frames")
+    return frames
 
 
 def _add_mesh(plotter: pv.Plotter, pv_data: pv.PolyData):

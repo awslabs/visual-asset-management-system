@@ -4,18 +4,15 @@
  */
 
 import React, { useState } from "react";
-import {
-    ExpandableSection,
-    FormField,
-    Toggle,
-    SpaceBetween,
-    Checkbox,
-    Box,
-    Grid,
-    Select,
-    DatePicker,
-    Input,
-} from "@cloudscape-design/components";
+import ExpandableSection from "@cloudscape-design/components/expandable-section";
+import FormField from "@cloudscape-design/components/form-field";
+import Toggle from "@cloudscape-design/components/toggle";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Checkbox from "@cloudscape-design/components/checkbox";
+import Grid from "@cloudscape-design/components/grid";
+import Select from "@cloudscape-design/components/select";
+import DatePicker from "@cloudscape-design/components/date-picker";
+import Input from "@cloudscape-design/components/input";
 import { SearchFilters } from "../types";
 import Synonyms from "../../../synonyms";
 

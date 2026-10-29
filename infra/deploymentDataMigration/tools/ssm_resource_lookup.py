@@ -87,6 +87,9 @@ class ResourceParamKeys:
     PIPELINE_TEMPLATE_TAG_SCHEMA_STORAGE_TABLE = "dynamoTables/pipelineTemplateTagSchemaStorage"
     WORKFLOW_STORAGE_TABLE_V2 = "dynamoTables/workflowStorageV2"
     WORKFLOW_TRIGGERS_STORAGE_TABLE = "dynamoTables/workflowTriggersStorage"
+    WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE = "dynamoTables/workflowExecutionLocksStorage"
+    # Vector search tables
+    VECTOR_EMBEDDINGS_STORAGE_TABLE = "dynamoTables/vectorEmbeddingsStorage"
 
     # Deprecated tables retained for data migration only
     LEGACY_ASSET_VERSIONS_STORAGE_TABLE_V1 = "dynamoTables/legacy/assetVersionsStorageV1"
@@ -114,6 +117,7 @@ class ResourceParamKeys:
 
     # Lambda function names consumed by migration tooling and external bridge stacks
     CR_OS_REINDEXER_FUNCTION = "lambdaFunctions/crOsReindexer"
+    VECTOR_REINDEXER_FUNCTION = "lambdaFunctions/vectorReindexer"
     IMPORT_GLOBAL_PIPELINE_WORKFLOW_FUNCTION = "lambdaFunctions/importGlobalPipelineWorkflow"
 
     # Integration surface resolved by externally owned pipeline bridge stacks

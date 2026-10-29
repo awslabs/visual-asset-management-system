@@ -1,0 +1,27 @@
+{
+    "providers": [
+        {
+            "id": "asset-list",
+            "name": "Basic Asset List",
+            "description": "Every asset the caller can see, listed from the asset API without a search engine.",
+            "componentPath": "AssetListProvider/AssetListProviderComponent",
+            "priority": 100,
+            "enabled": true,
+            "availability": { "always": true }
+        },
+        {
+            "id": "unified-search",
+            "name": "Primary Search",
+            "description": "Keyword search through OpenSearch and natural-language search over file embeddings.",
+            "componentPath": "UnifiedSearchProvider/UnifiedSearchProviderComponent",
+            "priority": 10,
+            "enabled": true,
+            "availability": {
+                "anyOf": [
+                    { "featureEnabled": "VECTORSEARCH" },
+                    { "featureDisabled": "NOOPENSEARCH" }
+                ]
+            }
+        }
+    ]
+}

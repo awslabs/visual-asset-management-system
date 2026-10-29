@@ -9,7 +9,7 @@ exposes both on the resolved inputs and builds an S3 client per Region, so a pip
 input in another Region signs the request for that Region.
 
 The five Batch pipelines whose compute runs in the VPC's isolated subnets (Potree viewer, 3D
-thumbnail, GenAI metadata labeling, coordinate transform, Video SOP/BOM) reach Amazon S3 in the deployment Region
+thumbnail, SYSTEM GenAI metadata, coordinate transform, Video SOP/BOM) reach Amazon S3 in the deployment Region
 through the S3 gateway endpoint and in each cross-Region asset bucket's Region through the
 cross-Region S3 interface endpoint the VPC builder creates there (`addCrossRegionS3Endpoints`). The
 CDK names those Regions in `CROSS_REGION_S3_ENDPOINT_REGIONS` on their `vamsExecute` Lambdas, and
@@ -39,7 +39,6 @@ MANIFEST_HELPER_COPIES = (
     "backendPipelines/conversion/coordinateTransform/lambda/manifestHelper.py",
     "backendPipelines/genAi/cadStepAgent/lambda/manifestHelper.py",
     "backendPipelines/genAi/imageTo3d/lambda/manifestHelper.py",
-    "backendPipelines/genAi/metadata3dLabeling/lambda/manifestHelper.py",
     "backendPipelines/genAi/nvidia/cosmos/3/lambda/manifestHelper.py",
     "backendPipelines/genAi/nvidia/cosmos/predict/lambda/manifestHelper.py",
     "backendPipelines/genAi/nvidia/cosmos/reason/lambda/manifestHelper.py",
@@ -52,12 +51,13 @@ MANIFEST_HELPER_COPIES = (
     "backendPipelines/preview/3dThumbnail/lambda/manifestHelper.py",
     "backendPipelines/preview/pcPotreeViewer/lambda/manifestHelper.py",
     "backendPipelines/simulation/isaacLabTraining/lambda/manifestHelper.py",
+    "backendPipelines/system/genAiMetadata/lambda/manifestHelper.py",
 )
 
 ISOLATED_SUBNET_VAMS_EXECUTE = (
     "backendPipelines/preview/pcPotreeViewer/lambda/vamsExecutePreviewPcPotreeViewerPipeline.py",
     "backendPipelines/preview/3dThumbnail/lambda/vamsExecutePreview3dThumbnailPipeline.py",
-    "backendPipelines/genAi/metadata3dLabeling/lambda/vamsExecuteGenAiMetadata3dLabelingPipeline.py",
+    "backendPipelines/system/genAiMetadata/lambda/vamsExecuteSystemGenAiMetadataPipeline.py",
     "backendPipelines/conversion/coordinateTransform/lambda/vamsExecuteCoordinateTransformPipeline.py",
     "backendPipelines/genAi/videoSopBom/lambda/vamsExecuteVideoSopBomPipeline.py",
 )

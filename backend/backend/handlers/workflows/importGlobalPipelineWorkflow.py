@@ -21,6 +21,7 @@ execution history. DELETE archives (soft) rather than hard-deletes.
 
 import json
 import os
+from urllib.parse import quote
 
 import boto3
 from botocore.config import Config
@@ -29,6 +30,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
 from common.resourceNames import ResourceKeys, get_bucket_name
 from common.workflows import vamsSchemaImport as vsi
+from common.workflows.systemRecords import IMPORT_SOURCE_MARKER
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 
@@ -72,7 +74,9 @@ def _invoke(target, method, path, path_parameters, body=None, query_parameters=N
         "requestContext": {"http": {"method": method, "path": path}},
         "pathParameters": path_parameters or {},
         "queryStringParameters": dict(query_parameters or {}),
-        "lambdaCrossCall": {"userName": "SYSTEM_USER"},
+        # The identity the services authorize as, plus the marker they trust for the read-only
+        # exemption and for the isSystem flag a bundle declares.
+        "lambdaCrossCall": {"userName": "SYSTEM_USER", "source": IMPORT_SOURCE_MARKER},
     }
     if body is not None:
         event["body"] = json.dumps(body)
@@ -273,12 +277,72 @@ def _archive_ids(resource_properties):
         }
 
 
+# Page size the archive path asks the trigger service for: its listing maximum.
+_TRIGGER_LIST_PAGE_SIZE = "500"
+
+
+def _list_workflow_trigger_keys(ids):
+    """Every trigger key of the workflow a bundle registered, read through the trigger service to
+    exhaustion. Returns [] when the workflow does not exist (404). Raises ImportError_ on any other
+    non-200 response or a transport failure."""
+    path = f"/database/{ids['workflowDatabaseId']}/workflows/{ids['workflowId']}/triggers"
+    path_parameters = {"databaseId": ids["workflowDatabaseId"], "workflowId": ids["workflowId"]}
+    keys = []
+    query = {"maxItems": _TRIGGER_LIST_PAGE_SIZE, "pageSize": _TRIGGER_LIST_PAGE_SIZE}
+    while True:
+        status_code, inner = _invoke(
+            vsi.TARGET_TRIGGER_SERVICE, "GET", path, path_parameters, query_parameters=query)
+        if status_code == 404:
+            return []
+        if status_code != 200:
+            raise ImportError_(
+                f"Unexpected status {status_code} listing triggers of workflow '{ids['workflowId']}'")
+        # A 200 whose body is not a listing page (a plain acknowledgement string) carries no keys.
+        page = inner.get("message")
+        page = page if isinstance(page, dict) else {}
+        keys.extend(item.get("triggerType") for item in page.get("Items") or [] if item.get("triggerType"))
+        next_token = page.get("NextToken")
+        if not next_token:
+            return keys
+        query = dict(query, startingToken=next_token)
+
+
+def _delete_workflow_triggers(ids, warnings):
+    """DELETE every trigger of the workflow before it is archived, appending a warning instead of
+    raising. A trigger row that outlives its workflow keeps matching uploads and costs a launch the
+    execute handler refuses, so the teardown removes them here as well as through the workflow
+    service's own archive."""
+    if not ids.get("workflowId"):
+        return
+    try:
+        trigger_keys = _list_workflow_trigger_keys(ids)
+    except Exception as e:
+        warnings.append(f"trigger listing: {e}")
+        return
+    for trigger_key in trigger_keys:
+        # The key travels percent-encoded, as API Gateway delivers it: a "type#triggerId" key carries
+        # a '#' that the trigger service decodes from the path parameter.
+        encoded = quote(trigger_key, safe="")
+        try:
+            status_code, inner = _invoke(
+                vsi.TARGET_TRIGGER_SERVICE, "DELETE",
+                f"/database/{ids['workflowDatabaseId']}/workflows/{ids['workflowId']}/triggers/{encoded}",
+                {"databaseId": ids["workflowDatabaseId"], "workflowId": ids["workflowId"],
+                 "triggerType": encoded})
+            if status_code not in (200, 404):
+                warnings.append(f"trigger delete {trigger_key}: {inner.get('message', status_code)}")
+        except Exception as e:
+            warnings.append(f"trigger delete {trigger_key}: {e}")
+
+
 def archive_bundle(resource_properties):
-    """Archive (soft-delete) the built-in pipeline + workflow a bundle registered. Best-effort: a
-    stack teardown is never blocked by a missing/already-archived resource."""
+    """Archive (soft-delete) the built-in pipeline + workflow a bundle registered, deleting the
+    workflow's triggers first. Best-effort: a stack teardown is never blocked by a missing/already-archived
+    resource."""
     ids = _archive_ids(resource_properties)
 
     warnings = []
+    _delete_workflow_triggers(ids, warnings)
     _archive_workflow(ids, warnings)
     _archive_pipeline(ids, warnings)
     return {"ids": ids, "warnings": warnings}

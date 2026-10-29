@@ -252,6 +252,54 @@ describe("Deadline Cloud callback queues", () => {
     });
 });
 
+/**
+ * The vector indexing construct, which the commercial template enables (`app.vectorSearch.enabled`).
+ *
+ * Its `vector.embedding.ready` rule targets the indexer queue with a rule-owned DLQ — the third queue in
+ * the assembly named only by an `AWS::Events::Rule` target's `DeadLetterConfig`. The queues are children
+ * of the `VectorIndexing` construct, so their logical ids carry that prefix: `VectorIndexing<ChildId>`.
+ */
+describe("vector indexing queues (commercial)", () => {
+    let synth: SynthResult;
+
+    beforeAll(() => {
+        synth = synthTemplate("commercial");
+    });
+
+    test("the embedding-ready rule DLQ IS in this synth", () => {
+        // The control: an unmutated restricted template emits none of these queues.
+        const matched = synth
+            .ofType("AWS::SQS::Queue")
+            .filter((q) => q.logicalId.startsWith("VectorIndexingVectorEmbeddingReadyRuleDLQ"));
+        expect(matched.length).toBe(1);
+    });
+
+    test("its rule-owned DLQ is recognized without carrying a RedrivePolicy of its own", () => {
+        expectRuleOwnedDlqRecognized(synth, "VectorIndexingVectorEmbeddingReadyRuleDLQ");
+    });
+
+    test("both vector source queues redrive to their own DLQ after three receives", () => {
+        for (const [source, dlq] of [
+            ["VectorIndexingVectorIndexerQueue", "VectorIndexingVectorIndexerDLQ"],
+            ["VectorIndexingSystemWorkflowLaunchQueue", "VectorIndexingSystemWorkflowLaunchDLQ"],
+        ]) {
+            const queues = synth
+                .ofType("AWS::SQS::Queue")
+                .filter((q) => q.logicalId.startsWith(source));
+            expect(queues.length).toBe(1);
+            const redrive = queues[0].properties.RedrivePolicy;
+            expect(redrive.maxReceiveCount).toBe(3);
+            const targets = synth
+                .ofType("AWS::SQS::Queue")
+                .filter((q) => q.logicalId.startsWith(dlq));
+            expect(targets.length).toBe(1);
+            expect(SynthResult.flatten(redrive.deadLetterTargetArn)).toContain(
+                targets[0].logicalId
+            );
+        }
+    });
+});
+
 describe("bucket-sync queues dead-letter, per bucket and per direction", () => {
     let synth: SynthResult;
 

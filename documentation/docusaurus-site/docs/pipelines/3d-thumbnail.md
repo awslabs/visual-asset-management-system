@@ -1,6 +1,6 @@
 # 3D Preview Thumbnail Pipeline
 
-The 3D Preview Thumbnail pipeline generates animated GIF or static image previews from 3D files, providing visual thumbnails for assets in the VAMS web interface. It supports a wide range of mesh, point cloud, CAD, USD and Gaussian splat file formats. The pipeline uses CPU-based headless rendering with PyVista, VTK, and Xvfb in an AWS Batch job on AWS Fargate.
+The 3D Preview Thumbnail pipeline generates animated GIF or static image previews from 3D files, providing visual thumbnails for assets in the VAMS web interface. It supports a wide range of mesh, point cloud, CAD, USD and Gaussian splat file formats. The pipeline uses CPU-based headless rendering with PyVista, VTK, and Xvfb in an AWS Batch job on AWS Fargate. It is a [system pipeline](system-pipelines.md) in the `SYSTEM - Preview` category: registered from its `vamsSchema` bundle, read-only through the API except for its `enabled` switches and its template's configuration body and tag schema, and re-asserted by each deployment.
 
 ## Supported Formats
 
@@ -169,8 +169,8 @@ Enable this pipeline in `infra/config/config.json`:
 | Option                                | Default | Description                                                                                                         |
 | ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
 | `enabled`                             | `false` | Deploy the 3D thumbnail pipeline infrastructure. Requires `app.useGlobalVpc.enabled`.                               |
-| `autoRegisterWithVAMS`                | `true`  | Automatically register the pipeline and workflow during CDK deployment.                                             |
-| `autoRegisterAutoTriggerOnFileUpload` | `true`  | Automatically trigger the pipeline when supported 3D files are uploaded.                                            |
+| `autoRegisterWithVAMS`                | `true`  | Register the pipeline, its workflow, its template, and its trigger during deployment.                               |
+| `autoRegisterAutoTriggerOnFileUpload` | `true`  | Arm the file-upload trigger. Each deployment re-asserts this value on the trigger.                                  |
 | `computeTiers.standard.vcpu`          | `4`     | AWS Fargate vCPU of the standard tier, which runs inputs below the large-tier threshold.                            |
 | `computeTiers.standard.memoryGiB`     | `16`    | Memory (GiB) of the standard tier. Must be a size AWS Fargate supports for the tier's vCPU.                         |
 | `computeTiers.large.vcpu`             | `16`    | AWS Fargate vCPU of the large tier, which runs inputs at or above the large-tier threshold.                         |
@@ -269,6 +269,10 @@ The container image is built during CDK deployment from `backendPipelines/previe
 -   **PlayCanvas splat-transform** -- Gaussian splat format conversion on the CPU (MIT license), run on **Node.js** 22 (MIT license)
 -   **Xvfb** -- Virtual framebuffer for headless rendering
 
+### Lambda image
+
+The same `preview_pipeline` package is also built as an AWS Lambda container image from `Dockerfile.lambda` in the same directory. That image is the 3D render branch of the SYSTEM - GenAI Metadata Generation pipeline: it loads a file with the format handlers above, extracts `sys_*` attributes, and renders still frames for the analysis model. It differs from the Fargate image in three ways. Every dependency is pinned to an exact version in `requirements.lambda.txt`, and Open3D is not installed because that pipeline routes FBX files to its Blender image. Xvfb is started by the handler into `/tmp` rather than by the image entrypoint. All working directories live under `/tmp`, the only writable path in AWS Lambda. The 3D Preview Thumbnail pipeline itself does not use this image.
+
 ## How It Works
 
 1. The workflow triggers the `vamsExecute` Lambda function with the input file path, all S3 output paths, and the `assetId`.
@@ -281,4 +285,5 @@ The container image is built during CDK deployment from `backendPipelines/previe
 
 -   [Pipeline System Overview](overview.md)
 -   [Potree Point Cloud Viewer Pipeline](potree-viewer.md) -- interactive point cloud visualization (complementary to thumbnail previews)
--   [CAD/Mesh Metadata Extraction Pipeline](cad-mesh-extraction.md) -- extracts metadata from similar file formats
+-   [SYSTEM - GenAI Metadata Generation Pipeline](system-genai-metadata.md) -- shares this pipeline's renderers to extract attributes and generate metadata for the same file formats
+-   [System pipelines](system-pipelines.md) -- the rules that apply to this pipeline's records

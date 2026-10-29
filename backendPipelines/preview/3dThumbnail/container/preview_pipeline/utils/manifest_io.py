@@ -8,20 +8,10 @@ mirroring the lambda-side ``manifestHelper``. Best-effort: an unreadable file yi
 
 import json
 
-from .s3_utils import client
+from .s3_utils import client, parse_s3_uri as _parse_s3_uri
 from .logging import get_logger
 
 logger = get_logger()
-
-
-def _parse_s3_uri(uri):
-    """Split ``s3://bucket/key`` into ``(bucket, key)``; ``("", "")`` for an empty/non-s3 value."""
-    if not uri or not uri.startswith("s3://"):
-        return "", ""
-    without_scheme = uri[len("s3://"):]
-    if "/" in without_scheme:
-        return tuple(without_scheme.split("/", 1))
-    return without_scheme, ""
 
 
 def _get_json(s3_location):

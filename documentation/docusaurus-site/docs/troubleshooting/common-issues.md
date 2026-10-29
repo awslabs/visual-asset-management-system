@@ -76,13 +76,13 @@ To minimize the chance of these failures, keep the availability zone count and s
 
 ### Docker Buildx Container Image Errors
 
-The 3D Basic Conversion and CAD/Mesh Metadata Extraction pipelines deploy as AWS Lambda container images, which AWS CDK builds with Docker and pushes to Amazon ECR during `npx cdk deploy`. Pushing one of these images or creating its function can fail with `failed commit on ref "manifest-sha256:..."` or `Lambda function XXX reached terminal FAILED state due to InvalidImage`.
+The 3D Basic Conversion pipeline and the SYSTEM GenAI metadata pipeline deploy AWS Lambda functions as container images, which AWS CDK builds with Docker and pushes to Amazon ECR during `npx cdk deploy`. Pushing one of these images or creating its function can fail with `failed commit on ref "manifest-sha256:..."` or `Lambda function XXX reached terminal FAILED state due to InvalidImage`.
 
 **Symptoms:**
 
 -   `unexpected status from PUT request to https://....dkr.ecr.REGION.amazonaws.com/v2/foo/manifests/bar: 400 Bad Request`
 -   `InvalidImage(ImageLayerFailure: UnsupportedImageLayerDetected)` or `The image manifest, config or layer media type for the source image ... is not supported` while AWS CloudFormation creates the pipeline's Lambda function
--   The conversion pipeline nested stack fails and the core stack rolls back
+-   The pipeline's nested stack fails and the core stack rolls back
 
 **Cause:**
 
@@ -93,10 +93,10 @@ When the error appears anyway, the image index is already cached. AWS CDK tags e
 **Resolution:**
 
 1. Run the deployment from the `infra/` directory with `npx cdk` so that the pinned AWS CDK CLI builds the images. `npx cdk --version` shows the version in use.
-2. List the asset hashes of the two conversion images. In `cdk.out/*.assets.json`, written by the failed deployment or by `npx cdk synth`, each image under `dockerImages` is keyed by its hash, which this command (run from the `infra/` directory) prints on the line before the image's `displayName`:
+2. List the asset hashes of the Lambda container images. In `cdk.out/*.assets.json`, written by the failed deployment or by `npx cdk synth`, each image under `dockerImages` is keyed by its hash, which this command (run from the `infra/` directory) prints on the line before the image's `displayName`:
 
     ```bash
-    grep -B1 -E 'vamsExecute(3dBasic|MeshCadMetadataExtraction)Conversion/AssetImage' cdk.out/*.assets.json
+    grep -B1 -E '(vamsExecute3dBasicConversion|SystemGenAiMetadata(BlenderRender|Render3d|MediaExtract|SegmentAnalyze))/AssetImage' cdk.out/*.assets.json
     ```
 
 3. Delete those image tags from the container assets repository. With the default bootstrap qualifier, the repository is named `cdk-hnb659fds-container-assets-<account>-<region>`:
@@ -412,6 +412,25 @@ Amazon OpenSearch indexing is asynchronous. After bulk operations, allow 30-60 s
 1. Check the Amazon CloudWatch logs for the indexing Lambda functions.
 2. Verify the Amazon OpenSearch cluster health in the AWS Management Console.
 3. If necessary, trigger a re-index by setting `reindexOnCdkDeploy: true` in the configuration and redeploying, or by using the manual re-index tool in `infra/deploymentDataMigration/`.
+
+### Natural-Language Search Does Not Return a Newly Uploaded File
+
+A file appears in the asset list and in keyword search but a natural-language query that clearly describes it returns nothing.
+
+**Symptoms:**
+
+-   The file was uploaded minutes ago.
+-   Keyword search finds it by name; natural-language search does not rank it.
+
+**Resolution:**
+
+Natural-language search reads embeddings produced by the SYSTEM GenAI metadata pipeline, which runs as a workflow execution after upload — rendering, analysis, and embedding take from one to several minutes per file. Check the file's asset **Executions** tab:
+
+1. **No execution** — the pipeline's file-upload trigger is off or the extension is not allow-listed. Confirm `app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload` is `true` and that the file type has a viewer.
+2. **Execution FAILED with `BedrockAccessDenied` or `BedrockModelError`** — the analysis model is not enabled for the account (see [Prerequisites](../deployment/prerequisites.md#amazon-bedrock-model-access)). Attributes were still written; no embedding was produced. Enable the model and re-run the execution, or run the vector reindexer.
+3. **Execution SUCCEEDED** — allow up to a minute for the vector indexer to consume the `vector.embedding.ready` event, then retry. If the vector indexer's dead-letter queue holds messages, the document was rejected — most often because `app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId` or `embeddingDimensions` changed after the pipeline produced the embedding; follow the model-change procedure in [Vector search](../concepts/vector-search.md#changing-the-embedding-model).
+
+A `503` from `POST /search/nlp` means the vector index is still being built after it was created or re-created; wait until `DescribeTable` shows it `ACTIVE`.
 
 ---
 

@@ -21,16 +21,11 @@ import {
     verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import {
-    Box,
-    SpaceBetween,
-    Button,
-    Icon,
-    Container,
-    Header,
-    Multiselect,
-    FormField,
-} from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Button from "@cloudscape-design/components/button";
+import Icon from "@cloudscape-design/components/icon";
+import Multiselect from "@cloudscape-design/components/multiselect";
 import { FIELD_MAPPINGS } from "../types";
 
 interface DraggableColumnListProps {
@@ -146,6 +141,7 @@ const DraggableColumnList: React.FC<DraggableColumnListProps> = ({
                 placeholder="Select columns to add"
                 disabled={disabled}
                 filteringType="auto"
+                filteringAriaLabel="Filter columns"
             />
 
             {/* Selected Columns - Draggable */}

@@ -362,6 +362,8 @@ def resolve_inputs(data, manifest=None):
     payload fields (fallback). ``data`` is the Step Functions payload body; ``manifest`` is the
     fetched envelope (or ``None``). Returns a flat dict using the legacy field names every
     pipeline already forwards, plus the resolved input-file list and orchestration config.
+    ``outputS3AssetResultsPath`` is the execution's results prefix (``outputs.results``): where a
+    pipeline writes structured result documents and the reserved ``execution.status.json``.
 
     Manifest values override legacy values only when present, so a partial manifest still
     degrades gracefully to the legacy payload."""

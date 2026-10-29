@@ -1,0 +1,33 @@
+/*
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* The search page's own width decides the layout, so an open side navigation counts against it. */
+.search-page {
+    container-type: inline-size;
+}
+
+/* Narrow page: the results come first, below the query band, and the filters follow them. */
+@container (max-width: 760px) {
+    .search-splitter.resizable-splitter-container {
+        flex-direction: column;
+        height: auto;
+    }
+
+    .search-splitter > .resizable-left-panel {
+        order: 2;
+        width: 100% !important;
+        border-right: 0;
+        border-top: 1px solid var(--vams-border-default);
+    }
+
+    .search-splitter > .resizable-splitter {
+        display: none;
+    }
+
+    .search-splitter > .resizable-right-panel {
+        order: 1;
+        padding: 0;
+    }
+}
