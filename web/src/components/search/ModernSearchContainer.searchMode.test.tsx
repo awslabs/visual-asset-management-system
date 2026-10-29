@@ -64,6 +64,36 @@ const keywordEnvelope = {
     aggregationTotal: 0,
 };
 
+const keywordRows = {
+    hits: {
+        total: { value: 2, relation: "eq" },
+        hits: [
+            {
+                _id: "k1",
+                _score: 1,
+                _index_type: "asset",
+                _source: {
+                    str_databaseid: "db1",
+                    str_assetid: "k1",
+                    str_assetname: "Keyword Alpha",
+                },
+            },
+            {
+                _id: "k2",
+                _score: 1,
+                _index_type: "asset",
+                _source: {
+                    str_databaseid: "db1",
+                    str_assetid: "k2",
+                    str_assetname: "Keyword Beta",
+                },
+            },
+        ],
+    },
+    aggregations: {},
+    aggregationTotal: 2,
+};
+
 const nlpEnvelope = (truncated: boolean) => ({
     took: 5,
     timed_out: false,
@@ -340,5 +370,75 @@ describe("ModernSearchContainer search modes", () => {
         await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(3), { timeout: 3000 });
         expect((searchNlp as jest.Mock).mock.calls[2][0]).not.toHaveProperty("includeSegments");
         expect(screen.getByLabelText("Search inside files")).toBeChecked();
+    });
+});
+
+describe("ModernSearchContainer switching between keyword and natural language", () => {
+    const idleTitle = "Describe what you are looking for";
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        clearPreferenceCookie();
+        setFeatures(["VECTORSEARCH"]);
+        (searchAssets as jest.Mock).mockResolvedValue([true, keywordRows]);
+        (searchNlp as jest.Mock).mockResolvedValue([true, nlpEnvelope(false)]);
+    });
+
+    it("an empty query in natural language shows the idle state, not the keyword listing", async () => {
+        renderContainer();
+        await screen.findByText("Keyword Alpha");
+        expect(screen.getByText("2 results")).toBeInTheDocument();
+
+        await userEvent.click(screen.getByTestId("nlp"));
+        await waitFor(() =>
+            expect(screen.getByTestId("nlp")).toHaveAttribute("aria-pressed", "true")
+        );
+        // Checked in the render that follows the switch, before the auto-refresh could run, and
+        // again after its window: no keyword rows, no count badge, no request.
+        expect(screen.getByText(idleTitle)).toBeInTheDocument();
+        expect(screen.queryByText("Keyword Alpha")).toBeNull();
+        expect(screen.queryByText("2 results")).toBeNull();
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        expect(screen.getByText(idleTitle)).toBeInTheDocument();
+        expect(screen.queryByText("Keyword Alpha")).toBeNull();
+        expect(screen.queryByText("2 results")).toBeNull();
+        expect(searchNlp).not.toHaveBeenCalled();
+        expect(searchAssets).toHaveBeenCalledTimes(1);
+    });
+
+    it("a keyword search that answers after the switch does not fill the natural-language table", async () => {
+        let answerKeyword: (value: unknown) => void = () => undefined;
+        (searchAssets as jest.Mock).mockReturnValueOnce(
+            new Promise((resolve) => {
+                answerKeyword = resolve;
+            })
+        );
+        renderContainer();
+        await waitFor(() => expect(searchAssets).toHaveBeenCalledTimes(1));
+        await userEvent.click(screen.getByTestId("nlp"));
+        await waitFor(() =>
+            expect(screen.getByTestId("nlp")).toHaveAttribute("aria-pressed", "true")
+        );
+        await act(async () => {
+            answerKeyword([true, keywordRows]);
+        });
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        expect(screen.getByText(idleTitle)).toBeInTheDocument();
+        expect(screen.queryByText("Keyword Alpha")).toBeNull();
+        expect(screen.queryByText("2 results")).toBeNull();
+        expect(searchNlp).not.toHaveBeenCalled();
+    });
+
+    it("switching back to keyword lists everything in scope again", async () => {
+        renderContainer();
+        await screen.findByText("Keyword Alpha");
+        await userEvent.click(screen.getByTestId("nlp"));
+        await screen.findByText(idleTitle);
+        await userEvent.click(screen.getByTestId("keyword"));
+        await waitFor(() => expect(searchAssets).toHaveBeenCalledTimes(2), { timeout: 3000 });
+        await screen.findByText("Keyword Alpha");
+        expect(screen.getByText("2 results")).toBeInTheDocument();
+        expect(screen.queryByText(idleTitle)).toBeNull();
+        expect(searchNlp).not.toHaveBeenCalled();
     });
 });

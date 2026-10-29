@@ -123,10 +123,11 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
     const [sidebarWidth, setSidebarWidth] = useState(preferences.sidebarWidth || 400);
     // The full natural-language result (at most 100 hits); the table pages within it client-side.
     const [nlpResult, setNlpResult] = useState<NlpSearchResponse | null>(null);
-    // Whether the last submit reached an engine. False before the first search and while natural-
-    // language mode idles on an empty query, so the count badge and the "No matches" state are not
-    // shown for a search that never ran.
-    const [searchIssued, setSearchIssued] = useState(false);
+    // The engine whose answer the page holds: null before the first search and while natural-
+    // language mode idles on an empty query. The count badge and the "No matches" state describe a
+    // search only in the mode that ran it, so a keyword listing is never presented as a natural-
+    // language answer.
+    const [answeredMode, setAnsweredMode] = useState<SearchMode | null>(null);
 
     // Initialize search query if provided
     useEffect(() => {
@@ -185,11 +186,10 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         if (searchMode === "nlp") {
             if (!searchQuery.query.trim()) {
                 setNlpResult(null);
-                setSearchIssued(false);
+                setAnsweredMode(null);
                 searchState.setResult(EMPTY_NLP_RESPONSE);
                 return null;
             }
-            setSearchIssued(true);
             const result = await searchAPI.executeNlpSearch(searchQuery, {
                 databaseId,
                 metadataSearchMode,
@@ -197,6 +197,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                 includeOpenSearchConstraints: !useNoOpenSearch,
             });
             setNlpResult(result);
+            setAnsweredMode("nlp");
             searchState.setResult(result);
             if (result.warnings && result.warnings.length > 0) {
                 // Each entry is `{ code, message }`; the user reads the messages.
@@ -205,7 +206,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
             return result;
         }
         setNlpResult(null);
-        setSearchIssued(true);
+        setAnsweredMode("keyword");
         const result = await searchAPI.executeSearch(
             searchQuery,
             databaseId,
@@ -495,9 +496,12 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         updatePreferences({ sidebarWidth: width });
     };
 
-    // What the table renders: the natural-language page slice, or the server page as returned.
+    // What the table renders: in natural-language mode the page slice of its own answer, or the
+    // empty set when none is held (a keyword listing from before a switch is never shown there);
+    // in keyword mode the server page as returned.
     const displayedResult = useMemo(() => {
-        if (searchMode === "nlp" && nlpResult) {
+        if (searchMode === "nlp") {
+            if (!nlpResult) return EMPTY_NLP_RESPONSE;
             return pageNlpResult(
                 nlpResult,
                 { from: searchState.pagination.from, size: preferences.pageSize },
@@ -631,9 +635,9 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         showPreviewThumbnails: preferences.showThumbnails,
         showMapThumbnails: preferences.showMapThumbnails,
         useMapView: useMapView,
-        // Natural-language mode with no query: nothing was searched, so the table explains what to
-        // type rather than reporting no matches.
-        nlpIdle: searchMode === "nlp" && !searchIssued,
+        // Natural-language mode without its own answer (no query yet, or only a keyword listing
+        // from before a switch): the table explains what to type rather than reporting no matches.
+        nlpIdle: searchMode === "nlp" && answeredMode !== "nlp",
     };
 
     // Render main content
@@ -704,7 +708,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                 onSearch={handleExplicitSearch}
                 onClearAll={handleClearSearch}
                 loading={searchState.loading}
-                resultCount={searchIssued ? totalResults : undefined}
+                resultCount={answeredMode === searchMode ? totalResults : undefined}
                 hasActiveFilters={searchState.hasActiveFilters()}
                 title={
                     embedded?.title ||
