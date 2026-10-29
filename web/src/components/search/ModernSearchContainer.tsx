@@ -32,6 +32,7 @@ import ToastManager from "./SearchNotifications/ToastManager";
 import SearchPageListView from "./SearchPageListView";
 import SearchPageMapView from "./SearchPageMapView";
 import { ResizableSplitter } from "../filemanager/components/ResizableSplitter";
+import "./SearchLayout/searchSplitter.css";
 import { initializePluginRegistry } from "../../visualizerPlugin";
 import { resolveSearchModeCase, effectiveSearchMode } from "./utils/searchMode";
 import { EMPTY_NLP_RESPONSE, pageNlpResult } from "./utils/nlpResultPaging";
@@ -806,6 +807,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                 minLeftWidth={300}
                 maxLeftWidth={600}
                 onWidthChange={handleSidebarWidthChange}
+                className="search-splitter"
             />
         </div>
     );

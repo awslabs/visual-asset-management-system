@@ -202,6 +202,14 @@ describe("ModernSearchContainer search modes", () => {
         expect(screen.queryByText("Search completed")).toBeNull();
     });
 
+    it("marks the search page's splitter for the phone layout, which stacks the filters above the results", async () => {
+        setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
+        const { container } = renderContainer();
+        await screen.findByPlaceholderText("Describe what you are looking for...");
+        const splitter = container.querySelector(".resizable-splitter-container");
+        expect(splitter).toHaveClass("search-splitter");
+    });
+
     it("a natural-language search that ran but matched nothing reports No matches and its count", async () => {
         setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
         (searchNlp as jest.Mock).mockResolvedValue([
