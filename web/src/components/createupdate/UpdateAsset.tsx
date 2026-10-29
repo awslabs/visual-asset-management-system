@@ -21,6 +21,7 @@ import {
     bindableSchemas,
     fetchComplianceState,
     bindSchemaToAsset,
+    liveDatabaseId,
     unbindSchemaFromAsset,
 } from "../../services/ComplianceService";
 import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
@@ -113,6 +114,9 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     // the record in hand does not carry one. Never the unscoped list — that surfaces every other
     // database's required tag types as constraints on this form.
     const tagScopeDatabaseId = asset?.databaseId || routeDatabaseId;
+    // The database id of the compliance requests: the live one, also for an archived asset, whose
+    // record carries `<databaseId>#deleted` (a compliance route refuses it with 400).
+    const complianceDatabaseId = liveDatabaseId(tagScopeDatabaseId);
     const [assetDetail, setAssetDetail] = useState(asset);
     // The asset as last saved; a save is sent only when the form differs from it.
     const [savedAsset, setSavedAsset] = useState(asset);
@@ -165,7 +169,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
         const sendSave = assetFieldsChanged(assetDetail, savedAsset);
         const sendBinding =
             canBindComplianceSchema &&
-            !!assetDetail.databaseId &&
+            !!complianceDatabaseId &&
             !!assetDetail.assetId &&
             selectedValue !== initialSchemaValue;
         if (!sendSave && !sendBinding) {
@@ -181,14 +185,10 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
             setSavedAsset(assetDetail);
             savedWhileOpen.current = true;
         }
-        if (sendBinding) {
+        if (sendBinding && complianceDatabaseId) {
             const [bound, message] = selectedValue
-                ? await bindSchemaToAsset(
-                      assetDetail.databaseId,
-                      assetDetail.assetId,
-                      selectedValue
-                  )
-                : await unbindSchemaFromAsset(assetDetail.databaseId, assetDetail.assetId);
+                ? await bindSchemaToAsset(complianceDatabaseId, assetDetail.assetId, selectedValue)
+                : await unbindSchemaFromAsset(complianceDatabaseId, assetDetail.assetId);
             if (!bound) {
                 setError({
                     isError: true,
@@ -294,7 +294,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
         if (!canBindComplianceSchema) return;
         const loadSchemas = async () => {
             setLoadingSchemas(true);
-            const [success, result] = await fetchComplianceSchemas(tagScopeDatabaseId);
+            const [success, result] = await fetchComplianceSchemas(complianceDatabaseId);
             if (success && Array.isArray(result)) {
                 setSchemaOptions(
                     bindableSchemas(result).map((s) => ({
@@ -307,12 +307,15 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
             setLoadingSchemas(false);
         };
         loadSchemas();
-    }, [canBindComplianceSchema, tagScopeDatabaseId]);
+    }, [canBindComplianceSchema, complianceDatabaseId]);
 
     useEffect(() => {
-        if (!canBindComplianceSchema || !asset?.databaseId || !asset?.assetId) return;
+        if (!canBindComplianceSchema || !complianceDatabaseId || !asset?.assetId) return;
         const loadBinding = async () => {
-            const [success, result] = await fetchComplianceState(asset.databaseId, asset.assetId);
+            const [success, result] = await fetchComplianceState(
+                complianceDatabaseId,
+                asset.assetId
+            );
             if (
                 success &&
                 typeof result !== "string" &&
@@ -324,7 +327,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
             }
         };
         loadBinding();
-    }, [canBindComplianceSchema, asset?.databaseId, asset?.assetId]);
+    }, [canBindComplianceSchema, complianceDatabaseId, asset?.assetId]);
 
     useEffect(() => {
         // Form Validation Error Check

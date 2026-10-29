@@ -28,6 +28,7 @@ jest.mock("../../services/APIService", () => ({
 }));
 jest.mock("../../services/ComplianceService", () => ({
     bindableSchemas: jest.requireActual("../../services/ComplianceService").bindableSchemas,
+    liveDatabaseId: jest.requireActual("../../services/ComplianceService").liveDatabaseId,
     fetchComplianceSchemas: jest.fn(),
     fetchComplianceState: jest.fn(),
     bindSchemaToAsset: jest.fn(),
@@ -315,5 +316,65 @@ describe("Update Asset save and compliance schema binding", () => {
         await waitFor(() => expect(onComplete).toHaveBeenCalled());
         expect(compliance.unbindSchemaFromAsset).toHaveBeenCalledWith("db1", "asset1");
         expect(updateAsset).not.toHaveBeenCalled();
+    });
+});
+
+describe("Update Asset of an archived asset", () => {
+    // The asset routes return an archived asset's record under `<databaseId>#deleted`; its
+    // compliance records keep the live id, and a compliance route refuses the archived form.
+    const archivedAsset = { ...asset, databaseId: "db1#deleted" };
+
+    const mountArchived = () =>
+        render(
+            <MemoryRouter>
+                <UpdateAsset
+                    asset={archivedAsset}
+                    isOpen={false}
+                    onClose={jest.fn()}
+                    onComplete={jest.fn()}
+                />
+            </MemoryRouter>
+        );
+
+    const requestedDatabaseIds = () => [
+        ...compliance.fetchComplianceSchemas.mock.calls.map((call: any[]) => call[0]),
+        ...compliance.fetchComplianceState.mock.calls.map((call: any[]) => call[0]),
+        ...compliance.bindSchemaToAsset.mock.calls.map((call: any[]) => call[0]),
+        ...compliance.unbindSchemaFromAsset.mock.calls.map((call: any[]) => call[0]),
+    ];
+
+    beforeEach(() => {
+        mockCanBind = true;
+    });
+
+    it("asks for the schemas and the binding with the live database id on page load", async () => {
+        // The page mounts the editor closed, so these requests go out when the page opens.
+        mountArchived();
+        await schemaOptionsLoaded();
+        await waitFor(() => expect(compliance.fetchComplianceState).toHaveBeenCalled());
+        expect(compliance.fetchComplianceSchemas).toHaveBeenCalledWith("db1");
+        expect(compliance.fetchComplianceState).toHaveBeenCalledWith("db1", "asset1");
+        expect(requestedDatabaseIds()).not.toContain("db1#deleted");
+    });
+
+    it("binds a schema with the live database id", async () => {
+        compliance.bindSchemaToAsset.mockResolvedValue([true, "Schema bound to asset"]);
+        const onComplete = jest.fn();
+        render(
+            <MemoryRouter>
+                <UpdateAsset
+                    asset={archivedAsset}
+                    isOpen={true}
+                    onClose={jest.fn()}
+                    onComplete={onComplete}
+                />
+            </MemoryRouter>
+        );
+        await schemaOptionsLoaded();
+        chooseSchema(2);
+        submit();
+        await waitFor(() => expect(onComplete).toHaveBeenCalled());
+        expect(compliance.bindSchemaToAsset).toHaveBeenCalledWith("db1", "asset1", "std");
+        expect(requestedDatabaseIds()).not.toContain("db1#deleted");
     });
 });

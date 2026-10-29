@@ -54,11 +54,21 @@ backend/
 │   │   │                                           #   the archived partition only when it is refused
 │   │   │                                           #   (one keys-only Query per database per listing;
 │   │   │                                           #   once read, only archived rows ask the stored id);
-│   │   │                                           #   withheld() / withheld_state_counts() for the
-│   │   │                                           #   overview's rows and counts; archive_visible()
+│   │   │                                           #   left_out() / listed() leave archived assets out
+│   │   │                                           #   of the overview, its counts (withheld_state_
+│   │   │                                           #   counts()) and the quarantine list for every
+│   │   │                                           #   caller; withheld() for the bindings listing;
+│   │   │                                           #   archive_visible()
 │   │   │                                           #   for the sweep / Evaluate All / cascade counts
 │   │   │                                           #   (archived assets the caller may not see are
 │   │   │                                           #   counted and listed nowhere)
+│   │   ├── compliance/cascadeAuditSummary.py       # cascade_completed / cascade_auto_triggered audit
+│   │   │                                           #   details: archived descendants (children) are
+│   │   │                                           #   recorded per database outside the shared
+│   │   │                                           #   summary / childCount the notifications carry
+│   │   │                                           #   (completion_details, opened_details); the audit
+│   │   │                                           #   service counts them only for a reader who may
+│   │   │                                           #   see that database's archive (details_for_reader)
 │   │   ├── compliance/evaluationEngine.py          # Pure vams-rules-v1 rule logic (no AWS access):
 │   │   │                                           #   rule parsing/inheritance, the six rule types
 │   │   │                                           #   (pipeline, metadata, relationship, fileStructure,
@@ -66,6 +76,12 @@ backend/
 │   │   │                                           #   rule scopes (asset|files|fileAttributes|links,
 │   │   │                                           #   SCOPE_ENTITY_TYPE binds each to a metadata-schema
 │   │   │                                           #   entity type), tolerances, verdict → state
+│   │   ├── compliance/knownDatabase.py             # database_known(): whether an id names a database
+│   │   │                                           #   (GLOBAL, a database row, or a deleted one's
+│   │   │                                           #   `<db>#deleted` row); the database-level reads
+│   │   │                                           #   (overview; quarantine, cascade, audit listings
+│   │   │                                           #   by databaseId) answer 400 database_not_found()
+│   │   │                                           #   after their own check on the id
 │   │   ├── compliance/quarantineGuard.py           # quarantine-blocks-download guard shared by the four
 │   │   │                                           #   asset download Lambdas; resolves the asset-state
 │   │   │                                           #   table only when COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD=true

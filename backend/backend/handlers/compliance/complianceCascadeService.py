@@ -43,6 +43,7 @@ from common.apiRoutes import (
 )
 from common.compliance import listing
 from common.compliance.archivedAssets import ArchivedAssets, is_asset_database
+from common.compliance.knownDatabase import database_not_found
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
@@ -617,7 +618,8 @@ def list_pending_cascades(event):
     A pending cascade past its `approvalTimeoutAt` is aborted and not listed. Each row carries
     `databaseId` / `assetId` / `assetName` (the trigger asset) beside the `triggeredBy*` attributes
     it is stored with, less the descendants skipped as archived that the caller may not see, as in
-    the single cascade.
+    the single cascade. A `databaseId` that names no database answers `400` "Database not found"
+    to a caller allowed the listing's checks on that id (`store.database_known`).
     """
     params = event.get("queryStringParameters") or {}
     state = params.get("state") or CASCADE_STATE_PENDING_APPROVAL
@@ -660,6 +662,14 @@ def list_pending_cascades(event):
         query_kwargs["FilterExpression"] = expression
 
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
+    # A database filter naming no database is not an empty page. Checked only for a caller allowed
+    # the listing's pair of checks on that database (a cascade of it, and its evaluation object):
+    # any other caller gets the page it got before, whether the database exists or not.
+    if (database_id and casbin_enforcer
+            and casbin_enforcer.enforce(_cascade_object("", database_id), "GET")
+            and casbin_enforcer.enforce(_evaluation_object(database_id), "GET")
+            and not store.database_known(database_id)):
+        return database_not_found(event)
     # A cascade of an archived parent asset is listed only for a caller allowed on the parent's
     # stored database id; the archived ids are read once per database, and only when that decides.
     archived = ArchivedAssets(store.asset_table)

@@ -16,6 +16,7 @@ import {
 describe("complianceStateBadge", () => {
     it("maps every compliance state, with exception as an info indicator", () => {
         expect(Object.keys(COMPLIANCE_STATE_INDICATORS).sort()).toEqual([
+            "archived",
             "compliant",
             "exception",
             "non_compliant",
@@ -33,6 +34,12 @@ describe("complianceStateBadge", () => {
             type: "error",
             label: "Quarantined",
             badgeColor: "red",
+        });
+        // Reported by the record read of an archived asset, never stored.
+        expect(complianceStateIndicator("archived")).toEqual({
+            type: "stopped",
+            label: "Archived (not evaluated)",
+            badgeColor: "grey",
         });
     });
 

@@ -7570,6 +7570,8 @@ class APIClient(CustomAPIClientMixin):
             whatever the filters; `assets` is one page of the filtered rows.
 
         Raises:
+            DatabaseNotFoundError: When the database id names no database (the route answers 400
+                "Database not found" rather than an empty overview)
             InvalidComplianceDataError: When the pagination token is malformed
         """
         endpoint = API_COMPLIANCE_STATE_DATABASE.format(databaseId=database_id)

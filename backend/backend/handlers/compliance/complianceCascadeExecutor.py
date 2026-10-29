@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Set
 import boto3
 from botocore.config import Config
 
+from common.compliance.cascadeAuditSummary import completion_details
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -307,20 +308,23 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
         _write_nodes(cascade_id, nodes)
 
     _complete_cascade(cascade_id, results)
-    summary = _results_summary(results)
+    # The descendants skipped as archived are recorded per database, outside the summary and the
+    # node count every reader shares: the audit service counts them only for a reader who may see
+    # that database's archive, and the notification, one message for every subscriber, not at all.
+    details = completion_details(results)
 
     store.write_audit(
         source_db, source_asset,
         event_type="cascade_completed",
         actor=store.SYSTEM_ACTOR,
         cascade_id=cascade_id,
-        details={"nodesEvaluated": len(results), "summary": summary},
+        details=details,
     )
 
     try:
         from handlers.compliance.complianceNotifications import notify_cascade_completed
 
-        notify_cascade_completed(source_db, source_asset, cascade_id, summary)
+        notify_cascade_completed(source_db, source_asset, cascade_id, details["summary"])
     except Exception as e:
         logger.exception(f"Failed sending cascade completion notification: {e}")
 
@@ -353,16 +357,6 @@ def _node_state_for(evaluation: Dict[str, Any]) -> str:
     if evaluation.get("superseded"):
         return NODE_STATE_SUPERSEDED
     return evaluation.get("verdict", NODE_STATE_ERROR)
-
-
-def _results_summary(results: List[Dict[str, Any]]) -> Dict[str, int]:
-    """Node count per status, in first-seen order; the completion audit entry and notification
-    carry it."""
-    summary: Dict[str, int] = {}
-    for result in results:
-        status = result.get("status", "unknown")
-        summary[status] = summary.get(status, 0) + 1
-    return summary
 
 
 def _write_nodes(cascade_id: str, nodes: Dict[str, str]) -> None:

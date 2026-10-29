@@ -74,7 +74,9 @@ def notify_cascade_pending(
     cascade_id: str,
     child_count: int,
 ):
-    """Notify subscribers that a cascade is awaiting approval."""
+    """Notify subscribers that a cascade is awaiting approval. `child_count` is the audit entry's
+    `childCount`: the direct children that are not archived (`cascadeAuditSummary.opened_details`).
+    This one message goes to every subscriber, so it counts no archived child."""
     asset_name, topic_arn = _get_asset_topic(database_id, asset_id)
     if not topic_arn:
         return
@@ -110,7 +112,10 @@ def notify_cascade_completed(
     cascade_id: str,
     results_summary: Dict[str, int],
 ):
-    """Notify subscribers that a cascade has completed execution."""
+    """Notify subscribers that a cascade has completed execution. `results_summary` is the node
+    count per status the audit entry shares with every reader: it leaves out the descendants
+    skipped as archived (`cascadeAuditSummary.completion_details`), which only a reader who may see
+    their database's archive may count, since this one message goes to every subscriber."""
     asset_name, topic_arn = _get_asset_topic(database_id, asset_id)
     if not topic_arn:
         return
@@ -118,7 +123,7 @@ def notify_cascade_completed(
     summary_lines = "\n".join(
         f"      {status}: {count}"
         for status, count in results_summary.items()
-    )
+    ) or "      none"
 
     message = f"""
     Dear Subscriber,

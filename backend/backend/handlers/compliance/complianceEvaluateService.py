@@ -37,6 +37,7 @@ from common.compliance import listing
 from common.compliance.archivedAssets import (
     ArchivedAssets, withheld_state_counts,
 )
+from common.compliance.knownDatabase import database_not_found
 from common.dynamodb import query_all_items
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -208,12 +209,12 @@ def _enforce_evaluation(database_id, action, compliance_state=""):
     }, action)
 
 
-def _enforce_asset_evaluation(database_id, asset_id, action, compliance_state=""):
+def _enforce_asset_evaluation(database_id, asset_id, action, compliance_state="", archived=None):
     """Tier-2 check on the compliance evaluation object of one asset, with the database id the
     asset is stored under: `<databaseId>#deleted` for an archived asset, so the engine's
     archived-record rule applies to its compliance record as it applies to the asset itself
-    (`ArchivedAssets.decide`)."""
-    return ArchivedAssets(asset_table).decide(
+    (`ArchivedAssets.decide`; `archived` is the request's, when it has one)."""
+    return (archived or ArchivedAssets(asset_table)).decide(
         database_id, asset_id,
         lambda stored_id: _enforce_evaluation(stored_id, action, compliance_state))
 
@@ -706,7 +707,10 @@ def get_evaluations(event, database_id, asset_id, query_params):
 
 
 def get_compliance_state(event, database_id, asset_id):
-    """The compliance state row of an asset ("unknown" when it has none)."""
+    """The compliance state row of an asset ("unknown" when it has none). An archived asset is not
+    evaluated while it is archived: a caller allowed to read its record gets it with
+    `complianceState` `archived` and the stored state as `recordedComplianceState`, which applies
+    again once the asset is unarchived."""
     (valid, message) = _validate_database_and_asset(database_id, asset_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
@@ -714,18 +718,22 @@ def get_compliance_state(event, database_id, asset_id):
     item = store.get_compliance_record(database_id, asset_id)
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
+    archived = ArchivedAssets(asset_table)
     if not _enforce_asset_evaluation(database_id, asset_id, "GET",
-                                     (item or {}).get("complianceState", "")):
+                                     (item or {}).get("complianceState", ""), archived):
         return authorization_error()
 
     if not item:
-        return success(body={
+        item = {
             "databaseId": database_id,
             "assetId": asset_id,
             "complianceState": engine.STATE_UNKNOWN,
             "schemaName": None,
             "schemaSource": None,
-        })
+        }
+    if archived.is_archived(database_id, asset_id):
+        item = dict(item, complianceState=engine.STATE_ARCHIVED,
+                    recordedComplianceState=item["complianceState"])
     return success(body=item)
 
 
@@ -745,7 +753,8 @@ def overview_summary(database_id, withheld=frozenset()):
     reads grow with the database's index entries, never with the item sizes, and no row is
     returned; the overlay is one COUNT over the database's partition filtered on
     `lastEvaluationStatus`. Exact at the time of the read. The records of the `withheld` (archived)
-    assets are read by key and left out of every count."""
+    assets are read by key and left out of every count, so the counts, `totalAssets` and the share
+    of compliant assets cover the live assets only."""
     summary = {}
     reads = 0
     for state in OVERVIEW_STATES:
@@ -871,6 +880,9 @@ def get_database_compliance_overview(event, database_id, query_params):
     evaluation could not run or could not evaluate any rule. `error` is not a state, so an asset in
     it is also counted in its state bucket and the state buckets alone sum to `totalAssets`. The
     counts are of the whole database, whatever the filters (`overview_summary`).
+
+    An id that names no database (`store.database_known`) answers `400` "Database not found",
+    after the authorization check on the id, rather than an empty overview.
     """
     (valid, message) = validate({
         "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True},
@@ -895,11 +907,10 @@ def get_database_compliance_overview(event, database_id, query_params):
     name_index = filters["sort"] == "name" and not filters["state"]
     name_sort_unavailable = False
     kwargs, keys, filtered, accept = _overview_query(database_id, filters)
-    # An archived asset keeps its record under the live database id. A caller refused the
-    # database's archived id (`<databaseId>#deleted`) does not see the records of its archived
-    # assets, in the rows or in the counts, as the asset listing does not show them.
-    withheld = ArchivedAssets(asset_table).withheld(
-        database_id, lambda stored_id: _enforce_evaluation(stored_id, "GET"))
+    # An archived asset keeps its record under the live database id, and it is not evaluated while
+    # it is archived. Its record is left out of the rows and the counts, for every caller, as the
+    # asset listing leaves archived assets out (`ArchivedAssets.left_out`).
+    withheld = ArchivedAssets(asset_table).left_out(database_id)
     read_limit = None
     if withheld:
         accept = _without(withheld, accept)
@@ -915,6 +926,10 @@ def get_database_compliance_overview(event, database_id, query_params):
             name_sort_unavailable = start_key is not None
         if start_key is None:
             return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
+    # A well-formed request the caller may make of this id, so the answer may say whether the id
+    # names a database: one that names none is not an empty overview.
+    if not store.database_known(database_id):
+        return database_not_found(event)
 
     rows = next_key = None
     if not name_sort_unavailable:
