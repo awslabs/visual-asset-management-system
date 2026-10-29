@@ -17308,7 +17308,7 @@ components:
                     description: "Tracked assets not evaluated because they are archived (the same count as `skippedArchived`)."
                 skippedArchived:
                     type: integer
-                    description: "Archived assets: not evaluated, and their compliance records are left as they are."
+                    description: "Archived assets: not evaluated, and their compliance records are left as they are. Counts only the archived assets the caller may see (the caller is allowed on the archived record `<databaseId>#deleted`); for any other caller the database's archived assets are counted nowhere in this response, including `withoutSchema` and `assetsRemaining`."
                 removedOrphans:
                     type: integer
                     description: "Compliance records of assets that no longer exist, removed (with an `asset_deleted` audit entry) instead of evaluated."
@@ -17366,7 +17366,7 @@ components:
                     description: "Bound assets skipped because the caller may not evaluate their database; counted, never listed, and none is evaluated with the system identity."
                 skippedArchived:
                     type: integer
-                    description: "Bound assets skipped because they are archived; their compliance records are left as they are."
+                    description: "Bound assets skipped because they are archived; their compliance records are left as they are. Counts only the archived assets the caller may see (the caller is allowed on the archived record `<databaseId>#deleted`); an archived asset the caller may not see is counted nowhere in this response, including `skippedNotAuthorized` and `assetsRemaining`."
                 superseded:
                     type: integer
                     description: "Listed assets whose evaluation did not run because a newer evaluation of the asset had already started."
@@ -17728,7 +17728,7 @@ components:
                     type: integer
                 nodes:
                     type: string
-                    description: "JSON-encoded map of `databaseId:assetId` to node status (`pending`, `evaluating`, the evaluation verdict, `skipped` for a descendant with no bound schema or that no longer exists, `skipped_not_authorized` for a descendant in a database the caller who started the cascade may not evaluate, `skipped_archived` for a descendant that is archived when the cascade reaches it (not evaluated, its compliance record left as it is), `superseded` when a newer evaluation of the asset had already started so this one did not run, `error`). A skipped or superseded node does not abort the cascade."
+                    description: "JSON-encoded map of `databaseId:assetId` to node status (`pending`, `evaluating`, the evaluation verdict, `skipped` for a descendant with no bound schema or that no longer exists, `skipped_not_authorized` for a descendant in a database the caller who started the cascade may not evaluate, `skipped_archived` for a descendant that is archived when the cascade reaches it (not evaluated, its compliance record left as it is), `superseded` when a newer evaluation of the asset had already started so this one did not run, `error`). A skipped or superseded node does not abort the cascade. A `skipped_archived` node is returned only to a caller who may see that database's archive (allowed on the archived record `<databaseId>#deleted`); for any other caller it is left out of `nodes`, `executionOrder`, `nodeNames`, `results` and `totalNodes`."
                 permissions:
                     type: object
                     description: "The caller's allowed actions on the cascade, computed by the service."

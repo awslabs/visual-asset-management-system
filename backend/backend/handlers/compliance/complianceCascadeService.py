@@ -256,6 +256,87 @@ def _validate_cascade_id(cascade_id):
 
 
 #######################
+# Descendants the reader may not see
+#######################
+
+# The node status the executor records for a descendant it skipped as archived
+# (`complianceCascadeExecutor.NODE_STATE_SKIPPED_ARCHIVED`; a test pins the two together). Kept here
+# rather than imported so this Lambda does not load the executor.
+NODE_STATE_SKIPPED_ARCHIVED = "skipped_archived"
+# The cache key of the archive-visibility decision (the evaluation GET on a descendant database's
+# stored id), so one request asks it once per database.
+ARCHIVE_VISIBILITY_CACHE_KEY = "evaluation-GET"
+
+
+def _decoded(raw, default):
+    """A JSON-encoded cascade attribute decoded (the executor stores them as JSON strings), or
+    `default` when it is absent or unreadable."""
+    if raw is None:
+        return default
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _encoded_like(raw, value):
+    """`value` in the encoding `raw` was stored in: a JSON string for a string attribute."""
+    return json.dumps(value) if isinstance(raw, str) else value
+
+
+def _without_hidden_archived_nodes(item, casbin_enforcer, archived):
+    """The cascade row less the descendants it skipped as archived (`skipped_archived`) in a
+    database whose archive the reader may not see: the evaluation GET on that database's stored id
+    `<databaseId>#deleted`, the decision the compliance reads make on an archived asset's record,
+    asked once per database of the request. Such a node is left out of `nodes`, `executionOrder`,
+    `nodeNames` and `results`, and out of `totalNodes`, as the asset listing does not show that
+    reader the archived asset. Nothing is read."""
+    nodes = _decoded(item.get("nodes"), {})
+    results = _decoded(item.get("results"), [])
+    if not isinstance(nodes, dict):
+        nodes = {}
+    if not isinstance(results, list):
+        results = []
+    candidates = {key for key, status in nodes.items() if status == NODE_STATE_SKIPPED_ARCHIVED}
+    candidates |= {entry.get("node") for entry in results
+                   if isinstance(entry, dict) and entry.get("status") == NODE_STATE_SKIPPED_ARCHIVED
+                   and isinstance(entry.get("node"), str)}
+    if not candidates:
+        return item
+
+    def archive_visible(database_id):
+        return bool(casbin_enforcer) and archived.archive_visible(
+            database_id,
+            lambda stored_id: casbin_enforcer.enforce(_evaluation_object(stored_id), "GET"),
+            cache_key=ARCHIVE_VISIBILITY_CACHE_KEY)
+
+    hidden = {key for key in candidates if not archive_visible(key.split(":", 1)[0])}
+    if not hidden:
+        return item
+    out = dict(item)
+    if "nodes" in item:
+        out["nodes"] = _encoded_like(item["nodes"], {
+            key: status for key, status in nodes.items() if key not in hidden})
+    if "results" in item:
+        out["results"] = _encoded_like(item["results"], [
+            entry for entry in results
+            if not (isinstance(entry, dict) and entry.get("node") in hidden)])
+    order = _decoded(item.get("executionOrder"), [])
+    if "executionOrder" in item and isinstance(order, list):
+        out["executionOrder"] = _encoded_like(item["executionOrder"], [
+            key for key in order if key not in hidden])
+    names = _decoded(item.get("nodeNames"), {})
+    if "nodeNames" in item and isinstance(names, dict):
+        out["nodeNames"] = _encoded_like(item["nodeNames"], {
+            key: name for key, name in names.items() if key not in hidden})
+    if item.get("totalNodes") is not None:
+        out["totalNodes"] = max(0, item["totalNodes"] - len(hidden & set(nodes)))
+    return out
+
+
+#######################
 # Executor hand-off
 #######################
 
@@ -491,7 +572,8 @@ def reject_cascade(event, cascade_id, request: RejectCascadeRequestModel):
 
 
 def get_cascade(event, cascade_id):
-    """One cascade."""
+    """One cascade. A descendant the cascade skipped as archived in a database whose archive the
+    caller may not see is left out of its nodes (`_without_hidden_archived_nodes`)."""
     (valid, message) = _validate_cascade_id(cascade_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
@@ -502,11 +584,13 @@ def get_cascade(event, cascade_id):
     if refused:
         return refused
     item = store.expire_timed_out_cascade(cascade_table, item)
+    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+    item = _without_hidden_archived_nodes(item, casbin_enforcer, ArchivedAssets(store.asset_table))
     body = {key: value for key, value in item.items() if key not in PRIVATE_CASCADE_ATTRIBUTES}
     # The trigger (parent) asset's name, as the listing rows carry it; the children's names are
     # in `nodeNames`, recorded by the executor with the nodes.
     body["assetName"] = item.get("triggeredByAssetName", "")
-    body["permissions"] = _cascade_permissions(CasbinEnforcer(claims_and_roles), item)
+    body["permissions"] = _cascade_permissions(casbin_enforcer, item)
     return success(body=body)
 
 
@@ -532,7 +616,8 @@ def list_pending_cascades(event):
     the pair every single-cascade route enforces). `NextToken` resumes after the last row returned.
     A pending cascade past its `approvalTimeoutAt` is aborted and not listed. Each row carries
     `databaseId` / `assetId` / `assetName` (the trigger asset) beside the `triggeredBy*` attributes
-    it is stored with.
+    it is stored with, less the descendants skipped as archived that the caller may not see, as in
+    the single cascade.
     """
     params = event.get("queryStringParameters") or {}
     state = params.get("state") or CASCADE_STATE_PENDING_APPROVAL
@@ -596,7 +681,8 @@ def list_pending_cascades(event):
     rows, next_key, _ = listing.query_page(
         cascade_table, query_kwargs, page_size, CASCADE_STATE_INDEX_KEYS, start_key=start_key,
         filtered=bool(conditions), accept=listable)
-    body = {"cascades": [dict(_cascade_row(item),
+    body = {"cascades": [dict(_cascade_row(_without_hidden_archived_nodes(
+                                  item, casbin_enforcer, archived)),
                               permissions=_cascade_permissions(casbin_enforcer, item, archived))
                          for item in rows]}
     if next_key:

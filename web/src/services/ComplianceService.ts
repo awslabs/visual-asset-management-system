@@ -409,7 +409,8 @@ export type CascadeState = "pending_approval" | "executing" | "completed" | "abo
  * State of one node of a cascade. `pending` and `evaluating` are in flight; every other value is
  * final: the verdict the node's evaluation produced, `skipped` (no bound schema, or the asset no
  * longer exists), `skipped_not_authorized` (in a database the caller who started the cascade may
- * not evaluate), `skipped_archived` (archived when the cascade reached it; not evaluated),
+ * not evaluate), `skipped_archived` (archived when the cascade reached it; not evaluated; returned
+ * only to a caller who may see that database's archive),
  * `superseded` (a newer evaluation of the asset had already started, so this one did not run; not
  * a failure) or `error`.
  */
@@ -672,7 +673,10 @@ export interface EvaluateDatabaseResponse {
     superseded?: number;
     registered?: number;
     withoutSchema?: number;
-    /** Archived assets: not evaluated, their records left as they are (`skippedArchived`). */
+    /**
+     * Archived assets the caller may see: not evaluated, their records left as they are
+     * (`skippedArchived`). 0 for a caller who may not see the database's archive.
+     */
     skipped?: number;
     skippedArchived?: number;
     /** Present while assets remain: pass it back as `startingToken` to continue the evaluation. */

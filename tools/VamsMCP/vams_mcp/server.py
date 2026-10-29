@@ -1967,7 +1967,8 @@ def get_compliance_cascade(cascade_id: str) -> Dict[str, Any]:
     bound schema, or the asset no longer exists), `skipped_not_authorized` (a node in a database
     the caller who started the cascade may not evaluate; it is neither evaluated nor named),
     `skipped_archived` (the asset was archived when the cascade reached it; it is not evaluated
-    and its compliance record is left as it is; not a failure), `superseded` (a newer
+    and its compliance record is left as it is; not a failure; shown only to a caller who may
+    see that database's archive), `superseded` (a newer
     evaluation of that asset had already started, so this one did not run; not a failure) or
     `error`.
 
@@ -2775,8 +2776,10 @@ if CONFIG.enable_writes:
 
         `skipped` counts the bound assets not evaluated: `skippedNotAuthorized` those the caller
         is not authorized to evaluate — counted, never listed, so a sweep by a narrowly scoped
-        caller can trigger nothing and still succeed — and `skippedArchived` the archived assets,
-        whose records are left as they are. `superseded` counts the listed assets whose evaluation did not run because a newer
+        caller can trigger nothing and still succeed — and `skippedArchived` the archived assets
+        the caller may see, whose records are left as they are (an archived asset the caller may
+        not see is counted nowhere). `superseded` counts the listed assets whose evaluation did
+        not run because a newer
         evaluation of the same asset had already started (such an entry carries verdict
         `superseded` and `superseded: true`); that is not a failure, and the asset's state is the
         newer evaluation's. Assets awaiting evaluation are evaluated first. One call evaluates a
@@ -2804,7 +2807,8 @@ if CONFIG.enable_writes:
         instead evaluates every database bound to one schema. In a bound database, assets that
         have no compliance record yet are registered under the binding first (`registered`);
         `withoutSchema` counts tracked assets whose record names no schema (not evaluated), and
-        `skipped` / `skippedArchived` the archived assets (not evaluated; records left as they are).
+        `skipped` / `skippedArchived` the archived assets the caller may see (not evaluated; records
+        left as they are; 0 for a caller who may not see the database's archive).
         Assets awaiting evaluation are evaluated first. One call evaluates a bounded number of
         assets: `assetsRemaining` counts those still to evaluate, and while it is above 0 call
         again with the response's `NextToken` as `starting_token` until no token is returned. Each

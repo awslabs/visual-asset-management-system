@@ -139,13 +139,21 @@ class ArchivedAssets:
             return True
         return not self.is_archived(database_id, asset_id, listing)
 
+    def archive_visible(self, database_id: str, decide: Callable[[str], bool],
+                        cache_key: Optional[Hashable] = None) -> bool:
+        """Whether the caller may see the database's archived assets: `decide` of the stored id
+        `<databaseId>#deleted` (which the engine passes only when the live id passes too), asked
+        once per database for a `cache_key`. Nothing is read. A scope that names no asset
+        partition (GLOBAL, `*`) has no archive to withhold."""
+        if not is_asset_database(database_id):
+            return True
+        return self._stored_decision(database_id, decide, cache_key)
+
     def withheld(self, database_id: str, decide: Callable[[str], bool],
                  cache_key: Optional[Hashable] = None) -> FrozenSet[str]:
         """The archived asset ids a listing of one database withholds from a caller whom `decide`
         allows on the live id: all of them when the stored id is refused, none when it passes."""
-        if not is_asset_database(database_id):
-            return frozenset()
-        if self._stored_decision(database_id, decide, cache_key):
+        if self.archive_visible(database_id, decide, cache_key):
             return frozenset()
         return self.archived_ids(database_id)
 

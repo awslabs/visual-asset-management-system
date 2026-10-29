@@ -7473,7 +7473,8 @@ class APIClient(CustomAPIClientMixin):
             skipped, skippedNotAuthorized, skippedArchived, superseded, assetsRemaining,
             NextToken?}. `skipped` counts the bound assets not evaluated: `skippedNotAuthorized`
             those the caller is not authorized to evaluate (never listed) and `skippedArchived` the
-            archived ones (their records are left as they are). `assetsRemaining` counts the
+            archived ones the caller may see (their records are left as they are; an archived asset
+            the caller may not see is counted nowhere). `assetsRemaining` counts the
             bound assets still to evaluate; while it is above 0 the response carries `NextToken`,
             which the next call passes back to continue.
         """
@@ -7497,8 +7498,9 @@ class APIClient(CustomAPIClientMixin):
             API response data: {message, databaseId, assetsTriggered: [{databaseId, assetId,
             schemaName, evaluationId, verdict, superseded?}], assetsRemaining, superseded,
             registered, withoutSchema, skipped, skippedArchived, NextToken?}. `skipped` and
-            `skippedArchived` count the archived assets, which are not evaluated (their records are
-            left as they are). While `assetsRemaining` is above 0 the response
+            `skippedArchived` count the archived assets the caller may see, which are not evaluated
+            (their records are left as they are); both are 0 for a caller who may not see the
+            database's archive. While `assetsRemaining` is above 0 the response
             carries `NextToken`: pass it back to continue. `registered` counts assets of a bound
             database registered under the binding by this call; `withoutSchema` counts tracked
             assets whose record names no schema (not evaluated).

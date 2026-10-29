@@ -128,6 +128,21 @@ class TestDecide:
         table.query.assert_not_called()
         table.get_item.assert_not_called()
 
+    @pytest.mark.parametrize("stored_allowed", [True, False])
+    def test_archive_visible_asks_the_stored_id_once_per_database_and_reads_nothing(
+            self, stored_allowed):
+        table = live_only_asset_table(archived={"a"})
+        decide, asked = self._decide({DB, ARCHIVED_DB} if stored_allowed else {DB})
+        archived = ArchivedAssets(table)
+        assert [archived.archive_visible(DB, decide, cache_key="GET")
+                for _ in range(3)] == [stored_allowed] * 3
+        assert asked == [ARCHIVED_DB]
+        # A scope that names no asset partition has no archive to withhold and asks nothing.
+        assert archived.archive_visible("GLOBAL", decide, cache_key="GET") is True
+        assert asked == [ARCHIVED_DB]
+        table.query.assert_not_called()
+        table.get_item.assert_not_called()
+
 
 def _cascade_listing(stored_id_allowed, archived_parents=("p03", "p11"), rows=20):
     """The pending cascade listing of DB, `rows` cascades whose parents are `p00`.., for a caller

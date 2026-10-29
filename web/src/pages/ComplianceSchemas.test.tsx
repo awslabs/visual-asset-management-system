@@ -261,6 +261,19 @@ describe("ComplianceSchemas sweep message", () => {
             })
         ).toBe(`Sweep of schema "std": 1 ${Synonyms.asset} evaluated; 2 archived, not evaluated.`);
     });
+
+    it("says nothing of archived assets when none is counted", () => {
+        // A caller who may not see the database's archive gets 0 for it, as when there is none.
+        expect(
+            sweepMessage("std", {
+                assetsTriggered: [{}, {}],
+                skipped: 0,
+                skippedNotAuthorized: 0,
+                skippedArchived: 0,
+                assetsRemaining: 0,
+            })
+        ).toBe(`Sweep of schema "std": 2 ${Synonyms.assets} evaluated.`);
+    });
 });
 
 describe("ComplianceSchemas rule-name errors", () => {

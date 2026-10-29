@@ -990,6 +990,20 @@ class TestComplianceEvaluationCommands:
             assert 'Skipped (archived, not evaluated): 2' in result.output
             assert 'not authorized' not in result.output
 
+    def test_sweep_prints_no_archived_line_when_none_is_counted(self, cli_runner,
+                                                                generic_command_mocks):
+        # A caller who may not see the database's archive gets 0 for it, as when there is none.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].evaluate_database_compliance.return_value = {
+                'message': 'Evaluation triggered for 1 assets', 'databaseId': 'my-database',
+                'assetsTriggered': [{'databaseId': 'my-database', 'assetId': 'a1'}],
+                'skipped': 0, 'skippedArchived': 0, 'assetsRemaining': 0}
+            result = cli_runner.invoke(cli, ['compliance', 'sweep', '-d', 'my-database'])
+            assert result.exit_code == 0
+            assert 'Assets Triggered: 1' in result.output
+            assert 'archived' not in result.output.lower()
+            assert 'Skipped' not in result.output
+
     def test_sweep_json_output(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].sweep_compliance_schema.return_value = {'assetsTriggered': [], 'skipped': 2}

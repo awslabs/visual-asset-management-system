@@ -237,6 +237,29 @@ def _validate_database_and_asset(database_id, asset_id):
     })
 
 
+# The cache key of the archive-visibility decision (the evaluation GET on a database's stored id),
+# so one request asks it once per database.
+ARCHIVE_VISIBILITY_CACHE_KEY = "evaluation-GET"
+
+
+def _archive_visible(archived, database_id):
+    """Whether the caller may see the archived assets of a database: the evaluation GET on its
+    stored id `<databaseId>#deleted`, the decision the overview and the record reads make on an
+    archived asset's record (`ArchivedAssets`), asked once per database of the request."""
+    return archived.archive_visible(
+        database_id, lambda stored_id: _enforce_evaluation(stored_id, "GET"),
+        cache_key=ARCHIVE_VISIBILITY_CACHE_KEY)
+
+
+def _hidden_archived(archived, database_id, asset_id):
+    """Whether an asset is archived in a database whose archive the caller may not see. Such an
+    asset is counted nowhere in the response of a sweep or of Evaluate All (only the operator log
+    counts it), as the asset listing does not show it to that caller. The database's archived ids
+    are read (keys only, once per request) only for a caller refused its archive."""
+    return (not _archive_visible(archived, database_id)
+            and asset_id in archived.archived_ids(database_id))
+
+
 #######################
 # Business logic
 #######################
@@ -304,10 +327,13 @@ def sweep_schema(event, schema_name, starting_token=None):
     database the caller may evaluate; the rest are counted as `skipped` (and in
     `skippedNotAuthorized`, the reason they were skipped) and never listed. An archived asset is
     not evaluated either (its row sits in the archive and cannot be read): it is counted in
-    `skipped` and `skippedArchived`, and its compliance record is left as it is. The caller needs read
-    access to the schema in its scope: a database's compliance administrator may sweep a GLOBAL
-    schema, and the sweep then reaches the assets of the databases that administrator may evaluate
-    only. Every evaluation runs as the caller, never with the system identity.
+    `skipped` and `skippedArchived`, and its compliance record is left as it is. Only the archived
+    assets the caller may see are counted (`_archive_visible`): an archived asset of a database
+    whose archive the caller may not see is counted nowhere in the response (`skippedNotAuthorized`
+    and `assetsRemaining` included). The caller needs read access to the schema in its scope: a
+    database's compliance administrator may sweep a GLOBAL schema, and the sweep then reaches the
+    assets of the databases that administrator may evaluate only. Every evaluation runs as the
+    caller, never with the system identity.
 
     One call evaluates at most MAX_SWEEP_ASSETS assets and stops launching once
     SWEEP_TIME_BUDGET_SECONDS has elapsed. A sweep is continued across calls: while assets remain,
@@ -358,17 +384,24 @@ def sweep_schema(event, schema_name, starting_token=None):
     triggered = []
     skipped = 0
     skipped_archived = 0
+    hidden_archived = 0
     superseded = 0
     removed_orphans = 0
     beyond_cap = 0
     beyond_budget = 0
     budget_spent = False
+    archived = ArchivedAssets(asset_table)
     for asset in bound_assets:
         # A database the caller may not evaluate is skipped whatever the bounds: its assets are
         # never this caller's to evaluate, so they are not counted as remaining either.
         database_id = asset["databaseId"]
         if database_id not in database_allowed:
             database_allowed[database_id] = _enforce_evaluation(database_id, "POST")
+        # An archived asset the caller may not see is counted nowhere in the response, whatever
+        # the reason it is not evaluated (only the operator log counts it).
+        if _hidden_archived(archived, database_id, asset["assetId"]):
+            hidden_archived += 1
+            continue
         if not database_allowed[database_id]:
             skipped += 1
             continue
@@ -385,7 +418,11 @@ def sweep_schema(event, schema_name, starting_token=None):
             removed_orphans += 1
             continue
         if target == EVALUATION_TARGET_ARCHIVED:
-            skipped_archived += 1
+            # Archived in a database whose archive the caller sees, or since the archive was read.
+            if _archive_visible(archived, database_id):
+                skipped_archived += 1
+            else:
+                hidden_archived += 1
             continue
         result = run_evaluation_for_asset(database_id, asset["assetId"], schema_name, actor)
         entry = {
@@ -403,7 +440,8 @@ def sweep_schema(event, schema_name, starting_token=None):
     logger.info(f"Sweep of schema {schema_name}: {registered} registered under a database binding")
     logger.info(f"Sweep of schema {schema_name}: {len(triggered)} triggered ({superseded} "
                 f"superseded by a newer evaluation), {skipped} skipped as not authorized, "
-                f"{skipped_archived} skipped as archived, {remaining} remaining "
+                f"{skipped_archived + hidden_archived} skipped as archived ({hidden_archived} in "
+                f"an archive the caller may not see, not in the response), {remaining} remaining "
                 f"({beyond_cap} beyond the cap, {beyond_budget} beyond the time budget), "
                 f"{evaluated_earlier} evaluated earlier in this sweep, {removed_orphans} records of deleted "
                 f"assets removed")
@@ -432,7 +470,10 @@ def evaluate_database(event, database_id, starting_token=None):
     to evaluate only the assets not evaluated since the evaluation started, and `assetsRemaining`
     the tracked assets still to evaluate after this call (`_sweep_candidates`). A record whose
     asset no longer exists is removed rather than evaluated, as in a sweep (`removedOrphans`), and
-    an archived asset is skipped with its record left as it is (`skipped`, `skippedArchived`).
+    an archived asset is skipped with its record left as it is (`skipped`, `skippedArchived`). As
+    in a sweep, only the archived assets the caller may see are counted: when the caller may not
+    see the database's archive, its archived assets are counted nowhere in the response
+    (`withoutSchema` and `assetsRemaining` included).
 
     A database binding governs every asset of the database, so an asset of a bound database that
     has no compliance record yet is registered under the binding first (`registered`). A tracked
@@ -471,13 +512,18 @@ def evaluate_database(event, database_id, starting_token=None):
     superseded = 0
     removed_orphans = 0
     skipped_archived = 0
+    hidden_archived = 0
     without_schema = 0
     beyond_cap = 0
     beyond_budget = 0
     budget_spent = False
+    archived = ArchivedAssets(asset_table)
     rows, evaluated_earlier = _sweep_candidates(
         _database_rows(database_id), sweep_started_at, lambda row: row.get("assetId", ""))
     for row in rows:
+        if _hidden_archived(archived, database_id, row.get("assetId", "")):
+            hidden_archived += 1
+            continue
         schema_name = row.get("schemaName")
         if not schema_name:
             without_schema += 1
@@ -495,7 +541,11 @@ def evaluate_database(event, database_id, starting_token=None):
             removed_orphans += 1
             continue
         if target == EVALUATION_TARGET_ARCHIVED:
-            skipped_archived += 1
+            # Archived in a database whose archive the caller sees, or since the archive was read.
+            if _archive_visible(archived, database_id):
+                skipped_archived += 1
+            else:
+                hidden_archived += 1
             continue
         result = run_evaluation_for_asset(database_id, row["assetId"], schema_name, actor)
         entry = {
@@ -515,8 +565,9 @@ def evaluate_database(event, database_id, starting_token=None):
                 f"triggered ({superseded} superseded), {without_schema} without a schema, "
                 f"{remaining} remaining ({beyond_cap} beyond the cap, {beyond_budget} beyond the "
                 f"time budget), {evaluated_earlier} evaluated earlier in this evaluation, "
-                f"{removed_orphans} records of deleted assets removed, {skipped_archived} archived "
-                f"assets skipped")
+                f"{removed_orphans} records of deleted assets removed, "
+                f"{skipped_archived + hidden_archived} archived assets skipped "
+                f"({hidden_archived} in an archive the caller may not see, not in the response)")
     body = {
         "message": f"Evaluation triggered for {len(triggered)} assets",
         "databaseId": database_id,

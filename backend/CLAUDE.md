@@ -55,7 +55,10 @@ backend/
 │   │   │                                           #   (one keys-only Query per database per listing;
 │   │   │                                           #   once read, only archived rows ask the stored id);
 │   │   │                                           #   withheld() / withheld_state_counts() for the
-│   │   │                                           #   overview's rows and counts
+│   │   │                                           #   overview's rows and counts; archive_visible()
+│   │   │                                           #   for the sweep / Evaluate All / cascade counts
+│   │   │                                           #   (archived assets the caller may not see are
+│   │   │                                           #   counted and listed nowhere)
 │   │   ├── compliance/evaluationEngine.py          # Pure vams-rules-v1 rule logic (no AWS access):
 │   │   │                                           #   rule parsing/inheritance, the six rule types
 │   │   │                                           #   (pipeline, metadata, relationship, fileStructure,
