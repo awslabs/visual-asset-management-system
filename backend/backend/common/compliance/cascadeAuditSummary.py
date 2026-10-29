@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The archived descendants in a finished cascade's audit entry.
+"""The archived descendants in a cascade's audit entries.
 
 A cascade does not evaluate a descendant that is archived when it reaches it (node status
 `skipped_archived`). How many it skipped is a count of a database's archived assets, which only a
@@ -21,11 +21,23 @@ each database whose archive the reader may see, its count goes back into `summar
 An entry written before this shape (its `summary` counts every archived descendant, with no
 per-database record) keeps its `skipped_archived` count only for a reader who may see the archive
 of the cascade's parent database.
+
+The cascade an evaluation of a parent opens (`cascade_auto_triggered`) is held to the same rule.
+Archiving keeps an asset's links, so its direct children can include archived assets:
+
+- `childCount` counts the children that are not archived (`opened_details`);
+- `archivedChildrenByDatabase` records the archived ones per database (absent when there were none);
+- the approval notification counts the children in `childCount` only.
+
+When the audit trail is read, a database's archived children go back into `childCount` and
+`archivedChildrenByDatabase` only for a reader who may see that database's archive. An entry written
+before this shape counts every child in `childCount` and cannot be told apart from one without
+archived children, so it is returned as it is (such entries exist only on test deployments).
 """
 
 import json
 from numbers import Number
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # The audit event a finished cascade writes (`complianceCascadeExecutor.execute_cascade`).
 CASCADE_COMPLETED_EVENT = "cascade_completed"
@@ -35,6 +47,11 @@ CASCADE_COMPLETED_EVENT = "cascade_completed"
 SKIPPED_ARCHIVED_STATUS = "skipped_archived"
 # The `details` key that records those descendants per database.
 ARCHIVED_BY_DATABASE_KEY = "skippedArchivedByDatabase"
+# The audit event the evaluation of a parent writes when it opens a cascade
+# (`complianceTrigger.check_and_trigger_cascade`), and the `details` key that records its archived
+# direct children per database.
+CASCADE_OPENED_EVENT = "cascade_auto_triggered"
+ARCHIVED_CHILDREN_KEY = "archivedChildrenByDatabase"
 
 
 def _database_of(node: Any) -> str:
@@ -58,6 +75,25 @@ def completion_details(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     details: Dict[str, Any] = {"nodesEvaluated": sum(summary.values()), "summary": summary}
     if archived:
         details[ARCHIVED_BY_DATABASE_KEY] = archived
+    return details
+
+
+def opened_details(reason: str, children: List[Tuple[str, str]],
+                   is_archived: Callable[[str, str], bool]) -> Dict[str, Any]:
+    """The `details` of the audit entry of a cascade an evaluation opened: `reason`, `childCount`
+    the direct children (`(databaseId, assetId)` pairs) that are not archived, and
+    `archivedChildrenByDatabase` (count per database) for those `is_archived(databaseId, assetId)`
+    says are."""
+    count = 0
+    archived: Dict[str, int] = {}
+    for database_id, asset_id in children:
+        if is_archived(database_id, asset_id):
+            archived[database_id] = archived.get(database_id, 0) + 1
+        else:
+            count += 1
+    details: Dict[str, Any] = {"reason": reason, "childCount": count}
+    if archived:
+        details[ARCHIVED_CHILDREN_KEY] = archived
     return details
 
 
@@ -97,24 +133,52 @@ def _with_archived(details: Dict[str, Any], count: int) -> Dict[str, Any]:
     return out
 
 
+def _visible_by_database(details: Dict[str, Any], key: str,
+                         archive_visible: Callable[[str], bool]) -> Dict[str, int]:
+    """The per-database archived counts under `key` of the databases whose archive the reader may
+    see; unreadable counts count nothing."""
+    by_database = details.get(key)
+    by_database = by_database if isinstance(by_database, dict) else {}
+    return {database_id: _count(count) for database_id, count in by_database.items()
+            if _count(count) > 0 and archive_visible(database_id)}
+
+
+def _opened_for_reader(details: Dict[str, Any],
+                       archive_visible: Callable[[str], bool]) -> Optional[Dict[str, Any]]:
+    """A `cascade_auto_triggered` entry's `details` for one reader, or None to leave it as it is
+    (no per-database record: no archived child, or written before the record existed)."""
+    if ARCHIVED_CHILDREN_KEY not in details:
+        return None
+    visible = _visible_by_database(details, ARCHIVED_CHILDREN_KEY, archive_visible)
+    out = dict(details)
+    out.pop(ARCHIVED_CHILDREN_KEY)
+    if "childCount" in details:
+        out["childCount"] = _count(details["childCount"]) + sum(visible.values())
+    if visible:
+        out[ARCHIVED_CHILDREN_KEY] = visible
+    return out
+
+
 def details_for_reader(entry: Dict[str, Any], archive_visible: Callable[[str], bool]) -> Dict[str, Any]:
     """The audit entry as one reader may see it. `archive_visible(database_id)` is whether the
-    reader may see that database's archive. Only a `cascade_completed` entry is changed: its
-    archived descendants are counted only for the databases whose archive the reader may see
-    (module docstring). Any other entry, and one whose `details` cannot be read, is returned as
-    it is."""
-    if entry.get("eventType") != CASCADE_COMPLETED_EVENT:
+    reader may see that database's archive. Only a `cascade_completed` and a
+    `cascade_auto_triggered` entry are changed: their archived descendants (children) are counted
+    only for the databases whose archive the reader may see (module docstring). Any other entry,
+    and one whose `details` cannot be read, is returned as it is."""
+    event_type = entry.get("eventType")
+    if event_type not in (CASCADE_COMPLETED_EVENT, CASCADE_OPENED_EVENT):
         return entry
     raw = entry.get("details")
     details = _decoded(raw)
     if details is None:
         return entry
 
-    if ARCHIVED_BY_DATABASE_KEY in details:
-        by_database = details.get(ARCHIVED_BY_DATABASE_KEY)
-        by_database = by_database if isinstance(by_database, dict) else {}
-        visible = {database_id: _count(count) for database_id, count in by_database.items()
-                   if _count(count) > 0 and archive_visible(database_id)}
+    if event_type == CASCADE_OPENED_EVENT:
+        out = _opened_for_reader(details, archive_visible)
+        if out is None:
+            return entry
+    elif ARCHIVED_BY_DATABASE_KEY in details:
+        visible = _visible_by_database(details, ARCHIVED_BY_DATABASE_KEY, archive_visible)
         out = _with_archived(details, sum(visible.values()))
         out.pop(ARCHIVED_BY_DATABASE_KEY)
         if visible:

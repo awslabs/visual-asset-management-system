@@ -74,7 +74,9 @@ def notify_cascade_pending(
     cascade_id: str,
     child_count: int,
 ):
-    """Notify subscribers that a cascade is awaiting approval."""
+    """Notify subscribers that a cascade is awaiting approval. `child_count` is the audit entry's
+    `childCount`: the direct children that are not archived (`cascadeAuditSummary.opened_details`).
+    This one message goes to every subscriber, so it counts no archived child."""
     asset_name, topic_arn = _get_asset_topic(database_id, asset_id)
     if not topic_arn:
         return

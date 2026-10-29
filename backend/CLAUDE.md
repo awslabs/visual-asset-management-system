@@ -59,12 +59,13 @@ backend/
 │   │   │                                           #   for the sweep / Evaluate All / cascade counts
 │   │   │                                           #   (archived assets the caller may not see are
 │   │   │                                           #   counted and listed nowhere)
-│   │   ├── compliance/cascadeAuditSummary.py       # cascade_completed audit details: descendants
-│   │   │                                           #   skipped as archived are recorded per database
-│   │   │                                           #   outside the shared summary the notification
-│   │   │                                           #   carries (completion_details); the audit service
-│   │   │                                           #   counts them only for a reader who may see that
-│   │   │                                           #   database's archive (details_for_reader)
+│   │   ├── compliance/cascadeAuditSummary.py       # cascade_completed / cascade_auto_triggered audit
+│   │   │                                           #   details: archived descendants (children) are
+│   │   │                                           #   recorded per database outside the shared
+│   │   │                                           #   summary / childCount the notifications carry
+│   │   │                                           #   (completion_details, opened_details); the audit
+│   │   │                                           #   service counts them only for a reader who may
+│   │   │                                           #   see that database's archive (details_for_reader)
 │   │   ├── compliance/evaluationEngine.py          # Pure vams-rules-v1 rule logic (no AWS access):
 │   │   │                                           #   rule parsing/inheritance, the six rule types
 │   │   │                                           #   (pipeline, metadata, relationship, fileStructure,

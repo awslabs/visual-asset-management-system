@@ -107,7 +107,8 @@ from common.assetProvenance import (
 )
 from common.compliance import evaluationEngine as engine
 from common.compliance import listing
-from common.compliance.archivedAssets import asset_is_archived
+from common.compliance.archivedAssets import asset_is_archived, names_an_asset
+from common.compliance.cascadeAuditSummary import opened_details
 from models.compliance import EvaluationVerdict
 from common.dynamodb import query_all_items
 from common.indexerEvents import s3_records_from_indexer_message
@@ -1245,6 +1246,11 @@ def check_and_trigger_cascade(database_id: str, asset_id: str):
         logger.info(f"Asset {asset_key} already has a cascade awaiting approval; not opening another")
         return
     logger.info(f"Asset {asset_key} has {len(children)} children; opening a cascade")
+    # Archiving keeps an asset's links, so a child may be archived. Its count is recorded per
+    # database, outside `childCount`: the audit service counts it only for a reader who may see
+    # that database's archive, and the approval notification, one message for every subscriber,
+    # not at all. Read before the cascade opens, like the links, so a failed read opens nothing.
+    details = opened_details("parent_update", _child_keys(children), _child_is_archived)
 
     now = datetime.now(timezone.utc)
     cascade_id = str(uuid.uuid4())
@@ -1274,16 +1280,34 @@ def check_and_trigger_cascade(database_id: str, asset_id: str):
         event_type="cascade_auto_triggered",
         actor=store.SYSTEM_ACTOR,
         cascade_id=cascade_id,
-        details={"reason": "parent_update", "childCount": len(children)},
+        details=details,
     )
 
     try:
         from handlers.compliance.complianceNotifications import notify_cascade_pending
-        notify_cascade_pending(database_id, asset_id, cascade_id, len(children))
+        notify_cascade_pending(database_id, asset_id, cascade_id, details["childCount"])
     except Exception as e:
         logger.exception(f"Failed sending cascade notification: {e}")
 
     logger.info(f"Created cascade {cascade_id} for parent {asset_key}")
+
+
+def _child_keys(children):
+    """`(databaseId, assetId)` of each child a cascade link names, each child once."""
+    keys, seen = [], set()
+    for link in children:
+        key = (link.get("toAssetDatabaseId") or "", link.get("toAssetId") or "")
+        if key not in seen:
+            seen.add(key)
+            keys.append(key)
+    return keys
+
+
+def _child_is_archived(database_id: str, asset_id: str) -> bool:
+    """Whether a child is archived: its archived row, read strongly consistent (one GetItem). A
+    link that names no asset partition has no archived child."""
+    return names_an_asset(database_id, asset_id) and asset_is_archived(
+        asset_table, database_id, asset_id)
 
 
 def _cascade_parent_name(database_id: str, asset_id: str) -> str:

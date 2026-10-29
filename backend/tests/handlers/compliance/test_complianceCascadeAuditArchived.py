@@ -19,6 +19,13 @@ one message for every subscriber, carries no archived count. An entry written by
 keeps its `skipped_archived` count only for a reader who may see the archive of the parent's
 database.
 
+The same holds for the cascade the parent's next evaluation opens (`cascade_auto_triggered`, D89):
+its `childCount` used to count every direct child link, archived children included, and the
+approval email said "Downstream assets affected: 2" for one live and one archived child. Now the
+entry counts the archived children per database (`archivedChildrenByDatabase`), outside
+`childCount`, the audit service adds them back only for a reader who may see that database's
+archive, and the email counts the live children only.
+
 The matrix runs the executor, the audit writes and the audit service on moto tables built from the
 CDK definitions with the production enforcer of every shipped role (as
 `test_complianceArchivedCounts` does); a role's archive visibility is read from the same world: may
@@ -26,6 +33,7 @@ it read the archived descendant's compliance record.
 """
 
 import json
+import pathlib
 from unittest.mock import MagicMock, patch
 
 import boto3
@@ -69,6 +77,13 @@ SEEN_BY_OTHER_READER = {
     OLD_CASCADE_ID: {"nodesEvaluated": 1, "summary": {"compliant": 1}},
 }
 
+# The cascade the parent's next evaluation opens (`check_and_trigger_cascade`) over the same two
+# children: what each reader sees of its `cascade_auto_triggered` entry, and what is stored.
+OPENED_SEEN_BY_ARCHIVE_READER = {"reason": "parent_update", "childCount": 2,
+                                 "archivedChildrenByDatabase": {DB: 1}}
+OPENED_SEEN_BY_OTHER_READER = {"reason": "parent_update", "childCount": 1}
+OPENED_STORED = {"reason": "parent_update", "childCount": 1, "archivedChildrenByDatabase": {DB: 1}}
+
 # The audit reads that return the parent's entries: the asset's audit trail and each listing path.
 AUDIT_READS = {
     "asset audit": (f"/compliance/audit/{DB}/{PARENT}", {"databaseId": DB, "assetId": PARENT},
@@ -79,6 +94,11 @@ AUDIT_READS = {
     "listing by asset": ("/compliance/audit", None, {"databaseId": DB, "assetId": PARENT}),
     "listing by text": ("/compliance/audit", None, {"text": PARENT}),
 }
+# The paths that return the opened cascade's entry: the same, with its own event-type listing.
+OPENED_READS = dict(
+    {name: read for name, read in AUDIT_READS.items() if name != "listing by event type"},
+    **{"listing by opened event type": (
+        "/compliance/audit", None, {"eventType": "cascade_auto_triggered"})})
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -129,6 +149,8 @@ def _observe_world(enforcer):
                 cascade_id=OLD_CASCADE_ID, timestamp="2026-10-01T00:00:00+00:00",
                 asset_name=f"Asset {PARENT}"))
             _seed(doubles)
+            # The parent's next evaluation opens a cascade over the same live and archived child.
+            trigger.check_and_trigger_cascade(DB, PARENT)
 
             def call(service, method, path, params=None, query=None):
                 response = service.lambda_handler(
@@ -139,7 +161,7 @@ def _observe_world(enforcer):
             out = {"archive visible": call(
                 evaluate_svc, "GET", f"/compliance/state/{DB}/{ARCHIVED_CHILD}",
                 {"databaseId": DB, "assetId": ARCHIVED_CHILD})["statusCode"] == 200}
-            for name, (path, params, query) in AUDIT_READS.items():
+            for name, (path, params, query) in {**AUDIT_READS, **OPENED_READS}.items():
                 response = call(audit_svc, "GET", path, params, query)
                 if response["statusCode"] != 200:
                     out[name] = None
@@ -149,14 +171,19 @@ def _observe_world(enforcer):
                     "details": {entry["cascadeId"]: json.loads(entry["details"])
                                 for entry in entries
                                 if entry.get("eventType") == "cascade_completed"},
+                    "opened": [json.loads(entry["details"]) for entry in entries
+                               if entry.get("eventType") == "cascade_auto_triggered"],
                     "text": json.dumps(entries, default=str),
                 }
-            out["published"] = [c.args[1] if len(c.args) > 1 else c.kwargs["message"]
-                                for c in publish.call_args_list]
-            out["stored"] = {
-                item["cascadeId"]: json.loads(item["details"])
-                for item in doubles["complianceAuditStorage"].scan()["Items"]
-                if item.get("eventType") == "cascade_completed"}
+            out["published"] = [
+                (c.kwargs.get("subject", c.args[2] if len(c.args) > 2 else ""),
+                 c.args[1] if len(c.args) > 1 else c.kwargs["message"])
+                for c in publish.call_args_list]
+            items = doubles["complianceAuditStorage"].scan()["Items"]
+            out["stored"] = {item["cascadeId"]: json.loads(item["details"]) for item in items
+                             if item.get("eventType") == "cascade_completed"}
+            out["stored opened"] = [json.loads(item["details"]) for item in items
+                                    if item.get("eventType") == "cascade_auto_triggered"]
             return out
         finally:
             for active in reversed(patches):
@@ -229,13 +256,72 @@ def test_the_notification_carries_no_archived_count(set_name, role_enforcer, obs
     """One message goes to every subscriber, whoever started or reads the cascade: it lists the
     live descendant's verdict and nothing of the archived one."""
     found = _observed(set_name, role_enforcer, observations)
-    assert len(found["published"]) == 1
-    message = found["published"][0]
+    completed = [message for subject, message in found["published"]
+                 if subject.startswith("[CASCADE COMPLETE]")]
+    assert len(completed) == 1
+    message = completed[0]
     assert "compliant: 1" in message
     assert "skipped_archived" not in message
     assert "archived" not in message.lower()
     results = message.split("Results:", 1)[1].split("Best Regards", 1)[0]
     assert [line.strip() for line in results.strip().splitlines()] == ["compliant: 1"]
+
+
+# ---------------------------------------------------------------------------------------------
+# The cascade the parent's next evaluation opens (D89)
+# ---------------------------------------------------------------------------------------------
+@pytest.mark.unit
+@pytest.mark.parametrize("set_name", SET_NAMES)
+def test_the_opened_entry_counts_the_archived_children_the_reader_may_see(
+        set_name, role_enforcer, observations):
+    found = _observed(set_name, role_enforcer, observations)
+    expected = (OPENED_SEEN_BY_ARCHIVE_READER if found["archive visible"]
+                else OPENED_SEEN_BY_OTHER_READER)
+    for name in OPENED_READS:
+        view = found[name]
+        if view is None or not view["opened"]:
+            # A role that may not read the parent's audit trail sees no entry.
+            continue
+        assert view["opened"] == [expected], (set_name, name, view["opened"])
+        if not found["archive visible"]:
+            assert "archivedChildrenByDatabase" not in view["text"], (set_name, name)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("set_name,archive_visible", [
+    ("template:database-admin.json", True),
+    ("template:compliance-admin.json", False),
+    ("template:compliance-readonly.json", False),
+    (ARCHIVE_DENY_SET, False),
+])
+def test_each_compliance_role_reads_the_opened_entry_with_its_own_archived_count(
+        set_name, archive_visible, role_enforcer, observations):
+    found = _observed(set_name, role_enforcer, observations)
+    assert found["archive visible"] is archive_visible
+    expected = OPENED_SEEN_BY_ARCHIVE_READER if archive_visible else OPENED_SEEN_BY_OTHER_READER
+    for name in OPENED_READS:
+        assert found[name] is not None, (set_name, name)
+        assert found[name]["opened"] == [expected], (set_name, name, found[name]["opened"])
+
+
+@pytest.mark.unit
+def test_the_stored_opened_entry_keeps_the_archived_children_out_of_the_child_count(
+        role_enforcer, observations):
+    found = _observed("template:database-admin.json", role_enforcer, observations)
+    assert found["stored opened"] == [OPENED_STORED]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("set_name", ["template:database-admin.json",
+                                      "template:compliance-admin.json"])
+def test_the_approval_notification_counts_no_archived_child(set_name, role_enforcer, observations):
+    """One message to every subscriber: it counts the live child only."""
+    found = _observed(set_name, role_enforcer, observations)
+    pending = [message for subject, message in found["published"]
+               if subject.startswith("[CASCADE PENDING]")]
+    assert len(pending) == 1
+    assert "Downstream assets affected: 1\n" in pending[0]
+    assert "archived" not in pending[0].lower()
 
 
 # ---------------------------------------------------------------------------------------------
@@ -366,3 +452,57 @@ def test_an_empty_summary_is_notified_as_none():
     message = publish.call_args.args[1]
     results = message.split("Results:", 1)[1].split("Best Regards", 1)[0]
     assert [line.strip() for line in results.strip().splitlines()] == ["none"]
+
+
+@pytest.mark.unit
+def test_the_opened_event_is_the_triggers():
+    """The event whose child count the audit service reads per reader is the one the trigger
+    writes when an evaluation opens a cascade."""
+    source = pathlib.Path(trigger.__file__).read_text(encoding="utf-8")
+    assert f'event_type="{summaries.CASCADE_OPENED_EVENT}"' in source
+
+
+@pytest.mark.unit
+def test_opened_details_record_the_archived_children_per_database():
+    archived = {("db-a", "2"), ("db-b", "3"), ("db-b", "4")}
+    children = [("db-a", "1"), ("db-a", "2"), ("db-b", "3"), ("db-b", "4"), ("db-c", "5")]
+    assert summaries.opened_details(
+        "parent_update", children, lambda db, asset: (db, asset) in archived) == {
+        "reason": "parent_update", "childCount": 2,
+        "archivedChildrenByDatabase": {"db-a": 1, "db-b": 2}}
+    assert summaries.opened_details("parent_update", [("db-a", "1")], lambda *_: False) == {
+        "reason": "parent_update", "childCount": 1}
+
+
+@pytest.mark.unit
+def test_a_reader_is_told_only_of_the_archived_children_it_may_see():
+    stored = {"reason": "parent_update", "childCount": 1,
+              "archivedChildrenByDatabase": {"db-a": 1, "db-b": 2}}
+    entry = _entry(stored, event_type="cascade_auto_triggered")
+    assert _details(summaries.details_for_reader(entry, lambda db: db == "db-b")) == {
+        "reason": "parent_update", "childCount": 3, "archivedChildrenByDatabase": {"db-b": 2}}
+    assert _details(summaries.details_for_reader(entry, lambda _db: True)) == {
+        "reason": "parent_update", "childCount": 4,
+        "archivedChildrenByDatabase": {"db-a": 1, "db-b": 2}}
+    assert _details(summaries.details_for_reader(entry, lambda _db: False)) == {
+        "reason": "parent_update", "childCount": 1}
+
+
+@pytest.mark.unit
+def test_an_opened_entry_without_archived_children_is_returned_as_it_is():
+    """No per-database record: no archived child, or an entry written before the record existed
+    (which cannot be told apart, and exists only on test deployments)."""
+    entry = _entry({"reason": "parent_update", "childCount": 2}, event_type="cascade_auto_triggered")
+    assert summaries.details_for_reader(entry, lambda _db: False) is entry
+
+
+@pytest.mark.unit
+def test_a_child_is_counted_once_and_a_link_naming_no_asset_is_not_archived():
+    links = [{"toAssetDatabaseId": DB, "toAssetId": "x"}, {"toAssetDatabaseId": DB, "toAssetId": "x"},
+             {"toAssetDatabaseId": DB}, {"toAssetDatabaseId": "GLOBAL", "toAssetId": "y"}]
+    assert trigger._child_keys(links) == [(DB, "x"), (DB, ""), ("GLOBAL", "y")]
+    with patch.object(trigger, "asset_is_archived", return_value=True) as archived:
+        assert trigger._child_is_archived(DB, "") is False
+        assert trigger._child_is_archived("GLOBAL", "y") is False
+        archived.assert_not_called()
+        assert trigger._child_is_archived(DB, "x") is True

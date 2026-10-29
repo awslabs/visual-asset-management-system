@@ -17889,7 +17889,7 @@ components:
                     format: uuid
                 details:
                     type: string
-                    description: "JSON-encoded event-specific details. A `cascade_completed` entry carries `nodesEvaluated` and `summary` (node count per status); the descendants the cascade skipped as archived are counted in them, under `skipped_archived`, and in `skippedArchivedByDatabase` (count per database) only for the databases whose archive the caller may see (allowed on `<databaseId>#deleted`)."
+                    description: "JSON-encoded event-specific details. A `cascade_completed` entry carries `nodesEvaluated` and `summary` (node count per status); the descendants the cascade skipped as archived are counted in them, under `skipped_archived`, and in `skippedArchivedByDatabase` (count per database) only for the databases whose archive the caller may see (allowed on `<databaseId>#deleted`). A `cascade_auto_triggered` entry carries `reason` and `childCount` (direct children); archived children are counted in `childCount`, and in `archivedChildrenByDatabase` (count per database), only for the databases whose archive the caller may see."
                 previousState:
                     type: string
                 newState:
