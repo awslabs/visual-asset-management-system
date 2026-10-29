@@ -910,7 +910,7 @@ GET /compliance/quarantine
             "lastEvaluatedAt": "2026-03-15T10:30:00+00:00"
         }
     ],
-    "NextToken": "eyJjb21wbGlhbmNlU3RhdGUiOiAicXVhcmFudGluZWQiLCAiZGF0YWJhc2VJZCI6ICIuLi4ifQ=="
+    "NextToken": "example-page-token"
 }
 ```
 
@@ -1274,7 +1274,7 @@ GET /compliance/audit
             "newState": "quarantined"
         }
     ],
-    "NextToken": "eyJwYXJ0aXRpb24iOiAiY29tcGxpYW5jZV9jaGVjayIsICJrZXkiOiB7Li4ufX0="
+    "NextToken": "example-page-token"
 }
 ```
 

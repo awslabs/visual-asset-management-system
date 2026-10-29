@@ -7,7 +7,7 @@
                 "assetIndexer": "admit"
             },
             "body": {
-                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e1",
+                "eventID": "evt-0001",
                 "eventName": "INSERT",
                 "eventVersion": "1.1",
                 "eventSource": "aws:dynamodb",
@@ -55,7 +55,7 @@
                 "assetIndexer": "admit"
             },
             "body": {
-                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e2",
+                "eventID": "evt-0002",
                 "eventName": "MODIFY",
                 "eventVersion": "1.1",
                 "eventSource": "aws:dynamodb",
@@ -103,7 +103,7 @@
                 "assetIndexer": "admit"
             },
             "body": {
-                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e3",
+                "eventID": "evt-0003",
                 "eventName": "REMOVE",
                 "eventVersion": "1.1",
                 "eventSource": "aws:dynamodb",
@@ -132,7 +132,7 @@
                 "fileIndexer": "drop"
             },
             "body": {
-                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e4",
+                "eventID": "evt-0004",
                 "eventName": "INSERT",
                 "eventVersion": "1.1",
                 "eventSource": "aws:dynamodb",
@@ -175,7 +175,7 @@
                 "fileIndexer": "drop"
             },
             "body": {
-                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e5",
+                "eventID": "evt-0005",
                 "eventName": "MODIFY",
                 "eventVersion": "1.1",
                 "eventSource": "aws:dynamodb",
@@ -218,7 +218,7 @@
                 "fileIndexer": "drop"
             },
             "body": {
-                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e6",
+                "eventID": "evt-0006",
                 "eventName": "REMOVE",
                 "eventVersion": "1.1",
                 "eventSource": "aws:dynamodb",
@@ -261,7 +261,7 @@
                 "fileIndexer": "drop"
             },
             "body": {
-                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e7",
+                "eventID": "evt-0007",
                 "eventName": "INSERT",
                 "eventVersion": "1.1",
                 "eventSource": "aws:dynamodb",
@@ -303,7 +303,7 @@
                 "fileIndexer": "admit"
             },
             "body": {
-                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e8",
+                "eventID": "evt-0008",
                 "eventName": "INSERT",
                 "eventVersion": "1.1",
                 "eventSource": "aws:dynamodb",
@@ -345,7 +345,7 @@
                 "fileIndexer": "admit"
             },
             "body": {
-                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e9",
+                "eventID": "evt-0009",
                 "eventName": "MODIFY",
                 "eventVersion": "1.1",
                 "eventSource": "aws:dynamodb",
@@ -387,7 +387,7 @@
                 "fileIndexer": "admit"
             },
             "body": {
-                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e10",
+                "eventID": "evt-0010",
                 "eventName": "REMOVE",
                 "eventVersion": "1.1",
                 "eventSource": "aws:dynamodb",
@@ -429,7 +429,7 @@
                 "assetIndexer": "admit"
             },
             "body": {
-                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e11",
+                "eventID": "evt-0011",
                 "eventName": "INSERT",
                 "eventVersion": "1.1",
                 "eventSource": "aws:dynamodb",
@@ -474,7 +474,7 @@
                 "assetIndexer": "admit"
             },
             "body": {
-                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e12",
+                "eventID": "evt-0012",
                 "eventName": "REMOVE",
                 "eventVersion": "1.1",
                 "eventSource": "aws:dynamodb",
@@ -519,7 +519,7 @@
                 "assetIndexer": "admit"
             },
             "body": {
-                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e13",
+                "eventID": "evt-0013",
                 "eventName": "INSERT",
                 "eventVersion": "1.1",
                 "eventSource": "aws:dynamodb",
@@ -561,7 +561,7 @@
                 "assetIndexer": "admit"
             },
             "body": {
-                "eventID": "0c5e1f2a3b4c5d6e7f8091a2b3c4d5e14",
+                "eventID": "evt-0014",
                 "eventName": "REMOVE",
                 "eventVersion": "1.1",
                 "eventSource": "aws:dynamodb",

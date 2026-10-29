@@ -29,7 +29,7 @@ RULE = {
                 "tolerance": {"operator": "eq", "value": 1}}],
 }
 
-SECRET = "secret<value>"
+CALLER_VALUE = "caller<value>"
 
 
 def _rejects(**selection):
@@ -71,7 +71,7 @@ class TestModes:
     def test_keys_are_refused_with_matching(self):
         assert "keys" in _rejects(mode="matching", keys=["/a.stl"])
 
-    @pytest.mark.parametrize("mode", ["", "all", "MATCHING", "whole-asset", SECRET])
+    @pytest.mark.parametrize("mode", ["", "all", "MATCHING", "whole-asset", CALLER_VALUE])
     def test_an_unknown_mode_is_refused_without_being_echoed(self, mode):
         message = _rejects(mode=mode)
         assert mode == "" or mode not in message
@@ -148,7 +148,7 @@ class TestRuleIntegration:
 
     def test_a_pipeline_rule_with_an_invalid_selection_is_refused_without_the_rule_name_or_value(self):
         with pytest.raises(ValidationError) as raised:
-            PipelineRule(**dict(RULE, inputFiles={"mode": "explicit", "keys": [f"/{SECRET}/../x"]}))
+            PipelineRule(**dict(RULE, inputFiles={"mode": "explicit", "keys": [f"/{CALLER_VALUE}/../x"]}))
         message = validation_error_message(raised.value)
-        assert SECRET not in message
+        assert CALLER_VALUE not in message
         assert "inputFiles" in message

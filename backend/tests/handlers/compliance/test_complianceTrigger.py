@@ -1285,7 +1285,7 @@ def _pipeline_rows(change_source, change_at, **extra):
 
 def _rows_after_the_output_write():
     return _pipeline_rows("workflowExecution", PIPELINE_OUTPUT_STAMP,
-                          lastChangeWorkflowExecutionId="824339307d3b4bfc9429b38c574338fd")
+                          lastChangeWorkflowExecutionId="exec-pipeline-output")
 
 
 def _pipeline_copy_messages(names=("r12-p2.stl",)):
@@ -1314,7 +1314,7 @@ class TestARevertOnAPipelineRuleAssetIsEvaluatedOnce:
         pending = _record_evaluated_at(PIPELINE_REVERT_EVALUATION_START, status="pending_pipeline")
         output = _run(_sns_event(_stream_message(change_source="workflowExecution",
                                                  change_at=PIPELINE_OUTPUT_STAMP,
-                                                 workflow_execution_id="824339307d3b4bfc")),
+                                                 workflow_execution_id="exec-pipeline-output")),
                       database_item=AUTO_EVAL_DB, compliance_record=pending,
                       asset_rows=_rows_after_the_output_write())
         output["run_evaluation"].assert_not_called()

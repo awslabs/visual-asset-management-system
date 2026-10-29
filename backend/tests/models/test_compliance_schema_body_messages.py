@@ -12,9 +12,9 @@ from aws_lambda_powertools.utilities.parser import ValidationError
 from models.common import validation_error_message
 from models.compliance import RULE_TYPE_MODELS, VamsRulesV1Schema
 
-SECRET_RULE_NAME = "secret<rule-name>"
-SECRET_RULE_TYPE = "not<a-rule-type>"
-SECRET_VALUE = "secret<value>"
+CALLER_RULE_NAME = "caller<rule-name>"
+CALLER_RULE_TYPE = "not<a-rule-type>"
+CALLER_VALUE = "caller<value>"
 
 
 def _errors_for(body):
@@ -28,24 +28,24 @@ class TestVamsRulesV1SchemaMessagesDoNotEchoInput:
 
     def test_an_unknown_rule_type_names_the_vocabulary_not_the_submitted_value(self):
         error = _errors_for({"schemaFormat": "vams-rules-v1",
-                             "rules": {SECRET_RULE_NAME: {"ruleType": SECRET_RULE_TYPE}}})
+                             "rules": {CALLER_RULE_NAME: {"ruleType": CALLER_RULE_TYPE}}})
         message = validation_error_message(error)
-        assert SECRET_RULE_NAME not in message
-        assert SECRET_RULE_TYPE not in message
+        assert CALLER_RULE_NAME not in message
+        assert CALLER_RULE_TYPE not in message
         for rule_type in RULE_TYPE_MODELS:
             assert rule_type in message
 
     def test_a_rule_that_is_not_an_object_is_not_echoed(self):
-        error = _errors_for({"schemaFormat": "vams-rules-v1", "rules": {SECRET_RULE_NAME: SECRET_VALUE}})
+        error = _errors_for({"schemaFormat": "vams-rules-v1", "rules": {CALLER_RULE_NAME: CALLER_VALUE}})
         message = validation_error_message(error)
-        assert SECRET_RULE_NAME not in message
-        assert SECRET_VALUE not in message
+        assert CALLER_RULE_NAME not in message
+        assert CALLER_VALUE not in message
         assert "must be an object" in message
 
     def test_a_missing_rule_type_is_reported_without_the_rule_name(self):
         error = _errors_for({"schemaFormat": "vams-rules-v1",
-                             "rules": {SECRET_RULE_NAME: {"enforcement": "warn"}}})
-        assert SECRET_RULE_NAME not in validation_error_message(error)
+                             "rules": {CALLER_RULE_NAME: {"enforcement": "warn"}}})
+        assert CALLER_RULE_NAME not in validation_error_message(error)
 
     def test_the_model_class_name_stays_out_of_the_caller_safe_message(self):
         error = _errors_for({"schemaFormat": "vams-rules-v1", "rules": {}})
