@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
@@ -567,5 +567,38 @@ describe("ModernSearchContainer natural-language File Type filter", () => {
         await waitFor(() => expect(screen.queryByText("/tides/buoy.glb")).toBeNull());
         expect(screen.getByText("/tides/gauge-a.txt")).toBeInTheDocument();
         expect(screen.getByText("/tides/gauge-b.txt")).toBeInTheDocument();
+    });
+});
+
+describe("ModernSearchContainer natural-language query length", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        clearPreferenceCookie();
+        setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
+        (searchNlp as jest.Mock).mockResolvedValue([true, nlpEnvelope(false)]);
+    });
+
+    it("does not send a query past the limit when a filter change re-runs the search", async () => {
+        renderContainer();
+        const input = await screen.findByPlaceholderText("Describe what you are looking for...");
+        fireEvent.change(input, { target: { value: "a".repeat(1001) } });
+        expect(
+            screen.getByText(/Natural-language queries can be up to 1,000 characters\./)
+        ).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Search" })).toBeDisabled();
+        await userEvent.click(screen.getByLabelText("Search inside files"));
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        expect(searchNlp).not.toHaveBeenCalled();
+    });
+
+    it("shows the route's own message when it refuses a query", async () => {
+        const refusal = "The query must not be blank.";
+        (searchNlp as jest.Mock).mockResolvedValue([false, refusal]);
+        renderContainer();
+        const input = await screen.findByPlaceholderText("Describe what you are looking for...");
+        await userEvent.type(input, "red truck");
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        await screen.findByText("Search failed");
+        expect(screen.getByText(refusal)).toBeInTheDocument();
     });
 });

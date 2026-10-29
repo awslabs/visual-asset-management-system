@@ -35,6 +35,7 @@ import { ResizableSplitter } from "../filemanager/components/ResizableSplitter";
 import { initializePluginRegistry } from "../../visualizerPlugin";
 import { resolveSearchModeCase, effectiveSearchMode } from "./utils/searchMode";
 import { EMPTY_NLP_RESPONSE, pageNlpResult } from "./utils/nlpResultPaging";
+import { NLP_QUERY_MAX_LENGTH, nlpQueryLength } from "./hooks/searchRequestBuilders";
 import Synonyms from "../../synonyms";
 
 /**
@@ -188,6 +189,11 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                 setNlpResult(null);
                 setAnsweredMode(null);
                 searchState.setResult(EMPTY_NLP_RESPONSE);
+                return null;
+            }
+            // Past the route's limit nothing is sent (an auto-refresh included); the query band
+            // shows the limit and how much to shorten the query.
+            if (nlpQueryLength(searchQuery.query) > NLP_QUERY_MAX_LENGTH) {
                 return null;
             }
             const result = await searchAPI.executeNlpSearch(searchQuery, {

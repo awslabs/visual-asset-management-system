@@ -36,6 +36,17 @@ export const quoteFilterValue = (value: unknown): string =>
 /** Candidates one NLP call returns: the DynamoDB SearchVectors TopK ceiling. */
 export const NLP_SEARCH_SIZE = 100;
 
+/** Longest natural-language query the route accepts (MAX_QUERY_LENGTH in backend/backend/models/vectorsearch.py). */
+export const NLP_QUERY_MAX_LENGTH = 1000;
+
+/**
+ * The length the route measures: the query is sent trimmed, and the route counts characters, so a
+ * character outside the Basic Multilingual Plane (two UTF-16 units) counts once.
+ */
+export function nlpQueryLength(query: string): number {
+    return Array.from(query.trim()).length;
+}
+
 const TYPE_PREFIXES = ["str_", "num_", "bool_", "date_", "list_", "gp_", "gs_"];
 
 /** `MD_str_<name>` from what a person typed: the MD_ prefix, a type prefix and wildcards are dropped. */

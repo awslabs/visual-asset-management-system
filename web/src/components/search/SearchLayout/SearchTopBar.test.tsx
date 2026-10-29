@@ -52,6 +52,81 @@ describe("SearchTopBar search-mode control", () => {
     });
 });
 
+describe("SearchTopBar natural-language query length", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    it("past 1,000 characters says so, disables Search and does not send on Enter or click", async () => {
+        const onSearch = jest.fn();
+        render(
+            <SearchTopBar
+                {...baseProps}
+                onSearch={onSearch}
+                searchMode="nlp"
+                query={"a".repeat(1001)}
+            />
+        );
+        const box = screen.getByRole("searchbox");
+        expect(
+            screen.getByText(/Natural-language queries can be up to 1,000 characters\./)
+        ).toBeInTheDocument();
+        expect(box).toHaveAccessibleDescription(/up to 1,000 characters/);
+        expect(box).toHaveAttribute("aria-invalid", "true");
+        const search = screen.getByRole("button", { name: "Search" });
+        expect(search).toBeDisabled();
+        await userEvent.type(box, "{Enter}");
+        await userEvent.click(search);
+        expect(onSearch).not.toHaveBeenCalled();
+    });
+
+    it("says how much to remove", () => {
+        const { rerender } = render(
+            <SearchTopBar {...baseProps} searchMode="nlp" query={"a".repeat(1001)} />
+        );
+        expect(screen.getByText(/Shorten it by 1 character to search\./)).toBeInTheDocument();
+        rerender(<SearchTopBar {...baseProps} searchMode="nlp" query={"a".repeat(1250)} />);
+        expect(screen.getByText(/Shorten it by 250 characters to search\./)).toBeInTheDocument();
+    });
+
+    it("accepts exactly 1,000 characters as sent: trimmed, counted per character not per UTF-16 unit", async () => {
+        const onSearch = jest.fn();
+        const { rerender } = render(
+            <SearchTopBar
+                {...baseProps}
+                onSearch={onSearch}
+                searchMode="nlp"
+                query={"a".repeat(1000)}
+            />
+        );
+        // The box is sent trimmed, and the route counts characters, so neither surrounding spaces
+        // nor characters outside the Basic Multilingual Plane (two UTF-16 units each) count extra.
+        for (const query of ["a".repeat(1000), `  ${"a".repeat(1000)}  `, "🌊".repeat(1000)]) {
+            rerender(
+                <SearchTopBar {...baseProps} onSearch={onSearch} searchMode="nlp" query={query} />
+            );
+            expect(screen.queryByText(/up to 1,000 characters/)).toBeNull();
+            expect(screen.getByRole("button", { name: "Search" })).toBeEnabled();
+        }
+        await userEvent.type(screen.getByRole("searchbox"), "{Enter}");
+        expect(onSearch).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves keyword mode unbounded", async () => {
+        const onSearch = jest.fn();
+        render(
+            <SearchTopBar
+                {...baseProps}
+                onSearch={onSearch}
+                searchMode="keyword"
+                query={"a".repeat(1001)}
+            />
+        );
+        expect(screen.queryByText(/up to 1,000 characters/)).toBeNull();
+        expect(screen.getByRole("button", { name: "Search" })).toBeEnabled();
+        await userEvent.type(screen.getByRole("searchbox"), "{Enter}");
+        expect(onSearch).toHaveBeenCalledTimes(1);
+    });
+});
+
 describe("SearchTopBar query band", () => {
     it("explains the active mode under the query box, in every engine configuration", () => {
         const { rerender } = render(<SearchTopBar {...baseProps} searchMode="keyword" />);

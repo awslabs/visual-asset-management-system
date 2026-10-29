@@ -7,11 +7,13 @@ import React from "react";
 import Badge from "@cloudscape-design/components/badge";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
+import FormField from "@cloudscape-design/components/form-field";
 import Header from "@cloudscape-design/components/header";
 import Input from "@cloudscape-design/components/input";
 import SegmentedControl from "@cloudscape-design/components/segmented-control";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import type { SearchMode } from "../types";
+import { NLP_QUERY_MAX_LENGTH, nlpQueryLength } from "../hooks/searchRequestBuilders";
 import Synonyms from "../../../synonyms";
 
 /**
@@ -54,6 +56,16 @@ export function searchModeDescription(mode: SearchMode): string {
     );
 }
 
+/** The inline error for a natural-language query past the route's limit; undefined within it. */
+export function nlpQueryLimitError(query: string): string | undefined {
+    const excess = nlpQueryLength(query) - NLP_QUERY_MAX_LENGTH;
+    if (excess <= 0) return undefined;
+    return (
+        `Natural-language queries can be up to ${NLP_QUERY_MAX_LENGTH.toLocaleString()} characters. ` +
+        `Shorten it by ${excess.toLocaleString()} character${excess === 1 ? "" : "s"} to search.`
+    );
+}
+
 const SearchTopBar: React.FC<SearchTopBarProps> = ({
     query,
     onQueryChange,
@@ -67,8 +79,11 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
     searchMode = "keyword",
     searchModeControl,
 }) => {
+    // Natural-language mode only: the route refuses a longer query, so Search waits until it fits.
+    const queryLimitError = searchMode === "nlp" ? nlpQueryLimitError(query) : undefined;
+
     const handleKeyDown = (event: any) => {
-        if (event.detail.key === "Enter") {
+        if (event.detail.key === "Enter" && !queryLimitError) {
             onSearch();
         }
     };
@@ -134,26 +149,30 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
                                     minWidth: 0,
                                 }}
                             >
-                                <Input
-                                    placeholder={placeholder}
-                                    ariaLabel={
-                                        searchMode === "nlp"
-                                            ? "Natural-language search query"
-                                            : "Keyword search query"
-                                    }
-                                    type="search"
-                                    value={query}
-                                    onChange={(e) => onQueryChange(e.detail.value)}
-                                    onKeyDown={handleKeyDown}
-                                    disabled={loading}
-                                    clearAriaLabel="Clear search"
-                                />
+                                <FormField errorText={queryLimitError} stretch>
+                                    <Input
+                                        placeholder={placeholder}
+                                        ariaLabel={
+                                            searchMode === "nlp"
+                                                ? "Natural-language search query"
+                                                : "Keyword search query"
+                                        }
+                                        type="search"
+                                        value={query}
+                                        onChange={(e) => onQueryChange(e.detail.value)}
+                                        onKeyDown={handleKeyDown}
+                                        disabled={loading}
+                                        invalid={!!queryLimitError}
+                                        clearAriaLabel="Clear search"
+                                    />
+                                </FormField>
                             </div>
                             <div style={{ flexShrink: 0 }}>
                                 <Button
                                     variant="primary"
                                     onClick={onSearch}
                                     loading={loading}
+                                    disabled={!!queryLimitError}
                                     iconName="search"
                                     wrapText={false}
                                 >
