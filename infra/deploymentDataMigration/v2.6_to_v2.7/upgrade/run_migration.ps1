@@ -67,9 +67,15 @@ Write-Host "Logs will be saved to: $LogFile"
 Write-Host ""
 
 $ExtraArgs = @()
-if ($Execute) {
-    $ExtraArgs += "--execute"
+# The config's "dry_run": true keeps a run dry even with -Execute, as the migration script does.
+$ConfigDryRun = $false
+try { $ConfigDryRun = ((Get-Content -Raw -Path $ConfigFile | ConvertFrom-Json).dry_run -eq $true) } catch { $ConfigDryRun = $false }
+$RealRun = $Execute -and -not $ConfigDryRun
+if ($Execute) { $ExtraArgs += "--execute" }
+if ($RealRun) {
     Write-Host "Mode: EXECUTE (rows are deleted and Bedrock-billed executions launched; the account id is confirmed first)" -ForegroundColor Yellow
+} elseif ($Execute) {
+    Write-Host "Mode: DRY RUN (`"dry_run`" is true in $ConfigFile, so -Execute applies nothing; set it to false for a real run)" -ForegroundColor Yellow
 } else {
     Write-Host "Mode: DRY RUN (no changes will be made; pass -Execute for a real run)" -ForegroundColor Yellow
 }
@@ -92,7 +98,7 @@ try {
         Write-Host ""
         Write-Host "Migration completed successfully." -ForegroundColor Green
         Write-Host ""
-        if ($Execute) {
+        if ($RealRun) {
             Write-Host "Next steps:" -ForegroundColor Yellow
             Write-Host "  1. Read the system-pipeline retirement report above; abort what it lists as in flight and re-point"
             Write-Host "     the workflows it lists as referencing a retired pipeline"
@@ -103,7 +109,7 @@ try {
             Write-Host "     (the live workflows' triggers, e.g. the system workflow's own fileUpload trigger)"
         } else {
             Write-Host "This was a dry run: no rows were deleted and no executions were launched." -ForegroundColor Yellow
-            Write-Host "Review the summaries above, then re-run with -Execute to apply them."
+            Write-Host "Review the summaries above, then set `"dry_run`": false in the config and re-run with -Execute to apply them."
         }
     } else {
         Write-Error "Migration failed. Check the logs for details."

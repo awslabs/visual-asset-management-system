@@ -70,7 +70,8 @@ function readMigrationFile(migration: ReleaseMigration, name: string): string {
 function runWrapper(
     migration: ReleaseMigration,
     stubExit: number,
-    args: string[] = []
+    args: string[] = [],
+    configBody = "{}"
 ): { status: number; stdout: string } {
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vams-migration-wrapper-"));
     try {
@@ -95,7 +96,7 @@ function runWrapper(
             path.join(scratch, "run_migration.sh")
         );
         // The wrapper requires the config file to exist; its contents are never read by the stub.
-        fs.writeFileSync(path.join(scratch, migration.configFile), "{}");
+        fs.writeFileSync(path.join(scratch, migration.configFile), configBody);
 
         const result = spawnSync("bash", ["run_migration.sh", ...args], {
             cwd: scratch,
@@ -143,8 +144,24 @@ describe(`${CURRENT.dir} run_migration.sh footer follows the run mode`, () => {
     it("lists the follow-up steps after an executed run", () => {
         const { status, stdout } = runWrapper(CURRENT, 0, ["--execute"]);
         expect(status).toBe(0);
+        expect(stdout).toContain("Mode: EXECUTE");
         expect(stdout).toContain("Watch the vector backfill");
         expect(stdout).not.toContain("This was a dry run");
+    });
+
+    it("reports a dry run when --execute is given but the config keeps dry_run true", () => {
+        const { status, stdout } = runWrapper(CURRENT, 0, ["--execute"], '{ "dry_run": true }');
+        expect(status).toBe(0);
+        expect(stdout).not.toContain("Mode: EXECUTE");
+        expect(stdout).toContain('"dry_run" is true in');
+        expect(stdout).toContain("This was a dry run");
+        expect(stdout).not.toContain("Watch the vector backfill");
+    });
+
+    it("keeps the PowerShell wrapper's mode on the same rule", () => {
+        const script = readMigrationFile(CURRENT, "run_migration.ps1");
+        expect(script).toMatch(/\$RealRun = \$Execute -and -not \$ConfigDryRun/);
+        expect(script).toMatch(/if \(\$RealRun\) \{\s*Write-Host "Mode: EXECUTE/);
     });
 
     it("keeps the PowerShell wrapper's footer on the same rule", () => {
@@ -154,9 +171,9 @@ describe(`${CURRENT.dir} run_migration.sh footer follows the run mode`, () => {
         const watch = footer.indexOf("Watch the vector backfill");
         expect(dryRun).toBeGreaterThan(-1);
         expect(watch).toBeGreaterThan(-1);
-        // The watch command sits in the -Execute branch, the dry-run note in the other.
+        // The watch command sits in the real-run branch, the dry-run note in the other.
         expect(footer).toMatch(
-            /if \(\$Execute\) \{[\s\S]*Watch the vector backfill[\s\S]*\} else \{[\s\S]*This was a dry run/
+            /if \(\$RealRun\) \{[\s\S]*Watch the vector backfill[\s\S]*\} else \{[\s\S]*This was a dry run/
         );
     });
 });

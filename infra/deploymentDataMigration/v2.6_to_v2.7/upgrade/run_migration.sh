@@ -84,8 +84,19 @@ LOG_FILE="$LOGS_DIR/migration_$TIMESTAMP.log"
 echo "Starting VAMS v2.6 to v2.7 migration..."
 echo "Using config file: $CONFIG_FILE"
 echo "Extra arguments: ${EXTRA_ARGS[*]}"
-if [ "$EXECUTE" -eq 1 ]; then
+# The config's "dry_run": true keeps a run dry even with --execute, as the migration script does.
+CONFIG_DRY_RUN=0
+if grep -Eq '"dry_run"[[:space:]]*:[[:space:]]*true' "$CONFIG_FILE"; then
+    CONFIG_DRY_RUN=1
+fi
+REAL_RUN=0
+if [ "$EXECUTE" -eq 1 ] && [ "$CONFIG_DRY_RUN" -eq 0 ]; then
+    REAL_RUN=1
+fi
+if [ "$REAL_RUN" -eq 1 ]; then
     echo "Mode: EXECUTE (rows are deleted and Bedrock-billed executions launched; the account id is confirmed first)"
+elif [ "$EXECUTE" -eq 1 ]; then
+    echo "Mode: DRY RUN (\"dry_run\" is true in $CONFIG_FILE, so --execute applies nothing; set it to false for a real run)"
 else
     echo "Mode: DRY RUN (no changes will be made; pass --execute for a real run)"
 fi
@@ -100,7 +111,7 @@ if [ "$MIGRATION_STATUS" -eq 0 ]; then
     echo ""
     echo "Migration completed successfully."
     echo ""
-    if [ "$EXECUTE" -eq 1 ]; then
+    if [ "$REAL_RUN" -eq 1 ]; then
         echo "Next steps:"
         echo "  1. Read the system-pipeline retirement report above; abort what it lists as in flight and re-point"
         echo "     the workflows it lists as referencing a retired pipeline"
@@ -111,7 +122,7 @@ if [ "$MIGRATION_STATUS" -eq 0 ]; then
         echo "     (the live workflows' triggers, e.g. the system workflow's own fileUpload trigger)"
     else
         echo "This was a dry run: no rows were deleted and no executions were launched."
-        echo "Review the summaries above, then re-run with --execute to apply them."
+        echo "Review the summaries above, then set \"dry_run\": false in the config and re-run with --execute to apply them."
     fi
 else
     echo "Migration failed. Check the logs for details."
