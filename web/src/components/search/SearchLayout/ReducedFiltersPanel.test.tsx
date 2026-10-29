@@ -109,6 +109,37 @@ describe("ReducedFiltersPanel", () => {
         });
     });
 
+    it("keeps the other file types selectable once a type filter narrows the answer", async () => {
+        const result = (list: SearchResult[]) => ({
+            hits: { total: { value: list.length, relation: "eq" as const }, hits: list },
+        });
+        const { container, rerender } = render(
+            <ReducedFiltersPanel
+                filters={{}}
+                onFilterChange={jest.fn()}
+                recordType="file"
+                searchResult={result(hits)}
+            />
+        );
+        const narrowed = hits.filter((h) => h._source?.str_fileext === ".laz");
+        rerender(
+            <ReducedFiltersPanel
+                filters={{ str_fileext: { label: ".laz", value: ".laz", values: [".laz"] } } as any}
+                onFilterChange={jest.fn()}
+                recordType="file"
+                searchResult={result(narrowed)}
+            />
+        );
+        const fileTypes = createWrapper(container).findAllMultiselects()[1];
+        fileTypes.openDropdown();
+        expect(
+            fileTypes
+                .findDropdown()
+                .findOptions()
+                .map((option) => option.getElement().textContent)
+        ).toEqual([".glb — mesh (2)", ".laz — pointcloud (1)"]);
+    });
+
     it("hides the file-type facet in asset mode", () => {
         const { container } = render(
             <ReducedFiltersPanel filters={{}} onFilterChange={jest.fn()} recordType="asset" />

@@ -78,10 +78,26 @@ const ReducedFiltersPanel: React.FC<ReducedFiltersPanelProps> = ({
         });
     }, []);
 
-    const fileTypeOptions = useMemo(
-        () => fileTypeOptionsFromHits(searchResult?.hits?.hits || []),
-        [searchResult]
-    );
+    const typeFilterSet = (filters.str_fileext?.values?.length ?? 0) > 0;
+    // An answer narrowed by a type filter holds only that type, so the list keeps the options of the
+    // last answer without one; the picked values are always listed.
+    const [unfilteredTypeOptions, setUnfilteredTypeOptions] = useState<Option[]>([]);
+    useEffect(() => {
+        if (!typeFilterSet && searchResult) {
+            setUnfilteredTypeOptions(fileTypeOptionsFromHits(searchResult.hits?.hits || []));
+        }
+    }, [searchResult, typeFilterSet]);
+
+    const fileTypeOptions = useMemo(() => {
+        const base = typeFilterSet
+            ? unfilteredTypeOptions
+            : fileTypeOptionsFromHits(searchResult?.hits?.hits || []);
+        const listed = new Set(base.map((opt) => opt.value));
+        const picked = (filters.str_fileext?.values || [])
+            .filter((value: string) => !listed.has(value))
+            .map((value: string) => ({ label: value, value }));
+        return [...base, ...picked];
+    }, [searchResult, typeFilterSet, unfilteredTypeOptions, filters.str_fileext]);
 
     const selected = (values?: string[]): Option[] =>
         (values || []).map((value) => ({ label: value, value }));
@@ -135,7 +151,7 @@ const ReducedFiltersPanel: React.FC<ReducedFiltersPanelProps> = ({
                 {recordType === "file" && (
                     <FormField
                         label="File Type"
-                        description="Types present in the current results (empty = all)"
+                        description="Types in the results before a type is picked (empty = all)"
                     >
                         <Multiselect
                             selectedOptions={selected(filters.str_fileext?.values)}
