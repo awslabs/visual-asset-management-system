@@ -6,6 +6,7 @@
 import pytest
 from aws_lambda_powertools.utilities.parser import ValidationError
 
+from models.common import validation_error_message
 from models.vectorsearch import (
     ENTITY_TYPES,
     WARNING_CODES,
@@ -33,6 +34,15 @@ class TestNlpSearchRequestModel:
     def test_query_bounds(self, query):
         with pytest.raises(ValidationError):
             NlpSearchRequestModel(query=query)
+
+    @pytest.mark.parametrize("length", [1001, 5000])
+    def test_an_over_long_query_is_refused_in_plain_words(self, length):
+        with pytest.raises(ValidationError) as caught:
+            NlpSearchRequestModel(query="q" * length)
+        assert validation_error_message(caught.value) == "The query is %d characters; the limit is 1000." % length
+
+    def test_a_query_at_the_limit_is_accepted(self):
+        assert len(NlpSearchRequestModel(query="q" * 1000).query) == 1000
 
     @pytest.mark.parametrize("size", [0, 101])
     def test_size_bounds(self, size):

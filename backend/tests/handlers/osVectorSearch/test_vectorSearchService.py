@@ -482,6 +482,13 @@ class TestErrorsAndEnvelope:
         resp = svc.lambda_handler({"requestContext": {"http": {"path": "/search/nlp", "method": "POST"}}, "body": "{not json"}, None)
         assert resp["statusCode"] == 400
 
+    def test_an_over_long_query_is_400_in_plain_words_before_any_embedding(self, svc):
+        store = FakeStore([item()])
+        status, body = call(svc, store, {"query": "q" * 1001})
+        assert status == 400
+        assert body == {"message": "The query is 1001 characters; the limit is 1000."}
+        assert not svc.embed_text.called and store.calls == []
+
     def test_other_routes_are_not_served(self, svc):
         resp = svc.lambda_handler(event({"query": "x"}, path="/search/simple"), None)
         assert resp["statusCode"] == 400

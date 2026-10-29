@@ -14945,7 +14945,7 @@ components:
                     type: string
                     minLength: 1
                     maxLength: 1000
-                    description: "Natural-language query; embedded with the deployment's embedding model."
+                    description: "Natural-language query; embedded with the deployment's embedding model. A longer query is refused with 400 and the message 'The query is <length> characters; the limit is 1000.'"
                 entityTypes:
                     type: array
                     items:

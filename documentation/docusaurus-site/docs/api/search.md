@@ -407,6 +407,8 @@ The OpenSearch-style envelope of [Advanced Search](#advanced-search) with an `nl
 | `503`  | The vector index is being built (`"Vector index is being built"`); retry later. |
 | `500`  | Internal server error.                                                          |
 
+A query longer than 1,000 characters is refused with `400` and the message `The query is <length> characters; the limit is 1000.`
+
 ---
 
 ### Get Index Mappings
