@@ -347,7 +347,26 @@ The OpenSearch-style envelope of [Advanced Search](#advanced-search) with an `nl
             }
         ]
     },
-    "aggregations": {},
+    "aggregations": {
+        "str_fileext": {
+            "doc_count_error_upper_bound": 0,
+            "sum_other_doc_count": 0,
+            "buckets": [
+                { "key": "mp4", "doc_count": 2 },
+                { "key": "jpg", "doc_count": 1 }
+            ]
+        },
+        "str_databaseid": {
+            "doc_count_error_upper_bound": 0,
+            "sum_other_doc_count": 0,
+            "buckets": [{ "key": "site-surveys", "doc_count": 3 }]
+        },
+        "list_tags": {
+            "doc_count_error_upper_bound": 0,
+            "sum_other_doc_count": 0,
+            "buckets": [{ "key": "survey", "doc_count": 3 }]
+        }
+    },
     "aggregationTotal": 3,
     "nlp": {
         "query": "drone footage of the harbour crane",
@@ -365,6 +384,7 @@ The OpenSearch-style envelope of [Advanced Search](#advanced-search) with an `nl
 -   `_id` is `databaseId#assetId#filePath#versionId` for a file hit and `databaseId#assetId` for an asset hit. `_score` is `1 - distance`, clipped to `[0, 1]`.
 -   Segment items collapse to one hit per file version. `_vector.segmentHits` counts the file's segment items among the candidates; `_vector.bestSegment` names the winning segment when a segment matched better than the whole file, else it is `null`.
 -   `hits.total.value` and `aggregationTotal` count the authorized hits before the `size` cut. `hits.total.relation` is `gte` when a result window filled or the accessible database list was cut (`nlp.truncated` is `true`), else `eq`.
+-   `aggregations` carries terms buckets in the shape [Advanced Search](#advanced-search) returns, counted over the same authorized hits before the `size` cut, so the filter counts match `hits.total.value`. File mode returns `str_fileext` (the extension in lower case without the dot; a file without an extension is in no bucket), `str_databaseid`, and `list_tags`; asset mode returns `str_assettype`, `str_databaseid`, and `list_tags`, counting each asset once. Buckets are ordered by `doc_count`, then by `key`, at most 1,000 per aggregation, with the remainder summed in `sum_other_doc_count`. `aggregations` is `{}` when the answer holds no hits.
 -   `nlp.candidatesEvaluated` is the number of distinct vector items after the per-database results were merged; `nlp.itemsCollapsed` is how many of them folded into another hit of the same file.
 
 **Warnings:**

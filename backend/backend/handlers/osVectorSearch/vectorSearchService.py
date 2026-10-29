@@ -13,8 +13,9 @@ to one hit per (database, asset, path, version) with the file's matching segment
 one named, ranked by similarity plus a fixed bonus for the file types the query mentions, joined to
 their asset rows and authorized per hit through Casbin. When an OpenSearch mode is enabled the
 OpenSearch-only constraints are applied and ``_source`` enriched through the ``/search`` code, imported
-lazily. The answer is the OpenSearch-style envelope the web table, CLI formatters and MCP helpers read;
-``SearchVectors`` has no cursor, so there is no pagination and ``size`` is the whole window.
+lazily. The answer is the OpenSearch-style envelope the web table, CLI formatters and MCP helpers read,
+with terms aggregations over the whole answer for the web filter panels; ``SearchVectors`` has no
+cursor, so there is no pagination and ``size`` is the whole window.
 """
 
 import json
@@ -81,6 +82,13 @@ ENRICHMENT_FAILED_MESSAGE = "OpenSearch enrichment failed; hits are returned wit
 # relevant match scores far above unrelated files (0.40 or more apart in measured runs), so the bonus
 # reorders near-equal hits without lifting a weak file of the named type above a strong match of another.
 INTENT_SCORE_BONUS = 0.1
+# Terms aggregations per entity type, named and keyed as the keyword search returns them for that index.
+AGGREGATION_FIELDS = {
+    "file": ("str_fileext", "str_databaseid", "list_tags"),
+    "asset": ("str_assettype", "str_databaseid", "list_tags"),
+}
+# Buckets per aggregation; the keyword search's terms size.
+AGGREGATION_BUCKET_LIMIT = 1000
 _SEGMENT_FIELDS = ("segmentKey", "segmentKind", "segmentLabel", "segmentStartMs", "segmentEndMs")
 _WHOLE_FILE_SEGMENT_KIND = "none"
 
@@ -350,7 +358,32 @@ def _strip(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [{k: v for k, v in hit.items() if k != "asset"} for hit in hits]
 
 
-def _envelope(hits, total, request, databases_searched, candidates, collapsed, class_intent, truncated, warnings, started) -> Dict[str, Any]:
+def _aggregations(hits: List[Dict[str, Any]], fields: Tuple[str, ...]) -> Dict[str, Any]:
+    """OpenSearch-style terms aggregations over every hit of the answer, before the ``size`` cut, for each
+    of ``fields`` the hits carry: ``{"key", "doc_count"}`` buckets by count, then key, at most
+    AGGREGATION_BUCKET_LIMIT, the rest summed in ``sum_other_doc_count``. A list field counts each value
+    once per hit; an empty value makes no bucket, as an unset field indexes no term."""
+    aggregations: Dict[str, Any] = {}
+    for field in fields:
+        carried = [hit["_source"][field] for hit in hits if field in hit["_source"]]
+        if not carried:
+            continue
+        counts: Dict[str, int] = {}
+        for value in carried:
+            values = value if isinstance(value, list) else [value]
+            for key in dict.fromkeys(v for v in values if isinstance(v, str) and v):
+                counts[key] = counts.get(key, 0) + 1
+        ordered = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+        aggregations[field] = {
+            "doc_count_error_upper_bound": 0,
+            "sum_other_doc_count": sum(count for _, count in ordered[AGGREGATION_BUCKET_LIMIT:]),
+            "buckets": [{"key": key, "doc_count": count} for key, count in ordered[:AGGREGATION_BUCKET_LIMIT]],
+        }
+    return aggregations
+
+
+def _envelope(hits, total, request, databases_searched, candidates, collapsed, class_intent, truncated, warnings,
+              started, aggregations=None) -> Dict[str, Any]:
     hits = _strip(hits)
     return {
         "took": int((time.monotonic() - started) * 1000),
@@ -361,7 +394,7 @@ def _envelope(hits, total, request, databases_searched, candidates, collapsed, c
             "max_score": max(hit["_score"] for hit in hits) if hits else None,
             "hits": hits,
         },
-        "aggregations": {},
+        "aggregations": aggregations or {},
         "aggregationTotal": total,
         "nlp": {
             "query": request.query,
@@ -493,6 +526,7 @@ def handle_nlp_search(event, claims_and_roles) -> APIGatewayProxyResponseV2:
         body=_envelope(
             result[: request.size], len(result), request, plan.databases_searched, len(merged),
             len(merged) - len(collapsed), class_intent, truncated, warnings, started,
+            aggregations=_aggregations(result, AGGREGATION_FIELDS[request.entityTypes[0]]),
         )
     )
 

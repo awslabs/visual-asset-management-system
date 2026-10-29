@@ -147,6 +147,20 @@ class NlpSummaryModel(BaseModel):
     truncated: bool = False
 
 
+class NlpTermsBucketModel(BaseModel, extra="ignore"):
+    key: str
+    doc_count: int
+
+
+class NlpTermsAggregationModel(BaseModel, extra="ignore"):
+    """One terms aggregation in the shape the keyword search returns: str_fileext (file mode) or
+    str_assettype (asset mode), str_databaseid and list_tags, counted over every hit of the answer."""
+
+    doc_count_error_upper_bound: int = 0
+    sum_other_doc_count: int = 0
+    buckets: List[NlpTermsBucketModel] = Field(default_factory=list)
+
+
 class NlpSearchResponseModel(BaseModel):
     took: int
     timed_out: bool = False
@@ -154,7 +168,7 @@ class NlpSearchResponseModel(BaseModel):
         default_factory=lambda: {"total": 1, "successful": 1, "skipped": 0, "failed": 0}, alias="_shards"
     )
     hits: Dict[str, Any]
-    aggregations: Dict[str, Any] = Field(default_factory=dict)
+    aggregations: Dict[str, NlpTermsAggregationModel] = Field(default_factory=dict)
     aggregationTotal: int = 0
     nlp: NlpSummaryModel
     warnings: List[NlpWarningModel] = Field(default_factory=list)

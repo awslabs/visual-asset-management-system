@@ -15096,8 +15096,12 @@ components:
                                 $ref: "#/components/schemas/nlpSearchHit"
                 aggregations:
                     type: object
+                    additionalProperties:
+                        $ref: "#/components/schemas/aggregation"
+                    description: "Terms aggregations in the keyword search's shape, counted over every authorized hit before the size cut: str_fileext (extension in lower case without the dot; a file without one is in no bucket), str_databaseid and list_tags in file mode; str_assettype, str_databaseid and list_tags in asset mode, one count per asset. Buckets are ordered by doc_count, then key, at most 1000 per aggregation, the rest summed in sum_other_doc_count. Empty when the answer holds no hits."
                 aggregationTotal:
                     type: integer
+                    description: "Authorized hits before the size cut; the sum of the str_databaseid buckets."
                 nlp:
                     type: object
                     properties:
