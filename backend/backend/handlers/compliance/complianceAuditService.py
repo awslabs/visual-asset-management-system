@@ -291,7 +291,7 @@ def query_audit(event, params):
     The time window narrows each index's `timestamp` sort key. The page is filled across at most
     `listing.DEFAULT_READ_BUDGET` reads with the entries the caller may GET by databaseId
     (`listing.query_page`); `NextToken` resumes after the last entry returned. A `databaseId` that
-    names no database, live or deleted, answers `404` "Database not found" to a caller the rows'
+    names no database, live or deleted, answers `400` "Database not found" to a caller the rows'
     check allows on that id (`knownDatabase.database_known`).
     """
     event_type = params.get("eventType") or None

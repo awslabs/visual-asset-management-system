@@ -6,8 +6,9 @@
 A compliance read of a database id that names no database would answer like a read of an empty
 database: an overview with no assets, an empty page. A mistyped id would then read as "no assets".
 So the database-level compliance reads (the database overview, and the quarantine, cascade and
-audit listings filtered by `databaseId`) answer `404` "Database not found" for such an id, once the
-caller has passed the read's own authorization check on it. A caller refused on the id gets the
+audit listings filtered by `databaseId`) answer `400` "Database not found" for such an id, as the
+other compliance routes and the core handlers answer for a database a route names that does not
+exist, once the caller has passed the read's own authorization check on it. A caller refused on the id gets the
 answer it got before, whether the database exists or not, so the answer tells it nothing of the
 database's existence.
 
@@ -18,8 +19,9 @@ of global schemas, names no database row and is always accepted.
 
 from models.common import general_error
 
-# The answer of a database-level compliance read for an id that names no database.
-DATABASE_NOT_FOUND_STATUS = 404
+# The answer of a database-level compliance read for an id that names no database: the 400 of
+# `general_error`, as `evaluate_database` and the binding routes answer it.
+DATABASE_NOT_FOUND_STATUS = 400
 DATABASE_NOT_FOUND_MESSAGE = "Database not found"
 # The scope keyword the compliance validators accept beside database ids (`allowGlobalKeyword`).
 GLOBAL_SCOPE = "GLOBAL"
@@ -42,6 +44,6 @@ def database_known(database_table, database_id: str) -> bool:
 
 
 def database_not_found(event):
-    """The `404` "Database not found" response of a database-level compliance read."""
+    """The `400` "Database not found" response of a database-level compliance read."""
     return general_error(status_code=DATABASE_NOT_FOUND_STATUS,
                          body={"message": DATABASE_NOT_FOUND_MESSAGE}, event=event)

@@ -238,7 +238,7 @@ def list_quarantined(event, query_params):
     on the asset name or id) is a FilterExpression. The page is filled across at most
     `listing.DEFAULT_READ_BUDGET` reads (`listing.query_page`), skipping the rows the caller may
     not GET; `NextToken` resumes after the last row returned. No per-row lookup: the name is on the
-    row. A `databaseId` that names no database answers `404` "Database not found" to a caller the
+    row. A `databaseId` that names no database answers `400` "Database not found" to a caller the
     rows' check allows on that id (`store.database_known`).
     """
     page_size = listing.page_size_of(query_params.get("maxItems"), DEFAULT_LIST_PAGE_SIZE)

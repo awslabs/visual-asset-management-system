@@ -873,7 +873,7 @@ def get_database_compliance_overview(event, database_id, query_params):
     it is also counted in its state bucket and the state buckets alone sum to `totalAssets`. The
     counts are of the whole database, whatever the filters (`overview_summary`).
 
-    An id that names no database (`store.database_known`) answers `404` "Database not found",
+    An id that names no database (`store.database_known`) answers `400` "Database not found",
     after the authorization check on the id, rather than an empty overview.
     """
     (valid, message) = validate({

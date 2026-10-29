@@ -618,7 +618,7 @@ def list_pending_cascades(event):
     A pending cascade past its `approvalTimeoutAt` is aborted and not listed. Each row carries
     `databaseId` / `assetId` / `assetName` (the trigger asset) beside the `triggeredBy*` attributes
     it is stored with, less the descendants skipped as archived that the caller may not see, as in
-    the single cascade. A `databaseId` that names no database answers `404` "Database not found"
+    the single cascade. A `databaseId` that names no database answers `400` "Database not found"
     to a caller allowed the listing's checks on that id (`store.database_known`).
     """
     params = event.get("queryStringParameters") or {}

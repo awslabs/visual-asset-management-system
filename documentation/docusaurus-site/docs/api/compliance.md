@@ -868,12 +868,11 @@ A record written before asset names were kept on compliance records has no `asse
 
 ### Error responses
 
-| Status | Description                                                                                                 |
-| ------ | ----------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid `databaseId`, filter value or pagination token                                                      |
-| `403`  | Not authorized                                                                                              |
-| `404`  | `Database not found`: no database has this id, live or deleted; answered only to a caller allowed on the id |
-| `500`  | Internal server error                                                                                       |
+| Status | Description                                                                                                                                                             |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid `databaseId`, filter value or pagination token, or no database has this id, live or deleted (`Database not found`; answered only to a caller allowed on the id) |
+| `403`  | Not authorized                                                                                                                                                          |
+| `500`  | Internal server error                                                                                                                                                   |
 
 ---
 
@@ -919,12 +918,11 @@ GET /compliance/quarantine
 
 ### Error responses
 
-| Status | Description                                                                                                        |
-| ------ | ------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid pagination token                                                                                           |
-| `403`  | Not authorized                                                                                                     |
-| `404`  | `Database not found`: `databaseId` names no database, live or deleted; answered only to a caller allowed on the id |
-| `500`  | Internal server error                                                                                              |
+| Status | Description                                                                                                                                      |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid pagination token, or `databaseId` names no database, live or deleted (`Database not found`; answered only to a caller allowed on the id) |
+| `403`  | Not authorized                                                                                                                                   |
+| `500`  | Internal server error                                                                                                                            |
 
 ---
 
@@ -1076,12 +1074,11 @@ Each row carries `databaseId` and `assetId` naming the trigger asset, copies of 
 
 ### Error responses
 
-| Status | Description                                                                                                        |
-| ------ | ------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid `state`, filter value or pagination token                                                                  |
-| `403`  | Not authorized                                                                                                     |
-| `404`  | `Database not found`: `databaseId` names no database, live or deleted; answered only to a caller allowed on the id |
-| `500`  | Internal server error                                                                                              |
+| Status | Description                                                                                                                                                               |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid `state`, filter value or pagination token, or `databaseId` names no database, live or deleted (`Database not found`; answered only to a caller allowed on the id) |
+| `403`  | Not authorized                                                                                                                                                            |
+| `500`  | Internal server error                                                                                                                                                     |
 
 ---
 
@@ -1308,12 +1305,11 @@ GET /compliance/audit
 
 ### Error responses
 
-| Status | Description                                                                                                        |
-| ------ | ------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters or pagination token                                                                             |
-| `403`  | Not authorized                                                                                                     |
-| `404`  | `Database not found`: `databaseId` names no database, live or deleted; answered only to a caller allowed on the id |
-| `500`  | Internal server error                                                                                              |
+| Status | Description                                                                                                                                                    |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters or pagination token, or `databaseId` names no database, live or deleted (`Database not found`; answered only to a caller allowed on the id) |
+| `403`  | Not authorized                                                                                                                                                 |
+| `500`  | Internal server error                                                                                                                                          |
 
 ---
 

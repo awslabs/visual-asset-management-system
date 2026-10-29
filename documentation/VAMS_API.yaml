@@ -10049,19 +10049,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/databaseComplianceOverviewResponse"
                 "400":
-                    description: Invalid database identifier, filter value or pagination token.
+                    description: "Invalid database identifier, filter value or pagination token, or Database not found: no database has this identifier, live or deleted (answered only to a caller allowed on the identifier)."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
                     description: Not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-                "404":
-                    description: "Database not found: no database has this identifier, live or deleted (answered only to a caller allowed on the identifier)."
                     content:
                         application/json:
                             schema:
@@ -10101,19 +10095,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/listQuarantinedResponse"
                 "400":
-                    description: Invalid pagination token.
+                    description: "Invalid pagination token, or Database not found: `databaseId` names no database, live or deleted (answered only to a caller allowed on it)."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
                     description: Not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-                "404":
-                    description: "Database not found: `databaseId` names no database, live or deleted (answered only to a caller allowed on it)."
                     content:
                         application/json:
                             schema:
@@ -10303,19 +10291,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/listCascadesResponse"
                 "400":
-                    description: Invalid state, filter value or pagination token.
+                    description: "Invalid state, filter value or pagination token, or Database not found: `databaseId` names no database, live or deleted (answered only to a caller allowed on it)."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
                     description: Not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-                "404":
-                    description: "Database not found: `databaseId` names no database, live or deleted (answered only to a caller allowed on it)."
                     content:
                         application/json:
                             schema:
@@ -10538,19 +10520,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/auditLogResponse"
                 "400":
-                    description: Invalid parameters or pagination token.
+                    description: "Invalid parameters or pagination token, or Database not found: `databaseId` names no database, live or deleted (answered only to a caller allowed on it)."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
                     description: Not authorized.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/error"
-                "404":
-                    description: "Database not found: `databaseId` names no database, live or deleted (answered only to a caller allowed on it)."
                     content:
                         application/json:
                             schema:

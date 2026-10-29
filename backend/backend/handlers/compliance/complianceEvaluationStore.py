@@ -231,7 +231,7 @@ def get_database_item(database_id: str) -> Optional[Dict[str, Any]]:
 
 def database_known(database_id: str) -> bool:
     """Whether the id names a database (`knownDatabase.database_known`: `GLOBAL`, a database row,
-    or a deleted database's row); the database-level compliance reads answer `404` otherwise."""
+    or a deleted database's row); the database-level compliance reads answer `400` otherwise."""
     return knownDatabase.database_known(database_table, database_id)
 
 

@@ -400,8 +400,8 @@ class TestComplianceErrorMapping:
             client.get_compliance_bindings('nope')
 
     def test_the_overview_of_a_database_that_does_not_exist_is_database_not_found(self):
-        # The database-level reads answer 404 "Database not found", not an empty overview.
-        client = _client_with_transport(_ErrorResponse(404, {'message': 'Database not found'}))
+        # The database-level reads answer 400 "Database not found", not an empty overview.
+        client = _client_with_transport(_ErrorResponse(400, {'message': 'Database not found'}))
         with pytest.raises(DatabaseNotFoundError):
             client.get_database_compliance_state('mistyped-db')
         with pytest.raises(DatabaseNotFoundError):

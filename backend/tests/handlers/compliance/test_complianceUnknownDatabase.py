@@ -1,12 +1,13 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""A database-level compliance read of an id that names no database answers `404`.
+"""A database-level compliance read of an id that names no database answers `400` "Database not
+found".
 
 `GET /compliance/state/{databaseId}` for a database that does not exist used to answer `200` with
 an empty overview, and the quarantine, cascade and audit listings filtered by such a `databaseId`
-an empty page, so a mistyped id read as "no assets". Now each answers `404` "Database not found"
-for it (`common.compliance.knownDatabase`), once the caller has passed the read's own check on the
+an empty page, so a mistyped id read as "no assets". Now each answers `400` "Database not found"
+for it, as the other compliance routes do for a database that does not exist (`common.compliance.knownDatabase`), once the caller has passed the read's own check on the
 id: a caller refused on the id gets the answer it got before (`403` from the overview, an empty
 page from a listing) whether the database exists or not, and the database table is not read for
 it. A real database with no compliance data still reads as empty, a deleted database (its row
@@ -123,7 +124,7 @@ def _listed(name, response):
 def test_an_id_that_names_no_database_is_not_found(name):
     responses, asked = _reads({"*"}, [(name, UNKNOWN_DB)])
     response = responses[(name, UNKNOWN_DB)]
-    assert response["statusCode"] == 404, response
+    assert response["statusCode"] == 400, response
     assert body_of(response) == {"message": "Database not found"}
     assert asked == [UNKNOWN_DB]
 
