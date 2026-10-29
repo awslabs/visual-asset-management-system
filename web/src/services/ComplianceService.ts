@@ -523,6 +523,19 @@ const responseErrored = (response: any): boolean =>
     typeof response.message === "string" &&
     (response.message.includes("error") || response.message.includes("Error"));
 
+/** The suffix of an archived asset's database id, as the asset routes return its record. */
+export const ARCHIVED_DATABASE_ID_SUFFIX = "#deleted";
+
+/**
+ * The database id the compliance routes take for an asset: its live database id. An archived
+ * asset's record carries `<databaseId>#deleted`, which no compliance route accepts; its compliance
+ * records keep the live id.
+ */
+export const liveDatabaseId = (databaseId?: string | null): string | undefined =>
+    databaseId && databaseId.endsWith(ARCHIVED_DATABASE_ID_SUFFIX)
+        ? databaseId.slice(0, -ARCHIVED_DATABASE_ID_SUFFIX.length)
+        : databaseId || undefined;
+
 // --- Schema Management ---
 
 /**
