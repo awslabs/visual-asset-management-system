@@ -177,6 +177,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   The infra test for `states:SendTaskFailure` grants identifies a SendTaskFailure caller by its client-method reference, so a helper that only names the method in its documentation is not required to carry its own grant. (issue #755)
 -   The RapidPipeline EKS infra tests compare the bundle `taskTimeout` with the synthesized state machine timeout, and the `jobTimeout` positive controls fail on any configuration error rather than only one that names `jobTimeout`. (issue #776)
 -   The RapidPipeline EKS `eksClusterVersion` positive controls and the container image URI positive control fail on any configuration error rather than only one that names the field under test, and the RapidPipeline infra test fixtures no longer set `useRapidPipeline.enabled` and `useRapidPipeline.autoRegisterWithVAMS`, which are not configuration keys. (issue #779)
+-   **Dependency security updates: zod 4 and mermaid 12** — `zod` 4.6.7 (`web/`; the pipeline form validation uses the string issue code `custom`) and `mermaid` 12.2.0 with `katex` 0.18.10 (documentation site) resolve security advisories. (PR #886)
 
 **Known issues:**
 
