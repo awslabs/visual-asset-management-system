@@ -216,6 +216,26 @@ Deny rules explicitly block specific operations. A single matching deny rule ove
 
 A common example denies `PUT`, `POST`, and `DELETE` on the `asset` object type wherever the asset's tag list includes `locked`. Write operations on such an asset are then blocked regardless of any other allow rule, while users can still view (`GET`) it. `tags` holds a list, so the criterion uses the membership operator `is_one_of` — the shipped `deny-tagged-assets` permission template applies the same rule with a variable tag value. For the constraint JSON, see [Developer Guide: Permissions](../developer/permissions.md#deny-by-tag).
 
+### Archived records
+
+An archived asset is stored with the database ID `<databaseId>#deleted`, and so is the record of a deleted database. VAMS authorizes such a record twice — once on its stored ID (`<databaseId>#deleted`) and once on its database ID (`<databaseId>`) — and allows the operation only when both checks pass. This applies to archived assets and their files in listings with `showArchived`, in GET and in search results with `includeArchived`, and to a deleted database's record.
+
+As a result:
+
+-   A deny rule on a database also blocks that database's archived assets and archived record.
+-   A constraint written only as `databaseId equals <databaseId>` does not reach archived records. To grant them, the constraint must also match `<databaseId>#deleted`:
+
+```json
+{
+    "criteriaOr": [
+        { "field": "databaseId", "operator": "equals", "value": "my-project-db" },
+        { "field": "databaseId", "operator": "equals", "value": "my-project-db#deleted" }
+    ]
+}
+```
+
+An allow that matches only `<databaseId>#deleted`, with no allow that matches `<databaseId>`, does not reach archived records either, because the check on the database ID fails.
+
 ## Common role patterns
 
 For detailed constraint tables, JSON examples, and design rationale for common roles (Database Admin, Database User, Database Read-Only, Global Read-Only, and Deny by Tag), see [Developer Guide: Permissions](../developer/permissions.md).

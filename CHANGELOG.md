@@ -6,11 +6,11 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Major Change Summary:
 
+-   Behavior changes to review before upgrading (security and correctness fixes): a role scoped to one database receives `403` instead of `404` for a missing metadata schema on update and for a missing asset on the subscription routes; an archived asset or a deleted database's record needs an allow on both `<databaseId>#deleted` and `<databaseId>`, so a custom role scoped with `databaseId equals <databaseId>` alone no longer reaches archived records, in listings, GET or search ([#579](https://github.com/awslabs/visual-asset-management-system/issues/579), [#879](https://github.com/awslabs/visual-asset-management-system/pull/879)); `PUT /database/{databaseId}` answers `403` instead of `400` to a caller not permitted to update the database ([#785](https://github.com/awslabs/visual-asset-management-system/issues/785)); a metadata search query with no searchable term returns `400` ([#584](https://github.com/awslabs/visual-asset-management-system/issues/584)); on an Application Load Balancer deployment a request for a missing web app file answers `403` instead of `404` ([#823](https://github.com/awslabs/visual-asset-management-system/pull/823)); `vamscli user cognito list --auto-paginate --json-output` lists the users under `users` ([#808](https://github.com/awslabs/visual-asset-management-system/issues/808)). See the breaking change below for the Amazon Cognito `retainLegacyGroupsAttribute` flag.
+
 ### ⚠ BREAKING CHANGES
 
 -   **Auth/CDK** Amazon Cognito tightened custom-attribute name validation, so VAMS's user pool declaration of the legacy `custom:groups` attribute is now rejected at user-pool creation and a new deployment's core stack rolls back. The new `app.authProvider.useCognito.retainLegacyGroupsAttribute` config flag controls whether the pool declares the attribute. The shipped `config.json` and the configuration templates set it to `false`, so a new deployment works unedited. **A deployment with an EXISTING Amazon Cognito user pool must set `retainLegacyGroupsAttribute: true`** — Cognito keeps a custom attribute for the life of a pool, so declaring `false` makes the update fail with `Existing schema attributes cannot be modified or deleted` and roll back. A `config.json` left without the key resolves to `true` and prints a configuration warning; a `config.json` taken from v2.6.6 (the shipped file or a template, both of which set `false`) must be changed to `true` before deploying over an existing pool. VAMS does not read the attribute. The breaking change is forced by the Amazon Cognito service change, not a VAMS behaviour change. ([#786](https://github.com/awslabs/visual-asset-management-system/issues/786))
-
-### Features
 
 ### Bug Fixes
 
@@ -138,10 +138,10 @@ All notable changes to this project will be documented in this file. See [standa
 -   **CLI** `vamscli user cognito list` lists the user pool's users instead of reporting "No Cognito users found.", with and without `--auto-paginate`; the `--auto-paginate --json-output` result lists them under `users`, the key the API returns. ([#808](https://github.com/awslabs/visual-asset-management-system/issues/808))
 -   **CLI** Destructive commands that require `--confirm` (`assets delete`, `database delete`, `role delete`, `role constraint delete`, `role user delete`, `user cognito delete`, and `sync file push --permanent-delete` / `sync file pull --allow-delete`) ask their additional "Are you sure?" question only in an interactive terminal; in a script, pipe or CI job `--confirm` alone proceeds instead of the command reporting "Operation cancelled by user." and deleting nothing. ([#809](https://github.com/awslabs/visual-asset-management-system/issues/809))
 -   **Web** A STEP, IGES or BREP file that the Three.js Viewer cannot open because the deployment has not set `app.webUi.allowUnsafeEvalFeatures` shows a message naming that setting instead of the browser's Content Security Policy violation text, and the viewer's OCCT setup steps list the setting beside the HTTP headers they already required. The viewer's error panel shows the whole message with its paragraph breaks, and no longer adds the "supported 3D format" hint under a CAD setup message. ([#832](https://github.com/awslabs/visual-asset-management-system/issues/832))
--   **Backend** Permission constraint criteria values that contain `p.`, `r.`, `!`, `&&` or `||` match as written, for every operator.
+-   **Backend** Permission constraint criteria values that contain `p.`, `r.`, `!`, `&&` or `||` match as written, for every operator. ([#868](https://github.com/awslabs/visual-asset-management-system/pull/868))
 -   **CDK** Turning `app.useKmsCmkEncryption.enabled` on for an existing deployment completes: the default role, constraint, user and metadata schema seeds wait for the policy that grants their role the new AWS KMS key, instead of failing with `kms:Decrypt` access denied and rolling back the core stack. ([#841](https://github.com/awslabs/visual-asset-management-system/issues/841))
 -   **Backend** `PUT /database/{databaseId}` answers `403` when the caller may call the route but is not permitted to update that database, instead of `400` with "Access denied", so the web application and `vamscli` report a permission refusal rather than an invalid request. Nothing is written in either case. ([#785](https://github.com/awslabs/visual-asset-management-system/issues/785))
--   **Backend** Search results that include archived assets and files are authorized the same way as the asset and file listings: an archived asset, and a file of an archived asset, on the archived record.
+-   **Backend** Search results that include archived assets and files are authorized the same way as the asset and file listings: an archived asset, and a file of an archived asset, on the archived record. ([#879](https://github.com/awslabs/visual-asset-management-system/pull/879))
 
 ### Chores
 
@@ -158,8 +158,6 @@ All notable changes to this project will be documented in this file. See [standa
 ### Known Outstanding Issues
 
 -   **Security** Build- and test-time dependencies that a package update alone does not fix: `braces`, `micromatch` and `postcss-selector-parser` 6.x through `tailwindcss` 3 (`web/`), `@typescript-eslint` 5 (root) and `cssnano` 6 in `@docusaurus/core` 3.10.2 (documentation site); `katex` 0.16 through `mermaid` 11 (documentation site); and `sprintf-js` 1.0.3 through `babel-jest` (`web/` tests) and `elliptic` through `vite-plugin-node-polyfills` (`web/`), which have no patched release. ([#486](https://github.com/awslabs/visual-asset-management-system/issues/486))
-
-### Troubleshooting
 
 ## [2.6.5] (2026-10-16)
 
