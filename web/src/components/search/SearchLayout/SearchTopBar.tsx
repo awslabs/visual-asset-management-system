@@ -115,8 +115,25 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
                                 ]}
                             />
                         )}
-                        <div style={{ display: "flex", gap: "8px", alignItems: "flex-start" }}>
-                            <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+                        {/* The button keeps its label width on one line; the query box takes the rest,
+                            and a row too narrow for both moves the button below the box. */}
+                        <div
+                            style={{
+                                display: "flex",
+                                flexWrap: "wrap",
+                                gap: "8px",
+                                alignItems: "flex-start",
+                            }}
+                        >
+                            <div
+                                data-query-box
+                                style={{
+                                    flexGrow: 1,
+                                    flexShrink: 1,
+                                    flexBasis: "12rem",
+                                    minWidth: 0,
+                                }}
+                            >
                                 <Input
                                     placeholder={placeholder}
                                     ariaLabel={
@@ -132,14 +149,17 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
                                     clearAriaLabel="Clear search"
                                 />
                             </div>
-                            <Button
-                                variant="primary"
-                                onClick={onSearch}
-                                loading={loading}
-                                iconName="search"
-                            >
-                                Search
-                            </Button>
+                            <div style={{ flexShrink: 0 }}>
+                                <Button
+                                    variant="primary"
+                                    onClick={onSearch}
+                                    loading={loading}
+                                    iconName="search"
+                                    wrapText={false}
+                                >
+                                    Search
+                                </Button>
+                            </div>
                         </div>
                         <Box color="text-body-secondary" fontSize="body-s">
                             {searchModeDescription(searchMode)}

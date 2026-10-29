@@ -87,6 +87,22 @@ describe("SearchTopBar query band", () => {
         expect(screen.getByText("1,234 results")).toBeInTheDocument();
     });
 
+    it("keeps the Search button at its label width and lets the query box take the rest", () => {
+        render(<SearchTopBar {...baseProps} />);
+        // jsdom does no layout, so the contract is checked on the styles that produce it: the
+        // button's box never shrinks and its label never breaks (Cloudscape's wrapText={false});
+        // the query box grows into the remaining width, and a row too narrow for both moves the
+        // button below instead.
+        const button = screen.getByRole("button", { name: "Search" });
+        expect(button.className).toMatch(/button-no-wrap/);
+        const buttonBox = button.parentElement as HTMLElement;
+        expect(buttonBox).toHaveStyle({ flexShrink: "0" });
+        const queryBox = screen.getByRole("searchbox").closest("[data-query-box]") as HTMLElement;
+        expect(queryBox).toHaveStyle({ flexGrow: "1", minWidth: "0" });
+        expect(queryBox.parentElement).toBe(buttonBox.parentElement);
+        expect(buttonBox.parentElement).toHaveStyle({ display: "flex", flexWrap: "wrap" });
+    });
+
     it("keeps Clear all filters as the header's only secondary action", () => {
         const onClearAll = jest.fn();
         const { rerender } = render(<SearchTopBar {...baseProps} onClearAll={onClearAll} />);
