@@ -208,6 +208,8 @@ describe("ModernSearchContainer search modes", () => {
         await screen.findByPlaceholderText("Describe what you are looking for...");
         const splitter = container.querySelector(".resizable-splitter-container");
         expect(splitter).toHaveClass("search-splitter");
+        // The narrow layout keys on the page's own width (a size container), not the window's.
+        expect(splitter?.closest(".search-page")).not.toBeNull();
     });
 
     it("a natural-language search that ran but matched nothing reports No matches and its count", async () => {

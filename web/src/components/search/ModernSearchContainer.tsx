@@ -704,7 +704,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
     const containerStyle = maxHeight ? { maxHeight, overflow: "auto" } : {};
 
     return (
-        <div style={containerStyle}>
+        <div className="search-page" style={containerStyle}>
             {/* Toast notifications at the very top */}
             <ToastManager toasts={toasts} onDismiss={removeToast} />
 

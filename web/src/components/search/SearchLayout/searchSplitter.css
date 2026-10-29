@@ -3,18 +3,23 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-/* Phone widths: the filters sit above the results, in a bounded scroll area, instead of sharing the row. */
-@media (max-width: 688px) {
+/* The search page's own width decides the layout, so an open side navigation counts against it. */
+.search-page {
+    container-type: inline-size;
+}
+
+/* Narrow page: the results come first, below the query band, and the filters follow them. */
+@container (max-width: 760px) {
     .search-splitter.resizable-splitter-container {
         flex-direction: column;
         height: auto;
     }
 
     .search-splitter > .resizable-left-panel {
+        order: 2;
         width: 100% !important;
-        max-height: 40vh;
         border-right: 0;
-        border-bottom: 1px solid var(--vams-border-default);
+        border-top: 1px solid var(--vams-border-default);
     }
 
     .search-splitter > .resizable-splitter {
@@ -22,6 +27,7 @@
     }
 
     .search-splitter > .resizable-right-panel {
+        order: 1;
         padding: 0;
     }
 }
