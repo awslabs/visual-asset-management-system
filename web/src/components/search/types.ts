@@ -203,7 +203,7 @@ export interface NlpSearchSummary {
     candidatesEvaluated: number;
     /** Segment items folded into their file's hit. */
     itemsCollapsed: number;
-    /** File classes the query's type words named; their hits are listed first. */
+    /** File classes the query's type words named; their hits get a small ranking bonus. */
     classIntent: string[];
     truncated: boolean;
 }
