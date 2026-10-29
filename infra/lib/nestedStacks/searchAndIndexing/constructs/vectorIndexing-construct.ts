@@ -141,7 +141,10 @@ export class VectorIndexingConstruct extends Construct {
             lambdaCommonBaseLayer,
             vpc,
             subnets,
-            { VECTOR_INDEXER_QUEUE_URL: this.vectorIndexerQueue.queueUrl }
+            {
+                VECTOR_INDEXER_QUEUE_URL: this.vectorIndexerQueue.queueUrl,
+                WORKFLOW_LAUNCH_QUEUE_URL: this.systemWorkflowLaunchQueue.queueUrl,
+            }
         );
         this.vectorReindexerFunction = buildVectorReindexerFunction(
             this,
@@ -173,6 +176,8 @@ export class VectorIndexingConstruct extends Construct {
         // Asset- and file-wide rules that run out of time re-enqueue the rest of their work here.
         this.vectorIndexerQueue.grantSendMessages(this.vectorIndexerFunction);
         this.systemWorkflowLaunchQueue.grantSendMessages(this.vectorReindexerFunction);
+        // A restored file that was never embedded is queued onto the launch queue by the indexer.
+        this.systemWorkflowLaunchQueue.grantSendMessages(this.vectorIndexerFunction);
 
         // The reindexer continues a long run by invoking itself asynchronously. An asynchronous
         // invocation Lambda could not complete (a timeout, a crash, exhausted retries after throttling)

@@ -363,18 +363,23 @@ describe.each([false, true])("VectorIndexingConstruct (govCloud=%s)", (govCloud)
         }
     });
 
-    test("the indexer addresses its own queue for continuation messages and may send to it", () => {
+    test("the indexer addresses its own queue and the launch queue, and may send to both", () => {
         const [, indexer] = functionByHandler(template, "vectorIndexer");
         expect(indexer.Properties.Environment.Variables.VECTOR_INDEXER_QUEUE_URL).toEqual({
             Ref: indexerQueueId,
         });
+        // A restored file that was never embedded is queued onto the launch queue.
+        expect(indexer.Properties.Environment.Variables.WORKFLOW_LAUNCH_QUEUE_URL).toEqual({
+            Ref: launchQueueId,
+        });
         // Read from inline and managed policies alike; a grant CDK spilled into a managed policy is a grant.
-        const send = statementsForFunction(template, indexer).filter((s) =>
-            JSON.stringify(s.Action).includes("sqs:SendMessage")
+        const sendResources = JSON.stringify(
+            statementsForFunction(template, indexer)
+                .filter((s) => JSON.stringify(s.Action).includes("sqs:SendMessage"))
+                .map((s) => s.Resource)
         );
-        expect(send).toHaveLength(1);
-        expect(JSON.stringify(send[0].Resource)).toContain(indexerQueueId);
-        expect(JSON.stringify(send[0].Resource)).not.toContain(launchQueueId);
+        expect(sendResources).toContain(indexerQueueId);
+        expect(sendResources).toContain(launchQueueId);
     });
 
     test("the reindexer's asynchronous self-invocations have an on-failure destination: its CMK-encrypted DLQ, after two retries", () => {

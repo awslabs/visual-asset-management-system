@@ -136,19 +136,26 @@ describe("commercial: vector indexing is wired into the search stack", () => {
         expect(resource).toContain("executeWorkflow");
     });
 
-    test("the indexer addresses its own queue and may send continuation messages to it", () => {
+    test("the indexer addresses its own queue and the launch queue, and may send to both", () => {
         const indexer = handlerOf(s, "vectorIndexer");
         const queue = vectorQueues(s).find((q) =>
             q.logicalId.startsWith("VectorIndexingVectorIndexerQueue")
         )!;
+        const launchQueue = vectorQueues(s).find((q) =>
+            q.logicalId.startsWith("VectorIndexingSystemWorkflowLaunchQueue")
+        )!;
         expect(
             SynthResult.flatten(indexer.properties.Environment.Variables.VECTOR_INDEXER_QUEUE_URL)
         ).toContain(queue.logicalId);
-        const send = statementsOf(s, indexer).filter((st: any) =>
-            JSON.stringify(st.Action).includes("sqs:SendMessage")
-        );
-        expect(send).toHaveLength(1);
-        expect(SynthResult.flatten(send[0].Resource)).toContain(queue.logicalId);
+        expect(
+            SynthResult.flatten(indexer.properties.Environment.Variables.WORKFLOW_LAUNCH_QUEUE_URL)
+        ).toContain(launchQueue.logicalId);
+        const sendResources = statementsOf(s, indexer)
+            .filter((st: any) => JSON.stringify(st.Action).includes("sqs:SendMessage"))
+            .map((st: any) => SynthResult.flatten(st.Resource))
+            .join(" ");
+        expect(sendResources).toContain(queue.logicalId);
+        expect(sendResources).toContain(launchQueue.logicalId);
     });
 
     test("both indexer topics subscribe the vector indexer queue", () => {
