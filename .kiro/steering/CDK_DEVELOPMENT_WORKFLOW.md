@@ -649,7 +649,6 @@ backend/
 │   ├── customLogging/           # Logging utilities
 │   └── models/                  # Data models and schemas
 ├── lambdaLayers/                # Reusable Lambda layers
-├── scripts/                     # Developer/release tools, NOT packaged into any Lambda
 ├── tests/                       # Backend unit and integration tests
 └── requirements.txt             # Python dependencies
 ```
@@ -2070,11 +2069,7 @@ backend/backend/handlers/auth/
 backend/backend/common/auth/
 ├── authorizerCore.py                # Shared auth logic (Cognito/external JWT, API key, IP)
 ├── clientIp.py                      # Trusted client-IP resolution + IP-range check
-├── cloudFrontOriginFacingRanges.py  # GENERATED CloudFront origin-facing prefixes (clientIp peer check)
 └── apiEvent.py                      # REST→canonical event normalization shim
-
-backend/scripts/
-└── generateCloudFrontOriginFacingRanges.py  # Regenerates the snapshot from ip-ranges.json (not in any Lambda)
 
 infra/config/config.ts
 └── CUSTOM_AUTHORIZER_IGNORED_PATHS  # Paths that bypass authorization
