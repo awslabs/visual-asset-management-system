@@ -407,7 +407,7 @@ The OpenSearch-style envelope of [Advanced Search](#advanced-search) with an `nl
 | `503`  | The vector index is being built (`"Vector index is being built"`); retry later. |
 | `500`  | Internal server error.                                                          |
 
-A query longer than 1,000 characters is refused with `400` and the message `The query is <length> characters; the limit is 1000.`
+A query longer than 1,000 characters is refused with `400` and the message `The query is <length> characters; the limit is 1000.` A query that is empty or only whitespace is refused with `400` and the message `The query must not be blank.`, before the query is embedded. When the embedding model call fails, the response is `400` with the message `The query could not be prepared for search. Try again; if it keeps failing, contact your administrator.`; the cause is written to the function's log.
 
 ---
 

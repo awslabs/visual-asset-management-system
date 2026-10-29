@@ -29,6 +29,7 @@ WARNING_CODES = (
 OPENSEARCH_ONLY_FIELDS = ("filters", "metadataQuery", "metadataSearchMode", "geoSearch", "tags")
 MAX_QUERY_LENGTH = 1000
 QUERY_TOO_LONG_MESSAGE = "The query is {length} characters; the limit is {limit}."
+QUERY_BLANK_MESSAGE = "The query must not be blank."
 MAX_DATABASE_IDS = 100
 MAX_SIZE = 100
 DEFAULT_SIZE = 25
@@ -69,12 +70,14 @@ class NlpSearchRequestModel(BaseModel):
 
     @root_validator(pre=True)
     def _query_in_plain_words(cls, values):
-        """The query's length limit as a sentence the caller can act on. A model-level error is reported
-        without a field prefix, and it stops validation before the field's own max_length, which stays
-        the declared bound."""
+        """The query's length limit and a blank query as sentences the caller can act on. A model-level
+        error is reported without a field prefix, and it stops validation before the field's own
+        max_length, which stays the declared bound. The query is kept as sent."""
         query = values.get("query")
         if isinstance(query, str) and len(query) > MAX_QUERY_LENGTH:
             raise ValueError(QUERY_TOO_LONG_MESSAGE.format(length=len(query), limit=MAX_QUERY_LENGTH))
+        if isinstance(query, str) and not query.strip():
+            raise ValueError(QUERY_BLANK_MESSAGE)
         return values
 
     @validator("entityTypes")

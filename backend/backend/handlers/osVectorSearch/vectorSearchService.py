@@ -78,6 +78,9 @@ INDEX_BUILDING_MESSAGE = "Vector index is being built"
 ROUTE_NOT_SERVED_MESSAGE = "Route is not served by this function"
 INVALID_BODY_MESSAGE = "Request body is not valid JSON"
 ENRICHMENT_FAILED_MESSAGE = "OpenSearch enrichment failed; hits are returned without it"
+EMBEDDING_FAILED_MESSAGE = (
+    "The query could not be prepared for search. Try again; if it keeps failing, contact your administrator."
+)
 # Added to the ranking value of a hit whose file class the query names, never to its returned _score. A
 # relevant match scores far above unrelated files (0.40 or more apart in measured runs), so the bonus
 # reorders near-equal hits without lifting a weak file of the named type above a strong match of another.
@@ -560,7 +563,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         return _service_unavailable(INDEX_BUILDING_MESSAGE)
     except EmbeddingModelError as e:
         logger.exception(f"Query embedding failed: {e.code}")
-        return general_error(body={"message": f"Query embedding failed: {e.code}"}, event=event)
+        return general_error(body={"message": EMBEDDING_FAILED_MESSAGE}, event=event)
     except VAMSGeneralErrorResponse as v:
         return general_error(body={"message": str(v)}, event=event)
     except Exception:

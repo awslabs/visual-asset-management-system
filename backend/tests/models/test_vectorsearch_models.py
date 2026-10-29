@@ -44,6 +44,20 @@ class TestNlpSearchRequestModel:
     def test_a_query_at_the_limit_is_accepted(self):
         assert len(NlpSearchRequestModel(query="q" * 1000).query) == 1000
 
+    @pytest.mark.parametrize("query", ["", " ", "   ", "\t\n ", "\u00a0\u2003"])
+    def test_a_blank_query_is_refused_in_plain_words(self, query):
+        with pytest.raises(ValidationError) as caught:
+            NlpSearchRequestModel(query=query)
+        assert validation_error_message(caught.value) == "The query must not be blank."
+
+    def test_an_over_long_blank_query_reports_the_length_first(self):
+        with pytest.raises(ValidationError) as caught:
+            NlpSearchRequestModel(query=" " * 1001)
+        assert validation_error_message(caught.value) == "The query is 1001 characters; the limit is 1000."
+
+    def test_a_query_with_surrounding_spaces_is_kept_as_sent(self):
+        assert NlpSearchRequestModel(query="  red tractor ").query == "  red tractor "
+
     @pytest.mark.parametrize("size", [0, 101])
     def test_size_bounds(self, size):
         with pytest.raises(ValidationError):

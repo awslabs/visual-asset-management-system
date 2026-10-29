@@ -72,6 +72,8 @@ def svc(monkeypatch):
     access = MagicMock()
     access.get_accessible_databases_with_count.return_value = (["db1"], 2)
     module.DatabaseAccessManager = MagicMock(return_value=access)
+    # An unstubbed asset-row read answers empty; a bare MagicMock reads as unprocessed keys forever.
+    module.dynamodb.batch_get_item = MagicMock(return_value={"Responses": {}})
     module.enforcer, module.access = enforcer, access
     return module
 
@@ -470,11 +472,23 @@ class TestErrorsAndEnvelope:
         status, body = call(svc, store, {"query": "tractor"})
         assert status == 503 and body == {"message": "Vector index is being built"}
 
-    def test_embedding_failure_is_a_general_error_without_the_query(self, svc):
+    def test_embedding_failure_is_a_plain_general_error_without_the_query_or_the_code(self, svc):
         svc.embed_text.side_effect = svc.EmbeddingModelError("boom", code="AccessDeniedException")
+        svc.logger = MagicMock()
         status, body = call(svc, FakeStore([]), {"query": "secret tractor"})
         assert status == 400
-        assert "AccessDeniedException" in body["message"] and "secret tractor" not in body["message"]
+        assert body == {"message": svc.EMBEDDING_FAILED_MESSAGE}
+        assert "AccessDeniedException" not in body["message"] and "secret tractor" not in body["message"]
+        # The cause stays in the log for the operator.
+        assert any("AccessDeniedException" in str(c) for c in svc.logger.exception.call_args_list)
+
+    @pytest.mark.parametrize("query", ["   ", "\t\n"])
+    def test_a_blank_query_is_400_in_plain_words_before_any_embedding(self, svc, query):
+        store = FakeStore([item()])
+        status, body = call(svc, store, {"query": query})
+        assert status == 400
+        assert body == {"message": "The query must not be blank."}
+        assert not svc.embed_text.called and store.calls == []
 
     def test_invalid_request_is_400_without_echo(self, svc):
         status, body = call(svc, FakeStore([]), {"query": "x", "entityTypes": ["folder-zzz"]})
