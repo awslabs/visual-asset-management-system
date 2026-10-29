@@ -13,8 +13,8 @@ JWT). Every log string surfaced by the executions logs endpoint must pass throug
 The redaction is intentionally conservative: it targets labelled secrets (the same key names
 safeLogger redacts) plus a few unambiguous credential shapes (Bearer tokens, AWS access-key ids,
 JWTs), and the values of the request-context keys that describe an API client (source address, user
-agent, caller identity, API key id). It never tries to guess at unlabelled high-entropy strings, so
-ordinary log content is left intact.
+agent, caller identity, API key id) and the account and API it called. It never tries to guess at
+unlabelled high-entropy strings, so ordinary log content is left intact.
 """
 
 import re
@@ -98,11 +98,13 @@ _JWT = re.compile(r'\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+')
 
 # Request-context keys that describe the client of an API call: the address and user agent it
 # connected from, its IAM or Amazon Cognito caller identity, and the VAMS API key it authenticated
-# with (`vams:apiKeyId` in the authorizer context). A workflow execution log can carry the request
-# context its execution was launched with. Each key is matched by its EXACT name, case-sensitively,
-# so a longer key that merely contains one (`bucketAccountId`, `sourceIpRange`) is left alone;
-# `apiKeyId` also matches behind a namespace prefix ending in `:`. Only a string value is masked, so
-# a `null` stays `null`.
+# with (`vams:apiKeyId` in the authorizer context), plus the AWS account and the API Gateway API the
+# request reached (`accountId`, `apiId`, `domainName`, `domainPrefix`). A workflow execution log can
+# carry the request context its execution was launched with. `requestId` is left visible: it names
+# the request, not the client, and is what a reader quotes when tracing a run. Each key is matched by
+# its EXACT name, case-sensitively, so a longer key that merely contains one (`bucketAccountId`,
+# `sourceIpRange`, `customDomainName`) is left alone; `apiKeyId` also matches behind a namespace
+# prefix ending in `:`. Only a string value is masked, so a `null` stays `null`.
 CLIENT_DETAIL_KEYS = [
     "sourceIp",
     "userAgent",
@@ -110,6 +112,10 @@ CLIENT_DETAIL_KEYS = [
     "cognitoIdentityId",
     "cognitoAuthenticationProvider",
     "principalOrgId",
+    "accountId",
+    "apiId",
+    "domainName",
+    "domainPrefix",
 ]
 
 _CLIENT_KEYS_ALT = (

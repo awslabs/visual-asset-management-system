@@ -303,6 +303,10 @@ CLIENT_DETAILS = {
     "principalOrgId": "o-exampleorgid",
     "apiKeyId": "11111111-2222-3333-4444-555555555555",
     "vams:apiKeyId": "66666666-7777-8888-9999-000000000000",
+    "accountId": "000000000000",
+    "apiId": "a1b2c3d4e5",
+    "domainName": "a1b2c3d4e5.execute-api.us-east-1.amazonaws.com",
+    "domainPrefix": "a1b2c3d4e5",
 }
 LEVELS = [0, 1, 2, 3]
 
@@ -337,7 +341,8 @@ class TestClientDetailRedaction:
     @pytest.mark.parametrize("key", [
         "bucketAccountId", "sourceIpRange", "xsourceIp", "SourceIp", "userAgentVersion",
         "userArnList", "principalOrgIds", "apiKeyIdHash", "myapiKeyId", "vams:apiKeyIdSuffix",
-        "cognitoIdentityIdPool",
+        "cognitoIdentityIdPool", "customDomainName", "apiIdentifier", "accountIds",
+        "domainPrefixes", "AccountId",
     ])
     def test_a_key_that_only_contains_a_client_detail_name_is_unchanged(self, key, level):
         text = _escape(json.dumps({key: "neighbour-value"}), level)
@@ -353,7 +358,8 @@ class TestClientDetailRedaction:
         # The username is shown to the same readers as the execution's triggeredByUserId.
         document = {"user": "alice", "caller": "AIDEXAMPLE", "sub": "s-1", "username": "alice",
                     "cognito:username": "alice", "vams:tokens": '["alice"]',
-                    "vams:roles": '["role1"]', "accountId": "000000000000"}
+                    "vams:roles": '["role1"]', "requestId": "req-keep-2",
+                    "extendedRequestId": "ext-keep-2", "stage": "api"}
         text = _escape(json.dumps(document), level)
         assert redact_log_text(text) == text
 
@@ -397,6 +403,8 @@ class TestClientDetailRedaction:
         assert context["authorizer"] == {"principalId": "alice", "vams:tokens": '["alice"]',
                                          "vams:apiKeyId": REDACTED}
         assert context["requestId"] == "req-1"
+        assert context["accountId"] == REDACTED
+        assert context["stage"] == "api"
 
     @pytest.mark.parametrize("text", [
         "sourceIp" + "\\" * 20000,

@@ -270,7 +270,7 @@ Returned log text is redacted: credential-bearing values — authorization heade
 access-key IDs, JSON web tokens, and labelled secret fields such as `SecretAccessKey` and
 `SessionToken` — are replaced with `<redacted>` before the logs are stored or returned. So are the
 client details of the request that launched the execution: its source IP address, user agent, API key
-ID, and IAM or Amazon Cognito caller identity.
+ID, IAM or Amazon Cognito caller identity, and the AWS account ID and API Gateway API ID it called.
 
 ```bash
 vamscli execution logs my-execution-id

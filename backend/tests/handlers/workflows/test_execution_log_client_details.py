@@ -51,6 +51,7 @@ def _launch_request_context():
     """A REST (v1) request context as the launch received it, normalize_event's http block included."""
     return {
         "accountId": "000000000000", "requestId": "req-1", "stage": "api",
+        "apiId": "a1b2c3d4e5", "domainName": "a1b2c3d4e5.execute-api.us-east-1.amazonaws.com",
         "identity": {"sourceIp": SOURCE_IP, "userAgent": USER_AGENT, "userArn": USER_ARN,
                      "cognitoIdentityId": None, "user": None, "caller": None},
         "authorizer": {"principalId": "alice", "vams:tokens": '["alice"]',
@@ -93,6 +94,9 @@ def _assert_masked(log_text):
         assert context["authorizer"] == {"principalId": "alice", "vams:tokens": '["alice"]',
                                          "vams:apiKeyId": REDACTED}
         assert context["requestId"] == "req-1"
+        assert context["stage"] == "api"
+        assert (context["accountId"], context["apiId"], context["domainName"]) == (
+            REDACTED, REDACTED, REDACTED)
     assert json.loads(started["details"]["input"])["executingUserName"] == "alice"
 
 
