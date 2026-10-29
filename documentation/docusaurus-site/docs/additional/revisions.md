@@ -93,6 +93,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Documentation** — Corrections to asset versioning, user management, external bucket multipart cleanup, ALB endpoints, the developer setup and web guides, viewer `loadStrategy` and the Image Viewer, constraint template import, the update request schemas, the upload rate limit, the allowed-routes listing, the external OAuth MFA scope, the Synonyms examples and the SuperSplat Editor file URL. (issues #579, #604, #614, #615, #616, #617, #620, #623, #658, #659, #660, #661, #671, #707)
 -   **Dependency security update: DOMPurify** — `dompurify` 3.4.17 resolves security advisories in `web/`, the Cesium 3D Tileset viewer install in `web/customInstalls/cesium`, and the documentation site. (PR #757)
 -   **Dependency security updates: follow-redirects, vite and launch-editor** — `follow-redirects` 1.16.1 (`web/` and the documentation site), `vite` 8.1.6 (`web/` build and development server) and `launch-editor` 2.14.2 (documentation site development server) resolve security advisories. (issue #821)
+-   **Dependency security updates: fast-uri, sanitize-html, body-parser, qs and setuptools** — `fast-uri` 3.1.9 (`web/`, the `web/customInstalls/*` viewer installs and the documentation site), `sanitize-html` 2.18.1 (`web/`), `body-parser` 1.20.9 and `qs` 6.16.1 (documentation site development server) and `setuptools` 84.1.0 (RapidPipeline EKS pipeline Lambda layer) resolve security advisories. (PR #885)
 
 **Known issues:**
 

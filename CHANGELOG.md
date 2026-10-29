@@ -153,6 +153,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Documentation** The allowed-routes listing's handling of templated `{param}` path segments is documented in the API, CLI and MCP docs and the permissions model. ([#604](https://github.com/awslabs/visual-asset-management-system/issues/604))
 -   **Security** Dependency update to resolve security advisories: `dompurify` 3.4.17 (`web/`, the Cesium 3D Tileset viewer install in `web/customInstalls/cesium`, and the documentation site). ([#757](https://github.com/awslabs/visual-asset-management-system/pull/757))
 -   **Security** Dependency updates to resolve security advisories: `follow-redirects` 1.16.1 (`web/` and the documentation site), `vite` 8.1.6 (`web/` build and development server) and `launch-editor` 2.14.2 (documentation site development server). ([#821](https://github.com/awslabs/visual-asset-management-system/issues/821))
+-   **Security** Dependency updates to resolve security advisories: `fast-uri` 3.1.9 (`web/`, the `web/customInstalls/*` viewer installs and the documentation site), `sanitize-html` 2.18.1 (`web/`), `body-parser` 1.20.9 and `qs` 6.16.1 (documentation site development server), and `setuptools` 84.1.0 (the RapidPipeline EKS pipeline Lambda layer). ([#885](https://github.com/awslabs/visual-asset-management-system/pull/885))
 
 ### Known Outstanding Issues
 
