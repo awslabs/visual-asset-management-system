@@ -247,6 +247,19 @@ describe("ModernSearchContainer search modes", () => {
         expect(screen.getByText("90%")).toBeInTheDocument();
     });
 
+    it("announces one explicit natural-language search with one notification", async () => {
+        setFeatures(["NOOPENSEARCH", "VECTORSEARCH"]);
+        (searchNlp as jest.Mock).mockResolvedValue([true, nlpEnvelope(true)]);
+        renderContainer();
+        const input = await screen.findByPlaceholderText("Describe what you are looking for...");
+        await userEvent.type(input, "red truck{Enter}");
+        await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
+        await screen.findByText("Search completed");
+        // Let a pending auto-refresh window pass: it must not announce the same search again.
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        expect(screen.getAllByText("Search completed")).toHaveLength(1);
+    });
+
     it("with only OpenSearch on: no mode control and the keyword search runs on mount", async () => {
         setFeatures([]);
         renderContainer();
