@@ -67,7 +67,9 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
         });
     }, []);
 
-    // Check if this is a non-filtered search (no query, no basic filters except rectype)
+    // Check if this is a non-filtered search (no query, no basic filters except rectype). The
+    // keyword and natural-language search options are not filters: they change how a query is
+    // matched, not which records are in scope, so the facets of such an answer are still complete.
     const isNonFilteredSearch = () => {
         const hasQuery = filters._rectype; // Always has rectype
         const filterKeys = Object.keys(filters).filter(
@@ -75,6 +77,7 @@ const BasicFiltersPanel: React.FC<BasicFiltersPanelProps> = ({
                 key !== "_rectype" &&
                 key !== "includeMetadataInKeywordSearch" &&
                 key !== "showResultExplanation" &&
+                key !== "includeSegments" &&
                 filters[key] !== null &&
                 filters[key] !== undefined
         );

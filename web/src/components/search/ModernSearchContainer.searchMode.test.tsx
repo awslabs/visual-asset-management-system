@@ -7,6 +7,7 @@ import React from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import ModernSearchContainer from "./ModernSearchContainer";
 import { appCache } from "../../services/appCache";
 import { searchAssets, searchNlp } from "../../services/APIService";
@@ -440,5 +441,131 @@ describe("ModernSearchContainer switching between keyword and natural language",
         expect(screen.getByText("2 results")).toBeInTheDocument();
         expect(screen.queryByText(idleTitle)).toBeNull();
         expect(searchNlp).not.toHaveBeenCalled();
+    });
+});
+
+describe("ModernSearchContainer natural-language File Type filter", () => {
+    const fileHit = (key: string, ext: string, score: number) => ({
+        _id: `db1#a1#${key}#v1`,
+        _score: score,
+        _index_type: "file",
+        _source: {
+            str_databaseid: "db1",
+            str_assetid: "a1",
+            str_assetname: "Tides",
+            str_key: key,
+            str_fileext: ext,
+        },
+        _vector: {
+            distance: 1 - score,
+            embeddingModelId: "m",
+            sourceModalities: ["text"],
+            indexedAt: "t",
+            fileClass: ext === "glb" ? "mesh" : "document",
+            segmentHits: 0,
+            bestSegment: null,
+        },
+    });
+
+    // The natural-language envelope with the terms buckets the keyword route also returns.
+    const nlpFiles = (
+        hits: ReturnType<typeof fileHit>[],
+        fileTypes: Array<{ key: string; doc_count: number }>
+    ) => ({
+        ...nlpEnvelope(false),
+        hits: { total: { value: hits.length, relation: "eq" }, hits },
+        aggregations: {
+            str_fileext: { buckets: fileTypes },
+            str_databaseid: { buckets: [{ key: "db1", doc_count: hits.length }] },
+        },
+        aggregationTotal: hits.length,
+    });
+
+    const fileTypeMultiselect = (container: HTMLElement) => {
+        const field = createWrapper(container)
+            .findAllFormFields()
+            .find((f) => f.findLabel()?.getElement().textContent === "File Type");
+        const multiselect = field?.findControl()?.findMultiselect();
+        if (!multiselect) throw new Error("File Type multiselect not rendered");
+        return multiselect;
+    };
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        clearPreferenceCookie();
+    });
+
+    it("offers the answer's file types and narrows the next search by the chosen one", async () => {
+        setFeatures(["VECTORSEARCH"]);
+        // A keyword Files listing answers with its own type bucket first, which the panel caches.
+        (searchAssets as jest.Mock).mockImplementation(async (body: any) => [
+            true,
+            body.entityTypes?.includes("file")
+                ? {
+                      ...keywordEnvelope,
+                      aggregations: {
+                          str_fileext: { buckets: [{ key: "pdf", doc_count: 7 }] },
+                      },
+                  }
+                : keywordEnvelope,
+        ]);
+        const hits = [
+            fileHit("/tides/gauge-a.txt", "txt", 0.9),
+            fileHit("/tides/gauge-b.txt", "txt", 0.8),
+            fileHit("/tides/buoy.glb", "glb", 0.7),
+        ];
+        (searchNlp as jest.Mock)
+            .mockResolvedValueOnce([
+                true,
+                nlpFiles(hits, [
+                    { key: "txt", doc_count: 2 },
+                    { key: "glb", doc_count: 1 },
+                ]),
+            ])
+            .mockResolvedValueOnce([
+                true,
+                nlpFiles(hits.slice(0, 2), [{ key: "txt", doc_count: 2 }]),
+            ]);
+
+        const { container } = renderContainer();
+        await waitFor(() => expect(searchAssets).toHaveBeenCalledTimes(1));
+        await userEvent.click(screen.getByTestId("file"));
+        await waitFor(() => expect(searchAssets).toHaveBeenCalledTimes(2), { timeout: 3000 });
+        await userEvent.click(screen.getByTestId("nlp"));
+        await waitFor(() =>
+            expect(screen.getByTestId("nlp")).toHaveAttribute("aria-pressed", "true")
+        );
+        // `Search inside files` cleared is a search option; the answer below is still unfiltered.
+        await userEvent.click(screen.getByLabelText("Search inside files"));
+        await userEvent.type(
+            screen.getByPlaceholderText("Describe what you are looking for..."),
+            "tide gauge calibration"
+        );
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+        await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(1));
+        await screen.findByText("/tides/buoy.glb");
+
+        const fileTypes = fileTypeMultiselect(container);
+        fileTypes.openDropdown();
+        expect(
+            fileTypes
+                .findDropdown()
+                .findOptions()
+                .map((option) => option.findLabel().getElement().textContent)
+        ).toEqual(["glb (1)", "txt (2)"]);
+        await act(async () => {
+            fileTypes.selectOptionByValue("txt");
+        });
+
+        await waitFor(() => expect(searchNlp).toHaveBeenCalledTimes(2), { timeout: 3000 });
+        expect((searchNlp as jest.Mock).mock.calls[1][0]).toMatchObject({
+            query: "tide gauge calibration",
+            entityTypes: ["file"],
+            includeSegments: false,
+            fileExtensions: ["txt"],
+        });
+        await waitFor(() => expect(screen.queryByText("/tides/buoy.glb")).toBeNull());
+        expect(screen.getByText("/tides/gauge-a.txt")).toBeInTheDocument();
+        expect(screen.getByText("/tides/gauge-b.txt")).toBeInTheDocument();
     });
 });
