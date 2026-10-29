@@ -10,11 +10,11 @@ SEARCH_WORKERS threads). Each target gets a *breadth* call over whole-file items
 ``includeSegments``, a *depth* call over every item; only a full breadth window marks the answer
 truncated because breadth windows hold one item per file. Candidates are merged by distance, collapsed
 to one hit per (database, asset, path, version) with the file's matching segments counted and the best
-one named, ordered so the file types the query mentions come first, joined to their asset rows and
-authorized per hit through Casbin. When an OpenSearch mode is enabled the OpenSearch-only constraints
-are applied and ``_source`` enriched through the ``/search`` code, imported lazily. The answer is the
-OpenSearch-style envelope the web table, CLI formatters and MCP helpers read; ``SearchVectors`` has no
-cursor, so there is no pagination and ``size`` is the whole window.
+one named, ranked by similarity plus a fixed bonus for the file types the query mentions, joined to
+their asset rows and authorized per hit through Casbin. When an OpenSearch mode is enabled the
+OpenSearch-only constraints are applied and ``_source`` enriched through the ``/search`` code, imported
+lazily. The answer is the OpenSearch-style envelope the web table, CLI formatters and MCP helpers read;
+``SearchVectors`` has no cursor, so there is no pagination and ``size`` is the whole window.
 """
 
 import json
@@ -77,6 +77,10 @@ INDEX_BUILDING_MESSAGE = "Vector index is being built"
 ROUTE_NOT_SERVED_MESSAGE = "Route is not served by this function"
 INVALID_BODY_MESSAGE = "Request body is not valid JSON"
 ENRICHMENT_FAILED_MESSAGE = "OpenSearch enrichment failed; hits are returned without it"
+# Added to the ranking value of a hit whose file class the query names, never to its returned _score. A
+# relevant match scores far above unrelated files (0.40 or more apart in measured runs), so the bonus
+# reorders near-equal hits without lifting a weak file of the named type above a strong match of another.
+INTENT_SCORE_BONUS = 0.1
 _SEGMENT_FIELDS = ("segmentKey", "segmentKind", "segmentLabel", "segmentStartMs", "segmentEndMs")
 _WHOLE_FILE_SEGMENT_KIND = "none"
 
@@ -200,12 +204,18 @@ def _collapse_hits(hits: List[VectorHit]) -> List[Dict[str, Any]]:
     return list(groups.values())
 
 
-def _partition_by_intent(hits: List[Dict[str, Any]], classes: List[str]) -> List[Dict[str, Any]]:
-    """Stable: hits of the named classes first, everything else after, order preserved within each part."""
+def _order_by_intent(hits: List[Dict[str, Any]], classes: List[str]) -> List[Dict[str, Any]]:
+    """Highest ranking value first: the similarity score, plus INTENT_SCORE_BONUS for a hit of a named
+    class. Stable, so equal values keep their distance order; each hit's distance is left as it is."""
     if not classes:
         return hits
     wanted = set(classes)
-    return [h for h in hits if h["item"].get("fileClass") in wanted] + [h for h in hits if h["item"].get("fileClass") not in wanted]
+
+    def ranking_value(hit: Dict[str, Any]) -> float:
+        bonus = INTENT_SCORE_BONUS if hit["item"].get("fileClass") in wanted else 0.0
+        return _score(hit["distance"]) + bonus
+
+    return sorted(hits, key=ranking_value, reverse=True)
 
 
 def _batch_get(keys: List[Dict[str, str]]) -> List[Dict[str, Any]]:
@@ -308,7 +318,8 @@ def _file_hit(hit: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _asset_hits(file_hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Best file hit per asset, presented as an asset record."""
+    """Each asset's first file hit in ranking order, presented as an asset record; the assets keep
+    that order, so an asset ranks by the boosted value of its best file and reports that file's score."""
     out: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for hit in file_hits:
         src, row = hit["_source"], hit["asset"]
@@ -347,7 +358,7 @@ def _envelope(hits, total, request, databases_searched, candidates, collapsed, c
         "_shards": {"total": 1, "successful": 1, "skipped": 0, "failed": 0},
         "hits": {
             "total": {"value": total, "relation": "gte" if truncated else "eq"},
-            "max_score": hits[0]["_score"] if hits else None,
+            "max_score": max(hit["_score"] for hit in hits) if hits else None,
             "hits": hits,
         },
         "aggregations": {},
@@ -465,7 +476,7 @@ def handle_nlp_search(event, claims_and_roles) -> APIGatewayProxyResponseV2:
     vector = embed_text(request.query, model_id=embedding_model_id, dimensions=embedding_dimensions, purpose="query")
     raw, breadth_full, depth_full = _run_searches(_store(), vector, request, plan)
     merged = _post_filter(_merge(raw), request)
-    collapsed = _partition_by_intent(_collapse_hits(merged), class_intent)
+    collapsed = _order_by_intent(_collapse_hits(merged), class_intent)
     truncated = breadth_full or plan.targets_cut
     if breadth_full:
         warnings.append(_warning("truncated:window", f"A result window of {plan.top_k} filled; more files may match"))

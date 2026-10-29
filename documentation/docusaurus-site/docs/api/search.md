@@ -275,7 +275,7 @@ Searches by meaning. The query is embedded with the deployment's embedding model
 | Field                | Type          | Default    | Description                                                                                                                                                                                      |
 | -------------------- | ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `query`              | string        | --         | Natural-language query (1-1,000 characters). Required.                                                                                                                                           |
-| `entityTypes`        | array         | `["file"]` | Exactly one of `["file"]` or `["asset"]`. Asset mode keeps the best file hit of each asset.                                                                                                      |
+| `entityTypes`        | array         | `["file"]` | Exactly one of `["file"]` or `["asset"]`. Asset mode keeps the highest-ranked file hit of each asset.                                                                                            |
 | `databaseIds`        | array[string] | `[]`       | Databases to search (at most 100), intersected with the caller's accessible databases. Empty searches every accessible database.                                                                 |
 | `includeArchived`    | boolean       | `false`    | Include archived files.                                                                                                                                                                          |
 | `includeSegments`    | boolean       | `true`     | Also match video time windows and text chunks. A file found through a segment reports it in `_vector.bestSegment`.                                                                               |
@@ -291,7 +291,7 @@ Searches by meaning. The query is embedded with the deployment's embedding model
 
 The OpenSearch-only fields are applied, and hits enriched, only when an OpenSearch mode is enabled. Without OpenSearch they are ignored and the response carries an `opensearch:fields_ignored` warning.
 
-File-type words in the query (`video`, `footage`, `point cloud`, `pdf`, `3D model`, ...) order hits of those file classes first; the detected classes are reported in `nlp.classIntent`. This is a soft preference, not a filter; use `fileClasses` to filter.
+File-type words in the query (`video`, `footage`, `point cloud`, `pdf`, `3D model`, ...) add a fixed bonus of 0.1 to the ranking value of hits of those file classes, so such a hit moves ahead of a hit of another class that scores less than 0.1 higher; the detected classes are reported in `nlp.classIntent`. The bonus changes the order only: `_score` and `_vector.distance` are the similarity without it. Words that describe content rather than a file type, such as `report` or `manual`, are not type words. This is a soft preference, not a filter; use `fileClasses` to filter.
 
 **Response:**
 

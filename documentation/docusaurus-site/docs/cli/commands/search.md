@@ -272,7 +272,7 @@ vamscli search nlp -q TEXT [OPTIONS]
 
 `--filter` is accepted as an alias of `--filters`.
 
-When no `--file-class` is given, type words in the query (`video`, `pdf`, `point cloud`, …) soft-boost matching classes rather than filtering; the classes detected are echoed in `nlp.classIntent` of the JSON response.
+When no `--file-class` is given, type words in the query (`video`, `pdf`, `point cloud`, …) give matching classes a ranking bonus of 0.1 rather than filtering: a hit of a named class moves ahead of one of another class that scores less than 0.1 higher, and the `score` column still shows the similarity without the bonus. Words that describe content, such as `report` or `manual`, name no type. The classes detected are echoed in `nlp.classIntent` of the JSON response.
 
 The `table` output shows `score`, `database`, `asset`, `file` and `class` for every hit, and adds a `segment` column with the best-matching window or chunk label whenever a hit was found through a segment. The total reads `N+` when it is a lower bound — the vector index answers fixed-size windows and one filled — and each `warnings[]` entry of the response is printed as a `Warning:` line (`truncated:window`, `truncated:targets`, `databases:none_accessible`, `opensearch:fields_ignored`, `opensearch:enrichment_failed`, `segments:window_full`). Narrow with `-d`, `--file-class` or `--file-ext` rather than raising `--size`.
 

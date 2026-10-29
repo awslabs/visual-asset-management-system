@@ -356,13 +356,17 @@ class TestCollapseAndOrder:
         vector = body["hits"]["hits"][0]["_vector"]
         assert vector["distance"] == 0.1 and vector["segmentHits"] == 1 and vector["bestSegment"] is None
 
-    def test_intent_partition_orders_named_classes_first(self, svc):
+    def test_intent_bonus_moves_a_near_tie_of_the_named_class_ahead(self, svc):
         rows(svc, ("db1", "a1"))
-        store = FakeStore([item(path="p.png", cls="image", distance=0.1, fileExt="png"), item(path="v.mp4", cls="video", distance=0.2, fileExt="mp4")])
+        store = FakeStore([
+            item(path="p.png", cls="image", distance=0.15, fileExt="png"),
+            item(path="v.mp4", cls="video", distance=0.2, fileExt="mp4"),
+        ])
         _, body = call(svc, store, {"query": "video of the crane"})
         assert [h["_vector"]["fileClass"] for h in body["hits"]["hits"]] == ["video", "image"]
         assert body["nlp"]["classIntent"] == ["video"]
-        assert body["hits"]["max_score"] == body["hits"]["hits"][0]["_score"]
+        # max_score is the highest similarity in the answer, not the first hit's.
+        assert body["hits"]["max_score"] == pytest.approx(0.85)
 
     def test_size_slices_after_authorization_and_total_counts_before(self, svc):
         rows(svc, ("db1", "a1"))
@@ -371,6 +375,66 @@ class TestCollapseAndOrder:
         assert len(body["hits"]["hits"]) == 2
         assert body["hits"]["total"]["value"] == 4 and body["aggregationTotal"] == 4
         assert body["nlp"]["truncated"] is True
+
+
+def _manual_and_inspection(pdf_score, txt_score):
+    """The two files of the type-word ranking case: a pump manual (document) and a valve inspection
+    note (text), each in its own asset, at the given similarity scores."""
+    return FakeStore([
+        item(asset="a1", path="/pump_manual.pdf", cls="document", fileExt="pdf", distance=1 - pdf_score),
+        item(asset="a2", path="/valve_inspection.txt", cls="text", fileExt="txt", distance=1 - txt_score),
+    ])
+
+
+class TestIntentBonus:
+    """A file-type word in the query adds a fixed bonus to the ranking value of the files of that class;
+    a much stronger match of another type still comes first, and the returned scores stay raw."""
+
+    def test_content_words_do_not_lift_a_weak_document_above_a_strong_match(self, svc):
+        rows(svc, ("db1", "a1"), ("db1", "a2"))
+        query = "steam valve inspection report with corrosion on the flange"
+        _, body = call(svc, _manual_and_inspection(0.078, 0.791), {"query": query})
+        assert [h["_source"]["str_key"] for h in body["hits"]["hits"]] == ["/valve_inspection.txt", "/pump_manual.pdf"]
+        assert body["nlp"]["classIntent"] == []
+
+    def test_a_type_word_does_not_lift_a_weak_match_above_a_much_stronger_one(self, svc):
+        rows(svc, ("db1", "a1"), ("db1", "a2"))
+        query = "pdf of the steam valve inspection with corrosion on the flange"
+        _, body = call(svc, _manual_and_inspection(0.078, 0.791), {"query": query})
+        hits = body["hits"]["hits"]
+        assert body["nlp"]["classIntent"] == ["document"]
+        assert [h["_source"]["str_key"] for h in hits] == ["/valve_inspection.txt", "/pump_manual.pdf"]
+        assert hits[1]["_score"] == pytest.approx(0.078)
+
+    def test_a_close_match_of_the_named_type_moves_ahead_with_its_raw_score(self, svc):
+        rows(svc, ("db1", "a1"), ("db1", "a2"))
+        _, body = call(svc, _manual_and_inspection(0.75, 0.79), {"query": "pdf about the valve inspection"})
+        hits = body["hits"]["hits"]
+        assert [h["_source"]["str_key"] for h in hits] == ["/pump_manual.pdf", "/valve_inspection.txt"]
+        assert hits[0]["_score"] == pytest.approx(0.75)
+        assert hits[0]["_vector"]["distance"] == pytest.approx(0.25)
+        assert body["hits"]["max_score"] == pytest.approx(0.79)
+
+    @pytest.mark.parametrize("pdf_score,txt_score,expected", [
+        (0.078, 0.791, ["a2", "a1"]),
+        (0.75, 0.79, ["a1", "a2"]),
+    ])
+    def test_asset_mode_ranks_assets_by_the_boosted_value_of_their_best_file(self, svc, pdf_score, txt_score, expected):
+        rows(svc, ("db1", "a1"), ("db1", "a2"))
+        body_in = {"query": "pdf about the valve inspection", "entityTypes": ["asset"]}
+        _, body = call(svc, _manual_and_inspection(pdf_score, txt_score), body_in)
+        hits = body["hits"]["hits"]
+        assert [h["_source"]["str_assetid"] for h in hits] == expected
+        assert {h["_source"]["str_assetid"]: h["_score"] for h in hits} == {
+            "a1": pytest.approx(pdf_score), "a2": pytest.approx(txt_score),
+        }
+
+    def test_an_explicit_class_filter_stays_a_hard_filter(self, svc):
+        rows(svc, ("db1", "a1"), ("db1", "a2"))
+        body_in = {"query": "pdf about the valve inspection", "fileClasses": ["document"]}
+        _, body = call(svc, _manual_and_inspection(0.75, 0.79), body_in)
+        assert [h["_source"]["str_key"] for h in body["hits"]["hits"]] == ["/pump_manual.pdf"]
+        assert body["nlp"]["classIntent"] == []
 
 
 class TestTruncation:

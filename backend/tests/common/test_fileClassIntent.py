@@ -75,6 +75,23 @@ def test_no_intent_is_empty(intent):
     assert intent.detect("") == []
 
 
+@pytest.mark.parametrize("query", [
+    "report",
+    "manual",
+    "steam valve inspection report with corrosion on the flange",
+    "maintenance manual for a hydraulic pump",
+])
+def test_content_words_name_no_file_type(intent, query):
+    # A report or a manual can be a PDF, a text file or a spreadsheet; the word says what the file is
+    # about, not its kind.
+    assert intent.detect(query) == []
+
+
+def test_document_type_words_still_detect(intent):
+    for query in ("pdf about torque settings", "the commissioning document"):
+        assert intent.detect(query) == ["document"]
+
+
 @pytest.mark.skipif(not os.path.exists(_CLASSIFIER), reason="fileClassifier.py not in the tree")
 def test_class_ids_and_phrases_match_the_classifier(intent):
     classifier = _load("fileClassifier_for_intent", _CLASSIFIER)

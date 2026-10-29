@@ -5,7 +5,8 @@
 
 Every embedding carries its file-type phrase, so the vector distance already favours the kind a query
 names; this module makes that preference deterministic by naming the classes a query mentions. The
-result is a soft boost in the handler (matching classes are ordered first), never a filter.
+handler turns the result into a fixed score bonus for files of those classes when it orders hits, never
+a filter.
 
 ``FILE_CLASS_PHRASES`` is the same dict the system GenAI metadata pipeline's ``fileClassifier`` embeds
 into every file's source text; the pipeline's tests pin the two copies to each other.
@@ -34,12 +35,13 @@ FILE_CLASS_PHRASES: Dict[str, str] = {
 FILE_CLASSES: Tuple[str, ...] = tuple(FILE_CLASS_PHRASES)
 
 # Words and phrases a person uses for each class; the class's own phrase is added at import. ``other``
-# has none: its phrase is the word "file", which names no kind.
+# has none: its phrase is the word "file", which names no kind. A word that says what a file is about
+# ("report", "manual") rather than its kind is not listed.
 _SYNONYMS: Dict[str, Tuple[str, ...]] = {
     "image": ("image", "photo", "photograph", "picture"),
     "video": ("video", "footage", "clip", "movie"),
     "audio": ("audio", "recording", "sound"),
-    "document": ("document", "pdf", "report", "manual"),
+    "document": ("document", "pdf"),
     "text": ("text file", "markdown", "readme", "source code", "log file"),
     "data": ("spreadsheet", "table", "csv", "dataset"),
     "tiles3d": ("tileset", "3d tiles"),
