@@ -1209,7 +1209,7 @@ that produced none and for a legacy run whose configuration record predates the 
 migration). No output content appears on the list — read a run's files with
 [Page execution detail files](#page-execution-detail-files), its result text with
 [Get execution results](#get-execution-results), and its metadata with
-[Page execution detail metadata](#page-execution-detail-metadata).
+[Read a metadata collection by page](#read-a-metadata-collection-by-page).
 
 :::note[A short page is a stated bound, not an absence of matches]
 Both the equality filters and the per-execution visibility check drop rows after a query's limit is spent, so the endpoint walks its query — repeating from its own continuation — until the page is full or the index is exhausted. A walk spanning several queries can return slightly more rows than `pageSize`.
