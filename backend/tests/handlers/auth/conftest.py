@@ -50,15 +50,6 @@ os.environ.setdefault("IGNORED_PATHS", "[]")
 os.environ.setdefault("API_KEY_STORAGE_TABLE_NAME", "test-apikey-table")
 os.environ.setdefault("USER_ROLES_STORAGE_TABLE_NAME", "test-userroles-table")
 
-from backend.tests.cloudFrontRangesStub import isolate_refresh  # noqa: E402
-
-
-@pytest.fixture(autouse=True)
-def cloudfront_refresh_offline(monkeypatch):
-    """No authorizer test reaches the network for the CloudFront origin-facing address list
-    (``backend/tests/cloudFrontRangesStub.py``)."""
-    return isolate_refresh(monkeypatch)
-
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_environment():

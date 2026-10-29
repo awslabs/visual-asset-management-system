@@ -1,10 +1,10 @@
 """The IP allow-list matcher must be family-aware: an IPv6 range is expressible and matches.
 
-The resolver returns an IPv6 client address as readily as an IPv4 one (as `identity.sourceIp`, or
-from `X-Forwarded-For` when `identity.sourceIp` is a CloudFront origin-facing address), so the module reads
-as IPv6-aware. The matcher was not: it split on `.` and `int()`ed each part, so any IPv6 literal
-raised `ValueError`, was caught, and became a denial — with no configuration able to admit an IPv6
-caller, because the CDK validator accepted only IPv4 dotted quads.
+`_strip_port` has always had a dedicated branch for the bracketed CloudFront viewer-address form
+(`[2001:db8::1]:50314`) and `test_clientIp.py` asserts the resolver extracts the address from it, so
+the module reads as IPv6-aware. The matcher was not: it split on `.` and `int()`ed each part, so any
+IPv6 literal raised `ValueError`, was caught, and became a denial — with no configuration able to
+admit an IPv6 caller, because the CDK validator accepted only IPv4 dotted quads.
 
 Every case below pairs a match with a non-match of the same family, so a matcher that simply started
 allowing everything fails here just as a family-blind one does. The cross-family cases are the ones
@@ -15,7 +15,7 @@ because the numeric comparison would otherwise be meaningless across families.
 import pytest
 
 from backend.backend.common.auth.clientIp import resolve_client_ip, is_ip_authorized
-from backend.tests.cloudFrontRangesStub import CLOUDFRONT_PEER_V4
+
 
 V4_RANGE = ["203.0.113.0", "203.0.113.255"]
 V6_RANGE = ["2001:db8::", "2001:db8::ffff"]
@@ -88,26 +88,22 @@ class TestMalformedRangesFailClosed:
 
 @pytest.mark.unit
 class TestEndToEndCloudFrontIpv6:
-    """The resolver already extracts an IPv6 viewer address; the matcher must now accept it.
-
-    ``sourceIp`` here is a CloudFront origin-facing address, so the viewer comes from
-    ``X-Forwarded-For`` (the guard). Through the distribution an IPv6 viewer is reported as
-    ``identity.sourceIp`` itself."""
+    """The resolver already extracts an IPv6 viewer address; the matcher must now accept it."""
 
     def _evt(self, source_ip, viewer):
         return {
             "requestContext": {"identity": {"sourceIp": source_ip}},
-            "headers": {"X-Forwarded-For": f"{viewer}, {source_ip}"},
+            "headers": {"CloudFront-Viewer-Address": viewer},
         }
 
-    def test_ipv6_viewer_resolves_and_authorizes(self):
-        evt = self._evt(CLOUDFRONT_PEER_V4, "2001:db8::1")
+    def test_bracketed_viewer_address_resolves_and_authorizes(self):
+        evt = self._evt("130.176.0.1", "[2001:db8::1]:50314")
         client_ip = resolve_client_ip(evt, fronted="cloudfront")
         assert client_ip == "2001:db8::1"
         assert is_ip_authorized(client_ip, [V6_RANGE]) is True
 
-    def test_ipv6_viewer_outside_the_range_is_denied(self):
-        evt = self._evt(CLOUDFRONT_PEER_V4, "2001:db9::1")
+    def test_bracketed_viewer_address_outside_the_range_is_denied(self):
+        evt = self._evt("130.176.0.1", "[2001:db9::1]:50314")
         client_ip = resolve_client_ip(evt, fronted="cloudfront")
         assert client_ip == "2001:db9::1"
         assert is_ip_authorized(client_ip, [V6_RANGE]) is False
