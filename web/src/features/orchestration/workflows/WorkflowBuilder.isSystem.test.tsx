@@ -118,4 +118,39 @@ describe("WorkflowBuilder for a system workflow", () => {
         expect(screen.queryByText(/System workflow:/)).toBeNull();
         expect(screen.getByLabelText("Workflow Name")).not.toBeDisabled();
     });
+
+    const basicFields = [
+        "Workflow Name",
+        "Category (optional)",
+        "Description (optional)",
+        "Sub-Dashboard URL (optional)",
+    ];
+
+    it("shows each locked Basic field greyed, as the system pipeline view does", async () => {
+        renderBuilder(systemWorkflow);
+        await waitFor(() =>
+            expect(screen.getByLabelText("Workflow Name")).toHaveValue("System GenAI Metadata")
+        );
+        for (const label of basicFields) {
+            const field = screen.getByLabelText(label);
+            expect(field).toBeDisabled();
+            // The greyed look keys on :disabled, which a control inside a disabled fieldset matches.
+            expect(field.matches(":disabled")).toBe(true);
+            expect(field).toHaveClass("disabled:opacity-50");
+        }
+        expect(screen.getByLabelText("Enabled")).toBeEnabled();
+    });
+
+    it("leaves each Basic field of an ordinary workflow enabled", async () => {
+        renderBuilder({ ...systemWorkflow, workflowId: "mine", isSystem: false });
+        await waitFor(() =>
+            expect(screen.getByLabelText("Workflow Name")).toHaveValue("System GenAI Metadata")
+        );
+        for (const label of basicFields) {
+            const field = screen.getByLabelText(label);
+            expect(field).toBeEnabled();
+            expect(field.matches(":disabled")).toBe(false);
+        }
+        expect(screen.getByLabelText("Enabled")).toBeEnabled();
+    });
 });

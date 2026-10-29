@@ -679,7 +679,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                                         value: e.target.value,
                                     })
                                 }
-                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                             />
                         </div>
                         <div>
@@ -700,7 +700,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                                         value: e.target.value,
                                     })
                                 }
-                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                             />
                         </div>
                         <div>
@@ -721,7 +721,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                                     })
                                 }
                                 rows={3}
-                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                             />
                         </div>
                         <div>
@@ -742,7 +742,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                                         value: e.target.value,
                                     })
                                 }
-                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary"
+                                className="orch-outline w-full px-3 py-2 border border-border-input rounded bg-surface-input text-text-primary disabled:opacity-50"
                             />
                         </div>
                     </fieldset>
