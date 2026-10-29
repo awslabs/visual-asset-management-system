@@ -1300,8 +1300,10 @@ GET /compliance/audit
 | `cascade_approved`             | A pending cascade is approved                                                                                                                  |
 | `cascade_rejected`             | A pending cascade is rejected                                                                                                                  |
 | `cascade_timed_out`            | A pending cascade reached its `approvalTimeoutAt` unapproved and was aborted (`abortReason` `approval timed out`); written by the system actor |
-| `cascade_completed`            | A cascade finishes evaluating its downstream assets; `details` carries `nodesEvaluated` and `summary`, the node count per status               |
+| `cascade_completed`            | A cascade finishes evaluating its downstream assets; `details` carries `nodesEvaluated` and `summary`, the node count per status (see below)   |
 | `asset_deleted`                | An asset is permanently deleted; its compliance record (state, binding override, quarantine) is removed                                        |
+
+A `cascade_completed` entry counts the descendants the cascade skipped as archived only for a reader who may see their database's archive (allowed on the archived record `<databaseId>#deleted`). For such a reader, `summary` counts them under `skipped_archived`, `nodesEvaluated` includes them, and `skippedArchivedByDatabase` maps each of those databases to its count. For any other reader they are in none of the three, on every path that returns the entry. The subscriber notification of a finished cascade, one message for every subscriber, lists the node count per status without them.
 
 ### Error responses
 

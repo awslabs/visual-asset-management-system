@@ -10,7 +10,10 @@ Audit table (PK entryId; GSI AssetIndex on databaseId:assetId/timestamp; GSI Eve
 eventType/timestamp; GSI AuditByDateGSI on the constant allListPartition/timestamp). Every listing
 is one newest-first query on the index that serves it and pages externally with a Base64 NextToken.
 The entries of an archived asset are decided with its stored database id, `<databaseId>#deleted`
-(`ArchivedAssets`), so they follow the engine's archived-record rule as the asset does.
+(`ArchivedAssets`), so they follow the engine's archived-record rule as the asset does. A finished
+cascade's entry (`cascade_completed`) counts the descendants it skipped as archived only for the
+databases whose archive the caller may see (`cascadeAuditSummary.details_for_reader`), on every
+path that returns it.
 """
 
 import base64
@@ -26,6 +29,7 @@ from common.apiRoutes import API_COMPLIANCE_AUDIT, API_COMPLIANCE_AUDIT_ASSET
 from common.compliance import listing
 from common.compliance.archivedAssets import ArchivedAssets
 from common.compliance.auditRecord import AUDIT_LIST_PARTITION
+from common.compliance.cascadeAuditSummary import details_for_reader
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -59,6 +63,10 @@ INVALID_PAGINATION_TOKEN_MESSAGE = "Invalid pagination token"
 ASSET_INDEX_KEY_ATTRIBUTES = ("entryId", "databaseId:assetId", "timestamp")
 EVENT_TYPE_INDEX_KEY_ATTRIBUTES = ("entryId", "eventType", "timestamp")
 DATE_INDEX_KEY_ATTRIBUTES = ("entryId", "allListPartition", "timestamp")
+# The cache key of the evaluation GET on a database's stored id `<databaseId>#deleted`: the row
+# decision of a listing and the archived counts of a finished cascade's entry ask it once per
+# database of a request.
+ARCHIVE_VISIBILITY_CACHE_KEY = "GET"
 
 try:
     audit_table_name = get_table_name(ResourceKeys.COMPLIANCE_AUDIT_STORAGE_TABLE)
@@ -144,6 +152,20 @@ def _enforce(database_id, action):
     if len(claims_and_roles["tokens"]) == 0:
         return False
     return CasbinEnforcer(claims_and_roles).enforce(_evaluation_object(database_id), action)
+
+
+def _archive_visibility(casbin_enforcer, archived):
+    """`archive_visible(database_id)` for the caller: whether it may see that database's archive,
+    the evaluation GET on the stored id `<databaseId>#deleted` (`ArchivedAssets.archive_visible`,
+    asked once per database of the request, the same answer the listing's row decision caches).
+    A finished cascade's entry counts the descendants it skipped as archived only for the
+    databases where this passes (`cascadeAuditSummary.details_for_reader`)."""
+    def archive_visible(database_id):
+        return bool(casbin_enforcer) and archived.archive_visible(
+            database_id,
+            lambda stored_id: casbin_enforcer.enforce(_evaluation_object(stored_id), "GET"),
+            cache_key=ARCHIVE_VISIBILITY_CACHE_KEY)
+    return archive_visible
 
 
 #######################
@@ -232,7 +254,9 @@ def get_asset_audit(event, database_id, asset_id, params):
 
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not ArchivedAssets(asset_table).decide(
+    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+    archived = ArchivedAssets(asset_table)
+    if not archived.decide(
             database_id, asset_id, lambda stored_id: _enforce(stored_id, "GET")):
         return authorization_error()
 
@@ -251,7 +275,8 @@ def get_asset_audit(event, database_id, asset_id, params):
         query_kwargs["ExclusiveStartKey"] = exclusive_start_key
 
     response = audit_table.query(**query_kwargs)
-    result = {"entries": response.get("Items", [])}
+    visible = _archive_visibility(casbin_enforcer, archived)
+    result = {"entries": [details_for_reader(entry, visible) for entry in response.get("Items", [])]}
     if "LastEvaluatedKey" in response:
         result["NextToken"] = _encode_token(response["LastEvaluatedKey"])
     return success(body=result)
@@ -381,11 +406,13 @@ def query_audit(event, params):
         return bool(casbin_enforcer) and archived.decide(
             item.get("databaseId"), item.get("assetId"),
             lambda stored_id: casbin_enforcer.enforce(_evaluation_object(stored_id), "GET"),
-            cache_key="GET", listing=True)
+            cache_key=ARCHIVE_VISIBILITY_CACHE_KEY, listing=True)
 
     entries, next_key, _ = listing.query_page(
         audit_table, query_kwargs, page_size, keys, start_key=start_key,
         filtered=expression is not None, accept=may_get)
+    visible = _archive_visibility(casbin_enforcer, archived)
+    entries = [details_for_reader(entry, visible) for entry in entries]
     for entry in entries:
         entry.pop("searchText", None)
     result = {"entries": entries}
