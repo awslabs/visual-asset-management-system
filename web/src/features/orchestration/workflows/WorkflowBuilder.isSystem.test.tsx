@@ -199,4 +199,26 @@ describe("WorkflowBuilder for a system workflow", () => {
             expect(fieldset).not.toHaveClass("[&_:disabled]:opacity-50");
         }
     );
+
+    it("locks the pipeline drag handle of a system workflow", async () => {
+        const user = userEvent.setup();
+        renderBuilder(systemWorkflow);
+        await waitFor(() => expect(screen.getByLabelText("Enabled")).toBeChecked());
+        await openStep(user, 2);
+        const handle = screen.getByText("☰");
+        expect(handle).toHaveAttribute("aria-disabled", "true");
+        expect(handle).toHaveClass("opacity-50");
+        expect(handle).not.toHaveClass("cursor-grab");
+    });
+
+    it("keeps the pipeline drag handle of an ordinary workflow live", async () => {
+        const user = userEvent.setup();
+        renderBuilder({ ...systemWorkflow, workflowId: "mine", isSystem: false });
+        await waitFor(() => expect(screen.getByLabelText("Enabled")).toBeChecked());
+        await openStep(user, 2);
+        const handle = screen.getByText("☰");
+        expect(handle).toHaveAttribute("aria-disabled", "false");
+        expect(handle).toHaveClass("cursor-grab");
+        expect(handle).not.toHaveClass("opacity-50");
+    });
 });

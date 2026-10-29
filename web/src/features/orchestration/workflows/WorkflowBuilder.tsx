@@ -849,6 +849,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                             onChange={(value) =>
                                 dispatch({ type: "SET_FIELD", field: "specifiedPipelines", value })
                             }
+                            disabled={isSystemWorkflow}
                         />
                         {state.specifiedPipelines.length > 0 && (
                             <Suspense
