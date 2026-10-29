@@ -211,11 +211,21 @@ class TestEachEmitterSharesOneContract:
                                "startedAt", "completedAt", "executionGroupId"}
 
 
-def _record_outputs(main_table, events_client):
-    """Drive `record_execution_outputs` with no output rows, so the only writes are the pipeline row's
-    status (patched) and the main row's terminal status on `main_table`."""
+def _tables(main_table, config_table, config_table_name):
+    """A DynamoDB resource whose configuration table is `config_table` and every other table is
+    `main_table`. The end-state and error lambdas also UPDATE the configuration row's outputTypes, so
+    it gets its own mock and `main_table` sees only the main-row writes."""
     dynamo = MagicMock()
-    dynamo.Table.return_value = main_table
+    dynamo.Table.side_effect = lambda name: config_table if name == config_table_name else main_table
+    return dynamo
+
+
+def _record_outputs(main_table, events_client, config_table=None):
+    """Drive `record_execution_outputs` with no output rows, so the only writes are the pipeline row's
+    status (patched), the configuration row's outputTypes on `config_table`, and the main row's
+    terminal status on `main_table`."""
+    dynamo = _tables(main_table, config_table or MagicMock(),
+                     po.workflow_execution_configuration_table)
     with patch.object(po, "events_client", events_client), \
             patch.object(po, "orchestration_bus_arn", BUS), \
             patch.object(po, "orchestration_event_source_prefix", PREFIX), \
@@ -355,8 +365,7 @@ class TestErrorHandlerEmitsWhenItFinalizes:
             main_table = MagicMock()
             main_table.query.return_value = {"Items": [{"executionStatus": "RUNNING"}]}
             main_table.update_item.side_effect = outcome
-            dynamodb = MagicMock()
-            dynamodb.Table.return_value = main_table
+            dynamodb = _tables(main_table, MagicMock(), heh.workflow_execution_configuration_table)
             events_client = MagicMock()
             with patch.object(heh, "events_client", events_client), \
                     patch.object(heh, "orchestration_bus_arn", BUS), \
