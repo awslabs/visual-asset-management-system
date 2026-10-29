@@ -14,20 +14,21 @@
  * projection are pinned too, because a KEYS_ONLY projection would make every page a fan-out of GetItem
  * calls and a swapped key order would silently query the wrong partition.
  *
- * **The default-schema seed is idempotent.** The `AwsCustomResource` that writes
- * `default-compliance-schema` puts with `attribute_not_exists(...)` so an existing row is never
- * overwritten — and that conditional put MUST ignore `ConditionalCheckFailedException`, or every Create
- * against a table that already holds the row fails the resource, which fails `apiBuilder2`, which rolls
- * back the core stack. That Create-against-existing case is ordinary, not exotic: a flag flipped
- * false→true on a deployment that seeded earlier, a construct replacement, or a `RemovalPolicy.RETAIN`
- * table adopted by a fresh stack. The Update call is the same put, so a redeploy is a no-op rather than
- * an overwrite.
- *
- * `apiBuilder2` hosts no other `Custom::AWS` resource, which is why the seed can be located by type
- * within that stack and why it keeps its own role rather than sharing one.
+ * **The default-schema seed is stable and idempotent.** A Lambda-backed custom resource writes
+ * `default-compliance-schema` (`backend/backend/customResources/complianceDefaultSchemaSeed.py`, whose
+ * conditional put and its no-op on an existing row are tested in
+ * `backend/tests/handlers/compliance/test_complianceDefaultSchemaSeed.py`). The synth-level contracts:
+ * the properties carry the row without a timestamp, so two synths of the same source emit the same
+ * `apiBuilder2` template (the handler stamps `registeredAt` when it writes) and a `cdk diff` of an
+ * unchanged source shows no change; the handler can issue `dynamodb:PutItem` on the schema table and
+ * nothing else, so it cannot touch a binding or rewrite anything beside the row; and the previous
+ * `AwsCustomResource` seed is gone, so an upgrade creates the new resource (a conditional put that
+ * leaves the existing row alone) and deletes the old one, which had no Delete call.
  */
 
-import { SynthResult, synthTemplate } from "../support/templateSynth";
+import * as fs from "fs";
+import * as path from "path";
+import { Resource, SynthResult, synthTemplate } from "../support/templateSynth";
 
 const synth = () => synthTemplate("commercial");
 
@@ -54,16 +55,42 @@ function assetStateTable(s: SynthResult) {
     return matches[0];
 }
 
-/** The seed custom resource's Create/Update payloads, parsed from their Fn::Join-assembled JSON. */
+const SEED_HANDLER = "customResources.complianceDefaultSchemaSeed.lambda_handler";
+
+/** The seed custom resource in apiBuilder2, with its properties and the row it writes. */
 function complianceSeed(s: SynthResult) {
     const apiBuilder2 = nestedTemplateKeyFor(s, "ApiBuilder2");
-    const seeds = s.where("Custom::AWS", (r) => r.stack === apiBuilder2);
+    const seeds = s.where(
+        "AWS::CloudFormation::CustomResource",
+        (r) => r.stack === apiBuilder2 && /ComplianceDefaultSchemaSeed/.test(r.logicalId)
+    );
     expect(seeds).toHaveLength(1);
     const props = seeds[0].properties;
-    const parse = (value: unknown) =>
-        value === undefined ? undefined : JSON.parse(SynthResult.flatten(value));
-    return { create: parse(props.Create), update: parse(props.Update), del: parse(props.Delete) };
+    return { resource: seeds[0], props, item: JSON.parse(props.Item) };
 }
+
+/** The seed's handler function and every IAM statement attached to its execution role. */
+function seedFunctionStatements(s: SynthResult): { fn: Resource; statements: any[] } {
+    const apiBuilder2 = nestedTemplateKeyFor(s, "ApiBuilder2");
+    const fns = s.where(
+        "AWS::Lambda::Function",
+        (r) => r.stack === apiBuilder2 && r.properties.Handler === SEED_HANDLER
+    );
+    expect(fns).toHaveLength(1);
+    const roleId = fns[0].properties.Role["Fn::GetAtt"][0];
+    const statements = s
+        .where(
+            "AWS::IAM::Policy",
+            (r) =>
+                r.stack === apiBuilder2 &&
+                (r.properties.Roles ?? []).some((role: any) => role.Ref === roleId)
+        )
+        .flatMap((p) => p.properties.PolicyDocument.Statement);
+    return { fn: fns[0], statements };
+}
+
+const actionsOf = (statement: any): string[] =>
+    Array.isArray(statement.Action) ? statement.Action : [statement.Action];
 
 describe("ComplianceAssetStateStorageTable indexes", () => {
     test("[control] the table synthesizes with the databaseId / assetId key", () => {
@@ -140,57 +167,120 @@ describe("ComplianceAssetStateStorageTable indexes", () => {
     });
 });
 
-describe("default compliance schema seed is idempotent", () => {
-    test("[control] apiBuilder2 hosts exactly one Custom::AWS resource, and it is the seed put", () => {
-        const { create } = complianceSeed(synth());
-        expect(create.service).toBe("DynamoDB");
-        expect(create.action).toBe("putItem");
-        expect(create.parameters.Item.schemaName).toEqual({ S: "default-compliance-schema" });
-        expect(create.parameters.Item.isSystem).toEqual({ BOOL: true });
+describe("default compliance schema seed", () => {
+    test("[control] apiBuilder2 hosts the seed, and it writes the GLOBAL system schema", () => {
+        const { item } = complianceSeed(synth());
+        expect(item.schemaName).toEqual({ S: "default-compliance-schema" });
+        expect(item.internalVersion).toEqual({ N: "1" });
+        expect(item.databaseId).toEqual({ S: "GLOBAL" });
+        expect(item.isSystem).toEqual({ BOOL: true });
+        expect(item.registeredBy).toEqual({ S: "SYSTEM_USER" });
+        expect(JSON.parse(item.schemaBody.S).schemaFormat).toBe("vams-rules-v1");
     });
 
-    test("the put is conditional on the row not existing", () => {
-        // The condition is what protects an existing row from being overwritten by a redeploy; the
-        // ignore below is what makes that protection succeed rather than fail the resource.
-        const { create } = complianceSeed(synth());
-        expect(create.parameters.ConditionExpression).toBe(
-            "attribute_not_exists(schemaName) AND attribute_not_exists(internalVersion)"
+    test("the row carries no timestamp: the handler stamps registeredAt when it writes", () => {
+        // A value fixed at synth time is the time `cdk synth` ran, not the time the row was written,
+        // and it changes the template on every synth.
+        const { props, item } = complianceSeed(synth());
+        expect(item.registeredAt).toBeUndefined();
+        expect(Object.keys(props).sort()).toEqual(["Item", "ServiceToken", "TableName"]);
+        expect(JSON.stringify(props.Item)).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+    });
+
+    test("two synths of the same source emit the same apiBuilder2 template", () => {
+        // The second synth runs with the clock moved a year on, so any value derived from the time
+        // of the synth differs between the two templates.
+        const first = synth();
+        jest.useFakeTimers({
+            now: Date.now() + 365 * 24 * 3600 * 1000,
+            doNotFake: [
+                "hrtime",
+                "nextTick",
+                "performance",
+                "queueMicrotask",
+                "requestAnimationFrame",
+                "cancelAnimationFrame",
+                "requestIdleCallback",
+                "cancelIdleCallback",
+                "setImmediate",
+                "clearImmediate",
+                "setInterval",
+                "clearInterval",
+                "setTimeout",
+                "clearTimeout",
+            ],
+        });
+        let second: SynthResult;
+        try {
+            second = synthTemplate("commercial", {
+                mutate: () => undefined,
+                mutateKey: "seed-stability-second-synth",
+            });
+        } finally {
+            jest.useRealTimers();
+        }
+        const key = nestedTemplateKeyFor(first, "ApiBuilder2");
+        expect(nestedTemplateKeyFor(second, "ApiBuilder2")).toBe(key);
+        // The top-level Metadata is left out: `setupSecurityAndLoggingEnvironmentAndPermissions`
+        // adds its stack-level cdk-nag suppression once per stack address per process, so a second
+        // synth in the same jest worker emits it without that block. A `cdk synth` runs one app.
+        const body = (template: any) => {
+            const rest = { ...template };
+            delete rest.Metadata;
+            return rest;
+        };
+        expect(Object.keys(body(first.templates[key]))).toContain("Resources");
+        expect(body(second.templates[key])).toEqual(body(first.templates[key]));
+    });
+
+    test("the handler module exists where the function's handler string points", () => {
+        const { fn } = seedFunctionStatements(synth());
+        expect(fn.properties.Handler).toBe(SEED_HANDLER);
+        const handlerFile = path.join(
+            __dirname,
+            "../../../backend/backend/customResources/complianceDefaultSchemaSeed.py"
         );
+        expect(fs.existsSync(handlerFile)).toBe(true);
     });
 
-    test("ConditionalCheckFailedException is ignored", () => {
-        const { create, update } = complianceSeed(synth());
-        expect(create.ignoreErrorCodesMatching).toBe("ConditionalCheckFailedException");
-        expect(update.ignoreErrorCodesMatching).toBe("ConditionalCheckFailedException");
+    test("the handler can issue dynamodb:PutItem and no other DynamoDB action", () => {
+        // A PutItem conditional on the key not existing is the whole write. No UpdateItem,
+        // DeleteItem or BatchWriteItem, and no grant on a binding or any other table, so the seed
+        // cannot reset what an administrator set.
+        const { statements } = seedFunctionStatements(synth());
+        const dynamo = statements.filter((st) =>
+            actionsOf(st).some((a) => a.startsWith("dynamodb:"))
+        );
+        expect(dynamo).toHaveLength(1);
+        expect(actionsOf(dynamo[0])).toEqual(["dynamodb:PutItem"]);
+        const resources = Array.isArray(dynamo[0].Resource)
+            ? dynamo[0].Resource
+            : [dynamo[0].Resource];
+        expect(resources).toHaveLength(1);
+        expect(JSON.stringify(resources[0])).toMatch(/ComplianceSchemaStorageTable/);
     });
 
-    test("Update is the same call as Create, and there is no Delete", () => {
-        // An Update that differed from Create could rewrite the row a redeploy is meant to leave alone;
-        // a Delete would remove the system schema when the resource is replaced or the stack torn down.
-        const { create, update, del } = complianceSeed(synth());
-        expect(update).toEqual(create);
-        expect(del).toBeUndefined();
+    test("the seed writes to the compliance schema table", () => {
+        const { props } = complianceSeed(synth());
+        expect(JSON.stringify(props.TableName)).toMatch(/ComplianceSchemaStorageTable/);
+    });
+
+    test("the previous AwsCustomResource seed is gone from apiBuilder2", () => {
+        // An upgrade then creates the new seed (a conditional put that leaves the existing row
+        // alone) and deletes the old resource, whose Delete made no call.
+        const s = synth();
+        const apiBuilder2 = nestedTemplateKeyFor(s, "ApiBuilder2");
+        expect(s.where("Custom::AWS", (r) => r.stack === apiBuilder2)).toHaveLength(0);
     });
 
     test("the seeded description stays true once autoLoadDefaultSchema is turned off", () => {
         // The row outlives the seed: turning the flag off removes the custom resource but not the
         // row, so its description names the flag that wrote it and says deployments leave it alone,
         // rather than claiming the deployment provides it.
-        const { create } = complianceSeed(synth());
-        const description: string = create.parameters.Item.description.S;
+        const { item } = complianceSeed(synth());
+        const description: string = item.description.S;
         expect(description).toContain("app.compliance.autoLoadDefaultSchema");
         expect(description).toContain("do not change or remove it");
         expect(description).not.toContain("Deployed automatically");
-    });
-
-    test("the physical id is a stable literal, not a response field", () => {
-        // `ignoreErrorCodesMatching` is incompatible with `PhysicalResourceId.fromResponse` — an ignored
-        // error returns no response to read — and a physical id that changed between Create and Update
-        // would make CloudFormation replace (delete) the resource on every deploy.
-        const { create, update } = complianceSeed(synth());
-        expect(typeof create.physicalResourceId.id).toBe("string");
-        expect(create.physicalResourceId.id).toMatch(/_default_schema_initialization$/);
-        expect(create.physicalResourceId.responsePath).toBeUndefined();
-        expect(update.physicalResourceId).toEqual(create.physicalResourceId);
     });
 });
