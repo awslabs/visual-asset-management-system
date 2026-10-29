@@ -268,7 +268,9 @@ reports `Source: stored` or `Source: live` so you can tell which was returned.
 
 Returned log text is redacted: credential-bearing values — authorization headers, bearer tokens, AWS
 access-key IDs, JSON web tokens, and labelled secret fields such as `SecretAccessKey` and
-`SessionToken` — are replaced with `<redacted>` before the logs are stored or returned.
+`SessionToken` — are replaced with `<redacted>` before the logs are stored or returned. So are the
+client details of the request that launched the execution: its source IP address, user agent, API key
+ID, and IAM or Amazon Cognito caller identity.
 
 ```bash
 vamscli execution logs my-execution-id

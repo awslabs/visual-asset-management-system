@@ -2012,7 +2012,7 @@ This route enforces the rule [Get execution details](#get-execution-details) enf
 
 Returns logs for an execution in one of two modes. Logs are always scoped to the requested execution; supplying a `pipelineExecutionId` narrows the result to that single pipeline execution.
 
-Returned log text is redacted: credential-bearing values — authorization headers, bearer tokens, AWS access-key IDs, JSON web tokens, and labelled secret fields such as `SecretAccessKey` and `SessionToken` — are replaced with `<redacted>` before the logs are stored or returned.
+Returned log text is redacted: credential-bearing values — authorization headers, bearer tokens, AWS access-key IDs, JSON web tokens, and labelled secret fields such as `SecretAccessKey` and `SessionToken` — are replaced with `<redacted>` before the logs are stored or returned. So are the client details of the request that launched the execution: its source IP address, user agent, API key ID, and IAM or Amazon Cognito caller identity.
 
 ```
 GET /workflows/executions/{executionId}/logs
@@ -2173,7 +2173,7 @@ Each `logSources` entry reports the location as registered, so a prefix-only `ba
 `warnings` is present only when a log could not be read — a missing permission on one group, or a registration list longer than the per-request cap. Each entry names the log in question. A warning never fails the request: the logs that could be read are still returned.
 
 :::note[Redaction]
-Every log string in the response passes through credential redaction first, so an inline token, AWS key, or JWT in a log message is masked before it reaches the caller.
+Every log string in the response passes through credential redaction first, so an inline token, AWS key, or JWT in a log message is masked before it reaches the caller, as are the source IP address, user agent, and API key ID of the request that launched the execution.
 :::
 
 :::note[Scope]
