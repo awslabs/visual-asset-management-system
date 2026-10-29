@@ -186,3 +186,25 @@ describe("SearchTopBar query band", () => {
         expect(screen.getByRole("button", { name: "Clear all filters" })).toBeInTheDocument();
     });
 });
+
+describe("SearchTopBar while a search runs", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    it("keeps the query box focused and sends no second search on Enter", async () => {
+        const onSearch = jest.fn();
+        const { rerender } = render(
+            <SearchTopBar {...baseProps} query="pump" onSearch={onSearch} />
+        );
+        const box = screen.getByRole("searchbox", { name: "Keyword search query" });
+        box.focus();
+        rerender(<SearchTopBar {...baseProps} query="pump" onSearch={onSearch} loading />);
+        expect(box).not.toBeDisabled();
+        expect(box).toHaveAttribute("readonly");
+        expect(document.activeElement).toBe(box);
+        await userEvent.keyboard("{Enter}");
+        expect(onSearch).not.toHaveBeenCalled();
+        rerender(<SearchTopBar {...baseProps} query="pump" onSearch={onSearch} />);
+        await userEvent.keyboard("{Enter}");
+        expect(onSearch).toHaveBeenCalledTimes(1);
+    });
+});

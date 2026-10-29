@@ -83,7 +83,7 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
     const queryLimitError = searchMode === "nlp" ? nlpQueryLimitError(query) : undefined;
 
     const handleKeyDown = (event: any) => {
-        if (event.detail.key === "Enter" && !queryLimitError) {
+        if (event.detail.key === "Enter" && !queryLimitError && !loading) {
             onSearch();
         }
     };
@@ -161,7 +161,7 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
                                         value={query}
                                         onChange={(e) => onQueryChange(e.detail.value)}
                                         onKeyDown={handleKeyDown}
-                                        disabled={loading}
+                                        readOnly={loading}
                                         invalid={!!queryLimitError}
                                         clearAriaLabel="Clear search"
                                     />
