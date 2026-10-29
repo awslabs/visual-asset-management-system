@@ -18,7 +18,8 @@ from botocore.exceptions import ClientError
 from moto import mock_aws
 
 from backend.tests.handlers.compliance._harness import (
-    COMPLIANCE_ASSET_STATE_TABLE_DEFINITION, USER, body_of, claims_for, enforcer, rest_event,
+    COMPLIANCE_ASSET_STATE_TABLE_DEFINITION, USER, body_of, claims_for, database_table_with,
+    enforcer, rest_event,
 )
 from common.compliance import listing
 from handlers.compliance import complianceEvaluateService as evaluate_svc
@@ -63,7 +64,8 @@ def state_table():
 def _overview(table, **params):
     with patch.object(evaluate_svc, "request_to_claims", claims_for(USER)), \
             patch.object(evaluate_svc, "CasbinEnforcer", return_value=enforcer()), \
-            patch.object(evaluate_svc, "asset_state_table", table):
+            patch.object(evaluate_svc, "asset_state_table", table), \
+            patch.object(evaluate_svc.store, "database_table", database_table_with(DB)):
         return evaluate_svc.lambda_handler(
             rest_event("GET", f"/compliance/state/{DB}", {"databaseId": DB},
                        query_params=params or None), MagicMock())

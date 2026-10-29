@@ -7168,9 +7168,11 @@ class APIClient(CustomAPIClientMixin):
 
     # Compliance API Methods
 
-    # Every compliance handler answers a rejected request with a 400 whose `message` names the cause,
-    # and reserves 404 for a schema or cascade that does not exist. One mapper classifies the message
-    # so each method stays a single call; `action` is the verb phrase the surfaced error begins with.
+    # Every compliance handler answers a rejected request with a 400 whose `message` names the cause;
+    # an entity that does not exist is a 400 "... not found", or a 404 "Database not found" from a
+    # database-level read (the overview, and the quarantine, cascade and audit listings filtered by
+    # a database). One mapper classifies the message so each method stays a single call; `action`
+    # is the verb phrase the surfaced error begins with.
 
     @staticmethod
     def _compliance_not_found_error(message: str):
@@ -7570,6 +7572,8 @@ class APIClient(CustomAPIClientMixin):
             whatever the filters; `assets` is one page of the filtered rows.
 
         Raises:
+            DatabaseNotFoundError: When the database id names no database (the route answers 404
+                rather than an empty overview)
             InvalidComplianceDataError: When the pagination token is malformed
         """
         endpoint = API_COMPLIANCE_STATE_DATABASE.format(databaseId=database_id)

@@ -10060,6 +10060,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
+                "404":
+                    description: "Database not found: no database has this identifier, live or deleted (answered only to a caller allowed on the identifier)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
                 "500":
                     description: Internal server error.
                     content:
@@ -10102,6 +10108,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: "#/components/schemas/error"
                 "403":
                     description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "404":
+                    description: "Database not found: `databaseId` names no database, live or deleted (answered only to a caller allowed on it)."
                     content:
                         application/json:
                             schema:
@@ -10298,6 +10310,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: "#/components/schemas/error"
                 "403":
                     description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "404":
+                    description: "Database not found: `databaseId` names no database, live or deleted (answered only to a caller allowed on it)."
                     content:
                         application/json:
                             schema:
@@ -10527,6 +10545,12 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: "#/components/schemas/error"
                 "403":
                     description: Not authorized.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/error"
+                "404":
+                    description: "Database not found: `databaseId` names no database, live or deleted (answered only to a caller allowed on it)."
                     content:
                         application/json:
                             schema:

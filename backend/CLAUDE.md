@@ -66,6 +66,12 @@ backend/
 │   │   │                                           #   rule scopes (asset|files|fileAttributes|links,
 │   │   │                                           #   SCOPE_ENTITY_TYPE binds each to a metadata-schema
 │   │   │                                           #   entity type), tolerances, verdict → state
+│   │   ├── compliance/knownDatabase.py             # database_known(): whether an id names a database
+│   │   │                                           #   (GLOBAL, a database row, or a deleted one's
+│   │   │                                           #   `<db>#deleted` row); the database-level reads
+│   │   │                                           #   (overview; quarantine, cascade, audit listings
+│   │   │                                           #   by databaseId) answer 404 database_not_found()
+│   │   │                                           #   after their own check on the id
 │   │   ├── compliance/quarantineGuard.py           # quarantine-blocks-download guard shared by the four
 │   │   │                                           #   asset download Lambdas; resolves the asset-state
 │   │   │                                           #   table only when COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD=true

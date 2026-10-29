@@ -65,6 +65,7 @@ from botocore.exceptions import ClientError
 
 from common.apiRoutes import API_EXECUTE_WORKFLOW
 from common.compliance import evaluationEngine as engine
+from common.compliance import knownDatabase
 from common.compliance import listing
 from common.compliance.auditRecord import build_audit_item
 from common.dynamodb import query_all_items, to_update_expr
@@ -226,6 +227,12 @@ def get_asset_item(database_id: str, asset_id: str) -> Optional[Dict[str, Any]]:
 def get_database_item(database_id: str) -> Optional[Dict[str, Any]]:
     """The database row (it carries the database binding, `complianceSchemaName`), or None."""
     return database_table.get_item(Key={"databaseId": database_id}).get("Item")
+
+
+def database_known(database_id: str) -> bool:
+    """Whether the id names a database (`knownDatabase.database_known`: `GLOBAL`, a database row,
+    or a deleted database's row); the database-level compliance reads answer `404` otherwise."""
+    return knownDatabase.database_known(database_table, database_id)
 
 
 # --- Database binding: assets registered under it ---

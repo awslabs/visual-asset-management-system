@@ -26,6 +26,7 @@ from common.apiRoutes import API_COMPLIANCE_AUDIT, API_COMPLIANCE_AUDIT_ASSET
 from common.compliance import listing
 from common.compliance.archivedAssets import ArchivedAssets
 from common.compliance.auditRecord import AUDIT_LIST_PARTITION
+from common.compliance.knownDatabase import database_known, database_not_found
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -63,6 +64,7 @@ DATE_INDEX_KEY_ATTRIBUTES = ("entryId", "allListPartition", "timestamp")
 try:
     audit_table_name = get_table_name(ResourceKeys.COMPLIANCE_AUDIT_STORAGE_TABLE)
     asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    database_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
 except Exception as e:
     logger.exception("Failed loading resource names")
     raise e
@@ -70,6 +72,8 @@ except Exception as e:
 audit_table = dynamodb.Table(audit_table_name)
 # Read for the archived status of an asset whose entries a caller may not see (keys only).
 asset_table = dynamodb.Table(asset_table_name)
+# Read for whether a listing's `databaseId` names a database (keys only).
+database_table = dynamodb.Table(database_table_name)
 
 
 #######################
@@ -287,7 +291,9 @@ def query_audit(event, params):
     - otherwise AuditByDateGSI, whose partition is the constant every audit row carries.
     The time window narrows each index's `timestamp` sort key. The page is filled across at most
     `listing.DEFAULT_READ_BUDGET` reads with the entries the caller may GET by databaseId
-    (`listing.query_page`); `NextToken` resumes after the last entry returned.
+    (`listing.query_page`); `NextToken` resumes after the last entry returned. A `databaseId` that
+    names no database, live or deleted, answers `404` "Database not found" to a caller the rows'
+    check allows on that id (`knownDatabase.database_known`).
     """
     event_type = params.get("eventType") or None
     start_date = params.get("startDate")
@@ -372,6 +378,14 @@ def query_audit(event, params):
         query_kwargs["FilterExpression"] = expression
 
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
+    # A database filter naming no database is not an empty page (`knownDatabase`). Checked only for
+    # a caller the rows' own check allows on that id: any other caller gets the page it got before
+    # (no entry of the database is listed for it), whether the database exists or not. A deleted
+    # database still names one, so its history stays readable.
+    if (database_id and casbin_enforcer
+            and casbin_enforcer.enforce(_evaluation_object(database_id), "GET")
+            and not database_known(database_table, database_id)):
+        return database_not_found(event)
     # The entries of an archived asset are listed only for a caller allowed on its stored database
     # id; its archived status is read once per database, and only when that decides anything.
     archived = ArchivedAssets(asset_table)

@@ -251,6 +251,8 @@ export function buildComplianceQuarantineServiceFunction(
     storageResources.dynamo.complianceEvaluationStorageTable.grantReadData(fun);
     storageResources.dynamo.assetLinksStorageTableV2.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    // A listing filtered by a database id that names no database answers 404 (keys-only reads).
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     // Revoking an exception can re-quarantine the asset, which notifies its subscribers.
     grantPublishToAssetTopics(fun, config);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
@@ -402,6 +404,8 @@ export function buildComplianceAuditServiceFunction(
     // The entries of an archived asset are listed only for a caller allowed on its stored database
     // id, so the service reads whether an asset is archived (its key under `<databaseId>#deleted`).
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    // A listing filtered by a database id that names no database answers 404 (keys-only reads).
+    storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
