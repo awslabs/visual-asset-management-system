@@ -1565,6 +1565,46 @@ class TestSearchNlpCommand:
             assert payload.get('error') == 'Vector index is being built'
 
 
+class TestSearchNlpRefusalReason:
+    """Why `search nlp` refuses decides what it suggests: switches the login could not read are not a
+    switch that is off, and the keyword commands are suggested only where keyword search exists."""
+
+    @staticmethod
+    def _switches(mocks, enabled):
+        mocks['profile_manager'].get_feature_switches.return_value = list(enabled)
+        mocks['profile_manager'].has_feature_switch.side_effect = lambda name: name in enabled
+
+    def test_unreadable_switches_say_so_and_suggest_no_other_command(self, cli_runner, search_command_mocks):
+        with search_command_mocks as mocks:
+            self._switches(mocks, [])
+            result = cli_runner.invoke(cli, ['search', 'nlp', '-q', 'x'])
+            assert result.exit_code != 0
+            assert "could not read this environment's feature switches" in result.output
+            assert "vamscli auth login" in result.output and "administrator" in result.output
+            assert "switch is off" not in result.output
+            assert "vamscli search" not in result.output and "vamscli assets" not in result.output
+            mocks['api_client'].search_nlp.assert_not_called()
+
+    def test_switch_off_with_keyword_search_suggests_the_keyword_commands(self, cli_runner, search_command_mocks):
+        with search_command_mocks as mocks:
+            self._switches(mocks, ['AUTHPROVIDER_COGNITO'])
+            result = cli_runner.invoke(cli, ['search', 'nlp', '-q', 'x'])
+            assert result.exit_code != 0
+            assert ("Natural-language search is not enabled for this environment (the VECTORSEARCH "
+                    "feature switch is off).") in result.output
+            assert "'vamscli search assets'" in result.output and "'vamscli search files'" in result.output
+            mocks['api_client'].search_nlp.assert_not_called()
+
+    def test_switch_off_without_opensearch_suggests_no_keyword_command(self, cli_runner, search_command_mocks):
+        with search_command_mocks as mocks:
+            self._switches(mocks, ['AUTHPROVIDER_COGNITO', 'NOOPENSEARCH'])
+            result = cli_runner.invoke(cli, ['search', 'nlp', '-q', 'x'])
+            assert result.exit_code != 0
+            assert "the VECTORSEARCH feature switch is off" in result.output
+            assert "vamscli search assets" not in result.output and "vamscli search files" not in result.output
+            mocks['api_client'].search_nlp.assert_not_called()
+
+
 class TestSearchGroupHelpNlpExemption:
     def test_group_help_keeps_the_pinned_sentence_and_names_the_exemption(self, cli_runner):
         result = cli_runner.invoke(cli, ['search', '--help'])

@@ -7,7 +7,7 @@ from io import StringIO
 from typing import Dict, Any, List, Optional
 import click
 
-from ..utils.decorators import requires_setup_and_auth, requires_feature, get_profile_manager_from_context
+from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
 from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_info
 from ..utils.exceptions import (
@@ -1074,6 +1074,27 @@ def _validate_nlp_databases(ctx: click.Context, param: click.Parameter, value: t
     return value
 
 
+def _require_vector_search(profile_manager) -> None:
+    """Refuse `search nlp` unless the VECTORSEARCH switch is on, naming the actual reason.
+
+    No cached switch at all means the login could not read them (``/secure-config`` refuses a user with
+    no VAMS role), which says nothing about the switch. The keyword commands are suggested only where
+    keyword search exists (NOOPENSEARCH off)."""
+    if is_feature_enabled(FEATURE_VECTORSEARCH, profile_manager):
+        return
+    if not profile_manager.get_feature_switches():
+        raise click.ClickException(
+            "The CLI could not read this environment's feature switches for the signed-in user (the user "
+            "has no VAMS role, or the login did not finish), so it cannot tell whether natural-language "
+            "search is enabled. Run 'vamscli auth login' again, or ask an administrator to assign you a "
+            "role.")
+    message = ("Natural-language search is not enabled for this environment "
+               "(the VECTORSEARCH feature switch is off).")
+    if not is_feature_enabled(FEATURE_NOOPENSEARCH, profile_manager):
+        message += " Use 'vamscli search assets' or 'vamscli search files' instead."
+    raise click.ClickException(message)
+
+
 @search.command()
 @click.option('-q', '--query', required=True, callback=_validate_nlp_query,
               help='Natural-language description of what to find (1-1000 characters)')
@@ -1100,10 +1121,6 @@ def _validate_nlp_databases(ctx: click.Context, param: click.Parameter, value: t
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-@requires_feature(FEATURE_VECTORSEARCH,
-                  "Natural-language search is not enabled for this environment "
-                  "(the VECTORSEARCH feature switch is off). Use 'vamscli search assets' "
-                  "or 'vamscli search files' instead.")
 def nlp(ctx: click.Context, query: str, entity_type: str, databases: tuple, include_archived: bool,
         size: int, file_classes: tuple, file_exts: tuple, no_segments: bool,
         filters: Optional[str], metadata_query: Optional[str], output_format: str, json_output: bool):
@@ -1124,8 +1141,9 @@ def nlp(ctx: click.Context, query: str, entity_type: str, databases: tuple, incl
         vamscli search nlp -q "hydraulic schematic" --file-class document --no-segments
         vamscli search nlp -q "turbine blade" --entity-type asset --json-output
     """
-    # Setup/auth and the feature gate already validated by the decorators
+    # Setup/auth already validated by the decorator; the feature gate names why it refuses
     profile_manager = get_profile_manager_from_context(ctx)
+    _require_vector_search(profile_manager)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
 
