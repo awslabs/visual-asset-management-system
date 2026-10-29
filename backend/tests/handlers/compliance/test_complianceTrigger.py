@@ -125,6 +125,14 @@ def _run(event, database_item=None, compliance_record=None, children=(), asset_r
         asset_table.query.side_effect = asset_query_effect
     if asset_item is not None:
         asset_table.get_item.return_value = {"Item": asset_item}
+
+    def asset_get_item(Key=None, **_kwargs):
+        # An archived key (`<databaseId>#deleted`) holds no row unless a test says so; any other key
+        # answers the configured row, as before.
+        if str((Key or {}).get("databaseId", "")).endswith("#deleted"):
+            return {}
+        return asset_table.get_item.return_value
+    asset_table.get_item.side_effect = asset_get_item
     s3_client = MagicMock(name="s3_client")
     if isinstance(head, (Exception, list)):
         s3_client.head_object.side_effect = head
