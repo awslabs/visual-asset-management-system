@@ -169,6 +169,7 @@ VAMS provides automated 3D format conversion through the 3D Conversion Basic pip
 -   RapidPipeline integration for asset optimization (licensed)
 -   VNTANA ModelOps for advanced spatial data optimization (licensed)
 -   Gaussian Splat viewers and pipeline for photogrammetry-based environment capture
+-   Image to 3D pipeline for generating a starting mesh from a single reference photograph
 -   Workflow system for chaining conversion, optimization, and quality validation steps
 -   VamsCLI for automated asset ingestion from build pipelines
 
