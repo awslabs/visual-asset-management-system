@@ -291,6 +291,23 @@ const COMMERCIAL: ConfigShape = {
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: false,
             },
+            useGenAiCadStepAgent: {
+                enabled: false,
+                runtime: "agentcore",
+                useCodeBuild: true,
+                autoRegisterWithVAMS: true,
+                autoRegisterAutoTriggerOnFileUpload: false,
+                bedrockModelId: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                openAi: { modelId: "", apiKeySecretArn: "" },
+                allowInternetResearch: true,
+                bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },
+                agentCore: {
+                    warmSessionSlots: 0,
+                    idleRuntimeSessionTimeoutSeconds: 900,
+                    maxLifetimeSeconds: 28800,
+                },
+                maxRunSeconds: 3600,
+            },
             usePreviewPcPotreeViewer: {
                 enabled: false,
                 autoRegisterWithVAMS: true,
@@ -476,6 +493,10 @@ function buildGovCloud(): ConfigShape {
     // The same reason: one model id serves this pipeline's text and vision calls, and the commercial
     // default is a "global." inference profile.
     cfg.app.pipelines.useGenAiVideoSopBom.bedrockModelId = "";
+    // AgentCore Runtime is commercial-only, so the restricted presets ship the Fargate runtime with
+    // the model id left for the operator, as for the labeling pipeline above.
+    cfg.app.pipelines.useGenAiCadStepAgent.runtime = "fargate";
+    cfg.app.pipelines.useGenAiCadStepAgent.bedrockModelId = "";
     // Left empty for the same reason as the labeling model id: the "global." inference profile exists only
     // in the commercial partition.
     cfg.app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId = "";
@@ -504,6 +525,8 @@ function buildEuSovereign(): ConfigShape {
     cfg.app.pipelines.useRapidPipeline.useEcs.ecrContainerImageURI = euEcr;
     cfg.app.pipelines.useRapidPipeline.useEks.ecrContainerImageURI = euEcr;
     cfg.app.pipelines.useModelOps.ecrContainerImageURI = euEcr;
+    // CodeBuild is not offered in the EU Sovereign Cloud (config.ts codeBuildSupportedPartitions).
+    cfg.app.pipelines.useGenAiCadStepAgent.useCodeBuild = false;
     // The in-account CodeBuild container build is supported in the aws and aws-us-gov partitions.
     cfg.app.pipelines.useImageTo3d.useCodeBuild = false;
     return cfg;

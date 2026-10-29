@@ -568,6 +568,89 @@ describe("processWorkflowExecutionOutput least privilege", () => {
     });
 });
 
+/**
+ * Both terminal handlers record the run's outputTypes on the execution configuration row and swallow
+ * a failed write as non-critical, so a missing grant leaves every real run reading `[]` while the run
+ * itself succeeds. The handler unit tests mock DynamoDB and cannot see it; the grant is the assertion.
+ */
+describe("execution outputTypes write grants", () => {
+    const outputSynth = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildProcessWorkflowExecutionOutputFunction(
+                scope,
+                layer,
+                resources,
+                extra.fileUploadFunction,
+                extra.metadataServiceFunction,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+    const errorSynth = () =>
+        synthWorkflowLambda((scope, layer, resources, extra, config) =>
+            buildHandleExecutionErrorFunction(
+                scope,
+                layer,
+                resources,
+                extra.workflowsLogGroup,
+                config,
+                undefined as any,
+                []
+            )
+        );
+
+    test.each([
+        ["processWorkflowExecutionOutput", outputSynth],
+        ["handleExecutionError", errorSynth],
+    ])("%s may UpdateItem the execution configuration table", (lambdaId, synth) => {
+        const { template, logicalIdOf } = synth();
+        expect(resourcesForAction(template, lambdaId, "dynamodb:UpdateItem")).toContain(
+            logicalIdOf("workflowExecutionConfigurationStorageTable")
+        );
+    });
+
+    // The row is created at launch and only ever updated here, so neither handler needs Put/Delete.
+    test.each([
+        ["processWorkflowExecutionOutput", outputSynth],
+        ["handleExecutionError", errorSynth],
+    ])("%s holds no Put or Delete on the execution configuration table", (lambdaId, synth) => {
+        const { template, logicalIdOf } = synth();
+        const refs = ["dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:BatchWriteItem"]
+            .map((action) => resourcesForAction(template, lambdaId, action))
+            .join(" ");
+        expect(refs).not.toContain(logicalIdOf("workflowExecutionConfigurationStorageTable"));
+    });
+
+    test("handleExecutionError may Query the three pipeline output tables", () => {
+        const { template, logicalIdOf } = errorSynth();
+        const queryRefs = resourcesForAction(template, "handleExecutionError", "dynamodb:Query");
+        for (const field of [
+            "pipelineExecutionOutputFilesStorageTable",
+            "pipelineExecutionOutputMetadataStorageTable",
+            "pipelineExecutionOutputResultsStorageTable",
+        ] as const) {
+            expect(queryRefs).toContain(logicalIdOf(field));
+        }
+    });
+
+    test("handleExecutionError holds no write on the pipeline output tables", () => {
+        const { template, logicalIdOf } = errorSynth();
+        const writeRefs = ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"]
+            .map((action) => resourcesForAction(template, "handleExecutionError", action))
+            .join(" ");
+        for (const field of [
+            "pipelineExecutionOutputFilesStorageTable",
+            "pipelineExecutionOutputMetadataStorageTable",
+            "pipelineExecutionOutputResultsStorageTable",
+        ] as const) {
+            expect(writeRefs).not.toContain(logicalIdOf(field));
+        }
+        expect(writeRefs).toContain(logicalIdOf("pipelineExecutionsStorageTable"));
+    });
+});
+
 /** The logical id of the stub workflow-service function built inside a synth callback. */
 const WORKFLOW_SERVICE_STUB = "WorkflowServiceStub";
 

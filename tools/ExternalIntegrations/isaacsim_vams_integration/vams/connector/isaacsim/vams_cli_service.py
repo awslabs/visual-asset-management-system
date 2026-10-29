@@ -427,6 +427,9 @@ class WorkflowExecution:
     start_date: str = ""
     stop_date: str = ""
     input_file_key: str = ""
+    # Additive (#858): the output kinds the run produced, a subset of ["File","Metadata","Result"].
+    # Empty for a legacy run whose config row predates the attribute; no behavior change.
+    output_types: List[str] = field(default_factory=list)
 
 
 class VamsCliService:
@@ -1215,6 +1218,7 @@ class VamsCliService:
                 start_date=item.get("executionStartDate", item.get("startDate", "")),
                 stop_date=item.get("executionStopDate", item.get("stopDate", "")),
                 input_file_key=item.get("inputAssetFileKey", ""),
+                output_types=item.get("outputTypes", []),
             )
             for item in items
         ]

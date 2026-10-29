@@ -369,6 +369,18 @@ API_WORKFLOW_EXECUTION_LOGS = ApiRoute(
 API_WORKFLOW_EXECUTION_DETAILS_METADATA = ApiRoute(
     "/workflows/executions/{executionId}/details/metadata", (GET,), "workflows"
 )
+# Paged read of ONE of the detail view's FILE collections (input / output). Mirrors the metadata
+# route's token-paged contract so a client can walk a file collection the detail view reported
+# truncated. Same Tier-2 rule as details.
+API_WORKFLOW_EXECUTION_DETAILS_FILES = ApiRoute(
+    "/workflows/executions/{executionId}/details/files", (GET,), "workflows"
+)
+# Full concatenated result text of a run (output-only; no collection param). Returns the whole
+# result, cut server-side only at the 5 MiB payload-safety budget with a truncation flag. Same
+# Tier-2 rule as details.
+API_WORKFLOW_EXECUTION_DETAILS_RESULTS = ApiRoute(
+    "/workflows/executions/{executionId}/details/results", (GET,), "workflows"
+)
 # Re-run: reconstruct the execute request from the stored execution records and launch a new
 # execution (new executionId; optionally the same executionGroupId).
 API_WORKFLOW_EXECUTION_RERUN = ApiRoute(
@@ -393,6 +405,8 @@ WORKFLOW_ROUTES: Tuple[ApiRoute, ...] = (
     API_WORKFLOW_EXECUTION,
     API_WORKFLOW_EXECUTION_DETAILS,
     API_WORKFLOW_EXECUTION_DETAILS_METADATA,
+    API_WORKFLOW_EXECUTION_DETAILS_FILES,
+    API_WORKFLOW_EXECUTION_DETAILS_RESULTS,
     API_WORKFLOW_EXECUTION_LOGS,
     API_WORKFLOW_EXECUTION_RERUN,
     API_WORKFLOW_EXECUTION_PERMANENT,

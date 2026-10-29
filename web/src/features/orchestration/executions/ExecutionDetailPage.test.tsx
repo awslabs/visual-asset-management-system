@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -21,6 +21,8 @@ jest.mock("@monaco-editor/react", () => ({
 jest.mock("../api/queries", () => ({
     useExecutionDetails: jest.fn(),
     useExecutionDetailMetadata: jest.fn(),
+    useExecutionDetailFiles: jest.fn(),
+    useExecutionResults: jest.fn(),
 }));
 
 /**
@@ -58,8 +60,20 @@ describe("ExecutionDetailPage", () => {
         });
         jest.clearAllMocks();
         // Default: no collection escalated. Tests about escalation override this.
-        const { useExecutionDetailMetadata } = require("../api/queries");
+        const {
+            useExecutionDetailMetadata,
+            useExecutionDetailFiles,
+            useExecutionResults,
+        } = require("../api/queries");
         useExecutionDetailMetadata.mockReturnValue(IDLE_PAGED_METADATA);
+        useExecutionDetailFiles.mockReturnValue(IDLE_PAGED_METADATA);
+        useExecutionResults.mockReturnValue({
+            data: undefined,
+            pageContents: [],
+            isLoading: false,
+            isError: false,
+            error: null,
+        });
     });
 
     it("shows the recorded per-step settings and flags what the template overrode", async () => {
@@ -470,16 +484,16 @@ describe("ExecutionDetailPage", () => {
 
     it("marks a truncated input section where it is rendered, not only in the banner", async () => {
         // A user scrolled to the table must be able to tell the list is a subset; the page-level banner
-        // is off-screen by then.
+        // is off-screen by then. Files now escalate to the paged route, so with the paged read still
+        // idle the section stays marked Partial until the walk completes.
         renderDetail({
             inputFiles: [{ databaseId: "db-1", assetId: "a1", inputAssetFileKey: "/f.glb" }],
             inputMetadata: [{ assetId: "a1", filePath: "/f.glb", metadata: { k: "v" } }],
             truncatedCollections: ["inputFiles"],
         });
 
-        expect(await screen.findByText(/these sections are a subset/i)).toBeInTheDocument();
         // Exactly one section carries the marker — the truncated one.
-        expect(screen.getAllByText("Partial")).toHaveLength(1);
+        expect(await screen.findAllByText("Partial")).toHaveLength(1);
     });
 
     it("marks each metadata collection independently", async () => {
@@ -772,9 +786,16 @@ describe("ExecutionDetailPage", () => {
     const renderEscalated = (
         data: Partial<ExecutionDetail>,
         byCollection: Record<string, any>,
-        canRoute: (method: string, path: string) => boolean = () => true
+        canRoute: (method: string, path: string) => boolean = () => true,
+        byFileCollection: Record<string, any> = {},
+        resultsPaged: any = undefined
     ) => {
-        const { useExecutionDetails, useExecutionDetailMetadata } = require("../api/queries");
+        const {
+            useExecutionDetails,
+            useExecutionDetailMetadata,
+            useExecutionDetailFiles,
+            useExecutionResults,
+        } = require("../api/queries");
         const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
         useExecutionDetails.mockReturnValue({
             data: {
@@ -791,6 +812,19 @@ describe("ExecutionDetailPage", () => {
             (_executionId: string, collection: string) =>
                 byCollection[collection] || IDLE_PAGED_METADATA
         );
+        useExecutionDetailFiles.mockImplementation(
+            (_executionId: string, collection: string) =>
+                byFileCollection[collection] || IDLE_PAGED_METADATA
+        );
+        useExecutionResults.mockReturnValue(
+            resultsPaged || {
+                data: undefined,
+                pageContents: [],
+                isLoading: false,
+                isError: false,
+                error: null,
+            }
+        );
         useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(canRoute) });
         return render(
             <QueryClientProvider client={queryClient}>
@@ -800,6 +834,42 @@ describe("ExecutionDetailPage", () => {
             </QueryClientProvider>
         );
     };
+
+    it("re-reads truncated results through the paged route and loads the next page on request", async () => {
+        const fetchNextPage = jest.fn();
+        renderEscalated(
+            {
+                outputs: { results: [{ resultsContent: "inline subset" }] },
+                truncatedCollections: ["outputs.results"],
+            } as any,
+            {},
+            () => true,
+            {},
+            {
+                data: {
+                    resultContent: "page one text",
+                    resultContentTruncated: false,
+                    resultRowCount: 1,
+                    resultContentBytes: 13,
+                },
+                pageContents: ["page one text"],
+                readFullText: jest.fn(),
+                isLoading: false,
+                isError: false,
+                error: null,
+                hasNextPage: true,
+                isFetchingNextPage: false,
+                fetchNextPage,
+            }
+        );
+        await userEvent.click(await screen.findByRole("tab", { name: /Outputs/i }));
+        expect(await screen.findByText("page one text")).toBeInTheDocument();
+        expect(screen.queryByText("inline subset")).not.toBeInTheDocument();
+        fireEvent.click(screen.getByTestId("results-section-load-more"));
+        expect(fetchNextPage).toHaveBeenCalledTimes(1);
+        // The full result can be saved without painting it.
+        expect(screen.getByTestId("results-section-download")).toHaveTextContent("Download");
+    });
 
     /** Metadata rows in the paged route's shape, one map entry each. */
     const pagedMetadataRows = (count: number, offset = 0) =>
@@ -1008,31 +1078,43 @@ describe("ExecutionDetailPage", () => {
         expect(screen.getAllByText("Partial")).toHaveLength(1);
     });
 
-    it("says plainly that a truncated file collection has no complete set to load", async () => {
-        // Files stay inline with no paged route, so the flag is the reader's only signal — and there is
-        // nothing further to fetch.
+    it("escalates a truncated file collection to the paged files route", async () => {
+        // Files now HAVE a paged route (#858), so a truncated file collection is read in full page by
+        // page — a "Load more rows" control appears while more pages remain, not a dead-end note.
+        const fetchNextPage = jest.fn();
         renderEscalated(
             {
                 inputFiles: [{ databaseId: "db-1", assetId: "a1", inputAssetFileKey: "/f.glb" }],
                 truncatedCollections: ["inputFiles"],
             },
-            {}
+            {},
+            () => true,
+            {
+                input: pagedResult(
+                    [[{ databaseId: "db-1", assetId: "a1", inputAssetFileKey: "/paged.glb" }]],
+                    { hasNextPage: true, fetchNextPage }
+                ),
+            }
         );
 
-        expect(await screen.findByText(/not retrievable through this view/i)).toBeInTheDocument();
-        expect(screen.queryByRole("button", { name: /Load more rows/i })).not.toBeInTheDocument();
+        expect(await screen.findByRole("button", { name: /Load more rows/i })).toBeInTheDocument();
+        const { useExecutionDetailFiles } = require("../api/queries");
+        expect(useExecutionDetailFiles).toHaveBeenCalledWith("e-p", "input", true);
     });
 
     it("does not call a metadata collection a subset in the banner once it is paged", async () => {
-        // The banner named every flagged collection as a subset. An escalated one is not — it is read
-        // separately, page by page — so the two are stated apart.
+        // The banner names a flagged collection a subset only when it cannot be escalated. An escalated
+        // one is read page by page and stated apart; here the files route is DENIED so inputFiles stays
+        // a subset while inputMetadata (permitted) escalates.
         renderEscalated(
             {
                 inputFiles: [{ databaseId: "db-1", assetId: "a1", inputAssetFileKey: "/f.glb" }],
                 inputMetadata: [],
                 truncatedCollections: ["inputFiles", "inputMetadata"],
             },
-            { input: pagedResult([pagedMetadataRows(1)]) }
+            { input: pagedResult([pagedMetadataRows(1)]) },
+            // Deny the files route so inputFiles cannot escalate; permit metadata.
+            (_method, path) => path !== "/workflows/executions/{executionId}/details/files"
         );
 
         const subset = await screen.findByText(/sections are a subset: inputFiles\./);

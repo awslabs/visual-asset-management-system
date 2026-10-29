@@ -43,6 +43,41 @@ METADATA_SCHEMA_VERSION_GROUPED = 2
 # Constant PK for the by-date global-list GSI (newest-first query, not a table scan).
 ALL_EXECUTIONS_LIST_PARTITION = "execution"
 
+# Payload-safety budget for the /details/results endpoint, which returns the FULL concatenated
+# result text of a run, counted in bytes AS SENT (after JSON escaping, where one CJK character costs
+# 7 bytes and a quote 4), not raw UTF-8. The AWS Lambda-proxy synchronous response limit is 6 MB; 5 MiB
+# leaves headroom for the JSON envelope so an oversized multi-row result is cut server-side and flagged
+# rather than overflowing the proxy limit as an opaque 502. This is NOT a UX preview cap — a normal
+# result is returned whole; the cut only guards the pathological many/large-row case.
+EXECUTION_RESULT_RESPONSE_MAX_BYTES = 5 * 1024 * 1024
+
+# The output kinds a finished execution can have produced, in the stable order they are surfaced
+# (File -> Metadata -> Result). Stored as a subset on the execution configuration row's outputTypes
+# attribute and read by both execution-list paths; a row written before this attribute existed
+# resolves to [] everywhere (no migration).
+EXECUTION_OUTPUT_TYPE_FILE = "File"
+EXECUTION_OUTPUT_TYPE_METADATA = "Metadata"
+EXECUTION_OUTPUT_TYPE_RESULT = "Result"
+EXECUTION_OUTPUT_TYPES = (
+    EXECUTION_OUTPUT_TYPE_FILE,
+    EXECUTION_OUTPUT_TYPE_METADATA,
+    EXECUTION_OUTPUT_TYPE_RESULT,
+)
+
+
+def derive_output_types(has_file: bool, has_metadata: bool, has_result: bool) -> list:
+    """The outputTypes subset for a finished execution, in EXECUTION_OUTPUT_TYPES order.
+
+    Pure and AWS-free so both write points (the end-state lambda and the error lambda) derive the
+    value identically through this one helper and cannot diverge. An execution that produced nothing
+    (or a failed run with no output rows) yields []."""
+    present = {
+        EXECUTION_OUTPUT_TYPE_FILE: bool(has_file),
+        EXECUTION_OUTPUT_TYPE_METADATA: bool(has_metadata),
+        EXECUTION_OUTPUT_TYPE_RESULT: bool(has_result),
+    }
+    return [output_type for output_type in EXECUTION_OUTPUT_TYPES if present[output_type]]
+
 # The value a systemConfig's metadataInputs map carries for a key it OMITS. A stored map may be
 # partial two ways: a record written before a key existed cannot carry it, and the API stores
 # systemConfig wholesale, so a client that sends only the keys it cares about persists exactly those.
@@ -1200,6 +1235,7 @@ def build_workflow_configuration_record(
     input_metadata_file_s3_key="",
     execution_start_date="",
     metadata_source_assets=None, metadata_source_databases=None,
+    output_types=None,
 ):
     """WorkflowExecutionConfigurationStorageTable row (SK='configuration').
 
@@ -1261,6 +1297,11 @@ def build_workflow_configuration_record(
         # them (the input rows carry no database-metadata provenance).
         "metadataSourceDatabases": source_databases,
         "metadataSourceDatabasesTruncated": source_databases_truncated,
+        # The output kinds the run produced (subset of EXECUTION_OUTPUT_TYPES, File->Metadata->Result
+        # order). Written [] at launch and UPDATEd to the derived subset at completion/failure via
+        # update_execution_output_types; both execution-list paths read it. A row written before this
+        # attribute existed resolves to [] everywhere (no migration).
+        "outputTypes": list(output_types or []),
     }
     # GSI partition for WorkflowExecConfigByOutputAssetGSI, written ONLY for an asset-targeted run
     # with a resolved destination. Omitting the attribute keeps the row out of the index entirely
@@ -1270,3 +1311,23 @@ def build_workflow_configuration_record(
         record["outputDatabaseId:outputAssetId"] = output_asset_partition_key(
             output_database_id, output_asset_id)
     return record
+
+
+def update_execution_output_types(dynamo, config_table_name, workflow_execution_id, output_types):
+    """UPDATE the execution configuration row's outputTypes attribute to the derived subset.
+
+    The configuration row is created at LAUNCH by executeWorkflow (build_workflow_configuration_record
+    writes outputTypes=[]), so completion and failure UPDATE the existing row rather than rebuilding
+    it. Both write points call this one helper so the stored value cannot diverge between them. No
+    terminal guard is needed: it is written once at finalization and an idempotent re-write is
+    harmless. A missing write leaves the launch-time [] in place, which every reader treats as "no
+    output types".
+
+    `dynamo` is a boto3 DynamoDB resource (passed in to keep this module AWS-free at import).
+    """
+    table = dynamo.Table(config_table_name)
+    return table.update_item(
+        Key={"workflowExecutionId": workflow_execution_id, "recordType": "configuration"},
+        UpdateExpression="SET outputTypes = :t",
+        ExpressionAttributeValues={":t": list(output_types or [])},
+    )

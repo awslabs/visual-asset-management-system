@@ -29,6 +29,8 @@ from common.workflows import availableLogs as al
 from common.apiRoutes import (
     API_WORKFLOW_EXECUTION_DETAILS,
     API_WORKFLOW_EXECUTION_DETAILS_METADATA,
+    API_WORKFLOW_EXECUTION_DETAILS_FILES,
+    API_WORKFLOW_EXECUTION_DETAILS_RESULTS,
     API_WORKFLOW_EXECUTION_LOGS,
     API_WORKFLOW_EXECUTION_RERUN,
     API_WORKFLOW_EXECUTION_PERMANENT,
@@ -47,6 +49,10 @@ from models.common import (
 )
 from models.executions import (
     DetailMetadataPageRequestModel,
+    DetailFilesPageRequestModel,
+    ExecutionResultsPageRequestModel,
+    DETAIL_FILE_COLLECTION_INPUT,
+    DETAIL_FILE_COLLECTION_OUTPUT,
     ListExecutionsRequestModel,
     RerunExecutionRequestModel,
     PermanentDeleteRequestModel,
@@ -728,7 +734,7 @@ def prewarm_asset_details(pairs):
 
 def build_execution_items(input_items, fetch_main_row, describe_execution,
                           persist_main_row, workflow_id_filter, workflow_database_id,
-                          fetch_execution_log_and_error=None):
+                          fetch_execution_log_and_error=None, config_rows=None):
     """Join WorkflowExecutionInputs rows with V2 main rows into the legacy wire
     shape. Dedupes by workflowExecutionId. Reconciles running status lazily.
 
@@ -858,8 +864,25 @@ def build_execution_items(input_items, fetch_main_row, describe_execution,
             'assetId': input_item.get('assetId', ''),
             'executionError': redact_log_text(execution_error),
             'executionLog': redact_log_text(execution_log),
+            # The output kinds the run produced (File/Metadata/Result subset). Threaded in via the
+            # per-request config-row memo the caller built (NOT free on this path — the auth pass
+            # reads the config row lazily and discards it); legacy rows have no attribute -> [].
+            'outputTypes': _row_output_types((config_rows or {}).get(execution_id)),
         })
     return result_items
+
+
+def _row_output_types(config_row):
+    """The outputTypes list to surface for a listed execution, from its configuration row.
+
+    Defends the response against a config row that is absent, is not a dict, or whose outputTypes is
+    not a list of strings: a legacy run has no attribute (-> []), and the value is only ever read, so
+    anything that is not a clean list of strings is reported as []. Keeps a non-serializable or
+    malformed value out of the JSON response."""
+    value = (config_row or {}).get("outputTypes") if isinstance(config_row, dict) else None
+    if not isinstance(value, list):
+        return []
+    return [str(v) for v in value if isinstance(v, str)]
 
 
 def get_executions(event, database_id, asset_id, workflow_database_id, workflow_id, query_params):
@@ -1024,6 +1047,11 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
         # Queried second and merged, so an execution that is BOTH an input and the output target keeps
         # its input row (first-seen wins) and is listed once. Bounded by the same
         # MAX_EXECUTIONS_INSPECTED budget across both directions.
+        # Per-request memo of execution configuration rows, so the per-asset auth pass and the
+        # outputTypes projection share one read per execution. Output-only executions seed it for free
+        # below (the by-output-asset GSI item IS the config row); input-direction executions fill it
+        # lazily through the config_row_loader threaded into the auth check.
+        config_row_memo = {}
         if len(deduped_inputs) < inspect_cap:
             cfg_table = dynamodb.Table(workflow_execution_configuration_table)
             output_key_condition = Key('outputDatabaseId:outputAssetId').eq(
@@ -1118,6 +1146,11 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                             'assetId': asset_id,
                             'executionStartDate': cfg_item.get('executionStartDate', ''),
                         }
+                        # The cfg_item IS this execution's configuration row (read from the
+                        # by-output-asset GSI), so seed the config-row memo with it for free — the
+                        # auth pass and the outputTypes projection below then cost no extra read for an
+                        # output-only execution.
+                        config_row_memo[execution_id] = cfg_item
                         if len(deduped_inputs) >= inspect_cap:
                             bounded = True
                             # Same precedence as the input direction: resume after the last row
@@ -1225,8 +1258,18 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             authorization_item = input_item
             if not input_item.get('workflowId', ''):
                 authorization_item = _fetch_main_row(candidate_id) or input_item
+
+            def _config_row_loader(eid=candidate_id):
+                # The one config-row read the auth pass pays for this candidate lands in the memo, so
+                # the outputTypes projection in build_execution_items reuses it rather than re-reading.
+                # An output-only execution was already seeded above, so this never runs for one.
+                if eid not in config_row_memo:
+                    config_row_memo[eid] = get_workflow_execution_configuration_row(eid)
+                return config_row_memo[eid]
+
             allowed, reason = _execution_access_check(
-                candidate_id, authorization_item, "GET", casbin_enforcer=casbin_enforcer)
+                candidate_id, authorization_item, "GET", casbin_enforcer=casbin_enforcer,
+                config_row_loader=_config_row_loader)
             if allowed:
                 authorized_inputs.append(input_item)
             else:
@@ -1247,6 +1290,7 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
             workflow_id_filter=workflow_id or '',
             workflow_database_id=workflow_database_id or '',
             fetch_execution_log_and_error=_fetch_execution_log_and_error,
+            config_rows=config_row_memo,
         )
 
         # Apply the optional equality filters (same semantics as the global board) so the asset
@@ -2208,6 +2252,16 @@ MAX_DETAIL_METADATA_ROWS_SCANNED = 20000
 # matching row when the subset is sparse.
 DETAIL_METADATA_QUERY_PAGE_SIZE = 200
 
+# The paged detail-FILES read reuses the metadata read's bounds: files carry the same per-row shape
+# order of magnitude and share the one Lambda-proxy response ceiling, so one set of page/byte/scan
+# bounds covers both. The input collection is a single-partition query over the workflow-level inputs
+# table and the output collection a step-walk over the per-pipeline output-files table, neither of
+# which is scope-split, so no query-page-size-vs-remainder constant is needed for files.
+DEFAULT_DETAIL_FILES_PAGE_SIZE = DEFAULT_DETAIL_METADATA_PAGE_SIZE
+MAX_DETAIL_FILES_PAGE_SIZE = MAX_DETAIL_METADATA_PAGE_SIZE
+MAX_DETAIL_FILES_PAGE_BYTES = MAX_DETAIL_METADATA_PAGE_BYTES
+MAX_DETAIL_FILES_ROWS_SCANNED = MAX_DETAIL_METADATA_ROWS_SCANNED
+
 # The detail view's metadata collections, addressable individually by the paged read. 'input' and
 # 'inputDatabase' are the scope split of the one per-pipeline input-metadata table; 'output' is the
 # per-pipeline output-metadata table.
@@ -2278,6 +2332,36 @@ def _wire_bytes(value):
         return len(json.dumps(json.dumps(value, default=str)).encode("utf-8"))
     except Exception:
         return 0
+
+
+# What an empty string occupies on the wire: its two quotes, escaped once more by the body's own
+# serialization. Subtracted so a text's measure is the bytes its characters add inside a string value.
+_EMPTY_STRING_WIRE_BYTES = len(json.dumps(json.dumps("")).encode("utf-8"))
+
+
+def _text_wire_bytes(text):
+    """Bytes `text` adds to the response as it is SENT, in _wire_bytes units, when it is (part of) a
+    string value: a CJK character costs 7 (`\\\\uXXXX`), a quote or backslash 4, plain ASCII 1."""
+    return max(0, _wire_bytes(text or "") - _EMPTY_STRING_WIRE_BYTES)
+
+
+def _cut_text_to_wire_budget(text, budget):
+    """The longest prefix of `text` whose _text_wire_bytes fits `budget` ("" when nothing fits).
+
+    Binary search over the character count: the per-character wire cost ranges from 1 to 14 bytes, so
+    no byte offset maps to a character offset directly. Slicing a str never splits a code point."""
+    if budget <= 0 or not text:
+        return ""
+    if _text_wire_bytes(text) <= budget:
+        return text
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if _text_wire_bytes(text[:middle]) <= budget:
+            low = middle
+        else:
+            high = middle - 1
+    return text[:low]
 
 
 def _rows_serialized_bytes(rows):
@@ -3525,6 +3609,363 @@ def get_execution_details_metadata(event, execution_id, query_params):
         execution_id, request.collection, page_size, request.resolved_starting_token(),
         pipeline_id_filter=request.pipelineId or "")
     return success(body={'message': result})
+
+
+# ---------------------------------------------------------------------------
+# Paged detail FILES read (input + output file collections). Mirrors the metadata read above.
+# ---------------------------------------------------------------------------
+
+# Primary-key attributes of the two file tables, used to build an ExclusiveStartKey that resumes a
+# query AFTER a returned row. Input files live on the workflow-level inputs table (one partition per
+# execution); output files on the per-pipeline output-files table (one partition per pipeline step).
+_INPUT_FILE_SORT_KEY = "databaseId:assetId:inputAssetFileKey"
+_OUTPUT_FILE_SORT_KEY = "fileType:relativeFilePath"
+
+
+def _encode_detail_files_token(step_index, last_evaluated_key, collection="",
+                               pipeline_id_filter=""):
+    """Encode the files read's resume point. Same binding contract as the metadata token: it carries
+    the step position, that step's own LastEvaluatedKey (pinned by stepKey), and the collection +
+    pipelineId filter it was issued for, so a token cannot be cross-applied to a different collection
+    or filter and silently serve the wrong rows. The 'input' collection is a single logical step
+    (step 0) over the workflow-level inputs table; 'output' walks the pipeline steps."""
+    return base64.b64encode(json.dumps({
+        "stepIndex": step_index,
+        "stepKey": (last_evaluated_key or {}).get("pipelineExecutionId", "")
+        if last_evaluated_key else "",
+        "lastEvaluatedKey": last_evaluated_key or None,
+        "collection": collection or "",
+        "pipelineIdFilter": pipeline_id_filter or "",
+    }).encode("utf-8")).decode("utf-8")
+
+
+def _decode_detail_files_token(token, steps, collection="", pipeline_id_filter=""):
+    """Decode a files continuation token into (step_index, last_evaluated_key), or None when it cannot
+    be used against `steps`. Refused (a 400, never a silent restart) on a decode failure, a step index
+    out of range, a stepKey that no longer matches the step now at that index, or a collection /
+    pipelineId filter it was not issued for — exactly like the metadata token, for the same
+    skip/repeat-rows reasons. For the input collection `steps` is a single synthetic entry, so a
+    stored stepKey (only set for the output step-walk) is matched there too."""
+    decoded = _decode_starting_token(token)
+    if decoded is None:
+        return None
+    if (decoded.get("collection", "") or "") != (collection or ""):
+        return None
+    if (decoded.get("pipelineIdFilter", "") or "") != (pipeline_id_filter or ""):
+        return None
+    try:
+        step_index = int(decoded.get("stepIndex", -1))
+    except (TypeError, ValueError):
+        return None
+    if step_index < 0 or step_index > len(steps):
+        return None
+    last_evaluated_key = decoded.get("lastEvaluatedKey") or None
+    if last_evaluated_key is not None and not isinstance(last_evaluated_key, dict):
+        return None
+    step_key = decoded.get("stepKey", "") or ""
+    if step_key:
+        if step_index >= len(steps) or steps[step_index][0] != step_key:
+            return None
+    return step_index, last_evaluated_key
+
+
+def _detail_files_resume_key(row, partition_attr, partition_value, sort_attr):
+    """The ExclusiveStartKey that resumes a file query AFTER `row`, from the row's own primary key.
+    partition_attr is 'workflowExecutionId' for input files and 'pipelineExecutionId' for output
+    files; sort_attr the matching table's sort key."""
+    key = {partition_attr: row.get(partition_attr, '') or partition_value}
+    if sort_attr in row:
+        key[sort_attr] = row[sort_attr]
+    return key
+
+
+def page_detail_files(execution_id, collection, page_size, token, pipeline_id_filter=""):
+    """One page of a detail FILE collection.
+
+    Returns {"Items": [...], "collection": ..., ["NextToken": ...]}. Rows carry the same scrubbed
+    shape the details view returns (output files also tagged with the producing pipelineId), so a
+    client renders them with identical columns.
+
+    - collection 'input': a single-partition query over the workflow-level inputs table
+      (workflowExecutionId PK), scrubbed by _scrub_input_file. Modeled as one synthetic step so the
+      token machinery is shared with the output walk. pipeline_id_filter does not apply (input files
+      are workflow-level, not per-pipeline) and is ignored.
+    - collection 'output': a step-walk over the per-pipeline output-files table in the SAME stable
+      step order the metadata read uses (_detail_metadata_step_order), scrubbed by _scrub_output_file,
+      each row tagged with its pipelineId. pipeline_id_filter narrows to one step.
+
+    Nothing is dropped by a bound — the page ends and the NextToken resumes at the first row left out,
+    which is what makes the walk complete across every partition. Raises VAMSGeneralErrorResponse for
+    an unusable token (the handler maps it to a 400)."""
+    if collection == DETAIL_FILE_COLLECTION_OUTPUT:
+        steps = _detail_metadata_step_order(execution_id, pipeline_id_filter)
+        table = dynamodb.Table(pipeline_execution_output_files_table)
+        partition_attr = "pipelineExecutionId"
+        sort_attr = _OUTPUT_FILE_SORT_KEY
+        scrub = _scrub_output_file
+        effective_filter = pipeline_id_filter or ""
+    else:
+        # Input files are workflow-level: one partition keyed on workflowExecutionId. Represent it as a
+        # single synthetic step so the step-walk loop and token binding are shared. The pipelineId
+        # filter is meaningless here, so it is forced empty for the token binding too (a token issued
+        # for input is never valid under a filter, and vice versa).
+        steps = [(execution_id, "")]
+        table = dynamodb.Table(workflow_execution_inputs_table)
+        partition_attr = "workflowExecutionId"
+        sort_attr = _INPUT_FILE_SORT_KEY
+        scrub = _scrub_input_file
+        effective_filter = ""
+
+    step_index, last_evaluated_key = 0, None
+    if token:
+        resumed = _decode_detail_files_token(token, steps, collection, effective_filter)
+        if resumed is None:
+            raise VAMSGeneralErrorResponse("startingToken is invalid.")
+        step_index, last_evaluated_key = resumed
+
+    items = []
+    used_bytes = 0
+    scanned = 0
+    next_token = None
+
+    while step_index < len(steps) and next_token is None:
+        partition_value, pipeline_id = steps[step_index]
+        remaining = max(1, page_size - len(items))
+        kwargs = {'KeyConditionExpression': Key(partition_attr).eq(partition_value),
+                  'Limit': remaining}
+        if last_evaluated_key is not None:
+            kwargs['ExclusiveStartKey'] = last_evaluated_key
+        resp = table.query(**kwargs)
+        rows = resp.get('Items', [])
+        # Continuation is decided on the key's PRESENCE, never its value (Rule 14): DynamoDB omits the
+        # key when a partition is exhausted, and testing the value instead loops forever against an
+        # under-stubbed reader. step_last_key is read only after presence is established, as the key to
+        # resume from.
+        step_has_more = 'LastEvaluatedKey' in resp
+        step_last_key = resp['LastEvaluatedKey'] if step_has_more else None
+        resume_after = last_evaluated_key
+
+        for row in rows:
+            scanned += 1
+            scrubbed = scrub(row)
+            if collection == DETAIL_FILE_COLLECTION_OUTPUT:
+                scrubbed["pipelineId"] = pipeline_id
+            row_bytes = _wire_bytes(scrubbed)
+            # Keep at least one row per page so an oversized single row cannot stall the walk.
+            if items and (len(items) >= page_size
+                          or used_bytes + row_bytes > MAX_DETAIL_FILES_PAGE_BYTES):
+                next_token = _encode_detail_files_token(step_index, resume_after, collection,
+                                                        effective_filter)
+                break
+            items.append(scrubbed)
+            used_bytes += row_bytes
+            resume_after = _detail_files_resume_key(row, partition_attr, partition_value, sort_attr)
+        if next_token is not None:
+            break
+
+        if step_has_more:
+            last_evaluated_key = step_last_key
+            if len(items) >= page_size or scanned >= MAX_DETAIL_FILES_ROWS_SCANNED:
+                next_token = _encode_detail_files_token(step_index, step_last_key, collection,
+                                                        effective_filter)
+            continue
+
+        step_index += 1
+        last_evaluated_key = None
+        if step_index < len(steps) and (len(items) >= page_size
+                                        or scanned >= MAX_DETAIL_FILES_ROWS_SCANNED):
+            next_token = _encode_detail_files_token(step_index, None, collection, effective_filter)
+
+    result = {"Items": items, "collection": collection}
+    if next_token is not None:
+        result["NextToken"] = next_token
+    return result
+
+
+def get_execution_details_files(event, execution_id, query_params):
+    """Return one page of one of an execution's FILE collections (404 if the execution is unknown).
+
+    Authorization is the SAME Tier-2 rule the details view enforces (workflow GET, GET on every
+    captured metadata-source database, GET on every asset the run read), evaluated for GET — identical
+    to the metadata read — so exactly the callers who can open the details page can page its files."""
+    main_item = get_execution_main_row(execution_id)
+    if not main_item:
+        return validation_error(status_code=404, body={'message': "Execution not found"}, event=event)
+
+    config_row = get_workflow_execution_configuration_row(execution_id)
+    allowed, reason = authorize_execution_access(execution_id, main_item, "GET",
+                                                 config_row=config_row)
+    if not allowed:
+        logger.info(f"Details files access not authorized for execution {execution_id}: {reason}")
+        return authorization_error()
+
+    request = parse(dict(query_params or {}), model=DetailFilesPageRequestModel)
+    # Clamped rather than rejected (as the lists treat pageSize): the cap bounds the RESPONSE size.
+    page_size = min(request.pageSize or DEFAULT_DETAIL_FILES_PAGE_SIZE, MAX_DETAIL_FILES_PAGE_SIZE)
+    result = page_detail_files(
+        execution_id, request.collection, page_size, request.resolved_starting_token(),
+        pipeline_id_filter=request.pipelineId or "")
+    return success(body={'message': result})
+
+
+def handle_details_files_request(event):
+    """Validate the executionId path param, enforce API authorization, return one page of one of the
+    execution's file collections. Mirrors handle_details_metadata_request."""
+    pathParams = event.get('pathParameters', {}) or {}
+    queryParameters = event.get('queryStringParameters', {}) or {}
+    execution_id = pathParams.get('executionId', '')
+    if not execution_id:
+        return validation_error(body={'message': 'Missing path parameter (executionId) in API call'}, event=event)
+
+    logger.info("Validating path parameters")
+    (valid, message) = validate({
+        'executionId': {'value': execution_id, 'validator': 'GUID'},
+    })
+    if not valid:
+        logger.error(message)
+        return validation_error(body={'message': message}, event=event)
+
+    if not _enforce_api(event):
+        return authorization_error()
+
+    logger.info(f"Getting execution details files {execution_id}")
+    return get_execution_details_files(event, execution_id, queryParameters)
+
+
+# ---------------------------------------------------------------------------
+# Paged result text read (/details/results). Output-only; no collection param.
+# ---------------------------------------------------------------------------
+
+# Token binding for the results read: the files token's machinery, under its own collection name, so a
+# files token cannot be replayed here (or a results token there) and serve the wrong rows.
+DETAIL_RESULTS_TOKEN_COLLECTION = "results"
+_OUTPUT_RESULT_SORT_KEY = "relativeFilePath"
+
+
+def page_execution_results(execution_id, token=""):
+    """One page of a run's result text: as many output-results rows as fit the response budget.
+
+    Rows are walked in the SAME stable step order the metadata/files reads use, then in sort-key order
+    within a step, and their resultsContent is concatenated in that order. A row is added while the
+    page's text AS SENT (_text_wire_bytes: after the body's JSON escaping and the proxy's second
+    escaping) stays within EXECUTION_RESULT_RESPONSE_MAX_BYTES; the first row that does not fit ends the
+    page and NextToken resumes AT it, so concatenating every page yields the whole result. The budget
+    is payload safety (the Lambda-proxy limit), not a UX preview.
+
+    A single row larger than the whole budget cannot be deferred, so it is cut to the longest prefix
+    that fits and the page is flagged resultContentTruncated. Rows are bounded at write time, so only a
+    corrupt or oversized row reaches that path. The flag is also set when a row on the page was stored
+    already truncated. A legacy/empty run returns the empty shape. The row's internal s3Key is never
+    surfaced. Raises VAMSGeneralErrorResponse for an unusable token (the handler maps it to a 400)."""
+    steps = _detail_metadata_step_order(execution_id)
+    step_index, last_evaluated_key = 0, None
+    if token:
+        resumed = _decode_detail_files_token(token, steps, DETAIL_RESULTS_TOKEN_COLLECTION, "")
+        if resumed is None:
+            raise VAMSGeneralErrorResponse("startingToken is invalid.")
+        step_index, last_evaluated_key = resumed
+
+    results_table = dynamodb.Table(pipeline_execution_output_results_table)
+    budget = er.EXECUTION_RESULT_RESPONSE_MAX_BYTES
+    parts = []
+    used_wire_bytes = 0
+    row_count = 0
+    truncated = False
+    next_token = None
+
+    while step_index < len(steps) and next_token is None:
+        pexec_id, _pipeline_id = steps[step_index]
+        query_kwargs = {'KeyConditionExpression': Key('pipelineExecutionId').eq(pexec_id)}
+        if last_evaluated_key is not None:
+            query_kwargs['ExclusiveStartKey'] = last_evaluated_key
+        resp = results_table.query(**query_kwargs)
+        # Continuation is decided on the key's PRESENCE, never its value (Rule 14).
+        step_has_more = 'LastEvaluatedKey' in resp
+        resume_after = last_evaluated_key
+
+        for row in resp.get('Items', []):
+            content = _scrub_output_result(row).get('resultsContent', '') or ''
+            content_wire_bytes = _text_wire_bytes(content)
+            if used_wire_bytes + content_wire_bytes > budget:
+                if parts:
+                    next_token = _encode_detail_files_token(
+                        step_index, resume_after, DETAIL_RESULTS_TOKEN_COLLECTION, "")
+                    break
+                # Alone over the budget: deferring it would stall the walk, so it is cut and consumed.
+                content = _cut_text_to_wire_budget(content, budget)
+                content_wire_bytes = _text_wire_bytes(content)
+                truncated = True
+            parts.append(content)
+            used_wire_bytes += content_wire_bytes
+            row_count += 1
+            if row.get('resultsContentTruncated'):
+                truncated = True
+            resume_after = _detail_files_resume_key(
+                row, 'pipelineExecutionId', pexec_id, _OUTPUT_RESULT_SORT_KEY)
+        if next_token is not None:
+            break
+
+        if step_has_more:
+            last_evaluated_key = resp['LastEvaluatedKey']
+            continue
+        step_index += 1
+        last_evaluated_key = None
+
+    result_content = "".join(parts)
+    result = {
+        "resultContent": result_content,
+        "resultContentTruncated": truncated,
+        "resultRowCount": row_count,
+        "resultContentBytes": len(result_content.encode('utf-8')),
+    }
+    if next_token is not None:
+        result["NextToken"] = next_token
+    return result
+
+
+def get_execution_results(event, execution_id, query_params=None):
+    """Return one page of a run's result text (404 if the execution is unknown). See
+    page_execution_results for the page shape; NextToken is absent on the last page.
+
+    Authorization is the SAME Tier-2 rule the details view enforces, evaluated for GET."""
+    main_item = get_execution_main_row(execution_id)
+    if not main_item:
+        return validation_error(status_code=404, body={'message': "Execution not found"}, event=event)
+
+    config_row = get_workflow_execution_configuration_row(execution_id)
+    allowed, reason = authorize_execution_access(execution_id, main_item, "GET",
+                                                 config_row=config_row)
+    if not allowed:
+        logger.info(f"Details results access not authorized for execution {execution_id}: {reason}")
+        return authorization_error()
+
+    request = parse(dict(query_params or {}), model=ExecutionResultsPageRequestModel)
+    result = page_execution_results(execution_id, request.resolved_starting_token())
+    return success(body={'message': result})
+
+
+def handle_details_results_request(event):
+    """Validate the executionId path param, enforce API authorization, return one page of the result
+    text. Mirrors handle_details_metadata_request (no collection; startingToken/NextToken only)."""
+    pathParams = event.get('pathParameters', {}) or {}
+    queryParameters = event.get('queryStringParameters', {}) or {}
+    execution_id = pathParams.get('executionId', '')
+    if not execution_id:
+        return validation_error(body={'message': 'Missing path parameter (executionId) in API call'}, event=event)
+
+    logger.info("Validating path parameters")
+    (valid, message) = validate({
+        'executionId': {'value': execution_id, 'validator': 'GUID'},
+    })
+    if not valid:
+        logger.error(message)
+        return validation_error(body={'message': message}, event=event)
+
+    if not _enforce_api(event):
+        return authorization_error()
+
+    logger.info(f"Getting execution results {execution_id}")
+    return get_execution_results(event, execution_id, queryParameters)
 
 
 def _reconcile_main_status(execution_id, main_item):
@@ -5072,6 +5513,9 @@ def _global_list_row(main_item, config_row=None):
         "outputLocationType": config_row.get("outputLocationType", ""),
         "outputAssetId": config_row.get("outputAssetId", ""),
         "outputDatabaseId": config_row.get("outputDatabaseId", ""),
+        # The output kinds the run produced (File/Metadata/Result subset). Read from the same
+        # already-threaded config row, so it is zero extra reads; legacy rows have no attribute -> [].
+        "outputTypes": _row_output_types(config_row),
     }
 
 
@@ -5797,6 +6241,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     GET /workflows/executions                       -> global (asset-less) permission-filtered list.
     GET /workflows/executions/{executionId}/details -> full execution detail/traceability.
     GET /workflows/executions/{executionId}/details/metadata -> one page of one metadata collection.
+    GET /workflows/executions/{executionId}/details/files -> one page of one file collection (input|output).
+    GET /workflows/executions/{executionId}/details/results -> one page of the concatenated result text.
     GET /workflows/executions/{executionId}/logs    -> execution logs (truncated | full).
     POST /workflows/executions/{executionId}/rerun  -> re-run (new execution from stored records).
     DELETE /workflows/executions/{executionId}       -> abort a running execution (or ?groupId= group).
@@ -5835,6 +6281,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             # specific route first means a later template change cannot silently reroute it.
             if API_WORKFLOW_EXECUTION_DETAILS_METADATA.matches(path):
                 return handle_details_metadata_request(event)
+            elif API_WORKFLOW_EXECUTION_DETAILS_FILES.matches(path):
+                return handle_details_files_request(event)
+            elif API_WORKFLOW_EXECUTION_DETAILS_RESULTS.matches(path):
+                return handle_details_results_request(event)
             elif API_WORKFLOW_EXECUTION_DETAILS.matches(path):
                 return handle_details_request(event)
             elif API_WORKFLOW_EXECUTION_LOGS.matches(path):

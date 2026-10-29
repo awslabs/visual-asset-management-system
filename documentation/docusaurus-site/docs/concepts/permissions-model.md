@@ -241,6 +241,8 @@ Archiving an asset and deleting a database keep the record, stored under the id 
 -   A `starts_with` or `contains` criterion that matches both forms (such as `databaseId contains .*` in the `global-readonly` template) reaches archived records without naming the suffix.
 -   The compliance records of an archived asset (its state, evaluations, quarantine, cascades and audit entries) are decided on the asset's stored id as well, on the compliance object types. The `database-admin` template names both ids on its compliance constraints too; see [Compliance: Archived assets](compliance.md#archived-assets).
 
+Search results follow the same rule: an archived asset, and a file of an archived asset, are checked on the archived record, and a file of a live asset, archived or not, is checked on the live asset, as in the asset's file listing.
+
 ## Common role patterns
 
 For detailed constraint tables, JSON examples, and design rationale for common roles (Database Admin, Database User, Database Read-Only, Global Read-Only, Database Tag Admin, Compliance Administrator, Compliance Read-Only, Multi-Database Access, and Deny by Tag), see [Developer Guide: Permissions](../developer/permissions.md).

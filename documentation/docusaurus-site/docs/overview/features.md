@@ -184,7 +184,7 @@ The Deadline Cloud execution type requires `app.pipelines.deadlineCloudExecution
 
 ### Built-In Pipelines
 
-VAMS includes twenty-five built-in processing pipelines, each deployable through configuration flags. Pipeline families that ship several model variants register each variant as its own pipeline with its own flag.
+VAMS includes twenty-seven built-in processing pipelines, each deployable through configuration flags. Pipeline families that ship several model variants register each variant as its own pipeline with its own flag.
 
 | Pipeline                                | Config Flag                                       | Description                                                                                                                                                      | Default  |
 | --------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
@@ -196,6 +196,7 @@ VAMS includes twenty-five built-in processing pipelines, each deployable through
 | 3D Gaussian Splat Toolbox               | `useSplatToolbox`                                 | 3D Gaussian splat generation from images and video                                                                                                               | Disabled |
 | GenAI 3D Metadata Labeling              | `useGenAiMetadata3dLabeling`                      | AI-powered asset metadata labeling via Amazon Bedrock                                                                                                            | Disabled |
 | Video SOP/BOM Extraction                | `useGenAiVideoSopBom`                             | Teardown-video transcription and SOP, LCA BOM, and lab summary extraction via Amazon Transcribe and Amazon Bedrock                                               | Disabled |
+| GenAI CAD STEP Agent                    | `useGenAiCadStepAgent`                            | Create or modify CAD STEP files from a prompt with a Strands agent on Amazon Bedrock AgentCore or AWS Batch                                                      | Disabled |
 | Image to 3D                             | `useImageTo3d`                                    | Image to 3D mesh generation with a selectable open-weight model or a Blender agent, with optional cleanup, colour and print-readiness stages to a watertight STL | Disabled |
 | NVIDIA Cosmos Text-to-World 2B v2       | `useNvidiaCosmos.modelsPredict.text2world2B_v2`   | Video generation from text prompts using Cosmos-Predict2.5 2B                                                                                                    | Disabled |
 | NVIDIA Cosmos Text-to-World 14B v2      | `useNvidiaCosmos.modelsPredict.text2world14B_v2`  | High-quality video generation from text prompts using Cosmos-Predict2.5 14B                                                                                      | Disabled |

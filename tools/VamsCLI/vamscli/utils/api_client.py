@@ -236,7 +236,8 @@ from ..constants import (
     API_WORKFLOW_TRIGGERS, API_WORKFLOW_TRIGGER,
     API_WORKFLOW_EXECUTIONS, API_EXECUTE_WORKFLOW, API_WORKFLOW_EXECUTIONS_GLOBAL,
     API_WORKFLOW_EXECUTION, API_WORKFLOW_EXECUTION_DETAILS,
-    API_WORKFLOW_EXECUTION_DETAILS_METADATA, API_WORKFLOW_EXECUTION_LOGS,
+    API_WORKFLOW_EXECUTION_DETAILS_METADATA, API_WORKFLOW_EXECUTION_DETAILS_FILES,
+    API_WORKFLOW_EXECUTION_DETAILS_RESULTS, API_WORKFLOW_EXECUTION_LOGS,
     API_WORKFLOW_EXECUTION_RERUN, API_WORKFLOW_EXECUTION_PERMANENT,
     API_AUTH_API_KEYS, API_AUTH_API_KEY,
     API_COMPLIANCE_SCHEMAS, API_COMPLIANCE_SCHEMA_BY_NAME,
@@ -4782,6 +4783,58 @@ class APIClient(CustomAPIClientMixin):
             raise
         except Exception as e:
             raise APIError(f"Failed to get execution detail metadata: {e}")
+
+    def get_execution_details_files(self, execution_id: str,
+                                    params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Get one page of an execution's detail FILES.
+        GET /workflows/executions/{executionId}/details/files.
+
+        params may include: collection (input | output — no inputDatabase), pageSize, startingToken,
+        pipelineId. Rows carry the same scrubbed file shape the details view returns; output rows also
+        carry the producing pipelineId. NextToken is absent on the last page, so its presence is the
+        only signal that more rows exist. A token is only valid alongside the same collection and
+        pipelineId it was issued with."""
+        try:
+            endpoint = API_WORKFLOW_EXECUTION_DETAILS_FILES.format(executionId=execution_id)
+            return self._pwe_request('GET', endpoint, params=params or {})
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
+            if e.response.status_code == 400:
+                raise InvalidExecutionDataError(self._pwe_error_message(e))
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to get execution detail files: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
+        except Exception as e:
+            raise APIError(f"Failed to get execution detail files: {e}")
+
+    def get_execution_results(self, execution_id: str,
+                              params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Get one page of an execution's concatenated result text.
+        GET /workflows/executions/{executionId}/details/results.
+
+        Output-only; no collection parameter. Returns one page: {resultContent, resultContentTruncated,
+        resultRowCount, resultContentBytes} for the rows that fit the service's 5 MiB response budget,
+        plus NextToken while more remain (pass it back as params['startingToken']). Concatenating every
+        page's resultContent yields the whole result. An empty/legacy run returns the empty shape
+        (resultContent '', counts zero, no NextToken), never an error."""
+        try:
+            endpoint = API_WORKFLOW_EXECUTION_DETAILS_RESULTS.format(executionId=execution_id)
+            return self._pwe_request('GET', endpoint, params=params or {})
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ExecutionNotFoundError(f"Execution '{execution_id}' not found")
+            if e.response.status_code == 400:
+                raise InvalidExecutionDataError(self._pwe_error_message(e))
+            if e.response.status_code in (401, 403):
+                raise AuthenticationError(f"Authentication failed: {e}")
+            raise APIError(f"Failed to get execution results: {self._pwe_error_message(e)}")
+        except GlobalInfrastructureError:
+            raise
+        except Exception as e:
+            raise APIError(f"Failed to get execution results: {e}")
 
     def get_execution_logs(self, execution_id: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Get an execution's logs. GET /workflows/executions/{executionId}/logs.

@@ -203,6 +203,8 @@ Private and public subnets are created when any of the following are enabled:
 -   NVIDIA Cosmos pipeline (Predict, Reason, or Transfer)
 -   NVIDIA Cosmos 3 pipeline
 -   NVIDIA Gr00t pipeline
+-   Image to 3D pipeline
+-   GenAI CAD STEP agent pipeline on its `fargate` runtime (the `agentcore` runtime runs outside the VPC)
 
 The AWS Batch pipelines that run in the isolated subnets — Coordinate Transform, Potree Point Cloud Viewer, 3D Preview Thumbnail, GenAI Metadata Labeling, and Video SOP/BOM Extraction — add neither subnet type and no NAT gateway.
 
@@ -296,6 +298,7 @@ These non-pipeline endpoints are created based on the deployment configuration:
 | AWS KMS (FIPS)                                  | `useKmsCmkEncryption.enabled` + `useFips`                                             | FIPS-compliant KMS                                                                                                                                                                                  |
 | Amazon S3 (ALB web)                             | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint`                                        | ALB-to-S3 static web file serving                                                                                                                                                                   |
 | AWS Deadline Cloud                              | `pipelines.deadlineCloudExecutionTypeEnabled` + `useGlobalVpc.useForAllLambdas`       | `deadline.management` — read a job's status and cancel a farm job. AWS Deadline Cloud is unavailable in GovCloud / EU Sovereign, so the execution type (and this endpoint) cannot be enabled there. |
+| Amazon Bedrock AgentCore                        | `useGenAiCadStepAgent` with `runtime: "agentcore"` + `useGlobalVpc.useForAllLambdas`  | `bedrock-agentcore` — the GenAI CAD STEP agent's invoke Lambda calls `InvokeAgentRuntime` from the isolated subnets. The `agentcore` runtime is commercial-only, so this endpoint is too.           |
 | Amazon S3 (cross-Region, one per bucket Region) | `useGlobalVpc.addCrossRegionS3Endpoints` + an external asset bucket in another Region | `com.amazonaws.<bucketRegion>.s3` with `ServiceRegion` set — reaches an asset bucket in another Region from the isolated subnets. Commercial partition only.                                        |
 
 VAMS does not create Amazon Cognito interface endpoints. See [MFA-Aware Roles](security.md#mfa-aware-roles) for what that means for Lambda functions running in the VPC.
