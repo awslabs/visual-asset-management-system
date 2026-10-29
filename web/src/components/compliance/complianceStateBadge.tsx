@@ -41,6 +41,7 @@ export const COMPLIANCE_STATE_INDICATORS: Record<ComplianceStateValue, Complianc
         label: "Pending Parent Resolution",
         badgeColor: "grey",
     },
+    archived: { type: "stopped", label: "Archived (not evaluated)", badgeColor: "grey" },
 };
 
 /** The indicator of a state; a missing or unrecognised state renders as Unknown. */

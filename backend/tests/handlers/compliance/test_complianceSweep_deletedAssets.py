@@ -130,8 +130,11 @@ class TestASweepRemovesTheRecordsOfDeletedAssets:
               rest_event("POST", f"/compliance/evaluate/{DB}", {"databaseId": DB}, body={}))
         overview = _call(Evaluations(tables),
                          rest_event("GET", f"/compliance/state/{DB}", {"databaseId": DB}))
-        assert overview["totalAssets"] == 3
+        # The two live assets. The archived asset keeps its record but is left out of the
+        # overview, as the asset listing leaves it out.
+        assert overview["totalAssets"] == 2
         assert overview["summary"]["quarantined"] == 0
+        assert ARCHIVED in _records(tables)
 
     def test_a_second_sweep_finds_nothing_to_remove(self, tables):
         event = rest_event("POST", f"/compliance/evaluate/{DB}", {"databaseId": DB}, body={})

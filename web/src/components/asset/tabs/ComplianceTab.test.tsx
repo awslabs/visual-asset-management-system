@@ -474,3 +474,76 @@ describe("ComplianceTab schema source", () => {
         expect(screen.getByText(text)).toBeInTheDocument();
     });
 });
+
+describe("ComplianceTab archived asset", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        (permissions.useAllowedRoutes as jest.Mock).mockReturnValue({
+            can: () => true,
+            loading: false,
+        });
+        service().fetchEvaluationHistory.mockResolvedValue([
+            true,
+            { evaluations: [], nextToken: undefined },
+        ]);
+    });
+
+    const archivedRecord = (recordedComplianceState: string, extra: object = {}) => ({
+        databaseId: "db1",
+        assetId: "asset-1",
+        complianceState: "archived",
+        recordedComplianceState,
+        schemaName: "std",
+        schemaSource: "database",
+        ...extra,
+    });
+
+    it("says the asset is archived and not evaluated instead of Pending Evaluation", async () => {
+        service().fetchComplianceState.mockResolvedValue([
+            true,
+            archivedRecord("pending_evaluation"),
+        ]);
+        renderTab();
+
+        expect(await screen.findByText("Archived (not evaluated)")).toBeInTheDocument();
+        expect(screen.getByText(`Archived ${Synonyms.asset}`)).toBeInTheDocument();
+        expect(screen.getByText(/left out of the compliance overview/)).toBeInTheDocument();
+        // The recorded state is shown apart, as the state that applies again on unarchive.
+        expect(screen.getByText("Recorded State")).toBeInTheDocument();
+        expect(screen.getByText("Pending Evaluation")).toBeInTheDocument();
+        // Nothing is evaluated while the asset is archived, so the tab offers no evaluation.
+        expect(screen.queryByRole("button", { name: "Evaluate Now" })).not.toBeInTheDocument();
+    });
+
+    it("offers no quarantine or exception action on an archived asset", async () => {
+        service().fetchComplianceState.mockResolvedValue([
+            true,
+            archivedRecord("exception", {
+                exceptionGranted: true,
+                exceptionReason: "accepted",
+                exceptionSchemaName: "std",
+                exceptionSchemaVersion: 1,
+            }),
+        ]);
+        renderTab();
+
+        expect(await screen.findByText("Archived (not evaluated)")).toBeInTheDocument();
+        expect(screen.getByText("Active exception")).toBeInTheDocument();
+        for (const name of ["Release", "Grant Exception", "Revoke exception", "Evaluate Now"]) {
+            expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+        }
+    });
+
+    it("shows a live asset's state with its actions and no archived notice", async () => {
+        service().fetchComplianceState.mockResolvedValue([
+            true,
+            { databaseId: "db1", assetId: "asset-1", complianceState: "pending_evaluation" },
+        ]);
+        renderTab();
+
+        expect(await screen.findByText("Pending Evaluation")).toBeInTheDocument();
+        expect(screen.queryByText(`Archived ${Synonyms.asset}`)).not.toBeInTheDocument();
+        expect(screen.queryByText("Recorded State")).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Evaluate Now" })).toBeInTheDocument();
+    });
+});

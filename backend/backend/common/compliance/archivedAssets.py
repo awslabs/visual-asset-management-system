@@ -21,6 +21,12 @@ finds out whether an asset is archived and picks the id to hand the engine.
   strongly-consistent GetItem of the archived key for a single record, or, in a listing, one Query
   of the database's archived partition (keys only), cached for the request, whatever the page size.
   Once a listing has those ids, the stored id is asked only of the rows they name.
+
+The compliance overview (its rows and per-state counts) and the state, quarantine and exception
+listings leave an archived asset out for every caller (`left_out`, `listed`), as the asset listing
+does unless it is asked to include archived assets. The asset is not evaluated while it is archived,
+so its record would otherwise stay counted in the state it held when it was archived. The record is
+kept, and a caller allowed to read it gets it with the state `archived`.
 """
 
 from typing import Callable, Dict, FrozenSet, Hashable, Optional, Tuple
@@ -92,6 +98,7 @@ class ArchivedAssets:
     def __init__(self, asset_table):
         self._asset_table = asset_table
         self._archived_ids: Dict[str, FrozenSet[str]] = {}
+        self._archived_records: Dict[Tuple[str, str], bool] = {}
         self._stored_decisions: Dict[Tuple[Hashable, str], bool] = {}
 
     def archived_ids(self, database_id: str) -> FrozenSet[str]:
@@ -101,9 +108,29 @@ class ArchivedAssets:
         return self._archived_ids[database_id]
 
     def is_archived(self, database_id: str, asset_id: str, listing: bool = False) -> bool:
+        """Whether the asset is archived: in a listing, from the database's archived ids; else one
+        read of its archived key, made once per request. Ids that name no asset are not."""
+        if not names_an_asset(database_id, asset_id):
+            return False
         if listing:
             return asset_id in self.archived_ids(database_id)
-        return asset_is_archived(self._asset_table, database_id, asset_id)
+        key = (database_id, asset_id)
+        if key not in self._archived_records:
+            self._archived_records[key] = asset_is_archived(self._asset_table, database_id, asset_id)
+        return self._archived_records[key]
+
+    def left_out(self, database_id: str) -> FrozenSet[str]:
+        """The asset ids whose records the compliance overview and its counts, and the state,
+        quarantine and exception listings of a database leave out, whoever the caller: its archived
+        assets (read once per request). A scope that names no asset partition (GLOBAL) has none."""
+        if not is_asset_database(database_id):
+            return frozenset()
+        return self.archived_ids(database_id)
+
+    def listed(self, database_id: str, asset_id: str) -> bool:
+        """Whether a compliance listing shows the record of an asset: not when it is archived
+        (`left_out`)."""
+        return not self.is_archived(database_id, asset_id, listing=True)
 
     def _stored_decision(self, database_id: str, decide: Callable[[str], bool],
                          cache_key: Optional[Hashable]) -> bool:

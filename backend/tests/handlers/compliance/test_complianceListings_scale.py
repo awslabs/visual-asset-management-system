@@ -25,6 +25,7 @@ from common.compliance import listing
 from handlers.compliance import complianceAuditService as audit_svc
 from handlers.compliance import complianceEvaluateService as evaluate_svc
 from handlers.compliance import complianceQuarantineService as quarantine_svc
+from backend.tests.handlers.compliance._harness import live_only_asset_table
 
 DB = "scale-db"
 OTHER_DB = "other-db"
@@ -55,6 +56,15 @@ AUDIT_TABLE_DEFINITION = {
     ],
     "BillingMode": "PAY_PER_REQUEST",
 }
+
+
+@pytest.fixture(autouse=True)
+def _no_archived_assets():
+    """The overview and the quarantine listing read the archived partition of each database they
+    list (`ArchivedAssets.left_out`); no asset of these databases is archived."""
+    with patch.object(evaluate_svc, "asset_table", live_only_asset_table()), \
+            patch.object(quarantine_svc, "asset_table", live_only_asset_table()):
+        yield
 
 
 class CountingTable:

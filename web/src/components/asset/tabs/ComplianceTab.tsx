@@ -239,6 +239,8 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
 
     const exceptionActive = !!complianceState?.exceptionGranted;
     const lastEvaluated = complianceState?.lastEvaluatedAt || complianceState?.lastEvaluationAt;
+    // An archived asset is not evaluated while it is archived; its record keeps the state it had.
+    const archived = complianceState?.complianceState === "archived";
 
     return (
         <SpaceBetween size="l">
@@ -271,12 +273,12 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                                             Grant Exception
                                         </Button>
                                     )}
-                                {exceptionActive && canRevokeException && (
+                                {exceptionActive && canRevokeException && !archived && (
                                     <Button onClick={() => setRevokeModalVisible(true)}>
                                         Revoke exception
                                     </Button>
                                 )}
-                                {canEvaluate && (
+                                {canEvaluate && !archived && (
                                     <Button
                                         variant="primary"
                                         loading={evaluating}
@@ -293,6 +295,14 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                 }
             >
                 <SpaceBetween size="m">
+                    {archived && (
+                        <Alert type="info" header={`Archived ${Synonyms.asset}`}>
+                            This {Synonyms.asset} is archived, so it is not evaluated and it is left
+                            out of the compliance overview of its {Synonyms.database} and the
+                            quarantine list. Its compliance record is kept: the state below applies
+                            again once the {Synonyms.asset} is unarchived.
+                        </Alert>
+                    )}
                     <div>
                         <Box variant="awsui-key-label">Current State</Box>
                         <SpaceBetween direction="horizontal" size="xs">
@@ -309,6 +319,12 @@ export const ComplianceTab: React.FC<ComplianceTabProps> = ({ databaseId, assetI
                             </Box>
                         )}
                     </div>
+                    {archived && complianceState?.recordedComplianceState && (
+                        <div>
+                            <Box variant="awsui-key-label">Recorded State</Box>
+                            <ComplianceStateBadge state={complianceState.recordedComplianceState} />
+                        </div>
+                    )}
                     {complianceState?.schemaName && (
                         <div>
                             <Box variant="awsui-key-label">Assigned Schema</Box>

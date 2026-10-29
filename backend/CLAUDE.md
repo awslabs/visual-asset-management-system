@@ -54,8 +54,11 @@ backend/
 │   │   │                                           #   the archived partition only when it is refused
 │   │   │                                           #   (one keys-only Query per database per listing;
 │   │   │                                           #   once read, only archived rows ask the stored id);
-│   │   │                                           #   withheld() / withheld_state_counts() for the
-│   │   │                                           #   overview's rows and counts; archive_visible()
+│   │   │                                           #   left_out() / listed() leave archived assets out
+│   │   │                                           #   of the overview, its counts (withheld_state_
+│   │   │                                           #   counts()) and the quarantine list for every
+│   │   │                                           #   caller; withheld() for the bindings listing;
+│   │   │                                           #   archive_visible()
 │   │   │                                           #   for the sweep / Evaluate All / cascade counts
 │   │   │                                           #   (archived assets the caller may not see are
 │   │   │                                           #   counted and listed nowhere)

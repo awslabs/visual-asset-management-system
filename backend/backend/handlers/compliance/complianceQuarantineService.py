@@ -277,13 +277,15 @@ def list_quarantined(event, query_params):
                 _evaluation_object(database_id, engine.STATE_QUARANTINED), "GET")
             and not store.database_known(database_id)):
         return database_not_found(event)
-    # An archived asset is listed only for a caller allowed on its stored database id; its
-    # archived status is read once per database, and only when that decides anything.
+    # An archived asset is not evaluated while it is archived, so its quarantine is left out for
+    # every caller, as the asset listing leaves archived assets out (`ArchivedAssets.listed`).
     archived = ArchivedAssets(asset_table)
 
     def may_get(item):
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
         if text_accept is not None and not text_accept(item):
+            return False
+        if not archived.listed(item.get("databaseId"), item.get("assetId")):
             return False
         return bool(casbin_enforcer) and archived.decide(
             item.get("databaseId"), item.get("assetId"),
