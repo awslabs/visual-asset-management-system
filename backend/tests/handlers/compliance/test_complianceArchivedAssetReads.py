@@ -247,15 +247,20 @@ def _overview(stored_id_allowed, archived=(), page_size=3):
 @pytest.mark.unit
 class TestTheOverviewRead:
 
-    def test_a_caller_allowed_on_both_ids_reads_as_before(self):
+    def test_a_caller_allowed_on_both_ids_gets_the_archived_rows_left_out_too(self):
+        """An archived asset is not evaluated, so its record would stay counted in the state it
+        was archived in: the overview leaves it out for every caller, as the asset listing does,
+        with the read the withheld rows already cost (one archive query, a page plus their
+        number, one BatchGetItem of their keys)."""
         response, reads, asset_table, state_table = _overview(True, archived=("a0x",))
         assert response["statusCode"] == 200
-        assert [r["Limit"] for r in reads] == [3]
-        asset_table.query.assert_not_called()
+        assert [r["Limit"] for r in reads] == [3 + 1]
+        assert asset_table.query.call_count == 1
         asset_table.get_item.assert_not_called()
-        state_table.meta.client.batch_get_item.assert_not_called()
-        assert "a0x" in [row["assetId"] for row in body_of(response)["assets"]]
-        assert body_of(response)["summary"]["quarantined"] == 1
+        state_table.meta.client.batch_get_item.assert_called_once()
+        assert "a0x" not in [row["assetId"] for row in body_of(response)["assets"]]
+        assert body_of(response)["summary"]["quarantined"] == 0
+        assert body_of(response)["totalAssets"] == 6
 
     def test_withheld_rows_cost_one_archive_query_and_a_page_plus_their_number(self):
         response, reads, asset_table, state_table = _overview(False, archived=("a0x", "a1x"))

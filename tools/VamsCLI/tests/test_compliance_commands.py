@@ -1141,6 +1141,28 @@ class TestComplianceEvaluationCommands:
             assert 'Exception Schema: cad-quality' in result.output
             assert 'Exception Schema Version: 3' in result.output
 
+    def test_state_for_an_archived_asset_shows_its_recorded_state(self, cli_runner,
+                                                                  generic_command_mocks):
+        # An archived asset is not evaluated: the route reports it as archived and keeps the state
+        # its record holds as recordedComplianceState, which applies again on unarchive.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_state.return_value = {
+                'databaseId': 'my-database', 'assetId': 'my-asset', 'complianceState': 'archived',
+                'recordedComplianceState': 'pending_evaluation', 'schemaName': 'cad-quality',
+                'schemaSource': 'database'}
+            result = cli_runner.invoke(cli, ['compliance', 'state', '-d', 'my-database', '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert 'Compliance State: archived' in result.output
+            assert 'Recorded State: pending_evaluation (the asset is archived' in result.output
+
+    def test_state_for_a_live_asset_has_no_recorded_state_line(self, cli_runner,
+                                                              generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_state.return_value = STATE_RECORD
+            result = cli_runner.invoke(cli, ['compliance', 'state', '-d', 'my-database', '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert 'Recorded State' not in result.output
+
     def test_state_for_a_database(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].get_database_compliance_state.return_value = {

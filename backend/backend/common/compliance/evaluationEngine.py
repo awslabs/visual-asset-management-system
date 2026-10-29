@@ -80,6 +80,9 @@ STATE_UNKNOWN = "unknown"
 # An asset whose latest evaluation failed while a quarantine exception is active: released, never
 # quarantined, with the violations kept on the evaluation row.
 STATE_EXCEPTION = "exception"
+# Never stored: the state the asset-state read reports for an archived asset, which is not evaluated
+# while it is archived. Its record keeps its stored state, which applies again once it is unarchived.
+STATE_ARCHIVED = "archived"
 
 # Asset-state attributes a quarantine exception writes. `exceptionSchemaName` /
 # `exceptionSchemaVersion` scope the exception to the schema name and `internalVersion` it was

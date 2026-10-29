@@ -1770,9 +1770,11 @@ def get_asset_compliance_state(database_id: str, asset_id: str) -> Dict[str, Any
     """Read one asset's compliance record.
 
     `complianceState` is one of compliant, non_compliant, pending_evaluation, quarantined,
-    exception or unknown; `schemaName` / `schemaSource` (database or asset) say which binding
-    governs it. A quarantined record carries `quarantineReason`. A record in state `exception`
-    holds an active quarantine exception: `exceptionGranted`, `exceptionReason`,
+    exception or unknown, or `archived` for an archived asset: it is not evaluated while it is
+    archived, and `recordedComplianceState` holds the state its record keeps, which applies again
+    once the asset is unarchived. `schemaName` / `schemaSource` (database or asset) say which
+    binding governs it. A quarantined record carries `quarantineReason`. A record in state
+    `exception` holds an active quarantine exception: `exceptionGranted`, `exceptionReason`,
     `exceptionGrantedBy`, `exceptionGrantedAt`, plus `exceptionSchemaName` /
     `exceptionSchemaVersion` naming the schema name and version the exception is scoped to — a
     re-evaluation against that version records its violations on the evaluation row but keeps the
@@ -1802,9 +1804,10 @@ def get_database_compliance_overview(
 ) -> Dict[str, Any]:
     """Read a database's compliance overview: `totalAssets` and a per-state `summary` (compliant,
     non_compliant, pending_evaluation, quarantined, exception, unknown) covering EVERY tracked
-    asset, plus `assets` — ONE PAGE of their records, each with its `assetName`, in assetId order
-    (or by name with `sort="name"`). `nameSortUnavailable: true` in the response means the name
-    index is still being built after an upgrade: that page is in assetId order.
+    asset (archived assets are left out of the counts and the rows), plus `assets` — ONE PAGE of
+    their records, each with its `assetName`, in assetId order (or by name with `sort="name"`).
+    `nameSortUnavailable: true` in the response means the name index is still being built after an
+    upgrade: that page is in assetId order.
 
     The page is filtered ON THE SERVER: `state` (one complianceState), `schema_name`,
     `schema_source` (`database` or `asset`), `evaluation_error` (True: the last evaluation
@@ -1895,10 +1898,10 @@ def list_quarantined_assets(
 
     Each item is the asset's compliance record (databaseId, assetId, assetName, schemaName,
     quarantineReason, updatedAt). Only assets in state `quarantined` are listed — an asset released
-    under an exception (state `exception`) is not. The route filters each page to the caller's
-    databases AFTER reading it, so a page can be empty while a token remains — the walk keeps
-    following the token, and an empty `Items` with `truncated` set does not mean nothing is
-    quarantined.
+    under an exception (state `exception`) is not, nor is an archived asset. The route filters each
+    page to the caller's databases AFTER reading it, so a page can be empty while a token remains —
+    the walk keeps following the token, and an empty `Items` with `truncated` set does not mean
+    nothing is quarantined.
 
     The walk is BOUNDED: `truncated` means rows were not seen, `note` says which bound stopped it,
     and `NextToken` continues the walk — pass it back as `starting_token`.
