@@ -43,7 +43,7 @@ from moto import mock_aws
 import backend.backend.handlers.authz as authz_module
 from backend.tests.handlers.compliance import _cdkTables
 from backend.tests.handlers.compliance._harness import (
-    body_of, claims_for, real_constants, rest_event,
+    body_of, claims_for, mirror_engine, real_constants, rest_event,
 )
 from backend.tests.handlers.compliance.test_complianceArchivedAssetAccess import _enforcer
 from backend.tests.handlers.compliance.test_complianceArchivedCounts import (
@@ -82,7 +82,8 @@ SEEN_BY_OTHER_READER = {
 OPENED_SEEN_BY_ARCHIVE_READER = {"reason": "parent_update", "childCount": 2,
                                  "archivedChildrenByDatabase": {DB: 1}}
 OPENED_SEEN_BY_OTHER_READER = {"reason": "parent_update", "childCount": 1}
-OPENED_STORED = {"reason": "parent_update", "childCount": 1, "archivedChildrenByDatabase": {DB: 1}}
+OPENED_STORED = {"reason": "parent_update", "childCount": 1,
+                 "archivedChildrenByDatabase": {DB: [ARCHIVED_CHILD]}}
 
 # The audit reads that return the parent's entries: the asset's audit trail and each listing path.
 AUDIT_READS = {
@@ -127,6 +128,7 @@ def _observe_world(enforcer):
     stand_in = MagicMock(name="CasbinEnforcer")
     stand_in.enforceAPI.return_value = True
     stand_in.enforce.side_effect = enforcer.enforce
+    mirror_engine(stand_in, enforcer)
     publish = MagicMock()
     with mock_aws():
         resource = boto3.resource("dynamodb", region_name="us-east-1")
@@ -246,7 +248,8 @@ def test_the_stored_entry_keeps_the_archived_descendants_out_of_the_shared_summa
         role_enforcer, observations):
     found = _observed("template:database-admin.json", role_enforcer, observations)
     assert found["stored"][CASCADE_ID] == {
-        "nodesEvaluated": 1, "summary": {"compliant": 1}, "skippedArchivedByDatabase": {DB: 1}}
+        "nodesEvaluated": 1, "summary": {"compliant": 1},
+        "skippedArchivedByDatabase": {DB: [ARCHIVED_CHILD]}}
 
 
 @pytest.mark.unit
@@ -358,7 +361,7 @@ def test_completion_details_record_the_archived_descendants_per_database():
     assert summaries.completion_details(results) == {
         "nodesEvaluated": 3,
         "summary": {"compliant": 1, "quarantined": 1, "skipped_not_authorized": 1},
-        "skippedArchivedByDatabase": {"db-a": 1, "db-b": 2},
+        "skippedArchivedByDatabase": {"db-a": ["2"], "db-b": ["3", "4"]},
     }
 
 
@@ -376,7 +379,7 @@ def test_a_reader_is_counted_only_the_databases_whose_archive_it_may_see():
               "skippedArchivedByDatabase": {"db-a": 1, "db-b": 2}}
     asked = []
 
-    def only_b(database_id):
+    def only_b(database_id, asset_id):
         asked.append(database_id)
         return database_id == "db-b"
 
@@ -386,13 +389,40 @@ def test_a_reader_is_counted_only_the_databases_whose_archive_it_may_see():
                     "skippedArchivedByDatabase": {"db-b": 2}}
     assert sorted(asked) == ["db-a", "db-b"]
 
-    everything = _details(summaries.details_for_reader(_entry(stored), lambda _db: True))
+    everything = _details(summaries.details_for_reader(_entry(stored), lambda _db, _asset: True))
     assert everything == {"nodesEvaluated": 6,
                           "summary": {"compliant": 2, "quarantined": 1, "skipped_archived": 3},
                           "skippedArchivedByDatabase": {"db-a": 1, "db-b": 2}}
 
-    nothing = _details(summaries.details_for_reader(_entry(stored), lambda _db: False))
+    nothing = _details(summaries.details_for_reader(_entry(stored), lambda _db, _asset: False))
     assert nothing == {"nodesEvaluated": 3, "summary": {"compliant": 2, "quarantined": 1}}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("event_type,count_key,base", [
+    ("cascade_completed", "nodesEvaluated", {"nodesEvaluated": 1, "summary": {"compliant": 1}}),
+    ("cascade_auto_triggered", "childCount", {"reason": "parent_update", "childCount": 1}),
+])
+def test_a_record_by_asset_id_is_decided_per_asset(event_type, count_key, base):
+    """The archived assets an entry names are each decided on their own (a deny on one asset's
+    tag hides that asset and no other); the reader learns counts, never the ids."""
+    key = (summaries.ARCHIVED_BY_DATABASE_KEY if event_type == "cascade_completed"
+           else summaries.ARCHIVED_CHILDREN_KEY)
+    stored = dict(base, **{key: {"db-a": ["a1", "a2", "a3"], "db-b": ["b1"]}})
+    asked = []
+
+    def visible(database_id, asset_id):
+        asked.append((database_id, asset_id))
+        return asset_id in ("a1", "a3", "b1")
+
+    entry = _entry(stored, event_type=event_type)
+    seen = _details(summaries.details_for_reader(entry, visible))
+    assert seen[key] == {"db-a": 2, "db-b": 1}
+    assert seen[count_key] == base[count_key] + 3
+    assert sorted(asked) == [("db-a", "a1"), ("db-a", "a2"), ("db-a", "a3"), ("db-b", "b1")]
+    assert "a2" not in json.dumps(seen) and "a1" not in json.dumps(seen)
+    none = _details(summaries.details_for_reader(entry, lambda _db, _asset: False))
+    assert key not in none and none[count_key] == base[count_key]
 
 
 @pytest.mark.unit
@@ -400,14 +430,15 @@ def test_an_earlier_builds_entry_is_counted_by_the_parents_database():
     old = {"nodesEvaluated": 4, "summary": {"compliant": 1, "skipped_archived": 3}}
     asked = []
 
-    def refuse(database_id):
+    def refuse(database_id, asset_id):
         asked.append(database_id)
+        assert asset_id is None
         return False
 
     seen = _details(summaries.details_for_reader(_entry(old), refuse))
     assert seen == {"nodesEvaluated": 1, "summary": {"compliant": 1}}
     assert asked == [DB]
-    assert _details(summaries.details_for_reader(_entry(old), lambda _db: True)) == old
+    assert _details(summaries.details_for_reader(_entry(old), lambda _db, _asset: True)) == old
 
 
 @pytest.mark.unit
@@ -418,20 +449,20 @@ def test_an_earlier_builds_entry_is_counted_by_the_parents_database():
 def test_an_entry_it_cannot_or_need_not_change_is_returned_as_it_is(details):
     entry = {"entryId": "e-1", "eventType": "cascade_completed", "databaseId": DB,
              "details": details}
-    assert summaries.details_for_reader(entry, lambda _db: False) is entry
+    assert summaries.details_for_reader(entry, lambda _db, _asset: False) is entry
 
 
 @pytest.mark.unit
 def test_other_events_are_returned_as_they_are():
     entry = _entry({"summary": {"skipped_archived": 1}}, event_type="cascade_auto_triggered")
-    assert summaries.details_for_reader(entry, lambda _db: False) is entry
+    assert summaries.details_for_reader(entry, lambda _db, _asset: False) is entry
 
 
 @pytest.mark.unit
 def test_details_stored_as_an_object_stay_an_object():
     entry = _entry({"nodesEvaluated": 1, "summary": {"compliant": 1},
                     "skippedArchivedByDatabase": {DB: 1}}, encode=False)
-    seen = summaries.details_for_reader(entry, lambda _db: False)
+    seen = summaries.details_for_reader(entry, lambda _db, _asset: False)
     assert seen["details"] == {"nodesEvaluated": 1, "summary": {"compliant": 1}}
     assert entry["details"]["skippedArchivedByDatabase"] == {DB: 1}
 
@@ -440,7 +471,7 @@ def test_details_stored_as_an_object_stay_an_object():
 def test_an_unreadable_per_database_record_counts_nothing():
     entry = _entry({"nodesEvaluated": 1, "summary": {"compliant": 1},
                     "skippedArchivedByDatabase": {DB: "two", "db-b": -1, "db-c": True}})
-    assert _details(summaries.details_for_reader(entry, lambda _db: True)) == {
+    assert _details(summaries.details_for_reader(entry, lambda _db, _asset: True)) == {
         "nodesEvaluated": 1, "summary": {"compliant": 1}}
 
 
@@ -469,7 +500,7 @@ def test_opened_details_record_the_archived_children_per_database():
     assert summaries.opened_details(
         "parent_update", children, lambda db, asset: (db, asset) in archived) == {
         "reason": "parent_update", "childCount": 2,
-        "archivedChildrenByDatabase": {"db-a": 1, "db-b": 2}}
+        "archivedChildrenByDatabase": {"db-a": ["2"], "db-b": ["3", "4"]}}
     assert summaries.opened_details("parent_update", [("db-a", "1")], lambda *_: False) == {
         "reason": "parent_update", "childCount": 1}
 
@@ -479,12 +510,12 @@ def test_a_reader_is_told_only_of_the_archived_children_it_may_see():
     stored = {"reason": "parent_update", "childCount": 1,
               "archivedChildrenByDatabase": {"db-a": 1, "db-b": 2}}
     entry = _entry(stored, event_type="cascade_auto_triggered")
-    assert _details(summaries.details_for_reader(entry, lambda db: db == "db-b")) == {
+    assert _details(summaries.details_for_reader(entry, lambda db, _asset: db == "db-b")) == {
         "reason": "parent_update", "childCount": 3, "archivedChildrenByDatabase": {"db-b": 2}}
-    assert _details(summaries.details_for_reader(entry, lambda _db: True)) == {
+    assert _details(summaries.details_for_reader(entry, lambda _db, _asset: True)) == {
         "reason": "parent_update", "childCount": 4,
         "archivedChildrenByDatabase": {"db-a": 1, "db-b": 2}}
-    assert _details(summaries.details_for_reader(entry, lambda _db: False)) == {
+    assert _details(summaries.details_for_reader(entry, lambda _db, _asset: False)) == {
         "reason": "parent_update", "childCount": 1}
 
 
@@ -493,7 +524,7 @@ def test_an_opened_entry_without_archived_children_is_returned_as_it_is():
     """No per-database record: no archived child, or an entry written before the record existed
     (which cannot be told apart, and exists only on test deployments)."""
     entry = _entry({"reason": "parent_update", "childCount": 2}, event_type="cascade_auto_triggered")
-    assert summaries.details_for_reader(entry, lambda _db: False) is entry
+    assert summaries.details_for_reader(entry, lambda _db, _asset: False) is entry
 
 
 @pytest.mark.unit

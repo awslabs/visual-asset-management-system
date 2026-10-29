@@ -309,8 +309,8 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
 
     _complete_cascade(cascade_id, results)
     # The descendants skipped as archived are recorded per database, outside the summary and the
-    # node count every reader shares: the audit service counts them only for a reader who may see
-    # that database's archive, and the notification, one message for every subscriber, not at all.
+    # node count every reader shares: the audit service counts each only for a reader who may see
+    # that archived asset, and the notification, one message for every subscriber, not at all.
     details = completion_details(results)
 
     store.write_audit(

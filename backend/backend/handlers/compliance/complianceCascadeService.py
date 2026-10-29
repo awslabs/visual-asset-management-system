@@ -42,7 +42,7 @@ from common.apiRoutes import (
     API_COMPLIANCE_CASCADES,
 )
 from common.compliance import listing
-from common.compliance.archivedAssets import ArchivedAssets, is_asset_database
+from common.compliance.archivedAssets import ArchivedAssets, flush_denials, is_asset_database
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
@@ -138,6 +138,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except Exception as e:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)
+    finally:
+        # The denials of this request's archived-asset checks for listings and counts.
+        flush_denials()
 
 
 #######################
@@ -196,6 +199,11 @@ def _enforce_cascade(cascade_id, database_id, action):
     return CasbinEnforcer(claims_and_roles).enforce(_cascade_object(cascade_id, database_id), action)
 
 
+def _caller_enforcer():
+    """The caller's CasbinEnforcer, or None for a request without tokens."""
+    return CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
+
+
 def _evaluable_database_ids():
     """The databases the caller may evaluate (`complianceEvaluation` POST), recorded on a cascade
     when it is started by a caller (approved, or created without approval). The executor evaluates
@@ -223,8 +231,9 @@ def _read_authorized_cascade(event, cascade_id, cascade_action, evaluation_actio
         return None, authorization_error()
     if not cascade:
         return None, general_error(body={"message": not_found_message}, event=event)
-    # The live cascade check passed above; the stored id of an archived parent is checked anew.
-    if not ArchivedAssets(store.asset_table).decide(
+    # The live cascade check passed above; an archived parent is checked on its stored id and
+    # with the asset GET on its archived row.
+    if not ArchivedAssets(store.asset_table, _caller_enforcer()).decide(
             database_id, cascade.get("triggeredByAssetId", ""),
             lambda stored_id: ((stored_id == database_id
                                 or _enforce_cascade(cascade_id, stored_id, cascade_action))
@@ -287,12 +296,13 @@ def _encoded_like(raw, value):
 
 
 def _without_hidden_archived_nodes(item, casbin_enforcer, archived):
-    """The cascade row less the descendants it skipped as archived (`skipped_archived`) in a
-    database whose archive the reader may not see: the evaluation GET on that database's stored id
-    `<databaseId>#deleted`, the decision the compliance reads make on an archived asset's record,
-    asked once per database of the request. Such a node is left out of `nodes`, `executionOrder`,
-    `nodeNames` and `results`, and out of `totalNodes`, as the asset listing does not show that
-    reader the archived asset. Nothing is read."""
+    """The cascade row less the descendants it skipped as archived (`skipped_archived`) that the
+    reader may not see (`ArchivedAssets.archived_asset_visible`: the evaluation GET on that
+    database's stored id `<databaseId>#deleted`, asked once per database of the request, and the
+    asset GET on the archived row), the decision the compliance reads make on an archived asset's
+    record. Such a node is left out of `nodes`, `executionOrder`, `nodeNames` and `results`, and
+    out of `totalNodes`, as the asset listing does not show that reader the archived asset. The
+    archived rows are read only when the reader's rules read an asset's own fields."""
     nodes = _decoded(item.get("nodes"), {})
     results = _decoded(item.get("results"), [])
     if not isinstance(nodes, dict):
@@ -306,13 +316,14 @@ def _without_hidden_archived_nodes(item, casbin_enforcer, archived):
     if not candidates:
         return item
 
-    def archive_visible(database_id):
-        return bool(casbin_enforcer) and archived.archive_visible(
-            database_id,
+    def visible(key):
+        database_id, _, asset_id = key.partition(":")
+        return bool(casbin_enforcer) and archived.archived_asset_visible(
+            database_id, asset_id,
             lambda stored_id: casbin_enforcer.enforce(_evaluation_object(stored_id), "GET"),
             cache_key=ARCHIVE_VISIBILITY_CACHE_KEY)
 
-    hidden = {key for key in candidates if not archive_visible(key.split(":", 1)[0])}
+    hidden = {key for key in candidates if not visible(key)}
     if not hidden:
         return item
     out = dict(item)
@@ -390,7 +401,7 @@ def create_cascade(event, request: CreateCascadeRequestModel):
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
     cascade_id = str(uuid.uuid4())
-    if not ArchivedAssets(store.asset_table).decide(
+    if not ArchivedAssets(store.asset_table, _caller_enforcer()).decide(
             request.databaseId, request.assetId,
             lambda stored_id: (_enforce_cascade(cascade_id, stored_id, "POST")
                                and _enforce_evaluation(stored_id, "POST"))):
@@ -572,8 +583,8 @@ def reject_cascade(event, cascade_id, request: RejectCascadeRequestModel):
 
 
 def get_cascade(event, cascade_id):
-    """One cascade. A descendant the cascade skipped as archived in a database whose archive the
-    caller may not see is left out of its nodes (`_without_hidden_archived_nodes`)."""
+    """One cascade. A descendant the cascade skipped as archived that the caller may not see is left
+    out of its nodes (`_without_hidden_archived_nodes`)."""
     (valid, message) = _validate_cascade_id(cascade_id)
     if not valid:
         return validation_error(body={"message": message}, event=event)
@@ -585,7 +596,8 @@ def get_cascade(event, cascade_id):
         return refused
     item = store.expire_timed_out_cascade(cascade_table, item)
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-    item = _without_hidden_archived_nodes(item, casbin_enforcer, ArchivedAssets(store.asset_table))
+    item = _without_hidden_archived_nodes(
+        item, casbin_enforcer, ArchivedAssets(store.asset_table, casbin_enforcer))
     body = {key: value for key, value in item.items() if key not in PRIVATE_CASCADE_ATTRIBUTES}
     # The trigger (parent) asset's name, as the listing rows carry it; the children's names are
     # in `nodeNames`, recorded by the executor with the nodes.
@@ -662,7 +674,7 @@ def list_pending_cascades(event):
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
     # A cascade of an archived parent asset is listed only for a caller allowed on the parent's
     # stored database id; the archived ids are read once per database, and only when that decides.
-    archived = ArchivedAssets(store.asset_table)
+    archived = ArchivedAssets(store.asset_table, casbin_enforcer)
 
     def listable(item):
         # A cascade past its approval timeout is aborted here and leaves the queue, whoever reads
@@ -698,7 +710,7 @@ def _cascade_permissions(casbin_enforcer, item, archived=None):
     if item.get("state") != CASCADE_STATE_PENDING_APPROVAL:
         return {"approve": False}
     listing_rows = archived is not None
-    archived = archived or ArchivedAssets(store.asset_table)
+    archived = archived or ArchivedAssets(store.asset_table, casbin_enforcer)
     approve = archived.decide(
         item.get("triggeredByDatabaseId", ""), item.get("triggeredByAssetId", ""),
         lambda stored_id: casbin_enforcer.enforce(

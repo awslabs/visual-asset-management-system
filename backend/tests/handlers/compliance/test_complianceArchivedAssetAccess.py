@@ -31,7 +31,7 @@ import backend.backend.handlers.authz as authz_module
 from backend.tests.handlers.authz import shipped_constraints
 from backend.tests.handlers.compliance import _cdkTables
 from backend.tests.handlers.compliance._harness import (
-    RULES_SCHEMA_BODY, body_of, claims_for, real_constants, rest_event, schema_row,
+    RULES_SCHEMA_BODY, body_of, claims_for, mirror_engine, real_constants, rest_event, schema_row,
 )
 from handlers.compliance import complianceAuditService as audit_svc
 from handlers.compliance import complianceCascadeService as cascade_svc
@@ -49,11 +49,13 @@ USER_ID = "archived-access-user"
 CASCADE_IDS = {LIVE: "7a0c0000-0000-4000-8000-000000000001",
                ARCHIVED: "7a0c0000-0000-4000-8000-000000000002"}
 VARIABLES = {"DATABASE_ID": DB, "TAG_VALUE": "locked"}
+# The tag of the archived asset that the tag-deny role is refused on (D90).
+DENIED_TAG = "restricted"
 SERVICES = (store, evaluate_svc, quarantine_svc, audit_svc, cascade_svc, binding_svc)
 ASSET_ROWS = {
     LIVE: {"databaseId": DB, "assetId": LIVE, "assetName": "Live Asset", "tags": []},
     ARCHIVED: {"databaseId": ARCHIVED_DB, "assetId": ARCHIVED, "assetName": "Archived Asset",
-               "tags": [], "status": "archived"},
+               "tags": [DENIED_TAG], "status": "archived"},
 }
 
 READS = ("state", "evaluations", "asset audit", "overview", "quarantine listing",
@@ -106,13 +108,35 @@ def _deny_on_live_id(role):
     }
 
 
-# Every shipped template on its own role, both seeded roles, and two synthetic Compliance Admin
-# roles (named on both ids; and that with a live-id deny). Built on first use, under the real
-# permission constants.
+def asset_read_deny(role, name, criterion, object_types=("asset", "database")):
+    """A deny of every action on `object_types` where `criterion` holds: the shape the permissions
+    model documents for hiding records from a role (D90)."""
+    return [{
+        "constraintId": f"{name}-{object_type}", "name": f"{name}-{object_type}",
+        "objectType": object_type, "criteriaAnd": [dict(criterion, id=f"{name}-c")],
+        "criteriaOr": [],
+        "groupPermissions": [{"groupId": role, "id": f"{name}-{object_type}-{action}",
+                              "permission": action, "permissionType": "deny"}
+                             for action in ("GET", "PUT", "POST", "DELETE")],
+        "userPermissions": [],
+    } for object_type in object_types]
+
+
+# The two Database Admin roles of D90: the template plus a deny on the archive of every database
+# (`databaseId contains #deleted`, on the asset and database object types only, so the compliance
+# grant on the archive stays), and the template plus a deny on one tag that only the archived
+# asset carries (on the asset object type).
+ARCHIVE_CONTAINS_DENY_SET = "synthetic:database-admin-with-archive-contains-deny"
+TAG_DENY_SET = "synthetic:database-admin-with-tag-deny"
+
+# Every shipped template on its own role, both seeded roles, two synthetic Compliance Admin roles
+# (named on both ids; and that with a live-id deny) and the two D90 roles. Built on first use,
+# under the real permission constants.
 ROLE_SET_NAMES = sorted(
     [f"template:{name}" for name in shipped_constraints.template_names()]
     + [f"seeded:{role}" for role in shipped_constraints.SEEDED_ROLE_CONSTRUCTS]
-    + ["synthetic:both-ids", "synthetic:both-ids-with-live-deny"])
+    + ["synthetic:both-ids", "synthetic:both-ids-with-live-deny",
+       ARCHIVE_CONTAINS_DENY_SET, TAG_DENY_SET])
 
 
 def _role_set(set_name):
@@ -123,6 +147,15 @@ def _role_set(set_name):
         return [role], shipped_constraints.template_constraints(name, role, VARIABLES)
     if kind == "seeded":
         return [name], shipped_constraints.seeded_constraints(name)
+    if set_name in (ARCHIVE_CONTAINS_DENY_SET, TAG_DENY_SET):
+        role = "tpl-database-admin"
+        constraints = shipped_constraints.template_constraints(
+            "database-admin.json", role, VARIABLES)
+        if set_name == ARCHIVE_CONTAINS_DENY_SET:
+            return [role], constraints + asset_read_deny(role, "deny-archive", {
+                "field": "databaseId", "operator": "contains", "value": "#deleted"})
+        return [role], constraints + asset_read_deny(role, "deny-tag", {
+            "field": "tags", "operator": "is_one_of", "value": DENIED_TAG}, ("asset",))
     both = _both_ids(shipped_constraints.template_constraints(
         "compliance-admin.json", "both", VARIABLES))
     if name == "both-ids":
@@ -199,6 +232,7 @@ def world():
         stand_in = MagicMock(name="CasbinEnforcer")
         stand_in.enforceAPI.return_value = True
         stand_in.enforce.side_effect = enforcer.enforce
+        mirror_engine(stand_in, enforcer)
         with mock_aws():
             resource = boto3.resource("dynamodb", region_name="us-east-1")
             patches, doubles = _cdkTables.table_doubles(resource, SERVICES)
@@ -343,13 +377,14 @@ def _decisions_of(set_name, role_enforcer, world, cache):
 def test_an_archived_assets_compliance_follows_the_archived_record_rule(
         set_name, role_enforcer, world, decisions):
     """For every read and action: allowed on the archived asset exactly when allowed on the live
-    one and the asset GET does not withhold the archived row (it reaches the archived row, or the
-    role reads no asset row at all). Where the live compliance decision equals the live asset GET,
-    that is the archived asset GET decision itself."""
+    one and the asset GET reaches the archived row, as opening the asset with archived assets does
+    (D90: a role that reads no asset row reads no archived asset's compliance either). Where the
+    live compliance decision equals the live asset GET, that is the archived asset GET decision
+    itself."""
     found = _decisions_of(set_name, role_enforcer, world, decisions)
     asset_live, asset_archived = found["asset_get"][LIVE], found["asset_get"][ARCHIVED]
     for check in READS + ACTIONS:
-        expected = found["live"][check] and (asset_archived or not asset_live)
+        expected = found["live"][check] and asset_archived
         assert found["archived"][check] is expected, (set_name, check, found)
         if found["live"][check] is asset_live:
             assert found["archived"][check] is asset_archived, (set_name, check)

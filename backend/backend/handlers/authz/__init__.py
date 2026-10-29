@@ -398,6 +398,15 @@ class CasbinEnforcer:
         
         return result
 
+    def policy_object_fields(self, fields):
+        """Which of `fields` of the checked object any of the caller's policy lines reads
+        (`CasbinEnforcerService.policy_object_fields`); all of them (the conservative answer) when
+        it cannot be told."""
+        service = self.service_object
+        if service is None:
+            return frozenset(fields)
+        return service.policy_object_fields(fields)
+
     def enforceAPI(self, lambdaEvent, apiMethodOverrideValue = ''):
         """Enforce API authorization with audit logging"""
         claims_and_roles = request_to_claims(lambdaEvent)
@@ -1079,6 +1088,29 @@ class CasbinEnforcerService:
         # MFA invalidation.
         _enforcer = ObjectTypeRoutingEnforcer(model=new_model, adapter=new_string_adapter, enable_log=False)
         return _enforcer
+
+    def policy_object_fields(self, fields):
+        """Which of `fields` of the checked object any of this user's policy lines reads: a rule
+        criterion on field F is written as `r.obj.F` in the line (`_generate_criteria_object_
+        rules`), whatever its object type. A caller deciding many objects of one type asks it: a
+        decision depends on no field outside the answer, so objects that agree on those fields
+        (and on the ones every decision reads, such as the database id) get the same answer.
+
+        Conservative: all of `fields` when there is no enforcer or its lines cannot be read, and a
+        value that happens to contain `r.obj.F` counts as reading F."""
+        names = [field for field in fields if isinstance(field, str) and field]
+        if not names:
+            return frozenset()
+        if self._enforcer is None:
+            return frozenset(names)
+        try:
+            rules = self._enforcer.get_policy()
+        except Exception as e:
+            logger.exception(f"Failed reading the policy lines: {e}")
+            return frozenset(names)
+        text = "\n".join(str(part) for rule in rules for part in rule)
+        return frozenset(name for name in names
+                         if re.search(r"r\.obj\." + re.escape(name) + r"\b", text))
 
     def _scrub_object_fields(self, obj):
         """Keep only the fields valid for the object's object__type (no-op for unknown types)."""

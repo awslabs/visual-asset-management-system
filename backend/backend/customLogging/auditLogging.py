@@ -434,6 +434,53 @@ def log_authorization(claims_and_roles: Dict[str, Any], authorized: bool, custom
         logger.exception(f"Failed to log authorization audit event: {e}")
 
 
+def log_authorization_denials(claims_and_roles: Dict[str, Any], denials: list) -> None:
+    """
+    Log several failed authorization checks of one caller in one batch, with silent failure.
+
+    Each entry of `denials` (the `custom_data` of one check, e.g. {"action", "obj"}) becomes the
+    record `log_authorization(claims_and_roles, False, custom_data)` writes, and the records go out
+    through `_write_batch_to_cloudwatch`: one PutLogEvents round trip per batch instead of one per
+    denial, for a listing that checks many records.
+
+    Args:
+        claims_and_roles: The claims and roles dictionary
+        denials: The custom data of each denied check
+    """
+    if not denials:
+        return
+    try:
+        log_group_name = _audit_log_group(ResourceKeys.AUDIT_LOG_AUTHORIZATION)
+        if not log_group_name:
+            logger.error("AUDIT_LOG_AUTHORIZATION resource name not resolved")
+            return
+
+        user_context = {
+            "user": claims_and_roles.get("tokens", ["UNKNOWN"])[0] if claims_and_roles.get("tokens") else "UNKNOWN",
+            "roles": claims_and_roles.get("roles", []),
+            "mfaEnabled": claims_and_roles.get("mfaEnabled", False)
+        }
+        event_type = "[AUTHORIZATION][authorized: False]"
+        messages = [_format_log_message(event_type, user_context, custom_data)
+                    for custom_data in denials]
+        mock_event = {
+            'requestContext': {
+                'authorizer': {
+                    'jwt': {
+                        'claims': {
+                            'sub': user_context["user"]
+                        }
+                    }
+                }
+            }
+        }
+        _write_batch_to_cloudwatch(log_group_name, messages, mock_event)
+
+    except Exception as e:
+        # Silent failure - log locally but don't raise
+        logger.exception(f"Failed to log authorization audit events: {e}")
+
+
 def log_authorization_api(event: Dict[str, Any], authorized: bool, custom_data: Optional[Any] = None) -> None:
     """
     Log API authorization events with silent failure using full API Gateway event.

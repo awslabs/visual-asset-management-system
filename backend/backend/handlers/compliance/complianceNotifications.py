@@ -115,7 +115,7 @@ def notify_cascade_completed(
     """Notify subscribers that a cascade has completed execution. `results_summary` is the node
     count per status the audit entry shares with every reader: it leaves out the descendants
     skipped as archived (`cascadeAuditSummary.completion_details`), which only a reader who may see
-    their database's archive may count, since this one message goes to every subscriber."""
+    those archived assets may count, since this one message goes to every subscriber."""
     asset_name, topic_arn = _get_asset_topic(database_id, asset_id)
     if not topic_arn:
         return

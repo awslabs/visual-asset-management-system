@@ -1248,7 +1248,7 @@ def check_and_trigger_cascade(database_id: str, asset_id: str):
     logger.info(f"Asset {asset_key} has {len(children)} children; opening a cascade")
     # Archiving keeps an asset's links, so a child may be archived. Its count is recorded per
     # database, outside `childCount`: the audit service counts it only for a reader who may see
-    # that database's archive, and the approval notification, one message for every subscriber,
+    # that archived asset, and the approval notification, one message for every subscriber,
     # not at all. Read before the cascade opens, like the links, so a failed read opens nothing.
     details = opened_details("parent_update", _child_keys(children), _child_is_archived)
 

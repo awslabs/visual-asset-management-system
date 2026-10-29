@@ -26,7 +26,7 @@ import pytest
 
 from backend.tests.handlers.compliance._harness import (
     ASSET, CASCADE_ID, DB, RULES_SCHEMA_BODY, USER, body_of, claims_for, live_only_asset_table,
-    rest_event, schema_row, update_values,
+    mirror_engine, rest_event, schema_row, update_values,
 )
 from backend.tests.handlers.compliance.test_complianceCascadeExecutor import Graph, _run_executor
 from handlers.compliance import complianceCascadeService as cascade_svc
@@ -63,7 +63,7 @@ def scoped_enforcer(rules):
         allowed = rules.get((obj.get("object__type"), action), ())
         return allowed == ALL or obj.get("databaseId") in allowed
     instance.enforce.side_effect = enforce
-    return instance
+    return mirror_engine(instance)
 
 
 def database_admin_rules(database_id=DB):

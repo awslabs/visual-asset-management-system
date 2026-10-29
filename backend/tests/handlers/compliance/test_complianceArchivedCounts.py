@@ -37,10 +37,11 @@ import backend.backend.handlers.authz as authz_module
 from backend.tests.handlers.assets.test_assetService_history import _load as load_asset_service
 from backend.tests.handlers.compliance import _cdkTables
 from backend.tests.handlers.compliance._harness import (
-    SYNC_RULES_SCHEMA_BODY, body_of, claims_for, real_constants, rest_event, schema_row,
+    SYNC_RULES_SCHEMA_BODY, body_of, claims_for, mirror_engine, real_constants, rest_event,
+    schema_row,
 )
 from backend.tests.handlers.compliance.test_complianceArchivedAssetAccess import (
-    ARCHIVED_DB, DB, ROLE_SET_NAMES, USER_ID, _enforcer, _role_set,
+    ARCHIVED_DB, DB, DENIED_TAG, ROLE_SET_NAMES, USER_ID, _enforcer, _role_set,
 )
 from handlers.compliance import complianceCascadeExecutor as executor
 from handlers.compliance import complianceCascadeService as cascade_svc
@@ -115,7 +116,8 @@ def _seed(doubles):
         archived = asset_id in ARCHIVED
         doubles["assetStorage"].put_item(Item={
             "databaseId": ARCHIVED_DB if archived else DB, "assetId": asset_id, "assetName": name,
-            "tags": [], **({"status": "archived"} if archived else {})})
+            "tags": [DENIED_TAG] if asset_id == ARCHIVED[0] else [],
+            **({"status": "archived"} if archived else {})})
         doubles["complianceAssetStateStorage"].put_item(Item={
             "databaseId": DB, "assetId": asset_id, "schemaName": SCHEMA,
             "schemaSource": "database", "complianceState": "compliant", "assetName": name,
@@ -146,6 +148,7 @@ def _in_world(enforcer, roles, body):
     stand_in = MagicMock(name="CasbinEnforcer")
     stand_in.enforceAPI.return_value = True
     stand_in.enforce.side_effect = enforcer.enforce
+    mirror_engine(stand_in, enforcer)
     asset_service = load_asset_service()
     with mock_aws():
         resource = boto3.resource("dynamodb", region_name="us-east-1")
@@ -252,12 +255,12 @@ def test_the_archived_counts_are_the_archived_assets_the_caller_sees(
     visible = _visible_archived(found)
     listed_archived = found["listed"] & set(ARCHIVED)
     reads_compliance = found["state"][LIVE[0]]
-    reads_assets = bool(found["listed"] & set(LIVE))
     # The archived assets the role may see in compliance are those the asset listing with archived
-    # assets shows it, for a role that reads both (a role that reads no asset row is decided on
-    # its compliance grants alone; one that reads no compliance record sees none of either).
-    assert visible == {asset_id for asset_id in ARCHIVED if reads_compliance and (
-        asset_id in listed_archived or not reads_assets)}, (set_name, found)
+    # assets shows it, for a role that reads compliance records (D90: a role that reads no asset
+    # row reads no archived asset's compliance either; one that reads no compliance record sees
+    # none of either).
+    assert visible == {asset_id for asset_id in ARCHIVED
+                       if reads_compliance and asset_id in listed_archived}, (set_name, found)
 
     evaluate_all = found["evaluate all"]
     if evaluate_all is not None:

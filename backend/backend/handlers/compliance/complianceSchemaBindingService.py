@@ -42,7 +42,7 @@ from botocore.config import Config
 from common.apiRoutes import API_COMPLIANCE_BIND_ASSET, API_COMPLIANCE_BIND_DATABASE
 from common.compliance import evaluationEngine as engine
 from common.compliance import listing
-from common.compliance.archivedAssets import ArchivedAssets, archived_database_id
+from common.compliance.archivedAssets import ArchivedAssets, archived_database_id, flush_denials
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
@@ -138,6 +138,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except Exception as e:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)
+    finally:
+        # The denials of this request's archived-asset checks for listings and counts.
+        flush_denials()
 
 
 #######################
@@ -607,9 +610,10 @@ def get_bindings(event, database_id, query_params):
         return error
 
     # The override of an archived asset is listed only for a caller who passes the listing's own
-    # database check on the stored id (`<databaseId>#deleted`) as well: the listing's check, made
-    # the way the engine decides an archived record.
-    withheld = ArchivedAssets(asset_table).withheld(
+    # database check on the stored id (`<databaseId>#deleted`) as well, the listing's check made
+    # the way the engine decides an archived record, and the asset GET on the archived row.
+    enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
+    withheld = ArchivedAssets(asset_table, enforcer).withheld(
         database_id, lambda stored_id: _enforce_database(
             dict(db_item, databaseId=stored_id), stored_id, "GET"))
     asset_overrides = []

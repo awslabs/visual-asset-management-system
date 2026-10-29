@@ -15,7 +15,7 @@ import pytest
 
 import backend.backend.handlers.authz as authz_module
 from backend.tests.handlers.compliance._harness import (
-    DB, USER, body_of, claims_for, live_only_asset_table, rest_event,
+    DB, USER, body_of, claims_for, enforcer, live_only_asset_table, mirror_engine, rest_event,
 )
 from common.compliance import archivedAssets
 from common.compliance import listing
@@ -35,6 +35,12 @@ def test_the_suffix_is_the_engines():
     assert archivedAssets.stored_database_id(DB, False) == DB
 
 
+def _asset_reader():
+    """An enforcer stand-in whose asset GET passes on every archived row and depends on the
+    database id alone, so the decisions below are those of the compliance object."""
+    return enforcer()
+
+
 @pytest.mark.unit
 class TestDecide:
 
@@ -49,7 +55,7 @@ class TestDecide:
     def test_a_caller_refused_on_the_live_id_reads_nothing(self):
         table = live_only_asset_table(archived={"a"})
         decide, asked = self._decide(set())
-        assert ArchivedAssets(table).decide(DB, "a", decide) is False
+        assert ArchivedAssets(table, _asset_reader()).decide(DB, "a", decide) is False
         assert asked == [DB]
         table.get_item.assert_not_called()
         table.query.assert_not_called()
@@ -57,7 +63,7 @@ class TestDecide:
     def test_a_caller_allowed_on_both_ids_reads_nothing(self):
         table = live_only_asset_table(archived={"a"})
         decide, asked = self._decide({DB, ARCHIVED_DB})
-        assert ArchivedAssets(table).decide(DB, "a", decide) is True
+        assert ArchivedAssets(table, _asset_reader()).decide(DB, "a", decide) is True
         assert asked == [DB, ARCHIVED_DB]
         table.get_item.assert_not_called()
         table.query.assert_not_called()
@@ -66,7 +72,7 @@ class TestDecide:
     def test_otherwise_one_consistent_read_of_the_archived_key_decides(self, asset_id, expected):
         table = live_only_asset_table(archived={"a"})
         decide, _ = self._decide({DB})
-        assert ArchivedAssets(table).decide(DB, asset_id, decide) is expected
+        assert ArchivedAssets(table, _asset_reader()).decide(DB, asset_id, decide) is expected
         table.get_item.assert_called_once_with(
             Key={"databaseId": ARCHIVED_DB, "assetId": asset_id}, ConsistentRead=True,
             ProjectionExpression="assetId")
@@ -75,7 +81,7 @@ class TestDecide:
     def test_a_listing_reads_the_archived_partition_once_per_database(self):
         table = live_only_asset_table(archived={"a"})
         decide, _ = self._decide({DB, "db2"})
-        archived = ArchivedAssets(table)
+        archived = ArchivedAssets(table, _asset_reader())
         rows = [(DB, f"x{i}") for i in range(50)] + [(DB, "a"), ("db2", "y"), ("db2", "z")]
         verdicts = {(d, a): archived.decide(d, a, decide, cache_key="GET", listing=True)
                     for d, a in rows}
@@ -95,7 +101,7 @@ class TestDecide:
     def test_rows_that_name_no_asset_partition_read_nothing(self, database_id, asset_id):
         table = live_only_asset_table(archived={"a"})
         decide, asked = self._decide({database_id})
-        assert ArchivedAssets(table).decide(database_id, asset_id, decide) is True
+        assert ArchivedAssets(table, _asset_reader()).decide(database_id, asset_id, decide) is True
         assert asked == [database_id]
         table.get_item.assert_not_called()
         table.query.assert_not_called()
@@ -108,7 +114,7 @@ class TestDecide:
         on the stored id one log write per row."""
         table = live_only_asset_table(archived={"a", "b"})
         decide, asked = self._decide({DB})
-        archived = ArchivedAssets(table)
+        archived = ArchivedAssets(table, _asset_reader())
         rows = [f"x{i}" for i in range(10)] + ["a"] + [f"y{i}" for i in range(10)] + ["b"]
         verdicts = {asset_id: archived.decide(DB, asset_id, decide, listing=True)
                     for asset_id in rows}
@@ -121,7 +127,7 @@ class TestDecide:
     def test_a_listing_allowed_on_both_ids_still_reads_no_archive(self):
         table = live_only_asset_table(archived={"a"})
         decide, asked = self._decide({DB, ARCHIVED_DB})
-        archived = ArchivedAssets(table)
+        archived = ArchivedAssets(table, _asset_reader())
         assert all(archived.decide(DB, asset_id, decide, listing=True)
                    for asset_id in ("x1", "a", "x2"))
         assert asked == [DB, ARCHIVED_DB] * 3
@@ -133,12 +139,12 @@ class TestDecide:
             self, stored_allowed):
         table = live_only_asset_table(archived={"a"})
         decide, asked = self._decide({DB, ARCHIVED_DB} if stored_allowed else {DB})
-        archived = ArchivedAssets(table)
-        assert [archived.archive_visible(DB, decide, cache_key="GET")
-                for _ in range(3)] == [stored_allowed] * 3
+        archived = ArchivedAssets(table, _asset_reader())
+        assert [archived.archived_asset_visible(DB, asset_id, decide, cache_key="GET")
+                for asset_id in ("a", "b", None)] == [stored_allowed] * 3
         assert asked == [ARCHIVED_DB]
         # A scope that names no asset partition has no archive to withhold and asks nothing.
-        assert archived.archive_visible("GLOBAL", decide, cache_key="GET") is True
+        assert archived.archived_asset_visible("GLOBAL", "a", decide, cache_key="GET") is True
         assert asked == [ARCHIVED_DB]
         table.query.assert_not_called()
         table.get_item.assert_not_called()
@@ -165,6 +171,7 @@ def _cascade_listing(stored_id_allowed, archived_parents=("p03", "p11"), rows=20
     instance = MagicMock(name="CasbinEnforcer")
     instance.enforceAPI.return_value = True
     instance.enforce.side_effect = enforce
+    mirror_engine(instance)
     asset_table = live_only_asset_table(archived=set(archived_parents))
     with patch.object(cascade_svc, "request_to_claims", claims_for(USER)), \
             patch.object(cascade_svc, "CasbinEnforcer", return_value=instance), \
@@ -229,6 +236,7 @@ def _overview(stored_id_allowed, archived=(), page_size=3):
         {"assetId": a, "complianceState": "quarantined"} for a in archived]}}
     instance = MagicMock(name="CasbinEnforcer")
     instance.enforceAPI.return_value = True
+    mirror_engine(instance)
     instance.enforce.side_effect = lambda obj, act: (
         obj["databaseId"] == DB or (stored_id_allowed and obj["databaseId"] == ARCHIVED_DB))
     asset_table = live_only_asset_table(archived=set(archived))

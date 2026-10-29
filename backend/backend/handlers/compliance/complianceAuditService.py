@@ -11,9 +11,9 @@ eventType/timestamp; GSI AuditByDateGSI on the constant allListPartition/timesta
 is one newest-first query on the index that serves it and pages externally with a Base64 NextToken.
 The entries of an archived asset are decided with its stored database id, `<databaseId>#deleted`
 (`ArchivedAssets`), so they follow the engine's archived-record rule as the asset does. A finished
-cascade's entry (`cascade_completed`) counts the descendants it skipped as archived only for the
-databases whose archive the caller may see (`cascadeAuditSummary.details_for_reader`), on every
-path that returns it.
+cascade's entries (`cascade_completed`, `cascade_auto_triggered`) count its archived descendants
+and children only where the caller may see them (`cascadeAuditSummary.details_for_reader`), on
+every path that returns them.
 """
 
 import base64
@@ -27,7 +27,7 @@ from botocore.config import Config
 
 from common.apiRoutes import API_COMPLIANCE_AUDIT, API_COMPLIANCE_AUDIT_ASSET
 from common.compliance import listing
-from common.compliance.archivedAssets import ArchivedAssets
+from common.compliance.archivedAssets import ArchivedAssets, flush_denials
 from common.compliance.auditRecord import AUDIT_LIST_PARTITION
 from common.compliance.cascadeAuditSummary import details_for_reader
 from common.resourceNames import ResourceKeys, get_table_name
@@ -114,6 +114,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except Exception as e:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)
+    finally:
+        # The denials of this request's archived-asset checks for listings and counts.
+        flush_denials()
 
 
 #######################
@@ -155,17 +158,18 @@ def _enforce(database_id, action):
 
 
 def _archive_visibility(casbin_enforcer, archived):
-    """`archive_visible(database_id)` for the caller: whether it may see that database's archive,
-    the evaluation GET on the stored id `<databaseId>#deleted` (`ArchivedAssets.archive_visible`,
-    asked once per database of the request, the same answer the listing's row decision caches).
-    A finished cascade's entry counts the descendants it skipped as archived only for the
-    databases where this passes (`cascadeAuditSummary.details_for_reader`)."""
-    def archive_visible(database_id):
-        return bool(casbin_enforcer) and archived.archive_visible(
-            database_id,
+    """`asset_visible(database_id, asset_id)` for the caller: whether it may see an archived asset
+    a cascade's entry counts (`ArchivedAssets.archived_asset_visible`: the evaluation GET on the
+    stored id `<databaseId>#deleted`, asked once per database of the request and shared with the
+    listing's row decision, and the asset GET on the archived row). A cascade's entries count the
+    archived descendants and children only where this passes
+    (`cascadeAuditSummary.details_for_reader`)."""
+    def asset_visible(database_id, asset_id):
+        return bool(casbin_enforcer) and archived.archived_asset_visible(
+            database_id, asset_id,
             lambda stored_id: casbin_enforcer.enforce(_evaluation_object(stored_id), "GET"),
             cache_key=ARCHIVE_VISIBILITY_CACHE_KEY)
-    return archive_visible
+    return asset_visible
 
 
 #######################
@@ -255,7 +259,7 @@ def get_asset_audit(event, database_id, asset_id, params):
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-    archived = ArchivedAssets(asset_table)
+    archived = ArchivedAssets(asset_table, casbin_enforcer)
     if not archived.decide(
             database_id, asset_id, lambda stored_id: _enforce(stored_id, "GET")):
         return authorization_error()
@@ -399,7 +403,7 @@ def query_audit(event, params):
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
     # The entries of an archived asset are listed only for a caller allowed on its stored database
     # id; its archived status is read once per database, and only when that decides anything.
-    archived = ArchivedAssets(asset_table)
+    archived = ArchivedAssets(asset_table, casbin_enforcer)
 
     def may_get(item):
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.

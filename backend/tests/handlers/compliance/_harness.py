@@ -207,12 +207,36 @@ def claims_for(*tokens):
     return _request_to_claims
 
 
+def mirror_engine(instance, real=None):
+    """Complete a CasbinEnforcer stand-in for the archived-asset decisions (`ArchivedAssets`): the
+    engine call they make (`service_object.enforce`, no audit record each) and the policy question
+    `policy_object_fields`.
+
+    With `real` (a production CasbinEnforcer the stand-in's `enforce` delegates to), both are the
+    real enforcer's. Without, the engine answers as the stand-in's `enforce` does, whatever it is
+    later set to, without recording a call on it, and the policy reads no asset field but the
+    database id (a stand-in decides on the database id at most). Returns the stand-in."""
+    if real is not None:
+        instance.service_object = real.service_object
+        instance.claims_and_roles = real.claims_and_roles
+        instance.policy_object_fields.side_effect = real.policy_object_fields
+        return instance
+
+    def engine(obj, action):
+        effect = instance.enforce.side_effect
+        return effect(obj, action) if effect is not None else instance.enforce.return_value
+    instance.service_object.enforce.side_effect = engine
+    instance.policy_object_fields.return_value = frozenset()
+    instance.claims_and_roles = {"tokens": [USER], "roles": [], "mfaEnabled": False}
+    return instance
+
+
 def enforcer(api=True, obj=True):
     """A CasbinEnforcer instance stand-in with fixed Tier-1 (`api`) and Tier-2 (`obj`) answers."""
     instance = MagicMock(name="CasbinEnforcer")
     instance.enforceAPI.return_value = api
     instance.enforce.return_value = obj
-    return instance
+    return mirror_engine(instance)
 
 
 def enforcer_for_object_types(*allowed_object_types):

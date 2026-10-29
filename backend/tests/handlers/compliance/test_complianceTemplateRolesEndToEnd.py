@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.tests.handlers.compliance._harness import (
-    ASSET, CASCADE_ID, RULES_SCHEMA_BODY, body_of, claims_for, live_only_asset_table,
+    ASSET, CASCADE_ID, RULES_SCHEMA_BODY, body_of, claims_for, live_only_asset_table, mirror_engine,
     real_constants, rest_event, schema_row, update_values,
 )
 from handlers.compliance import (
@@ -60,6 +60,7 @@ def _real(enforcer):
     stand_in = MagicMock(name="CasbinEnforcer")
     stand_in.enforceAPI.return_value = True
     stand_in.enforce.side_effect = enforcer.enforce
+    mirror_engine(stand_in, enforcer)
     return lambda _claims: stand_in
 
 

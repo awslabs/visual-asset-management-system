@@ -48,24 +48,27 @@ backend/
 │   │   │                                           #   fill, ≤200 rows, token = last row's index key),
 │   │   │                                           #   count_items() (Select=COUNT), name attributes,
 │   │   │                                           #   asset_text_filter() (no key attr in a filter)
-│   │   ├── compliance/archivedAssets.py            # Archived-asset rule for compliance records:
-│   │   │                                           #   ArchivedAssets.decide() checks the stored id
-│   │   │                                           #   `<db>#deleted` with the shared engine and reads
-│   │   │                                           #   the archived partition only when it is refused
-│   │   │                                           #   (one keys-only Query per database per listing;
-│   │   │                                           #   once read, only archived rows ask the stored id);
-│   │   │                                           #   withheld() / withheld_state_counts() for the
-│   │   │                                           #   overview's rows and counts; archive_visible()
-│   │   │                                           #   for the sweep / Evaluate All / cascade counts
-│   │   │                                           #   (archived assets the caller may not see are
-│   │   │                                           #   counted and listed nowhere)
+│   │   ├── compliance/archivedAssets.py            # THE archived-asset rule for compliance records
+│   │   │                                           #   (every compliance read and action uses it):
+│   │   │                                           #   allowed only when the engine allows the
+│   │   │                                           #   compliance object on the stored id `<db>#deleted`
+│   │   │                                           #   AND the asset GET on the archived row (its own
+│   │   │                                           #   fields), as opening the asset does. Decided once
+│   │   │                                           #   per database when the caller's rules read no
+│   │   │                                           #   asset field but databaseId (CasbinEnforcer.
+│   │   │                                           #   policy_object_fields), else per distinct value of
+│   │   │                                           #   the fields read; decide() / withheld() /
+│   │   │                                           #   withholds() / archived_asset_visible(); asset
+│   │   │                                           #   checks run on the engine and their denials go
+│   │   │                                           #   out in one batch: handlers call flush_denials()
+│   │   │                                           #   in lambda_handler's finally
 │   │   ├── compliance/cascadeAuditSummary.py       # cascade_completed / cascade_auto_triggered audit
 │   │   │                                           #   details: archived descendants (children) are
-│   │   │                                           #   recorded per database outside the shared
-│   │   │                                           #   summary / childCount the notifications carry
-│   │   │                                           #   (completion_details, opened_details); the audit
-│   │   │                                           #   service counts them only for a reader who may
-│   │   │                                           #   see that database's archive (details_for_reader)
+│   │   │                                           #   recorded per database, by asset id, outside the
+│   │   │                                           #   shared summary / childCount the notifications
+│   │   │                                           #   carry (completion_details, opened_details); the
+│   │   │                                           #   audit service counts each only for a reader who
+│   │   │                                           #   may see that archived asset (details_for_reader)
 │   │   ├── compliance/evaluationEngine.py          # Pure vams-rules-v1 rule logic (no AWS access):
 │   │   │                                           #   rule parsing/inheritance, the six rule types
 │   │   │                                           #   (pipeline, metadata, relationship, fileStructure,

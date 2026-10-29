@@ -22,6 +22,7 @@ def _noop(*args, **kwargs):
 # Mirror the public audit functions exported by the real module.
 log_authentication = _noop
 log_authorization = _noop
+log_authorization_denials = _noop
 log_authorization_api = _noop
 log_authorization_gateway = _noop
 log_file_upload = _noop

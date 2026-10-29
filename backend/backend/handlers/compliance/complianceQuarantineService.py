@@ -34,7 +34,7 @@ from common.apiRoutes import (
 )
 from common.compliance import evaluationEngine as engine
 from common.compliance import listing
-from common.compliance.archivedAssets import ArchivedAssets
+from common.compliance.archivedAssets import ArchivedAssets, flush_denials
 from common.validators import validate
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
@@ -120,6 +120,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except Exception as e:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)
+    finally:
+        # The denials of this request's archived-asset checks for listings and counts.
+        flush_denials()
 
 
 #######################
@@ -188,9 +191,10 @@ def _enforce(database_id, action, compliance_state=engine.STATE_QUARANTINED):
 
 def _enforce_asset(database_id, asset_id, action, compliance_state=engine.STATE_QUARANTINED):
     """`_enforce` with the database id the asset is stored under: `<databaseId>#deleted` for an
-    archived asset, so the engine's archived-record rule applies to its quarantine and exception
-    as it applies to the asset itself (`ArchivedAssets.decide`)."""
-    return ArchivedAssets(asset_table).decide(
+    archived asset, together with the asset GET on its archived row, so its quarantine and
+    exception are decided as opening the asset is (`ArchivedAssets.decide`)."""
+    enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
+    return ArchivedAssets(asset_table, enforcer).decide(
         database_id, asset_id,
         lambda stored_id: _enforce(stored_id, action, compliance_state))
 
@@ -269,7 +273,7 @@ def list_quarantined(event, query_params):
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
     # An archived asset is listed only for a caller allowed on its stored database id; its
     # archived status is read once per database, and only when that decides anything.
-    archived = ArchivedAssets(asset_table)
+    archived = ArchivedAssets(asset_table, casbin_enforcer)
 
     def may_get(item):
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
