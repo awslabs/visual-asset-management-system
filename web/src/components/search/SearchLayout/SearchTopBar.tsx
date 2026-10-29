@@ -107,7 +107,10 @@ const SearchTopBar: React.FC<SearchTopBarProps> = ({
                     }
                     info={
                         resultCount !== undefined && (
-                            <Badge color="blue">{resultCount.toLocaleString()} results</Badge>
+                            <Badge color="blue">
+                                {resultCount.toLocaleString()}{" "}
+                                {resultCount === 1 ? "result" : "results"}
+                            </Badge>
                         )
                     }
                 >

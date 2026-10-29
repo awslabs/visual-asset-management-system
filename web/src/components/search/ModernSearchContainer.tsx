@@ -61,6 +61,10 @@ export const REDUCED_ASSET_COLUMNS = [
     "bool_archived",
 ];
 
+/** "Found 1 result" / "Found N results". */
+const resultCountMessage = (count: number) =>
+    `Found ${count} ${count === 1 ? "result" : "results"}`;
+
 const ModernSearchContainer: React.FC<SearchContainerProps> = ({
     mode = "full",
     initialFilters,
@@ -231,7 +235,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
 
             // `null` means no request was issued (empty natural-language query): nothing to announce.
             if (result && !autoRefreshing) {
-                showSuccess("Search completed", `Found ${getTotalResultCount(result)} results`);
+                showSuccess("Search completed", resultCountMessage(getTotalResultCount(result)));
             }
         } catch (error: any) {
             console.error("Search error:", error);
@@ -385,7 +389,10 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                 searchState.setLoading(true);
                 const result = await runSearch(searchState.buildSearchQuery(newPagination));
                 if (result) {
-                    showSuccess("Search completed", `Found ${getTotalResultCount(result)} results`);
+                    showSuccess(
+                        "Search completed",
+                        resultCountMessage(getTotalResultCount(result))
+                    );
                 }
             } catch (error: any) {
                 console.error("Search error:", error);

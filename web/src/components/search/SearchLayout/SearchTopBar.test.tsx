@@ -160,6 +160,9 @@ describe("SearchTopBar query band", () => {
         expect(screen.getByText("0 results")).toBeInTheDocument();
         rerender(<SearchTopBar {...baseProps} resultCount={1234} />);
         expect(screen.getByText("1,234 results")).toBeInTheDocument();
+        rerender(<SearchTopBar {...baseProps} resultCount={1} />);
+        expect(screen.getByText("1 result")).toBeInTheDocument();
+        expect(screen.queryByText("1 results")).toBeNull();
     });
 
     it("keeps the Search button at its label width and lets the query box take the rest", () => {
