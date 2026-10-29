@@ -1818,10 +1818,11 @@ def get_database_compliance_overview(
     assets are also counted under the state they kept, so do not add it to the others.
 
     Only assets with a compliance record are counted — an asset in a database with no binding is
-    absent, not `unknown`. The response is the route's own page, not a walk: `max_items` is the
-    page size (the route applies its default when omitted and caps larger values), and a `NextToken`
-    in the response means more records exist — pass it back as `starting_token`. Use `summary` /
-    `totalAssets` for counts; do not count the rows of one page.
+    absent, not `unknown`. A `database_id` that names no database is reported as not found
+    ("Database not found"), not as an empty overview. The response is the route's own page, not a
+    walk: `max_items` is the page size (the route applies its default when omitted and caps larger
+    values), and a `NextToken` in the response means more records exist — pass it back as
+    `starting_token`. Use `summary` / `totalAssets` for counts; do not count the rows of one page.
     """
     filters = {
         "state": state,

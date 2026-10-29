@@ -37,6 +37,7 @@ from common.compliance import listing
 from common.compliance.archivedAssets import (
     ArchivedAssets, withheld_state_counts,
 )
+from common.compliance.knownDatabase import database_not_found
 from common.dynamodb import query_all_items
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -871,6 +872,9 @@ def get_database_compliance_overview(event, database_id, query_params):
     evaluation could not run or could not evaluate any rule. `error` is not a state, so an asset in
     it is also counted in its state bucket and the state buckets alone sum to `totalAssets`. The
     counts are of the whole database, whatever the filters (`overview_summary`).
+
+    An id that names no database (`store.database_known`) answers `400` "Database not found",
+    after the authorization check on the id, rather than an empty overview.
     """
     (valid, message) = validate({
         "databaseId": {"value": database_id, "validator": "ID", "allowGlobalKeyword": True},
@@ -915,6 +919,10 @@ def get_database_compliance_overview(event, database_id, query_params):
             name_sort_unavailable = start_key is not None
         if start_key is None:
             return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
+    # A well-formed request the caller may make of this id, so the answer may say whether the id
+    # names a database: one that names none is not an empty overview.
+    if not store.database_known(database_id):
+        return database_not_found(event)
 
     rows = next_key = None
     if not name_sort_unavailable:

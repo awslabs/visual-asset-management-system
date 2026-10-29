@@ -15,7 +15,7 @@ import pytest
 
 import backend.backend.handlers.authz as authz_module
 from backend.tests.handlers.compliance._harness import (
-    DB, USER, body_of, claims_for, live_only_asset_table, rest_event,
+    DB, USER, body_of, claims_for, database_table_with, live_only_asset_table, rest_event,
 )
 from common.compliance import archivedAssets
 from common.compliance import listing
@@ -169,7 +169,8 @@ def _cascade_listing(stored_id_allowed, archived_parents=("p03", "p11"), rows=20
     with patch.object(cascade_svc, "request_to_claims", claims_for(USER)), \
             patch.object(cascade_svc, "CasbinEnforcer", return_value=instance), \
             patch.object(cascade_svc, "cascade_table", cascade_table), \
-            patch.object(cascade_svc.store, "asset_table", asset_table):
+            patch.object(cascade_svc.store, "asset_table", asset_table), \
+            patch.object(cascade_svc.store, "database_table", database_table_with(DB)):
         response = cascade_svc.lambda_handler(
             rest_event("GET", "/compliance/cascades", query_params={"databaseId": DB}),
             MagicMock())
@@ -235,7 +236,8 @@ def _overview(stored_id_allowed, archived=(), page_size=3):
     with patch.object(evaluate_svc, "request_to_claims", claims_for(USER)), \
             patch.object(evaluate_svc, "CasbinEnforcer", return_value=instance), \
             patch.object(evaluate_svc, "asset_state_table", state_table), \
-            patch.object(evaluate_svc, "asset_table", asset_table):
+            patch.object(evaluate_svc, "asset_table", asset_table), \
+            patch.object(evaluate_svc.store, "database_table", database_table_with(DB)):
         response = evaluate_svc.lambda_handler(
             rest_event("GET", f"/compliance/state/{DB}", {"databaseId": DB},
                        {"maxItems": str(page_size)}), MagicMock())
