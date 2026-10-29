@@ -210,6 +210,12 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
     // A system pipeline (shipped by a vamsSchema bundle) accepts only `enabled` on update; every other
     // field is locked and the save sends nothing else.
     const isSystemPipeline = mode === "edit" && !!initial?.isSystem;
+    const pageTitle =
+        mode === "create"
+            ? "Create Pipeline"
+            : isSystemPipeline
+            ? "View Pipeline"
+            : "Edit Pipeline";
 
     // Input-file filters are add-to lists (each entry an ext/path/name/wildcard), not comma text.
     const [allowFilters, setAllowFilters] = React.useState<string[]>(
@@ -1308,9 +1314,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
                             },
                         ]}
                     />
-                    <h1 className="text-text-primary">
-                        {mode === "create" ? "Create Pipeline" : "Edit Pipeline"}
-                    </h1>
+                    <h1 className="text-text-primary">{pageTitle}</h1>
                 </div>
                 {formBody}
                 <div className="flex justify-end gap-2">{footerButtons}</div>
@@ -1320,12 +1324,7 @@ const PipelineForm: React.FC<PipelineFormProps> = ({
 
     // Dialog variant (default).
     return (
-        <Dialog
-            open={isOpen}
-            onOpenChange={handleClose}
-            title={mode === "create" ? "Create Pipeline" : "Edit Pipeline"}
-            footer={footerButtons}
-        >
+        <Dialog open={isOpen} onOpenChange={handleClose} title={pageTitle} footer={footerButtons}>
             {formBody}
         </Dialog>
     );

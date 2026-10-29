@@ -86,6 +86,7 @@ describe("WorkflowBuilder for a system workflow", () => {
             expect(screen.getByLabelText("Workflow Name")).toHaveValue("System GenAI Metadata")
         );
         expect(screen.getByText(/System workflow:/)).toBeInTheDocument();
+        expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("View Workflow");
         expect(screen.getByLabelText("Workflow Name")).toBeDisabled();
         expect(screen.getByLabelText("Category (optional)")).toBeDisabled();
         expect(screen.getByLabelText("Enabled")).not.toBeDisabled();
@@ -116,6 +117,7 @@ describe("WorkflowBuilder for a system workflow", () => {
             expect(screen.getByLabelText("Workflow Name")).toHaveValue("System GenAI Metadata")
         );
         expect(screen.queryByText(/System workflow:/)).toBeNull();
+        expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Edit Workflow");
         expect(screen.getByLabelText("Workflow Name")).not.toBeDisabled();
     });
 

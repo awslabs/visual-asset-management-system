@@ -621,7 +621,11 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                     ]}
                 />
                 <h1 className="text-text-primary">
-                    {mode === "create" ? "Create Workflow" : "Edit Workflow"}
+                    {mode === "create"
+                        ? "Create Workflow"
+                        : isSystemWorkflow
+                        ? "View Workflow"
+                        : "Edit Workflow"}
                 </h1>
             </div>
 

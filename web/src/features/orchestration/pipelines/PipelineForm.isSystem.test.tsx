@@ -83,4 +83,14 @@ describe("PipelineForm for a system pipeline", () => {
         expect(mockUpdate.mock.calls[0][0].body.pipelineName).toBe("System GenAI Metadata");
         expect(mockUpdate.mock.calls[0][0].body.executionConfig).toBeDefined();
     });
+
+    it("titles a system pipeline View, and an ordinary one Edit", () => {
+        const { unmount } = renderEdit(systemPipeline);
+        expect(screen.getByText("View Pipeline")).toBeInTheDocument();
+        expect(screen.queryByText("Edit Pipeline")).toBeNull();
+        unmount();
+        renderEdit({ ...systemPipeline, pipelineId: "mine", isSystem: false });
+        expect(screen.getByText("Edit Pipeline")).toBeInTheDocument();
+        expect(screen.queryByText("View Pipeline")).toBeNull();
+    });
 });
