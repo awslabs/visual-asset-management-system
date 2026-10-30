@@ -288,14 +288,14 @@ const ComplianceQuarantine: React.FC = () => {
                             // failed pipeline rules' execution failure reasons follow, for a caller
                             // who may read those executions.
                             cell: (item) => (
-                                <SpaceBetween size="xxs">
+                                <>
                                     <span style={WRAP_ANYWHERE_STYLE}>
                                         {item.quarantineReason || "-"}
                                     </span>
                                     <ExecutionFailureReasons
                                         entries={item.quarantineExecutionFailures}
                                     />
-                                </SpaceBetween>
+                                </>
                             ),
                         },
                         // No State column: every asset on this page is quarantined.
