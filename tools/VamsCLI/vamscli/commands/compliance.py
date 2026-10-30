@@ -228,6 +228,9 @@ def format_state_record(record: Dict[str, Any]) -> str:
         f"Schema: {record.get('schemaName') or 'none'}",
         f"Schema Source: {record.get('schemaSource') or 'none'}",
     ]
+    if record.get('recordedComplianceState'):
+        lines.append(f"Recorded State: {record['recordedComplianceState']} (the asset is archived "
+                     "and not evaluated; this state applies again once it is unarchived)")
     if record.get('assetName'):
         lines.append(f"Asset Name: {record['assetName']}")
     if record.get('lastEvaluationId'):
@@ -1035,13 +1038,16 @@ def state(ctx: click.Context, database_id: str, asset_id: Optional[str], max_ite
     """Show compliance state: one asset's record, or a database's overview.
 
     complianceState is one of compliant, non_compliant, quarantined, exception (released under an
-    active exception although the last evaluation failed), pending_evaluation or unknown. A record
-    also carries lastEvaluationStatus (completed, pending_pipeline or error): 'error' means the
-    last evaluation produced no verdict, so complianceState is the state held before it. The
+    active exception although the last evaluation failed), pending_evaluation or unknown, or
+    archived for an archived asset, which is not evaluated while it is archived (its stored state
+    is recordedComplianceState). A record also carries lastEvaluationStatus (completed,
+    pending_pipeline or error): 'error' means the last evaluation produced no verdict, so
+    complianceState is the state held before it. The
     database overview carries a per-state summary (one bucket per state, including exception, plus
     an error count of the assets whose last evaluation errored — an overlay on the state buckets,
     not a state) and totalAssets covering every tracked asset, and one page of their records as
     assets; the response carries a NextToken when more exist — pass it back as --starting-token.
+    Archived assets are left out of the overview.
     An asset that is not tracked is reported with state 'unknown'. --max-items and
     --starting-token apply to the overview only; the single-asset route is not paged.
 

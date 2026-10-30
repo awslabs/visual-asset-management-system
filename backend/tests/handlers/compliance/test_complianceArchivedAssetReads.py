@@ -15,7 +15,8 @@ import pytest
 
 import backend.backend.handlers.authz as authz_module
 from backend.tests.handlers.compliance._harness import (
-    DB, USER, body_of, claims_for, enforcer, live_only_asset_table, mirror_engine, rest_event,
+    DB, USER, body_of, claims_for, database_table_with, enforcer, live_only_asset_table,
+    mirror_engine, rest_event,
 )
 from common.compliance import archivedAssets
 from common.compliance import listing
@@ -176,7 +177,8 @@ def _cascade_listing(stored_id_allowed, archived_parents=("p03", "p11"), rows=20
     with patch.object(cascade_svc, "request_to_claims", claims_for(USER)), \
             patch.object(cascade_svc, "CasbinEnforcer", return_value=instance), \
             patch.object(cascade_svc, "cascade_table", cascade_table), \
-            patch.object(cascade_svc.store, "asset_table", asset_table):
+            patch.object(cascade_svc.store, "asset_table", asset_table), \
+            patch.object(cascade_svc.store, "database_table", database_table_with(DB)):
         response = cascade_svc.lambda_handler(
             rest_event("GET", "/compliance/cascades", query_params={"databaseId": DB}),
             MagicMock())
@@ -243,7 +245,8 @@ def _overview(stored_id_allowed, archived=(), page_size=3):
     with patch.object(evaluate_svc, "request_to_claims", claims_for(USER)), \
             patch.object(evaluate_svc, "CasbinEnforcer", return_value=instance), \
             patch.object(evaluate_svc, "asset_state_table", state_table), \
-            patch.object(evaluate_svc, "asset_table", asset_table):
+            patch.object(evaluate_svc, "asset_table", asset_table), \
+            patch.object(evaluate_svc.store, "database_table", database_table_with(DB)):
         response = evaluate_svc.lambda_handler(
             rest_event("GET", f"/compliance/state/{DB}", {"databaseId": DB},
                        {"maxItems": str(page_size)}), MagicMock())
@@ -255,15 +258,20 @@ def _overview(stored_id_allowed, archived=(), page_size=3):
 @pytest.mark.unit
 class TestTheOverviewRead:
 
-    def test_a_caller_allowed_on_both_ids_reads_as_before(self):
+    def test_a_caller_allowed_on_both_ids_gets_the_archived_rows_left_out_too(self):
+        """An archived asset is not evaluated, so its record would stay counted in the state it
+        was archived in: the overview leaves it out for every caller, as the asset listing does,
+        with the read the withheld rows already cost (one archive query, a page plus their
+        number, one BatchGetItem of their keys)."""
         response, reads, asset_table, state_table = _overview(True, archived=("a0x",))
         assert response["statusCode"] == 200
-        assert [r["Limit"] for r in reads] == [3]
-        asset_table.query.assert_not_called()
+        assert [r["Limit"] for r in reads] == [3 + 1]
+        assert asset_table.query.call_count == 1
         asset_table.get_item.assert_not_called()
-        state_table.meta.client.batch_get_item.assert_not_called()
-        assert "a0x" in [row["assetId"] for row in body_of(response)["assets"]]
-        assert body_of(response)["summary"]["quarantined"] == 1
+        state_table.meta.client.batch_get_item.assert_called_once()
+        assert "a0x" not in [row["assetId"] for row in body_of(response)["assets"]]
+        assert body_of(response)["summary"]["quarantined"] == 0
+        assert body_of(response)["totalAssets"] == 6
 
     def test_withheld_rows_cost_one_archive_query_and_a_page_plus_their_number(self):
         response, reads, asset_table, state_table = _overview(False, archived=("a0x", "a1x"))

@@ -24,6 +24,7 @@ import {
     revokeException,
     complianceSchemaFormat,
     erroredRuleNames,
+    liveDatabaseId,
     ComplianceSchema,
     EvaluationRecord,
 } from "./ComplianceService";
@@ -369,5 +370,15 @@ describe("paged listings", () => {
         get.mockResolvedValue({ message: "Invalid pagination token error" });
         const result = await fetchAuditLog({ startingToken: "garbage" });
         expect(result).toEqual([false, "Invalid pagination token error"]);
+    });
+});
+
+describe("liveDatabaseId", () => {
+    it("names an archived asset's database by its live id", () => {
+        expect(liveDatabaseId("db1#deleted")).toBe("db1");
+        expect(liveDatabaseId("db1")).toBe("db1");
+        expect(liveDatabaseId("GLOBAL")).toBe("GLOBAL");
+        expect(liveDatabaseId(undefined)).toBeUndefined();
+        expect(liveDatabaseId("")).toBeUndefined();
     });
 });

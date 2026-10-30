@@ -61,7 +61,10 @@ backend/
 │   │   │                                           #   withholds() / archived_asset_visible(); asset
 │   │   │                                           #   checks run on the engine and their denials go
 │   │   │                                           #   out in one batch: handlers call flush_denials()
-│   │   │                                           #   in lambda_handler's finally
+│   │   │                                           #   in lambda_handler's finally. left_out() /
+│   │   │                                           #   listed() leave archived assets out of the
+│   │   │                                           #   overview, its counts (withheld_state_counts())
+│   │   │                                           #   and the quarantine list for every caller
 │   │   ├── compliance/cascadeAuditSummary.py       # cascade_completed / cascade_auto_triggered audit
 │   │   │                                           #   details: archived descendants (children) are
 │   │   │                                           #   recorded per database, by asset id, outside the
@@ -76,6 +79,12 @@ backend/
 │   │   │                                           #   rule scopes (asset|files|fileAttributes|links,
 │   │   │                                           #   SCOPE_ENTITY_TYPE binds each to a metadata-schema
 │   │   │                                           #   entity type), tolerances, verdict → state
+│   │   ├── compliance/knownDatabase.py             # database_known(): whether an id names a database
+│   │   │                                           #   (GLOBAL, a database row, or a deleted one's
+│   │   │                                           #   `<db>#deleted` row); the database-level reads
+│   │   │                                           #   (overview; quarantine, cascade, audit listings
+│   │   │                                           #   by databaseId) answer 400 database_not_found()
+│   │   │                                           #   after their own check on the id
 │   │   ├── compliance/quarantineGuard.py           # quarantine-blocks-download guard shared by the four
 │   │   │                                           #   asset download Lambdas; resolves the asset-state
 │   │   │                                           #   table only when COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD=true

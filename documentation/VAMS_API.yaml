@@ -9947,7 +9947,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/state/{databaseId}/{assetId}:
         get:
             summary: "Get the compliance state of an asset."
-            description: "Returns the compliance record of an asset: its state, bound schema and last evaluation. An asset with no record is reported as `unknown` with no schema."
+            description: "Returns the compliance record of an asset: its state, bound schema and last evaluation. An asset with no record is reported as `unknown` with no schema. An archived asset's record is reported with state `archived` and its stored state as `recordedComplianceState`."
             parameters:
                 - name: databaseId
                   in: path
@@ -9991,7 +9991,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/state/{databaseId}:
         get:
             summary: "Get the compliance overview of a database."
-            description: "Returns per-state counts covering every tracked asset of a database (whatever the filters; counted with COUNT queries), and one page of the tracked assets in `assetId` order (or by name with `sort=name`), each with its asset name, filtered on the server. A filtered page reads a bounded amount of the table and can hold fewer rows than `maxItems` while `NextToken` is present; a token is valid only with the filters it was issued for."
+            description: "Returns per-state counts covering every tracked asset of a database (whatever the filters; counted with COUNT queries), and one page of the tracked assets in `assetId` order (or by name with `sort=name`), each with its asset name, filtered on the server. Archived assets are left out of the page and the counts, for every caller. A filtered page reads a bounded amount of the table and can hold fewer rows than `maxItems` while `NextToken` is present; a token is valid only with the filters it was issued for."
             parameters:
                 - name: databaseId
                   in: path
@@ -10049,7 +10049,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/databaseComplianceOverviewResponse"
                 "400":
-                    description: Invalid database identifier, filter value or pagination token.
+                    description: "Invalid database identifier, filter value or pagination token, or Database not found: no database has this identifier, live or deleted (answered only to a caller allowed on the identifier)."
                     content:
                         application/json:
                             schema:
@@ -10071,7 +10071,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/quarantine:
         get:
             summary: "List quarantined assets."
-            description: "Returns one page of quarantined assets across databases, each with its asset name, filtered to the databases the caller may read after the page is read — a page can be empty while `NextToken` is present, so keep following the token."
+            description: "Returns one page of quarantined assets across databases, each with its asset name, filtered to the databases the caller may read after the page is read — a page can be empty while `NextToken` is present, so keep following the token. Archived assets are not listed, for any caller."
             parameters:
                 - name: databaseId
                   in: query
@@ -10095,7 +10095,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/listQuarantinedResponse"
                 "400":
-                    description: Invalid pagination token.
+                    description: "Invalid pagination token, or Database not found: `databaseId` names no database, live or deleted (answered only to a caller allowed on it)."
                     content:
                         application/json:
                             schema:
@@ -10291,7 +10291,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/listCascadesResponse"
                 "400":
-                    description: Invalid state, filter value or pagination token.
+                    description: "Invalid state, filter value or pagination token, or Database not found: `databaseId` names no database, live or deleted (answered only to a caller allowed on it)."
                     content:
                         application/json:
                             schema:
@@ -10520,7 +10520,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/auditLogResponse"
                 "400":
-                    description: Invalid parameters or pagination token.
+                    description: "Invalid parameters or pagination token, or Database not found: `databaseId` names no database, live or deleted (answered only to a caller allowed on it)."
                     content:
                         application/json:
                             schema:
@@ -17484,8 +17484,12 @@ components:
                     type: string
                 complianceState:
                     type: string
+                    enum: [compliant, non_compliant, pending_evaluation, quarantined, exception, unknown, archived]
+                    description: "`exception` is an asset whose latest evaluation failed while a quarantine exception was active: released, never quarantined, with the violations kept on the evaluation. `archived` is never stored: the asset-state read reports it for an archived asset, which is not evaluated while it is archived, with the stored state in `recordedComplianceState`. The database overview and the quarantine listing leave archived assets out."
+                recordedComplianceState:
+                    type: string
                     enum: [compliant, non_compliant, pending_evaluation, quarantined, exception, unknown]
-                    description: "`exception` is an asset whose latest evaluation failed while a quarantine exception was active: released, never quarantined, with the violations kept on the evaluation."
+                    description: "Present when `complianceState` is `archived`: the state the record holds, which applies again once the asset is unarchived."
                 schemaName:
                     type: string
                     nullable: true

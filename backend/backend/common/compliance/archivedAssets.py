@@ -48,6 +48,12 @@ row as it is stored now (`archived_asset_visible`); decided per database, on the
 archive. When each asset is decided on its own row, a record whose asset is no longer in the
 archive, or that counts archived assets without naming them (an entry written by an earlier build),
 cannot be decided on the asset's own fields and is not shown.
+
+The compliance overview (its rows and per-state counts) and the state, quarantine and exception
+listings leave an archived asset out for every caller (`left_out`, `listed`), as the asset listing
+does unless it is asked to include archived assets. The asset is not evaluated while it is archived,
+so its record would otherwise stay counted in the state it held when it was archived. The record is
+kept, and a caller allowed to read it gets it with the state `archived`.
 """
 
 import json
@@ -227,7 +233,24 @@ class ArchivedAssets:
         return self._single_rows[key]
 
     def is_archived(self, database_id: str, asset_id: str, listing: bool = False) -> bool:
+        """Whether the asset is archived: in a listing, from the database's archived rows; else one
+        read of its archived key, made once per request. Ids that name no asset are not."""
+        if not names_an_asset(database_id, asset_id):
+            return False
         return self.archived_row(database_id, asset_id, listing) is not None
+
+    def left_out(self, database_id: str) -> FrozenSet[str]:
+        """The asset ids whose records the compliance overview and its counts, and the state,
+        quarantine and exception listings of a database leave out, whoever the caller: its archived
+        assets (read once per request). A scope that names no asset partition (GLOBAL) has none."""
+        if not is_asset_database(database_id):
+            return frozenset()
+        return self.archived_ids(database_id)
+
+    def listed(self, database_id: str, asset_id: str) -> bool:
+        """Whether a compliance listing shows the record of an asset: not when it is archived
+        (`left_out`)."""
+        return not self.is_archived(database_id, asset_id, listing=True)
 
     # ---- the engine's two checks -----------------------------------------------------------
 

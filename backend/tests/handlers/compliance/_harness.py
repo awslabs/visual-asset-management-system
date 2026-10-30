@@ -269,6 +269,17 @@ def live_only_asset_table(live_item=None, archived=()):
     return table
 
 
+def database_table_with(*database_ids):
+    """A database-table stand-in for the existence check of the database-level compliance reads
+    (`common.compliance.knownDatabase`): a `get_item` answers a row for each id in `database_ids`
+    (a deleted database's row id `<databaseId>#deleted` included when listed so) and none for any
+    other id."""
+    table = MagicMock(name="database_table")
+    table.get_item.side_effect = lambda Key, **_kwargs: (
+        {"Item": {"databaseId": Key["databaseId"]}} if Key["databaseId"] in database_ids else {})
+    return table
+
+
 def stored_id_checks(live_object, action):
     """The two Tier-2 checks an asset-scoped compliance check makes when the live one passes: the
     object with the live database id, then with the stored id `<databaseId>#deleted`

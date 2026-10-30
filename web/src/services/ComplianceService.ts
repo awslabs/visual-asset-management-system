@@ -285,6 +285,8 @@ export const complianceSchemaFormat = (schema: ComplianceSchema): ComplianceSche
 /**
  * States of an asset's compliance record. `exception` is a quarantine verdict the asset is
  * released from by a granted exception; it holds until the exception is revoked or superseded.
+ * `archived` is never stored: the asset-state read reports it for an archived asset, which is not
+ * evaluated while it is archived, with the stored state as `recordedComplianceState`.
  */
 export type ComplianceStateValue =
     | "unknown"
@@ -293,7 +295,8 @@ export type ComplianceStateValue =
     | "non_compliant"
     | "quarantined"
     | "exception"
-    | "pending_parent_resolution";
+    | "pending_parent_resolution"
+    | "archived";
 
 /**
  * Status of an asset's last evaluation. `error` means it produced no verdict — every rule errored
@@ -305,6 +308,8 @@ export interface ComplianceState {
     databaseId: string;
     assetId: string;
     complianceState: ComplianceStateValue;
+    /** Set when `complianceState` is `archived`: the state the record holds, which applies again once the asset is unarchived. */
+    recordedComplianceState?: ComplianceStateValue;
     schemaName?: string;
     lastEvaluationAt?: string;
     lastEvaluatedAt?: string;
@@ -517,6 +522,19 @@ const responseErrored = (response: any): boolean =>
     !!response?.message &&
     typeof response.message === "string" &&
     (response.message.includes("error") || response.message.includes("Error"));
+
+/** The suffix of an archived asset's database id, as the asset routes return its record. */
+export const ARCHIVED_DATABASE_ID_SUFFIX = "#deleted";
+
+/**
+ * The database id the compliance routes take for an asset: its live database id. An archived
+ * asset's record carries `<databaseId>#deleted`, which no compliance route accepts; its compliance
+ * records keep the live id.
+ */
+export const liveDatabaseId = (databaseId?: string | null): string | undefined =>
+    databaseId && databaseId.endsWith(ARCHIVED_DATABASE_ID_SUFFIX)
+        ? databaseId.slice(0, -ARCHIVED_DATABASE_ID_SUFFIX.length)
+        : databaseId || undefined;
 
 // --- Schema Management ---
 

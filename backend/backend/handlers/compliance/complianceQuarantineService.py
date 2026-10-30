@@ -35,6 +35,7 @@ from common.apiRoutes import (
 from common.compliance import evaluationEngine as engine
 from common.compliance import listing
 from common.compliance.archivedAssets import ArchivedAssets, flush_denials
+from common.compliance.knownDatabase import database_not_found
 from common.validators import validate
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
@@ -241,7 +242,8 @@ def list_quarantined(event, query_params):
     on the asset name or id) is a FilterExpression. The page is filled across at most
     `listing.DEFAULT_READ_BUDGET` reads (`listing.query_page`), skipping the rows the caller may
     not GET; `NextToken` resumes after the last row returned. No per-row lookup: the name is on the
-    row.
+    row. A `databaseId` that names no database answers `400` "Database not found" to a caller the
+    rows' check allows on that id (`store.database_known`).
     """
     page_size = listing.page_size_of(query_params.get("maxItems"), DEFAULT_LIST_PAGE_SIZE)
     if page_size is None:
@@ -271,13 +273,23 @@ def list_quarantined(event, query_params):
         query_kwargs["FilterExpression"], text_accept = listing.asset_text_filter(text)
 
     casbin_enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
-    # An archived asset is listed only for a caller allowed on its stored database id; its
-    # archived status is read once per database, and only when that decides anything.
+    # A database filter naming no database is not an empty page. Checked only for a caller the
+    # rows' own check allows on that id: any other caller gets the page it got before (no row of
+    # the database is listed for it), whether the database exists or not.
+    if (database_id and casbin_enforcer
+            and casbin_enforcer.enforce(
+                _evaluation_object(database_id, engine.STATE_QUARANTINED), "GET")
+            and not store.database_known(database_id)):
+        return database_not_found(event)
+    # An archived asset is not evaluated while it is archived, so its quarantine is left out for
+    # every caller, as the asset listing leaves archived assets out (`ArchivedAssets.listed`).
     archived = ArchivedAssets(asset_table, casbin_enforcer)
 
     def may_get(item):
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.
         if text_accept is not None and not text_accept(item):
+            return False
+        if not archived.listed(item.get("databaseId"), item.get("assetId")):
             return False
         return bool(casbin_enforcer) and archived.decide(
             item.get("databaseId"), item.get("assetId"),

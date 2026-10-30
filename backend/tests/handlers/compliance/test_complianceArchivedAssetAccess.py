@@ -16,8 +16,9 @@ with a deny on the live id.
 For every role, every compliance read and action on the archived asset is compared with the same
 check on a live asset of the database and with the asset GET the asset routes make on each row:
 the archived asset's compliance data is available exactly where the live asset's is, less what the
-archived-record rule withholds from the asset itself. Where the role's live compliance decision and
-its live asset GET agree, that is the archived asset GET decision itself.
+archived-record rule withholds from the asset itself, and less the overview and the quarantine
+listing, which leave an archived asset out for every role. Where the role's live compliance decision
+and its live asset GET agree, that is the archived asset GET decision itself.
 """
 
 import json
@@ -62,6 +63,9 @@ READS = ("state", "evaluations", "asset audit", "overview", "quarantine listing"
          "audit listing", "bindings listing", "cascade listing", "cascade")
 ACTIONS = ("release", "grant exception", "revoke exception", "evaluate", "approve cascade",
            "remove override")
+# The listings that leave an archived asset out for every role, as the asset listing does without
+# archived assets: the asset is not evaluated while it is archived (test_complianceArchivedLeftOut).
+LEFT_OUT = ("overview", "quarantine listing")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -384,6 +388,9 @@ def test_an_archived_assets_compliance_follows_the_archived_record_rule(
     found = _decisions_of(set_name, role_enforcer, world, decisions)
     asset_live, asset_archived = found["asset_get"][LIVE], found["asset_get"][ARCHIVED]
     for check in READS + ACTIONS:
+        if check in LEFT_OUT:
+            assert found["archived"][check] is False, (set_name, check, found)
+            continue
         expected = found["live"][check] and asset_archived
         assert found["archived"][check] is expected, (set_name, check, found)
         if found["live"][check] is asset_live:
@@ -403,10 +410,13 @@ def test_the_matrix_reaches_both_outcomes(role_enforcer, world, decisions):
     assert not any(user["archived"][check] for check in READS + ACTIONS)
     assert user["asset_get"] == {LIVE: True, ARCHIVED: False}
     # The Database Admin template names both ids on its asset constraint, and on its compliance
-    # ones: it reads and acts on the archived asset as on the live one.
+    # ones: it reads and acts on the archived asset as on the live one, less the listings that
+    # leave an archived asset out for every role.
     admin = of("template:database-admin.json")
     assert all(admin["live"][check] for check in READS + ACTIONS)
-    assert admin["archived"] == admin["live"]
+    assert ({check: allowed for check, allowed in admin["archived"].items() if check not in LEFT_OUT}
+            == {check: allowed for check, allowed in admin["live"].items() if check not in LEFT_OUT})
+    assert not any(admin["archived"][check] for check in LEFT_OUT)
     assert admin["asset_get"] == {LIVE: True, ARCHIVED: True}
     # Compliance Admin of the database: full reach on the live asset, none on the archived one.
     compliance_admin = of("template:compliance-admin.json")
@@ -417,7 +427,8 @@ def test_the_matrix_reaches_both_outcomes(role_enforcer, world, decisions):
 @pytest.mark.unit
 def test_a_role_allowed_on_both_ids_sees_and_acts(role_enforcer, world, decisions):
     found = _decisions_of("synthetic:both-ids", role_enforcer, world, decisions)
-    assert all(found["archived"][check] for check in READS + ACTIONS), found["archived"]
+    assert all(found["archived"][check] for check in READS + ACTIONS
+               if check not in LEFT_OUT), found["archived"]
 
 
 @pytest.mark.unit

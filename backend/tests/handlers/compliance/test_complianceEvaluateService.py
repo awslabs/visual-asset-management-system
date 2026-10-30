@@ -109,7 +109,10 @@ def _run(event, tokens=(USER,), api=True, obj=True, asset_exists=True, complianc
         page["LastEvaluatedKey"] = evaluation_last_key
     evaluation_table.query.return_value = page
     asset_table = MagicMock(name="asset_table")
-    asset_table.get_item.return_value = {"Item": {"assetName": "Turbine"}}
+    # A live asset only: its archived key `<databaseId>#deleted` holds no row.
+    asset_table.get_item.side_effect = lambda Key, **_kwargs: (
+        {} if Key["databaseId"].endswith("#deleted") else {"Item": {"assetName": "Turbine"}})
+    asset_table.query.return_value = {"Items": []}
     casbin = casbin if casbin is not None else enforcer(api=api, obj=obj)
     with patch(f"{MOD}.request_to_claims", claims_for(*tokens)), \
             patch(f"{MOD}.CasbinEnforcer", return_value=casbin), \

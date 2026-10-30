@@ -18,12 +18,14 @@ import pytest
 from moto import mock_aws
 
 from backend.tests.handlers.compliance._harness import (
-    COMPLIANCE_ASSET_STATE_TABLE_DEFINITION, USER, body_of, claims_for, enforcer, rest_event,
+    COMPLIANCE_ASSET_STATE_TABLE_DEFINITION, USER, body_of, claims_for, database_table_with,
+    enforcer, rest_event,
 )
 from common.compliance import listing
 from handlers.compliance import complianceAuditService as audit_svc
 from handlers.compliance import complianceEvaluateService as evaluate_svc
 from handlers.compliance import complianceQuarantineService as quarantine_svc
+from backend.tests.handlers.compliance._harness import live_only_asset_table
 
 DB = "scale-db"
 OTHER_DB = "other-db"
@@ -54,6 +56,15 @@ AUDIT_TABLE_DEFINITION = {
     ],
     "BillingMode": "PAY_PER_REQUEST",
 }
+
+
+@pytest.fixture(autouse=True)
+def _no_archived_assets():
+    """The overview and the quarantine listing read the archived partition of each database they
+    list (`ArchivedAssets.left_out`); no asset of these databases is archived."""
+    with patch.object(evaluate_svc, "asset_table", live_only_asset_table()), \
+            patch.object(quarantine_svc, "asset_table", live_only_asset_table()):
+        yield
 
 
 class CountingTable:
@@ -112,9 +123,12 @@ def tables():
 
 def _call(module, table_attribute, table, event):
     counting = CountingTable(table)
+    databases = database_table_with(DB, OTHER_DB)
     with patch(f"{module.__name__}.request_to_claims", claims_for(USER)), \
             patch(f"{module.__name__}.CasbinEnforcer", return_value=enforcer()), \
-            patch(f"{module.__name__}.{table_attribute}", counting):
+            patch(f"{module.__name__}.{table_attribute}", counting), \
+            patch.object(evaluate_svc.store, "database_table", databases), \
+            patch.object(audit_svc, "database_table", databases):
         response = module.lambda_handler(event, MagicMock())
     assert response["statusCode"] == 200, response
     return body_of(response), counting.reads

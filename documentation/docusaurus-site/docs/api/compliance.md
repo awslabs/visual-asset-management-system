@@ -794,7 +794,7 @@ GET /compliance/state/{databaseId}/{assetId}
 }
 ```
 
-`complianceState` is one of `compliant`, `non_compliant`, `quarantined`, `exception`, `pending_evaluation` or `unknown`. An asset with no compliance record is reported with `complianceState` `unknown` and `null` for `schemaName` and `schemaSource`. `lastEvaluationStatus` is the status of the evaluation `lastEvaluationId` names — `completed`, `pending_pipeline` or `error`; an evaluation that has started and not yet completed reads `pending_pipeline`, since it records itself on the asset before it evaluates any rule. When it is `error` that evaluation produced no verdict (every rule of it errored, or its schema could not be loaded), so `complianceState` is the state the asset held before it. An asset holding an active exception is in state `exception` and carries `exceptionGranted: true`, `exceptionReason`, `exceptionGrantedBy`, `exceptionGrantedAt`, and `exceptionSchemaName` / `exceptionSchemaVersion` — the schema name and version the exception is scoped to; revoking or superseding the exception sets `exceptionGranted` to `false` and clears the other exception fields. The rule failures behind a quarantine are summarised in `quarantineReason` while the asset is quarantined and listed in full on the last evaluation's `violations` (see [List the evaluations of an asset](#list-the-evaluations-of-an-asset)).
+`complianceState` is one of `compliant`, `non_compliant`, `quarantined`, `exception`, `pending_evaluation`, `unknown` or `archived`. An asset with no compliance record is reported with `complianceState` `unknown` and `null` for `schemaName` and `schemaSource`. An archived asset is not evaluated while it is archived: its record is returned with `complianceState` `archived` and the state the record holds as `recordedComplianceState` (`unknown` when it has no record), which applies again once the asset is unarchived. `archived` is never stored and is not a filter or a bucket of the database overview, which leaves archived assets out. A role refused the archived asset itself gets `403`, as for its other compliance records. `lastEvaluationStatus` is the status of the evaluation `lastEvaluationId` names — `completed`, `pending_pipeline` or `error`; an evaluation that has started and not yet completed reads `pending_pipeline`, since it records itself on the asset before it evaluates any rule. When it is `error` that evaluation produced no verdict (every rule of it errored, or its schema could not be loaded), so `complianceState` is the state the asset held before it. An asset holding an active exception is in state `exception` and carries `exceptionGranted: true`, `exceptionReason`, `exceptionGrantedBy`, `exceptionGrantedAt`, and `exceptionSchemaName` / `exceptionSchemaVersion` — the schema name and version the exception is scoped to; revoking or superseding the exception sets `exceptionGranted` to `false` and clears the other exception fields. The rule failures behind a quarantine are summarised in `quarantineReason` while the asset is quarantined and listed in full on the last evaluation's `violations` (see [List the evaluations of an asset](#list-the-evaluations-of-an-asset)).
 
 ### Error responses
 
@@ -808,7 +808,7 @@ GET /compliance/state/{databaseId}/{assetId}
 
 ## Get the compliance overview of a database
 
-Retrieves per-state counts covering every tracked asset of a database, and one page of the tracked assets, filtered and sorted on the server. Only assets with a compliance record are counted.
+Retrieves per-state counts covering every tracked asset of a database, and one page of the tracked assets, filtered and sorted on the server. Only assets with a compliance record are counted. An archived asset keeps its record but is not evaluated, so it is left out of the page, `totalAssets` and every bucket of `summary`, for every caller, as the asset list leaves archived assets out.
 
 ```
 GET /compliance/state/{databaseId}
@@ -868,17 +868,17 @@ A record written before asset names were kept on compliance records has no `asse
 
 ### Error responses
 
-| Status | Description                                            |
-| ------ | ------------------------------------------------------ |
-| `400`  | Invalid `databaseId`, filter value or pagination token |
-| `403`  | Not authorized                                         |
-| `500`  | Internal server error                                  |
+| Status | Description                                                                                                                                                             |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid `databaseId`, filter value or pagination token, or no database has this id, live or deleted (`Database not found`; answered only to a caller allowed on the id) |
+| `403`  | Not authorized                                                                                                                                                          |
+| `500`  | Internal server error                                                                                                                                                   |
 
 ---
 
 ## List quarantined assets
 
-Retrieves one page of assets in the `quarantined` state across databases, each with its `assetName` and `permissions` (`release`, `exception`: whether the caller may release the asset or grant it an exception, a `POST` on the quarantined evaluation object of its database); an asset released under an exception (state `exception`) is not listed. The page is filtered to the databases the caller may read after it is read, so a page can be empty while `NextToken` is present — keep following the token until none is returned.
+Retrieves one page of assets in the `quarantined` state across databases, each with its `assetName` and `permissions` (`release`, `exception`: whether the caller may release the asset or grant it an exception, a `POST` on the quarantined evaluation object of its database); an asset released under an exception (state `exception`) is not listed, nor is an archived asset, for any caller. The page is filtered to the databases the caller may read after it is read, so a page can be empty while `NextToken` is present — keep following the token until none is returned.
 
 ```
 GET /compliance/quarantine
@@ -918,11 +918,11 @@ GET /compliance/quarantine
 
 ### Error responses
 
-| Status | Description              |
-| ------ | ------------------------ |
-| `400`  | Invalid pagination token |
-| `403`  | Not authorized           |
-| `500`  | Internal server error    |
+| Status | Description                                                                                                                                      |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid pagination token, or `databaseId` names no database, live or deleted (`Database not found`; answered only to a caller allowed on the id) |
+| `403`  | Not authorized                                                                                                                                   |
+| `500`  | Internal server error                                                                                                                            |
 
 ---
 
@@ -1074,11 +1074,11 @@ Each row carries `databaseId` and `assetId` naming the trigger asset, copies of 
 
 ### Error responses
 
-| Status | Description                                       |
-| ------ | ------------------------------------------------- |
-| `400`  | Invalid `state`, filter value or pagination token |
-| `403`  | Not authorized                                    |
-| `500`  | Internal server error                             |
+| Status | Description                                                                                                                                                               |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid `state`, filter value or pagination token, or `databaseId` names no database, live or deleted (`Database not found`; answered only to a caller allowed on the id) |
+| `403`  | Not authorized                                                                                                                                                            |
+| `500`  | Internal server error                                                                                                                                                     |
 
 ---
 
@@ -1309,11 +1309,11 @@ A `cascade_auto_triggered` entry counts the direct children that are archived (a
 
 ### Error responses
 
-| Status | Description                            |
-| ------ | -------------------------------------- |
-| `400`  | Invalid parameters or pagination token |
-| `403`  | Not authorized                         |
-| `500`  | Internal server error                  |
+| Status | Description                                                                                                                                                    |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters or pagination token, or `databaseId` names no database, live or deleted (`Database not found`; answered only to a caller allowed on the id) |
+| `403`  | Not authorized                                                                                                                                                 |
+| `500`  | Internal server error                                                                                                                                          |
 
 ---
 

@@ -16,8 +16,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.tests.handlers.compliance._harness import (
-    ASSET, CASCADE_ID, DB, USER, body_of, claims_for, enforcer, live_only_asset_table, put_items,
-    rest_event, stored_id_checks, update_values,
+    ASSET, CASCADE_ID, DB, USER, body_of, claims_for, database_table_with, enforcer,
+    live_only_asset_table, put_items, rest_event, stored_id_checks, update_values,
 )
 from handlers.compliance import complianceCascadeService as svc
 from handlers.compliance import complianceEvaluationStore as store
@@ -82,6 +82,7 @@ def _run(event, tokens=(USER,), api=True, obj=True, cascade_item=PENDING, pendin
             patch(f"{STORE}.get_asset_item",
                   return_value={"assetId": ASSET} if asset_exists else None), \
             patch(f"{STORE}.all_database_ids", return_value=[DB]), \
+            patch(f"{STORE}.database_table", database_table_with(DB)), \
             patch(f"{STORE}.write_audit") as write_audit:
         response = svc.lambda_handler(event, MagicMock())
     return response, {"table": cascade_table, "audit": write_audit, "invoke": lambda_client.invoke,

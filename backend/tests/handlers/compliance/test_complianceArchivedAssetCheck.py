@@ -19,7 +19,8 @@ roles. These tests cover the mechanics:
   (`policy_object_fields`), so the shipped templates keep the reads they had;
 - a decision per asset reads each archived row once per request and checks each once;
 - the denials of those checks are written in one batch, not one audit write per archived asset;
-- the cost on a database with 1,000 archived assets (printed `COST` lines; the assertions bound it).
+- the cost of an audit listing over 1,000 archived assets (printed `COST` lines; the assertions
+  bound it).
 """
 
 import json
@@ -41,6 +42,8 @@ from backend.tests.handlers.compliance.test_complianceArchivedAssetAccess import
 )
 from common.compliance import archivedAssets
 from common.compliance.archivedAssets import ArchivedAssets
+from common.compliance.auditRecord import build_audit_item
+from handlers.compliance import complianceAuditService as audit_svc
 from handlers.compliance import complianceEvaluateService as evaluate_svc
 from handlers.compliance import complianceEvaluationStore as store
 
@@ -225,10 +228,14 @@ def test_the_handlers_flush_the_denials_of_the_request():
 
 
 # ---------------------------------------------------------------------------------------------
-# Cost: the database overview with 1,000 archived assets
+# Cost: the audit listing of a database with 1,000 archived assets
 # ---------------------------------------------------------------------------------------------
+# The overview and the quarantine list leave every archived asset out for every role (D91), so
+# the listing where D90 decides what a role sees is the audit trail: each entry of an archived
+# asset is listed only for a role that may see that asset.
 ARCHIVED_COUNT = 1000
 LIVE_COUNT = 200
+PAGE = 100
 
 
 class _Counting:
@@ -253,7 +260,11 @@ class _Counting:
         return getattr(self._table, name)
 
 
-def _overview_cost(set_name, role_enforcer):
+def _archived_id(index):
+    return f"z{index:05d}"
+
+
+def _audit_listing_cost(set_name, role_enforcer):
     real = role_enforcer(set_name)
     stand_in = MagicMock(name="CasbinEnforcer")
     stand_in.enforceAPI.return_value = True
@@ -263,7 +274,7 @@ def _overview_cost(set_name, role_enforcer):
     check_seconds = []
 
     class CountingEngine:
-        """The real engine, its calls (the archived-asset checks) counted."""
+        """The real engine, its calls (the archived-asset checks) counted and timed."""
 
         def enforce(self, obj, action):
             engine_calls.append(obj.get("object__type"))
@@ -275,39 +286,43 @@ def _overview_cost(set_name, role_enforcer):
     stand_in.service_object = CountingEngine()
     with mock_aws():
         resource = boto3.resource("dynamodb", region_name="us-east-1")
-        patches, doubles = _cdkTables.table_doubles(resource, (store, evaluate_svc))
+        patches, doubles = _cdkTables.table_doubles(resource, (store, audit_svc))
         for active in patches:
             active.start()
         try:
-            assets, states = doubles["assetStorage"], doubles["complianceAssetStateStorage"]
+            assets, audit = doubles["assetStorage"], doubles["complianceAuditStorage"]
             doubles["databaseStorage"].put_item(Item={"databaseId": DB})
-            with assets.batch_writer() as asset_batch, states.batch_writer() as state_batch:
+            with assets.batch_writer() as asset_batch, audit.batch_writer() as audit_batch:
                 for index in range(ARCHIVED_COUNT + LIVE_COUNT):
                     archived = index < ARCHIVED_COUNT
-                    asset_id = f"{'z' if archived else 'a'}{index:05d}"
+                    asset_id = _archived_id(index) if archived else f"a{index:05d}"
                     asset_batch.put_item(Item={
                         "databaseId": ARCHIVED_DB if archived else DB, "assetId": asset_id,
                         "assetName": f"Asset {index}", "assetType": ".glb",
                         "description": "x" * 400,
                         "tags": [DENIED_TAG] if archived and index % 10 == 0 else ["ok"],
                         **({"status": "archived"} if archived else {})})
-                    state_batch.put_item(Item={
-                        "databaseId": DB, "assetId": asset_id, "complianceState": "compliant",
-                        "schemaName": "s", "schemaSource": "database"})
+                    # The archived assets' entries are the newest, so they fill the first page.
+                    audit_batch.put_item(Item=build_audit_item(
+                        DB, asset_id, "compliance_check", "SYSTEM_USER", {},
+                        timestamp=f"2026-10-{'29' if archived else '01'}T00:00:00.{index:06d}+00:00",
+                        asset_name=f"Asset {index}"))
             counting = _Counting(doubles["assetStorage"])
-            with patch.object(evaluate_svc, "asset_table", counting), \
-                    patch.object(evaluate_svc, "CasbinEnforcer", return_value=stand_in), \
-                    patch.object(evaluate_svc, "request_to_claims", claims_for("cost-user")), \
+            with patch.object(audit_svc, "asset_table", counting), \
+                    patch.object(audit_svc, "CasbinEnforcer", return_value=stand_in), \
+                    patch.object(audit_svc, "request_to_claims", claims_for("cost-user")), \
                     patch("customLogging.auditLogging.log_authorization_denials") as denials:
                 started = perf_counter()
-                response = evaluate_svc.lambda_handler(
-                    rest_event("GET", f"/compliance/state/{DB}", {"databaseId": DB},
-                               {"maxItems": "100"}), MagicMock())
+                response = audit_svc.lambda_handler(
+                    rest_event("GET", "/compliance/audit", None,
+                               {"databaseId": DB, "maxItems": str(PAGE)}), MagicMock())
                 elapsed = perf_counter() - started
             assert response["statusCode"] == 200, response
-            body = json.loads(response["body"])
-            return {"total": body["totalAssets"], "reads": dict(counting.calls),
-                    "items": counting.items, "asset checks": engine_calls.count("asset"),
+            listed = [entry["assetId"] for entry in json.loads(response["body"])["entries"]]
+            return {"listed": len(listed), "archived listed": sum(a.startswith("z") for a in listed),
+                    "tagged listed": sum(a.startswith("z") and int(a[1:]) % 10 == 0 for a in listed),
+                    "reads": dict(counting.calls), "items": counting.items,
+                    "asset checks": engine_calls.count("asset"),
                     "denial batches": denials.call_count,
                     "denials": sum(len(c.args[1]) for c in denials.call_args_list),
                     "check seconds": round(sum(check_seconds), 3),
@@ -318,31 +333,32 @@ def _overview_cost(set_name, role_enforcer):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("set_name,total,decided_per_asset", [
-    ("template:database-admin.json", ARCHIVED_COUNT + LIVE_COUNT, False),
-    (ARCHIVE_CONTAINS_DENY_SET, LIVE_COUNT, False),
-    (TAG_DENY_SET, ARCHIVED_COUNT + LIVE_COUNT - ARCHIVED_COUNT // 10, True),
+@pytest.mark.parametrize("set_name", [
+    "template:database-admin.json", ARCHIVE_CONTAINS_DENY_SET, TAG_DENY_SET,
 ], ids=["database admin", "archive deny", "tag deny"])
-def test_the_cost_of_an_overview_with_1000_archived_assets(
-        set_name, total, decided_per_asset, role_enforcer):
-    cost = _overview_cost(set_name, role_enforcer)
+def test_the_cost_of_an_audit_listing_over_1000_archived_assets(set_name, role_enforcer):
+    cost = _audit_listing_cost(set_name, role_enforcer)
     print(f"COST {set_name}: {cost}")
-    assert cost["total"] == total
-    if decided_per_asset:
-        # One Query of the archive (paged by DynamoDB's 1 MB limit), and one asset check per
-        # distinct value of the fields the rules read (two tag lists here, not 1,000 checks); the
-        # one denial is written in one batch.
-        assert cost["reads"]["get_item"] == 0
+    if set_name == "template:database-admin.json":
+        # Allowed on the archive: one asset check for the database, and nothing read.
+        assert cost["listed"] == PAGE and cost["archived listed"] == PAGE
+        assert cost["reads"] == {"query": 0, "get_item": 0}
+        assert cost["asset checks"] == 1 and cost["denials"] == 0
+    elif set_name == ARCHIVE_CONTAINS_DENY_SET:
+        # Refused the archive: one asset check, the archived ids read once (keys only), as for a
+        # role refused the compliance object on the archive (Compliance Admin).
+        assert cost["archived listed"] == 0
+        assert cost["reads"]["get_item"] == 0 and cost["reads"]["query"] == 1
+        assert cost["items"] == ARCHIVED_COUNT
+        assert cost["asset checks"] == 1
+        assert cost["denial batches"] == 1 and cost["denials"] == 1
+    else:
+        # One Query of the archive, projected on the field the rules read (`tags`), and one asset
+        # check per distinct tag list (two here, not one per archived asset); the one denial is
+        # written in one batch. The tagged archived assets are left out, the others listed.
+        assert cost["listed"] == PAGE
+        assert cost["tagged listed"] == 0 and cost["archived listed"] == PAGE
+        assert cost["reads"] == {"query": 1, "get_item": 0}
         assert cost["items"] == ARCHIVED_COUNT
         assert cost["asset checks"] == 2
         assert cost["denial batches"] == 1 and cost["denials"] == 1
-    elif total == ARCHIVED_COUNT + LIVE_COUNT:
-        # Allowed on the archive: one asset check for the database, and nothing read.
-        assert cost["reads"] == {"query": 0, "get_item": 0}
-        assert cost["asset checks"] == 1
-    else:
-        # Refused the archive: one asset check, and the archived ids read once (as before D90).
-        assert cost["reads"]["get_item"] == 0
-        assert cost["items"] == ARCHIVED_COUNT
-        assert cost["asset checks"] == 1
-        assert cost["denials"] == 1
