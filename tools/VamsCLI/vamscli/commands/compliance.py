@@ -249,6 +249,13 @@ def format_state_record(record: Dict[str, Any]) -> str:
     ):
         if record.get(key):
             lines.append(f"{label}: {record[key]}")
+    # The failed pipeline rules' execution failure reasons, present for a caller who may read those
+    # executions; any other caller's entries name the rule and the execution only.
+    for failure in record.get('quarantineExecutionFailures') or []:
+        reason = failure.get('executionFailureReason')
+        if reason:
+            lines.append(f"Execution Failure ({failure.get('ruleName', 'N/A')}, execution "
+                         f"{failure.get('executionId', 'N/A')}): {reason}")
     last_status = record.get('lastEvaluationStatus')
     if last_status == 'error':
         lines.append("Last Evaluation Status: error (no verdict; the compliance state is the one "
@@ -329,6 +336,9 @@ def format_evaluation(result: Dict[str, Any]) -> str:
             if rule.get('message'):
                 line += f": {rule['message']}"
             lines.append(line)
+            # Why the rule's execution failed, for a caller who may read that execution.
+            if rule.get('executionFailureReason'):
+                lines.append(f"      Execution Failure: {rule['executionFailureReason']}")
     return '\n'.join(lines)
 
 

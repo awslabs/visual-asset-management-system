@@ -1171,6 +1171,33 @@ class TestComplianceEvaluationCommands:
             assert result.exit_code == 0
             assert 'Recorded State' not in result.output
 
+    def test_state_prints_a_quarantines_execution_failure_reasons(self, cli_runner,
+                                                                 generic_command_mocks):
+        # The API returns a reason only to a caller who may read the execution; an entry without
+        # one names the rule and the execution only, and prints nothing.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].get_compliance_state.return_value = {
+                'databaseId': 'my-database', 'assetId': 'my-asset',
+                'complianceState': 'quarantined', 'schemaName': 'cad-quality',
+                'quarantineReason': 'Pipeline execution FAILED',
+                'quarantineExecutionFailures': [
+                    {'ruleName': 'converts', 'executionId': 'e1',
+                     'executionFailureReason': 'ValueError: latin1.obj is not UTF-8'},
+                    {'ruleName': 'withheld', 'executionId': 'e2'}]}
+            result = cli_runner.invoke(cli, ['compliance', 'state', '-d', 'my-database', '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert 'Quarantine Reason: Pipeline execution FAILED' in result.output
+            assert ('Execution Failure (converts, execution e1): ValueError: latin1.obj is not '
+                    'UTF-8') in result.output
+            assert 'withheld' not in result.output
+
+            result = cli_runner.invoke(cli, ['compliance', 'state', '-d', 'my-database', '-a',
+                                             'my-asset', '--json-output'])
+            assert result.exit_code == 0
+            failures = json.loads(result.output)['quarantineExecutionFailures']
+            assert failures[0]['executionFailureReason'] == 'ValueError: latin1.obj is not UTF-8'
+            assert 'executionFailureReason' not in failures[1]
+
     def test_state_for_a_database(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].get_database_compliance_state.return_value = {
@@ -2027,6 +2054,29 @@ class TestEvaluationErrorOutput:
             assert '✗ has-owner [warn]: owner missing' in result.output
             assert '✓ has-parent [inform]' in result.output
             assert 'Exception Applied' not in result.output
+
+    def test_a_failed_pipeline_rule_prints_its_execution_failure_reason(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].evaluate_asset_compliance.return_value = {
+                'message': 'Evaluation completed', 'evaluationId': 'ev-1', 'schemaName': 'cad-quality',
+                'verdict': 'quarantined', 'complianceState': 'quarantined',
+                'ruleResults': [
+                    {'ruleName': 'converts', 'enforcement': 'quarantine', 'passed': False,
+                     'status': 'evaluated', 'message': 'Pipeline execution FAILED',
+                     'executionId': 'e1',
+                     'executionFailureReason': 'ValueError: latin1.obj is not UTF-8'},
+                    {'ruleName': 'withheld', 'enforcement': 'quarantine', 'passed': False,
+                     'status': 'evaluated', 'message': 'Pipeline execution FAILED',
+                     'executionId': 'e2'},
+                ],
+                'pipelineRulesPending': 0}
+            result = cli_runner.invoke(cli, ['compliance', 'evaluate', '-d', 'my-database', '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert ('✗ converts [quarantine]: Pipeline execution FAILED\n'
+                    '      Execution Failure: ValueError: latin1.obj is not UTF-8') in result.output
+            assert '✗ withheld [quarantine]: Pipeline execution FAILED\n' in result.output
+            assert result.output.count('Execution Failure:') == 1
 
     def test_evaluate_prints_the_exception_flag_when_applied(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:

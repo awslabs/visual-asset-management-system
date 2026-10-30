@@ -1773,7 +1773,11 @@ def get_asset_compliance_state(database_id: str, asset_id: str) -> Dict[str, Any
     exception or unknown, or `archived` for an archived asset: it is not evaluated while it is
     archived, and `recordedComplianceState` holds the state its record keeps, which applies again
     once the asset is unarchived. `schemaName` / `schemaSource` (database or asset) say which
-    binding governs it. A quarantined record carries `quarantineReason`. A record in state
+    binding governs it. A quarantined record carries `quarantineReason` (the failed rules'
+    messages) and `quarantineExecutionFailures` (`{ruleName, executionId,
+    executionFailureReason}` per failed pipeline rule; the reason is present only when the caller
+    may read that workflow execution, otherwise the entry names the rule and execution only). A
+    record in state
     `exception` holds an active quarantine exception: `exceptionGranted`, `exceptionReason`,
     `exceptionGrantedBy`, `exceptionGrantedAt`, plus `exceptionSchemaName` /
     `exceptionSchemaVersion` naming the schema name and version the exception is scoped to — a
@@ -1855,7 +1859,10 @@ def list_compliance_evaluations(
 
     Each row carries evaluationId, schemaName, evaluatedAt, the verdict / complianceState once the
     evaluation completed, ruleResults, and — for an evaluation with pipeline rules — the
-    `executionId` of the workflow execution that produced the measurements. A row with
+    `executionId` of the workflow execution that produced the measurements. A pipeline rule's
+    result names its own `executionId`; when that execution failed its `message` is the generic
+    "Pipeline execution FAILED" and `executionFailureReason` is why the execution failed, present
+    only when the caller may read that execution (get_execution_details() would succeed). A row with
     `exceptionApplied` true ran while a quarantine exception was active: its violations are
     recorded as computed but the asset stayed released (state `exception`, never quarantined).
 
@@ -1898,7 +1905,9 @@ def list_quarantined_assets(
     contains it (case-insensitive); both filter on the server.
 
     Each item is the asset's compliance record (databaseId, assetId, assetName, schemaName,
-    quarantineReason, updatedAt). Only assets in state `quarantined` are listed — an asset released
+    quarantineReason, quarantineExecutionFailures, updatedAt); a failed pipeline rule's
+    `executionFailureReason` is present only when the caller may read that execution. Only assets
+    in state `quarantined` are listed — an asset released
     under an exception (state `exception`) is not, nor is an archived asset. The route filters each
     page to the caller's databases AFTER reading it, so a page can be empty while a token remains —
     the walk keeps following the token, and an empty `Items` with `truncated` set does not mean
