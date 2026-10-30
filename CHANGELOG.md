@@ -236,6 +236,22 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Troubleshooting
 
+## [2.6.7] (2026-11-13)
+
+### Major Change Summary:
+
+### ⚠ BREAKING CHANGES
+
+### Features
+
+### Bug Fixes
+
+### Chores
+
+### Known Outstanding Issues
+
+### Troubleshooting
+
 ## [2.6.6] (2026-10-30)
 
 ### Major Change Summary:
