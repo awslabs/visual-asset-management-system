@@ -83,6 +83,11 @@ describe("CI workflow", () => {
         );
     });
 
+    test("the infra shards install the root packages the docs prettier test resolves", () => {
+        const infraJob = /^ {4}infra-test:\n([\s\S]*?)\n {4}\S/m.exec(text)?.[1] ?? "";
+        expect(infraJob).toMatch(/- name: Npm ci root directory\n\s+run: npm ci/);
+    });
+
     describe("automated security helper scan", () => {
         const ashCheckout = (): string =>
             /- name: Clone automated security helper\n([\s\S]*?)\n\s*\n/.exec(text)?.[1] ?? "";
@@ -106,7 +111,7 @@ describe("CI workflow", () => {
             expect(text).toMatch(new RegExp(`^\\s+path: ${outputDir}/?$`, "m"));
         });
 
-        test("the summary step always ends with exit 0", () => {
+        test("the summary step fails only when the scan produced no results", () => {
             const summary =
                 /- name: Summarize automated security helper results\n([\s\S]*?)\n\s*\n/.exec(
                     text
@@ -114,7 +119,21 @@ describe("CI workflow", () => {
             expect(summary).toBeDefined();
             expect(summary).toContain("set +e");
             expect(summary).toContain("GITHUB_STEP_SUMMARY");
+            // A missing results file exits 3, which is the only path to a failed step.
+            expect(summary).toContain("raise SystemExit(3)");
+            expect(summary).toMatch(/if \[ "\$summary_rc" -eq 3 \]; then\n\s+exit 1\n/);
+            expect(summary?.match(/exit 1/g)?.length).toBe(1);
             expect(summary?.trimEnd().endsWith("exit 0")).toBe(true);
+        });
+
+        test("the base image is pulled with retries before the scan, with a Docker Hub fallback", () => {
+            const pull = /- name: Pull the ASH base image\n([\s\S]*?)\n\s*\n/.exec(text)?.[1];
+            expect(pull).toBeDefined();
+            expect(pull).toContain("ash/Dockerfile");
+            expect(pull).toContain("--build-arg BASE_IMAGE=");
+            expect(text.indexOf("- name: Pull the ASH base image")).toBeLessThan(
+                text.indexOf("- name: Run automated security helper")
+            );
         });
     });
 });
