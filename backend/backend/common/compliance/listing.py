@@ -232,3 +232,22 @@ def count_items(table, query_kwargs: Dict[str, Any]) -> Tuple[int, int]:
         if "LastEvaluatedKey" not in response:
             return total, reads
         kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+
+
+def query_ids(table, query_kwargs: Dict[str, Any], attribute: str = "assetId") -> Tuple[List[str], int]:
+    """`(values, reads)`: `attribute` of every item a query returns, read to exhaustion and
+    projected on that attribute alone. DynamoDB pages it at 1 MB of evaluated data, as it pages a
+    `Select=COUNT` query of the same key condition (`count_items`), so the two make the same reads;
+    this one also says which items were counted."""
+    values: List[str] = []
+    reads = 0
+    kwargs = dict(query_kwargs, ProjectionExpression="#queried",
+                  ExpressionAttributeNames={"#queried": attribute})
+    while True:
+        response = table.query(**kwargs)
+        reads += 1
+        values.extend(item[attribute] for item in response.get("Items", [])
+                      if isinstance(item.get(attribute), str))
+        if "LastEvaluatedKey" not in response:
+            return values, reads
+        kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]

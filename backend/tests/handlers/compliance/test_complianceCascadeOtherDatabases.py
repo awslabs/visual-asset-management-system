@@ -620,6 +620,13 @@ def _node_keys(count):
 
 def _seed_sized(doubles):
     _seed_assets(doubles)
+    # The descendants are live assets (a reader whose rules read an asset's own fields is refused
+    # a descendant with no row).
+    with doubles["assetStorage"].batch_writer() as batch:
+        for key in _node_keys(LARGE_NODES):
+            database_id, asset_id = key.split(":", 1)
+            batch.put_item(Item={"databaseId": database_id, "assetId": asset_id,
+                                 "assetName": f"Node {key}", "tags": []})
     for cascade_id, keys, created_at in ((LARGE, _node_keys(LARGE_NODES), "2026-10-30T06:00:00+00:00"),
                                          (SMALL, _node_keys(2), "2026-10-30T07:00:00+00:00")):
         doubles["complianceCascadeStorage"].put_item(Item=_cascade_row(

@@ -61,13 +61,16 @@ The reads and checks, per request:
   `CasbinEnforcer.enforce` writes, one per denial.
 
 A live asset that has no row (a record left by a permanently deleted asset, until it is removed) has
-no fields to decide on: it is decided on the database alone (`{databaseId}`), as an asset of the
-database. A record that names an asset as archived (a cascade's `skipped_archived` node, the
-archived descendants and children counted on a cascade's audit entries) is decided on the asset's
-archived row as it is stored now (`archived_asset_visible`); decided per database, on the
-database's archive. When each asset is decided on its own row, a record whose asset is no longer in
-the archive, or that counts archived assets without naming them (an entry written by an earlier
-build), cannot be decided on the asset's own fields and is not shown.
+no fields to decide on. Decided per database, it is decided on the database alone (`{databaseId}`),
+as an asset of the database; when each asset is decided on its own row, it is refused (not shown,
+not acted on, and skipped by a sweep as not authorized), as a record whose archived asset is no
+longer in the archive is not shown. A record that names an asset as archived (a cascade's
+`skipped_archived` node, the archived descendants and children counted on a cascade's audit
+entries) is decided on the asset's archived row as it is stored now (`archived_asset_visible`);
+decided per database, on the database's archive. When each asset is decided on its own row, a
+record whose asset is no longer in the archive, or that counts archived assets without naming them
+(an entry written by an earlier build), cannot be decided on the asset's own fields and is not
+shown.
 
 The compliance overview (its rows and per-state counts) and the state, quarantine and exception
 listings leave an archived asset out for every caller (`left_out`, `listed`), as the asset listing
@@ -114,9 +117,20 @@ _PENDING_DENIALS: List[Tuple[Dict[str, Any], Dict[str, Any], str]] = []
 
 class LiveWithheld(NamedTuple):
     """What a listing or a count of one database leaves out of its live assets for a caller:
-    `everything` (the asset GET refuses the database's assets), or the `ids` it refuses."""
+    `everything` (the asset GET refuses the database's assets), or the `ids` it refuses. When each
+    asset is decided on its own row, `readable` holds the live asset ids the caller may read (the
+    database's live rows the asset GET passes), and a live record of any other asset is left out
+    too: one whose asset has no row has no fields to decide on. None when the decision is made per
+    database."""
     everything: bool
     ids: FrozenSet[str]
+    readable: Optional[FrozenSet[str]] = None
+
+    def leaves_out(self, asset_id: Optional[str]) -> bool:
+        """Whether the record of a live (not archived) asset is left out for the caller."""
+        if self.everything or asset_id in self.ids:
+            return True
+        return self.readable is not None and asset_id not in self.readable
 
 
 NOTHING_WITHHELD = LiveWithheld(False, frozenset())
@@ -491,8 +505,8 @@ class AssetAccess:
 
     def database_assets_readable(self, database_id: str) -> bool:
         """The asset GET on a database's live assets without an asset's own fields
-        (`{databaseId}`): the decision on every live asset of it when it is decided per database,
-        and on a live asset that has no row. Always for a caller without asset rules."""
+        (`{databaseId}`): the decision on every live asset of it when it is decided per database.
+        Always for a caller without asset rules."""
         if not self.has_asset_rules():
             return True
         # The engine passes the archive's id only when the database's own id passes too, so an
@@ -503,10 +517,14 @@ class AssetAccess:
         return self._asset_readable({"databaseId": database_id})
 
     def _live_allowed(self, database_id: str, row: Optional[Dict[str, Any]] = None) -> bool:
-        """The asset GET on a live asset: on its row when each asset is decided on its own row and
-        it has one; otherwise on the database alone."""
-        if row is None or self.decided_per_database():
+        """The asset GET on a live asset: on the database alone when it is decided per database;
+        otherwise on its row. A live asset with no row (a record left by a permanently deleted
+        asset) has no fields to decide on and is refused then, as a record that names an archived
+        asset no longer in the archive is not shown."""
+        if self.decided_per_database():
             return self.database_assets_readable(database_id)
+        if row is None:
+            return False
         return self._asset_readable(row)
 
     def _archive_readable(self, database_id: str) -> bool:
@@ -639,7 +657,8 @@ class AssetAccess:
         """Whether the asset is live and the asset GET on its live row refuses it, so that a sweep
         skips it as not authorized. False for a caller without asset rules and for an archived
         asset (decided as archived). Decided per database, read only when the database's assets
-        are refused; otherwise from the archived rows and the live rows (`expect`)."""
+        are refused; otherwise from the archived rows and the live rows (`expect`), and an asset
+        with neither row is refused (`_live_allowed`)."""
         if not names_an_asset(database_id, asset_id) or not self.has_asset_rules():
             return False
         if self.decided_per_database():
@@ -653,18 +672,20 @@ class AssetAccess:
     def live_withheld(self, database_id: str) -> LiveWithheld:
         """The live assets a listing or a count of one whole database leaves out for the caller,
         beyond its archived ones (`left_out`): none without asset rules; decided per database, all
-        of them (`everything`) or none, with no read; otherwise those whose live row the asset GET
-        refuses, from the database's live partition read once (`live_rows`). A record of an asset
-        with no row is decided on the database alone and is left out only with `everything`."""
+        of them (`everything`) or none, with no read; otherwise every live record but those of the
+        assets whose live row the asset GET passes (`readable`, `ids` the rows it refuses), from the
+        database's live partition read once (`live_rows`). A record of an asset with no row is then
+        left out: it has no fields to decide on."""
         if not is_asset_database(database_id) or not self.has_asset_rules():
             return NOTHING_WITHHELD
         if self.decided_per_database():
             if self.database_assets_readable(database_id):
                 return NOTHING_WITHHELD
             return LiveWithheld(True, frozenset())
-        return LiveWithheld(False, frozenset(
-            asset_id for asset_id, row in self.live_rows(database_id).items()
-            if not self._live_allowed(database_id, row)))
+        rows = self.live_rows(database_id)
+        readable = frozenset(asset_id for asset_id, row in rows.items()
+                             if self._live_allowed(database_id, row))
+        return LiveWithheld(False, frozenset(rows) - readable, readable)
 
 
 def withheld_state_counts(asset_state_table, database_id: str, asset_ids,

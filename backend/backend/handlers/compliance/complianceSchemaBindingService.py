@@ -613,7 +613,8 @@ def get_bindings(event, database_id, query_params):
     # database check on the stored id (`<databaseId>#deleted`) as well, the listing's check made
     # the way the engine decides an archived record, and, for a caller whose policy has asset
     # rules, the asset GET on the archived row. The override of a live asset the caller's asset
-    # rules refuse is not listed either (`AssetAccess.live_withheld`).
+    # rules refuse is not listed either (`AssetAccess.live_withheld`), nor, for a caller whose
+    # rules read an asset's own fields, that of an asset with no row.
     enforcer = CasbinEnforcer(claims_and_roles) if len(claims_and_roles["tokens"]) > 0 else None
     access = AssetAccess(asset_table, enforcer)
     withheld = access.withheld(
@@ -625,8 +626,11 @@ def get_bindings(event, database_id, query_params):
     for item in _database_asset_state_rows(database_id):
         if item.get("assetId") in withheld:
             continue
-        if live_withheld.everything and item.get("assetId") not in access.archived_ids(database_id):
-            # Every live asset of the database is refused; only its archived assets may be listed.
+        if (live_withheld.leaves_out(item.get("assetId"))
+                and item.get("assetId") not in access.archived_ids(database_id)):
+            # A live asset the caller may not read (every live asset of the database, or one with
+            # no row decided on its own fields); only the archived assets decided above may be
+            # listed.
             continue
         if item.get("schemaSource") == SCHEMA_SOURCE_ASSET:
             asset_overrides.append({

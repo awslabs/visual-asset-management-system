@@ -51,7 +51,8 @@ backend/
 │   │   │                                           #   read's rows first, for batched reads), once_per_key() (a
 │   │   │                                           #   listing over many databases asks the engine
 │   │   │                                           #   once per database id, never once per row),
-│   │   │                                           #   count_items() (Select=COUNT), name attributes,
+│   │   │                                           #   count_items() (Select=COUNT), query_ids() (the
+│   │   │                                           #   same reads, returning the ids), name attributes,
 │   │   │                                           #   asset_text_filter() (no key attr in a filter)
 │   │   ├── compliance/assetAccess.py               # THE asset rule for compliance records, live
 │   │   │                                           #   and archived (every compliance read, action
@@ -77,7 +78,11 @@ backend/
 │   │   │                                           #   archived_asset_visible(); asset checks run
 │   │   │                                           #   on the engine and their denials go
 │   │   │                                           #   out in one batch: handlers call flush_denials()
-│   │   │                                           #   in lambda_handler's finally. left_out() /
+│   │   │                                           #   in lambda_handler's finally. A live record
+│   │   │                                           #   with no asset row: decided on the database
+│   │   │                                           #   per database, refused when decided per row
+│   │   │                                           #   (live_withheld().readable is the allowlist
+│   │   │                                           #   the overview counts and bindings use). left_out() /
 │   │   │                                           #   listed() leave archived assets out of the
 │   │   │                                           #   overview, its counts (withheld_state_counts())
 │   │   │                                           #   and the quarantine list for every caller

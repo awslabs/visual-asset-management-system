@@ -175,7 +175,8 @@ def test_a_listing_reads_the_archive_once_and_checks_each_distinct_archived_asse
     archived.expect((DB, asset_id) for asset_id in rows)
     verdicts = [archived.decide(DB, asset_id, _allow_all, cache_key="GET", listing=True)
                 for asset_id in rows]
-    assert verdicts == [True, False, True, False, False, True, True]
+    # `live-gone` has no row, live or archived: no field to decide on, so it is refused.
+    assert verdicts == [True, False, True, False, False, True, False]
     assert archived.withheld(DB, _allow_all, cache_key="GET") == frozenset({"a"})
     assert archived.withholds(DB, "a", _allow_all, cache_key="GET") is True
     assert archived.withholds(DB, "b", _allow_all, cache_key="GET") is False
@@ -185,9 +186,9 @@ def test_a_listing_reads_the_archive_once_and_checks_each_distinct_archived_asse
     batch = table.meta.client.batch_get_item.call_args.kwargs["RequestItems"]["assets"]
     assert {key["assetId"] for key in batch["Keys"]} == {"live", "live-tagged", "live-gone"}
     assert set(batch["ExpressionAttributeNames"].values()) == {"databaseId", "assetId", "tags"}
-    # One check per distinct (databaseId, tags) of the rows decided: two archived rows, and three
-    # live ones (the untagged, the tagged, and the asset with no row, decided on the database).
-    assert reader.service_object.enforce.call_count == 5
+    # One check per distinct (databaseId, tags) of the rows decided: two archived rows and two live
+    # ones (the untagged and the tagged); the asset with no row is refused without a check.
+    assert reader.service_object.enforce.call_count == 4
     reader.enforce.assert_not_called()
 
 

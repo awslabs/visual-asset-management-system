@@ -5,8 +5,9 @@
 
 One database holds 5,000 live assets (every tenth tagged `locked`) and 50 archived ones, each with a
 quarantined compliance record and an audit entry. For each kind of caller the tests count the
-asset-table reads (Query, GetItem, BatchGetItem), the BatchGetItem reads of compliance records
-(the counts leaving withheld assets out), and the asset checks made on the engine, for:
+asset-table reads (Query, GetItem, BatchGetItem), the reads of compliance records by the overview
+(Query, and BatchGetItem for the counts leaving withheld assets out), and the asset checks made on
+the engine, for:
 
 - the overview first page (rows and per-state counts), the Quarantine first page and the audit
   first page (database path), each at its default page size (100);
@@ -214,7 +215,8 @@ def _measure(world, caller, method, path, params=None, query=None, request_body=
             active.stop()
     assert response["statusCode"] in (200, 403), response
     cost = {key: calls.get(key, 0) for key in (
-        "asset Query", "asset GetItem", "asset BatchGetItem", "record BatchGetItem")}
+        "asset Query", "asset GetItem", "asset BatchGetItem", "record Query",
+        "record BatchGetItem")}
     cost["asset checks"] = checks.count("asset")
     cost["check seconds"] = round(sum(check_seconds), 4)
     cost["seconds (moto)"] = round(elapsed, 3)
@@ -266,11 +268,14 @@ def test_the_first_pages_at_5000_assets(world, caller, surface):
         assert cost["asset checks"] <= 4, cost
         assert cost["check seconds"] < 0.1, cost
         if surface == "overview first page":
-            # The live partition once (5,000 projected rows, a few pages) plus the archive once;
-            # the records of the 500 refused and the 50 archived assets left out of the counts,
-            # 100 to a BatchGetItem.
+            # The live partition once (5,000 projected rows, a few pages). The counts are of the
+            # readable assets' records: their ids come from the queries every caller's counts make
+            # (six states and the error overlay), so no record is read by key, and the archived
+            # partition is not read (an archived asset has no live row to be readable).
             assert cost["asset BatchGetItem"] == 0 and cost["asset Query"] <= 6, cost
-            assert cost["record BatchGetItem"] == -(-(LIVE_COUNT // 10 + ARCHIVED_COUNT) // 100), cost
+            assert cost["record BatchGetItem"] == 0, cost
+            assert cost["record Query"] <= (len(evaluate_svc.OVERVIEW_STATES) + 1
+                                            + evaluate_svc.listing.DEFAULT_READ_BUDGET), cost
             summary = body["summary"]
             assert body["totalAssets"] == LIVE_COUNT - LIVE_COUNT // 10
             assert summary["quarantined"] == body["totalAssets"]

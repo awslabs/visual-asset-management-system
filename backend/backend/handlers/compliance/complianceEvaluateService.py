@@ -358,7 +358,8 @@ def sweep_schema(event, schema_name, starting_token=None):
     database the caller may evaluate; the rest are counted as `skipped` (and in
     `skippedNotAuthorized`, the reason they were skipped) and never listed. So is a live asset the
     caller may not read: a caller whose policy has asset rules needs the asset GET on its row, as
-    the asset routes ask it (`_live_not_readable`). An archived asset is
+    the asset routes ask it (`_live_not_readable`); for a caller whose rules read an asset's own
+    fields a record whose asset has no row is skipped the same way. An archived asset is
     not evaluated either (its row sits in the archive and cannot be read): it is counted in
     `skipped` and `skippedArchived`, and its compliance record is left as it is. Only the archived
     assets the caller may see are counted (`_archived_visible`): an archived asset the caller may
@@ -525,7 +526,9 @@ def evaluate_database(event, database_id, starting_token=None):
     archived asset the caller may not see is counted nowhere in the response (`withoutSchema` and
     `assetsRemaining` included). A live asset the caller may not read (a caller whose policy has
     asset rules needs the asset GET on its row) is not evaluated and is counted in `skipped` and
-    `skippedNotAuthorized`.
+    `skippedNotAuthorized`; for a caller whose rules read an asset's own fields, so is a record
+    whose asset has no row (it is not removed then: `removedOrphans` counts only the records the
+    caller may read).
 
     A database binding governs every asset of the database, so an asset of a bound database that
     has no compliance record yet is registered under the binding first (`registered`). A tracked
@@ -571,11 +574,13 @@ def evaluate_database(event, database_id, starting_token=None):
     beyond_budget = 0
     budget_spent = False
     archived = _asset_access()
-    if archived.reads_asset_rows():
-        # Decided on each asset's own row: the database's live rows are read once, projected.
-        archived.live_rows(database_id)
     rows, evaluated_earlier = _sweep_candidates(
         _database_rows(database_id), sweep_started_at, lambda row: row.get("assetId", ""))
+    if archived.reads_asset_rows():
+        # Decided on each asset's own row: the database's live rows are read once, projected, and
+        # after its records, so every record read names an asset whose row was written before it
+        # (the trigger records an asset after its row is written).
+        archived.live_rows(database_id)
     for row in rows:
         if _hidden_archived(archived, database_id, row.get("assetId", "")):
             hidden_archived += 1
@@ -846,11 +851,43 @@ def overview_summary(database_id, withheld=frozenset()):
     return summary, sum(summary[state] for state in OVERVIEW_STATES), reads
 
 
-def _without(withheld, accept=None):
-    """An `accept` for `listing.query_page` that drops the rows of the `withheld` asset ids and
-    otherwise applies `accept`."""
+def overview_summary_readable(database_id, readable):
+    """`(summary, totalAssets, records, reads)` for a caller whose asset rules read an asset's own
+    fields: the per-state counts and the evaluation-error overlay of the records of the `readable`
+    assets only (`AssetAccess.live_withheld`: the live assets whose rows the caller may read), so an
+    archived asset, a refused one and a record with no asset row count nowhere. Each state reads
+    its ComplianceStateIndex partition narrowed to the database projected on `assetId`, and the
+    overlay the database's error records the same way: the items and the pages `overview_summary`'s
+    COUNT queries read (`listing.query_ids`), and no record by key. `records` is how many records
+    were read in all, so the listing knows how many rows it leaves out."""
+    summary = {}
+    reads = 0
+    records = 0
+    for state in OVERVIEW_STATES:
+        ids, spent = listing.query_ids(asset_state_table, {
+            "IndexName": COMPLIANCE_STATE_INDEX,
+            "KeyConditionExpression": (Key("complianceState").eq(state)
+                                       & Key("databaseId").eq(database_id)),
+        })
+        summary[state] = sum(1 for asset_id in ids if asset_id in readable)
+        records += len(ids)
+        reads += spent
+    error_ids, spent = listing.query_ids(asset_state_table, {
+        "KeyConditionExpression": Key("databaseId").eq(database_id),
+        "FilterExpression": Attr("lastEvaluationStatus").eq(engine.EVALUATION_STATUS_ERROR),
+    })
+    reads += spent
+    summary[OVERVIEW_ERROR_BUCKET] = sum(1 for asset_id in error_ids if asset_id in readable)
+    return summary, sum(summary[state] for state in OVERVIEW_STATES), records, reads
+
+
+def _without(withheld, accept=None, readable=None):
+    """An `accept` for `listing.query_page` that drops the rows of the `withheld` asset ids, and,
+    with `readable`, those of every asset not among them, and otherwise applies `accept`."""
     def accept_row(row):
         if row.get("assetId") in withheld:
+            return False
+        if readable is not None and row.get("assetId") not in readable:
             return False
         return accept is None or accept(row)
     return accept_row
@@ -948,7 +985,10 @@ def get_database_compliance_overview(event, database_id, query_params):
     The rows and the counts cover the assets the caller may read: an archived asset is left out
     for every caller, and so is a live asset whose row the caller's asset rules refuse the asset
     GET on (`AssetAccess.live_withheld`); a caller refused the asset GET on the database's assets
-    gets an empty overview with zero counts.
+    gets an empty overview with zero counts. For a caller whose asset rules read an asset's own
+    fields, a record whose asset has no row (left by a permanently deleted asset until it is
+    removed) is left out too, and the counts are of the readable assets' records
+    (`overview_summary_readable`).
 
     An id that names no database (`store.database_known`) answers `400` "Database not found",
     after the authorization check on the id, rather than an empty overview.
@@ -981,14 +1021,20 @@ def get_database_compliance_overview(event, database_id, query_params):
     # asset listing leaves archived assets out (`AssetAccess.left_out`). A live asset the caller's
     # asset rules refuse is left out as well, as the asset listing leaves it out
     # (`AssetAccess.live_withheld`): every asset of the database, or those whose rows are refused.
+    # For a caller whose rules read an asset's own fields only the readable live assets are kept
+    # (`readable`): that leaves out the archived ones, the refused ones and a record whose asset
+    # has no row, which has no fields to decide on.
     access = _asset_access()
-    withheld = access.left_out(database_id)
     live_withheld = access.live_withheld(database_id)
-    withheld = withheld | live_withheld.ids
+    readable = live_withheld.readable
+    if readable is None:
+        withheld = access.left_out(database_id) | live_withheld.ids
+    else:
+        withheld = frozenset()
     read_limit = None
-    if withheld:
-        accept = _without(withheld, accept)
-        if not filtered:
+    if withheld or readable is not None:
+        accept = _without(withheld, accept, readable)
+        if withheld and not filtered:
             # At most len(withheld) rows are dropped, so a page plus that many fills in one read.
             read_limit = min(page_size + len(withheld), listing.FILTERED_READ_LIMIT)
     start_key = None
@@ -1011,6 +1057,15 @@ def get_database_compliance_overview(event, database_id, query_params):
         return success(body={"databaseId": database_id, "totalAssets": 0, "summary": summary,
                              "assets": []})
 
+    readable_summary = None
+    if readable is not None:
+        # The counts first: they say how many records the rows leave out, so an unfiltered page
+        # plus that many fills in one read.
+        readable_summary = overview_summary_readable(database_id, readable)
+        dropped = readable_summary[2] - readable_summary[1]
+        if dropped and not filtered:
+            read_limit = min(page_size + dropped, listing.FILTERED_READ_LIMIT)
+
     rows = next_key = None
     if not name_sort_unavailable:
         try:
@@ -1027,8 +1082,8 @@ def get_database_compliance_overview(event, database_id, query_params):
                 start_key = {name: start_key[name] for name in listing.BASE_STATE_KEYS}
     if name_sort_unavailable:
         kwargs, keys, filtered, accept = _overview_query(database_id, dict(filters, sort="assetId"))
-        if withheld:
-            accept = _without(withheld, accept)
+        if withheld or readable is not None:
+            accept = _without(withheld, accept, readable)
         rows, next_key, _ = listing.query_page(asset_state_table, kwargs, page_size, keys,
                                                start_key=start_key, filtered=filtered,
                                                accept=accept, read_limit=read_limit)
@@ -1041,7 +1096,10 @@ def get_database_compliance_overview(event, database_id, query_params):
     reads = _execution_reads()
     rows = [failure_access.state_record_for_caller(reads, row) for row in rows]
 
-    summary, total, _ = overview_summary(database_id, withheld)
+    if readable_summary is not None:
+        summary, total = readable_summary[0], readable_summary[1]
+    else:
+        summary, total, _ = overview_summary(database_id, withheld)
     body = {
         "databaseId": database_id,
         "totalAssets": total,
